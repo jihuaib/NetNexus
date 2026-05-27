@@ -48,7 +48,15 @@
                                                 :pagination="bgpRoutePagination"
                                                 size="small"
                                                 :scroll="{ y: 360 }"
-                                            />
+                                            >
+                                                <template #bodyCell="{ column, record }">
+                                                    <template v-if="column.key === 'routeAction'">
+                                                        <a-button type="link" size="small" @click="viewRouteDetails(record)">
+                                                            查询详情
+                                                        </a-button>
+                                                    </template>
+                                                </template>
+                                            </a-table>
                                         </a-tab-pane>
                                     </a-tabs>
                                 </div>
@@ -330,6 +338,12 @@
         detailsDrawerVisible.value = true;
     };
 
+    const viewRouteDetails = record => {
+        currentDetails.value = record;
+        detailsDrawerTitle.value = `路由详情: ${record.ip || ''}`;
+        detailsDrawerVisible.value = true;
+    };
+
     // 监听activeClientKey变化，加载对应的peer列表 AND instances
     watch(activeClientKey, _newKey => {
         activeInstanceKey.value = '';
@@ -368,6 +382,7 @@
         total: 0,
         showSizeChanger: false,
         position: ['bottomCenter'],
+        showTotal: total => `共 ${total} 条`,
         onChange: (page, pageSize) => {
             bgpRoutePagination.value.current = page;
             bgpRoutePagination.value.pageSize = pageSize;
@@ -386,12 +401,25 @@
         },
         { title: 'Path ID', dataIndex: 'pathId', key: 'pathId', ellipsis: true, width: 100 },
         { title: 'RD', dataIndex: 'rd', key: 'rd', ellipsis: true, width: 100 },
+        { title: 'Labels', dataIndex: 'labels', key: 'labels', ellipsis: true, width: 100 },
+        {
+            title: 'Parse',
+            dataIndex: 'parserValid',
+            key: 'parserValid',
+            ellipsis: true,
+            width: 120,
+            customRender: ({ record }) => {
+                if (record.parserValid === false) return record.parseErrors || 'Invalid';
+                return record.parseWarnings || 'OK';
+            }
+        },
         { title: 'Prefix', dataIndex: 'ip', key: 'ip', ellipsis: true, width: 120 },
         { title: 'Mask', dataIndex: 'mask', key: 'mask', ellipsis: true, width: 60 },
         { title: 'Origin', dataIndex: 'origin', key: 'origin', ellipsis: true, width: 80 },
         { title: 'AS Path', dataIndex: 'asPath', key: 'asPath', ellipsis: true },
         { title: 'Next Hop', dataIndex: 'nextHop', key: 'nextHop', ellipsis: true, width: 120 },
-        { title: 'MED', dataIndex: 'med', key: 'med', ellipsis: true, width: 80 }
+        { title: 'MED', dataIndex: 'med', key: 'med', ellipsis: true, width: 80 },
+        { title: '操作', key: 'routeAction', width: 100 }
     ];
 
     watch(activeInstanceKey, newKey => {

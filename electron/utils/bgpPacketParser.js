@@ -121,6 +121,1474 @@ function parseQpDqpn(buffer, position, bitLength) {
     };
 }
 
+function readBigEndianValue(buffer, position, length) {
+    let value = 0n;
+    for (let i = 0; i < length && position + i < buffer.length; i++) {
+        value = (value << 8n) + BigInt(buffer[position + i]);
+    }
+
+    if (value <= BigInt(Number.MAX_SAFE_INTEGER)) {
+        return Number(value);
+    }
+    return value.toString();
+}
+
+function getBit(buffer, bitIndex) {
+    const byteIndex = Math.floor(bitIndex / 8);
+    const bitOffset = 7 - (bitIndex % 8);
+    return (buffer[byteIndex] >> bitOffset) & 0x01;
+}
+
+function setBit(buffer, bitIndex, value) {
+    if (!value) {
+        return;
+    }
+
+    const byteIndex = Math.floor(bitIndex / 8);
+    const bitOffset = 7 - (bitIndex % 8);
+    buffer[byteIndex] |= 1 << bitOffset;
+}
+
+function parseNextHop(buffer, position, nextHopLength, afi, safi) {
+    if (nextHopLength === 0) {
+        return '';
+    }
+
+    if (
+        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
+        safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN
+    ) {
+        if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IP_HOST_BYTE_LEN) {
+            return ipv4BufferToString(
+                buffer.subarray(position + BgpConst.BGP_RD_LEN, position + BgpConst.BGP_RD_LEN + BgpConst.IP_HOST_BYTE_LEN),
+                BgpConst.IP_HOST_LEN
+            );
+        }
+
+        if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) {
+            return ipv6BufferToString(
+                buffer.subarray(position + BgpConst.BGP_RD_LEN, position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
+                BgpConst.IPV6_HOST_LEN
+            );
+        }
+
+        if (
+            afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 &&
+            nextHopLength === (BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) * 2
+        ) {
+            const globalNextHop = ipv6BufferToString(
+                buffer.subarray(position + BgpConst.BGP_RD_LEN, position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
+                BgpConst.IPV6_HOST_LEN
+            );
+            const linkLocalNextHopPosition = position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN + BgpConst.BGP_RD_LEN;
+            const linkLocalNextHop = ipv6BufferToString(
+                buffer.subarray(linkLocalNextHopPosition, linkLocalNextHopPosition + BgpConst.IPV6_HOST_BYTE_LEN),
+                BgpConst.IPV6_HOST_LEN
+            );
+            return `${globalNextHop}, ${linkLocalNextHop}`;
+        }
+
+        return buffer.subarray(position, position + nextHopLength).toString('hex');
+    }
+
+    if (nextHopLength === BgpConst.IP_HOST_BYTE_LEN) {
+        return ipv4BufferToString(buffer.subarray(position, position + 4), BgpConst.IP_HOST_LEN);
+    }
+
+    if (nextHopLength === BgpConst.IPV6_HOST_BYTE_LEN) {
+        return ipv6BufferToString(buffer.subarray(position, position + 16), BgpConst.IPV6_HOST_LEN);
+    }
+
+    if (nextHopLength === BgpConst.IPV6_HOST_BYTE_LEN * 2) {
+        const globalNextHop = ipv6BufferToString(
+            buffer.subarray(position, position + 16),
+            BgpConst.IPV6_HOST_LEN
+        );
+        const linkLocalNextHop = ipv6BufferToString(
+            buffer.subarray(position + 16, position + 32),
+            BgpConst.IPV6_HOST_LEN
+        );
+        return `${globalNextHop}, ${linkLocalNextHop}`;
+    }
+
+    return buffer.subarray(position, position + nextHopLength).toString('hex');
+}
+
+function parseFlowSpecLength(buffer, position) {
+    const errors = [];
+    if (position >= buffer.length) {
+        return {
+            nlriLength: 0,
+            lengthBytes: 0,
+            errors: ['FlowSpec NLRI length is missing']
+        };
+    }
+
+    const firstByte = buffer[position];
+    if (firstByte < 240) {
+        return {
+            nlriLength: firstByte,
+            lengthBytes: 1,
+            errors
+        };
+    }
+
+    if (position + 1 >= buffer.length) {
+        return {
+            nlriLength: 0,
+            lengthBytes: 1,
+            errors: ['FlowSpec extended NLRI length is truncated']
+        };
+    }
+
+    return {
+        nlriLength: ((firstByte & 0x0f) << 8) + buffer[position + 1],
+        lengthBytes: 2,
+        errors
+    };
+}
+
+const FLOW_SPEC_COMPONENT_NAMES = {
+    1: 'dst',
+    2: 'src',
+    3: 'proto',
+    4: 'port',
+    5: 'dst-port',
+    6: 'src-port',
+    7: 'icmp-type',
+    8: 'icmp-code',
+    9: 'tcp-flags',
+    10: 'packet-length',
+    11: 'dscp',
+    12: 'fragment',
+    13: 'flow-label'
+};
+
+function getFlowSpecOperatorValueLength(operator) {
+    return 1 << ((operator & 0x30) >> 4);
+}
+
+function getFlowSpecOperatorName(operator, isBitmask) {
+    const names = [];
+    if (operator & 0x40) {
+        names.push('and');
+    }
+
+    if (isBitmask) {
+        const operation = operator & 0x01 ? 'match' : 'any';
+        names.push(operator & 0x02 ? `not ${operation}` : operation);
+    } else {
+        const comparisonNames = {
+            0: 'false',
+            1: '=',
+            2: '>',
+            3: '>=',
+            4: '<',
+            5: '<=',
+            6: '!=',
+            7: 'true'
+        };
+        names.push(comparisonNames[operator & 0x07]);
+    }
+
+    return names.length > 0 ? names.join(' ') : '=';
+}
+
+function buildIpv6PrefixFromPattern(prefixBuffer, prefixLength, prefixOffset) {
+    const fullPrefixBuffer = Buffer.alloc(BgpConst.IPV6_HOST_BYTE_LEN);
+    const carriedBits = Math.max(prefixLength - prefixOffset, 0);
+
+    for (let bitIndex = 0; bitIndex < carriedBits; bitIndex++) {
+        setBit(fullPrefixBuffer, prefixOffset + bitIndex, getBit(prefixBuffer, bitIndex));
+    }
+
+    return ipv6BufferToString(fullPrefixBuffer, prefixLength);
+}
+
+function isFlowSpecComponentTypeAllowed(type, afi) {
+    if (type < 1 || type > 13) {
+        return false;
+    }
+
+    return afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 || type !== 13;
+}
+
+function validateFlowSpecOperationLength(type, valueLength) {
+    if (type === 9 && valueLength > 2) {
+        return 'FlowSpec TCP flags bitmask must be encoded as 1 or 2 octets';
+    }
+
+    if (type === 11 && valueLength !== 1) {
+        return 'FlowSpec DSCP value must be encoded as 1 octet';
+    }
+
+    if (type === 12 && valueLength !== 1) {
+        return 'FlowSpec fragment bitmask must be encoded as 1 octet';
+    }
+
+    return null;
+}
+
+function parseFlowSpecPrefixComponent(buffer, position, type, afi) {
+    const errors = [];
+    const isIpv6 = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6;
+    if (position >= buffer.length) {
+        return {
+            position: buffer.length,
+            component: {
+                type,
+                name: FLOW_SPEC_COMPONENT_NAMES[type] || `type-${type}`,
+                prefix: '',
+                length: 0,
+                offset: 0,
+                formatted: `${FLOW_SPEC_COMPONENT_NAMES[type] || `type-${type}`}=truncated`
+            },
+            errors: ['FlowSpec prefix component length is truncated']
+        };
+    }
+
+    const prefixLength = buffer[position];
+    position += 1;
+
+    let prefixOffset = 0;
+    if (isIpv6) {
+        if (position >= buffer.length) {
+            return {
+                position: buffer.length,
+                component: {
+                    type,
+                    name: FLOW_SPEC_COMPONENT_NAMES[type] || `type-${type}`,
+                    prefix: '',
+                    length: prefixLength,
+                    offset: 0,
+                    formatted: `${FLOW_SPEC_COMPONENT_NAMES[type] || `type-${type}`}=truncated`
+                },
+                errors: ['IPv6 FlowSpec prefix offset is truncated']
+            };
+        }
+        prefixOffset = buffer[position];
+        position += 1;
+    }
+
+    if (isIpv6) {
+        const isMatchAny = prefixLength === 0 && prefixOffset === 0;
+        if (!isMatchAny && !(prefixOffset < prefixLength && prefixLength < 129)) {
+            errors.push(`Invalid IPv6 FlowSpec prefix length/offset: length=${prefixLength}, offset=${prefixOffset}`);
+        }
+    } else if (prefixLength > BgpConst.IP_HOST_LEN) {
+        errors.push(`Invalid IPv4 FlowSpec prefix length: ${prefixLength}`);
+    }
+
+    const carriedBits = Math.max(prefixLength - prefixOffset, 0);
+    const prefixBytes = Math.ceil(carriedBits / 8);
+    if (position + prefixBytes > buffer.length) {
+        errors.push('FlowSpec prefix component is truncated');
+    }
+    const prefixBuffer = buffer.subarray(position, position + prefixBytes);
+    position += prefixBytes;
+
+    let prefix;
+    if (isIpv6) {
+        prefix = buildIpv6PrefixFromPattern(prefixBuffer, prefixLength, prefixOffset);
+    } else {
+        prefix = ipv4BufferToString(prefixBuffer, prefixLength);
+    }
+
+    const name = FLOW_SPEC_COMPONENT_NAMES[type] || `type-${type}`;
+    const offsetText = prefixOffset > 0 ? ` offset ${prefixOffset}` : '';
+    return {
+        position,
+        component: {
+            type,
+            name,
+            prefix,
+            length: prefixLength,
+            offset: prefixOffset,
+            formatted: `${name}=${prefix}/${prefixLength}${offsetText}`
+        },
+        errors
+    };
+}
+
+function parseFlowSpecComponents(buffer, afi) {
+    const components = [];
+    const errors = [];
+    let position = 0;
+    let lastType = 0;
+
+    while (position < buffer.length) {
+        const type = buffer[position];
+        position += 1;
+
+        if (!FLOW_SPEC_COMPONENT_NAMES[type] || !isFlowSpecComponentTypeAllowed(type, afi)) {
+            errors.push(`Unknown FlowSpec component type: ${type}`);
+            components.push({
+                type,
+                name: `unknown-${type}`,
+                rawValue: buffer.subarray(position).toString('hex'),
+                formatted: `unknown-${type}=0x${buffer.subarray(position).toString('hex')}`
+            });
+            position = buffer.length;
+            break;
+        }
+
+        if (type <= lastType) {
+            errors.push(`FlowSpec component type ${type} is not in strict increasing order`);
+        }
+        lastType = type;
+
+        if (type === 1 || type === 2) {
+            const parsed = parseFlowSpecPrefixComponent(buffer, position, type, afi);
+            components.push(parsed.component);
+            errors.push(...parsed.errors);
+            position = parsed.position;
+            continue;
+        }
+
+        const operations = [];
+        const isBitmask = type === 9 || type === 12;
+        let endOfList = false;
+        while (position < buffer.length && !endOfList) {
+            const operator = buffer[position];
+            position += 1;
+
+            const valueLength = getFlowSpecOperatorValueLength(operator);
+            if (operations.length === 0 && (operator & 0x40) !== 0) {
+                errors.push(`FlowSpec component type ${type} first operator has AND bit set`);
+            }
+            const lengthError = validateFlowSpecOperationLength(type, valueLength);
+            if (lengthError) {
+                errors.push(lengthError);
+            }
+            if (position + valueLength > buffer.length) {
+                errors.push(`FlowSpec component type ${type} operator value is truncated`);
+                position = buffer.length;
+                break;
+            }
+            const value = readBigEndianValue(buffer, position, valueLength);
+            position += valueLength;
+            endOfList = (operator & 0x80) !== 0;
+
+            operations.push({
+                operator,
+                operatorName: getFlowSpecOperatorName(operator, isBitmask),
+                value
+            });
+        }
+
+        if (!endOfList) {
+            errors.push(`FlowSpec component type ${type} operator list does not contain end-of-list`);
+        }
+
+        const name = FLOW_SPEC_COMPONENT_NAMES[type] || `type-${type}`;
+        components.push({
+            type,
+            name,
+            operations,
+            formatted: `${name} ${operations.map(op => `${op.operatorName} ${op.value}`).join(' ')}`
+        });
+    }
+
+    return { components, errors };
+}
+
+function parseFlowSpecNlri(buffer, position, afi) {
+    const { nlriLength, lengthBytes, errors: lengthErrors } = parseFlowSpecLength(buffer, position);
+    position += lengthBytes;
+
+    const errors = [...lengthErrors];
+    if (lengthBytes === 0) {
+        position = buffer.length;
+    }
+
+    if (nlriLength === 0) {
+        errors.push('FlowSpec NLRI value must contain at least one component');
+    }
+
+    if (position + nlriLength > buffer.length) {
+        errors.push('FlowSpec NLRI length exceeds remaining buffer');
+    }
+
+    const nlriEnd = Math.min(position + nlriLength, buffer.length);
+    const nlriBuffer = buffer.subarray(position, nlriEnd);
+    const parsedComponents = parseFlowSpecComponents(nlriBuffer, afi);
+    const components = parsedComponents.components;
+    errors.push(...parsedComponents.errors);
+    position = nlriEnd;
+
+    const formatted = components.length > 0 ? components.map(component => component.formatted).join('; ') : 'flowspec';
+    return {
+        position,
+        route: {
+            prefix: formatted,
+            rd: null,
+            length: nlriLength,
+            components,
+            rawNlri: nlriBuffer.toString('hex'),
+            valid: errors.length === 0,
+            errors
+        }
+    };
+}
+
+function parseMplsLabelStack(buffer, position, nlriBitLength, nlriEnd) {
+    const labels = [];
+    let labelBits = 0;
+
+    while (position + 3 <= nlriEnd && nlriBitLength - labelBits >= 24) {
+        const entry = (buffer[position] << 16) | (buffer[position + 1] << 8) | buffer[position + 2];
+        labels.push({
+            label: entry >> 4,
+            exp: (entry >> 1) & 0x07,
+            bottom: (entry & 0x01) === 1
+        });
+        position += 3;
+        labelBits += 24;
+
+        if (labels[labels.length - 1].bottom) {
+            break;
+        }
+    }
+
+    return {
+        labels,
+        labelBits,
+        position
+    };
+}
+
+function parseLabeledUnicastNlri(buffer, position, afi) {
+    const errors = [];
+    const nlriBitLength = buffer[position];
+    position += 1;
+    const nlriEnd = position + Math.ceil(nlriBitLength / 8);
+    const valueStart = position;
+
+    if (nlriEnd > buffer.length) {
+        errors.push('Labeled Unicast NLRI length exceeds remaining buffer');
+    }
+
+    if (nlriBitLength < 24) {
+        errors.push(`Labeled Unicast NLRI length is too short: ${nlriBitLength}`);
+    }
+
+    const { labels, labelBits, position: prefixPosition } = parseMplsLabelStack(
+        buffer,
+        position,
+        nlriBitLength,
+        Math.min(nlriEnd, buffer.length)
+    );
+    position = prefixPosition;
+    if (labels.length === 0) {
+        errors.push('Labeled Unicast NLRI has no MPLS label');
+    } else if (!labels[labels.length - 1].bottom) {
+        errors.push('Labeled Unicast label stack does not contain bottom-of-stack bit');
+    }
+
+    const prefixLength = Math.max(nlriBitLength - labelBits, 0);
+    const maxPrefixLength =
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
+    if (prefixLength > maxPrefixLength) {
+        errors.push(`Labeled Unicast prefix length ${prefixLength} exceeds AFI maximum ${maxPrefixLength}`);
+    }
+    const prefixBytes = Math.ceil(prefixLength / 8);
+    if (position + prefixBytes > buffer.length) {
+        errors.push('Labeled Unicast prefix is truncated');
+    }
+    const prefixBuffer = buffer.subarray(position, position + prefixBytes);
+    position += prefixBytes;
+
+    const prefix =
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6
+            ? ipv6BufferToString(prefixBuffer, prefixLength)
+            : ipv4BufferToString(prefixBuffer, prefixLength);
+
+    return {
+        position,
+        route: {
+            prefix,
+            rd: null,
+            length: prefixLength,
+            labels,
+            nlriBits: nlriBitLength,
+            rawNlri: buffer.subarray(valueStart, Math.min(nlriEnd, buffer.length)).toString('hex'),
+            valid: errors.length === 0,
+            errors
+        }
+    };
+}
+
+function parseLabeledUnicastWithdrawalNlri(buffer, position, afi) {
+    const errors = [];
+    const nlriBitLength = buffer[position];
+    position += 1;
+    const nlriEnd = position + Math.ceil(nlriBitLength / 8);
+    const valueStart = position;
+
+    if (nlriEnd > buffer.length) {
+        errors.push('Labeled Unicast withdrawal NLRI length exceeds remaining buffer');
+    }
+
+    if (nlriBitLength < 24) {
+        errors.push(`Labeled Unicast withdrawal NLRI length is too short: ${nlriBitLength}`);
+    }
+
+    const compatibilityField = buffer.subarray(position, Math.min(position + 3, buffer.length)).toString('hex');
+    if (position + 3 > buffer.length) {
+        errors.push('Labeled Unicast withdrawal compatibility field is truncated');
+        position = buffer.length;
+    } else {
+        position += 3;
+    }
+
+    const prefixLength = Math.max(nlriBitLength - 24, 0);
+    const maxPrefixLength =
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
+    if (prefixLength > maxPrefixLength) {
+        errors.push(`Labeled Unicast withdrawal prefix length ${prefixLength} exceeds AFI maximum ${maxPrefixLength}`);
+    }
+
+    const prefixBytes = Math.ceil(prefixLength / 8);
+    if (position + prefixBytes > buffer.length) {
+        errors.push('Labeled Unicast withdrawal prefix is truncated');
+    }
+    const prefixBuffer = buffer.subarray(position, position + prefixBytes);
+    position += prefixBytes;
+
+    const prefix =
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6
+            ? ipv6BufferToString(prefixBuffer, prefixLength)
+            : ipv4BufferToString(prefixBuffer, prefixLength);
+
+    return {
+        position: Math.min(position, buffer.length),
+        route: {
+            prefix,
+            rd: null,
+            length: prefixLength,
+            compatibilityField,
+            nlriBits: nlriBitLength,
+            rawNlri: buffer.subarray(valueStart, Math.min(nlriEnd, buffer.length)).toString('hex'),
+            valid: errors.length === 0,
+            errors
+        }
+    };
+}
+
+const BGP_LS_NLRI_TYPE_NAMES = {
+    1: 'Node',
+    2: 'Link',
+    3: 'IPv4 Prefix',
+    4: 'IPv6 Prefix'
+};
+
+const BGP_LS_PROTOCOL_NAMES = {
+    1: 'IS-IS L1',
+    2: 'IS-IS L2',
+    3: 'OSPFv2',
+    4: 'Direct',
+    5: 'Static',
+    6: 'OSPFv3'
+};
+
+const BGP_LS_TLV_NAMES = {
+    256: 'Local Node Descriptors',
+    257: 'Remote Node Descriptors',
+    258: 'Link Local/Remote IDs',
+    259: 'IPv4 Interface Address',
+    260: 'IPv4 Neighbor Address',
+    261: 'IPv6 Interface Address',
+    262: 'IPv6 Neighbor Address',
+    263: 'Multi-Topology ID',
+    264: 'OSPF Route Type',
+    265: 'IP Reachability',
+    512: 'Autonomous System',
+    513: 'BGP-LS Identifier',
+    514: 'OSPF Area ID',
+    515: 'IGP Router ID'
+};
+
+function parseBgpLsIpReachability(buffer, nlriType) {
+    const errors = [];
+    if (buffer.length < 1) {
+        return {
+            prefix: '',
+            length: 0,
+            formatted: 'truncated',
+            errors: ['BGP-LS IP Reachability TLV is truncated']
+        };
+    }
+
+    const prefixLength = buffer[0];
+    const prefixBytes = Math.ceil(prefixLength / 8);
+    const maxPrefixLength = nlriType === 4 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
+    if (prefixLength > maxPrefixLength) {
+        errors.push(`BGP-LS IP Reachability prefix length ${prefixLength} exceeds ${maxPrefixLength}`);
+    }
+    if (1 + prefixBytes > buffer.length) {
+        errors.push('BGP-LS IP Reachability prefix is truncated');
+    }
+    const prefixBuffer = buffer.subarray(1, 1 + prefixBytes);
+    const isIpv6Prefix = nlriType === 4;
+    const prefix = isIpv6Prefix
+        ? ipv6BufferToString(prefixBuffer, prefixLength)
+        : ipv4BufferToString(prefixBuffer, prefixLength);
+
+    return {
+        prefix,
+        length: prefixLength,
+        formatted: `${prefix}/${prefixLength}`,
+        errors
+    };
+}
+
+function formatBgpLsTlvValue(type, valueBuffer, nlriType) {
+    if (type === 512 && valueBuffer.length >= 4) {
+        return valueBuffer.readUInt32BE(0).toString();
+    }
+
+    if (type === 513 && valueBuffer.length >= 4) {
+        return valueBuffer.readUInt32BE(0).toString();
+    }
+
+    if (type === 514 && valueBuffer.length >= 4) {
+        return ipv4BufferToString(valueBuffer.subarray(0, 4), BgpConst.IP_HOST_LEN);
+    }
+
+    if (type === 515) {
+        if (valueBuffer.length === 4) {
+            return ipv4BufferToString(valueBuffer, BgpConst.IP_HOST_LEN);
+        }
+        return valueBuffer.toString('hex');
+    }
+
+    if (type === 258 && valueBuffer.length >= 8) {
+        return `${valueBuffer.readUInt32BE(0)}->${valueBuffer.readUInt32BE(4)}`;
+    }
+
+    if ((type === 259 || type === 260) && valueBuffer.length >= 4) {
+        return ipv4BufferToString(valueBuffer.subarray(0, 4), BgpConst.IP_HOST_LEN);
+    }
+
+    if ((type === 261 || type === 262) && valueBuffer.length >= 16) {
+        return ipv6BufferToString(valueBuffer.subarray(0, 16), BgpConst.IPV6_HOST_LEN);
+    }
+
+    if (type === 263 && valueBuffer.length >= 2) {
+        return (valueBuffer.readUInt16BE(0) & 0x0fff).toString();
+    }
+
+    if (type === 264 && valueBuffer.length >= 1) {
+        return valueBuffer[0].toString();
+    }
+
+    if (type === 265) {
+        const reachability = parseBgpLsIpReachability(valueBuffer, nlriType);
+        return reachability ? reachability.formatted : valueBuffer.toString('hex');
+    }
+
+    return valueBuffer.toString('hex');
+}
+
+function compareBuffers(left, right) {
+    const maxLength = Math.min(left.length, right.length);
+    for (let i = 0; i < maxLength; i++) {
+        if (left[i] !== right[i]) {
+            return left[i] - right[i];
+        }
+    }
+
+    return left.length - right.length;
+}
+
+function compareBgpLsTlvOrder(previous, current) {
+    if (!previous) {
+        return 0;
+    }
+
+    if (previous.type !== current.type) {
+        return previous.type - current.type;
+    }
+
+    if (previous.length !== current.length) {
+        return previous.length - current.length;
+    }
+
+    return compareBuffers(previous.valueBuffer, current.valueBuffer);
+}
+
+function validateBgpLsTlvValue(type, valueBuffer, nlriType) {
+    if (type !== 265) {
+        return [];
+    }
+
+    const reachability = parseBgpLsIpReachability(valueBuffer, nlriType);
+    return reachability.errors || [];
+}
+
+function parseBgpLsTlvs(buffer, nlriType, options = {}) {
+    const tlvs = [];
+    const errors = [];
+    let position = 0;
+    let previousOrder = null;
+    const seenTypes = new Set();
+
+    while (position + 4 <= buffer.length) {
+        const type = buffer.readUInt16BE(position);
+        position += 2;
+        const length = buffer.readUInt16BE(position);
+        position += 2;
+
+        if (options.nodeDescriptor) {
+            if (seenTypes.has(type)) {
+                errors.push(`BGP-LS Node Descriptor sub-TLV type ${type} appears more than once`);
+            }
+            seenTypes.add(type);
+        }
+
+        if (position + length > buffer.length) {
+            errors.push(`BGP-LS TLV type ${type} length exceeds remaining NLRI`);
+        }
+
+        const valueEnd = Math.min(position + length, buffer.length);
+        const valueBuffer = buffer.subarray(position, valueEnd);
+        position = valueEnd;
+
+        const currentOrder = { type, length, valueBuffer };
+        if (compareBgpLsTlvOrder(previousOrder, currentOrder) > 0) {
+            errors.push(`BGP-LS TLV type ${type} is not in canonical order`);
+        }
+        previousOrder = currentOrder;
+
+        errors.push(...validateBgpLsTlvValue(type, valueBuffer, nlriType));
+
+        const childResult =
+            type === 256 || type === 257 ? parseBgpLsTlvs(valueBuffer, nlriType, { nodeDescriptor: true }) : null;
+        const children = childResult ? childResult.tlvs : [];
+        if (childResult) {
+            errors.push(...childResult.errors.map(error => `BGP-LS TLV ${type}: ${error}`));
+        }
+        const tlv = {
+            type,
+            typeName: BGP_LS_TLV_NAMES[type] || `Unknown (${type})`,
+            length,
+            value: formatBgpLsTlvValue(type, valueBuffer, nlriType)
+        };
+        if (children.length > 0) {
+            tlv.children = children;
+        }
+        tlvs.push(tlv);
+    }
+
+    if (position !== buffer.length) {
+        errors.push('BGP-LS TLV trailer is shorter than a TLV header');
+    }
+
+    return { tlvs, errors };
+}
+
+function findBgpLsTlv(tlvs, type) {
+    for (const tlv of tlvs) {
+        if (tlv.type === type) {
+            return tlv;
+        }
+        if (tlv.children) {
+            const childMatch = findBgpLsTlv(tlv.children, type);
+            if (childMatch) {
+                return childMatch;
+            }
+        }
+    }
+    return null;
+}
+
+function buildBgpLsRoutePrefix(nlriType, protocolId, identifier, tlvs) {
+    const typeName = BGP_LS_NLRI_TYPE_NAMES[nlriType] || `Type ${nlriType}`;
+    const protocolName = BGP_LS_PROTOCOL_NAMES[protocolId] || `Protocol ${protocolId}`;
+    const reachability = findBgpLsTlv(tlvs, 265);
+    if (reachability) {
+        return `bgp-ls:${typeName}:${reachability.value}`;
+    }
+
+    const localAddress = findBgpLsTlv(tlvs, 259) || findBgpLsTlv(tlvs, 261);
+    const remoteAddress = findBgpLsTlv(tlvs, 260) || findBgpLsTlv(tlvs, 262);
+    if (localAddress || remoteAddress) {
+        return `bgp-ls:${typeName}:${localAddress ? localAddress.value : '?'}->${remoteAddress ? remoteAddress.value : '?'}`;
+    }
+
+    const localNode = findBgpLsTlv(tlvs, 256);
+    const nodeSummary = localNode && localNode.children ? localNode.children.map(child => child.value).join(',') : '';
+    return `bgp-ls:${typeName}:${protocolName}:id=${identifier}${nodeSummary ? `:${nodeSummary}` : ''}`;
+}
+
+function parseBgpLsNlri(buffer, position) {
+    const errors = [];
+    const warnings = [];
+    if (position + 4 > buffer.length) {
+        return {
+            position: buffer.length,
+            route: {
+                prefix: 'bgp-ls:truncated',
+                rd: null,
+                length: 0,
+                valid: false,
+                errors: ['BGP-LS NLRI header is truncated'],
+                warnings,
+                rawNlri: buffer.subarray(position).toString('hex')
+            }
+        };
+    }
+
+    const nlriType = buffer.readUInt16BE(position);
+    position += 2;
+    const nlriLength = buffer.readUInt16BE(position);
+    position += 2;
+
+    if (position + nlriLength > buffer.length) {
+        errors.push('BGP-LS Total NLRI Length exceeds remaining buffer');
+    }
+
+    const nlriEnd = Math.min(position + nlriLength, buffer.length);
+    const rawNlri = buffer.subarray(position, nlriEnd);
+    if (!BGP_LS_NLRI_TYPE_NAMES[nlriType]) {
+        return {
+            position: nlriEnd,
+            route: {
+                prefix: `bgp-ls:type-${nlriType}:0x${rawNlri.toString('hex')}`,
+                rd: null,
+                length: nlriLength * 8,
+                routeType: nlriType,
+                descriptors: [],
+                rawNlri: rawNlri.toString('hex'),
+                valid: errors.length === 0,
+                errors,
+                warnings
+            }
+        };
+    }
+
+    let protocolId = null;
+    if (position < nlriEnd) {
+        protocolId = buffer[position];
+        position += 1;
+    } else {
+        errors.push('BGP-LS Protocol-ID is truncated');
+    }
+
+    let identifier = '';
+    if (position + 8 <= nlriEnd) {
+        identifier = `0x${buffer.subarray(position, position + 8).toString('hex')}`;
+        position += 8;
+    } else {
+        errors.push('BGP-LS Identifier is truncated');
+    }
+
+    const parsedTlvs = parseBgpLsTlvs(buffer.subarray(position, nlriEnd), nlriType);
+    const tlvs = parsedTlvs.tlvs;
+    errors.push(...parsedTlvs.errors);
+    const reachability = findBgpLsTlv(tlvs, 265);
+    if ((nlriType === 3 || nlriType === 4) && !reachability) {
+        warnings.push('BGP-LS Prefix NLRI is missing IP Reachability TLV');
+    }
+    const routePrefix = buildBgpLsRoutePrefix(nlriType, protocolId, identifier, tlvs);
+    const routeLength = reachability ? parseInt(reachability.value.split('/').pop(), 10) : nlriLength * 8;
+
+    return {
+        position: nlriEnd,
+        route: {
+            prefix: routePrefix,
+            rd: null,
+            length: routeLength,
+            routeType: nlriType,
+            protocolId,
+            protocol: BGP_LS_PROTOCOL_NAMES[protocolId] || protocolId,
+            identifier,
+            descriptors: tlvs,
+            rawNlri: rawNlri.toString('hex'),
+            valid: errors.length === 0,
+            errors,
+            warnings
+        }
+    };
+}
+
+function parseRouteDistinguisherNlri(buffer, position, afi) {
+    let prefixLength = buffer[position];
+    position += 1;
+
+    position += 3;
+    const rdBuffer = buffer.subarray(position, position + BgpConst.BGP_RD_LEN);
+    const rd = rdBufferToString(rdBuffer);
+    position += BgpConst.BGP_RD_LEN;
+
+    prefixLength -= 3 << 3;
+    prefixLength -= BgpConst.BGP_RD_LEN << 3;
+
+    const prefixBytes = Math.ceil(prefixLength / 8);
+    const prefixBuffer = buffer.subarray(position, position + prefixBytes);
+    position += prefixBytes;
+
+    const prefix =
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6
+            ? ipv6BufferToString(prefixBuffer, prefixLength)
+            : ipv4BufferToString(prefixBuffer, prefixLength);
+
+    return {
+        position,
+        route: {
+            prefix,
+            displayPrefix: `${rd}:${prefix}`,
+            rd,
+            length: prefixLength
+        }
+    };
+}
+
+const EVPN_ROUTE_TYPE_NAMES = {
+    1: 'Ethernet A-D',
+    2: 'MAC/IP Advertisement',
+    3: 'Inclusive Multicast Ethernet Tag',
+    4: 'Ethernet Segment',
+    5: 'IP Prefix'
+};
+
+function readEvpnRd(buffer, position, errors) {
+    if (position + BgpConst.BGP_RD_LEN > buffer.length) {
+        errors.push('EVPN RD is truncated');
+        return {
+            rd: null,
+            position: buffer.length
+        };
+    }
+
+    return {
+        rd: rdBufferToString(buffer.subarray(position, position + BgpConst.BGP_RD_LEN)),
+        position: position + BgpConst.BGP_RD_LEN
+    };
+}
+
+function readEvpnBytes(buffer, position, length, fieldName, errors) {
+    if (position + length > buffer.length) {
+        errors.push(`EVPN ${fieldName} is truncated`);
+    }
+
+    const end = Math.min(position + length, buffer.length);
+    return {
+        value: buffer.subarray(position, end),
+        position: end
+    };
+}
+
+function formatColonHex(buffer) {
+    return Array.from(buffer)
+        .map(byte => byte.toString(16).padStart(2, '0'))
+        .join(':');
+}
+
+function formatMacAddress(buffer) {
+    return formatColonHex(buffer);
+}
+
+function readEvpnUint32(buffer, position, fieldName, errors) {
+    if (position + 4 > buffer.length) {
+        errors.push(`EVPN ${fieldName} is truncated`);
+        return {
+            value: null,
+            position: buffer.length
+        };
+    }
+
+    return {
+        value: buffer.readUInt32BE(position),
+        position: position + 4
+    };
+}
+
+function readEvpnLabel(buffer, position, fieldName, errors) {
+    if (position + 3 > buffer.length) {
+        errors.push(`EVPN ${fieldName} is truncated`);
+        return {
+            label: null,
+            position: buffer.length
+        };
+    }
+
+    const entry = (buffer[position] << 16) | (buffer[position + 1] << 8) | buffer[position + 2];
+    return {
+        label: {
+            label: entry >> 4,
+            exp: (entry >> 1) & 0x07,
+            bottom: (entry & 0x01) === 1
+        },
+        position: position + 3
+    };
+}
+
+function parseEvpnIpByLength(buffer, position, bitLength, fieldName, errors) {
+    if (bitLength === 0) {
+        return {
+            ip: null,
+            position
+        };
+    }
+
+    if (bitLength === BgpConst.IP_HOST_LEN) {
+        const parsed = readEvpnBytes(buffer, position, BgpConst.IP_HOST_BYTE_LEN, fieldName, errors);
+        return {
+            ip: ipv4BufferToString(parsed.value, BgpConst.IP_HOST_LEN),
+            position: parsed.position
+        };
+    }
+
+    if (bitLength === BgpConst.IPV6_HOST_LEN) {
+        const parsed = readEvpnBytes(buffer, position, BgpConst.IPV6_HOST_BYTE_LEN, fieldName, errors);
+        return {
+            ip: ipv6BufferToString(parsed.value, BgpConst.IPV6_HOST_LEN),
+            position: parsed.position
+        };
+    }
+
+    errors.push(`EVPN ${fieldName} length is unsupported: ${bitLength}`);
+    const byteLength = Math.ceil(bitLength / 8);
+    const parsed = readEvpnBytes(buffer, position, byteLength, fieldName, errors);
+    return {
+        ip: `0x${parsed.value.toString('hex')}`,
+        position: parsed.position
+    };
+}
+
+function parseEvpnIpPrefix(buffer, position, prefixLength, isIpv6, fieldName, errors) {
+    const byteLength = isIpv6 ? BgpConst.IPV6_HOST_BYTE_LEN : BgpConst.IP_HOST_BYTE_LEN;
+    const maxLength = isIpv6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
+
+    if (prefixLength > maxLength) {
+        errors.push(`EVPN ${fieldName} length ${prefixLength} exceeds ${maxLength}`);
+    }
+
+    const parsed = readEvpnBytes(buffer, position, byteLength, fieldName, errors);
+    return {
+        prefix: isIpv6
+            ? ipv6BufferToString(parsed.value, prefixLength)
+            : ipv4BufferToString(parsed.value, prefixLength),
+        position: parsed.position
+    };
+}
+
+function buildEvpnRoute(routeType, routeLength, routeValue, parsed) {
+    return {
+        prefix: parsed.prefix,
+        rd: parsed.rd || null,
+        length: parsed.length,
+        routeType,
+        routeTypeName: EVPN_ROUTE_TYPE_NAMES[routeType] || `Unknown (${routeType})`,
+        rawNlri: routeValue.toString('hex'),
+        valid: parsed.errors.length === 0,
+        errors: parsed.errors,
+        ...parsed.fields
+    };
+}
+
+function parseEvpnEthernetAutoDiscoveryRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    if (routeLength !== 25) {
+        errors.push(`EVPN Ethernet A-D route length must be 25 octets: ${routeLength}`);
+    }
+
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const esiResult = readEvpnBytes(routeValue, position, 10, 'ESI', errors);
+    position = esiResult.position;
+    const tagResult = readEvpnUint32(routeValue, position, 'Ethernet Tag ID', errors);
+    position = tagResult.position;
+    const labelResult = readEvpnLabel(routeValue, position, 'MPLS Label', errors);
+
+    const rd = rdResult.rd;
+    const esi = formatColonHex(esiResult.value);
+    const ethernetTagId = tagResult.value;
+    const labels = labelResult.label ? [labelResult.label] : [];
+    const prefix = `evpn:ad:${rd || '?'}:esi=${esi || '?'}:tag=${ethernetTagId ?? '?'}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            esi,
+            ethernetTagId,
+            labels
+        }
+    });
+}
+
+function parseEvpnMacIpAdvertisementRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const esiResult = readEvpnBytes(routeValue, position, 10, 'ESI', errors);
+    position = esiResult.position;
+    const tagResult = readEvpnUint32(routeValue, position, 'Ethernet Tag ID', errors);
+    position = tagResult.position;
+
+    const macLength = position < routeValue.length ? routeValue[position] : 0;
+    position += 1;
+    if (macLength !== 48) {
+        errors.push(`EVPN MAC/IP Advertisement MAC length is unsupported: ${macLength}`);
+    }
+    const macResult = readEvpnBytes(routeValue, position, Math.ceil(macLength / 8), 'MAC Address', errors);
+    position = macResult.position;
+
+    const ipLength = position < routeValue.length ? routeValue[position] : 0;
+    position += 1;
+    const ipBytes = ipLength === 0 ? 0 : ipLength === BgpConst.IP_HOST_LEN ? 4 : ipLength === BgpConst.IPV6_HOST_LEN ? 16 : null;
+    if (ipBytes !== null) {
+        const expectedLength = 8 + 10 + 4 + 1 + 6 + 1 + ipBytes + 3;
+        if (routeLength !== expectedLength && routeLength !== expectedLength + 3) {
+            errors.push(`EVPN MAC/IP Advertisement route length is inconsistent: ${routeLength}`);
+        }
+    }
+    const ipResult = parseEvpnIpByLength(routeValue, position, ipLength, 'IP Address', errors);
+    position = ipResult.position;
+
+    const labelResult = readEvpnLabel(routeValue, position, 'MPLS Label 1', errors);
+    position = labelResult.position;
+    const labels = labelResult.label ? [labelResult.label] : [];
+    if (position + 3 <= routeValue.length) {
+        const label2Result = readEvpnLabel(routeValue, position, 'MPLS Label 2', errors);
+        position = label2Result.position;
+        if (label2Result.label) {
+            labels.push(label2Result.label);
+        }
+    }
+    if (position !== routeValue.length) {
+        errors.push('EVPN MAC/IP Advertisement route has trailing bytes');
+    }
+
+    const rd = rdResult.rd;
+    const esi = formatColonHex(esiResult.value);
+    const ethernetTagId = tagResult.value;
+    const macAddress = formatMacAddress(macResult.value);
+    const ipText = ipResult.ip ? `:ip=${ipResult.ip}` : '';
+    const prefix = `evpn:mac-ip:${rd || '?'}:tag=${ethernetTagId ?? '?'}:mac=${macAddress || '?'}${ipText}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            esi,
+            ethernetTagId,
+            macLength,
+            macAddress,
+            ipLength,
+            ipAddress: ipResult.ip,
+            labels
+        }
+    });
+}
+
+function parseEvpnInclusiveMulticastRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const tagResult = readEvpnUint32(routeValue, position, 'Ethernet Tag ID', errors);
+    position = tagResult.position;
+    const ipLength = position < routeValue.length ? routeValue[position] : 0;
+    position += 1;
+    if (ipLength === BgpConst.IP_HOST_LEN && routeLength !== 17) {
+        errors.push(`EVPN Inclusive Multicast IPv4 route length must be 17 octets: ${routeLength}`);
+    }
+    if (ipLength === BgpConst.IPV6_HOST_LEN && routeLength !== 29) {
+        errors.push(`EVPN Inclusive Multicast IPv6 route length must be 29 octets: ${routeLength}`);
+    }
+    const originResult = parseEvpnIpByLength(routeValue, position, ipLength, 'Originating Router IP', errors);
+    position = originResult.position;
+    if (position !== routeValue.length) {
+        errors.push('EVPN Inclusive Multicast route has trailing bytes');
+    }
+
+    const rd = rdResult.rd;
+    const ethernetTagId = tagResult.value;
+    const prefix = `evpn:imet:${rd || '?'}:tag=${ethernetTagId ?? '?'}:origin=${originResult.ip || '?'}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            ethernetTagId,
+            ipLength,
+            originatingRouterIp: originResult.ip
+        }
+    });
+}
+
+function parseEvpnEthernetSegmentRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const esiResult = readEvpnBytes(routeValue, position, 10, 'ESI', errors);
+    position = esiResult.position;
+    const ipLength = position < routeValue.length ? routeValue[position] : 0;
+    position += 1;
+    if (ipLength === BgpConst.IP_HOST_LEN && routeLength !== 23) {
+        errors.push(`EVPN Ethernet Segment IPv4 route length must be 23 octets: ${routeLength}`);
+    }
+    if (ipLength === BgpConst.IPV6_HOST_LEN && routeLength !== 35) {
+        errors.push(`EVPN Ethernet Segment IPv6 route length must be 35 octets: ${routeLength}`);
+    }
+    const originResult = parseEvpnIpByLength(routeValue, position, ipLength, 'Originating Router IP', errors);
+    position = originResult.position;
+    if (position !== routeValue.length) {
+        errors.push('EVPN Ethernet Segment route has trailing bytes');
+    }
+
+    const rd = rdResult.rd;
+    const esi = formatColonHex(esiResult.value);
+    const prefix = `evpn:es:${rd || '?'}:esi=${esi || '?'}:origin=${originResult.ip || '?'}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            esi,
+            ipLength,
+            originatingRouterIp: originResult.ip
+        }
+    });
+}
+
+function parseEvpnIpPrefixRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const esiResult = readEvpnBytes(routeValue, position, 10, 'ESI', errors);
+    position = esiResult.position;
+    const tagResult = readEvpnUint32(routeValue, position, 'Ethernet Tag ID', errors);
+    position = tagResult.position;
+    const prefixLength = position < routeValue.length ? routeValue[position] : 0;
+    position += 1;
+    const isIpv6 = routeLength >= 58 || prefixLength > BgpConst.IP_HOST_LEN;
+    if (routeLength !== 34 && routeLength !== 58) {
+        errors.push(`EVPN IP Prefix route length must be 34 or 58 octets: ${routeLength}`);
+    }
+    const prefixResult = parseEvpnIpPrefix(routeValue, position, prefixLength, isIpv6, 'IP Prefix', errors);
+    position = prefixResult.position;
+    const gatewayResult = parseEvpnIpByLength(
+        routeValue,
+        position,
+        isIpv6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN,
+        'Gateway IP',
+        errors
+    );
+    position = gatewayResult.position;
+    const labelResult = readEvpnLabel(routeValue, position, 'MPLS Label', errors);
+    position = labelResult.position;
+    if (position !== routeValue.length) {
+        errors.push('EVPN IP Prefix route has trailing bytes');
+    }
+
+    const rd = rdResult.rd;
+    const esi = formatColonHex(esiResult.value);
+    const ethernetTagId = tagResult.value;
+    const labels = labelResult.label ? [labelResult.label] : [];
+    const prefix = `evpn:ip-prefix:${rd || '?'}:tag=${ethernetTagId ?? '?'}:${prefixResult.prefix}/${prefixLength}:gw=${
+        gatewayResult.ip || '?'
+    }`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: prefixLength,
+        errors,
+        fields: {
+            esi,
+            ethernetTagId,
+            ipPrefix: prefixResult.prefix,
+            prefixLength,
+            gatewayIp: gatewayResult.ip,
+            labels
+        }
+    });
+}
+
+function parseEvpnNlri(buffer, position) {
+    const routeType = buffer[position];
+    position += 1;
+    const routeLength = buffer[position];
+    position += 1;
+    const routeEnd = Math.min(position + routeLength, buffer.length);
+    const routeValue = buffer.subarray(position, routeEnd);
+    position = routeEnd;
+
+    switch (routeType) {
+        case 1:
+            return {
+                position,
+                route: parseEvpnEthernetAutoDiscoveryRoute(routeType, routeLength, routeValue)
+            };
+        case 2:
+            return {
+                position,
+                route: parseEvpnMacIpAdvertisementRoute(routeType, routeLength, routeValue)
+            };
+        case 3:
+            return {
+                position,
+                route: parseEvpnInclusiveMulticastRoute(routeType, routeLength, routeValue)
+            };
+        case 4:
+            return {
+                position,
+                route: parseEvpnEthernetSegmentRoute(routeType, routeLength, routeValue)
+            };
+        case 5:
+            return {
+                position,
+                route: parseEvpnIpPrefixRoute(routeType, routeLength, routeValue)
+            };
+    }
+
+    return {
+        position,
+        route: {
+            prefix: routeValue.toString('hex'),
+            rd: null,
+            length: routeLength,
+            routeType,
+            rawNlri: routeValue.toString('hex')
+        }
+    };
+}
+
+function parseIpPrefixNlri(buffer, position, afi) {
+    const prefixLength = buffer[position];
+    position += 1;
+
+    const prefixBytes = Math.ceil(prefixLength / 8);
+    const prefixBuffer = buffer.subarray(position, position + prefixBytes);
+    position += prefixBytes;
+
+    const prefix =
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6
+            ? ipv6BufferToString(prefixBuffer, prefixLength)
+            : ipv4BufferToString(prefixBuffer, prefixLength);
+
+    return {
+        position,
+        route: {
+            prefix,
+            rd: null,
+            length: prefixLength
+        }
+    };
+}
+
+function parseFallbackNlri(buffer, position) {
+    const routeType = buffer[position];
+    position += 1;
+    const routeLength = position < buffer.length ? buffer[position] : 0;
+    position += 1;
+    const routeValue = buffer.subarray(position, position + routeLength);
+    position += routeLength;
+
+    return {
+        position,
+        route: {
+            prefix: routeValue.toString('hex'),
+            rd: null,
+            length: routeLength,
+            routeType,
+            rawNlri: routeValue.toString('hex')
+        }
+    };
+}
+
+function parseNlriEntry(buffer, position, afi, safi, isWithdrawn = false) {
+    if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
+        return parseIpPrefixNlri(buffer, position, afi);
+    }
+
+    if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
+        return parseIpPrefixNlri(buffer, position, afi);
+    }
+
+    if (afi === BgpConst.BGP_AFI_TYPE.AFI_L2VPN && safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) {
+        return parseEvpnNlri(buffer, position);
+    }
+
+    if (
+        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
+        safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN
+    ) {
+        return parseRouteDistinguisherNlri(buffer, position, afi);
+    }
+
+    if (
+        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
+        safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+    ) {
+        if (isWithdrawn) {
+            return parseLabeledUnicastWithdrawalNlri(buffer, position, afi);
+        }
+        return parseLabeledUnicastNlri(buffer, position, afi);
+    }
+
+    if (
+        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
+        safi === BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC
+    ) {
+        return parseFlowSpecNlri(buffer, position, afi);
+    }
+
+    if (afi === BgpConst.BGP_AFI_TYPE.AFI_BGP_LS && safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS) {
+        return parseBgpLsNlri(buffer, position);
+    }
+
+    if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
+        const nlriTotalLength = buffer[position];
+        position += 1;
+        position += 1;
+        const dqpnBitLength = buffer[position];
+        position += 1;
+        const { dqpn, byteLength: dqpnByteLength } = parseQpDqpn(buffer, position, dqpnBitLength);
+        position += dqpnByteLength;
+        position += 1;
+        const prefixLength = buffer[position];
+        position += 1;
+        const prefixBytes = Math.ceil(prefixLength / 8);
+        const prefixBuffer = buffer.subarray(position, position + prefixBytes);
+        position += prefixBytes;
+        const prefix =
+            afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4
+                ? ipv4BufferToString(prefixBuffer, prefixLength)
+                : ipv6BufferToString(prefixBuffer, prefixLength);
+
+        return {
+            position,
+            route: {
+                prefix,
+                rd: null,
+                length: prefixLength,
+                dqpn,
+                dqpnBits: dqpnBitLength,
+                nlriBits: nlriTotalLength * 8
+            }
+        };
+    }
+
+    return parseFallbackNlri(buffer, position);
+}
+
 /**
  * Parse BGP OPEN message
  * @param {Buffer} buffer - Raw BGP packet buffer
@@ -315,6 +1783,12 @@ function parseUpdateMessage(buffer, context) {
     const pathAttributesEnd = position + pathAttributesLength;
     const { pathAttributes, nextPosition } = parsePathAttributes(buffer, position, pathAttributesEnd, context);
     position = nextPosition;
+    const attributeErrors = [];
+    pathAttributes.forEach(attr => {
+        if (attr.valid === false && Array.isArray(attr.errors)) {
+            attributeErrors.push(...attr.errors.map(error => `${getBgpPathAttrTypeName(attr.typeCode)}: ${error}`));
+        }
+    });
 
     // Parse NLRI
     const nlri = [];
@@ -350,7 +1824,10 @@ function parseUpdateMessage(buffer, context) {
         withdrawnRoutes,
         pathAttributesLength,
         pathAttributes,
-        nlri
+        nlri,
+        valid: attributeErrors.length === 0,
+        error: attributeErrors.join('; '),
+        errors: attributeErrors
     };
 }
 
@@ -462,11 +1939,17 @@ function parsePathAttributes(buffer, startPosition, endPosition, context) {
             case BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI: {
                 // MP_REACH_NLRI
                 attribute.mpReach = parseMpReachNlri(attributeValue, context);
+                attribute.valid = attribute.mpReach.valid;
+                attribute.errors = attribute.mpReach.errors;
+                attribute.warnings = attribute.mpReach.warnings;
                 break;
             }
             case BgpConst.BGP_PATH_ATTR.MP_UNREACH_NLRI: {
                 // MP_UNREACH_NLRI
                 attribute.mpUnreach = parseMpUnreachNlri(attributeValue, context);
+                attribute.valid = attribute.mpUnreach.valid;
+                attribute.errors = attribute.mpUnreach.errors;
+                attribute.warnings = attribute.mpUnreach.warnings;
                 break;
             }
             case BgpConst.BGP_PATH_ATTR.PATH_OTC: {
@@ -610,40 +2093,7 @@ function parseMpReachNlri(buffer, context) {
     const nextHopLength = buffer[position];
     position += 1;
 
-    let nextHop = '';
-
-    if (
-        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) ||
-        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) ||
-        (afi === BgpConst.BGP_AFI_TYPE.AFI_L2VPN && safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN)
-    ) {
-        if (nextHopLength === BgpConst.IP_HOST_BYTE_LEN) {
-            // IPv4
-            nextHop = ipv4BufferToString(buffer.subarray(position, position + 4), BgpConst.IP_HOST_LEN);
-        } else if (nextHopLength === BgpConst.IPV6_HOST_BYTE_LEN) {
-            // IPv6
-            nextHop = ipv6BufferToString(buffer.subarray(position, position + 16), BgpConst.IPV6_HOST_LEN);
-        }
-    } else if (
-        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) ||
-        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN)
-    ) {
-        let tmpPosition = position + BgpConst.BGP_RD_LEN; // 跳过8字节RD
-        let tmpNextHopLength = nextHopLength - BgpConst.BGP_RD_LEN;
-        if (tmpNextHopLength === BgpConst.IP_HOST_BYTE_LEN) {
-            // IPv4
-            nextHop = ipv4BufferToString(buffer.subarray(tmpPosition, tmpPosition + 4), BgpConst.IP_HOST_LEN);
-        } else if (tmpNextHopLength === BgpConst.IPV6_HOST_BYTE_LEN) {
-            // IPv6
-            nextHop = ipv6BufferToString(buffer.subarray(tmpPosition, tmpPosition + 16), BgpConst.IPV6_HOST_LEN);
-        }
-    } else if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
-        if (nextHopLength === BgpConst.IPV6_HOST_BYTE_LEN) {
-            nextHop = ipv6BufferToString(buffer.subarray(position, position + 16), BgpConst.IPV6_HOST_LEN);
-        } else if (nextHopLength === BgpConst.IP_HOST_BYTE_LEN) {
-            nextHop = ipv4BufferToString(buffer.subarray(position, position + 4), BgpConst.IP_HOST_LEN);
-        }
-    }
+    const nextHop = parseNextHop(buffer, position, nextHopLength, afi, safi);
 
     position += nextHopLength;
 
@@ -660,6 +2110,8 @@ function parseMpReachNlri(buffer, context) {
 
     // Parse NLRI
     const nlri = [];
+    const errors = [];
+    const warnings = [];
     while (position < buffer.length) {
         let pathId = 0;
         if (addPathEnabled) {
@@ -667,118 +2119,21 @@ function parseMpReachNlri(buffer, context) {
             position += 4;
         }
 
-        let prefixLength = 0;
-        let prefix = null;
-        let rd = null;
-        if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
-            prefixLength = buffer[position];
-            position += 1;
-
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-
-            prefix = ipv4BufferToString(prefixBuffer, prefixLength);
-        } else if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
-            prefixLength = buffer[position];
-            position += 1;
-
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-
-            prefix = ipv6BufferToString(prefixBuffer, prefixLength);
-        } else if (afi === BgpConst.BGP_AFI_TYPE.AFI_L2VPN && safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) {
-            prefixLength = 0;
-            let _routeType = buffer[position];
-            position += 1;
-
-            let len = buffer[position];
-            prefixLength = len;
-            position += 1;
-            prefix = buffer.subarray(position, position + len).toString('hex');
-            position += len;
-        } else if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
-            prefixLength = buffer[position];
-            position += 1;
-
-            position += 3; // 跳过3字节label
-            const rdBuffer = buffer.subarray(position, position + BgpConst.BGP_RD_LEN);
-            rd = rdBufferToString(rdBuffer);
-            position += BgpConst.BGP_RD_LEN;
-
-            prefixLength -= 3 << 3; // 3字节label
-            prefixLength -= BgpConst.BGP_RD_LEN << 3; // 8字节label
-
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-            prefix = ipv4BufferToString(prefixBuffer, prefixLength);
-        } else if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
-            prefixLength = buffer[position];
-            position += 1;
-
-            position += 3; // 跳过3字节label
-            const rdBuffer = buffer.subarray(position, position + BgpConst.BGP_RD_LEN);
-            rd = rdBufferToString(rdBuffer);
-            position += BgpConst.BGP_RD_LEN;
-
-            prefixLength -= 3 << 3; // 3字节label
-            prefixLength -= BgpConst.BGP_RD_LEN << 3; // 8字节label
-
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-            prefix = ipv6BufferToString(prefixBuffer, prefixLength);
-        } else if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
-            const nlriTotalLength = buffer[position];
-            // TLV 1: DQPN，length 字段单位为 bit
-            position += 1;
-            position += 1; // skip type byte (=1)
-            const dqpnBitLength = buffer[position];
-            position += 1;
-            const { dqpn, byteLength: dqpnByteLength } = parseQpDqpn(buffer, position, dqpnBitLength);
-            position += dqpnByteLength;
-            // TLV 2: prefix
-            position += 1; // skip type byte (=2)
-            prefixLength = buffer[position]; // bits
-            position += 1;
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-            if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4) {
-                prefix = ipv4BufferToString(prefixBuffer, prefixLength);
-            } else {
-                prefix = ipv6BufferToString(prefixBuffer, prefixLength);
-            }
-            nlri.push({
-                pathId,
-                prefix,
-                rd,
-                length: prefixLength,
-                dqpn,
-                dqpnBits: dqpnBitLength,
-                nlriBits: nlriTotalLength * 8
-            });
-            continue;
-        } else {
-            // 不支持，按照16进制解析存储
-            prefixLength = 0;
-            let _routeType = buffer[position];
-            position += 1;
-
-            let len = buffer[position];
-            prefixLength = len;
-            position += 1;
-            prefix = buffer.subarray(position, position + len).toString('hex');
-            position += len;
+        const parsedNlri = parseNlriEntry(buffer, position, afi, safi);
+        if (parsedNlri.position <= position) {
+            break;
+        }
+        position = parsedNlri.position;
+        if (parsedNlri.route.valid === false && Array.isArray(parsedNlri.route.errors)) {
+            errors.push(...parsedNlri.route.errors.map(error => `NLRI ${nlri.length + 1}: ${error}`));
+        }
+        if (Array.isArray(parsedNlri.route.warnings)) {
+            warnings.push(...parsedNlri.route.warnings.map(warning => `NLRI ${nlri.length + 1}: ${warning}`));
         }
 
         nlri.push({
             pathId,
-            prefix,
-            rd,
-            length: prefixLength
+            ...parsedNlri.route
         });
     }
 
@@ -787,7 +2142,10 @@ function parseMpReachNlri(buffer, context) {
         safi,
         nextHopLength,
         nextHop,
-        nlri
+        nlri,
+        valid: errors.length === 0,
+        errors,
+        warnings
     };
 }
 
@@ -814,6 +2172,8 @@ function parseMpUnreachNlri(buffer, context) {
 
     // Parse withdrawn routes
     const withdrawnRoutes = [];
+    const errors = [];
+    const warnings = [];
     while (position < buffer.length) {
         let pathId = 0;
         if (addPathEnabled) {
@@ -821,124 +2181,33 @@ function parseMpUnreachNlri(buffer, context) {
             position += 4;
         }
 
-        let prefixLength = 0;
-        let prefix = null;
-        let rd = null;
-        if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
-            prefixLength = buffer[position];
-            position += 1;
-
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-
-            prefix = ipv4BufferToString(prefixBuffer, prefixLength);
-        } else if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
-            prefixLength = buffer[position];
-            position += 1;
-
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-
-            prefix = ipv6BufferToString(prefixBuffer, prefixLength);
-        } else if (afi === BgpConst.BGP_AFI_TYPE.AFI_L2VPN && safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) {
-            prefixLength = 0;
-            let _routeType = buffer[position];
-            position += 1;
-
-            let len = buffer[position];
-            prefixLength = len;
-            position += 1;
-            prefix = buffer.subarray(position, position + len).toString('hex');
-            position += len;
-        } else if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
-            prefixLength = buffer[position];
-            position += 1;
-
-            position += 3; // 跳过3字节label
-            const rdBuffer = buffer.subarray(position, position + BgpConst.BGP_RD_LEN);
-            rd = rdBufferToString(rdBuffer);
-            position += BgpConst.BGP_RD_LEN;
-
-            prefixLength -= 3 << 3; // 3字节label
-            prefixLength -= BgpConst.BGP_RD_LEN << 3; // 8字节label
-
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-            prefix = ipv4BufferToString(prefixBuffer, prefixLength);
-        } else if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
-            prefixLength = buffer[position];
-            position += 1;
-
-            position += 3; // 跳过3字节label
-            const rdBuffer = buffer.subarray(position, position + BgpConst.BGP_RD_LEN);
-            rd = rdBufferToString(rdBuffer);
-            position += BgpConst.BGP_RD_LEN;
-
-            prefixLength -= 3 << 3; // 3字节label
-            prefixLength -= BgpConst.BGP_RD_LEN << 3; // 8字节label
-
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-            prefix = ipv6BufferToString(prefixBuffer, prefixLength);
-        } else if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
-            // TLV 1: DQPN，length 字段单位为 bit
-            const nlriTotalLength = buffer[position];
-            position += 1;
-            position += 1; // skip type byte (=1)
-            const dqpnBitLength = buffer[position];
-            position += 1;
-            const { dqpn, byteLength: dqpnByteLength } = parseQpDqpn(buffer, position, dqpnBitLength);
-            position += dqpnByteLength;
-            // TLV 2: prefix
-            position += 1; // skip type byte (=2)
-            prefixLength = buffer[position]; // bits
-            position += 1;
-            const prefixBytes = Math.ceil(prefixLength / 8);
-            const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-            position += prefixBytes;
-            if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4) {
-                prefix = ipv4BufferToString(prefixBuffer, prefixLength);
-            } else {
-                prefix = ipv6BufferToString(prefixBuffer, prefixLength);
-            }
-            withdrawnRoutes.push({
-                pathId,
-                prefix,
-                rd,
-                length: prefixLength,
-                dqpn,
-                dqpnBits: dqpnBitLength,
-                nlriBits: nlriTotalLength * 8
-            });
-            continue;
-        } else {
-            prefixLength = 0;
-            let _routeType = buffer[position];
-            position += 1;
-
-            let len = buffer[position];
-            prefixLength = len;
-            position += 1;
-            prefix = buffer.subarray(position, position + len).toString('hex');
-            position += len;
+        const parsedNlri = parseNlriEntry(buffer, position, afi, safi, true);
+        if (parsedNlri.position <= position) {
+            break;
+        }
+        position = parsedNlri.position;
+        if (parsedNlri.route.valid === false && Array.isArray(parsedNlri.route.errors)) {
+            errors.push(...parsedNlri.route.errors.map(error => `Withdrawn NLRI ${withdrawnRoutes.length + 1}: ${error}`));
+        }
+        if (Array.isArray(parsedNlri.route.warnings)) {
+            warnings.push(
+                ...parsedNlri.route.warnings.map(warning => `Withdrawn NLRI ${withdrawnRoutes.length + 1}: ${warning}`)
+            );
         }
 
         withdrawnRoutes.push({
             pathId,
-            prefix,
-            rd,
-            length: prefixLength
+            ...parsedNlri.route
         });
     }
 
     return {
         afi,
         safi,
-        withdrawnRoutes
+        withdrawnRoutes,
+        valid: errors.length === 0,
+        errors,
+        warnings
     };
 }
 

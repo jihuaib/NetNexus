@@ -54,8 +54,10 @@ function getBgpAfiName(afi) {
             return 'IPv4';
         case BgpConst.BGP_AFI_TYPE.AFI_IPV6:
             return 'IPv6';
-        case BgpConst.BGP_AFI_TYPE.L2VPN_EVPN:
+        case BgpConst.BGP_AFI_TYPE.AFI_L2VPN:
             return 'L2VPN';
+        case BgpConst.BGP_AFI_TYPE.AFI_BGP_LS:
+            return 'BGP-LS';
         default:
             return `Unknown (${afi})`;
     }
@@ -70,12 +72,18 @@ function getBgpSafiName(safi) {
     switch (safi) {
         case BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST:
             return 'Unicast';
+        case BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST:
+            return 'Labeled Unicast';
         case BgpConst.BGP_SAFI_TYPE.SAFI_MVPN:
             return 'MVPN';
+        case BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS:
+            return 'BGP-LS';
         case BgpConst.BGP_SAFI_TYPE.SAFI_EVPN:
             return 'EVPN';
         case BgpConst.BGP_SAFI_TYPE.SAFI_VPN:
             return 'VPN';
+        case BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC:
+            return 'FlowSpec';
         case BgpConst.BGP_SAFI_TYPE.SAFI_QP:
             return 'QP';
         default:
@@ -312,8 +320,14 @@ function getAddrFamilyType(afi, safi) {
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.VPNV4;
             }
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+                addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
+            }
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN;
+            }
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC) {
+                addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV4_FLOWSPEC;
             }
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV4_QP;
@@ -326,8 +340,14 @@ function getAddrFamilyType(afi, safi) {
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.VPNV6;
             }
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+                addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST;
+            }
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV6_MVPN;
+            }
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC) {
+                addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV6_FLOWSPEC;
             }
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV6_QP;
@@ -336,6 +356,11 @@ function getAddrFamilyType(afi, safi) {
         case BgpConst.BGP_AFI_TYPE.AFI_L2VPN:
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN;
+            }
+            break;
+        case BgpConst.BGP_AFI_TYPE.AFI_BGP_LS:
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS) {
+                addrFamily = BgpConst.BGP_ADDR_FAMILY.LINK_STATE;
             }
             break;
     }
@@ -368,6 +393,14 @@ function getAfiAndSafi(addrFamily) {
             afi = BgpConst.BGP_AFI_TYPE.AFI_IPV6;
             safi = BgpConst.BGP_SAFI_TYPE.SAFI_VPN;
             break;
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST:
+            afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
+            safi = BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST;
+            break;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST:
+            afi = BgpConst.BGP_AFI_TYPE.AFI_IPV6;
+            safi = BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST;
+            break;
         case BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN:
             afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
             safi = BgpConst.BGP_SAFI_TYPE.SAFI_MVPN;
@@ -376,6 +409,14 @@ function getAfiAndSafi(addrFamily) {
             afi = BgpConst.BGP_AFI_TYPE.AFI_IPV6;
             safi = BgpConst.BGP_SAFI_TYPE.SAFI_MVPN;
             break;
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_FLOWSPEC:
+            afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
+            safi = BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC;
+            break;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_FLOWSPEC:
+            afi = BgpConst.BGP_AFI_TYPE.AFI_IPV6;
+            safi = BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC;
+            break;
         case BgpConst.BGP_ADDR_FAMILY.IPV4_QP:
             afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
             safi = BgpConst.BGP_SAFI_TYPE.SAFI_QP;
@@ -383,6 +424,10 @@ function getAfiAndSafi(addrFamily) {
         case BgpConst.BGP_ADDR_FAMILY.IPV6_QP:
             afi = BgpConst.BGP_AFI_TYPE.AFI_IPV6;
             safi = BgpConst.BGP_SAFI_TYPE.SAFI_QP;
+            break;
+        case BgpConst.BGP_ADDR_FAMILY.LINK_STATE:
+            afi = BgpConst.BGP_AFI_TYPE.AFI_BGP_LS;
+            safi = BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS;
             break;
     }
 

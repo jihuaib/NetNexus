@@ -72,23 +72,32 @@ const BGP_ADDR_FAMILY = {
     IPV4_MVPN: 6,
     IPV6_MVPN: 7,
     IPV4_QP: 8,
-    IPV6_QP: 9
+    IPV6_QP: 9,
+    IPV4_FLOWSPEC: 10,
+    IPV6_FLOWSPEC: 11,
+    IPV4_LABEL_UNICAST: 12,
+    IPV6_LABEL_UNICAST: 13,
+    LINK_STATE: 14
 };
 
 // 协议规定的afi
 const BGP_AFI_TYPE = {
     AFI_IPV4: 1,
     AFI_IPV6: 2,
-    AFI_L2VPN: 25
+    AFI_L2VPN: 25,
+    AFI_BGP_LS: 16388
 };
 
 // 协议规定的safi
 const BGP_SAFI_TYPE = {
     SAFI_UNICAST: 1,
+    SAFI_LABEL_UNICAST: 4,
     SAFI_MVPN: 5,
+    SAFI_BGP_LS: 71,
     SAFI_EVPN: 70,
     SAFI_VPN: 128,
-    SAFI_QP: 253
+    SAFI_FLOW_SPEC: 133,
+    SAFI_QP: 241
 };
 
 // 协议规定的role

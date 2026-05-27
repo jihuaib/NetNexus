@@ -86,6 +86,25 @@ class BmpSession {
         }
     }
 
+    setRouteNlri(route, nlri, afi, safi) {
+        route.pathId = nlri.pathId;
+        route.rd = nlri.rd;
+        route.ip = nlri.displayPrefix || nlri.prefix;
+        route.mask = nlri.length;
+        route.afi = afi;
+        route.safi = safi;
+        route.labels = Array.isArray(nlri.labels)
+            ? nlri.labels.map(label => `${label.label}${label.bottom ? '(BOS)' : ''}`).join(',')
+            : null;
+        route.routeType = nlri.routeType || null;
+        route.rawNlri = nlri.rawNlri || null;
+        route.nlriDetail = nlri;
+        route.parserValid = nlri.valid !== false;
+        route.parseErrors = Array.isArray(nlri.errors) && nlri.errors.length > 0 ? nlri.errors.join('; ') : null;
+        route.parseWarnings =
+            Array.isArray(nlri.warnings) && nlri.warnings.length > 0 ? nlri.warnings.join('; ') : null;
+    }
+
     getRibTypesByFlags(sessionFlags) {
         const ribTypes = [];
 
@@ -307,10 +326,12 @@ class BmpSession {
                             bmpBgpRoute.clearAttributes();
                         }
 
-                        bmpBgpRoute.pathId = nlri.pathId;
-                        bmpBgpRoute.rd = nlri.rd;
-                        bmpBgpRoute.ip = nlri.prefix;
-                        bmpBgpRoute.mask = nlri.length;
+                        this.setRouteNlri(
+                            bmpBgpRoute,
+                            nlri,
+                            BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                            BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+                        );
 
                         // 设置路由属性
                         this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
@@ -369,10 +390,7 @@ class BmpSession {
                             bmpBgpRoute.clearAttributes();
                         }
 
-                        bmpBgpRoute.pathId = nlri.pathId;
-                        bmpBgpRoute.rd = nlri.rd;
-                        bmpBgpRoute.ip = nlri.prefix;
-                        bmpBgpRoute.mask = nlri.length;
+                        this.setRouteNlri(bmpBgpRoute, nlri, mpReachNlri.afi, mpReachNlri.safi);
 
                         // 设置路由属性
                         this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
@@ -547,10 +565,12 @@ class BmpSession {
                         bmpBgpRoute.clearAttributes();
                     }
 
-                    bmpBgpRoute.pathId = nlri.pathId;
-                    bmpBgpRoute.rd = nlri.rd;
-                    bmpBgpRoute.ip = nlri.prefix;
-                    bmpBgpRoute.mask = nlri.length;
+                    this.setRouteNlri(
+                        bmpBgpRoute,
+                        nlri,
+                        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+                    );
 
                     // 设置路由属性
                     this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
@@ -600,10 +620,7 @@ class BmpSession {
                         bmpBgpRoute.clearAttributes();
                     }
 
-                    bmpBgpRoute.pathId = nlri.pathId;
-                    bmpBgpRoute.rd = nlri.rd;
-                    bmpBgpRoute.ip = nlri.prefix;
-                    bmpBgpRoute.mask = nlri.length;
+                    this.setRouteNlri(bmpBgpRoute, nlri, mpReachNlri.afi, mpReachNlri.safi);
 
                     // 设置路由属性
                     this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
