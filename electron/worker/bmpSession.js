@@ -63,6 +63,61 @@ class BmpSession {
         warnings.forEach(warning => logger.warn(`${context}: ${warning}`));
     }
 
+    getBmpV4TlvDraft() {
+        return Number(this.bmpWorker?.bmpConfigData?.bmpV4TlvDraft) === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+            ? BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+            : BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20;
+    }
+
+    getRouteMonitoringTlvTypes() {
+        return this.getBmpV4TlvDraft() === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+            ? BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE_LEGACY
+            : BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE;
+    }
+
+    isBmpV4TlvDraft20() {
+        return this.getBmpV4TlvDraft() === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20;
+    }
+
+    isRouteMonitoringBgpMessageTlv(tlv) {
+        if (tlv.enterprise || (tlv.index !== 0 && tlv.index !== null)) {
+            return false;
+        }
+
+        return tlv.type === this.getRouteMonitoringTlvTypes().BGP_MESSAGE;
+    }
+
+    isRouteMonitoringStatelessParsingTlv(tlv) {
+        if (tlv.enterprise || !Buffer.isBuffer(tlv.value)) {
+            return false;
+        }
+
+        return tlv.type === this.getRouteMonitoringTlvTypes().STATELESS_PARSING;
+    }
+
+    isTextTlvValue(value) {
+        if (!Buffer.isBuffer(value) || value.length === 0 || value.length > 255) {
+            return false;
+        }
+
+        return value.every(byte => byte >= 0x20 && byte !== 0x7f);
+    }
+
+    isVrfTableNameTlv(tlv) {
+        if (tlv.enterprise || !Buffer.isBuffer(tlv.value)) {
+            return false;
+        }
+
+        if (tlv.index !== null && tlv.index !== undefined) {
+            return tlv.type === this.getRouteMonitoringTlvTypes().VRF_TABLE_NAME;
+        }
+
+        return (
+            tlv.type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME &&
+            this.isTextTlvValue(tlv.value)
+        );
+    }
+
     decodeStatelessParsingTlvs(tlvs) {
         const addPathMap = new Map();
         if (!Array.isArray(tlvs)) {
@@ -70,11 +125,7 @@ class BmpSession {
         }
 
         tlvs.forEach(tlv => {
-            if (
-                tlv.enterprise ||
-                tlv.type !== BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.STATELESS_PARSING ||
-                !Buffer.isBuffer(tlv.value)
-            ) {
+            if (!this.isRouteMonitoringStatelessParsingTlv(tlv)) {
                 return;
             }
 
@@ -149,12 +200,7 @@ class BmpSession {
         }
 
         return tlvs
-            .filter(
-                tlv =>
-                    !tlv.enterprise &&
-                    (tlv.type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME ||
-                        tlv.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME)
-            )
+            .filter(tlv => this.isVrfTableNameTlv(tlv))
             .map(tlv => {
                 tlv.name = 'VRF/Table Name';
                 tlv.valueText = tlv.value.toString('utf8');
@@ -264,12 +310,7 @@ class BmpSession {
             this.logTlvWarnings('Route Monitoring TLV', tlvResult.warnings);
 
             const routeTlvs = tlvResult.tlvs;
-            const bgpMessageTlv = routeTlvs.find(
-                tlv =>
-                    !tlv.enterprise &&
-                    tlv.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE &&
-                    (tlv.index === 0 || tlv.index === null)
-            );
+            const bgpMessageTlv = routeTlvs.find(tlv => this.isRouteMonitoringBgpMessageTlv(tlv));
 
             if (!bgpMessageTlv) {
                 return {
@@ -448,7 +489,9 @@ class BmpSession {
             }
             const parsedBgpUpdate = routePayload.parsedBgpUpdate;
             const effectiveSessionFlags =
-                version === BmpConst.BMP_VERSION.V4 ? getEffectivePeerFlags(sessionFlags, routePayload.routeTlvs) : sessionFlags;
+                version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
+                    ? getEffectivePeerFlags(sessionFlags, routePayload.routeTlvs)
+                    : sessionFlags;
             bgpSession.lastRouteMonitoringTlvs = routePayload.routeTlvs || [];
 
             if (!parsedBgpUpdate.valid) {
@@ -916,6 +959,7 @@ class BmpSession {
             sysName: this.sysName,
             sysDesc: this.sysDesc,
             bmpVersion: this.bmpVersion,
+            bmpV4TlvDraft: this.getBmpV4TlvDraft(),
             rawTlvs: toSerializableTlvs(this.tlvs),
             terminationTlvs: toSerializableTlvs(this.terminationTlvs),
             receivedAt: this.receivedAt
@@ -998,7 +1042,9 @@ class BmpSession {
             position += 1;
             const peerDownPayload = this.parsePeerDownPayload(message, position, reason, version);
             const effectiveSessionFlags =
-                version === BmpConst.BMP_VERSION.V4 ? getEffectivePeerFlags(sessionFlags, peerDownPayload.tlvs) : sessionFlags;
+                version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
+                    ? getEffectivePeerFlags(sessionFlags, peerDownPayload.tlvs)
+                    : sessionFlags;
 
             const ribTypes = this.getRibTypesByFlags(effectiveSessionFlags);
             if (ribTypes.length === 0) {
@@ -1174,7 +1220,9 @@ class BmpSession {
             this.logTlvWarnings('Peer Up TLV', peerUpTlvResult.warnings);
             const peerUpTlvs = peerUpTlvResult.tlvs;
             const effectiveSessionFlags =
-                version === BmpConst.BMP_VERSION.V4 ? getEffectivePeerFlags(sessionFlags, peerUpTlvs) : sessionFlags;
+                version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
+                    ? getEffectivePeerFlags(sessionFlags, peerUpTlvs)
+                    : sessionFlags;
 
             // 识别是否需要ADD-PATH
             const recvAddPaths = new Map(); // afi|safi -> code
@@ -1422,7 +1470,9 @@ class BmpSession {
             const peerUpTlvs = peerUpTlvResult.tlvs;
             const vrfTableNames = this.decodeVrfTableNameTlvs(peerUpTlvs);
             const effectiveInstanceFlags =
-                version === BmpConst.BMP_VERSION.V4 ? getEffectivePeerFlags(instanceFlags, peerUpTlvs) : instanceFlags;
+                version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
+                    ? getEffectivePeerFlags(instanceFlags, peerUpTlvs)
+                    : instanceFlags;
 
             // 识别是否需要ADD-PATH
             const recvAddPaths = new Map(); // afi|safi -> code
@@ -1648,7 +1698,7 @@ class BmpSession {
 
             let statistics = [];
             let tlvs = [];
-            if (version === BmpConst.BMP_VERSION.V4) {
+            if (version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()) {
                 const tlvResult = parseBmpTlvs(message, position);
                 this.logTlvWarnings('Statistics Report TLV', tlvResult.warnings);
                 tlvs = tlvResult.tlvs;
@@ -1719,7 +1769,7 @@ class BmpSession {
 
             let statistics = [];
             let tlvs = [];
-            if (version === BmpConst.BMP_VERSION.V4) {
+            if (version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()) {
                 const tlvResult = parseBmpTlvs(message, position);
                 this.logTlvWarnings('Local-RIB Statistics Report TLV', tlvResult.warnings);
                 tlvs = tlvResult.tlvs;

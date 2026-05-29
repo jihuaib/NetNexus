@@ -108,9 +108,15 @@ function tlv(type, value) {
     return Buffer.concat([u16(type), u16(value.length), value]);
 }
 
-function makeSession() {
+function makeSession(config = {}) {
     const events = [];
-    const bmpWorker = { bmpSessionMap: new Map() };
+    const bmpWorker = {
+        bmpSessionMap: new Map(),
+        bmpConfigData: {
+            bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20,
+            ...config
+        }
+    };
     const session = new BmpSession(
         {
             sendEvent(type, payload) {
@@ -127,6 +133,29 @@ function makeSession() {
     bmpWorker.bmpSessionMap.set(BmpSession.makeKey(session.localIp, session.localPort, session.remoteIp, session.remotePort), session);
 
     return { session, events };
+}
+
+function bytesFromDump(dump) {
+    return Buffer.from(
+        dump
+            .split(/\n/)
+            .flatMap(line =>
+                line
+                    .replace(/^\s*[0-9a-f]+\s+/i, '')
+                    .trim()
+                    .split(/\s+/)
+                    .filter(Boolean)
+                    .map(value => parseInt(value, 16))
+            )
+    );
+}
+
+function tcpPayloadFromEthernetFrame(frame) {
+    const ipOffset = 14;
+    const ipHeaderLength = (frame[ipOffset] & 0x0f) * 4;
+    const tcpOffset = ipOffset + ipHeaderLength;
+    const tcpHeaderLength = (frame[tcpOffset + 12] >> 4) * 4;
+    return frame.subarray(tcpOffset + tcpHeaderLength);
 }
 
 const { session, events } = makeSession();
@@ -246,5 +275,76 @@ assert.ok(locRibStatsEvent, 'BMPv4 Loc-RIB Stats TLV should emit an instance sta
 assert.equal(locRibStatsEvent.payload.data.statistics[0].afi, BgpConst.BGP_AFI_TYPE.AFI_IPV4);
 assert.equal(locRibStatsEvent.payload.data.statistics[0].safi, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
 assert.equal(locRibStatsEvent.payload.data.statistics[0].value, 7);
+
+const huaweiDraft19Frame = bytesFromDump(`
+0000   00 50 56 c0 00 03 fa a9 61 f7 00 10 08 00 45 00
+0010   01 98 00 04 00 00 ff 06 70 fc c0 a8 64 0b c0 a8
+0020   64 03 c7 43 06 fe d4 92 51 8b c2 62 00 e7 50 18
+0030   f0 00 c7 2f 00 00 04 00 00 00 a4 03 03 80 00 00
+0040   00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0050   00 00 00 00 00 00 00 00 00 64 c0 a8 64 0b 6a 19
+0060   f7 fe 00 06 74 58 00 00 00 00 00 00 00 00 00 00
+0070   00 00 00 00 00 00 00 00 00 00 ff ff ff ff ff ff
+0080   ff ff ff ff ff ff ff ff ff ff 00 2b 01 04 00 64
+0090   00 b4 c0 a8 64 0b 0e 02 0c 41 04 00 00 00 64 01
+00a0   04 00 01 00 01 ff ff ff ff ff ff ff ff ff ff ff
+00b0   ff ff ff ff ff 00 2b 01 04 00 64 00 b4 c0 a8 64
+00c0   0b 0e 02 0c 41 04 00 00 00 64 01 04 00 01 00 01
+00d0   00 03 00 06 67 6c 6f 62 61 6c 04 00 00 00 73 00
+00e0   03 80 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00f0   00 00 00 00 00 00 00 00 00 00 00 00 00 64 c0 a8
+0100   64 0b 6a 19 f7 5d 00 06 7a 74 00 03 00 06 00 00
+0110   67 6c 6f 62 61 6c 00 04 00 31 00 00 ff ff ff ff
+0120   ff ff ff ff ff ff ff ff ff ff ff ff 00 31 02 00
+0130   00 00 15 40 01 01 02 40 02 00 40 03 04 00 00 00
+0140   00 80 04 04 00 00 00 00 20 02 01 01 01 04 00 00
+0150   00 59 00 03 80 00 00 00 00 00 00 00 00 00 00 00
+0160   00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0170   64 c0 a8 64 0b 6a 19 f7 fe 00 06 7a bf 00 03 00
+0180   06 00 00 67 6c 6f 62 61 6c 00 04 00 17 00 00 ff
+0190   ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 00
+01a0   17 02 00 00 00 00
+`);
+
+const huaweiDraft20Session = makeSession();
+huaweiDraft20Session.session.recvMsg(tcpPayloadFromEthernetFrame(huaweiDraft19Frame));
+const huaweiDraft20Instance = huaweiDraft20Session.session.bgpInstanceMap.get(locRibPeerUpInstanceKey);
+assert.equal(
+    huaweiDraft20Instance ? huaweiDraft20Instance.bgpRoutes.size : 0,
+    0,
+    'draft-20 mode should not auto-detect Huawei draft-19 Route Monitoring TLVs'
+);
+
+const { session: huaweiSession, events: huaweiEvents } = makeSession({
+    bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+});
+huaweiSession.recvMsg(tcpPayloadFromEthernetFrame(huaweiDraft19Frame));
+const huaweiLocRibInstance = huaweiSession.bgpInstanceMap.get(locRibPeerUpInstanceKey);
+assert.ok(huaweiLocRibInstance, 'Huawei BMPv4 draft-19 Loc-RIB messages should create a Loc-RIB instance');
+assert.deepEqual(huaweiLocRibInstance.vrfTableNames, ['global']);
+const huaweiRoutes = [...huaweiLocRibInstance.bgpRoutes.values()];
+assert.equal(huaweiRoutes.length, 1);
+assert.equal(huaweiRoutes[0].ip, '2.1.1.1');
+assert.ok(huaweiEvents.some(event => event.type === BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE));
+
+const { session: draft19StatsSession, events: draft19StatsEvents } = makeSession({
+    bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+});
+draft19StatsSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.STATISTICS_REPORT,
+        Buffer.concat([
+            peerHeader(),
+            u32(1),
+            u16(BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN),
+            u16(4),
+            u32(456)
+        ])
+    )
+);
+const draft19StatsEvent = draft19StatsEvents.find(event => event.type === BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT);
+assert.ok(draft19StatsEvent, 'draft-19 mode should parse BMPv4 raw statistics records');
+assert.equal(draft19StatsEvent.payload.data.statistics[0].value, 456);
 
 console.log('BMPv4 parser tests passed');

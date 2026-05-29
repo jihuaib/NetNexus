@@ -5,6 +5,16 @@ export const BMP_VERSION = {
     V4: 4
 };
 
+export const BMP_V4_TLV_DRAFT = {
+    DRAFT_19: 19,
+    DRAFT_20: 20
+};
+
+export const BMP_V4_TLV_DRAFT_NAME = {
+    [BMP_V4_TLV_DRAFT.DRAFT_19]: 'draft-19',
+    [BMP_V4_TLV_DRAFT.DRAFT_20]: 'draft-20'
+};
+
 export const BMP_PEER_TYPE = {
     GLOBAL: 0,
     L3VPN: 1,
@@ -96,6 +106,13 @@ export const BMP_ROUTE_MONITORING_TLV_TYPE = {
     BGP_MESSAGE: 7
 };
 
+export const BMP_ROUTE_MONITORING_TLV_TYPE_LEGACY = {
+    STATELESS_PARSING: 1,
+    GROUP: 2,
+    VRF_TABLE_NAME: 3,
+    BGP_MESSAGE: 4
+};
+
 export const BMP_STATS_REPORT_TLV_TYPE = {
     STATS: 1,
     ...BMP_TLV_TYPE
@@ -122,6 +139,10 @@ export const BMP_PEER_DOWN_REASON_NAME = {
 export const getBmpVersionName = version => {
     if (!version) return '-';
     return `BMPv${version}`;
+};
+
+export const getBmpV4TlvDraftName = draft => {
+    return BMP_V4_TLV_DRAFT_NAME[Number(draft)] || BMP_V4_TLV_DRAFT_NAME[BMP_V4_TLV_DRAFT.DRAFT_20];
 };
 
 export const getBmpFlagsName = flags => {
@@ -179,6 +200,7 @@ export const BMP_LOC_RIB_STATS_TYPE_NAME = {
 // Default Values
 export const DEFAULT_VALUES = {
     DEFAULT_BMP_PORT: '1790',
+    DEFAULT_BMP_V4_TLV_DRAFT: BMP_V4_TLV_DRAFT.DRAFT_20,
     DEFAULT_GRPC_PORT: 50051
 };
 

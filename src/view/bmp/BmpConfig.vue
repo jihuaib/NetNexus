@@ -18,6 +18,16 @@
                         </a-row>
                         <a-row>
                             <a-col :span="24">
+                                <a-form-item label="v4 TLV格式" name="bmpV4TlvDraft">
+                                    <a-radio-group v-model:value="bmpConfig.bmpV4TlvDraft" button-style="solid">
+                                        <a-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_20">draft-20</a-radio-button>
+                                        <a-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_19">draft-19</a-radio-button>
+                                    </a-radio-group>
+                                </a-form-item>
+                            </a-col>
+                        </a-row>
+                        <a-row>
+                            <a-col :span="24">
                                 <a-form-item label="启用认证" name="enableAuth">
                                     <a-checkbox v-model:checked="bmpConfig.enableAuth" />
                                 </a-form-item>
@@ -148,6 +158,9 @@
                                         {{ getBmpVersionName(record.bmpVersion) }}
                                     </a-tag>
                                 </template>
+                                <template v-else-if="column.key === 'bmpV4TlvDraft'">
+                                    <a-tag>{{ getBmpV4TlvDraftName(record.bmpV4TlvDraft) }}</a-tag>
+                                </template>
                                 <template v-else-if="column.key === 'tlvCount'">
                                     {{ getClientTlvCount(record) }}
                                 </template>
@@ -177,7 +190,13 @@
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
     import { FormValidator, createBmpConfigValidationRules } from '../../utils/validationCommon';
-    import { DEFAULT_VALUES, BMP_EVENT_PAGE_ID, getBmpVersionName } from '../../const/bmpConst';
+    import {
+        DEFAULT_VALUES,
+        BMP_EVENT_PAGE_ID,
+        BMP_V4_TLV_DRAFT,
+        getBmpVersionName,
+        getBmpV4TlvDraftName
+    } from '../../const/bmpConst';
     import EventBus from '../../utils/eventBus';
 
     defineOptions({
@@ -191,6 +210,7 @@
 
     const bmpConfig = ref({
         port: DEFAULT_VALUES.DEFAULT_BMP_PORT,
+        bmpV4TlvDraft: DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT,
         localPort: '11019',
         enableAuth: false,
         authMode: 'md5', // 'md5' or 'keychain'
@@ -206,6 +226,12 @@
 
     const getClientTlvCount = record => {
         return (record.rawTlvs || []).length + (record.terminationTlvs || []).length;
+    };
+
+    const normalizeBmpV4TlvDraft = draft => {
+        return Number(draft) === BMP_V4_TLV_DRAFT.DRAFT_19
+            ? BMP_V4_TLV_DRAFT.DRAFT_19
+            : BMP_V4_TLV_DRAFT.DRAFT_20;
     };
 
     // Initiation messages list
@@ -227,6 +253,12 @@
             title: 'BMP版本',
             dataIndex: 'bmpVersion',
             key: 'bmpVersion',
+            width: 90
+        },
+        {
+            title: 'v4 TLV',
+            dataIndex: 'bmpV4TlvDraft',
+            key: 'bmpV4TlvDraft',
             width: 90
         },
         {
@@ -307,6 +339,7 @@
 
         try {
             const payload = JSON.parse(JSON.stringify(bmpConfig.value));
+            payload.bmpV4TlvDraft = normalizeBmpV4TlvDraft(payload.bmpV4TlvDraft);
             const saveResult = await window.bmpApi.saveBmpConfig(payload);
             if (saveResult.status !== 'success') {
                 message.error(saveResult.msg || '配置文件保存失败');
@@ -424,6 +457,7 @@
         const savedConfig = await window.bmpApi.loadBmpConfig();
         if (savedConfig.status === 'success' && savedConfig.data) {
             bmpConfig.value.port = savedConfig.data.port || DEFAULT_VALUES.DEFAULT_BMP_PORT;
+            bmpConfig.value.bmpV4TlvDraft = normalizeBmpV4TlvDraft(savedConfig.data.bmpV4TlvDraft);
             bmpConfig.value.enableAuth = savedConfig.data.enableAuth || false;
             bmpConfig.value.authMode = savedConfig.data.authMode || 'md5';
             bmpConfig.value.localPort = savedConfig.data.localPort;
