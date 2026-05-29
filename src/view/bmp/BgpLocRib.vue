@@ -15,7 +15,7 @@
                                         <a-tab-pane
                                             v-for="instance in bgpInstances"
                                             :key="`${instance.instanceType}|${instance.instanceRd}|${instance.addrFamilyType}`"
-                                            :tab="`${instance.instanceType} | ${instance.instanceRd} | ${ADDRESS_FAMILY_NAME[instance.addrFamilyType]}`"
+                                            :tab="`${formatVrfTableName(instance)} | ${ADDRESS_FAMILY_NAME[instance.addrFamilyType]}`"
                                         >
                                             <a-table
                                                 :columns="bgpInstanceColumns"
@@ -30,6 +30,17 @@
                                                     <template v-if="column.key === 'addPath'">
                                                         <a-tag v-if="record.isAddPath" color="green">Yes</a-tag>
                                                         <a-tag v-else color="red">No</a-tag>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'instanceFlags'">
+                                                        <a-tooltip :title="getBmpLocRibFlagsName(record.instanceFlags)">
+                                                            <span>{{ getBmpLocRibFlagsName(record.instanceFlags) }}</span>
+                                                        </a-tooltip>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'rawInstanceFlags'">
+                                                        <span>{{ formatRawFlags(record.rawInstanceFlags) }}</span>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'tlvCount'">
+                                                        <span>{{ getInstanceTlvCount(record) }}</span>
                                                     </template>
                                                     <template v-else-if="column.key === 'action'">
                                                         <a-button
@@ -86,7 +97,12 @@
 <script setup>
     import { ref, onActivated, watch, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
-    import { BMP_SESSION_TYPE_NAME, BMP_SESSION_STATE_NAME, BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
+    import {
+        BMP_SESSION_TYPE_NAME,
+        BMP_SESSION_STATE_NAME,
+        BMP_EVENT_PAGE_ID,
+        getBmpLocRibFlagsName
+    } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME } from '../../const/bgpConst';
     import EventBus from '../../utils/eventBus';
     defineOptions({
@@ -97,6 +113,21 @@
     const clientList = ref([]);
     const activeClientKey = ref('');
 
+    const formatRawFlags = flags => {
+        if (flags === null || flags === undefined) return '-';
+        return `0x${Number(flags).toString(16).padStart(2, '0')}`;
+    };
+
+    const getInstanceTlvCount = record => {
+        return (record.peerUpTlvs || []).length + (record.lastRouteMonitoringTlvs || []).length;
+    };
+
+    const formatVrfTableName = instance => {
+        return Array.isArray(instance.vrfTableNames) && instance.vrfTableNames.length > 0
+            ? instance.vrfTableNames.join(', ')
+            : `${instance.instanceType} | ${instance.instanceRd}`;
+    };
+
     const bgpInstanceColumns = [
         {
             title: 'Instance Type',
@@ -106,6 +137,16 @@
             width: 100,
             customRender: ({ text }) => {
                 return BMP_SESSION_TYPE_NAME[text] || text;
+            }
+        },
+        {
+            title: 'VRF/Table',
+            dataIndex: 'vrfTableNames',
+            key: 'vrfTableNames',
+            width: 100,
+            ellipsis: true,
+            customRender: ({ text }) => {
+                return Array.isArray(text) && text.length > 0 ? text.join(', ') : '-';
             }
         },
         {
@@ -141,6 +182,26 @@
             key: 'addPath',
             ellipsis: true,
             width: 80
+        },
+        {
+            title: 'Flags',
+            dataIndex: 'instanceFlags',
+            key: 'instanceFlags',
+            ellipsis: true,
+            width: 140
+        },
+        {
+            title: 'Raw Flags',
+            dataIndex: 'rawInstanceFlags',
+            key: 'rawInstanceFlags',
+            ellipsis: true,
+            width: 90
+        },
+        {
+            title: 'TLV数量',
+            key: 'tlvCount',
+            width: 80,
+            align: 'right'
         },
         {
             title: 'Instance状态',

@@ -1,5 +1,10 @@
 // BMP peer types, 需要和后台定义保持一致, 后台会
 // 直接使用这个值处理
+export const BMP_VERSION = {
+    V3: 3,
+    V4: 4
+};
+
 export const BMP_PEER_TYPE = {
     GLOBAL: 0,
     L3VPN: 1,
@@ -13,7 +18,13 @@ export const BMP_SESSION_FLAGS = {
     IPV6: 0x80, // V 位: 使用 IPv6 地址
     POST_POLICY: 0x40, // P 位: Adj-RIB-In 是策略后导出的（post-policy）
     AS_PATH: 0x20, // L 位: 表示 AS_PATH
-    ADJ_RIB_OUT: 0x10 // O 位: Adj-RIB-Out
+    ADJ_RIB_OUT: 0x10, // O 位: Adj-RIB-Out
+    FILTERED: 0x08, // F 位: Local-RIB filtered
+    EXTENDED_FLAGS: 0x01 // X 位: Extended Flags TLV carries effective flags
+};
+
+export const BMP_LOC_RIB_FLAGS = {
+    FILTERED: 0x80
 };
 
 // 需要和后台定义保持一致, 后台会
@@ -41,7 +52,13 @@ export const BMP_SESSION_FLAGS_NAME = {
     [BMP_SESSION_FLAGS.IPV6]: 'IPv6',
     [BMP_SESSION_FLAGS.POST_POLICY]: 'Post Policy',
     [BMP_SESSION_FLAGS.AS_PATH]: 'AS Path',
-    [BMP_SESSION_FLAGS.ADJ_RIB_OUT]: 'Adj RIB Out'
+    [BMP_SESSION_FLAGS.ADJ_RIB_OUT]: 'Adj RIB Out',
+    [BMP_SESSION_FLAGS.FILTERED]: 'Filtered',
+    [BMP_SESSION_FLAGS.EXTENDED_FLAGS]: 'Extended Flags'
+};
+
+export const BMP_LOC_RIB_FLAGS_NAME = {
+    [BMP_LOC_RIB_FLAGS.FILTERED]: 'Filtered'
 };
 
 export const BMP_SESSION_STATE_NAME = {
@@ -63,6 +80,64 @@ export const BMP_BGP_RIB_TYPE_NAME = {
     [BMP_BGP_RIB_TYPE.AS_PATH]: 'AS Path',
     [BMP_BGP_RIB_TYPE.ADJ_RIB_OUT]: 'Adj RIB Out',
     [BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT]: 'Post Adj RIB Out'
+};
+
+export const BMP_TLV_TYPE = {
+    SEQUENCE_NUMBER: 1,
+    EXTENDED_FLAGS: 2,
+    TIMESTAMP: 3
+};
+
+export const BMP_ROUTE_MONITORING_TLV_TYPE = {
+    ...BMP_TLV_TYPE,
+    GROUP: 4,
+    VRF_TABLE_NAME: 5,
+    STATELESS_PARSING: 6,
+    BGP_MESSAGE: 7
+};
+
+export const BMP_STATS_REPORT_TLV_TYPE = {
+    STATS: 1,
+    ...BMP_TLV_TYPE
+};
+
+export const BMP_PEER_DOWN_REASON = {
+    LOCAL_SYSTEM_CLOSED_WITH_NOTIFICATION: 1,
+    LOCAL_SYSTEM_CLOSED_NO_NOTIFICATION: 2,
+    REMOTE_SYSTEM_CLOSED_WITH_NOTIFICATION: 3,
+    REMOTE_SYSTEM_CLOSED_NO_NOTIFICATION: 4,
+    PEER_DE_CONFIGURED: 5,
+    LOCAL_SYSTEM_CLOSED_WITH_TLV: 6
+};
+
+export const BMP_PEER_DOWN_REASON_NAME = {
+    [BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_WITH_NOTIFICATION]: 'Local Notification',
+    [BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_NO_NOTIFICATION]: 'Local No Notification',
+    [BMP_PEER_DOWN_REASON.REMOTE_SYSTEM_CLOSED_WITH_NOTIFICATION]: 'Remote Notification',
+    [BMP_PEER_DOWN_REASON.REMOTE_SYSTEM_CLOSED_NO_NOTIFICATION]: 'Remote No Notification',
+    [BMP_PEER_DOWN_REASON.PEER_DE_CONFIGURED]: 'Peer De-configured',
+    [BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_WITH_TLV]: 'Local TLV'
+};
+
+export const getBmpVersionName = version => {
+    if (!version) return '-';
+    return `BMPv${version}`;
+};
+
+export const getBmpFlagsName = flags => {
+    if (flags === null || flags === undefined) return '-';
+    const names = Object.entries(BMP_SESSION_FLAGS_NAME)
+        .filter(([flag]) => (Number(flags) & Number(flag)) !== 0)
+        .map(([, name]) => name);
+    return names.length > 0 ? names.join(', ') : 'None';
+};
+
+export const getBmpLocRibFlagsName = flags => {
+    if (flags === null || flags === undefined) return '-';
+    const names = Object.entries(BMP_LOC_RIB_FLAGS_NAME)
+        .filter(([flag]) => (Number(flags) & Number(flag)) !== 0)
+        .map(([, name]) => name);
+    return names.length > 0 ? names.join(', ') : 'None';
 };
 
 // BMP Statistics Types (RFC 7854 Section 4.8)
@@ -94,6 +169,11 @@ export const BMP_STATS_TYPE_NAME = {
     [BMP_STATS_TYPE.NUM_UPDATES_TREATED_AS_WITHDRAW]: '被视为撤销的更新数',
     [BMP_STATS_TYPE.NUM_PREFIXES_TREATED_AS_WITHDRAW]: '被视为撤销的前缀数',
     [BMP_STATS_TYPE.NUM_DUPLICATE_UPDATE_MESSAGES]: '重复的更新消息数'
+};
+
+export const BMP_LOC_RIB_STATS_TYPE_NAME = {
+    [BMP_STATS_TYPE.NUM_LOC_RIB]: 'Loc-RIB 中的路由数',
+    [BMP_STATS_TYPE.NUM_PREFIXES_TREATED_AS_WITHDRAW]: '每 AFI/SAFI Loc-RIB 中的路由数'
 };
 
 // Default Values

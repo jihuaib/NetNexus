@@ -143,7 +143,15 @@
                             size="small"
                         >
                             <template #bodyCell="{ column, record }">
-                                <template v-if="column.key === 'action'">
+                                <template v-if="column.key === 'bmpVersion'">
+                                    <a-tag :color="record.bmpVersion === 4 ? 'blue' : 'default'">
+                                        {{ getBmpVersionName(record.bmpVersion) }}
+                                    </a-tag>
+                                </template>
+                                <template v-else-if="column.key === 'tlvCount'">
+                                    {{ getClientTlvCount(record) }}
+                                </template>
+                                <template v-else-if="column.key === 'action'">
                                     <a-button type="link" @click="viewClientDetails(record)">详情</a-button>
                                 </template>
                             </template>
@@ -169,7 +177,7 @@
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
     import { FormValidator, createBmpConfigValidationRules } from '../../utils/validationCommon';
-    import { DEFAULT_VALUES, BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
+    import { DEFAULT_VALUES, BMP_EVENT_PAGE_ID, getBmpVersionName } from '../../const/bmpConst';
     import EventBus from '../../utils/eventBus';
 
     defineOptions({
@@ -196,6 +204,10 @@
     const serverDeploymentStatus = ref(false);
     const keychains = ref([]);
 
+    const getClientTlvCount = record => {
+        return (record.rawTlvs || []).length + (record.terminationTlvs || []).length;
+    };
+
     // Initiation messages list
     const clientList = ref([]);
     const clientColumns = [
@@ -210,6 +222,12 @@
             dataIndex: 'remotePort',
             key: 'remotePort',
             ellipsis: true
+        },
+        {
+            title: 'BMP版本',
+            dataIndex: 'bmpVersion',
+            key: 'bmpVersion',
+            width: 90
         },
         {
             title: '系统名称',
@@ -233,6 +251,12 @@
                 const date = new Date(text);
                 return date.toLocaleString();
             }
+        },
+        {
+            title: 'TLV数量',
+            key: 'tlvCount',
+            width: 90,
+            align: 'right'
         },
         {
             title: '操作',

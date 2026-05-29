@@ -1,4 +1,5 @@
 const { getAddrFamilyType } = require('../utils/bgpUtils');
+const { toSerializableTlvs } = require('../utils/bmpUtils');
 
 class BmpBgpInstance {
     constructor(bmpSession) {
@@ -8,6 +9,7 @@ class BmpBgpInstance {
         this.safi = null;
         this.instanceType = null;
         this.instanceFlags = null;
+        this.rawInstanceFlags = null;
         this.instanceRd = null;
         this.instanceIp = null;
         this.instanceAs = null;
@@ -18,6 +20,9 @@ class BmpBgpInstance {
         this.localPort = null;
         this.remotePort = null;
         this.instanceState = null;
+        this.peerUpTlvs = [];
+        this.lastRouteMonitoringTlvs = [];
+        this.vrfTableNames = [];
 
         this.recvAddressFamilies = [];
         this.sendAddressFamilies = [];
@@ -63,6 +68,7 @@ class BmpBgpInstance {
             addrFamilyType: getAddrFamilyType(this.afi, this.safi),
             instanceType: this.instanceType,
             instanceFlags: this.instanceFlags,
+            rawInstanceFlags: this.rawInstanceFlags,
             instanceRd: this.instanceRd,
             instanceIp: this.instanceIp,
             instanceAs: this.instanceAs,
@@ -80,7 +86,10 @@ class BmpBgpInstance {
             ribTypes: this.ribTypes,
             recvAddPathMap: Object.fromEntries(this.recvAddPathMap),
             sendAddPathMap: Object.fromEntries(this.sendAddPathMap),
-            isAddPath: this.isAddPath
+            isAddPath: this.isAddPath,
+            peerUpTlvs: toSerializableTlvs(this.peerUpTlvs),
+            lastRouteMonitoringTlvs: toSerializableTlvs(this.lastRouteMonitoringTlvs),
+            vrfTableNames: this.vrfTableNames
         };
     }
 

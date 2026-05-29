@@ -1,6 +1,14 @@
 const logger = require('../log/logger');
 const BmpConst = require('../const/bmpConst');
-const { getInitiationTlvName } = require('../utils/bmpUtils');
+const {
+    getInitiationTlvName,
+    parseCommonHeader,
+    parsePeerHeader,
+    parseBmpTlvs,
+    toSerializableTlvs,
+    getEffectivePeerFlags,
+    parseStatsRecords
+} = require('../utils/bmpUtils');
 const BgpConst = require('../const/bgpConst');
 const BmpBgpSession = require('./bmpBgpSession');
 const BmpBgpRoute = require('./bmpBgpRoute');
@@ -22,6 +30,8 @@ class BmpSession {
         this.sysDesc = null;
         this.receivedAt = null;
         this.tlvs = [];
+        this.bmpVersion = null;
+        this.terminationTlvs = [];
 
         this.bgpSessionMap = new Map();
         this.bgpInstanceMap = new Map();
@@ -44,6 +54,290 @@ class BmpSession {
             return this.instAddPathMap.get(key);
         }
         return false;
+    }
+
+    logTlvWarnings(context, warnings) {
+        if (!Array.isArray(warnings)) {
+            return;
+        }
+        warnings.forEach(warning => logger.warn(`${context}: ${warning}`));
+    }
+
+    decodeStatelessParsingTlvs(tlvs) {
+        const addPathMap = new Map();
+        if (!Array.isArray(tlvs)) {
+            return addPathMap;
+        }
+
+        tlvs.forEach(tlv => {
+            if (
+                tlv.enterprise ||
+                tlv.type !== BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.STATELESS_PARSING ||
+                !Buffer.isBuffer(tlv.value)
+            ) {
+                return;
+            }
+
+            tlv.name = 'Stateless Parsing';
+            tlv.decoded = { capabilities: [] };
+            let position = 0;
+            while (position + 2 <= tlv.value.length) {
+                const capCode = tlv.value[position];
+                position += 1;
+                const capLength = tlv.value[position];
+                position += 1;
+
+                if (position + capLength > tlv.value.length) {
+                    logger.warn(`Stateless Parsing TLV capability ${capCode} is truncated`);
+                    break;
+                }
+
+                const capValue = tlv.value.subarray(position, position + capLength);
+                position += capLength;
+                const capability = {
+                    code: capCode,
+                    length: capLength,
+                    valueHex: capValue.toString('hex')
+                };
+
+                if (capCode === BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH) {
+                    capability.addPaths = [];
+                    let capPosition = 0;
+                    while (capPosition + 4 <= capValue.length) {
+                        const afi = capValue.readUInt16BE(capPosition);
+                        capPosition += 2;
+                        const safi = capValue[capPosition];
+                        capPosition += 1;
+                        const sendReceive = capValue[capPosition];
+                        capPosition += 1;
+
+                        capability.addPaths.push({ afi, safi, sendReceive });
+                        addPathMap.set(`${afi}|${safi}`, sendReceive !== 0);
+                    }
+                }
+
+                tlv.decoded.capabilities.push(capability);
+            }
+        });
+
+        return addPathMap;
+    }
+
+    createBgpParsingContext(tlvs, fallbackContext) {
+        const statelessAddPathMap = this.decodeStatelessParsingTlvs(tlvs);
+        if (statelessAddPathMap.size === 0) {
+            return fallbackContext;
+        }
+
+        return {
+            isAddPathReceiveEnabled: (afi, safi) => {
+                const key = `${afi}|${safi}`;
+                if (statelessAddPathMap.has(key)) {
+                    return statelessAddPathMap.get(key);
+                }
+                if (fallbackContext && typeof fallbackContext.isAddPathReceiveEnabled === 'function') {
+                    return fallbackContext.isAddPathReceiveEnabled(afi, safi);
+                }
+                return false;
+            }
+        };
+    }
+
+    decodeVrfTableNameTlvs(tlvs) {
+        if (!Array.isArray(tlvs)) {
+            return [];
+        }
+
+        return tlvs
+            .filter(
+                tlv =>
+                    !tlv.enterprise &&
+                    (tlv.type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME ||
+                        tlv.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME)
+            )
+            .map(tlv => {
+                tlv.name = 'VRF/Table Name';
+                tlv.valueText = tlv.value.toString('utf8');
+                return tlv.valueText;
+            });
+    }
+
+    updateLocRibAddPathFromTlvs(instanceType, instanceRd, tlvs) {
+        const statelessAddPathMap = this.decodeStatelessParsingTlvs(tlvs);
+        statelessAddPathMap.forEach((enabled, key) => {
+            this.instAddPathMap.set(key, enabled);
+            const [afi, safi] = key.split('|');
+            const instanceKey = BmpBgpInstance.makeKey(instanceType, instanceRd, afi, safi);
+            const bgpInstance = this.bgpInstanceMap.get(instanceKey);
+            if (bgpInstance) {
+                bgpInstance.isAddPath = enabled;
+            }
+        });
+    }
+
+    getOrCreateLocRibInstance(peer, afi, safi, options = {}) {
+        const instanceKey = BmpBgpInstance.makeKey(peer.peerType, peer.peerRd, afi, safi);
+        let bgpInstance = this.bgpInstanceMap.get(instanceKey);
+        if (!bgpInstance) {
+            bgpInstance = new BmpBgpInstance(this);
+            this.bgpInstanceMap.set(instanceKey, bgpInstance);
+        }
+
+        const addrFamily = { afi, safi };
+        this.mergeAddressFamilies(bgpInstance.enabledAddressFamilies, [addrFamily]);
+        if (!bgpInstance.afi) {
+            bgpInstance.afi = afi;
+            bgpInstance.safi = safi;
+        }
+
+        bgpInstance.instanceType = peer.peerType;
+        bgpInstance.instanceFlags = peer.peerFlags;
+        bgpInstance.rawInstanceFlags = peer.peerFlags;
+        bgpInstance.instanceRd = peer.peerRd;
+        bgpInstance.instanceIp = peer.peerAddress;
+        bgpInstance.instanceAs = peer.peerAs;
+        bgpInstance.instanceRouterId = peer.peerRouterId;
+        bgpInstance.instanceTimestamp = peer.peerTimestamp;
+        bgpInstance.instanceTimestampMs = peer.peerTimestampMs;
+        bgpInstance.localIp = options.localAddress || bgpInstance.localIp || '0.0.0.0';
+        bgpInstance.localPort = options.localPort || bgpInstance.localPort || 0;
+        bgpInstance.remotePort = options.remotePort || bgpInstance.remotePort || 0;
+        bgpInstance.instanceState = BmpConst.BMP_SESSION_STATE.PEER_UP;
+
+        if (Array.isArray(options.peerUpTlvs)) {
+            bgpInstance.peerUpTlvs = options.peerUpTlvs;
+        }
+        if (Array.isArray(options.routeTlvs)) {
+            bgpInstance.lastRouteMonitoringTlvs = options.routeTlvs;
+        }
+
+        const vrfTableNames = [
+            ...this.decodeVrfTableNameTlvs(options.peerUpTlvs),
+            ...this.decodeVrfTableNameTlvs(options.routeTlvs)
+        ];
+        if (vrfTableNames.length > 0) {
+            bgpInstance.vrfTableNames = Array.from(new Set([...(bgpInstance.vrfTableNames || []), ...vrfTableNames]));
+        } else if (!bgpInstance.vrfTableNames || bgpInstance.vrfTableNames.length === 0) {
+            bgpInstance.vrfTableNames = peer.peerRd === '0:0' ? ['global'] : [];
+        }
+
+        return bgpInstance;
+    }
+
+    parseEmbeddedBgpPacket(message, position, context, label) {
+        if (position + BgpConst.BGP_HEAD_LEN > message.length) {
+            return {
+                error: `${label} header is truncated`
+            };
+        }
+
+        const bgpHeader = this.parseBgpHeader(message.subarray(position, position + BgpConst.BGP_HEAD_LEN));
+        if (!bgpHeader || bgpHeader.length < BgpConst.BGP_HEAD_LEN) {
+            return {
+                error: `${label} has invalid header`
+            };
+        }
+
+        if (position + bgpHeader.length > message.length) {
+            return {
+                error: `${label} length ${bgpHeader.length} exceeds remaining bytes`
+            };
+        }
+
+        const packet = message.subarray(position, position + bgpHeader.length);
+        const parsed = parseBgpPacket(packet, context);
+        if (!parsed.valid) {
+            logger.error(`${label} is invalid: ${parsed.error}`);
+        }
+
+        return {
+            packet,
+            parsed,
+            length: bgpHeader.length,
+            type: bgpHeader.type
+        };
+    }
+
+    parseRouteMonitoringBgpUpdate(message, position, version, context) {
+        if (version === BmpConst.BMP_VERSION.V4) {
+            const tlvResult = parseBmpTlvs(message, position, { indexed: true });
+            this.logTlvWarnings('Route Monitoring TLV', tlvResult.warnings);
+
+            const routeTlvs = tlvResult.tlvs;
+            const bgpMessageTlv = routeTlvs.find(
+                tlv =>
+                    !tlv.enterprise &&
+                    tlv.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE &&
+                    (tlv.index === 0 || tlv.index === null)
+            );
+
+            if (!bgpMessageTlv) {
+                return {
+                    error: 'BMPv4 Route Monitoring message does not contain mandatory BGP Message TLV',
+                    routeTlvs
+                };
+            }
+
+            bgpMessageTlv.name = 'BGP Message';
+            const bgpContext = this.createBgpParsingContext(routeTlvs, context);
+            const parsed = parseBgpPacket(bgpMessageTlv.value, bgpContext);
+            if (!parsed.valid) {
+                logger.error(`Received BMPv4 BGP Update message is invalid: ${parsed.error}`);
+            }
+
+            return {
+                parsedBgpUpdate: parsed,
+                bgpUpdate: bgpMessageTlv.value,
+                routeTlvs
+            };
+        }
+
+        const embedded = this.parseEmbeddedBgpPacket(message, position, context, 'BGP Update message');
+        if (embedded.error) {
+            return embedded;
+        }
+
+        return {
+            parsedBgpUpdate: embedded.parsed,
+            bgpUpdate: embedded.packet,
+            routeTlvs: []
+        };
+    }
+
+    parsePeerDownPayload(message, position, reason, version) {
+        const result = {
+            parsedBgpNotification: null,
+            fsmEventCode: null,
+            tlvs: []
+        };
+
+        if (
+            reason === BmpConst.BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_WITH_NOTIFICATION ||
+            reason === BmpConst.BMP_PEER_DOWN_REASON.REMOTE_SYSTEM_CLOSED_WITH_NOTIFICATION
+        ) {
+            const embedded = this.parseEmbeddedBgpPacket(message, position, null, 'BGP Notification message');
+            if (!embedded.error) {
+                result.parsedBgpNotification = embedded.parsed;
+                position += embedded.length;
+            } else {
+                logger.warn(`Peer Down: ${embedded.error}`);
+            }
+        } else if (reason === BmpConst.BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_NO_NOTIFICATION) {
+            if (position + 2 <= message.length) {
+                result.fsmEventCode = message.readUInt16BE(position);
+                position += 2;
+            } else {
+                logger.warn('Peer Down: FSM event code is truncated');
+            }
+        }
+
+        if (version === BmpConst.BMP_VERSION.V4 || reason === BmpConst.BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_WITH_TLV) {
+            const tlvResult = parseBmpTlvs(message, position);
+            this.logTlvWarnings('Peer Down TLV', tlvResult.warnings);
+            result.tlvs = tlvResult.tlvs;
+        }
+
+        return result;
     }
 
     // 辅助方法：设置路由属性
@@ -106,71 +400,39 @@ class BmpSession {
     }
 
     getRibTypesByFlags(sessionFlags) {
-        const ribTypes = [];
+        const postPolicy = (sessionFlags & BmpConst.BMP_SESSION_FLAGS.POST_POLICY) !== 0;
+        const adjRibOut = (sessionFlags & BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT) !== 0;
+        const asPath = (sessionFlags & BmpConst.BMP_SESSION_FLAGS.AS_PATH) !== 0;
 
-        if (sessionFlags === 0x00 || sessionFlags === BmpConst.BMP_SESSION_FLAGS.IPV6) {
-            ribTypes.push(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
+        if (adjRibOut) {
+            return [
+                postPolicy ? BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT : BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT
+            ];
         }
 
-        if (
-            sessionFlags === (0x00 | BmpConst.BMP_SESSION_FLAGS.POST_POLICY) ||
-            sessionFlags === (BmpConst.BMP_SESSION_FLAGS.IPV6 | BmpConst.BMP_SESSION_FLAGS.POST_POLICY)
-        ) {
-            ribTypes.push(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN);
+        if (asPath) {
+            return [BmpConst.BMP_BGP_RIB_TYPE.AS_PATH];
         }
 
-        if (
-            sessionFlags === (0x00 | BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT) ||
-            sessionFlags === (BmpConst.BMP_SESSION_FLAGS.IPV6 | BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT)
-        ) {
-            ribTypes.push(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT);
-        }
-
-        if (
-            sessionFlags === (0x00 | BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT | BmpConst.BMP_SESSION_FLAGS.POST_POLICY) ||
-            sessionFlags ===
-                (BmpConst.BMP_SESSION_FLAGS.IPV6 |
-                    BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT |
-                    BmpConst.BMP_SESSION_FLAGS.POST_POLICY)
-        ) {
-            ribTypes.push(BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT);
-        }
-
-        return ribTypes;
+        return [postPolicy ? BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN : BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN];
     }
 
-    processRouteMonitoringGlobal(message) {
+    processRouteMonitoringGlobal(message, version = BmpConst.BMP_VERSION.V3) {
         try {
             let position = 0;
-            const sessionType = message[position];
-            position += 1;
-            const sessionFlags = message[position];
-            position += 1;
-            const rdBuffer = message.subarray(position, position + BgpConst.BGP_RD_LEN);
-            position += BgpConst.BGP_RD_LEN;
-            const sessionRd = rdBufferToString(rdBuffer);
-
-            let sessionAddress;
-            if (sessionFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
-                // IPv6 对等体
-                sessionAddress = ipv6BufferToString(message.subarray(position, position + 16), 128);
-                position += 16;
-            } else {
-                // IPv4 对等体
-                // 12字节保留字段
-                position += 12;
-                sessionAddress = ipv4BufferToString(message.subarray(position, position + 4), 32);
-                position += 4;
+            const peerHeader = parsePeerHeader(message, position);
+            if (!peerHeader.valid) {
+                logger.error(peerHeader.error);
+                return;
             }
-
-            const sessionAs = message.readUInt32BE(position);
-            position += 4;
-            const _sessionRouterId = ipv4BufferToString(message.subarray(position, position + 4), 32);
-            position += 4;
-            const _sessionTimestamp = message.readUInt32BE(position);
-            position += 4;
-            const _sessionTimestampMs = message.readUInt32BE(position);
-            position += 4;
+            position = peerHeader.offset;
+            const {
+                peerType: sessionType,
+                peerFlags: sessionFlags,
+                peerRd: sessionRd,
+                peerAddress: sessionAddress,
+                peerAs: sessionAs
+            } = peerHeader.peer;
 
             const bgpSessionKey = BmpBgpSession.makeKey(sessionType, sessionRd, sessionAddress, sessionAs);
             const bgpSession = this.bgpSessionMap.get(bgpSessionKey);
@@ -179,23 +441,24 @@ class BmpSession {
                 return;
             }
 
-            // BGP 更新消息
-            const bgpUpdateHeader = message.subarray(position, position + BgpConst.BGP_HEAD_LEN);
-            const { length: updateLength, type: _updateType } = this.parseBgpHeader(bgpUpdateHeader);
-            const bgpUpdate = message.subarray(position, position + updateLength);
-
-            // Pass bgpSession for ADD-PATH capability check
-            const parsedBgpUpdate = parseBgpPacket(bgpUpdate, bgpSession); // passing bgpSession as second arg
+            const routePayload = this.parseRouteMonitoringBgpUpdate(message, position, version, bgpSession);
+            if (routePayload.error) {
+                logger.error(routePayload.error);
+                return;
+            }
+            const parsedBgpUpdate = routePayload.parsedBgpUpdate;
+            const effectiveSessionFlags =
+                version === BmpConst.BMP_VERSION.V4 ? getEffectivePeerFlags(sessionFlags, routePayload.routeTlvs) : sessionFlags;
+            bgpSession.lastRouteMonitoringTlvs = routePayload.routeTlvs || [];
 
             if (!parsedBgpUpdate.valid) {
                 logger.error(`Received BGP Update message is invalid: ${parsedBgpUpdate.error}`);
             }
-            position += updateLength;
 
             let isNotify = false;
-            const ribTypes = this.getRibTypesByFlags(sessionFlags);
+            const ribTypes = this.getRibTypesByFlags(effectiveSessionFlags);
             if (ribTypes.length === 0) {
-                logger.error(`Received BGP Update message from unknown rib type: ${sessionFlags}`);
+                logger.error(`Received BGP Update message from unknown rib type: ${effectiveSessionFlags}`);
                 return;
             }
 
@@ -416,61 +679,39 @@ class BmpSession {
         }
     }
 
-    processRouteMonitoringLocalRib(message) {
+    processRouteMonitoringLocalRib(message, version = BmpConst.BMP_VERSION.V3) {
         try {
             let position = 0;
-            const instanceType = message[position];
-            position += 1;
-            const instanceFlags = message[position];
-            position += 1;
-            const rdBuffer = message.subarray(position, position + BgpConst.BGP_RD_LEN);
-            position += BgpConst.BGP_RD_LEN;
-            const instanceRd = rdBufferToString(rdBuffer);
-
-            let _instanceAddress;
-            if (instanceFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
-                // IPv6 对等体
-                _instanceAddress = ipv6BufferToString(message.subarray(position, position + 16), 128);
-                position += 16;
-            } else {
-                // IPv4 对等体
-                // 12字节保留字段
-                position += 12;
-                _instanceAddress = ipv4BufferToString(message.subarray(position, position + 4), 32);
-                position += 4;
+            const peerHeader = parsePeerHeader(message, position);
+            if (!peerHeader.valid) {
+                logger.error(peerHeader.error);
+                return;
             }
+            position = peerHeader.offset;
+            const locRibPeer = peerHeader.peer;
+            const { peerType: instanceType, peerRd: instanceRd } = locRibPeer;
 
-            const _instanceAs = message.readUInt32BE(position);
-            position += 4;
-            const _instanceRouterId = ipv4BufferToString(message.subarray(position, position + 4), 32);
-            position += 4;
-            const _instanceTimestamp = message.readUInt32BE(position);
-            position += 4;
-            const _instanceTimestampMs = message.readUInt32BE(position);
-            position += 4;
-
-            // BGP 更新消息
-            const bgpUpdateHeader = message.subarray(position, position + BgpConst.BGP_HEAD_LEN);
-            const { length: updateLength, type: _updateType } = this.parseBgpHeader(bgpUpdateHeader);
-            const bgpUpdate = message.subarray(position, position + updateLength);
-
-            // Pass bgpSession for ADD-PATH capability check
-            const parsedBgpUpdate = parseBgpPacket(bgpUpdate, this); // passing bgpSession as second arg
+            const routePayload = this.parseRouteMonitoringBgpUpdate(message, position, version, this);
+            if (routePayload.error) {
+                logger.error(routePayload.error);
+                return;
+            }
+            const parsedBgpUpdate = routePayload.parsedBgpUpdate;
+            this.updateLocRibAddPathFromTlvs(instanceType, instanceRd, routePayload.routeTlvs);
 
             if (!parsedBgpUpdate.valid) {
                 logger.error(`Received BGP Update message is invalid: ${parsedBgpUpdate.error}`);
             }
-            position += updateLength;
 
             let isNotify = false;
             // 处理withdrawn routes (IPv4)
             if (parsedBgpUpdate.withdrawnRoutes && parsedBgpUpdate.withdrawnRoutes.length > 0) {
-                const instKey = `${instanceType}|${instanceRd}|${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`;
-                const bgpInstance = this.bgpInstanceMap.get(instKey);
-                if (!bgpInstance) {
-                    logger.error(`Received BGP Update message from unknown instance: ${instKey}`);
-                    return;
-                }
+                const bgpInstance = this.getOrCreateLocRibInstance(
+                    locRibPeer,
+                    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                    { routeTlvs: routePayload.routeTlvs }
+                );
 
                 // 删除所有撤销的路由
                 for (const withdrawn of parsedBgpUpdate.withdrawnRoutes) {
@@ -510,12 +751,9 @@ class BmpSession {
             }
 
             if (mpUnreachNlri && mpUnreachNlri.withdrawnRoutes && mpUnreachNlri.withdrawnRoutes.length > 0) {
-                const instKey = `${instanceType}|${instanceRd}|${mpUnreachNlri.afi}|${mpUnreachNlri.safi}`;
-                const bgpInstance = this.bgpInstanceMap.get(instKey);
-                if (!bgpInstance) {
-                    logger.error(`Received BGP Update message from unknown instance: ${instKey}`);
-                    return;
-                }
+                const bgpInstance = this.getOrCreateLocRibInstance(locRibPeer, mpUnreachNlri.afi, mpUnreachNlri.safi, {
+                    routeTlvs: routePayload.routeTlvs
+                });
 
                 // 删除所有撤销的路由
                 for (const withdrawn of mpUnreachNlri.withdrawnRoutes) {
@@ -547,12 +785,12 @@ class BmpSession {
             isNotify = false;
             // 处理IPv4 NLRI
             if (parsedBgpUpdate.nlri && parsedBgpUpdate.nlri.length > 0) {
-                const instKey = `${instanceType}|${instanceRd}|${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`;
-                const bgpInstance = this.bgpInstanceMap.get(instKey);
-                if (!bgpInstance) {
-                    logger.error(`Received BGP Update message from unknown instance: ${instKey}`);
-                    return;
-                }
+                const bgpInstance = this.getOrCreateLocRibInstance(
+                    locRibPeer,
+                    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                    { routeTlvs: routePayload.routeTlvs }
+                );
 
                 for (const nlri of parsedBgpUpdate.nlri) {
                     const routeKey = BmpBgpRoute.makeKey(nlri.pathId, nlri.rd, nlri.prefix, nlri.length);
@@ -602,12 +840,9 @@ class BmpSession {
 
             if (mpReachNlri && mpReachNlri.nlri && mpReachNlri.nlri.length > 0) {
                 // 寻找匹配的多协议peer
-                const instKey = `${instanceType}|${instanceRd}|${mpReachNlri.afi}|${mpReachNlri.safi}`;
-                const bgpInstance = this.bgpInstanceMap.get(instKey);
-                if (!bgpInstance) {
-                    logger.error(`Received BGP Update message from unknown instance: ${instKey}`);
-                    return;
-                }
+                const bgpInstance = this.getOrCreateLocRibInstance(locRibPeer, mpReachNlri.afi, mpReachNlri.safi, {
+                    routeTlvs: routePayload.routeTlvs
+                });
 
                 for (const nlri of mpReachNlri.nlri) {
                     const routeKey = BmpBgpRoute.makeKey(nlri.pathId, nlri.rd, nlri.prefix, nlri.length);
@@ -644,14 +879,18 @@ class BmpSession {
         }
     }
 
-    processRouteMonitoring(message) {
+    processRouteMonitoring(message, version = BmpConst.BMP_VERSION.V3) {
         let position = 0;
         const sessionType = message[position];
 
-        if (sessionType === BmpConst.BMP_PEER_TYPE.GLOBAL) {
-            this.processRouteMonitoringGlobal(message);
+        if (
+            sessionType === BmpConst.BMP_PEER_TYPE.GLOBAL ||
+            sessionType === BmpConst.BMP_PEER_TYPE.L3VPN ||
+            sessionType === BmpConst.BMP_PEER_TYPE.LOCAL
+        ) {
+            this.processRouteMonitoringGlobal(message, version);
         } else if (sessionType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB) {
-            this.processRouteMonitoringLocalRib(message);
+            this.processRouteMonitoringLocalRib(message, version);
         } else {
             logger.error(`Received BGP Update message from unknown session type: ${sessionType}`);
             return;
@@ -676,56 +915,41 @@ class BmpSession {
             remotePort: this.remotePort,
             sysName: this.sysName,
             sysDesc: this.sysDesc,
-            rawTlvs: this.tlvs,
+            bmpVersion: this.bmpVersion,
+            rawTlvs: toSerializableTlvs(this.tlvs),
+            terminationTlvs: toSerializableTlvs(this.terminationTlvs),
             receivedAt: this.receivedAt
         };
     }
 
     processInitiation(message) {
         try {
-            let position = 0;
-
             this.tlvs = [];
-
-            // 解析消息中的所有TLV
-            while (position < message.length) {
-                // 每个TLV由Type (2字节), Length (2字节)和Value (可变)组成
-                if (position + 4 > message.length) {
-                    break; // 没有足够的TLV头数据
-                }
-
-                const type = message.readUInt16BE(position);
-                position += 2;
-
-                const length = message.readUInt16BE(position);
-                position += 2;
-
-                if (position + length > message.length) {
-                    break; // 没有足够的TLV值数据
-                }
-
-                const value = message.subarray(position, position + length).toString('utf8');
-                position += length;
-
-                this.tlvs.push({ type, length, value });
-            }
+            const tlvResult = parseBmpTlvs(message);
+            this.logTlvWarnings('Initiation TLV', tlvResult.warnings);
+            this.tlvs = tlvResult.tlvs;
 
             // 提取已知的TLV类型
             this.sysName = '';
             this.sysDesc = '';
 
             for (const tlv of this.tlvs) {
+                tlv.name = getInitiationTlvName(tlv.type);
                 switch (tlv.type) {
                     case BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME: // sysName
-                        this.sysName = tlv.value;
-                        tlv.tlvName = getInitiationTlvName(tlv.type);
+                        if (!tlv.enterprise) {
+                            tlv.valueText = tlv.value.toString('utf8');
+                            this.sysName = tlv.valueText;
+                        }
                         break;
                     case BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC: // sysDesc
-                        this.sysDesc = tlv.value;
-                        tlv.tlvName = getInitiationTlvName(tlv.type);
+                        if (!tlv.enterprise) {
+                            tlv.valueText = tlv.value.toString('utf8');
+                            this.sysDesc = tlv.valueText;
+                        }
                         break;
                     default:
-                        tlv.tlvName = getInitiationTlvName(tlv.type);
+                        break;
                 }
             }
 
@@ -753,59 +977,33 @@ class BmpSession {
         return { marker, length, type };
     }
 
-    processPeerDownGlobal(message) {
+    processPeerDownGlobal(message, version = BmpConst.BMP_VERSION.V3) {
         try {
             let position = 0;
-            const sessionType = message[position];
-            position += 1;
-            const sessionFlags = message[position];
-            position += 1;
-            const rdBuffer = message.subarray(position, position + BgpConst.BGP_RD_LEN);
-            position += BgpConst.BGP_RD_LEN;
-            const sessionRd = rdBufferToString(rdBuffer);
-
-            let sessionAddress;
-            if (sessionFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
-                // IPv6 peer
-                sessionAddress = ipv6BufferToString(message.subarray(position, position + 16), 128);
-                position += 16;
-            } else {
-                // IPv4 peer
-                // 12字节保留字段
-                position += 12;
-                sessionAddress = ipv4BufferToString(message.subarray(position, position + 4), 32);
-                position += 4;
-            }
-
-            const sessionAs = message.readUInt32BE(position);
-            position += 4;
-            const _sessionRouterId = ipv4BufferToString(message.subarray(position, position + 4), 32);
-            position += 4;
-            const _sessionTimestamp = message.readUInt32BE(position);
-            position += 4;
-            const _sessionTimestampMs = message.readUInt32BE(position);
-            position += 4;
-
-            const _reason = message[position];
-            position += 1;
-
-            const ribTypes = this.getRibTypesByFlags(sessionFlags);
-            if (ribTypes.length === 0) {
-                logger.error(`Received BGP Update message from unknown rib type: ${sessionFlags}`);
+            const peerHeader = parsePeerHeader(message, position);
+            if (!peerHeader.valid) {
+                logger.error(peerHeader.error);
                 return;
             }
+            position = peerHeader.offset;
+            const {
+                peerType: sessionType,
+                peerFlags: sessionFlags,
+                peerRd: sessionRd,
+                peerAddress: sessionAddress,
+                peerAs: sessionAs
+            } = peerHeader.peer;
 
-            let parsedBgpNotification = null;
-            if (position + BgpConst.BGP_HEAD_LEN <= message.length) {
-                // BGP notification message
-                const bgpNotificationHeader = message.subarray(position, position + BgpConst.BGP_HEAD_LEN);
-                const { length: notificationLength, type: _notificationType } =
-                    this.parseBgpHeader(bgpNotificationHeader);
-                const bgpNotification = message.subarray(position, position + notificationLength);
-                parsedBgpNotification = parseBgpPacket(bgpNotification);
-                if (!parsedBgpNotification.valid) {
-                    logger.error(`Received BGP Notification message is invalid: ${parsedBgpNotification.error}`);
-                }
+            const reason = message[position];
+            position += 1;
+            const peerDownPayload = this.parsePeerDownPayload(message, position, reason, version);
+            const effectiveSessionFlags =
+                version === BmpConst.BMP_VERSION.V4 ? getEffectivePeerFlags(sessionFlags, peerDownPayload.tlvs) : sessionFlags;
+
+            const ribTypes = this.getRibTypesByFlags(effectiveSessionFlags);
+            if (ribTypes.length === 0) {
+                logger.error(`Received BGP Update message from unknown rib type: ${effectiveSessionFlags}`);
+                return;
             }
 
             const sessKey = BmpBgpSession.makeKey(sessionType, sessionRd, sessionAddress, sessionAs);
@@ -815,7 +1013,11 @@ class BmpSession {
                 return;
             }
 
-            if (parsedBgpNotification) {
+            bgpSession.peerDownReason = reason;
+            bgpSession.peerDownTlvs = peerDownPayload.tlvs;
+            bgpSession.peerDownFsmEventCode = peerDownPayload.fsmEventCode;
+
+            if (peerDownPayload.parsedBgpNotification) {
                 // bgp断开
                 bgpSession.closeSession();
                 this.bgpSessionMap.delete(sessKey);
@@ -840,56 +1042,30 @@ class BmpSession {
         }
     }
 
-    processPeerDownLocalRib(message) {
+    processPeerDownLocalRib(message, version = BmpConst.BMP_VERSION.V3) {
         try {
             let position = 0;
-            const _instanceType = message[position];
-            position += 1;
-            const instanceFlags = message[position];
-            position += 1;
-            const rdBuffer = message.subarray(position, position + BgpConst.BGP_RD_LEN);
-            position += BgpConst.BGP_RD_LEN;
-            const _instanceRd = rdBufferToString(rdBuffer);
-
-            let _instanceAddress;
-            if (instanceFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
-                // IPv6 peer
-                _instanceAddress = ipv6BufferToString(message.subarray(position, position + 16), 128);
-                position += 16;
-            } else {
-                // IPv4 peer
-                // 12字节保留字段
-                position += 12;
-                _instanceAddress = ipv4BufferToString(message.subarray(position, position + 4), 32);
-                position += 4;
+            const peerHeader = parsePeerHeader(message, position);
+            if (!peerHeader.valid) {
+                logger.error(peerHeader.error);
+                return;
             }
+            position = peerHeader.offset;
+            const { peerType: instanceType, peerRd: instanceRd } = peerHeader.peer;
 
-            const _instanceAs = message.readUInt32BE(position);
-            position += 4;
-            const _instanceRouterId = ipv4BufferToString(message.subarray(position, position + 4), 32);
-            position += 4;
-            const _instanceTimestamp = message.readUInt32BE(position);
-            position += 4;
-            const _instanceTimestampMs = message.readUInt32BE(position);
-            position += 4;
-
-            const _reason = message[position];
+            const reason = message[position];
             position += 1;
+            const peerDownPayload = this.parsePeerDownPayload(message, position, reason, version);
+            this.decodeVrfTableNameTlvs(peerDownPayload.tlvs);
 
-            let parsedBgpNotification = null;
-            if (position + BgpConst.BGP_HEAD_LEN <= message.length) {
-                // BGP notification message
-                const bgpNotificationHeader = message.subarray(position, position + BgpConst.BGP_HEAD_LEN);
-                const { length: notificationLength, type: _notificationType } =
-                    this.parseBgpHeader(bgpNotificationHeader);
-                const bgpNotification = message.subarray(position, position + notificationLength);
-                parsedBgpNotification = parseBgpPacket(bgpNotification);
-                if (!parsedBgpNotification.valid) {
-                    logger.error(`Received BGP Notification message is invalid: ${parsedBgpNotification.error}`);
+            const prefix = `${instanceType}|${instanceRd}|`;
+            this.bgpInstanceMap.forEach((instance, key) => {
+                if (key.startsWith(prefix)) {
+                    instance.closeInstance();
+                    this.bgpInstanceMap.delete(key);
                 }
-            }
+            });
 
-            // todo: loc-rib 无法识别down的实例
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE, {
                 data: {
                     client: this.getClientInfo()
@@ -900,19 +1076,23 @@ class BmpSession {
         }
     }
 
-    processPeerDown(message) {
+    processPeerDown(message, version = BmpConst.BMP_VERSION.V3) {
         let position = 0;
         const peerType = message[position];
-        if (peerType === BmpConst.BMP_PEER_TYPE.GLOBAL) {
-            this.processPeerDownGlobal(message);
+        if (
+            peerType === BmpConst.BMP_PEER_TYPE.GLOBAL ||
+            peerType === BmpConst.BMP_PEER_TYPE.L3VPN ||
+            peerType === BmpConst.BMP_PEER_TYPE.LOCAL
+        ) {
+            this.processPeerDownGlobal(message, version);
         } else if (peerType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB) {
-            this.processPeerDownLocalRib(message);
+            this.processPeerDownLocalRib(message, version);
         } else {
             logger.error(`Unknown peer type: ${peerType}`);
         }
     }
 
-    processPeerUpGlobal(message) {
+    processPeerUpGlobal(message, version = BmpConst.BMP_VERSION.V3) {
         try {
             let position = 0;
             const sessionType = message[position];
@@ -989,6 +1169,12 @@ class BmpSession {
                 }
                 position += sendOpenLength;
             }
+
+            const peerUpTlvResult = parseBmpTlvs(message, position);
+            this.logTlvWarnings('Peer Up TLV', peerUpTlvResult.warnings);
+            const peerUpTlvs = peerUpTlvResult.tlvs;
+            const effectiveSessionFlags =
+                version === BmpConst.BMP_VERSION.V4 ? getEffectivePeerFlags(sessionFlags, peerUpTlvs) : sessionFlags;
 
             // 识别是否需要ADD-PATH
             const recvAddPaths = new Map(); // afi|safi -> code
@@ -1114,7 +1300,9 @@ class BmpSession {
                 }
             });
 
-            bgpSession.sessionFlags = (bgpSession.sessionFlags || 0) | sessionFlags;
+            bgpSession.sessionFlags = (bgpSession.sessionFlags || 0) | effectiveSessionFlags;
+            bgpSession.rawSessionFlags = sessionFlags;
+            bgpSession.peerUpTlvs = peerUpTlvs;
 
             // 考虑到不同厂商实现不同，此处不从报文中获取ribType，改为一次性全部创建出来
             const ribTypes = [
@@ -1139,7 +1327,7 @@ class BmpSession {
 
             // 正常相同bgp Session这些字段一样
             bgpSession.sessionType = sessionType;
-            bgpSession.sessionFlags = sessionFlags;
+            bgpSession.sessionFlags = effectiveSessionFlags;
             bgpSession.sessionRd = sessionRd;
             bgpSession.sessionIp = sessionAddress;
             bgpSession.sessionAs = sessionAs;
@@ -1161,41 +1349,31 @@ class BmpSession {
         }
     }
 
-    processPeerUpLocalRib(message) {
+    processPeerUpLocalRib(message, version = BmpConst.BMP_VERSION.V3) {
         try {
             let position = 0;
-            const instanceType = message[position];
-            position += 1;
-            const instanceFlags = message[position];
-            position += 1;
-            const rdBuffer = message.subarray(position, position + BgpConst.BGP_RD_LEN);
-            position += BgpConst.BGP_RD_LEN;
-            const instanceRd = rdBufferToString(rdBuffer);
-
-            let instanceAddress;
-            if (instanceFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
-                // IPv6 peer
-                instanceAddress = ipv6BufferToString(message.subarray(position, position + 16), 128);
-                position += 16;
-            } else {
-                // IPv4 peer
-                // 12字节保留字段
-                position += 12;
-                instanceAddress = ipv4BufferToString(message.subarray(position, position + 4), 32);
-                position += 4;
+            const peerHeader = parsePeerHeader(message, position);
+            if (!peerHeader.valid) {
+                logger.error(peerHeader.error);
+                return;
             }
-
-            const instanceAs = message.readUInt32BE(position);
-            position += 4;
-            const instanceRouterId = ipv4BufferToString(message.subarray(position, position + 4), 32);
-            position += 4;
-            const instanceTimestamp = message.readUInt32BE(position);
-            position += 4;
-            const instanceTimestampMs = message.readUInt32BE(position);
-            position += 4;
+            position = peerHeader.offset;
+            const {
+                peerType: instanceType,
+                peerFlags: instanceFlags,
+                peerRd: instanceRd,
+                peerAddress: instanceAddress,
+                peerAs: instanceAs,
+                peerRouterId: instanceRouterId,
+                peerTimestamp: instanceTimestamp,
+                peerTimestampMs: instanceTimestampMs
+            } = peerHeader.peer;
 
             let localAddress;
-            if (instanceFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
+            if (instanceType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB) {
+                localAddress = '0.0.0.0';
+                position += 16;
+            } else if (instanceFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
                 // IPv6 peer
                 localAddress = ipv6BufferToString(message.subarray(position, position + 16), 128);
                 position += 16;
@@ -1238,6 +1416,13 @@ class BmpSession {
                 }
                 position += sendOpenLength;
             }
+
+            const peerUpTlvResult = parseBmpTlvs(message, position);
+            this.logTlvWarnings('Peer Up Local-RIB TLV', peerUpTlvResult.warnings);
+            const peerUpTlvs = peerUpTlvResult.tlvs;
+            const vrfTableNames = this.decodeVrfTableNameTlvs(peerUpTlvs);
+            const effectiveInstanceFlags =
+                version === BmpConst.BMP_VERSION.V4 ? getEffectivePeerFlags(instanceFlags, peerUpTlvs) : instanceFlags;
 
             // 识别是否需要ADD-PATH
             const recvAddPaths = new Map(); // afi|safi -> code
@@ -1321,9 +1506,17 @@ class BmpSession {
                 bgpInstance.afi = enabledAF.afi;
                 bgpInstance.safi = enabledAF.safi;
 
-                bgpInstance.instanceFlags = (bgpInstance.instanceFlags || 0) | instanceFlags;
+                bgpInstance.instanceFlags = (bgpInstance.instanceFlags || 0) | effectiveInstanceFlags;
+                bgpInstance.rawInstanceFlags = instanceFlags;
+                bgpInstance.peerUpTlvs = peerUpTlvs;
+                bgpInstance.vrfTableNames =
+                    vrfTableNames.length > 0
+                        ? vrfTableNames
+                        : instanceRd === '0:0'
+                          ? ['global']
+                          : bgpInstance.vrfTableNames;
 
-                const ribTypes = this.getRibTypesByFlags(instanceFlags);
+                const ribTypes = this.getRibTypesByFlags(effectiveInstanceFlags);
                 ribTypes.forEach(ribType => {
                     if (!bgpInstance.ribTypes.includes(ribType)) {
                         bgpInstance.ribTypes.push(ribType);
@@ -1332,7 +1525,7 @@ class BmpSession {
 
                 // 正常相同bgp Session这些字段一样
                 bgpInstance.instanceType = instanceType;
-                bgpInstance.instanceFlags = instanceFlags;
+                bgpInstance.instanceFlags = effectiveInstanceFlags;
                 bgpInstance.instanceRd = instanceRd;
                 bgpInstance.instanceIp = instanceAddress;
                 bgpInstance.instanceAs = instanceAs;
@@ -1403,21 +1596,28 @@ class BmpSession {
         }
     }
 
-    processPeerUp(message) {
+    processPeerUp(message, version = BmpConst.BMP_VERSION.V3) {
         let position = 0;
 
         const sessionType = message[position];
 
-        if (sessionType === BmpConst.BMP_PEER_TYPE.GLOBAL) {
-            this.processPeerUpGlobal(message);
+        if (
+            sessionType === BmpConst.BMP_PEER_TYPE.GLOBAL ||
+            sessionType === BmpConst.BMP_PEER_TYPE.L3VPN ||
+            sessionType === BmpConst.BMP_PEER_TYPE.LOCAL
+        ) {
+            this.processPeerUpGlobal(message, version);
         } else if (sessionType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB) {
-            this.processPeerUpLocalRib(message);
+            this.processPeerUpLocalRib(message, version);
         } else {
             logger.error(`Unknown session type: ${sessionType}`);
         }
     }
 
-    processTermination(_message) {
+    processTermination(message) {
+        const tlvResult = parseBmpTlvs(message);
+        this.logTlvWarnings('Termination TLV', tlvResult.warnings);
+        this.terminationTlvs = tlvResult.tlvs;
         const clientInfo = this.getClientInfo();
         this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: clientInfo });
         this.closeSession();
@@ -1426,72 +1626,70 @@ class BmpSession {
         this.bmpWorker.bmpSessionMap.delete(key);
     }
 
-    processStatisticsReportGlobal(message) {
+    processStatisticsReportGlobal(message, version = BmpConst.BMP_VERSION.V3) {
         try {
             let position = 0;
-            const sessionType = message[position];
-            position += 1;
-            const sessionFlags = message[position];
-            position += 1;
-            const rdBuffer = message.subarray(position, position + BgpConst.BGP_RD_LEN);
-            position += BgpConst.BGP_RD_LEN;
-            const sessionRd = rdBufferToString(rdBuffer);
-
-            let sessionAddress;
-            if (sessionFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
-                sessionAddress = ipv6BufferToString(message.subarray(position, position + 16), 128);
-                position += 16;
-            } else {
-                position += 12;
-                sessionAddress = ipv4BufferToString(message.subarray(position, position + 4), 32);
-                position += 4;
+            const peerHeader = parsePeerHeader(message, position);
+            if (!peerHeader.valid) {
+                logger.error(peerHeader.error);
+                return;
             }
+            position = peerHeader.offset;
+            const {
+                peerType: sessionType,
+                peerFlags: sessionFlags,
+                peerRd: sessionRd,
+                peerAddress: sessionAddress,
+                peerAs: sessionAs,
+                peerRouterId: sessionRouterId,
+                peerTimestamp: sessionTimestamp,
+                peerTimestampMs: sessionTimestampMs
+            } = peerHeader.peer;
 
-            const sessionAs = message.readUInt32BE(position);
-            position += 4;
-            position += 4; // sessionRouterId
-            position += 4; // sessionTimestamp
-            position += 4; // sessionTimestampMs
-
-            const statsCount = message.readUInt32BE(position);
-            position += 4;
-
-            const statistics = [];
-            for (let i = 0; i < statsCount; i++) {
-                if (position + 4 > message.length) break;
-
-                const statType = message.readUInt16BE(position);
-                position += 2;
-                const statLength = message.readUInt16BE(position);
-                position += 2;
-
-                if (position + statLength > message.length) break;
-
-                let statValue;
-                if (statLength === 4) {
-                    statValue = message.readUInt32BE(position);
-                } else if (statLength === 8) {
-                    statValue = Number(message.readBigUInt64BE(position));
-                } else {
-                    statValue = 0;
+            let statistics = [];
+            let tlvs = [];
+            if (version === BmpConst.BMP_VERSION.V4) {
+                const tlvResult = parseBmpTlvs(message, position);
+                this.logTlvWarnings('Statistics Report TLV', tlvResult.warnings);
+                tlvs = tlvResult.tlvs;
+                const statsTlv = tlvs.find(
+                    tlv => !tlv.enterprise && tlv.type === BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS
+                );
+                if (!statsTlv) {
+                    logger.error('BMPv4 Statistics Report message does not contain mandatory Stats TLV');
+                    return;
                 }
-                position += statLength;
-
-                statistics.push({
-                    type: statType,
-                    value: statValue,
-                    typeName: BmpConst.BMP_STATS_TYPE_NAME[statType] || `Unknown (${statType})`
-                });
+                statsTlv.name = 'Stats';
+                const statsResult = parseStatsRecords(statsTlv.value);
+                this.logTlvWarnings('Statistics Report Stats TLV', statsResult.warnings);
+                statistics = statsResult.statistics;
+            } else {
+                const statsResult = parseStatsRecords(message, position);
+                this.logTlvWarnings('Statistics Report', statsResult.warnings);
+                statistics = statsResult.statistics;
             }
 
             const bgpSessionKey = BmpBgpSession.makeKey(sessionType, sessionRd, sessionAddress, sessionAs);
             const bgpSession = this.bgpSessionMap.get(bgpSessionKey);
+            const sessionInfo = bgpSession
+                ? bgpSession.getSessionInfo()
+                : {
+                      sessionType,
+                      sessionFlags,
+                      sessionRd,
+                      sessionIp: sessionAddress,
+                      sessionAs,
+                      sessionRouterId,
+                      sessionTimestamp,
+                      sessionTimestampMs
+                  };
 
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, {
                 data: {
                     client: this.getClientInfo(),
-                    session: bgpSession ? bgpSession.getSessionInfo() : null,
-                    statistics: statistics
+                    session: sessionInfo,
+                    statistics: statistics,
+                    tlvs: toSerializableTlvs(tlvs)
                 }
             });
         } catch (err) {
@@ -1499,65 +1697,73 @@ class BmpSession {
         }
     }
 
-    processStatisticsReportLocalRib(message) {
+    processStatisticsReportLocalRib(message, version = BmpConst.BMP_VERSION.V3) {
         try {
             let position = 0;
-            const instanceType = message[position];
-            position += 1;
-            const instanceFlags = message[position];
-            position += 1;
-            const rdBuffer = message.subarray(position, position + BgpConst.BGP_RD_LEN);
-            position += BgpConst.BGP_RD_LEN;
-            const instanceRd = rdBufferToString(rdBuffer);
-
-            if (instanceFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
-                position += 16;
-            } else {
-                position += 12;
-                position += 4;
+            const peerHeader = parsePeerHeader(message, position);
+            if (!peerHeader.valid) {
+                logger.error(peerHeader.error);
+                return;
             }
+            position = peerHeader.offset;
+            const {
+                peerType: instanceType,
+                peerFlags: instanceFlags,
+                peerRd: instanceRd,
+                peerAddress: instanceIp,
+                peerAs: instanceAs,
+                peerRouterId: instanceRouterId,
+                peerTimestamp: instanceTimestamp,
+                peerTimestampMs: instanceTimestampMs
+            } = peerHeader.peer;
 
-            position += 4; // instanceAs
-            position += 4; // instanceRouterId
-            position += 4; // instanceTimestamp
-            position += 4; // instanceTimestampMs
-
-            const statsCount = message.readUInt32BE(position);
-            position += 4;
-
-            const statistics = [];
-            for (let i = 0; i < statsCount; i++) {
-                if (position + 4 > message.length) break;
-
-                const statType = message.readUInt16BE(position);
-                position += 2;
-                const statLength = message.readUInt16BE(position);
-                position += 2;
-
-                if (position + statLength > message.length) break;
-
-                let statValue;
-                if (statLength === 4) {
-                    statValue = message.readUInt32BE(position);
-                } else if (statLength === 8) {
-                    statValue = Number(message.readBigUInt64BE(position));
-                } else {
-                    statValue = 0;
+            let statistics = [];
+            let tlvs = [];
+            if (version === BmpConst.BMP_VERSION.V4) {
+                const tlvResult = parseBmpTlvs(message, position);
+                this.logTlvWarnings('Local-RIB Statistics Report TLV', tlvResult.warnings);
+                tlvs = tlvResult.tlvs;
+                const statsTlv = tlvs.find(
+                    tlv => !tlv.enterprise && tlv.type === BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS
+                );
+                if (!statsTlv) {
+                    logger.error('BMPv4 Local-RIB Statistics Report message does not contain mandatory Stats TLV');
+                    return;
                 }
-                position += statLength;
-
-                statistics.push({
-                    type: statType,
-                    value: statValue,
-                    typeName: BmpConst.BMP_STATS_TYPE_NAME[statType] || `Unknown (${statType})`
-                });
+                statsTlv.name = 'Stats';
+                const statsResult = parseStatsRecords(statsTlv.value, 0, { locRib: true });
+                this.logTlvWarnings('Local-RIB Statistics Report Stats TLV', statsResult.warnings);
+                statistics = statsResult.statistics;
+            } else {
+                const statsResult = parseStatsRecords(message, position, { locRib: true });
+                this.logTlvWarnings('Local-RIB Statistics Report', statsResult.warnings);
+                statistics = statsResult.statistics;
             }
+
+            const vrfTableNames = [];
+            const instancePrefix = `${instanceType}|${instanceRd}|`;
+            this.bgpInstanceMap.forEach((instance, key) => {
+                if (key.startsWith(instancePrefix) && Array.isArray(instance.vrfTableNames)) {
+                    vrfTableNames.push(...instance.vrfTableNames);
+                }
+            });
 
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, {
                 data: {
                     client: this.getClientInfo(),
-                    instance: { instanceType, instanceRd },
-                    statistics: statistics
+                    instance: {
+                        instanceType,
+                        instanceFlags,
+                        instanceRd,
+                        instanceIp,
+                        instanceAs,
+                        instanceRouterId,
+                        instanceTimestamp,
+                        instanceTimestampMs,
+                        vrfTableNames: Array.from(new Set(vrfTableNames))
+                    },
+                    statistics: statistics,
+                    tlvs: toSerializableTlvs(tlvs)
                 }
             });
         } catch (err) {
@@ -1565,12 +1771,16 @@ class BmpSession {
         }
     }
 
-    processStatisticsReport(message) {
+    processStatisticsReport(message, version = BmpConst.BMP_VERSION.V3) {
         const peerType = message[0];
-        if (peerType === BmpConst.BMP_PEER_TYPE.GLOBAL) {
-            this.processStatisticsReportGlobal(message);
+        if (
+            peerType === BmpConst.BMP_PEER_TYPE.GLOBAL ||
+            peerType === BmpConst.BMP_PEER_TYPE.L3VPN ||
+            peerType === BmpConst.BMP_PEER_TYPE.LOCAL
+        ) {
+            this.processStatisticsReportGlobal(message, version);
         } else if (peerType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB) {
-            this.processStatisticsReportLocalRib(message);
+            this.processStatisticsReportLocalRib(message, version);
         } else {
             logger.error(`Unknown peer type in statistics report: ${peerType}`);
         }
@@ -1580,25 +1790,35 @@ class BmpSession {
         try {
             const clientAddress = `${this.remoteIp}:${this.remotePort}`;
 
-            const _version = message[0];
-            const length = message.readUInt32BE(1);
-            const type = message[5];
+            const header = parseCommonHeader(message);
+            if (!header.valid) {
+                logger.error(header.error);
+                return;
+            }
+
+            const { version, length, type } = header;
+            this.bmpVersion = version;
+            if (version !== BmpConst.BMP_VERSION.V3 && version !== BmpConst.BMP_VERSION.V4) {
+                logger.warn(`Unsupported BMP version ${version} from ${clientAddress}`);
+                this.closeSession();
+                return;
+            }
 
             logger.info(
-                `Received message type ${BmpConst.BMP_MSG_TYPE_NAME[type]} from ${clientAddress}, length ${length}`
+                `Received BMPv${version} message type ${BmpConst.BMP_MSG_TYPE_NAME[type]} from ${clientAddress}, length ${length}`
             );
 
             const msg = message.slice(BmpConst.BMP_HEADER_LENGTH, length);
 
             switch (type) {
                 case BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING:
-                    this.processRouteMonitoring(msg);
+                    this.processRouteMonitoring(msg, version);
                     break;
                 case BmpConst.BMP_MSG_TYPE.PEER_DOWN_NOTIFICATION:
-                    this.processPeerDown(msg);
+                    this.processPeerDown(msg, version);
                     break;
                 case BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION:
-                    this.processPeerUp(msg);
+                    this.processPeerUp(msg, version);
                     break;
                 case BmpConst.BMP_MSG_TYPE.INITIATION:
                     this.processInitiation(msg);
@@ -1607,7 +1827,7 @@ class BmpSession {
                     this.processTermination(msg);
                     break;
                 case BmpConst.BMP_MSG_TYPE.STATISTICS_REPORT:
-                    this.processStatisticsReport(msg);
+                    this.processStatisticsReport(msg, version);
                     break;
                 default:
                     logger.warn(`Unknown message type: ${type}`);
@@ -1625,6 +1845,13 @@ class BmpSession {
     processBufferedMessages() {
         while (this.messageBuffer.length >= BmpConst.BMP_HEADER_LENGTH) {
             const messageLength = this.messageBuffer.readUInt32BE(1);
+            if (messageLength < BmpConst.BMP_HEADER_LENGTH) {
+                logger.warn(`Invalid BMP message length ${messageLength}, closing session`);
+                this.messageBuffer = Buffer.alloc(0);
+                this.closeSession();
+                break;
+            }
+
             if (this.messageBuffer.length < messageLength) {
                 logger.info(
                     `Waiting for more data. Have ${this.messageBuffer.length} bytes, need ${messageLength} bytes`

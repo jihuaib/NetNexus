@@ -49,6 +49,20 @@
                                                         </a-tooltip>
                                                         <a-tag v-else color="red">No</a-tag>
                                                     </template>
+                                                    <template v-else-if="column.key === 'sessionFlags'">
+                                                        <a-tooltip :title="getBmpFlagsName(record.sessionFlags)">
+                                                            <span>{{ getBmpFlagsName(record.sessionFlags) }}</span>
+                                                        </a-tooltip>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'rawSessionFlags'">
+                                                        <span>{{ formatRawFlags(record.rawSessionFlags) }}</span>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'peerDownReason'">
+                                                        <span>{{ formatPeerDownReason(record.peerDownReason) }}</span>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'tlvCount'">
+                                                        <span>{{ getSessionTlvCount(record) }}</span>
+                                                    </template>
                                                     <template v-else-if="column.key === 'action'">
                                                         <a-button
                                                             type="link"
@@ -140,7 +154,9 @@
         BMP_SESSION_TYPE_NAME,
         BMP_SESSION_STATE_NAME,
         BMP_BGP_RIB_TYPE_NAME,
-        BMP_EVENT_PAGE_ID
+        BMP_EVENT_PAGE_ID,
+        BMP_PEER_DOWN_REASON_NAME,
+        getBmpFlagsName
     } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME } from '../../const/bgpConst';
     import EventBus from '../../utils/eventBus';
@@ -202,6 +218,33 @@
             width: 80
         },
         {
+            title: 'Flags',
+            dataIndex: 'sessionFlags',
+            key: 'sessionFlags',
+            ellipsis: true,
+            width: 140
+        },
+        {
+            title: 'Raw Flags',
+            dataIndex: 'rawSessionFlags',
+            key: 'rawSessionFlags',
+            ellipsis: true,
+            width: 90
+        },
+        {
+            title: 'Down Reason',
+            dataIndex: 'peerDownReason',
+            key: 'peerDownReason',
+            ellipsis: true,
+            width: 140
+        },
+        {
+            title: 'TLV数量',
+            key: 'tlvCount',
+            width: 80,
+            align: 'right'
+        },
+        {
             title: 'Session状态',
             dataIndex: 'sessionState',
             key: 'sessionState',
@@ -235,6 +278,24 @@
         currentDetails.value = record;
         detailsDrawerTitle.value = `路由详情: ${record.ip || ''}`;
         detailsDrawerVisible.value = true;
+    };
+
+    const formatRawFlags = flags => {
+        if (flags === null || flags === undefined) return '-';
+        return `0x${Number(flags).toString(16).padStart(2, '0')}`;
+    };
+
+    const formatPeerDownReason = reason => {
+        if (reason === null || reason === undefined) return '-';
+        return BMP_PEER_DOWN_REASON_NAME[reason] || reason;
+    };
+
+    const getSessionTlvCount = record => {
+        return (
+            (record.peerUpTlvs || []).length +
+            (record.peerDownTlvs || []).length +
+            (record.lastRouteMonitoringTlvs || []).length
+        );
     };
 
     // Close details drawer

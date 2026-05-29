@@ -10,23 +10,43 @@
                                 :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
                                 :tab="`${client.sysDesc}[${client.remoteIp}]`"
                             >
-                                <div v-if="getClientStatistics(client).length > 0">
-                                    <a-table
-                                        :columns="columns"
-                                        :data-source="getClientStatistics(client)"
-                                        :pagination="false"
-                                        size="small"
-                                        bordered
-                                    >
-                                        <template #bodyCell="{ column, record }">
-                                            <template v-if="column.key === 'typeName'">
-                                                {{ record.typeName }}
-                                            </template>
-                                            <template v-if="column.key === 'value'">
-                                                {{ record.value }}
-                                            </template>
-                                        </template>
-                                    </a-table>
+                                <div v-if="getClientReports(client).length > 0">
+                                    <a-tabs>
+                                        <a-tab-pane
+                                            v-for="report in getClientReports(client)"
+                                            :key="report.key"
+                                            :tab="formatInstanceTab(report)"
+                                        >
+                                            <div class="report-header">
+                                                <a-space>
+                                                    <a-tag color="blue">Type {{ report.instance.instanceType }}</a-tag>
+                                                    <a-tag>RD {{ report.instance.instanceRd }}</a-tag>
+                                                    <a-tag v-if="formatVrfTableName(report)">{{ formatVrfTableName(report) }}</a-tag>
+                                                    <a-tag>TLV {{ getReportTlvCount(report) }}</a-tag>
+                                                    <a-button type="link" size="small" @click="viewReportDetails(report)">
+                                                        详情
+                                                    </a-button>
+                                                </a-space>
+                                            </div>
+                                            <a-table
+                                                :columns="columns"
+                                                :data-source="report.statistics"
+                                                :pagination="false"
+                                                :row-key="record => `${record.type}`"
+                                                size="small"
+                                                bordered
+                                            >
+                                                <template #bodyCell="{ column, record }">
+                                                    <template v-if="column.key === 'typeName'">
+                                                        {{ record.typeName }}
+                                                    </template>
+                                                    <template v-if="column.key === 'value'">
+                                                        {{ record.value }}
+                                                    </template>
+                                                </template>
+                                            </a-table>
+                                        </a-tab-pane>
+                                    </a-tabs>
                                 </div>
                                 <div v-else class="no-result-message">
                                     <a-empty description="暂无统计数据" />
@@ -41,6 +61,16 @@
                 </a-card>
             </a-col>
         </a-row>
+
+        <a-drawer
+            v-model:open="detailsDrawerVisible"
+            :title="detailsDrawerTitle"
+            placement="right"
+            width="520px"
+            @close="closeDetailsDrawer"
+        >
+            <pre v-if="currentDetails">{{ JSON.stringify(currentDetails, null, 2) }}</pre>
+        </a-drawer>
     </div>
 </template>
 
@@ -59,13 +89,27 @@
             title: '统计类型',
             dataIndex: 'typeName',
             key: 'typeName',
-            width: '60%'
+            width: '50%'
+        },
+        {
+            title: 'AFI',
+            dataIndex: 'afi',
+            key: 'afi',
+            width: '15%',
+            customRender: ({ text }) => text || '-'
+        },
+        {
+            title: 'SAFI',
+            dataIndex: 'safi',
+            key: 'safi',
+            width: '15%',
+            customRender: ({ text }) => text || '-'
         },
         {
             title: '数值',
             dataIndex: 'value',
             key: 'value',
-            width: '40%',
+            width: '20%',
             align: 'right'
         }
     ];
@@ -73,19 +117,77 @@
     // 客户端
     const clientList = ref([]);
     const activeClientKey = ref('');
-    const statisticsMap = ref(new Map());
+    const reportMap = ref(new Map());
+    const detailsDrawerVisible = ref(false);
+    const detailsDrawerTitle = ref('');
+    const currentDetails = ref(null);
 
-    const getClientStatistics = client => {
-        const key = `${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`;
-        return statisticsMap.value.get(key) || [];
+    const getClientKey = client => {
+        return `${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`;
+    };
+
+    const getInstanceKey = instance => {
+        return `${instance.instanceType}|${instance.instanceRd}`;
+    };
+
+    const getClientReports = client => {
+        const clientKey = getClientKey(client);
+        return Array.from(reportMap.value.values()).filter(report => report.clientKey === clientKey);
+    };
+
+    const formatInstanceTab = report => {
+        const vrfName = formatVrfTableName(report);
+        return vrfName || `${report.instance.instanceType} | ${report.instance.instanceRd}`;
+    };
+
+    const formatVrfTableName = report => {
+        return Array.isArray(report.instance.vrfTableNames) && report.instance.vrfTableNames.length > 0
+            ? report.instance.vrfTableNames.join(', ')
+            : '';
+    };
+
+    const getReportTlvCount = report => {
+        return (report.tlvs || []).length;
+    };
+
+    const viewReportDetails = report => {
+        currentDetails.value = report;
+        detailsDrawerTitle.value = `Loc-RIB统计详情: ${report.instance.instanceRd}`;
+        detailsDrawerVisible.value = true;
+    };
+
+    const closeDetailsDrawer = () => {
+        detailsDrawerVisible.value = false;
+        currentDetails.value = null;
+    };
+
+    const deleteReportsByClient = clientKey => {
+        const nextMap = new Map(reportMap.value);
+        for (const key of nextMap.keys()) {
+            if (key.startsWith(`${clientKey}|`)) {
+                nextMap.delete(key);
+            }
+        }
+        reportMap.value = nextMap;
     };
 
     const onStatisticsReport = result => {
         if (result.status === 'success') {
             const data = result.data;
-            if (data && data.client && data.statistics) {
-                const key = `${data.client.localIp}|${data.client.localPort}|${data.client.remoteIp}|${data.client.remotePort}`;
-                statisticsMap.value.set(key, data.statistics);
+            if (data && data.client && data.instance && data.statistics) {
+                const clientKey = getClientKey(data.client);
+                const key = `${clientKey}|${getInstanceKey(data.instance)}`;
+                const nextMap = new Map(reportMap.value);
+                nextMap.set(key, {
+                    key,
+                    clientKey,
+                    client: data.client,
+                    instance: data.instance,
+                    statistics: data.statistics,
+                    tlvs: data.tlvs || [],
+                    updatedAt: new Date().toISOString()
+                });
+                reportMap.value = nextMap;
             }
         }
     };
@@ -102,18 +204,17 @@
                 );
                 if (existingIndex !== -1) {
                     clientList.value.splice(existingIndex, 1);
-                    const key = `${data.localIp}|${data.localPort}|${data.remoteIp}|${data.remotePort}`;
-                    statisticsMap.value.delete(key);
+                    deleteReportsByClient(getClientKey(data));
 
                     if (clientList.value.length > 0 && !activeClientKey.value) {
-                        activeClientKey.value = `${clientList.value[0].localIp}|${clientList.value[0].localPort}|${clientList.value[0].remoteIp}|${clientList.value[0].remotePort}`;
+                        activeClientKey.value = getClientKey(clientList.value[0]);
                     }
                 }
             } else {
                 // BMP 服务停止，清空所有数据
                 clientList.value = [];
                 activeClientKey.value = '';
-                statisticsMap.value.clear();
+                reportMap.value = new Map();
             }
 
             if (clientList.value.length === 0) {
@@ -138,7 +239,7 @@
                 clientList.value.push(result.data);
             }
             if (clientList.value.length > 0 && !activeClientKey.value) {
-                activeClientKey.value = `${clientList.value[0].localIp}|${clientList.value[0].localPort}|${clientList.value[0].remoteIp}|${clientList.value[0].remotePort}`;
+                activeClientKey.value = getClientKey(clientList.value[0]);
             }
         } else {
             message.error('客户端列表获取失败');
@@ -153,7 +254,7 @@
 
                 // 设置默认选中第一个客户端
                 if (clientList.value.length > 0 && !activeClientKey.value) {
-                    activeClientKey.value = `${clientList.value[0].localIp}|${clientList.value[0].localPort}|${clientList.value[0].remoteIp}|${clientList.value[0].remotePort}`;
+                    activeClientKey.value = getClientKey(clientList.value[0]);
                 }
             }
         } catch (error) {
@@ -165,7 +266,7 @@
     onActivated(async () => {
         clientList.value = [];
         activeClientKey.value = '';
-        statisticsMap.value.clear();
+        reportMap.value = new Map();
         EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB_STATIS_REPORT, onClientListUpdate);
         EventBus.on('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB_STATIS_REPORT, onTerminationHandler);
         EventBus.on(
@@ -184,6 +285,10 @@
 </script>
 
 <style scoped>
+    .report-header {
+        margin-bottom: 8px;
+    }
+
     .no-result-message {
         display: flex;
         justify-content: center;

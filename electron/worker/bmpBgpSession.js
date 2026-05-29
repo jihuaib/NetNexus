@@ -1,4 +1,5 @@
 const { getAddrFamilyType } = require('../utils/bgpUtils');
+const { toSerializableTlvs } = require('../utils/bmpUtils');
 
 class BmpBgpSession {
     constructor(bmpSession) {
@@ -6,6 +7,7 @@ class BmpBgpSession {
 
         this.sessionType = null;
         this.sessionFlags = null;
+        this.rawSessionFlags = null;
         this.sessionRd = null;
         this.sessionIp = null;
         this.sessionAs = null;
@@ -16,6 +18,11 @@ class BmpBgpSession {
         this.localPort = null;
         this.remotePort = null;
         this.sessionState = null;
+        this.peerUpTlvs = [];
+        this.peerDownTlvs = [];
+        this.lastRouteMonitoringTlvs = [];
+        this.peerDownReason = null;
+        this.peerDownFsmEventCode = null;
 
         this.recvAddressFamilies = [];
         this.sendAddressFamilies = [];
@@ -65,6 +72,7 @@ class BmpBgpSession {
         return {
             sessionType: this.sessionType,
             sessionFlags: this.sessionFlags,
+            rawSessionFlags: this.rawSessionFlags,
             sessionRd: this.sessionRd,
             sessionIp: this.sessionIp,
             sessionAs: this.sessionAs,
@@ -82,7 +90,12 @@ class BmpBgpSession {
             ribTypes: this.ribTypes,
             recvAddPathMap: Object.fromEntries(this.recvAddPathMap),
             sendAddPathMap: Object.fromEntries(this.sendAddPathMap),
-            addPathMap: Object.fromEntries(addPaths)
+            addPathMap: Object.fromEntries(addPaths),
+            peerUpTlvs: toSerializableTlvs(this.peerUpTlvs),
+            peerDownTlvs: toSerializableTlvs(this.peerDownTlvs),
+            lastRouteMonitoringTlvs: toSerializableTlvs(this.lastRouteMonitoringTlvs),
+            peerDownReason: this.peerDownReason,
+            peerDownFsmEventCode: this.peerDownFsmEventCode
         };
     }
 
