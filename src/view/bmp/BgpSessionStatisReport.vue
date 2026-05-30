@@ -4,7 +4,12 @@
             <a-col :span="24">
                 <a-card title="BGP会话统计">
                     <div v-if="clientList.length > 0">
-                        <a-tabs v-model:active-key="activeClientKey" tab-position="left" class="client-tabs">
+                        <a-tabs
+                            v-model:active-key="activeClientKey"
+                            tab-position="left"
+                            class="client-tabs"
+                            :tab-bar-style="clientTabBarStyle"
+                        >
                             <a-tab-pane
                                 v-for="client in clientList"
                                 :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
@@ -139,6 +144,7 @@
     // 客户端
     const clientList = ref([]);
     const activeClientKey = ref('');
+    const clientTabBarStyle = { width: '128px', flex: '0 0 128px' };
     const reportMap = ref(new Map());
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
@@ -333,15 +339,6 @@
     .report-table :deep(.ant-table-body) {
         height: 320px !important;
         overflow-y: auto !important;
-    }
-
-    .client-tabs :deep(.ant-tabs-nav) {
-        flex: 0 0 128px;
-        width: 128px;
-    }
-
-    .client-tabs :deep(.ant-tabs-tab) {
-        padding: 8px 10px;
     }
 
     .client-tab-label {

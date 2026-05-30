@@ -4,7 +4,12 @@
             <a-col :span="24">
                 <a-card title="BGP Loc-RIB" class="bgp-loc-rib-card">
                     <div v-if="clientList.length > 0">
-                        <a-tabs v-model:active-key="activeClientKey" tab-position="left" class="client-tabs">
+                        <a-tabs
+                            v-model:active-key="activeClientKey"
+                            tab-position="left"
+                            class="client-tabs"
+                            :tab-bar-style="clientTabBarStyle"
+                        >
                             <a-tab-pane
                                 v-for="client in clientList"
                                 :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
@@ -21,42 +26,21 @@
                                             :key="`${instance.instanceType}|${instance.instanceRd}|${instance.addrFamilyType}`"
                                             :tab="`${formatVrfTableName(instance)} | ${ADDRESS_FAMILY_NAME[instance.addrFamilyType]}`"
                                         >
-                                            <a-table
-                                                :columns="bgpInstanceColumns"
-                                                :data-source="[instance]"
-                                                :pagination="false"
-                                                size="small"
-                                                style="margin-bottom: 8px"
-                                                row-key="peerIp"
-                                                :scroll="{ x: 'max-content' }"
-                                            >
-                                                <template #bodyCell="{ column, record }">
-                                                    <template v-if="column.key === 'addPath'">
-                                                        <a-tag v-if="record.isAddPath" color="green">Yes</a-tag>
-                                                        <a-tag v-else color="red">No</a-tag>
-                                                    </template>
-                                                    <template v-else-if="column.key === 'instanceFlags'">
-                                                        <a-tooltip :title="getBmpLocRibFlagsName(record.instanceFlags)">
-                                                            <span>{{ getBmpLocRibFlagsName(record.instanceFlags) }}</span>
-                                                        </a-tooltip>
-                                                    </template>
-                                                    <template v-else-if="column.key === 'rawInstanceFlags'">
-                                                        <span>{{ formatRawFlags(record.rawInstanceFlags) }}</span>
-                                                    </template>
-                                                    <template v-else-if="column.key === 'tlvCount'">
-                                                        <span>{{ getInstanceTlvCount(record) }}</span>
-                                                    </template>
-                                                    <template v-else-if="column.key === 'action'">
-                                                        <a-button
-                                                            type="link"
-                                                            size="small"
-                                                            @click="viewInstanceDetails(record)"
-                                                        >
-                                                            详情
-                                                        </a-button>
-                                                    </template>
-                                                </template>
-                                            </a-table>
+                                            <div class="instance-summary">
+                                                <a-tag color="blue">
+                                                    {{ BMP_SESSION_TYPE_NAME[instance.instanceType] || instance.instanceType }}
+                                                </a-tag>
+                                                <a-tag>{{ formatVrfTableName(instance) }}</a-tag>
+                                                <a-tag>{{ ADDRESS_FAMILY_NAME[instance.addrFamilyType] }}</a-tag>
+                                                <a-tag>RD {{ instance.instanceRd }}</a-tag>
+                                                <a-tooltip :title="getBmpLocRibFlagsName(instance.instanceFlags)">
+                                                    <a-tag>{{ getBmpLocRibFlagsName(instance.instanceFlags) }}</a-tag>
+                                                </a-tooltip>
+                                                <a-tag>{{ BMP_SESSION_STATE_NAME[instance.instanceState] || instance.instanceState }}</a-tag>
+                                                <a-button type="link" size="small" @click="viewInstanceDetails(instance)">
+                                                    详情
+                                                </a-button>
+                                            </div>
                                             <div class="route-toolbar">
                                                 <a-radio-group v-model:value="routeStateFilter" size="small">
                                                     <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
@@ -166,11 +150,7 @@
     // 客户端
     const clientList = ref([]);
     const activeClientKey = ref('');
-
-    const formatRawFlags = flags => {
-        if (flags === null || flags === undefined) return '-';
-        return `0x${Number(flags).toString(16).padStart(2, '0')}`;
-    };
+    const clientTabBarStyle = { width: '128px', flex: '0 0 128px' };
 
     const formatClientTab = client => {
         return client.remoteIp || '-';
@@ -181,108 +161,11 @@
         return `${sysDesc} | ${client.remoteIp || '-'}:${client.remotePort || '-'} -> ${client.localIp || '-'}:${client.localPort || '-'}`;
     };
 
-    const getInstanceTlvCount = record => {
-        return (record.peerUpTlvs || []).length + (record.lastRouteMonitoringTlvs || []).length;
-    };
-
     const formatVrfTableName = instance => {
         return Array.isArray(instance.vrfTableNames) && instance.vrfTableNames.length > 0
             ? instance.vrfTableNames.join(', ')
             : `${instance.instanceType} | ${instance.instanceRd}`;
     };
-
-    const bgpInstanceColumns = [
-        {
-            title: 'Instance Type',
-            dataIndex: 'instanceType',
-            key: 'instanceType',
-            ellipsis: true,
-            width: 100,
-            customRender: ({ text }) => {
-                return BMP_SESSION_TYPE_NAME[text] || text;
-            }
-        },
-        {
-            title: 'VRF/Table',
-            dataIndex: 'vrfTableNames',
-            key: 'vrfTableNames',
-            width: 100,
-            ellipsis: true,
-            customRender: ({ text }) => {
-                return Array.isArray(text) && text.length > 0 ? text.join(', ') : '-';
-            }
-        },
-        {
-            title: 'Instance IP',
-            dataIndex: 'instanceIp',
-            key: 'instanceIp',
-            width: 100,
-            ellipsis: true
-        },
-        {
-            title: 'AS',
-            dataIndex: 'instanceAs',
-            key: 'instanceAs',
-            width: 100,
-            ellipsis: true
-        },
-        {
-            title: 'RD',
-            dataIndex: 'instanceRd',
-            key: 'instanceRd',
-            width: 100,
-            ellipsis: true
-        },
-        {
-            title: 'Router ID',
-            dataIndex: 'instanceRouterId',
-            key: 'instanceRouterId',
-            width: 100,
-            ellipsis: true
-        },
-        {
-            title: 'ADD-PATH',
-            key: 'addPath',
-            ellipsis: true,
-            width: 80
-        },
-        {
-            title: 'Flags',
-            dataIndex: 'instanceFlags',
-            key: 'instanceFlags',
-            ellipsis: true,
-            width: 140
-        },
-        {
-            title: 'Raw Flags',
-            dataIndex: 'rawInstanceFlags',
-            key: 'rawInstanceFlags',
-            ellipsis: true,
-            width: 90
-        },
-        {
-            title: 'TLV数量',
-            key: 'tlvCount',
-            width: 80,
-            align: 'right'
-        },
-        {
-            title: 'Instance状态',
-            dataIndex: 'instanceState',
-            key: 'instanceState',
-            ellipsis: true,
-            width: 100,
-            customRender: ({ text }) => {
-                return BMP_SESSION_STATE_NAME[text] || text;
-            }
-        },
-        {
-            title: '操作',
-            key: 'action',
-            fixed: 'right',
-            width: 200
-        }
-    ];
 
     // Details drawer
     const detailsDrawerVisible = ref(false);
@@ -618,15 +501,6 @@
         overflow: hidden;
     }
 
-    .client-tabs :deep(.ant-tabs-nav) {
-        flex: 0 0 128px;
-        width: 128px;
-    }
-
-    .client-tabs :deep(.ant-tabs-tab) {
-        padding: 8px 10px;
-    }
-
     .client-tab-label {
         display: inline-block;
         max-width: 104px;
@@ -647,6 +521,15 @@
         gap: 12px;
         flex-wrap: wrap;
         margin-bottom: 8px;
+    }
+
+    .instance-summary {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+        min-height: 24px;
     }
 
     .bgp-peer-info-header {
