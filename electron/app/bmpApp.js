@@ -39,6 +39,13 @@ class BmpApp {
         this.ipcMain.handle('bmp:getBgpRoutes', this.handleGetBgpRoutes.bind(this));
         this.ipcMain.handle('bmp:getBgpInstances', this.handleGetBgpInstances.bind(this));
         this.ipcMain.handle('bmp:getBgpInstanceRoutes', this.handleGetBgpInstanceRoutes.bind(this));
+        this.ipcMain.handle('bmp:purgeStaleBgpRoutes', this.handlePurgeStaleBgpRoutes.bind(this));
+        this.ipcMain.handle('bmp:purgeStaleBgpInstanceRoutes', this.handlePurgeStaleBgpInstanceRoutes.bind(this));
+        this.ipcMain.handle('bmp:getBgpStatisticsReports', this.handleGetBgpStatisticsReports.bind(this));
+        this.ipcMain.handle(
+            'bmp:getBgpInstanceStatisticsReports',
+            this.handleGetBgpInstanceStatisticsReports.bind(this)
+        );
     }
 
     async handleSaveBmpConfig(event, config) {
@@ -251,7 +258,38 @@ class BmpApp {
         }
     }
 
-    async handleGetBgpRoutes(event, client, session, af, ribType, page, pageSize) {
+    async handleGetBgpStatisticsReports(event, client) {
+        if (null === this.worker) {
+            return successResponse([], 'BMP未启动');
+        }
+
+        try {
+            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.GET_BGP_STATISTICS_REPORTS, client);
+            return successResponse(result.data, '获取BGP统计报表成功');
+        } catch (error) {
+            logger.error('Error getting BGP statistics reports:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetBgpInstanceStatisticsReports(event, client) {
+        if (null === this.worker) {
+            return successResponse([], 'BMP未启动');
+        }
+
+        try {
+            const result = await this.worker.sendRequest(
+                BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_STATISTICS_REPORTS,
+                client
+            );
+            return successResponse(result.data, '获取BGP实例统计报表成功');
+        } catch (error) {
+            logger.error('Error getting BGP instance statistics reports:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetBgpRoutes(event, client, session, af, ribType, page, pageSize, routeState) {
         if (null === this.worker) {
             return successResponse([], 'BMP未启动');
         }
@@ -267,7 +305,8 @@ class BmpApp {
                 af,
                 ribType,
                 page,
-                pageSize
+                pageSize,
+                routeState
             });
             logger.info(`获取路由列表成功 result: ${JSON.stringify(result)}`);
             return successResponse(result.data, '获取路由列表成功');
@@ -277,7 +316,7 @@ class BmpApp {
         }
     }
 
-    async handleGetBgpInstanceRoutes(event, client, instance, page, pageSize) {
+    async handleGetBgpInstanceRoutes(event, client, instance, page, pageSize, routeState) {
         if (null === this.worker) {
             return successResponse([], 'BMP未启动');
         }
@@ -291,12 +330,49 @@ class BmpApp {
                 client,
                 instance,
                 page,
-                pageSize
+                pageSize,
+                routeState
             });
             logger.info(`获取BGP实例路由列表成功 result: ${JSON.stringify(result)}`);
             return successResponse(result.data, '获取BGP实例路由列表成功');
         } catch (error) {
             logger.error('Error getting routes:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handlePurgeStaleBgpRoutes(event, client, session, af, ribType) {
+        if (null === this.worker) {
+            return successResponse({ deleted: 0 }, 'BMP未启动');
+        }
+
+        try {
+            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.PURGE_STALE_BGP_ROUTES, {
+                client,
+                session,
+                af,
+                ribType
+            });
+            return successResponse(result.data, '过期路由清理成功');
+        } catch (error) {
+            logger.error('Error purging stale routes:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handlePurgeStaleBgpInstanceRoutes(event, client, instance) {
+        if (null === this.worker) {
+            return successResponse({ deleted: 0 }, 'BMP未启动');
+        }
+
+        try {
+            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.PURGE_STALE_BGP_INSTANCE_ROUTES, {
+                client,
+                instance
+            });
+            return successResponse(result.data, 'BGP实例过期路由清理成功');
+        } catch (error) {
+            logger.error('Error purging stale instance routes:', error.message);
             return errorResponse(error.message);
         }
     }

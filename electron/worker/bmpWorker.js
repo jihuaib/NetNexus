@@ -34,6 +34,22 @@ class BmpWorker {
             BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_ROUTES,
             this.getBgpInstanceRoutes.bind(this)
         );
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.PURGE_STALE_BGP_ROUTES,
+            this.purgeStaleBgpRoutes.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.PURGE_STALE_BGP_INSTANCE_ROUTES,
+            this.purgeStaleBgpInstanceRoutes.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.GET_BGP_STATISTICS_REPORTS,
+            this.getBgpStatisticsReports.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_STATISTICS_REPORTS,
+            this.getBgpInstanceStatisticsReports.bind(this)
+        );
     }
 
     async startTcpServer(messageId) {
@@ -355,8 +371,40 @@ class BmpWorker {
         this.messageHandler.sendSuccessResponse(messageId, peerList, '获取对等体列表成功');
     }
 
+    getBgpStatisticsReports(messageId, client) {
+        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
+        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
+        if (!bmpSession) {
+            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
+            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
+            return;
+        }
+
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            Array.from(bmpSession.bgpStatisticsReportMap.values()),
+            '获取BGP统计报表成功'
+        );
+    }
+
+    getBgpInstanceStatisticsReports(messageId, client) {
+        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
+        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
+        if (!bmpSession) {
+            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
+            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
+            return;
+        }
+
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            Array.from(bmpSession.bgpInstanceStatisticsReportMap.values()),
+            '获取BGP实例统计报表成功'
+        );
+    }
+
     getBgpInstanceRoutes(messageId, data) {
-        const { client, instance, page, pageSize } = data;
+        const { client, instance, page, pageSize, routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE } = data;
         const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
         const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
         const routeList = [];
@@ -376,18 +424,32 @@ class BmpWorker {
             return;
         }
 
+        const summary = { active: 0, stale: 0, total: 0 };
         bgpInstance.bgpRoutes.forEach((route, _) => {
-            routeList.push(route.getRouteInfo());
+            summary.total += 1;
+            if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
+                summary.stale += 1;
+            } else {
+                summary.active += 1;
+            }
+
+            if (
+                routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ALL ||
+                route.routeState === routeState ||
+                (!route.routeState && routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE)
+            ) {
+                routeList.push(route.getRouteInfo());
+            }
         });
 
         const total = routeList.length;
         const list = routeList.slice((page - 1) * pageSize, page * pageSize);
 
-        this.messageHandler.sendSuccessResponse(messageId, { list, total }, 'BGP实例获取路由列表成功');
+        this.messageHandler.sendSuccessResponse(messageId, { list, total, summary }, 'BGP实例获取路由列表成功');
     }
 
     getBgpRoutes(messageId, data) {
-        const { client, session, af, ribType, page, pageSize } = data;
+        const { client, session, af, ribType, page, pageSize, routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE } = data;
         const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
         const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
         const routeList = [];
@@ -426,14 +488,97 @@ class BmpWorker {
             return;
         }
 
+        const summary = { active: 0, stale: 0, total: 0 };
         routeMap.forEach((route, _) => {
-            routeList.push(route.getRouteInfo());
+            summary.total += 1;
+            if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
+                summary.stale += 1;
+            } else {
+                summary.active += 1;
+            }
+
+            if (
+                routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ALL ||
+                route.routeState === routeState ||
+                (!route.routeState && routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE)
+            ) {
+                routeList.push(route.getRouteInfo());
+            }
         });
 
         const total = routeList.length;
         const list = routeList.slice((page - 1) * pageSize, page * pageSize);
 
-        this.messageHandler.sendSuccessResponse(messageId, { list, total }, '获取路由列表成功');
+        this.messageHandler.sendSuccessResponse(messageId, { list, total, summary }, '获取路由列表成功');
+    }
+
+    purgeStaleRouteMap(routeMap) {
+        let deleted = 0;
+        routeMap.forEach((route, key) => {
+            if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
+                routeMap.delete(key);
+                deleted += 1;
+            }
+        });
+        return deleted;
+    }
+
+    purgeStaleBgpInstanceRoutes(messageId, data) {
+        const { client, instance } = data;
+        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
+        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
+        if (!bmpSession) {
+            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
+            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
+            return;
+        }
+
+        const { afi, safi } = getAfiAndSafi(instance.addrFamilyType);
+        const bgpInstKey = BmpBgpSession.makeKey(instance.instanceType, instance.instanceRd, afi, safi);
+        const bgpInstance = bmpSession.bgpInstanceMap.get(bgpInstKey);
+        if (!bgpInstance) {
+            logger.error(`BMP会话 ${bmpSessionKey} 不存在BGP实例 ${bgpInstKey}`);
+            this.messageHandler.sendErrorResponse(messageId, 'BGP实例不存在');
+            return;
+        }
+
+        const deleted = this.purgeStaleRouteMap(bgpInstance.bgpRoutes);
+        this.messageHandler.sendSuccessResponse(messageId, { deleted }, 'BGP实例过期路由清理成功');
+    }
+
+    purgeStaleBgpRoutes(messageId, data) {
+        const { client, session, af, ribType } = data;
+        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
+        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
+        if (!bmpSession) {
+            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
+            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
+            return;
+        }
+
+        const bgpSessionKey = BmpBgpSession.makeKey(
+            session.sessionType,
+            session.sessionRd,
+            session.sessionIp,
+            session.sessionAs
+        );
+        const bgpSession = bmpSession.bgpSessionMap.get(bgpSessionKey);
+        if (!bgpSession) {
+            logger.error(`BMP会话 ${bmpSessionKey} 不存在BGP会话 ${bgpSessionKey}`);
+            this.messageHandler.sendErrorResponse(messageId, 'BGP会话不存在');
+            return;
+        }
+
+        const { afi, safi } = getAfiAndSafi(af);
+        const ribTypeRouteMap = bgpSession.bgpRoutes.get(`${afi}|${safi}`);
+        const routeMap = ribTypeRouteMap ? ribTypeRouteMap.get(ribType) : null;
+        if (!routeMap) {
+            this.messageHandler.sendErrorResponse(messageId, '路由表不存在');
+            return;
+        }
+
+        const deleted = this.purgeStaleRouteMap(routeMap);
+        this.messageHandler.sendSuccessResponse(messageId, { deleted }, '过期路由清理成功');
     }
 
     getBgpInstances(messageId, client) {

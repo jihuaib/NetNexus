@@ -298,7 +298,46 @@ const routeMap = bgpSession.bgpRoutes
     .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
 assert.equal(routeMap.size, 1);
 assert.equal([...routeMap.values()][0].ip, '203.0.113.0');
+assert.equal([...routeMap.values()][0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
 assert.ok(events.some(event => event.type === BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE));
+
+const { session: staleRefreshSession } = makeSession();
+staleRefreshSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+staleRefreshSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate('203.0.130.0'))
+        ])
+    )
+);
+const staleRefreshBgpSession = staleRefreshSession.bgpSessionMap.get(bgpSessionKey);
+const staleRefreshRouteMap = staleRefreshBgpSession.bgpRoutes
+    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
+const staleRefreshRoute = [...staleRefreshRouteMap.values()][0];
+assert.equal(staleRefreshRoute.routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
+staleRefreshSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+assert.equal(staleRefreshRoute.routeState, BmpConst.BMP_ROUTE_STATE.STALE);
+assert.equal(staleRefreshRoute.staleReason, 'peer-up-refresh');
+staleRefreshSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate('203.0.130.0'))
+        ])
+    )
+);
+assert.equal(staleRefreshRouteMap.size, 1);
+assert.equal([...staleRefreshRouteMap.values()][0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
 
 session.processMessage(
     bmpMessage(
@@ -422,6 +461,14 @@ locRibPeerDownSession.processMessage(
 );
 assert.equal(locRibPeerDownSession.bgpInstanceMap.get(ipv4LocRib.instanceKey).bgpRoutes.size, 1);
 assert.equal(locRibPeerDownSession.bgpInstanceMap.get(ipv6LocRib.instanceKey).bgpRoutes.size, 1);
+assert.equal(
+    [...locRibPeerDownSession.bgpInstanceMap.get(ipv4LocRib.instanceKey).bgpRoutes.values()][0].routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE
+);
+assert.equal(
+    [...locRibPeerDownSession.bgpInstanceMap.get(ipv6LocRib.instanceKey).bgpRoutes.values()][0].routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE
+);
 locRibPeerDownSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -453,6 +500,14 @@ peerUpRefreshSession.processMessage(
 const refreshedBgpSession = peerUpRefreshSession.bgpSessionMap.get(ipv4BgpRoute.sessionKey);
 assert.equal(refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).size, 1);
 assert.equal(refreshedBgpSession.bgpRoutes.get(ipv6BgpRoute.afKey).get(ipv6BgpRoute.ribType).size, 1);
+assert.equal(
+    [...refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).values()][0].routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE
+);
+assert.equal(
+    [...refreshedBgpSession.bgpRoutes.get(ipv6BgpRoute.afKey).get(ipv6BgpRoute.ribType).values()][0].routeState,
+    BmpConst.BMP_ROUTE_STATE.ACTIVE
+);
 peerUpRefreshSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -464,6 +519,11 @@ peerUpRefreshSession.processMessage(
     )
 );
 assert.equal(refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).size, 2);
+assert.ok(
+    [...refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).values()].some(
+        route => route.ip === '203.0.114.0' && route.routeState === BmpConst.BMP_ROUTE_STATE.ACTIVE
+    )
+);
 
 const { session: peerDownMultiAfSession } = makeSession();
 const peerDownIpv4Route = addBgpSessionRoute(
@@ -498,6 +558,16 @@ assert.equal(
 assert.equal(
     peerDownIpv6Route.bgpSession.bgpRoutes.get(peerDownIpv6Route.afKey).get(peerDownIpv6Route.ribType).size,
     1
+);
+assert.equal(
+    [...peerDownIpv4Route.bgpSession.bgpRoutes.get(peerDownIpv4Route.afKey).get(peerDownIpv4Route.ribType).values()][0]
+        .routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE
+);
+assert.equal(
+    [...peerDownIpv6Route.bgpSession.bgpRoutes.get(peerDownIpv6Route.afKey).get(peerDownIpv6Route.ribType).values()][0]
+        .routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE
 );
 peerDownMultiAfSession.processMessage(
     bmpMessage(

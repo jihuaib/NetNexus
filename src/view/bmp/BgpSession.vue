@@ -80,6 +80,7 @@
                                                     display: flex;
                                                     gap: 16px;
                                                     align-items: center;
+                                                    flex-wrap: wrap;
                                                 "
                                             >
                                                 <a-select v-model:value="activeLocRibAf" style="width: 200px">
@@ -100,7 +101,27 @@
                                                         {{ BMP_BGP_RIB_TYPE_NAME[rt] }}
                                                     </a-select-option>
                                                 </a-select>
+                                                <a-radio-group v-model:value="routeStateFilter" size="small">
+                                                    <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
+                                                        当前
+                                                    </a-radio-button>
+                                                    <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
+                                                        全部
+                                                    </a-radio-button>
+                                                    <a-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
+                                                        过期
+                                                    </a-radio-button>
+                                                </a-radio-group>
+                                                <a-tag color="green">当前 {{ routeSummary.active }}</a-tag>
+                                                <a-tag color="orange">过期 {{ routeSummary.stale }}</a-tag>
                                                 <a-button type="primary" @click="loadBgpRoutes">查询</a-button>
+                                                <a-button
+                                                    danger
+                                                    :disabled="routeSummary.stale === 0"
+                                                    @click="purgeStaleRoutes"
+                                                >
+                                                    清理过期
+                                                </a-button>
                                             </div>
                                             <a-table
                                                 :columns="bgpRouteColumns"
@@ -110,11 +131,31 @@
                                                     record =>
                                                         `${record.addrFamilyType}|${record.pathId}|${record.rd}|${record.ip}|${record.mask}`
                                                 "
+                                                :row-class-name="
+                                                    record =>
+                                                        record.routeState === BMP_ROUTE_STATE.STALE
+                                                            ? 'route-stale-row'
+                                                            : ''
+                                                "
                                                 size="small"
-                                                :scroll="{ y: 320 }"
+                                                :scroll="{ y: 320, x: 'max-content' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
-                                                    <template v-if="column.key === 'routeAction'">
+                                                    <template v-if="column.key === 'routeState'">
+                                                        <a-tag
+                                                            :color="
+                                                                record.routeState === BMP_ROUTE_STATE.STALE
+                                                                    ? 'orange'
+                                                                    : 'green'
+                                                            "
+                                                        >
+                                                            {{
+                                                                BMP_ROUTE_STATE_NAME[record.routeState] ||
+                                                                BMP_ROUTE_STATE_NAME[BMP_ROUTE_STATE.ACTIVE]
+                                                            }}
+                                                        </a-tag>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'routeAction'">
                                                         <a-button type="link" size="small" @click="viewRouteDetails(record)">
                                                             查询详情
                                                         </a-button>
@@ -156,6 +197,9 @@
         BMP_BGP_RIB_TYPE_NAME,
         BMP_EVENT_PAGE_ID,
         BMP_PEER_DOWN_REASON_NAME,
+        BMP_ROUTE_STATE,
+        BMP_ROUTE_STATE_FILTER,
+        BMP_ROUTE_STATE_NAME,
         getBmpFlagsName
     } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME } from '../../const/bgpConst';
@@ -444,6 +488,8 @@
     const activeLocRibAf = ref(null);
     const activeLocRibType = ref('');
     const bgpRouteList = ref([]);
+    const routeStateFilter = ref(BMP_ROUTE_STATE_FILTER.ALL);
+    const routeSummary = ref({ active: 0, stale: 0, total: 0 });
 
     // 监听activeClientKey变化，加载对应的peer列表 AND instances
     watch(activeClientKey, _newKey => {
@@ -493,6 +539,12 @@
 
     const bgpRouteColumns = [
         {
+            title: '状态',
+            dataIndex: 'routeState',
+            key: 'routeState',
+            width: 80
+        },
+        {
             title: 'Addr Family',
             dataIndex: 'addrFamilyType',
             key: 'addrFamilyType',
@@ -537,17 +589,56 @@
         const pageSize = bgpRoutePagination.value.pageSize;
 
         try {
-            const res = await window.bmpApi.getBgpRoutes(client, sessionInfo, af, ribType, page, pageSize);
+            const res = await window.bmpApi.getBgpRoutes(
+                client,
+                sessionInfo,
+                af,
+                ribType,
+                page,
+                pageSize,
+                routeStateFilter.value
+            );
             if (res.status === 'success' && res.data) {
                 bgpRouteList.value = res.data.list;
                 bgpRoutePagination.value.total = res.data.total;
+                routeSummary.value = res.data.summary || { active: 0, stale: 0, total: 0 };
             } else {
                 bgpRouteList.value = [];
                 bgpRoutePagination.value.total = 0;
+                routeSummary.value = { active: 0, stale: 0, total: 0 };
             }
         } catch (e) {
             console.error(e);
             message.error('Load routes failed');
+        }
+    };
+
+    const purgeStaleRoutes = async () => {
+        if (!activeClientKey.value || !activeBgpSessionKey.value || !activeLocRibAf.value || !activeLocRibType.value)
+            return;
+        const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
+        const [sessionType, sessionRd, sessionIp, sessionAs] = activeBgpSessionKey.value.split('|');
+
+        const client = { localIp, localPort, remoteIp, remotePort };
+        const sessionInfo = { sessionType, sessionRd, sessionIp, sessionAs };
+
+        try {
+            const res = await window.bmpApi.purgeStaleBgpRoutes(
+                client,
+                sessionInfo,
+                activeLocRibAf.value,
+                activeLocRibType.value
+            );
+            if (res.status === 'success') {
+                message.success(`已清理 ${res.data?.deleted || 0} 条过期路由`);
+                bgpRoutePagination.value.current = 1;
+                loadBgpRoutes();
+            } else {
+                message.error('清理过期路由失败');
+            }
+        } catch (e) {
+            console.error(e);
+            message.error('清理过期路由失败');
         }
     };
 
@@ -561,6 +652,11 @@
             bgpRoutePagination.value.current = 1;
             loadBgpRoutes();
         }
+    });
+
+    watch(routeStateFilter, () => {
+        bgpRoutePagination.value.current = 1;
+        loadBgpRoutes();
     });
 </script>
 
@@ -593,5 +689,10 @@
         width: 100%;
         color: #999;
         overflow: auto;
+    }
+
+    :deep(.route-stale-row) {
+        color: #8c6d1f;
+        background-color: #fffbe6;
     }
 </style>

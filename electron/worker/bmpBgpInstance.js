@@ -1,5 +1,6 @@
 const { getAddrFamilyType } = require('../utils/bgpUtils');
 const { toSerializableTlvs } = require('../utils/bmpUtils');
+const BmpConst = require('../const/bmpConst');
 
 class BmpBgpInstance {
     constructor(bmpSession) {
@@ -36,6 +37,7 @@ class BmpBgpInstance {
         this.isAddPath = false;
 
         this.bgpRoutes = new Map();
+        this.ribEpoch = 0;
     }
 
     isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
@@ -64,6 +66,38 @@ class BmpBgpInstance {
             afi,
             safi
         };
+    }
+
+    getRibEpoch() {
+        return this.ribEpoch || 0;
+    }
+
+    advanceRibEpoch() {
+        this.ribEpoch = this.getRibEpoch() + 1;
+        return this.ribEpoch;
+    }
+
+    markRoutesStale(reason) {
+        const staleEpoch = this.advanceRibEpoch();
+        let changed = 0;
+        this.bgpRoutes.forEach(route => {
+            route.markStale(reason, staleEpoch);
+            changed += 1;
+        });
+        return { staleEpoch, changed };
+    }
+
+    getRouteSummary() {
+        const summary = { active: 0, stale: 0, total: 0 };
+        this.bgpRoutes.forEach(route => {
+            summary.total += 1;
+            if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
+                summary.stale += 1;
+            } else {
+                summary.active += 1;
+            }
+        });
+        return summary;
     }
 
     getInstanceInfo() {
@@ -99,7 +133,9 @@ class BmpBgpInstance {
             isAddPath: this.isAddPath,
             peerUpTlvs: toSerializableTlvs(this.peerUpTlvs),
             lastRouteMonitoringTlvs: toSerializableTlvs(this.lastRouteMonitoringTlvs),
-            vrfTableNames: this.vrfTableNames
+            vrfTableNames: this.vrfTableNames,
+            ribEpoch: this.ribEpoch,
+            routeSummary: this.getRouteSummary()
         };
     }
 
@@ -110,6 +146,7 @@ class BmpBgpInstance {
         this.addPathReceiveMap.clear();
         this.addPathSendMap.clear();
         this.isAddPath = false;
+        this.ribEpoch = 0;
     }
 }
 

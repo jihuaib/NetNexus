@@ -48,7 +48,24 @@ export const BMP_SESSION_STATE = {
 // 直接使用这个值处理
 export const BMP_ROUTE_UPDATE_TYPE = {
     ROUTE_DELETE: 0,
-    ROUTE_UPDATE: 1
+    ROUTE_UPDATE: 1,
+    ROUTE_STALE: 2
+};
+
+export const BMP_ROUTE_STATE = {
+    ACTIVE: 'active',
+    STALE: 'stale'
+};
+
+export const BMP_ROUTE_STATE_FILTER = {
+    ACTIVE: 'active',
+    STALE: 'stale',
+    ALL: 'all'
+};
+
+export const BMP_ROUTE_STATE_NAME = {
+    [BMP_ROUTE_STATE.ACTIVE]: '当前',
+    [BMP_ROUTE_STATE.STALE]: '过期'
 };
 
 export const BMP_SESSION_TYPE_NAME = {

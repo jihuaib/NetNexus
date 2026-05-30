@@ -173,24 +173,27 @@
         reportMap.value = nextMap;
     };
 
+    const upsertReport = data => {
+        if (data && data.client && data.session && data.statistics) {
+            const clientKey = getClientKey(data.client);
+            const key = `${clientKey}|${getSessionKey(data.session)}`;
+            const nextMap = new Map(reportMap.value);
+            nextMap.set(key, {
+                key,
+                clientKey,
+                client: data.client,
+                session: data.session,
+                statistics: data.statistics,
+                tlvs: data.tlvs || [],
+                updatedAt: data.updatedAt || new Date().toISOString()
+            });
+            reportMap.value = nextMap;
+        }
+    };
+
     const onStatisticsReport = result => {
         if (result.status === 'success') {
-            const data = result.data;
-            if (data && data.client && data.session && data.statistics) {
-                const clientKey = getClientKey(data.client);
-                const key = `${clientKey}|${getSessionKey(data.session)}`;
-                const nextMap = new Map(reportMap.value);
-                nextMap.set(key, {
-                    key,
-                    clientKey,
-                    client: data.client,
-                    session: data.session,
-                    statistics: data.statistics,
-                    tlvs: data.tlvs || [],
-                    updatedAt: new Date().toISOString()
-                });
-                reportMap.value = nextMap;
-            }
+            upsertReport(result.data);
         }
     };
 
@@ -269,6 +272,20 @@
         }
     };
 
+    const loadStatisticsReports = async () => {
+        try {
+            for (const client of clientList.value) {
+                const result = await window.bmpApi.getBgpStatisticsReports(client);
+                if (result.status === 'success') {
+                    (result.data || []).forEach(report => upsertReport(report));
+                }
+            }
+        } catch (error) {
+            console.error(error);
+            message.error('加载统计数据失败');
+        }
+    };
+
     onActivated(async () => {
         EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION_STATIS_REPORT, onClientListUpdate);
         EventBus.on('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION_STATIS_REPORT, onTerminationHandler);
@@ -278,6 +295,7 @@
             onStatisticsReport
         );
         await loadClientList();
+        await loadStatisticsReports();
     });
 
     onDeactivated(() => {

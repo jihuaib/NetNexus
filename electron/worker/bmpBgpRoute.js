@@ -1,4 +1,5 @@
 const { getAddrFamilyType } = require('../utils/bgpUtils');
+const BmpConst = require('../const/bmpConst');
 
 class BmpBgpRoute {
     constructor(BmpBgpSession, BmpBgpInstance) {
@@ -31,6 +32,13 @@ class BmpBgpRoute {
 
         // bgp packet
         this.bgpPacket = [];
+
+        this.routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
+        this.ribEpoch = 0;
+        this.staleEpoch = null;
+        this.lastSeenAt = null;
+        this.staleAt = null;
+        this.staleReason = null;
     }
 
     static makeKey(pathId, rd, ip, mask) {
@@ -72,8 +80,30 @@ class BmpBgpRoute {
             nlriDetail: this.nlriDetail,
             parserValid: this.parserValid,
             parseErrors: this.parseErrors,
-            parseWarnings: this.parseWarnings
+            parseWarnings: this.parseWarnings,
+            routeState: this.routeState,
+            ribEpoch: this.ribEpoch,
+            staleEpoch: this.staleEpoch,
+            lastSeenAt: this.lastSeenAt,
+            staleAt: this.staleAt,
+            staleReason: this.staleReason
         };
+    }
+
+    markActive(ribEpoch = 0) {
+        this.routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
+        this.ribEpoch = ribEpoch;
+        this.lastSeenAt = new Date().toISOString();
+        this.staleAt = null;
+        this.staleReason = null;
+        this.staleEpoch = null;
+    }
+
+    markStale(reason, staleEpoch = null) {
+        this.routeState = BmpConst.BMP_ROUTE_STATE.STALE;
+        this.staleReason = reason;
+        this.staleEpoch = staleEpoch;
+        this.staleAt = new Date().toISOString();
     }
 
     clearAttributes() {

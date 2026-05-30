@@ -129,11 +129,17 @@ contextBridge.exposeInMainWorld('bmpApi', {
     // 数据获取
     getClientList: () => ipcRenderer.invoke('bmp:getClientList'),
     getBgpSessions: client => ipcRenderer.invoke('bmp:getBgpSessions', client),
-    getBgpRoutes: (client, session, af, ribType, page, pageSize) =>
-        ipcRenderer.invoke('bmp:getBgpRoutes', client, session, af, ribType, page, pageSize),
+    getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState) =>
+        ipcRenderer.invoke('bmp:getBgpRoutes', client, session, af, ribType, page, pageSize, routeState),
     getBgpInstances: client => ipcRenderer.invoke('bmp:getBgpInstances', client),
-    getBgpInstanceRoutes: (client, instance, page, pageSize) =>
-        ipcRenderer.invoke('bmp:getBgpInstanceRoutes', client, instance, page, pageSize)
+    getBgpInstanceRoutes: (client, instance, page, pageSize, routeState) =>
+        ipcRenderer.invoke('bmp:getBgpInstanceRoutes', client, instance, page, pageSize, routeState),
+    purgeStaleBgpRoutes: (client, session, af, ribType) =>
+        ipcRenderer.invoke('bmp:purgeStaleBgpRoutes', client, session, af, ribType),
+    purgeStaleBgpInstanceRoutes: (client, instance) =>
+        ipcRenderer.invoke('bmp:purgeStaleBgpInstanceRoutes', client, instance),
+    getBgpStatisticsReports: client => ipcRenderer.invoke('bmp:getBgpStatisticsReports', client),
+    getBgpInstanceStatisticsReports: client => ipcRenderer.invoke('bmp:getBgpInstanceStatisticsReports', client)
 });
 
 // rpki模块

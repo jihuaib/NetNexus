@@ -1,5 +1,6 @@
 const { getAddrFamilyType } = require('../utils/bgpUtils');
 const { toSerializableTlvs } = require('../utils/bmpUtils');
+const BmpConst = require('../const/bmpConst');
 
 class BmpBgpSession {
     constructor(bmpSession) {
@@ -36,6 +37,7 @@ class BmpBgpSession {
         this.addPathMap = new Map();
 
         this.bgpRoutes = new Map();
+        this.ribEpochMap = new Map();
     }
 
     isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
@@ -71,6 +73,65 @@ class BmpBgpSession {
             sessionIp,
             sessionAs
         };
+    }
+
+    static makeRibEpochKey(afi, safi, ribType) {
+        return `${afi}|${safi}|${ribType}`;
+    }
+
+    getRibEpoch(afi, safi, ribType) {
+        const key = BmpBgpSession.makeRibEpochKey(afi, safi, ribType);
+        if (!this.ribEpochMap.has(key)) {
+            this.ribEpochMap.set(key, 0);
+        }
+        return this.ribEpochMap.get(key);
+    }
+
+    advanceRibEpoch(afi, safi, ribType) {
+        const key = BmpBgpSession.makeRibEpochKey(afi, safi, ribType);
+        const nextEpoch = this.getRibEpoch(afi, safi, ribType) + 1;
+        this.ribEpochMap.set(key, nextEpoch);
+        return nextEpoch;
+    }
+
+    markRoutesStale(afi, safi, ribTypes, reason) {
+        const afKey = `${afi}|${safi}`;
+        const ribTypeRouteMap = this.bgpRoutes.get(afKey);
+        const targetRibTypes = Array.isArray(ribTypes) && ribTypes.length > 0
+            ? ribTypes
+            : ribTypeRouteMap
+              ? Array.from(ribTypeRouteMap.keys())
+              : [];
+
+        return targetRibTypes.map(ribType => {
+            const staleEpoch = this.advanceRibEpoch(afi, safi, ribType);
+            const routeMap = ribTypeRouteMap ? ribTypeRouteMap.get(ribType) : null;
+            let changed = 0;
+            if (routeMap) {
+                routeMap.forEach(route => {
+                    route.markStale(reason, staleEpoch);
+                    changed += 1;
+                });
+            }
+            return { afi, safi, ribType, staleEpoch, changed };
+        });
+    }
+
+    getRouteSummary() {
+        const summary = { active: 0, stale: 0, total: 0 };
+        this.bgpRoutes.forEach(ribTypeRouteMap => {
+            ribTypeRouteMap.forEach(routeMap => {
+                routeMap.forEach(route => {
+                    summary.total += 1;
+                    if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
+                        summary.stale += 1;
+                    } else {
+                        summary.active += 1;
+                    }
+                });
+            });
+        });
+        return summary;
     }
 
     getSessionInfo() {
@@ -122,7 +183,9 @@ class BmpBgpSession {
             peerDownTlvs: toSerializableTlvs(this.peerDownTlvs),
             lastRouteMonitoringTlvs: toSerializableTlvs(this.lastRouteMonitoringTlvs),
             peerDownReason: this.peerDownReason,
-            peerDownFsmEventCode: this.peerDownFsmEventCode
+            peerDownFsmEventCode: this.peerDownFsmEventCode,
+            ribEpochMap: Object.fromEntries(this.ribEpochMap),
+            routeSummary: this.getRouteSummary()
         };
     }
 
@@ -133,6 +196,7 @@ class BmpBgpSession {
         this.addPathReceiveMap.clear();
         this.addPathSendMap.clear();
         this.addPathMap.clear();
+        this.ribEpochMap.clear();
     }
 }
 
