@@ -2,7 +2,7 @@
     <div class="mt-container">
         <a-row>
             <a-col :span="24">
-                <a-card title="BGP Loc-RIB" class="bgp-loc-rib-card">
+                <a-card title="BGP Loc-RIB">
                     <div v-if="clientList.length > 0">
                         <a-tabs
                             v-model:active-key="activeClientKey"
@@ -609,21 +609,6 @@
 </script>
 
 <style scoped>
-    .mt-container {
-        height: calc(100vh - 20px);
-        overflow: hidden;
-    }
-
-    .bgp-loc-rib-card {
-        height: 100%;
-        overflow: hidden;
-    }
-
-    .bgp-loc-rib-card :deep(.ant-card-body) {
-        height: calc(100% - 41px);
-        overflow: hidden;
-    }
-
     .client-tab-label {
         display: inline-block;
         max-width: 104px;
@@ -631,19 +616,6 @@
         text-overflow: ellipsis;
         white-space: nowrap;
         vertical-align: bottom;
-    }
-
-    .route-table :deep(.ant-table-body) {
-        height: 320px !important;
-        overflow-y: auto !important;
-    }
-
-    .route-table :deep(.ant-table-placeholder) {
-        height: 320px !important;
-    }
-
-    .route-table :deep(.ant-empty-normal) {
-        margin: 132px 0;
     }
 
     .route-toolbar {

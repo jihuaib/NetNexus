@@ -2,7 +2,7 @@
     <div class="mt-container">
         <a-row>
             <a-col :span="24">
-                <a-card title="BGP会话" class="bgp-session-card">
+                <a-card title="BGP会话">
                     <div v-if="clientList.length > 0">
                         <a-tabs
                             v-model:active-key="activeClientKey"
@@ -680,21 +680,6 @@
 </script>
 
 <style scoped>
-    .mt-container {
-        height: calc(100vh - 20px);
-        overflow: hidden;
-    }
-
-    .bgp-session-card {
-        height: 100%;
-        overflow: hidden;
-    }
-
-    .bgp-session-card :deep(.ant-card-body) {
-        height: calc(100% - 41px);
-        overflow: hidden;
-    }
-
     .client-tab-label {
         display: inline-block;
         max-width: 104px;
@@ -702,19 +687,6 @@
         text-overflow: ellipsis;
         white-space: nowrap;
         vertical-align: bottom;
-    }
-
-    .route-table :deep(.ant-table-body) {
-        height: 320px !important;
-        overflow-y: auto !important;
-    }
-
-    .route-table :deep(.ant-table-placeholder) {
-        height: 320px !important;
-    }
-
-    .route-table :deep(.ant-empty-normal) {
-        margin: 132px 0;
     }
 
     .bgp-peer-info-header {
