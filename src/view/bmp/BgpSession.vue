@@ -718,4 +718,8 @@
         color: #8c6d1f;
         background-color: #fffbe6;
     }
+
+    :deep(.ant-table-body) {
+        height: 270px;
+    }
 </style>
