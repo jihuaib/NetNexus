@@ -2,14 +2,18 @@
     <div class="mt-container">
         <a-row>
             <a-col :span="24">
-                <a-card title="BGP会话">
+                <a-card title="BGP会话" class="bgp-session-card">
                     <div v-if="clientList.length > 0">
-                        <a-tabs v-model:active-key="activeClientKey" tab-position="left">
+                        <a-tabs v-model:active-key="activeClientKey" tab-position="left" class="client-tabs">
                             <a-tab-pane
                                 v-for="client in clientList"
                                 :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
-                                :tab="`${client.sysDesc}[${client.remoteIp}]`"
                             >
+                                <template #tab>
+                                    <a-tooltip :title="formatClientTitle(client)" placement="right">
+                                        <span class="client-tab-label">{{ formatClientTab(client) }}</span>
+                                    </a-tooltip>
+                                </template>
                                 <div v-if="bgpSessionList.length > 0">
                                     <a-tabs v-model:active-key="activeBgpSessionKey">
                                         <a-tab-pane
@@ -124,6 +128,7 @@
                                                 </a-button>
                                             </div>
                                             <a-table
+                                                class="route-table"
                                                 :columns="bgpRouteColumns"
                                                 :data-source="bgpRouteList"
                                                 :pagination="bgpRoutePagination"
@@ -138,7 +143,7 @@
                                                             : ''
                                                 "
                                                 size="small"
-                                                :scroll="{ y: 320, x: 'max-content' }"
+                                                :scroll="{ y: 240, x: 'max-content' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeState'">
@@ -340,6 +345,15 @@
             (record.peerDownTlvs || []).length +
             (record.lastRouteMonitoringTlvs || []).length
         );
+    };
+
+    const formatClientTab = client => {
+        return client.remoteIp || '-';
+    };
+
+    const formatClientTitle = client => {
+        const sysDesc = client.sysDesc || client.sysName || '-';
+        return `${sysDesc} | ${client.remoteIp || '-'}:${client.remotePort || '-'} -> ${client.localIp || '-'}:${client.localPort || '-'}`;
     };
 
     // Close details drawer
@@ -661,8 +675,41 @@
 </script>
 
 <style scoped>
-    :deep(.ant-table-body) {
-        height: 320px !important;
+    .mt-container {
+        height: calc(100vh - 20px);
+        overflow: hidden;
+    }
+
+    .bgp-session-card {
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .bgp-session-card :deep(.ant-card-body) {
+        height: calc(100% - 41px);
+        overflow: hidden;
+    }
+
+    .client-tabs :deep(.ant-tabs-nav) {
+        flex: 0 0 128px;
+        width: 128px;
+    }
+
+    .client-tabs :deep(.ant-tabs-tab) {
+        padding: 8px 10px;
+    }
+
+    .client-tab-label {
+        display: inline-block;
+        max-width: 104px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        vertical-align: bottom;
+    }
+
+    .route-table :deep(.ant-table-body) {
+        height: 240px !important;
         overflow-y: auto !important;
     }
 

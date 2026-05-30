@@ -4,12 +4,16 @@
             <a-col :span="24">
                 <a-card title="BGP会话统计">
                     <div v-if="clientList.length > 0">
-                        <a-tabs v-model:active-key="activeClientKey" tab-position="left">
+                        <a-tabs v-model:active-key="activeClientKey" tab-position="left" class="client-tabs">
                             <a-tab-pane
                                 v-for="client in clientList"
                                 :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
-                                :tab="`${client.sysDesc}[${client.remoteIp}]`"
                             >
+                                <template #tab>
+                                    <a-tooltip :title="formatClientTitle(client)" placement="right">
+                                        <span class="client-tab-label">{{ formatClientTab(client) }}</span>
+                                    </a-tooltip>
+                                </template>
                                 <div v-if="getClientReports(client).length > 0">
                                     <a-tabs>
                                         <a-tab-pane
@@ -95,6 +99,15 @@
         return `${name} (${record.afi}/${record.safi})`;
     };
 
+    const formatClientTab = client => {
+        return client.remoteIp || '-';
+    };
+
+    const formatClientTitle = client => {
+        const sysDesc = client.sysDesc || client.sysName || '-';
+        return `${sysDesc} | ${client.remoteIp || '-'}:${client.remotePort || '-'} -> ${client.localIp || '-'}:${client.localPort || '-'}`;
+    };
+
     const columns = [
         {
             title: 'Type',
@@ -134,6 +147,13 @@
     const getClientKey = client => {
         return `${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`;
     };
+
+    const toPlainClient = client => ({
+        localIp: client.localIp,
+        localPort: client.localPort,
+        remoteIp: client.remoteIp,
+        remotePort: client.remotePort
+    });
 
     const getSessionKey = session => {
         return `${session.sessionType}|${session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
@@ -275,7 +295,7 @@
     const loadStatisticsReports = async () => {
         try {
             for (const client of clientList.value) {
-                const result = await window.bmpApi.getBgpStatisticsReports(client);
+                const result = await window.bmpApi.getBgpStatisticsReports(toPlainClient(client));
                 if (result.status === 'success') {
                     (result.data || []).forEach(report => upsertReport(report));
                 }
@@ -313,6 +333,24 @@
     .report-table :deep(.ant-table-body) {
         height: 320px !important;
         overflow-y: auto !important;
+    }
+
+    .client-tabs :deep(.ant-tabs-nav) {
+        flex: 0 0 128px;
+        width: 128px;
+    }
+
+    .client-tabs :deep(.ant-tabs-tab) {
+        padding: 8px 10px;
+    }
+
+    .client-tab-label {
+        display: inline-block;
+        max-width: 104px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        vertical-align: bottom;
     }
 
     .no-result-message {
