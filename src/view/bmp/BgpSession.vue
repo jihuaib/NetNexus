@@ -26,19 +26,62 @@
                                             :key="`${session.sessionType}|${session.sessionRd}|${session.sessionIp}|${session.sessionAs}`"
                                             :tab="`${session.sessionType} | rd(${session.sessionRd}) | ip(${session.sessionIp}) | as(${session.sessionAs})`"
                                         >
-                                            <div class="session-summary">
-                                                <a-tag color="blue">{{ BMP_SESSION_TYPE_NAME[session.sessionType] || session.sessionType }}</a-tag>
-                                                <a-tag>{{ session.sessionIp }}</a-tag>
-                                                <a-tag>AS {{ session.sessionAs }}</a-tag>
-                                                <a-tag>RD {{ session.sessionRd }}</a-tag>
-                                                <a-tooltip :title="getBmpFlagsName(session.sessionFlags)">
-                                                    <a-tag>{{ getBmpFlagsName(session.sessionFlags) }}</a-tag>
-                                                </a-tooltip>
-                                                <a-tag>{{ BMP_SESSION_STATE_NAME[session.sessionState] || session.sessionState }}</a-tag>
-                                                <a-button type="link" size="small" @click="viewSessionDetails(session)">
-                                                    详情
-                                                </a-button>
-                                            </div>
+                                            <a-table
+                                                :columns="bgpSessionColumns"
+                                                :data-source="[session]"
+                                                :pagination="false"
+                                                size="small"
+                                                style="margin-bottom: 8px"
+                                                row-key="peerIp"
+                                                :scroll="{ x: 'max-content' }"
+                                            >
+                                                <template #bodyCell="{ column, record }">
+                                                    <template v-if="column.key === 'addPathMap'">
+                                                        <a-tooltip
+                                                            v-if="
+                                                                record.addPathMap &&
+                                                                Object.values(record.addPathMap).some(v => v)
+                                                            "
+                                                        >
+                                                            <template #title>
+                                                                <div
+                                                                    v-for="(enabled, key) in record.addPathMap"
+                                                                    :key="key"
+                                                                >
+                                                                    <span v-if="enabled">
+                                                                        {{ ADDRESS_FAMILY_NAME[key] }}: Yes
+                                                                    </span>
+                                                                </div>
+                                                            </template>
+                                                            <a-tag color="green">Yes</a-tag>
+                                                        </a-tooltip>
+                                                        <a-tag v-else color="red">No</a-tag>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'sessionFlags'">
+                                                        <a-tooltip :title="getBmpFlagsName(record.sessionFlags)">
+                                                            <span>{{ getBmpFlagsName(record.sessionFlags) }}</span>
+                                                        </a-tooltip>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'rawSessionFlags'">
+                                                        <span>{{ formatRawFlags(record.rawSessionFlags) }}</span>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'peerDownReason'">
+                                                        <span>{{ formatPeerDownReason(record.peerDownReason) }}</span>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'tlvCount'">
+                                                        <span>{{ getSessionTlvCount(record) }}</span>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'action'">
+                                                        <a-button
+                                                            type="link"
+                                                            size="small"
+                                                            @click="viewSessionDetails(record)"
+                                                        >
+                                                            详情
+                                                        </a-button>
+                                                    </template>
+                                                </template>
+                                            </a-table>
                                             <div
                                                 style="
                                                     margin-bottom: 8px;
@@ -104,7 +147,7 @@
                                                             : ''
                                                 "
                                                 size="small"
-                                                :scroll="{ y: 240, x: 'max-content' }"
+                                                :scroll="{ y: 320, x: 'max-content' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeState'">
@@ -162,6 +205,7 @@
         BMP_SESSION_STATE_NAME,
         BMP_BGP_RIB_TYPE_NAME,
         BMP_EVENT_PAGE_ID,
+        BMP_PEER_DOWN_REASON_NAME,
         BMP_ROUTE_STATE,
         BMP_ROUTE_STATE_FILTER,
         BMP_ROUTE_STATE_NAME,
@@ -180,6 +224,98 @@
 
     const bgpSessionList = ref([]);
 
+    // 对等体列表
+    const bgpSessionColumns = [
+        {
+            title: 'Session Type',
+            dataIndex: 'sessionType',
+            key: 'sessionType',
+            ellipsis: true,
+            width: 100,
+            customRender: ({ text }) => {
+                return BMP_SESSION_TYPE_NAME[text] || text;
+            }
+        },
+        {
+            title: 'Session IP',
+            dataIndex: 'sessionIp',
+            key: 'sessionIp',
+            width: 100,
+            ellipsis: true
+        },
+        {
+            title: 'AS',
+            dataIndex: 'sessionAs',
+            key: 'sessionAs',
+            width: 100,
+            ellipsis: true
+        },
+        {
+            title: 'RD',
+            dataIndex: 'sessionRd',
+            key: 'sessionRd',
+            width: 100,
+            ellipsis: true
+        },
+        {
+            title: 'Router ID',
+            dataIndex: 'sessionRouterId',
+            key: 'sessionRouterId',
+            width: 100,
+            ellipsis: true
+        },
+        {
+            title: 'ADD-PATH',
+            dataIndex: 'addPathMap',
+            key: 'addPathMap',
+            ellipsis: true,
+            width: 80
+        },
+        {
+            title: 'Flags',
+            dataIndex: 'sessionFlags',
+            key: 'sessionFlags',
+            ellipsis: true,
+            width: 140
+        },
+        {
+            title: 'Raw Flags',
+            dataIndex: 'rawSessionFlags',
+            key: 'rawSessionFlags',
+            ellipsis: true,
+            width: 90
+        },
+        {
+            title: 'Down Reason',
+            dataIndex: 'peerDownReason',
+            key: 'peerDownReason',
+            ellipsis: true,
+            width: 140
+        },
+        {
+            title: 'TLV数量',
+            key: 'tlvCount',
+            width: 80,
+            align: 'right'
+        },
+        {
+            title: 'Session状态',
+            dataIndex: 'sessionState',
+            key: 'sessionState',
+            ellipsis: true,
+            width: 100,
+            customRender: ({ text }) => {
+                return BMP_SESSION_STATE_NAME[text] || text;
+            }
+        },
+        {
+            title: '操作',
+            key: 'action',
+            fixed: 'right',
+            width: 200
+        }
+    ];
+
     // Details drawer
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
@@ -196,6 +332,24 @@
         currentDetails.value = record;
         detailsDrawerTitle.value = `路由详情: ${record.ip || ''}`;
         detailsDrawerVisible.value = true;
+    };
+
+    const formatRawFlags = flags => {
+        if (flags === null || flags === undefined) return '-';
+        return `0x${Number(flags).toString(16).padStart(2, '0')}`;
+    };
+
+    const formatPeerDownReason = reason => {
+        if (reason === null || reason === undefined) return '-';
+        return BMP_PEER_DOWN_REASON_NAME[reason] || reason;
+    };
+
+    const getSessionTlvCount = record => {
+        return (
+            (record.peerUpTlvs || []).length +
+            (record.peerDownTlvs || []).length +
+            (record.lastRouteMonitoringTlvs || []).length
+        );
     };
 
     const formatClientTab = client => {
@@ -550,18 +704,17 @@
         vertical-align: bottom;
     }
 
-    .session-summary {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex-wrap: wrap;
-        margin-bottom: 8px;
-        min-height: 24px;
+    .route-table :deep(.ant-table-body) {
+        height: 320px !important;
+        overflow-y: auto !important;
     }
 
-    .route-table :deep(.ant-table-body) {
-        height: 240px !important;
-        overflow-y: auto !important;
+    .route-table :deep(.ant-table-placeholder) {
+        height: 320px !important;
+    }
+
+    .route-table :deep(.ant-empty-normal) {
+        margin: 132px 0;
     }
 
     .bgp-peer-info-header {
