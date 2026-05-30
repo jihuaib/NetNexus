@@ -429,7 +429,7 @@ locRibPeerDownSession.processMessage(
         locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED)
     )
 );
-assert.equal(locRibPeerDownSession.bgpInstanceMap.get(ipv4LocRib.instanceKey).bgpRoutes.size, 0);
+assert.equal(locRibPeerDownSession.bgpInstanceMap.get(ipv4LocRib.instanceKey).bgpRoutes.size, 1);
 assert.equal(locRibPeerDownSession.bgpInstanceMap.get(ipv6LocRib.instanceKey).bgpRoutes.size, 1);
 
 const { session: peerUpRefreshSession } = makeSession();
@@ -451,8 +451,19 @@ peerUpRefreshSession.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
 );
 const refreshedBgpSession = peerUpRefreshSession.bgpSessionMap.get(ipv4BgpRoute.sessionKey);
-assert.equal(refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).size, 0);
+assert.equal(refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).size, 1);
 assert.equal(refreshedBgpSession.bgpRoutes.get(ipv6BgpRoute.afKey).get(ipv6BgpRoute.ribType).size, 1);
+peerUpRefreshSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate('203.0.114.0'))
+        ])
+    )
+);
+assert.equal(refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).size, 2);
 
 const { session: peerDownMultiAfSession } = makeSession();
 const peerDownIpv4Route = addBgpSessionRoute(
@@ -501,7 +512,7 @@ assert.equal(
 );
 assert.equal(
     peerDownIpv6Route.bgpSession.bgpRoutes.get(peerDownIpv6Route.afKey).get(peerDownIpv6Route.ribType).size,
-    0
+    1
 );
 
 const { session: peerDownNotificationMultiAfSession } = makeSession();
@@ -533,19 +544,7 @@ peerDownNotificationMultiAfSession.processMessage(
         ])
     )
 );
-assert.ok(peerDownNotificationMultiAfSession.bgpSessionMap.has(peerDownNotificationIpv4Route.sessionKey));
-assert.equal(
-    peerDownNotificationIpv4Route.bgpSession.bgpRoutes
-        .get(peerDownNotificationIpv4Route.afKey)
-        .get(peerDownNotificationIpv4Route.ribType).size,
-    1
-);
-assert.equal(
-    peerDownNotificationIpv6Route.bgpSession.bgpRoutes
-        .get(peerDownNotificationIpv6Route.afKey)
-        .get(peerDownNotificationIpv6Route.ribType).size,
-    1
-);
+assert.equal(peerDownNotificationMultiAfSession.bgpSessionMap.has(peerDownNotificationIpv4Route.sessionKey), false);
 
 const { session: addPathSession } = makeSession();
 addPathSession.processMessage(

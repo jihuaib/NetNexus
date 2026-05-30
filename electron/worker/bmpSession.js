@@ -1003,24 +1003,6 @@ class BmpSession {
         });
     }
 
-    clearSessionRoutesByAddressFamilies(bgpSession, addressFamilies) {
-        if (!bgpSession || !Array.isArray(addressFamilies)) {
-            return;
-        }
-
-        addressFamilies.forEach(addrFamily => {
-            const afKey = `${addrFamily.afi}|${addrFamily.safi}`;
-            const ribTypeRouteMap = bgpSession.bgpRoutes.get(afKey);
-            if (!ribTypeRouteMap) {
-                return;
-            }
-
-            ribTypeRouteMap.forEach(routeMap => {
-                routeMap.clear();
-            });
-        });
-    }
-
     clearSessionAddPathByAddressFamilies(bgpSession, addressFamilies) {
         if (!bgpSession || !Array.isArray(addressFamilies)) {
             return;
@@ -1157,15 +1139,9 @@ class BmpSession {
             );
 
             if (peerDownPayload.parsedBgpNotification) {
-                if (addressFamilyKeys.length <= 1) {
-                    // bgp断开
-                    bgpSession.closeSession();
-                    this.bgpSessionMap.delete(sessKey);
-                } else {
-                    logger.info(
-                        `Peer Down notification matched ${addressFamilyKeys.length} address families for ${sessKey}; keeping routes until AF-specific Peer Up refresh or withdraw`
-                    );
-                }
+                // BGP Notification means the monitored BGP peer is down, not an AF-only BMP config refresh.
+                bgpSession.closeSession();
+                this.bgpSessionMap.delete(sessKey);
             } else {
                 if (addressFamilyKeys.length === 1) {
                     const ribTypeRouteMap = bgpSession.bgpRoutes.get(addressFamilyKeys[0]);
@@ -1423,7 +1399,6 @@ class BmpSession {
                 bgpSession = new BmpBgpSession(this);
                 this.bgpSessionMap.set(bgpSessionKey, bgpSession);
             } else {
-                this.clearSessionRoutesByAddressFamilies(bgpSession, enabledAddressFamilies);
                 this.clearSessionAddPathByAddressFamilies(bgpSession, enabledAddressFamilies);
             }
 
@@ -1656,7 +1631,11 @@ class BmpSession {
                     bgpInstance = new BmpBgpInstance(this);
                     this.bgpInstanceMap.set(instanceKey, bgpInstance);
                 } else {
-                    bgpInstance.closeInstance();
+                    bgpInstance.recvAddPathMap.clear();
+                    bgpInstance.sendAddPathMap.clear();
+                    bgpInstance.addPathReceiveMap.clear();
+                    bgpInstance.addPathSendMap.clear();
+                    bgpInstance.isAddPath = false;
                 }
 
                 this.mergeAddressFamilies(bgpInstance.enabledAddressFamilies, enabledAddressFamilies);
