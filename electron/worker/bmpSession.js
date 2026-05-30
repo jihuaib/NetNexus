@@ -1154,13 +1154,24 @@ class BmpSession {
                 bgpSession.closeSession();
                 this.bgpSessionMap.delete(sessKey);
             } else {
-                // 遍历rib类型
-                for (const ribType of ribTypes) {
-                    bgpSession.bgpRoutes.forEach(routeMap => {
-                        if (routeMap.has(ribType)) {
-                            routeMap.get(ribType).clear();
+                const addressFamilyKeys =
+                    bgpSession.enabledAddressFamilies.length > 0
+                        ? bgpSession.enabledAddressFamilies.map(addrFamily => `${addrFamily.afi}|${addrFamily.safi}`)
+                        : Array.from(bgpSession.bgpRoutes.keys());
+
+                if (addressFamilyKeys.length === 1) {
+                    const ribTypeRouteMap = bgpSession.bgpRoutes.get(addressFamilyKeys[0]);
+                    if (ribTypeRouteMap) {
+                        for (const ribType of ribTypes) {
+                            if (ribTypeRouteMap.has(ribType)) {
+                                ribTypeRouteMap.get(ribType).clear();
+                            }
                         }
-                    });
+                    }
+                } else if (addressFamilyKeys.length > 1) {
+                    logger.info(
+                        `Peer Down matched ${addressFamilyKeys.length} address families for ${sessKey}; keeping routes until AF-specific Peer Up refresh or withdraw`
+                    );
                 }
             }
 

@@ -70,6 +70,24 @@ export const ADDRESS_FAMILY_NAME = {
     [BGP_ADDR_FAMILY.LINK_STATE]: 'Link-State'
 };
 
+export const getAddrFamilyType = (afi, safi) => {
+    if (afi === 1 && safi === 1) return BGP_ADDR_FAMILY.IPV4_UNC;
+    if (afi === 1 && safi === 128) return BGP_ADDR_FAMILY.VPNV4;
+    if (afi === 1 && safi === 4) return BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
+    if (afi === 1 && safi === 5) return BGP_ADDR_FAMILY.IPV4_MVPN;
+    if (afi === 1 && safi === 133) return BGP_ADDR_FAMILY.IPV4_FLOWSPEC;
+    if (afi === 1 && safi === 241) return BGP_ADDR_FAMILY.IPV4_QP;
+    if (afi === 2 && safi === 1) return BGP_ADDR_FAMILY.IPV6_UNC;
+    if (afi === 2 && safi === 128) return BGP_ADDR_FAMILY.VPNV6;
+    if (afi === 2 && safi === 4) return BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST;
+    if (afi === 2 && safi === 5) return BGP_ADDR_FAMILY.IPV6_MVPN;
+    if (afi === 2 && safi === 133) return BGP_ADDR_FAMILY.IPV6_FLOWSPEC;
+    if (afi === 2 && safi === 241) return BGP_ADDR_FAMILY.IPV6_QP;
+    if (afi === 25 && safi === 70) return BGP_ADDR_FAMILY.L2VPN_EVPN;
+    if (afi === 16388 && safi === 71) return BGP_ADDR_FAMILY.LINK_STATE;
+    return null;
+};
+
 // Default Values
 export const DEFAULT_VALUES = {
     LOCAL_AS: '65535',

@@ -2,6 +2,13 @@ const BmpConst = require('../const/bmpConst');
 const BgpConst = require('../const/bgpConst');
 const { rdBufferToString, ipv4BufferToString, ipv6BufferToString } = require('./ipUtils');
 
+const PER_AFI_SAFI_STATS_TYPES = new Set([
+    BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_ADJ_RIB_IN,
+    BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_LOC_RIB,
+    BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_PRE_POLICY_ADJ_RIB_OUT,
+    BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_OUT
+]);
+
 function getInitiationTlvName(tlvType) {
     switch (tlvType) {
         case BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME:
@@ -254,11 +261,7 @@ function parseStatsRecords(buffer, offset = 0, options = {}) {
         } else if (statLength === 8) {
             const bigValue = buffer.readBigUInt64BE(position);
             statValue = bigValue <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(bigValue) : bigValue.toString();
-        } else if (
-            locRib &&
-            statType === BmpConst.BMP_STATS_TYPE.NUM_PREFIXES_TREATED_AS_WITHDRAW &&
-            statLength === 11
-        ) {
+        } else if (PER_AFI_SAFI_STATS_TYPES.has(statType) && statLength === 11) {
             afi = buffer.readUInt16BE(position);
             safi = buffer[position + 2];
             const bigValue = buffer.readBigUInt64BE(position + 3);

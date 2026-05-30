@@ -28,12 +28,14 @@
                                                 </a-space>
                                             </div>
                                             <a-table
+                                                class="report-table"
                                                 :columns="columns"
                                                 :data-source="report.statistics"
                                                 :pagination="false"
-                                                :row-key="record => `${record.type}`"
+                                                :row-key="record => `${record.type}|${record.afi || ''}|${record.safi || ''}`"
                                                 size="small"
                                                 bordered
+                                                :scroll="{ y: 320, x: 'max-content' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'typeName'">
@@ -78,23 +80,45 @@
     import { message } from 'ant-design-vue';
     import EventBus from '../../utils/eventBus';
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
+    import { ADDRESS_FAMILY_NAME, getAddrFamilyType } from '../../const/bgpConst';
 
     defineOptions({
         name: 'BgpSessionStatisReport'
     });
 
+    const formatAddrFamily = record => {
+        if (record.afi === null || record.afi === undefined || record.safi === null || record.safi === undefined) {
+            return '-';
+        }
+        const addrFamilyType = getAddrFamilyType(Number(record.afi), Number(record.safi));
+        const name = ADDRESS_FAMILY_NAME[addrFamilyType] || `AFI ${record.afi} / SAFI ${record.safi}`;
+        return `${name} (${record.afi}/${record.safi})`;
+    };
+
     const columns = [
+        {
+            title: 'Type',
+            dataIndex: 'type',
+            key: 'type',
+            width: 80
+        },
         {
             title: '统计类型',
             dataIndex: 'typeName',
             key: 'typeName',
-            width: '60%'
+            width: 320
+        },
+        {
+            title: '地址族',
+            key: 'addrFamily',
+            width: 180,
+            customRender: ({ record }) => formatAddrFamily(record)
         },
         {
             title: '数值',
             dataIndex: 'value',
             key: 'value',
-            width: '40%',
+            width: 120,
             align: 'right'
         }
     ];
@@ -230,9 +254,13 @@
             if (clientListResult.status === 'success') {
                 clientList.value = clientListResult.data;
 
-                // 设置默认选中第一个客户端
-                if (clientList.value.length > 0 && !activeClientKey.value) {
-                    activeClientKey.value = getClientKey(clientList.value[0]);
+                if (clientList.value.length > 0) {
+                    const activeClientExists = clientList.value.some(client => getClientKey(client) === activeClientKey.value);
+                    if (!activeClientKey.value || !activeClientExists) {
+                        activeClientKey.value = getClientKey(clientList.value[0]);
+                    }
+                } else {
+                    activeClientKey.value = '';
                 }
             }
         } catch (error) {
@@ -242,9 +270,6 @@
     };
 
     onActivated(async () => {
-        clientList.value = [];
-        activeClientKey.value = '';
-        reportMap.value = new Map();
         EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION_STATIS_REPORT, onClientListUpdate);
         EventBus.on('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION_STATIS_REPORT, onTerminationHandler);
         EventBus.on(
@@ -265,6 +290,11 @@
 <style scoped>
     .report-header {
         margin-bottom: 8px;
+    }
+
+    .report-table :deep(.ant-table-body) {
+        height: 320px !important;
+        overflow-y: auto !important;
     }
 
     .no-result-message {

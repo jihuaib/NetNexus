@@ -35,11 +35,16 @@ function addPathCapability(
     return Buffer.concat([Buffer.from([BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH, 4]), u16(afi), Buffer.from([safi, mode])]);
 }
 
-function bgpOpen(routerId = '192.0.2.1', addPathMode = null) {
+function bgpOpenForAf(
+    routerId = '192.0.2.1',
+    afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    addPathMode = null
+) {
     const mpCapability = Buffer.concat([
         Buffer.from([BgpConst.BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS, 4]),
-        u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
-        Buffer.from([0, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST])
+        u16(afi),
+        Buffer.from([0, safi])
     ]);
     const capabilities = [mpCapability];
     if (addPathMode !== null) {
@@ -60,6 +65,10 @@ function bgpOpen(routerId = '192.0.2.1', addPathMode = null) {
     ]);
 
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.OPEN, body);
+}
+
+function bgpOpen(routerId = '192.0.2.1', addPathMode = null) {
+    return bgpOpenForAf(routerId, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST, addPathMode);
 }
 
 function pathAttr(typeCode, value, flags = BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE) {
@@ -117,6 +126,18 @@ function peerUpPayload(flags = 0, options = {}) {
         u16(50000),
         bgpOpen('192.0.2.2', options.recvAddPathMode ?? null),
         bgpOpen('192.0.2.1', options.sendAddPathMode ?? null)
+    ]);
+}
+
+function peerUpPayloadForAf(afi, safi, flags = 0) {
+    return Buffer.concat([
+        peerHeader(flags),
+        Buffer.alloc(12),
+        ip('192.0.2.254'),
+        u16(179),
+        u16(50000),
+        bgpOpenForAf('192.0.2.2', afi, safi),
+        bgpOpenForAf('192.0.2.1', afi, safi)
     ]);
 }
 
@@ -350,7 +371,7 @@ session.processMessage(
                 BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS,
                 Buffer.concat([
                     u32(1),
-                    u16(BmpConst.BMP_STATS_TYPE.NUM_PREFIXES_TREATED_AS_WITHDRAW),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_LOC_RIB),
                     u16(11),
                     u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
                     Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST]),
@@ -428,6 +449,56 @@ peerUpRefreshSession.processMessage(
 const refreshedBgpSession = peerUpRefreshSession.bgpSessionMap.get(ipv4BgpRoute.sessionKey);
 assert.equal(refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).size, 0);
 assert.equal(refreshedBgpSession.bgpRoutes.get(ipv6BgpRoute.afKey).get(ipv6BgpRoute.ribType).size, 1);
+
+const { session: peerDownMultiAfSession } = makeSession();
+const peerDownIpv4Route = addBgpSessionRoute(
+    peerDownMultiAfSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    '203.0.120.0',
+    24
+);
+const peerDownIpv6Route = addBgpSessionRoute(
+    peerDownMultiAfSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    '2001:db8:120::',
+    64
+);
+peerDownIpv4Route.bgpSession.enabledAddressFamilies = [
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST },
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST }
+];
+peerDownMultiAfSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_DOWN_NOTIFICATION,
+        Buffer.concat([peerHeader(), Buffer.from([BmpConst.BMP_PEER_DOWN_REASON.PEER_DE_CONFIGURED])])
+    )
+);
+assert.equal(
+    peerDownIpv4Route.bgpSession.bgpRoutes.get(peerDownIpv4Route.afKey).get(peerDownIpv4Route.ribType).size,
+    1
+);
+assert.equal(
+    peerDownIpv6Route.bgpSession.bgpRoutes.get(peerDownIpv6Route.afKey).get(peerDownIpv6Route.ribType).size,
+    1
+);
+peerDownMultiAfSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        peerUpPayloadForAf(BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+    )
+);
+assert.equal(
+    peerDownIpv4Route.bgpSession.bgpRoutes.get(peerDownIpv4Route.afKey).get(peerDownIpv4Route.ribType).size,
+    1
+);
+assert.equal(
+    peerDownIpv6Route.bgpSession.bgpRoutes.get(peerDownIpv6Route.afKey).get(peerDownIpv6Route.ribType).size,
+    0
+);
 
 const { session: addPathSession } = makeSession();
 addPathSession.processMessage(
@@ -523,6 +594,39 @@ const statelessRoutes = [...statelessRouteMap.values()];
 assert.ok(statelessRoutes.some(route => route.ip === '203.0.115.0' && route.pathId === 88));
 assert.ok(statelessRoutes.some(route => route.ip === '203.0.116.0' && route.pathId === 0));
 assert.equal(statelessBgpSession.addPathMap.has(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`), false);
+
+const { session: statsTypeSession, events: statsTypeEvents } = makeSession();
+statsTypeSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.STATISTICS_REPORT,
+        Buffer.concat([
+            peerHeader(),
+            tlv(
+                BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS,
+                Buffer.concat([
+                    u32(2),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT),
+                    u16(4),
+                    u32(15),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_OUT),
+                    u16(11),
+                    u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+                    Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST]),
+                    Buffer.from('0000000000000017', 'hex')
+                ])
+            )
+        ])
+    )
+);
+const statsTypeEvent = statsTypeEvents.find(event => event.type === BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT);
+assert.equal(statsTypeEvent.payload.data.statistics[0].typeName, 'Post-Policy Adj-RIB-Out 中的路由数');
+assert.equal(
+    statsTypeEvent.payload.data.statistics[1].typeName,
+    '每 AFI/SAFI Post-Policy Adj-RIB-Out 中的路由数'
+);
+assert.equal(statsTypeEvent.payload.data.statistics[1].afi, BgpConst.BGP_AFI_TYPE.AFI_IPV4);
+assert.equal(statsTypeEvent.payload.data.statistics[1].safi, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
 
 const huaweiDraft19Frame = bytesFromDump(`
 0000   00 50 56 c0 00 03 fa a9 61 f7 00 10 08 00 45 00
