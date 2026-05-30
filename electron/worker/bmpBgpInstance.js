@@ -31,15 +31,23 @@ class BmpBgpInstance {
 
         this.recvAddPathMap = new Map();
         this.sendAddPathMap = new Map();
+        this.addPathReceiveMap = new Map();
+        this.addPathSendMap = new Map();
         this.isAddPath = false;
 
         this.bgpRoutes = new Map();
     }
 
-    isAddPathReceiveEnabled(afi, safi) {
+    isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
         const key = `${afi}|${safi}`;
-        if (this.addPathMap.has(key)) {
-            return this.addPathMap.get(key);
+        if (direction === 'send') {
+            return this.addPathSendMap.get(key) === true;
+        }
+        if (direction === 'any') {
+            return this.addPathReceiveMap.get(key) === true || this.addPathSendMap.get(key) === true;
+        }
+        if (this.addPathReceiveMap.has(key)) {
+            return this.addPathReceiveMap.get(key) === true;
         }
         return false;
     }
@@ -86,6 +94,8 @@ class BmpBgpInstance {
             ribTypes: this.ribTypes,
             recvAddPathMap: Object.fromEntries(this.recvAddPathMap),
             sendAddPathMap: Object.fromEntries(this.sendAddPathMap),
+            addPathReceiveMap: Object.fromEntries(this.addPathReceiveMap),
+            addPathSendMap: Object.fromEntries(this.addPathSendMap),
             isAddPath: this.isAddPath,
             peerUpTlvs: toSerializableTlvs(this.peerUpTlvs),
             lastRouteMonitoringTlvs: toSerializableTlvs(this.lastRouteMonitoringTlvs),
@@ -97,6 +107,9 @@ class BmpBgpInstance {
         this.bgpRoutes.clear();
         this.recvAddPathMap.clear();
         this.sendAddPathMap.clear();
+        this.addPathReceiveMap.clear();
+        this.addPathSendMap.clear();
+        this.isAddPath = false;
     }
 }
 

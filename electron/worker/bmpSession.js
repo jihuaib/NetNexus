@@ -36,6 +36,8 @@ class BmpSession {
         this.bgpSessionMap = new Map();
         this.bgpInstanceMap = new Map();
         this.instAddPathMap = new Map();
+        this.instAddPathReceiveMap = new Map();
+        this.instAddPathSendMap = new Map();
         this.messageBuffer = Buffer.alloc(0);
     }
 
@@ -48,12 +50,48 @@ class BmpSession {
         return { localIp, localPort, remoteIp, remotePort };
     }
 
-    isAddPathReceiveEnabled(afi, safi) {
+    isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
         const key = `${afi}|${safi}`;
+        if (direction === 'send') {
+            return this.instAddPathSendMap.get(key) === true;
+        }
+        if (direction === 'any') {
+            return (
+                this.instAddPathReceiveMap.get(key) === true ||
+                this.instAddPathSendMap.get(key) === true ||
+                this.instAddPathMap.get(key) === true
+            );
+        }
+        if (this.instAddPathReceiveMap.has(key)) {
+            return this.instAddPathReceiveMap.get(key) === true;
+        }
         if (this.instAddPathMap.has(key)) {
-            return this.instAddPathMap.get(key);
+            return this.instAddPathMap.get(key) === true;
         }
         return false;
+    }
+
+    canReceiveAddPath(mode) {
+        return mode === BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY || mode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE;
+    }
+
+    canSendAddPath(mode) {
+        return mode === BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY || mode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE;
+    }
+
+    canRouterReceiveAddPath(remoteMode, routerMode) {
+        return this.canSendAddPath(remoteMode) && this.canReceiveAddPath(routerMode);
+    }
+
+    canRouterSendAddPath(remoteMode, routerMode) {
+        return this.canSendAddPath(routerMode) && this.canReceiveAddPath(remoteMode);
+    }
+
+    getAddPathParsingDirection(peerType, peerFlags) {
+        if (peerType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB) {
+            return 'any';
+        }
+        return (peerFlags & BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT) !== 0 ? 'send' : 'receive';
     }
 
     logTlvWarnings(context, warnings) {
@@ -163,7 +201,7 @@ class BmpSession {
                         capPosition += 1;
 
                         capability.addPaths.push({ afi, safi, sendReceive });
-                        addPathMap.set(`${afi}|${safi}`, sendReceive !== 0);
+                        addPathMap.set(`${afi}|${safi}`, sendReceive);
                     }
                 }
 
@@ -174,20 +212,25 @@ class BmpSession {
         return addPathMap;
     }
 
-    createBgpParsingContext(tlvs, fallbackContext) {
+    createBgpParsingContext(tlvs, fallbackContext, direction = 'receive') {
         const statelessAddPathMap = this.decodeStatelessParsingTlvs(tlvs);
         if (statelessAddPathMap.size === 0) {
-            return fallbackContext;
+            if (!fallbackContext || typeof fallbackContext.isAddPathReceiveEnabled !== 'function') {
+                return fallbackContext;
+            }
+            return {
+                isAddPathReceiveEnabled: (afi, safi) => fallbackContext.isAddPathReceiveEnabled(afi, safi, direction)
+            };
         }
 
         return {
             isAddPathReceiveEnabled: (afi, safi) => {
                 const key = `${afi}|${safi}`;
                 if (statelessAddPathMap.has(key)) {
-                    return statelessAddPathMap.get(key);
+                    return statelessAddPathMap.get(key) !== 0;
                 }
                 if (fallbackContext && typeof fallbackContext.isAddPathReceiveEnabled === 'function') {
-                    return fallbackContext.isAddPathReceiveEnabled(afi, safi);
+                    return fallbackContext.isAddPathReceiveEnabled(afi, safi, direction);
                 }
                 return false;
             }
@@ -206,19 +249,6 @@ class BmpSession {
                 tlv.valueText = tlv.value.toString('utf8');
                 return tlv.valueText;
             });
-    }
-
-    updateLocRibAddPathFromTlvs(instanceType, instanceRd, tlvs) {
-        const statelessAddPathMap = this.decodeStatelessParsingTlvs(tlvs);
-        statelessAddPathMap.forEach((enabled, key) => {
-            this.instAddPathMap.set(key, enabled);
-            const [afi, safi] = key.split('|');
-            const instanceKey = BmpBgpInstance.makeKey(instanceType, instanceRd, afi, safi);
-            const bgpInstance = this.bgpInstanceMap.get(instanceKey);
-            if (bgpInstance) {
-                bgpInstance.isAddPath = enabled;
-            }
-        });
     }
 
     getOrCreateLocRibInstance(peer, afi, safi, options = {}) {
@@ -304,7 +334,7 @@ class BmpSession {
         };
     }
 
-    parseRouteMonitoringBgpUpdate(message, position, version, context) {
+    parseRouteMonitoringBgpUpdate(message, position, version, context, peerFlags = 0, peerType = null) {
         if (version === BmpConst.BMP_VERSION.V4) {
             const tlvResult = parseBmpTlvs(message, position, { indexed: true });
             this.logTlvWarnings('Route Monitoring TLV', tlvResult.warnings);
@@ -320,7 +350,13 @@ class BmpSession {
             }
 
             bgpMessageTlv.name = 'BGP Message';
-            const bgpContext = this.createBgpParsingContext(routeTlvs, context);
+            const effectivePeerFlags =
+                this.isBmpV4TlvDraft20() ? getEffectivePeerFlags(peerFlags, routeTlvs) : peerFlags;
+            const bgpContext = this.createBgpParsingContext(
+                routeTlvs,
+                context,
+                this.getAddPathParsingDirection(peerType, effectivePeerFlags)
+            );
             const parsed = parseBgpPacket(bgpMessageTlv.value, bgpContext);
             if (!parsed.valid) {
                 logger.error(`Received BMPv4 BGP Update message is invalid: ${parsed.error}`);
@@ -333,7 +369,12 @@ class BmpSession {
             };
         }
 
-        const embedded = this.parseEmbeddedBgpPacket(message, position, context, 'BGP Update message');
+        const bgpContext = this.createBgpParsingContext(
+            [],
+            context,
+            this.getAddPathParsingDirection(peerType, peerFlags)
+        );
+        const embedded = this.parseEmbeddedBgpPacket(message, position, bgpContext, 'BGP Update message');
         if (embedded.error) {
             return embedded;
         }
@@ -482,7 +523,14 @@ class BmpSession {
                 return;
             }
 
-            const routePayload = this.parseRouteMonitoringBgpUpdate(message, position, version, bgpSession);
+            const routePayload = this.parseRouteMonitoringBgpUpdate(
+                message,
+                position,
+                version,
+                bgpSession,
+                sessionFlags,
+                sessionType
+            );
             if (routePayload.error) {
                 logger.error(routePayload.error);
                 return;
@@ -732,15 +780,20 @@ class BmpSession {
             }
             position = peerHeader.offset;
             const locRibPeer = peerHeader.peer;
-            const { peerType: instanceType, peerRd: instanceRd } = locRibPeer;
 
-            const routePayload = this.parseRouteMonitoringBgpUpdate(message, position, version, this);
+            const routePayload = this.parseRouteMonitoringBgpUpdate(
+                message,
+                position,
+                version,
+                this,
+                locRibPeer.peerFlags,
+                locRibPeer.peerType
+            );
             if (routePayload.error) {
                 logger.error(routePayload.error);
                 return;
             }
             const parsedBgpUpdate = routePayload.parsedBgpUpdate;
-            this.updateLocRibAddPathFromTlvs(instanceType, instanceRd, routePayload.routeTlvs);
 
             if (!parsedBgpUpdate.valid) {
                 logger.error(`Received BGP Update message is invalid: ${parsedBgpUpdate.error}`);
@@ -950,6 +1003,39 @@ class BmpSession {
         });
     }
 
+    clearSessionRoutesByAddressFamilies(bgpSession, addressFamilies) {
+        if (!bgpSession || !Array.isArray(addressFamilies)) {
+            return;
+        }
+
+        addressFamilies.forEach(addrFamily => {
+            const afKey = `${addrFamily.afi}|${addrFamily.safi}`;
+            const ribTypeRouteMap = bgpSession.bgpRoutes.get(afKey);
+            if (!ribTypeRouteMap) {
+                return;
+            }
+
+            ribTypeRouteMap.forEach(routeMap => {
+                routeMap.clear();
+            });
+        });
+    }
+
+    clearSessionAddPathByAddressFamilies(bgpSession, addressFamilies) {
+        if (!bgpSession || !Array.isArray(addressFamilies)) {
+            return;
+        }
+
+        addressFamilies.forEach(addrFamily => {
+            const key = `${addrFamily.afi}|${addrFamily.safi}`;
+            bgpSession.recvAddPathMap.delete(key);
+            bgpSession.sendAddPathMap.delete(key);
+            bgpSession.addPathReceiveMap.delete(key);
+            bgpSession.addPathSendMap.delete(key);
+            bgpSession.addPathMap.delete(key);
+        });
+    }
+
     getClientInfo() {
         return {
             localIp: this.localIp,
@@ -1102,15 +1188,38 @@ class BmpSession {
             const reason = message[position];
             position += 1;
             const peerDownPayload = this.parsePeerDownPayload(message, position, reason, version);
-            this.decodeVrfTableNameTlvs(peerDownPayload.tlvs);
+            const peerDownVrfTableNames = this.decodeVrfTableNameTlvs(peerDownPayload.tlvs);
 
             const prefix = `${instanceType}|${instanceRd}|`;
+            const candidates = [];
             this.bgpInstanceMap.forEach((instance, key) => {
-                if (key.startsWith(prefix)) {
-                    instance.closeInstance();
-                    this.bgpInstanceMap.delete(key);
+                if (!key.startsWith(prefix)) {
+                    return;
                 }
+
+                if (peerDownVrfTableNames.length > 0) {
+                    const instanceVrfTableNames =
+                        Array.isArray(instance.vrfTableNames) && instance.vrfTableNames.length > 0
+                            ? instance.vrfTableNames
+                            : instanceRd === '0:0'
+                              ? ['global']
+                              : [];
+                    if (!peerDownVrfTableNames.some(name => instanceVrfTableNames.includes(name))) {
+                        return;
+                    }
+                }
+
+                candidates.push({ instance, key });
             });
+
+            if (candidates.length === 1) {
+                candidates[0].instance.closeInstance();
+                this.bgpInstanceMap.delete(candidates[0].key);
+            } else if (candidates.length > 1) {
+                logger.info(
+                    `Loc-RIB Peer Down matched ${candidates.length} address families for ${prefix}; keeping routes until AF-specific Peer Up refresh`
+                );
+            }
 
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE, {
                 data: {
@@ -1294,6 +1403,9 @@ class BmpSession {
             if (!bgpSession) {
                 bgpSession = new BmpBgpSession(this);
                 this.bgpSessionMap.set(bgpSessionKey, bgpSession);
+            } else {
+                this.clearSessionRoutesByAddressFamilies(bgpSession, enabledAddressFamilies);
+                this.clearSessionAddPathByAddressFamilies(bgpSession, enabledAddressFamilies);
             }
 
             this.mergeAddressFamilies(bgpSession.enabledAddressFamilies, enabledAddressFamilies);
@@ -1304,38 +1416,12 @@ class BmpSession {
             allKeys.forEach(key => {
                 const recvMode = recvAddPaths.get(key); // Remote Peer's mode
                 const sendMode = sendAddPaths.get(key); // Monitored Router's mode
+                const receive = this.canRouterReceiveAddPath(recvMode, sendMode);
+                const send = this.canRouterSendAddPath(recvMode, sendMode);
 
-                let receive = false; // Does Router receive Path IDs? (Peer Send)
-                let send = false; // Does Router send Path IDs? (Peer Recv)
-
-                // Peer Sends if mode is 1(Both) or 2(Send)
-                // Router Receives if mode is 1(Both) or 3(Receive)
-                // BGP_ADD_PATH_TYPE: SEND_RECEIVE=1, SEND_ONLY=2, RECEIVE_ONLY=3
-                if (
-                    (recvMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE ||
-                        recvMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY) &&
-                    (sendMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE ||
-                        sendMode === BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY)
-                ) {
-                    receive = true;
-                }
-
-                // Router Sends if mode is 1(Both) or 2(Send)
-                // Peer Receives if mode is 1(Both) or 3(Receive)
-                if (
-                    (sendMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE ||
-                        sendMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY) &&
-                    (recvMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE ||
-                        recvMode === BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY)
-                ) {
-                    send = true;
-                }
-
-                if (receive && send) {
-                    bgpSession.addPathMap.set(key, true);
-                } else {
-                    bgpSession.addPathMap.set(key, false);
-                }
+                bgpSession.addPathReceiveMap.set(key, receive);
+                bgpSession.addPathSendMap.set(key, send);
+                bgpSession.addPathMap.set(key, receive || send);
             });
 
             bgpSession.recvAddPathMap = recvAddPaths;
@@ -1540,11 +1626,18 @@ class BmpSession {
             });
 
             enabledAddressFamilies.forEach(enabledAF => {
+                const addPathKey = `${enabledAF.afi}|${enabledAF.safi}`;
+                this.instAddPathMap.delete(addPathKey);
+                this.instAddPathReceiveMap.delete(addPathKey);
+                this.instAddPathSendMap.delete(addPathKey);
+
                 const instanceKey = BmpBgpInstance.makeKey(instanceType, instanceRd, enabledAF.afi, enabledAF.safi);
                 let bgpInstance = this.bgpInstanceMap.get(instanceKey);
                 if (!bgpInstance) {
                     bgpInstance = new BmpBgpInstance(this);
                     this.bgpInstanceMap.set(instanceKey, bgpInstance);
+                } else {
+                    bgpInstance.closeInstance();
                 }
 
                 this.mergeAddressFamilies(bgpInstance.enabledAddressFamilies, enabledAddressFamilies);
@@ -1592,32 +1685,8 @@ class BmpSession {
             allKeys.forEach(key => {
                 const recvMode = recvAddPaths.get(key); // Remote Peer's mode
                 const sendMode = sendAddPaths.get(key); // Monitored Router's mode
-
-                let receive = false; // Does Router receive Path IDs? (Peer Send)
-                let send = false; // Does Router send Path IDs? (Peer Recv)
-
-                // Peer Sends if mode is 1(Both) or 2(Send)
-                // Router Receives if mode is 1(Both) or 3(Receive)
-                // BGP_ADD_PATH_TYPE: SEND_RECEIVE=1, SEND_ONLY=2, RECEIVE_ONLY=3
-                if (
-                    (recvMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE ||
-                        recvMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY) &&
-                    (sendMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE ||
-                        sendMode === BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY)
-                ) {
-                    receive = true;
-                }
-
-                // Router Sends if mode is 1(Both) or 2(Send)
-                // Peer Receives if mode is 1(Both) or 3(Receive)
-                if (
-                    (sendMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE ||
-                        sendMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY) &&
-                    (recvMode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE ||
-                        recvMode === BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY)
-                ) {
-                    send = true;
-                }
+                const receive = this.canRouterReceiveAddPath(recvMode, sendMode);
+                const send = this.canRouterSendAddPath(recvMode, sendMode);
 
                 const [afi, safi] = key.split('|');
                 const instanceKey = BmpBgpInstance.makeKey(instanceType, instanceRd, afi, safi);
@@ -1627,13 +1696,12 @@ class BmpSession {
                     return;
                 }
 
-                if (receive && send) {
-                    this.instAddPathMap.set(key, true);
-                    bgpInstance.isAddPath = true;
-                } else {
-                    this.instAddPathMap.set(key, false);
-                    bgpInstance.isAddPath = false;
-                }
+                this.instAddPathReceiveMap.set(key, receive);
+                this.instAddPathSendMap.set(key, send);
+                this.instAddPathMap.set(key, receive || send);
+                bgpInstance.addPathReceiveMap.set(key, receive);
+                bgpInstance.addPathSendMap.set(key, send);
+                bgpInstance.isAddPath = receive || send;
             });
 
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE, {
@@ -1928,6 +1996,8 @@ class BmpSession {
 
         this.bgpSessionMap.clear();
         this.instAddPathMap.clear();
+        this.instAddPathReceiveMap.clear();
+        this.instAddPathSendMap.clear();
         this.bgpInstanceMap.clear();
     }
 }

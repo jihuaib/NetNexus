@@ -111,8 +111,8 @@ const BGP_ROLE_TYPE = {
 };
 
 const BGP_ADD_PATH_TYPE = {
-    SEND_ONLY: 1,
-    RECEIVE_ONLY: 2,
+    RECEIVE_ONLY: 1,
+    SEND_ONLY: 2,
     SEND_RECEIVE: 3
 };
 

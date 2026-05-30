@@ -31,15 +31,30 @@ class BmpBgpSession {
 
         this.recvAddPathMap = new Map();
         this.sendAddPathMap = new Map();
+        this.addPathReceiveMap = new Map();
+        this.addPathSendMap = new Map();
         this.addPathMap = new Map();
 
         this.bgpRoutes = new Map();
     }
 
-    isAddPathReceiveEnabled(afi, safi) {
+    isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
         const key = `${afi}|${safi}`;
+        if (direction === 'send') {
+            return this.addPathSendMap.get(key) === true;
+        }
+        if (direction === 'any') {
+            return (
+                this.addPathReceiveMap.get(key) === true ||
+                this.addPathSendMap.get(key) === true ||
+                this.addPathMap.get(key) === true
+            );
+        }
+        if (this.addPathReceiveMap.has(key)) {
+            return this.addPathReceiveMap.get(key) === true;
+        }
         if (this.addPathMap.has(key)) {
-            return this.addPathMap.get(key);
+            return this.addPathMap.get(key) === true;
         }
         return false;
     }
@@ -69,6 +84,16 @@ class BmpBgpSession {
             const [afi, safi] = key.split('|');
             addPaths.set(getAddrFamilyType(parseInt(afi), parseInt(safi)), value);
         });
+        const addPathReceiveMap = {};
+        this.addPathReceiveMap.forEach((value, key) => {
+            const [afi, safi] = key.split('|');
+            addPathReceiveMap[getAddrFamilyType(parseInt(afi), parseInt(safi))] = value;
+        });
+        const addPathSendMap = {};
+        this.addPathSendMap.forEach((value, key) => {
+            const [afi, safi] = key.split('|');
+            addPathSendMap[getAddrFamilyType(parseInt(afi), parseInt(safi))] = value;
+        });
         return {
             sessionType: this.sessionType,
             sessionFlags: this.sessionFlags,
@@ -90,6 +115,8 @@ class BmpBgpSession {
             ribTypes: this.ribTypes,
             recvAddPathMap: Object.fromEntries(this.recvAddPathMap),
             sendAddPathMap: Object.fromEntries(this.sendAddPathMap),
+            addPathReceiveMap,
+            addPathSendMap,
             addPathMap: Object.fromEntries(addPaths),
             peerUpTlvs: toSerializableTlvs(this.peerUpTlvs),
             peerDownTlvs: toSerializableTlvs(this.peerDownTlvs),
@@ -103,6 +130,8 @@ class BmpBgpSession {
         this.bgpRoutes.clear();
         this.recvAddPathMap.clear();
         this.sendAddPathMap.clear();
+        this.addPathReceiveMap.clear();
+        this.addPathSendMap.clear();
         this.addPathMap.clear();
     }
 }

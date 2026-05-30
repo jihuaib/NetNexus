@@ -57,6 +57,10 @@
                                                 :columns="bgpRouteColumns"
                                                 :data-source="bgpRouteList"
                                                 :pagination="bgpRoutePagination"
+                                                :row-key="
+                                                    record =>
+                                                        `${record.addrFamilyType}|${record.pathId}|${record.rd}|${record.ip}|${record.mask}`
+                                                "
                                                 size="small"
                                                 :scroll="{ y: 360 }"
                                             >

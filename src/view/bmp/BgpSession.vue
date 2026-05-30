@@ -108,7 +108,7 @@
                                                 :pagination="bgpRoutePagination"
                                                 :row-key="
                                                     record =>
-                                                        `${record.addrFamilyType}|${record.rd}|${record.ip}|${record.mask}`
+                                                        `${record.addrFamilyType}|${record.pathId}|${record.rd}|${record.ip}|${record.mask}`
                                                 "
                                                 size="small"
                                                 :scroll="{ y: 320 }"
