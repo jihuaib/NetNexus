@@ -1149,16 +1149,24 @@ class BmpSession {
             bgpSession.peerDownTlvs = peerDownPayload.tlvs;
             bgpSession.peerDownFsmEventCode = peerDownPayload.fsmEventCode;
 
-            if (peerDownPayload.parsedBgpNotification) {
-                // bgp断开
-                bgpSession.closeSession();
-                this.bgpSessionMap.delete(sessKey);
-            } else {
-                const addressFamilyKeys =
-                    bgpSession.enabledAddressFamilies.length > 0
-                        ? bgpSession.enabledAddressFamilies.map(addrFamily => `${addrFamily.afi}|${addrFamily.safi}`)
-                        : Array.from(bgpSession.bgpRoutes.keys());
+            const addressFamilyKeys = Array.from(
+                new Set([
+                    ...bgpSession.enabledAddressFamilies.map(addrFamily => `${addrFamily.afi}|${addrFamily.safi}`),
+                    ...bgpSession.bgpRoutes.keys()
+                ])
+            );
 
+            if (peerDownPayload.parsedBgpNotification) {
+                if (addressFamilyKeys.length <= 1) {
+                    // bgp断开
+                    bgpSession.closeSession();
+                    this.bgpSessionMap.delete(sessKey);
+                } else {
+                    logger.info(
+                        `Peer Down notification matched ${addressFamilyKeys.length} address families for ${sessKey}; keeping routes until AF-specific Peer Up refresh or withdraw`
+                    );
+                }
+            } else {
                 if (addressFamilyKeys.length === 1) {
                     const ribTypeRouteMap = bgpSession.bgpRoutes.get(addressFamilyKeys[0]);
                     if (ribTypeRouteMap) {

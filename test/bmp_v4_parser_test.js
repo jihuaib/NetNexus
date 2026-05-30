@@ -85,6 +85,10 @@ function bgpUpdate(prefix = '203.0.113.0') {
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, body);
 }
 
+function bgpNotification() {
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.NOTIFICATION, Buffer.from([6, 3]));
+}
+
 function bgpUpdateAddPath(prefix = '203.0.113.0', pathId = 7) {
     const attrs = Buffer.concat([
         pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
@@ -498,6 +502,49 @@ assert.equal(
 assert.equal(
     peerDownIpv6Route.bgpSession.bgpRoutes.get(peerDownIpv6Route.afKey).get(peerDownIpv6Route.ribType).size,
     0
+);
+
+const { session: peerDownNotificationMultiAfSession } = makeSession();
+const peerDownNotificationIpv4Route = addBgpSessionRoute(
+    peerDownNotificationMultiAfSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    '203.0.121.0',
+    24
+);
+const peerDownNotificationIpv6Route = addBgpSessionRoute(
+    peerDownNotificationMultiAfSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    '2001:db8:121::',
+    64
+);
+peerDownNotificationIpv4Route.bgpSession.enabledAddressFamilies = [
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST }
+];
+peerDownNotificationMultiAfSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_DOWN_NOTIFICATION,
+        Buffer.concat([
+            peerHeader(),
+            Buffer.from([BmpConst.BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_WITH_NOTIFICATION]),
+            bgpNotification()
+        ])
+    )
+);
+assert.ok(peerDownNotificationMultiAfSession.bgpSessionMap.has(peerDownNotificationIpv4Route.sessionKey));
+assert.equal(
+    peerDownNotificationIpv4Route.bgpSession.bgpRoutes
+        .get(peerDownNotificationIpv4Route.afKey)
+        .get(peerDownNotificationIpv4Route.ribType).size,
+    1
+);
+assert.equal(
+    peerDownNotificationIpv6Route.bgpSession.bgpRoutes
+        .get(peerDownNotificationIpv6Route.afKey)
+        .get(peerDownNotificationIpv6Route.ribType).size,
+    1
 );
 
 const { session: addPathSession } = makeSession();
