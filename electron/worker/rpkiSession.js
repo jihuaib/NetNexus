@@ -15,6 +15,7 @@ class RpkiSession {
         this.messageBuffer = Buffer.alloc(0);
         this.sessionId = null;
         this.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
+        this.aspaFormat = RpkiConst.RPKI_ASPA_FORMAT.LATEST;
     }
 
     static makeKey(localIp, localPort, remoteIp, remotePort) {
@@ -277,25 +278,38 @@ class RpkiSession {
         this.writeRouterKeyPdu(rpkiRouterKey, RpkiConst.RPKI_FLAGS.WITHDRAWAL);
     }
 
-    // ASPA PDU (draft-ietf-sidrops-8210bis §5.12, v2+)
-    // Header(8: Version|Type|Flags|Zero|Length) + Customer ASN(4) + Provider ASNs(4*N)
-    // 注：最新草案中 ASPA 不绑定 AFI（customer-provider 关系是 AFI-agnostic 的）
+    // ASPA PDU (v2+)
+    // LATEST  (draft-ietf-sidrops-8210bis-19+):
+    //   Header(8: Ver|Type|Flags|Zero|Length) + Customer ASN(4) + Provider ASNs(4*N)
+    //   Total = 12 + 4N
+    // LEGACY  (draft-ietf-sidrops-8210bis-10 风格, 华为 VRP 兼容):
+    //   Header(8: Ver|Type|Flags|AFI|Length) + Provider AS Count(4) + Customer ASN(4) + Provider ASNs(4*N)
+    //   Total = 16 + 4N
     writeAspaPdu(rpkiAspa, flags) {
         if (this.protocolVersion < RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
             logger.warn(`Cannot send ASPA PDU on protocol version ${this.protocolVersion}`);
             return;
         }
         const providerCount = rpkiAspa.providerAsns.length;
-        const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 4 + 4 * providerCount;
+        const isLegacy = this.aspaFormat === RpkiConst.RPKI_ASPA_FORMAT.LEGACY;
+        const totalLen = isLegacy
+            ? RpkiConst.RPKI_HEADER_LENGTH + 8 + 4 * providerCount
+            : RpkiConst.RPKI_HEADER_LENGTH + 4 + 4 * providerCount;
         const buffer = Buffer.alloc(totalLen);
         let position = 0;
 
         buffer[position++] = this.protocolVersion;
         buffer[position++] = RpkiConst.RPKI_MSG_TYPE.ASPA;
         buffer[position++] = flags;
-        buffer[position++] = 0; // zero per RFC
+        // byte 3: legacy = AFI flags; latest = zero
+        buffer[position++] = isLegacy ? rpkiAspa.afiFlags & 0xff : 0;
         buffer.writeUInt32BE(totalLen, position);
         position += 4;
+
+        if (isLegacy) {
+            buffer.writeUInt32BE(providerCount, position); // Provider AS Count
+            position += 4;
+        }
 
         buffer.writeUInt32BE(parseInt(rpkiAspa.customerAsn, 10), position);
         position += 4;

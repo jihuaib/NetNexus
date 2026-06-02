@@ -104,6 +104,24 @@
                                 </a-col>
                             </a-row>
                         </template>
+                        <a-row>
+                            <a-col :span="24">
+                                <a-form-item label="ASPA编码格式" name="aspaFormat">
+                                    <a-radio-group v-model:value="rpkiConfig.aspaFormat">
+                                        <a-radio :value="RPKI_ASPA_FORMAT.LATEST">
+                                            最新 (draft-19+)
+                                        </a-radio>
+                                        <a-radio :value="RPKI_ASPA_FORMAT.LEGACY">
+                                            兼容 (draft-10 / 华为 VRP)
+                                        </a-radio>
+                                    </a-radio-group>
+                                    <div style="color: #999; font-size: 12px; line-height: 1.5">
+                                        最新格式遵循 draft-ietf-sidrops-8210bis-19+ 规范；兼容格式包含 Provider AS Count 字段且
+                                        byte3 为 AFI flags，适用于华为 VRP 等老旧设备。仅在协议 v2 协商成功时生效。
+                                    </div>
+                                </a-form-item>
+                            </a-col>
+                        </a-row>
                         <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
                             <a-space>
                                 <a-button
@@ -167,7 +185,7 @@
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
     import { FormValidator, createRpkiConfigValidationRules } from '../../utils/validationCommon';
-    import { DEFAULT_VALUES, RPKI_EVENT_PAGE_ID } from '../../const/rpkiConst';
+    import { DEFAULT_VALUES, RPKI_EVENT_PAGE_ID, RPKI_ASPA_FORMAT } from '../../const/rpkiConst';
     import EventBus from '../../utils/eventBus';
 
     defineOptions({
@@ -186,7 +204,8 @@
         authMode: 'md5', // 'md5' or 'keychain'
         peerIP: '',
         md5Password: '',
-        keychainId: ''
+        keychainId: '',
+        aspaFormat: RPKI_ASPA_FORMAT.LATEST
     });
 
     const serverLoading = ref(false);
@@ -390,6 +409,7 @@
                 rpkiConfig.value.peerIP = result.data.peerIP || '';
                 rpkiConfig.value.md5Password = result.data.md5Password || '';
                 rpkiConfig.value.keychainId = result.data.keychainId || '';
+                rpkiConfig.value.aspaFormat = result.data.aspaFormat || RPKI_ASPA_FORMAT.LATEST;
             } else {
                 console.error('配置文件加载失败', result.msg);
             }

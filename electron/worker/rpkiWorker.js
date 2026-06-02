@@ -145,6 +145,7 @@ class RpkiWorker {
                 rpkiSession.localPort = socket.localPort;
                 rpkiSession.remoteIp = clientAddress;
                 rpkiSession.remotePort = clientPort;
+                rpkiSession.aspaFormat = this.rpkiConfigData.aspaFormat || RpkiConst.RPKI_ASPA_FORMAT.LATEST;
 
                 this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
                     opType: 'add',
@@ -251,6 +252,7 @@ class RpkiWorker {
                 rpkiSession.localPort = socket.localPort;
                 rpkiSession.remoteIp = clientAddress;
                 rpkiSession.remotePort = clientPort;
+                rpkiSession.aspaFormat = this.rpkiConfigData.aspaFormat || RpkiConst.RPKI_ASPA_FORMAT.LATEST;
 
                 this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
                     opType: 'add',

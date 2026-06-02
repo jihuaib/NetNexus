@@ -64,6 +64,14 @@ const RPKI_ASPA_AFI_FLAGS = {
     IPV6: 0x02
 };
 
+// ASPA PDU 编码格式
+// LATEST = draft-ietf-sidrops-8210bis-19+ (byte3=zero, 无 Provider Count)
+// LEGACY = draft-ietf-sidrops-8210bis-10 风格 (byte3=AFI flags, 含 Provider AS Count, 华为 VRP 兼容)
+const RPKI_ASPA_FORMAT = {
+    LATEST: 'latest',
+    LEGACY: 'legacy'
+};
+
 // RPKI ROA Status
 const RPKI_ROA_STATUS = {
     ACTIVE: 'active',
@@ -100,6 +108,7 @@ module.exports = {
     RPKI_ERROR_CODE,
     RPKI_FLAGS,
     RPKI_ASPA_AFI_FLAGS,
+    RPKI_ASPA_FORMAT,
     RPKI_ROA_STATUS,
     RPKI_DEFAULT_PORT,
     RPKI_EVT_TYPES,

@@ -227,6 +227,25 @@ section('ASPA PDU (type 11, v2, draft-ietf-sidrops-8210bis §5.12)');
     assertEq(sentBuffers[0].readUInt32BE(16), 65002, 'ASPA Provider ASN[1]');
 }
 
+section('ASPA PDU LEGACY format (draft-10, Huawei VRP compat)');
+{
+    const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    session.aspaFormat = RpkiConst.RPKI_ASPA_FORMAT.LEGACY;
+    const aspa = new RpkiAspa(65000, [65001, 65002], RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4 | RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6);
+    session.sendAspa(aspa);
+    // Total = 8 (header) + 4 (provider count) + 4 (customer) + 4*2 (providers) = 24
+    assertEq(sentBuffers[0].length, 24, 'ASPA LEGACY total = 8+4+4+8 = 24');
+    assertEq(sentBuffers[0].readUInt32BE(4), 24, 'ASPA LEGACY length field = 24');
+    assertEq(sentBuffers[0][0], 2, 'ASPA LEGACY version = 2');
+    assertEq(sentBuffers[0][1], 11, 'ASPA LEGACY PDU type = 11');
+    assertEq(sentBuffers[0][2], RpkiConst.RPKI_FLAGS.UPDATE, 'ASPA LEGACY flag = UPDATE');
+    assertEq(sentBuffers[0][3], 0x03, 'ASPA LEGACY byte 3 = AFI flags (IPv4|IPv6)');
+    assertEq(sentBuffers[0].readUInt32BE(8), 2, 'ASPA LEGACY Provider AS Count = 2');
+    assertEq(sentBuffers[0].readUInt32BE(12), 65000, 'ASPA LEGACY Customer ASN');
+    assertEq(sentBuffers[0].readUInt32BE(16), 65001, 'ASPA LEGACY Provider ASN[0]');
+    assertEq(sentBuffers[0].readUInt32BE(20), 65002, 'ASPA LEGACY Provider ASN[1]');
+}
+
 section('ASPA cannot send on v1');
 {
     const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V1);

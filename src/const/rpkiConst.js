@@ -38,3 +38,11 @@ export const RPKI_ASPA_AFI_FLAGS = {
     IPV6: 0x02,
     BOTH: 0x03
 };
+
+// ASPA PDU 编码格式（与后端 RPKI_ASPA_FORMAT 对齐）
+// LATEST = draft-ietf-sidrops-8210bis-19+ (byte3=zero, 无 Provider Count)
+// LEGACY = draft-ietf-sidrops-8210bis-10 风格 (byte3=AFI flags, 含 Provider AS Count, 华为 VRP 兼容)
+export const RPKI_ASPA_FORMAT = {
+    LATEST: 'latest',
+    LEGACY: 'legacy'
+};
