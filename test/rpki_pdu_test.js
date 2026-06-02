@@ -238,12 +238,16 @@ section('ASPA PDU LEGACY format (draft-10, Huawei VRP compat)');
     assertEq(sentBuffers[0].readUInt32BE(4), 24, 'ASPA LEGACY length field = 24');
     assertEq(sentBuffers[0][0], 2, 'ASPA LEGACY version = 2');
     assertEq(sentBuffers[0][1], 11, 'ASPA LEGACY PDU type = 11');
-    assertEq(sentBuffers[0][2], RpkiConst.RPKI_FLAGS.UPDATE, 'ASPA LEGACY flag = UPDATE');
+    assertEq(sentBuffers[0][2], RpkiConst.RPKI_FLAGS.WITHDRAWAL, 'ASPA LEGACY announce wire flag = 0');
     assertEq(sentBuffers[0][3], 0x03, 'ASPA LEGACY byte 3 = AFI flags (IPv4|IPv6)');
     assertEq(sentBuffers[0].readUInt32BE(8), 2, 'ASPA LEGACY Provider AS Count = 2');
     assertEq(sentBuffers[0].readUInt32BE(12), 65000, 'ASPA LEGACY Customer ASN');
     assertEq(sentBuffers[0].readUInt32BE(16), 65001, 'ASPA LEGACY Provider ASN[0]');
     assertEq(sentBuffers[0].readUInt32BE(20), 65002, 'ASPA LEGACY Provider ASN[1]');
+
+    session.withdrawAspa(aspa);
+    assertEq(sentBuffers[1][2], RpkiConst.RPKI_FLAGS.UPDATE, 'ASPA LEGACY withdraw wire flag = 1');
+    assertEq(sentBuffers[1][3], 0x03, 'ASPA LEGACY withdraw byte 3 = AFI flags (IPv4|IPv6)');
 }
 
 section('ASPA cannot send on v1');

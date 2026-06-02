@@ -285,6 +285,21 @@ class RpkiSession {
     // LEGACY  (draft-ietf-sidrops-8210bis-10 风格, 华为 VRP 兼容):
     //   Header(8: Ver|Type|Flags|AFI|Length) + Provider AS Count(4) + Customer ASN(4) + Provider ASNs(4*N)
     //   Total = 16 + 4N
+    getAspaWireFlags(flags) {
+        if (this.aspaFormat !== RpkiConst.RPKI_ASPA_FORMAT.LEGACY) {
+            return flags;
+        }
+
+        // Huawei VRP legacy ASPA treats the announce/withdraw bit opposite to standard PDUs.
+        if (flags === RpkiConst.RPKI_FLAGS.UPDATE) {
+            return RpkiConst.RPKI_FLAGS.WITHDRAWAL;
+        }
+        if (flags === RpkiConst.RPKI_FLAGS.WITHDRAWAL) {
+            return RpkiConst.RPKI_FLAGS.UPDATE;
+        }
+        return flags;
+    }
+
     writeAspaPdu(rpkiAspa, flags) {
         if (this.protocolVersion < RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
             logger.warn(`Cannot send ASPA PDU on protocol version ${this.protocolVersion}`);
@@ -292,6 +307,7 @@ class RpkiSession {
         }
         const providerCount = rpkiAspa.providerAsns.length;
         const isLegacy = this.aspaFormat === RpkiConst.RPKI_ASPA_FORMAT.LEGACY;
+        const wireFlags = this.getAspaWireFlags(flags);
         const totalLen = isLegacy
             ? RpkiConst.RPKI_HEADER_LENGTH + 8 + 4 * providerCount
             : RpkiConst.RPKI_HEADER_LENGTH + 4 + 4 * providerCount;
@@ -300,7 +316,7 @@ class RpkiSession {
 
         buffer[position++] = this.protocolVersion;
         buffer[position++] = RpkiConst.RPKI_MSG_TYPE.ASPA;
-        buffer[position++] = flags;
+        buffer[position++] = wireFlags;
         // byte 3: legacy = AFI flags; latest = zero
         buffer[position++] = isLegacy ? rpkiAspa.afiFlags & 0xff : 0;
         buffer.writeUInt32BE(totalLen, position);

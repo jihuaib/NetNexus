@@ -66,7 +66,7 @@ const RPKI_ASPA_AFI_FLAGS = {
 
 // ASPA PDU 编码格式
 // LATEST = draft-ietf-sidrops-8210bis-19+ (byte3=zero, 无 Provider Count)
-// LEGACY = draft-ietf-sidrops-8210bis-10 风格 (byte3=AFI flags, 含 Provider AS Count, 华为 VRP 兼容)
+// LEGACY = draft-ietf-sidrops-8210bis-10 风格 (byte3=AFI flags, 含 Provider AS Count, ASPA flags 反向，华为 VRP 兼容)
 const RPKI_ASPA_FORMAT = {
     LATEST: 'latest',
     LEGACY: 'legacy'
