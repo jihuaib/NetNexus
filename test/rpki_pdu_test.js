@@ -225,29 +225,59 @@ section('ASPA PDU (type 11, v2, draft-ietf-sidrops-8210bis §5.12)');
     assertEq(sentBuffers[0].readUInt32BE(8), 65000, 'ASPA Customer ASN');
     assertEq(sentBuffers[0].readUInt32BE(12), 65001, 'ASPA Provider ASN[0]');
     assertEq(sentBuffers[0].readUInt32BE(16), 65002, 'ASPA Provider ASN[1]');
+
+    session.withdrawAspa(aspa);
+    assertEq(sentBuffers[1].length, 12, 'ASPA withdraw total = 8+4 = 12');
+    assertEq(sentBuffers[1].readUInt32BE(4), 12, 'ASPA withdraw length field = 12');
+    assertEq(sentBuffers[1][2], RpkiConst.RPKI_FLAGS.WITHDRAWAL, 'ASPA withdraw flag = WITHDRAWAL');
+    assertEq(sentBuffers[1][3], 0, 'ASPA withdraw byte 3 = zero');
+    assertEq(sentBuffers[1].readUInt32BE(8), 65000, 'ASPA withdraw Customer ASN');
 }
 
 section('ASPA PDU LEGACY format (draft-10, Huawei VRP compat)');
 {
     const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
     session.aspaFormat = RpkiConst.RPKI_ASPA_FORMAT.LEGACY;
-    const aspa = new RpkiAspa(65000, [65001, 65002], RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4 | RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6);
+    const aspa = new RpkiAspa(65000, [65001, 65002], RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4);
     session.sendAspa(aspa);
-    // Total = 8 (header) + 4 (provider count) + 4 (customer) + 4*2 (providers) = 24
+    // Total = 8 (header) + 4 (flags/AFI/count) + 4 (customer) + 4*2 (providers) = 24
     assertEq(sentBuffers[0].length, 24, 'ASPA LEGACY total = 8+4+4+8 = 24');
     assertEq(sentBuffers[0].readUInt32BE(4), 24, 'ASPA LEGACY length field = 24');
     assertEq(sentBuffers[0][0], 2, 'ASPA LEGACY version = 2');
     assertEq(sentBuffers[0][1], 11, 'ASPA LEGACY PDU type = 11');
-    assertEq(sentBuffers[0][2], RpkiConst.RPKI_FLAGS.WITHDRAWAL, 'ASPA LEGACY announce wire flag = 0');
-    assertEq(sentBuffers[0][3], 0x03, 'ASPA LEGACY byte 3 = AFI flags (IPv4|IPv6)');
-    assertEq(sentBuffers[0].readUInt32BE(8), 2, 'ASPA LEGACY Provider AS Count = 2');
+    assertEq(sentBuffers[0].readUInt16BE(2), 0, 'ASPA LEGACY header zero');
+    assertEq(sentBuffers[0][8], RpkiConst.RPKI_FLAGS.UPDATE, 'ASPA LEGACY announce flag = 1');
+    assertEq(sentBuffers[0][9], 0, 'ASPA LEGACY AFI flag = IPv4');
+    assertEq(sentBuffers[0].readUInt16BE(10), 2, 'ASPA LEGACY Provider AS Count = 2');
     assertEq(sentBuffers[0].readUInt32BE(12), 65000, 'ASPA LEGACY Customer ASN');
     assertEq(sentBuffers[0].readUInt32BE(16), 65001, 'ASPA LEGACY Provider ASN[0]');
     assertEq(sentBuffers[0].readUInt32BE(20), 65002, 'ASPA LEGACY Provider ASN[1]');
 
     session.withdrawAspa(aspa);
-    assertEq(sentBuffers[1][2], RpkiConst.RPKI_FLAGS.UPDATE, 'ASPA LEGACY withdraw wire flag = 1');
-    assertEq(sentBuffers[1][3], 0x03, 'ASPA LEGACY withdraw byte 3 = AFI flags (IPv4|IPv6)');
+    assertEq(sentBuffers[1].length, 16, 'ASPA LEGACY withdraw total = 8+4+4 = 16');
+    assertEq(sentBuffers[1].readUInt32BE(4), 16, 'ASPA LEGACY withdraw length field = 16');
+    assertEq(sentBuffers[1][8], RpkiConst.RPKI_FLAGS.WITHDRAWAL, 'ASPA LEGACY withdraw flag = 0');
+    assertEq(sentBuffers[1][9], 0, 'ASPA LEGACY withdraw AFI flag = IPv4');
+    assertEq(sentBuffers[1].readUInt16BE(10), 0, 'ASPA LEGACY withdraw Provider AS Count = 0');
+    assertEq(sentBuffers[1].readUInt32BE(12), 65000, 'ASPA LEGACY withdraw Customer ASN');
+}
+
+section('ASPA PDU LEGACY Both AFI splits into IPv4 and IPv6 PDUs');
+{
+    const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    session.aspaFormat = RpkiConst.RPKI_ASPA_FORMAT.LEGACY;
+    const aspa = new RpkiAspa(
+        65000,
+        [65001, 65002],
+        RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4 | RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6
+    );
+    session.sendAspa(aspa);
+
+    assertEq(sentBuffers.length, 2, 'ASPA LEGACY Both sends two PDUs');
+    assertEq(sentBuffers[0][9], 0, 'ASPA LEGACY Both first PDU AFI = IPv4');
+    assertEq(sentBuffers[1][9], 1, 'ASPA LEGACY Both second PDU AFI = IPv6');
+    assertEq(sentBuffers[0].readUInt16BE(10), 2, 'ASPA LEGACY Both IPv4 Provider AS Count = 2');
+    assertEq(sentBuffers[1].readUInt16BE(10), 2, 'ASPA LEGACY Both IPv6 Provider AS Count = 2');
 }
 
 section('ASPA cannot send on v1');

@@ -283,21 +283,49 @@ class RpkiSession {
     //   Header(8: Ver|Type|Flags|Zero|Length) + Customer ASN(4) + Provider ASNs(4*N)
     //   Total = 12 + 4N
     // LEGACY  (draft-ietf-sidrops-8210bis-10 风格, 华为 VRP 兼容):
-    //   Header(8: Ver|Type|Flags|AFI|Length) + Provider AS Count(4) + Customer ASN(4) + Provider ASNs(4*N)
+    //   Header(8: Ver|Type|Zero|Length) + Flags(1) + AFI Flags(1) + Provider AS Count(2)
+    //   + Customer ASN(4) + Provider ASNs(4*N)
     //   Total = 16 + 4N
-    getAspaWireFlags(flags) {
-        if (this.aspaFormat !== RpkiConst.RPKI_ASPA_FORMAT.LEGACY) {
-            return flags;
+    getLegacyAspaAfiFlags(rpkiAspa) {
+        const afiFlags = Number(rpkiAspa.afiFlags);
+        const legacyAfiFlags = [];
+
+        if ((afiFlags & RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4) !== 0) {
+            legacyAfiFlags.push(0);
+        }
+        if ((afiFlags & RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6) !== 0) {
+            legacyAfiFlags.push(1);
         }
 
-        // Huawei VRP legacy ASPA treats the announce/withdraw bit opposite to standard PDUs.
-        if (flags === RpkiConst.RPKI_FLAGS.UPDATE) {
-            return RpkiConst.RPKI_FLAGS.WITHDRAWAL;
+        return legacyAfiFlags.length > 0 ? legacyAfiFlags : [0];
+    }
+
+    writeAspaLegacyPdu(rpkiAspa, flags, legacyAfiFlags) {
+        const isWithdrawal = flags === RpkiConst.RPKI_FLAGS.WITHDRAWAL;
+        const providerCount = isWithdrawal ? 0 : rpkiAspa.providerAsns.length;
+        const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 8 + 4 * providerCount;
+        const buffer = Buffer.alloc(totalLen);
+        let position = 0;
+
+        buffer[position++] = this.protocolVersion;
+        buffer[position++] = RpkiConst.RPKI_MSG_TYPE.ASPA;
+        buffer.writeUInt16BE(0, position);
+        position += 2;
+        buffer.writeUInt32BE(totalLen, position);
+        position += 4;
+        buffer[position++] = flags;
+        buffer[position++] = legacyAfiFlags;
+        buffer.writeUInt16BE(providerCount, position);
+        position += 2;
+        buffer.writeUInt32BE(parseInt(rpkiAspa.customerAsn, 10), position);
+        position += 4;
+
+        for (let i = 0; i < providerCount; i++) {
+            buffer.writeUInt32BE(parseInt(rpkiAspa.providerAsns[i], 10), position);
+            position += 4;
         }
-        if (flags === RpkiConst.RPKI_FLAGS.WITHDRAWAL) {
-            return RpkiConst.RPKI_FLAGS.UPDATE;
-        }
-        return flags;
+
+        this.sendMessage(buffer);
     }
 
     writeAspaPdu(rpkiAspa, flags) {
@@ -307,29 +335,30 @@ class RpkiSession {
         }
         const providerCount = rpkiAspa.providerAsns.length;
         const isLegacy = this.aspaFormat === RpkiConst.RPKI_ASPA_FORMAT.LEGACY;
-        const wireFlags = this.getAspaWireFlags(flags);
-        const totalLen = isLegacy
-            ? RpkiConst.RPKI_HEADER_LENGTH + 8 + 4 * providerCount
-            : RpkiConst.RPKI_HEADER_LENGTH + 4 + 4 * providerCount;
+        if (isLegacy) {
+            for (const legacyAfiFlags of this.getLegacyAspaAfiFlags(rpkiAspa)) {
+                this.writeAspaLegacyPdu(rpkiAspa, flags, legacyAfiFlags);
+            }
+            return;
+        }
+
+        const isWithdrawal = flags === RpkiConst.RPKI_FLAGS.WITHDRAWAL;
+        const pduProviderCount = isWithdrawal ? 0 : providerCount;
+        const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 4 + 4 * pduProviderCount;
         const buffer = Buffer.alloc(totalLen);
         let position = 0;
 
         buffer[position++] = this.protocolVersion;
         buffer[position++] = RpkiConst.RPKI_MSG_TYPE.ASPA;
-        buffer[position++] = wireFlags;
-        // byte 3: legacy = AFI flags; latest = zero
-        buffer[position++] = isLegacy ? rpkiAspa.afiFlags & 0xff : 0;
+        buffer[position++] = flags;
+        // byte 3 is zero in the latest ASPA PDU format.
+        buffer[position++] = 0;
         buffer.writeUInt32BE(totalLen, position);
         position += 4;
 
-        if (isLegacy) {
-            buffer.writeUInt32BE(providerCount, position); // Provider AS Count
-            position += 4;
-        }
-
         buffer.writeUInt32BE(parseInt(rpkiAspa.customerAsn, 10), position);
         position += 4;
-        for (let i = 0; i < providerCount; i++) {
+        for (let i = 0; i < pduProviderCount; i++) {
             buffer.writeUInt32BE(parseInt(rpkiAspa.providerAsns[i], 10), position);
             position += 4;
         }
