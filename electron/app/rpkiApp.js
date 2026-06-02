@@ -13,6 +13,8 @@ class RpkiApp {
         this.store = store;
         this.rpkiConfigFileKey = 'rpki-config';
         this.rpkiRoaFileKey = 'rpki-roa';
+        this.rpkiRouterKeyFileKey = 'rpki-router-key';
+        this.rpkiAspaFileKey = 'rpki-aspa';
         this.isDev = !app.isPackaged;
         this.worker = null;
         this.eventDispatcher = null; // 添加事件发送器
@@ -38,6 +40,16 @@ class RpkiApp {
         this.ipcMain.handle('rpki:addRoa', this.handleAddRoa.bind(this));
         this.ipcMain.handle('rpki:deleteRoa', this.handleDeleteRoa.bind(this));
         this.ipcMain.handle('rpki:getRoaList', this.handleGetRoaList.bind(this));
+
+        // router key (v1+)
+        this.ipcMain.handle('rpki:addRouterKey', this.handleAddRouterKey.bind(this));
+        this.ipcMain.handle('rpki:deleteRouterKey', this.handleDeleteRouterKey.bind(this));
+        this.ipcMain.handle('rpki:getRouterKeyList', this.handleGetRouterKeyList.bind(this));
+
+        // aspa (v2+)
+        this.ipcMain.handle('rpki:addAspa', this.handleAddAspa.bind(this));
+        this.ipcMain.handle('rpki:deleteAspa', this.handleDeleteAspa.bind(this));
+        this.ipcMain.handle('rpki:getAspaList', this.handleGetAspaList.bind(this));
     }
 
     async handleSaveRpkiConfig(event, config) {
@@ -113,6 +125,28 @@ class RpkiApp {
                 }
             } else {
                 logger.error(`RPKI ROA配置加载失败: ${roaList.msg}`);
+            }
+
+            // 加载 router key 配置 (v1+)
+            const rkList = await this.handleGetRouterKeyList();
+            if (rkList.status === 'success') {
+                for (const rk of rkList.data) {
+                    const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY, rk);
+                    if (result.status !== 'success') {
+                        logger.error(`worker RPKI RouterKey恢复失败: ${result.msg}`);
+                    }
+                }
+            }
+
+            // 加载 ASPA 配置 (v2+)
+            const aspaList = await this.handleGetAspaList();
+            if (aspaList.status === 'success') {
+                for (const aspa of aspaList.data) {
+                    const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, aspa);
+                    if (result.status !== 'success') {
+                        logger.error(`worker RPKI ASPA恢复失败: ${result.msg}`);
+                    }
+                }
             }
 
             if (rpkiConfigData.enableAuth) {
@@ -299,6 +333,124 @@ class RpkiApp {
             return successResponse(currentRoaList, 'RPKI ROA配置文件加载成功');
         } catch (error) {
             logger.error('Error getting ROA list:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    // ============ Router Key (v1+) ============
+    async handleAddRouterKey(event, rk) {
+        try {
+            let currentList = this.store.get(this.rpkiRouterKeyFileKey) || [];
+            const index = currentList.findIndex(item => item.ski === rk.ski && item.asn === rk.asn);
+            if (index !== -1) {
+                return errorResponse('RouterKey已存在');
+            }
+
+            if (this.worker) {
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY, rk);
+                if (result.status !== 'success') {
+                    logger.error(`worker RouterKey添加失败: ${result.msg}`);
+                    return errorResponse(result.msg);
+                }
+            }
+
+            currentList.push(rk);
+            this.store.set(this.rpkiRouterKeyFileKey, currentList);
+            return successResponse(null, 'RouterKey保存成功');
+        } catch (error) {
+            logger.error('Error adding RouterKey:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleDeleteRouterKey(event, rk) {
+        try {
+            let currentList = this.store.get(this.rpkiRouterKeyFileKey) || [];
+            const index = currentList.findIndex(item => item.ski === rk.ski && item.asn === rk.asn);
+            if (index !== -1) {
+                currentList.splice(index, 1);
+            }
+
+            if (this.worker) {
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROUTER_KEY, rk);
+                if (result.status !== 'success') {
+                    logger.error(`worker RouterKey删除失败: ${result.msg}`);
+                }
+            }
+
+            this.store.set(this.rpkiRouterKeyFileKey, currentList);
+            return successResponse(null, 'RouterKey删除成功');
+        } catch (error) {
+            logger.error('Error deleting RouterKey:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetRouterKeyList() {
+        try {
+            const list = this.store.get(this.rpkiRouterKeyFileKey) || [];
+            return successResponse(list, 'RouterKey列表加载成功');
+        } catch (error) {
+            logger.error('Error getting RouterKey list:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    // ============ ASPA (v2+) ============
+    async handleAddAspa(event, aspa) {
+        try {
+            let currentList = this.store.get(this.rpkiAspaFileKey) || [];
+            const index = currentList.findIndex(item => item.customerAsn === aspa.customerAsn);
+            if (index !== -1) {
+                return errorResponse('ASPA已存在 (Customer ASN 重复)');
+            }
+
+            if (this.worker) {
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, aspa);
+                if (result.status !== 'success') {
+                    logger.error(`worker ASPA添加失败: ${result.msg}`);
+                    return errorResponse(result.msg);
+                }
+            }
+
+            currentList.push(aspa);
+            this.store.set(this.rpkiAspaFileKey, currentList);
+            return successResponse(null, 'ASPA保存成功');
+        } catch (error) {
+            logger.error('Error adding ASPA:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleDeleteAspa(event, aspa) {
+        try {
+            let currentList = this.store.get(this.rpkiAspaFileKey) || [];
+            const index = currentList.findIndex(item => item.customerAsn === aspa.customerAsn);
+            if (index !== -1) {
+                currentList.splice(index, 1);
+            }
+
+            if (this.worker) {
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, aspa);
+                if (result.status !== 'success') {
+                    logger.error(`worker ASPA删除失败: ${result.msg}`);
+                }
+            }
+
+            this.store.set(this.rpkiAspaFileKey, currentList);
+            return successResponse(null, 'ASPA删除成功');
+        } catch (error) {
+            logger.error('Error deleting ASPA:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetAspaList() {
+        try {
+            const list = this.store.get(this.rpkiAspaFileKey) || [];
+            return successResponse(list, 'ASPA列表加载成功');
+        } catch (error) {
+            logger.error('Error getting ASPA list:', error.message);
             return errorResponse(error.message);
         }
     }

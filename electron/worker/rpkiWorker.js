@@ -4,6 +4,8 @@ const logger = require('../log/logger');
 const WorkerMessageHandler = require('./workerMessageHandler');
 const RpkiSession = require('./rpkiSession');
 const RpkiRoa = require('./rpkiRoa');
+const RpkiRouterKey = require('./rpkiRouterKey');
+const RpkiAspa = require('./rpkiAspa');
 const RpkiConst = require('../const/rpkiConst');
 const SshTunnel = require('./sshTunnel');
 
@@ -17,6 +19,8 @@ class RpkiWorker {
 
         this.rpkiSessionMap = new Map(); // rpki会话map
         this.rpkiRoaMap = new Map(); // rpki roa map
+        this.rpkiRouterKeyMap = new Map(); // rpki router key map (v1+)
+        this.rpkiAspaMap = new Map(); // rpki aspa map (v2+)
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler();
@@ -28,6 +32,16 @@ class RpkiWorker {
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ROA, this.addRoa.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA, this.deleteRoa.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.GET_CLIENT_LIST, this.getClientList.bind(this));
+        this.messageHandler.registerHandler(
+            RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY,
+            this.addRouterKey.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            RpkiConst.RPKI_REQ_TYPES.DELETE_ROUTER_KEY,
+            this.deleteRouterKey.bind(this)
+        );
+        this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, this.addAspa.bind(this));
+        this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, this.deleteAspa.bind(this));
     }
 
     async startTcpServer(messageId) {
@@ -421,6 +435,8 @@ class RpkiWorker {
         });
         this.rpkiSessionMap.clear();
         this.rpkiRoaMap.clear();
+        this.rpkiRouterKeyMap.clear();
+        this.rpkiAspaMap.clear();
         this.messageHandler.sendSuccessResponse(messageId, null, 'rpki协议停止成功');
     }
 
@@ -477,6 +493,92 @@ class RpkiWorker {
             clientList.push(session.getClientInfo());
         });
         this.messageHandler.sendSuccessResponse(messageId, clientList, '获取客户端列表成功');
+    }
+
+    // RouterKey (v1+)
+    sendSingleRouterKey(rk) {
+        for (const session of this.rpkiSessionMap.values()) {
+            if (session.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
+                session.sendRouterKey(rk);
+            }
+        }
+    }
+
+    withdrawSingleRouterKey(rk) {
+        for (const session of this.rpkiSessionMap.values()) {
+            if (session.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
+                session.withdrawRouterKey(rk);
+            }
+        }
+    }
+
+    addRouterKey(messageId, payload) {
+        const key = RpkiRouterKey.makeKey(payload.ski, payload.asn);
+        if (this.rpkiRouterKeyMap.has(key)) {
+            logger.error(`RPKI RouterKey已存在: ${key}`);
+            this.messageHandler.sendErrorResponse(messageId, 'RouterKey已存在');
+            return;
+        }
+        const rk = new RpkiRouterKey(payload.ski, payload.asn, payload.spki);
+        this.rpkiRouterKeyMap.set(key, rk);
+        this.sendSingleRouterKey(rk);
+        this.messageHandler.sendSuccessResponse(messageId, null, 'RouterKey添加成功');
+    }
+
+    deleteRouterKey(messageId, payload) {
+        const key = RpkiRouterKey.makeKey(payload.ski, payload.asn);
+        if (!this.rpkiRouterKeyMap.has(key)) {
+            logger.error(`RPKI RouterKey不存在: ${key}`);
+            this.messageHandler.sendErrorResponse(messageId, 'RouterKey不存在');
+            return;
+        }
+        const rk = this.rpkiRouterKeyMap.get(key);
+        this.withdrawSingleRouterKey(rk);
+        this.rpkiRouterKeyMap.delete(key);
+        this.messageHandler.sendSuccessResponse(messageId, null, 'RouterKey删除成功');
+    }
+
+    // ASPA (v2+)
+    sendSingleAspa(aspa) {
+        for (const session of this.rpkiSessionMap.values()) {
+            if (session.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+                session.sendAspa(aspa);
+            }
+        }
+    }
+
+    withdrawSingleAspa(aspa) {
+        for (const session of this.rpkiSessionMap.values()) {
+            if (session.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+                session.withdrawAspa(aspa);
+            }
+        }
+    }
+
+    addAspa(messageId, payload) {
+        const key = RpkiAspa.makeKey(payload.customerAsn);
+        if (this.rpkiAspaMap.has(key)) {
+            logger.error(`RPKI ASPA已存在: ${key}`);
+            this.messageHandler.sendErrorResponse(messageId, 'ASPA已存在');
+            return;
+        }
+        const aspa = new RpkiAspa(payload.customerAsn, payload.providerAsns, payload.afiFlags);
+        this.rpkiAspaMap.set(key, aspa);
+        this.sendSingleAspa(aspa);
+        this.messageHandler.sendSuccessResponse(messageId, null, 'ASPA添加成功');
+    }
+
+    deleteAspa(messageId, payload) {
+        const key = RpkiAspa.makeKey(payload.customerAsn);
+        if (!this.rpkiAspaMap.has(key)) {
+            logger.error(`RPKI ASPA不存在: ${key}`);
+            this.messageHandler.sendErrorResponse(messageId, 'ASPA不存在');
+            return;
+        }
+        const aspa = this.rpkiAspaMap.get(key);
+        this.withdrawSingleAspa(aspa);
+        this.rpkiAspaMap.delete(key);
+        this.messageHandler.sendSuccessResponse(messageId, null, 'ASPA删除成功');
     }
 }
 

@@ -156,7 +156,17 @@ contextBridge.exposeInMainWorld('rpkiApi', {
     addRoa: roa => ipcRenderer.invoke('rpki:addRoa', roa),
     deleteRoa: roa => ipcRenderer.invoke('rpki:deleteRoa', roa),
     getRoaList: () => ipcRenderer.invoke('rpki:getRoaList'),
-    getClientList: () => ipcRenderer.invoke('rpki:getClientList')
+    getClientList: () => ipcRenderer.invoke('rpki:getClientList'),
+
+    // router key (v1+)
+    addRouterKey: rk => ipcRenderer.invoke('rpki:addRouterKey', rk),
+    deleteRouterKey: rk => ipcRenderer.invoke('rpki:deleteRouterKey', rk),
+    getRouterKeyList: () => ipcRenderer.invoke('rpki:getRouterKeyList'),
+
+    // aspa (v2+)
+    addAspa: aspa => ipcRenderer.invoke('rpki:addAspa', aspa),
+    deleteAspa: aspa => ipcRenderer.invoke('rpki:deleteAspa', aspa),
+    getAspaList: () => ipcRenderer.invoke('rpki:getAspaList')
 });
 
 // ftp模块

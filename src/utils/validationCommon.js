@@ -1089,6 +1089,75 @@ export const createRpkiRoaConfigValidationRules = () => {
 };
 
 /**
+ * 创建 RPKI Router Key (v1+) 验证规则
+ */
+export const createRpkiRouterKeyValidationRules = () => {
+    return {
+        ski: [
+            { required: true, message: '请输入 SKI (Subject Key Identifier)' },
+            {
+                validator: value => {
+                    if (!value) return false;
+                    return /^[0-9a-fA-F]{40}$/.test(value);
+                },
+                message: 'SKI 必须是 40 位十六进制字符（20 字节）'
+            }
+        ],
+        asn: [
+            { required: true, message: '请输入 ASN' },
+            { validator: validators.asn, message: '请输入有效的 ASN' }
+        ],
+        spki: [
+            { required: true, message: '请输入 SPKI (Subject Public Key Info)' },
+            {
+                validator: value => {
+                    if (!value) return false;
+                    return /^[0-9a-fA-F]+$/.test(value) && value.length % 2 === 0;
+                },
+                message: 'SPKI 必须是十六进制字符串，长度必须为偶数'
+            }
+        ]
+    };
+};
+
+/**
+ * 创建 RPKI ASPA (v2+) 验证规则
+ */
+export const createRpkiAspaValidationRules = () => {
+    return {
+        customerAsn: [
+            { required: true, message: '请输入 Customer ASN' },
+            { validator: validators.asn, message: '请输入有效的 Customer ASN' }
+        ],
+        providerAsnsRaw: [
+            { required: true, message: '请输入 Provider ASN 列表（逗号分隔）' },
+            {
+                validator: value => {
+                    if (!value) return false;
+                    const parts = value
+                        .split(',')
+                        .map(s => s.trim())
+                        .filter(s => s.length > 0);
+                    if (parts.length === 0) return false;
+                    return parts.every(p => validators.asn(p));
+                },
+                message: 'Provider ASN 必须是逗号分隔的有效 ASN 列表'
+            }
+        ],
+        afiFlags: [
+            { required: true, message: '请选择 AFI Flags' },
+            {
+                validator: value => {
+                    const n = parseInt(value, 10);
+                    return n === 1 || n === 2 || n === 3;
+                },
+                message: 'AFI Flags 必须为 1(IPv4) / 2(IPv6) / 3(BOTH)'
+            }
+        ]
+    };
+};
+
+/**
  * 创建SNMP配置验证规则
  */
 export const createSnmpConfigValidationRules = () => {

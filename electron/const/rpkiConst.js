@@ -1,6 +1,6 @@
 const RPKI_HEADER_LENGTH = 8;
 
-// RPKI message types
+// RPKI message types (RFC 6810 / RFC 8210 / draft-ietf-sidrops-8210bis)
 const RPKI_MSG_TYPE = {
     SERIAL_NOTIFY: 0,
     SERIAL_QUERY: 1,
@@ -10,7 +10,9 @@ const RPKI_MSG_TYPE = {
     IPV6_PREFIX: 6,
     END_OF_DATA: 7,
     CACHE_RESET: 8,
-    ERROR: 10
+    ROUTER_KEY: 9, // v1+
+    ERROR_REPORT: 10,
+    ASPA: 11 // v2+
 };
 
 const RPKI_MSG_TYPE_NAME = {
@@ -22,7 +24,9 @@ const RPKI_MSG_TYPE_NAME = {
     [RPKI_MSG_TYPE.IPV6_PREFIX]: 'IPV6_PREFIX',
     [RPKI_MSG_TYPE.END_OF_DATA]: 'END_OF_DATA',
     [RPKI_MSG_TYPE.CACHE_RESET]: 'CACHE_RESET',
-    [RPKI_MSG_TYPE.ERROR]: 'ERROR'
+    [RPKI_MSG_TYPE.ROUTER_KEY]: 'ROUTER_KEY',
+    [RPKI_MSG_TYPE.ERROR_REPORT]: 'ERROR_REPORT',
+    [RPKI_MSG_TYPE.ASPA]: 'ASPA'
 };
 
 // RPKI Protocol Version
@@ -31,6 +35,9 @@ const RPKI_PROTOCOL_VERSION = {
     V1: 1,
     V2: 2
 };
+
+// 服务端支持的最高协议版本
+const RPKI_MAX_SUPPORTED_VERSION = RPKI_PROTOCOL_VERSION.V2;
 
 // RPKI Error Codes
 const RPKI_ERROR_CODE = {
@@ -41,13 +48,20 @@ const RPKI_ERROR_CODE = {
     UNSUPPORTED_PROTOCOL_VERSION: 4,
     UNSUPPORTED_PDU_TYPE: 5,
     WITHDRAWAL_UNKNOWN: 6,
-    DUPLICATE_ANNOUNCEMENT: 7
+    DUPLICATE_ANNOUNCEMENT: 7,
+    UNEXPECTED_PROTOCOL_VERSION: 8
 };
 
 // RPKI PDU Flags
 const RPKI_FLAGS = {
     WITHDRAWAL: 0x00,
     UPDATE: 0x01
+};
+
+// ASPA AFI Flags (v2)
+const RPKI_ASPA_AFI_FLAGS = {
+    IPV4: 0x01,
+    IPV6: 0x02
 };
 
 // RPKI ROA Status
@@ -70,7 +84,11 @@ const RPKI_REQ_TYPES = {
     STOP_RPKI: 2,
     ADD_ROA: 3,
     DELETE_ROA: 4,
-    GET_CLIENT_LIST: 5
+    GET_CLIENT_LIST: 5,
+    ADD_ROUTER_KEY: 6,
+    DELETE_ROUTER_KEY: 7,
+    ADD_ASPA: 8,
+    DELETE_ASPA: 9
 };
 
 module.exports = {
@@ -78,8 +96,10 @@ module.exports = {
     RPKI_MSG_TYPE,
     RPKI_MSG_TYPE_NAME,
     RPKI_PROTOCOL_VERSION,
+    RPKI_MAX_SUPPORTED_VERSION,
     RPKI_ERROR_CODE,
     RPKI_FLAGS,
+    RPKI_ASPA_AFI_FLAGS,
     RPKI_ROA_STATUS,
     RPKI_DEFAULT_PORT,
     RPKI_EVT_TYPES,

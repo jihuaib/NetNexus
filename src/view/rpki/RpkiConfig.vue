@@ -222,6 +222,15 @@
             ellipsis: true
         },
         {
+            title: '协议版本',
+            key: 'protocolVersion',
+            ellipsis: true,
+            customRender: ({ record }) =>
+                record.protocolVersion === undefined || record.protocolVersion === null
+                    ? '-'
+                    : `v${record.protocolVersion}`
+        },
+        {
             title: '操作',
             key: 'action'
         }
@@ -324,18 +333,23 @@
     const onClientConnection = result => {
         if (result.status === 'success') {
             const data = result.data;
+            const matchClient = item =>
+                item.localIp === data.data.localIp &&
+                item.localPort === data.data.localPort &&
+                item.remoteIp === data.data.remoteIp &&
+                item.remotePort === data.data.remotePort;
+
             if (data.opType === 'add') {
                 clientList.value.push(data.data);
             } else if (data.opType === 'delete') {
-                const index = clientList.value.findIndex(
-                    item =>
-                        item.localIp === data.data.localIp &&
-                        item.localPort === data.data.localPort &&
-                        item.remoteIp === data.data.remoteIp &&
-                        item.remotePort === data.data.remotePort
-                );
+                const index = clientList.value.findIndex(matchClient);
                 if (index !== -1) {
                     clientList.value.splice(index, 1);
+                }
+            } else if (data.opType === 'update') {
+                const index = clientList.value.findIndex(matchClient);
+                if (index !== -1) {
+                    clientList.value[index] = { ...clientList.value[index], ...data.data };
                 }
             }
         } else {

@@ -2,6 +2,7 @@ const logger = require('../log/logger');
 const RpkiConst = require('../const/rpkiConst');
 const BgpConst = require('../const/bgpConst');
 const { ipToBytes } = require('../utils/ipUtils');
+
 class RpkiSession {
     constructor(messageHandler, rpkiWorker) {
         this.socket = null;
@@ -35,35 +36,17 @@ class RpkiSession {
             );
 
             switch (header.type) {
+                case RpkiConst.RPKI_MSG_TYPE.SERIAL_QUERY:
+                    this.handleSerialQuery(header, message);
+                    break;
                 case RpkiConst.RPKI_MSG_TYPE.RESET_QUERY:
                     this.handleResetQuery(header, message);
-                    break;
-                case RpkiConst.RPKI_MSG_TYPE.CACHE_RESPONSE:
-                    this.handleCacheResponse(message);
-                    break;
-                case RpkiConst.RPKI_MSG_TYPE.IPV4_PREFIX:
-                    this.handleIPv4Prefix(message);
-                    break;
-                case RpkiConst.RPKI_MSG_TYPE.IPV6_PREFIX:
-                    this.handleIPv6Prefix(message);
-                    break;
-                case RpkiConst.RPKI_MSG_TYPE.END_OF_DATA:
-                    this.handleEndOfData(message);
-                    break;
-                case RpkiConst.RPKI_MSG_TYPE.CACHE_RESET:
-                    this.handleCacheReset(message);
-                    break;
-                case RpkiConst.RPKI_MSG_TYPE.ROUTER_KEY:
-                    this.handleRouterKey(message);
                     break;
                 case RpkiConst.RPKI_MSG_TYPE.ERROR_REPORT:
                     this.handleErrorReport(message);
                     break;
-                case RpkiConst.RPKI_MSG_TYPE.ERROR:
-                    this.handleError(message);
-                    break;
                 default:
-                    logger.error(`Unknown message type: ${header.type}`);
+                    logger.error(`Unsupported PDU type from client: ${header.type}`);
                     this.sendError(RpkiConst.RPKI_ERROR_CODE.UNSUPPORTED_PDU_TYPE);
             }
         } catch (err) {
@@ -112,147 +95,71 @@ class RpkiSession {
         }
     }
 
-    // RPKI Message Handling Methods
-    handleResetQuery(header, _message) {
-        this.protocolVersion = header.version;
-        if (this.protocolVersion === RpkiConst.RPKI_PROTOCOL_VERSION.V0) {
-            this.sendCacheResponse();
-            this.sendRoaData();
-            this.sendEndOfData();
+    // 协商协议版本：取客户端请求版本与服务端最高支持版本的较小者
+    negotiateVersion(clientVersion) {
+        if (clientVersion > RpkiConst.RPKI_MAX_SUPPORTED_VERSION) {
+            this.protocolVersion = RpkiConst.RPKI_MAX_SUPPORTED_VERSION;
         } else {
-            logger.error(`Unsupported protocol version: ${this.protocolVersion}`);
+            this.protocolVersion = clientVersion;
+        }
+        return this.protocolVersion;
+    }
+
+    handleResetQuery(header, _message) {
+        // 版本协商
+        if (header.version > RpkiConst.RPKI_MAX_SUPPORTED_VERSION) {
+            logger.error(
+                `Unsupported protocol version: ${header.version}, max supported: ${RpkiConst.RPKI_MAX_SUPPORTED_VERSION}`
+            );
             this.sendError(RpkiConst.RPKI_ERROR_CODE.UNSUPPORTED_PROTOCOL_VERSION);
+            return;
         }
-    }
+        this.negotiateVersion(header.version);
+        logger.info(`Negotiated protocol version: ${this.protocolVersion}`);
 
-    handleCacheResponse(message) {
-        logger.info(`Handling Cache Response message`);
-        this.sessionId = message.readUInt16BE(RpkiConst.RPKI_HEADER_LENGTH);
-        logger.info(`Session ID: ${this.sessionId}`);
-    }
-
-    handleIPv4Prefix(message) {
-        const flags = message[RpkiConst.RPKI_HEADER_LENGTH];
-        const prefixLength = message[RpkiConst.RPKI_HEADER_LENGTH + 1];
-        const maxLength = message[RpkiConst.RPKI_HEADER_LENGTH + 2];
-        const asn = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 4);
-
-        // Read IPv4 address (4 bytes)
-        const prefix = message.subarray(RpkiConst.RPKI_HEADER_LENGTH + 8, RpkiConst.RPKI_HEADER_LENGTH + 12);
-        const ipv4 = `${prefix[0]}.${prefix[1]}.${prefix[2]}.${prefix[3]}`;
-
-        logger.info(`IPv4 Prefix: ${ipv4}/${prefixLength}, MaxLength: ${maxLength}, ASN: ${asn}, Flags: ${flags}`);
-
-        // Store ROA data
-        const roaKey = `${ipv4}/${prefixLength}-${asn}`;
-        this.roaData.set(roaKey, {
-            type: 'ipv4',
-            prefix: ipv4,
-            prefixLength,
-            maxLength,
-            asn,
-            flags,
-            status: RpkiConst.RPKI_ROA_STATUS.ACTIVE
+        // 版本协商完成后通知前端刷新客户端列表
+        this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
+            opType: 'update',
+            data: this.getClientInfo()
         });
 
-        // Notify frontend of new ROA data
-        this.notifyRoaUpdate();
-    }
-
-    handleIPv6Prefix(message) {
-        const flags = message[RpkiConst.RPKI_HEADER_LENGTH];
-        const prefixLength = message[RpkiConst.RPKI_HEADER_LENGTH + 1];
-        const maxLength = message[RpkiConst.RPKI_HEADER_LENGTH + 2];
-        const asn = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 4);
-
-        // Read IPv6 address (16 bytes)
-        const prefix = message.subarray(RpkiConst.RPKI_HEADER_LENGTH + 8, RpkiConst.RPKI_HEADER_LENGTH + 24);
-
-        // Format IPv6 address
-        let ipv6Parts = [];
-        for (let i = 0; i < 16; i += 2) {
-            ipv6Parts.push(prefix.readUInt16BE(i).toString(16));
+        this.sendCacheResponse();
+        this.sendRoaData();
+        if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
+            this.sendRouterKeyData();
         }
-        const ipv6 = ipv6Parts.join(':');
-
-        logger.info(`IPv6 Prefix: ${ipv6}/${prefixLength}, MaxLength: ${maxLength}, ASN: ${asn}, Flags: ${flags}`);
-
-        // Store ROA data
-        const roaKey = `${ipv6}/${prefixLength}-${asn}`;
-        this.roaData.set(roaKey, {
-            type: 'ipv6',
-            prefix: ipv6,
-            prefixLength,
-            maxLength,
-            asn,
-            flags,
-            status: RpkiConst.RPKI_ROA_STATUS.ACTIVE
-        });
-
-        // Notify frontend of new ROA data
-        this.notifyRoaUpdate();
-    }
-
-    handleEndOfData(message) {
-        logger.info(`Handling End of Data message`);
-        // Process end of data notification
-        // The version 1 End of Data PDU has the following format:
-        if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V0) {
-            const sessionId = message.readUInt16BE(RpkiConst.RPKI_HEADER_LENGTH);
-            const serial = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 2);
-            const refreshInterval = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 6);
-            const retryInterval = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 10);
-            const expireInterval = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 14);
-
-            logger.info(`Session ID: ${sessionId}, Serial: ${serial}`);
-            logger.info(`Refresh: ${refreshInterval}, Retry: ${retryInterval}, Expire: ${expireInterval}`);
+        if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+            this.sendAspaData();
         }
-
-        // Notify frontend that we've received all data
-        this.notifyRoaComplete();
+        this.sendEndOfData();
     }
 
-    handleCacheReset(_message) {
-        logger.info(`Handling Cache Reset message`);
-        // Clear all current ROA data
-        this.roaData.clear();
-
-        // Send a Reset Query to request fresh data
-        this.sendResetQuery();
-    }
-
-    handleRouterKey(_message) {
-        logger.info(`Handling Router Key message`);
-        // Process router key information
+    handleSerialQuery(header, message) {
+        // 版本一致性检查
+        if (header.version !== this.protocolVersion) {
+            logger.error(
+                `Serial Query version mismatch: got ${header.version}, expected ${this.protocolVersion}`
+            );
+            this.sendError(RpkiConst.RPKI_ERROR_CODE.UNEXPECTED_PROTOCOL_VERSION);
+            return;
+        }
+        const sessionId = message.readUInt16BE(2);
+        const serial = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH);
+        logger.info(`Serial Query: sessionId=${sessionId}, serial=${serial}`);
+        // 模拟器实现：直接发送 Cache Reset，让客户端重新拉取全量
+        this.sendCacheReset();
     }
 
     handleErrorReport(message) {
-        // Process error report
-        const errorCode = message.readUInt16BE(RpkiConst.RPKI_HEADER_LENGTH);
-
-        // Extract length of the erroneous PDU
-        const pduLength = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 2);
-
-        // Extract the erroneous PDU itself
-        const erroneousPdu = message.subarray(
-            RpkiConst.RPKI_HEADER_LENGTH + 6,
-            RpkiConst.RPKI_HEADER_LENGTH + 6 + pduLength
-        );
-
-        logger.error(
-            `RPKI Error Report: Code ${errorCode}, PDU Length: ${pduLength}, Erroneous PDU: ${Buffer.from(erroneousPdu).toString('hex')}`
-        );
-    }
-
-    handleError(message) {
-        const _version = message[0];
-        const _type = message[1];
         const errorCode = message.readUInt16BE(2);
-        const _length = message.readUInt32BE(4);
-        const sessionKey = RpkiSession.makeKey(this.localIp, this.localPort, this.remoteIp, this.remotePort);
-        this.rpkiWorker.rpkiSessionMap.delete(sessionKey);
-        this.closeSession();
-        logger.error(`RPKI Error: Code ${errorCode}`);
+        const encapPduLength = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH);
+        const encapPdu = message.subarray(
+            RpkiConst.RPKI_HEADER_LENGTH + 4,
+            RpkiConst.RPKI_HEADER_LENGTH + 4 + encapPduLength
+        );
+        logger.error(
+            `RPKI Error Report from client: Code ${errorCode}, Encapsulated PDU(hex): ${Buffer.from(encapPdu).toString('hex')}`
+        );
     }
 
     sendMessage(buffer) {
@@ -269,279 +176,225 @@ class RpkiSession {
         }
     }
 
-    sendResetQuery() {
-        // Create Reset Query message
-        // Header: Version(1) + Type(2) + Reserved(0) + Length(8)
-        const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH);
-
-        buffer[0] = this.protocolVersion; // Version
-        buffer[1] = RpkiConst.RPKI_MSG_TYPE.RESET_QUERY; // Type
-        buffer.writeUInt16BE(0, 2); // Reserved
-        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH, 4); // Length
-
-        this.sendMessage(buffer);
-    }
-
     sendCacheResponse() {
         const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH);
 
-        buffer[0] = this.protocolVersion; // Version
-        buffer[1] = RpkiConst.RPKI_MSG_TYPE.CACHE_RESPONSE; // Type
+        buffer[0] = this.protocolVersion;
+        buffer[1] = RpkiConst.RPKI_MSG_TYPE.CACHE_RESPONSE;
         if (!this.sessionId) {
             this.sessionId = Math.floor(Math.random() * 65536);
         }
         buffer.writeUInt16BE(this.sessionId, 2);
-        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH, 4); // Length
+        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH, 4);
+
+        this.sendMessage(buffer);
+    }
+
+    writePrefixPdu(rpkiRoa, flags, isIpv6) {
+        const prefixLen = isIpv6 ? 16 : 4;
+        const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 8 + prefixLen;
+        const buffer = Buffer.alloc(totalLen);
+        let position = 0;
+
+        buffer[position++] = this.protocolVersion;
+        buffer[position++] = isIpv6 ? RpkiConst.RPKI_MSG_TYPE.IPV6_PREFIX : RpkiConst.RPKI_MSG_TYPE.IPV4_PREFIX;
+        buffer.writeUInt16BE(0, position);
+        position += 2;
+        buffer.writeUInt32BE(totalLen, position);
+        position += 4;
+
+        buffer[position++] = flags;
+        buffer[position++] = rpkiRoa.mask;
+        buffer[position++] = rpkiRoa.maxLength;
+        buffer[position++] = 0; // Padding
+
+        const ipBytesArray = ipToBytes(rpkiRoa.ip);
+        for (let i = 0; i < prefixLen; i++) {
+            buffer[position + i] = ipBytesArray[i];
+        }
+        position += prefixLen;
+
+        buffer.writeUInt32BE(rpkiRoa.asn, position);
 
         this.sendMessage(buffer);
     }
 
     sendIPv4Prefix(rpkiRoa) {
-        // Header + Flags(1) + PrefixLength(1) + MaxLength(1) + Padding(1) + ASN(4) + Prefix(4)
-        const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH + 12);
-
-        let position = 0;
-
-        buffer[position] = this.protocolVersion; // Version
-        position++;
-        buffer[position] = RpkiConst.RPKI_MSG_TYPE.IPV4_PREFIX; // Type
-        position++;
-        buffer.writeUInt16BE(0, position); // Reserved
-        position += 2;
-        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 12, position); // Length
-        position += 4;
-
-        buffer[position] = RpkiConst.RPKI_FLAGS.UPDATE; // Flags
-        position++;
-        buffer[position] = rpkiRoa.mask; // Prefix Length
-        position++;
-        buffer[position] = rpkiRoa.maxLength; // Max Length
-        position++;
-        buffer[position] = 0; // Padding
-        position++;
-
-        // Write IPv4 prefix
-        const ipBytesArray = ipToBytes(rpkiRoa.ip);
-        for (let i = 0; i < 4; i++) {
-            buffer[position + i] = ipBytesArray[i];
-        }
-        position += 4;
-
-        buffer.writeUInt32BE(rpkiRoa.asn, position); // ASN
-        position += 4;
-
-        this.sendMessage(buffer);
+        this.writePrefixPdu(rpkiRoa, RpkiConst.RPKI_FLAGS.UPDATE, false);
     }
 
     sendIPv6Prefix(rpkiRoa) {
-        // Header + Flags(1) + PrefixLength(1) + MaxLength(1) + Padding(1) + ASN(4) + Prefix(16)
-        const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH + 24);
-
-        let position = 0;
-
-        buffer[position] = this.protocolVersion; // Version
-        position++;
-        buffer[position] = RpkiConst.RPKI_MSG_TYPE.IPV6_PREFIX; // Type
-        position++;
-        buffer.writeUInt16BE(0, position); // Reserved
-        position += 2;
-        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 24, position); // Length
-        position += 4;
-
-        buffer[position] = RpkiConst.RPKI_FLAGS.UPDATE; // Flags
-        position++;
-        buffer[position] = rpkiRoa.mask; // Prefix Length
-        position++;
-        buffer[position] = rpkiRoa.maxLength; // Max Length
-        position++;
-        buffer[position] = 0; // Padding
-        position++;
-
-        // Write IPv6 prefix
-        const ipBytesArray = ipToBytes(rpkiRoa.ip);
-        for (let i = 0; i < 16; i++) {
-            buffer[position + i] = ipBytesArray[i];
-        }
-        position += 16;
-
-        buffer.writeUInt32BE(rpkiRoa.asn, position); // ASN
-        position += 4;
-
-        this.sendMessage(buffer);
+        this.writePrefixPdu(rpkiRoa, RpkiConst.RPKI_FLAGS.UPDATE, true);
     }
 
     withdrawIPv4Prefix(rpkiRoa) {
-        // Header + Flags(1) + PrefixLength(1) + MaxLength(1) + Padding(1) + ASN(4) + Prefix(4)
-        const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH + 12);
-
-        let position = 0;
-
-        buffer[position] = this.protocolVersion; // Version
-        position++;
-        buffer[position] = RpkiConst.RPKI_MSG_TYPE.IPV4_PREFIX; // Type
-        position++;
-        buffer.writeUInt16BE(0, position); // Reserved
-        position += 2;
-        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 12, position); // Length
-        position += 4;
-
-        buffer[position] = RpkiConst.RPKI_FLAGS.WITHDRAWAL; // Flags
-        position++;
-        buffer[position] = rpkiRoa.mask; // Prefix Length
-        position++;
-        buffer[position] = rpkiRoa.maxLength; // Max Length
-        position++;
-        buffer[position] = 0; // Padding
-        position++;
-
-        // Write IPv4 prefix
-        const ipBytesArray = ipToBytes(rpkiRoa.ip);
-        for (let i = 0; i < 4; i++) {
-            buffer[position + i] = ipBytesArray[i];
-        }
-        position += 4;
-
-        buffer.writeUInt32BE(rpkiRoa.asn, position); // ASN
-        position += 4;
-
-        this.sendMessage(buffer);
+        this.writePrefixPdu(rpkiRoa, RpkiConst.RPKI_FLAGS.WITHDRAWAL, false);
     }
 
     withdrawIPv6Prefix(rpkiRoa) {
-        // Header + Flags(1) + PrefixLength(1) + MaxLength(1) + Padding(1) + ASN(4) + Prefix(16)
-        const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH + 24);
+        this.writePrefixPdu(rpkiRoa, RpkiConst.RPKI_FLAGS.WITHDRAWAL, true);
+    }
 
+    // Router Key PDU (RFC 8210 §5.10, v1+)
+    // Header(8: Version|Type|Flags|Zero|Length) + SKI(20) + ASN(4) + SPKI(variable)
+    writeRouterKeyPdu(rpkiRouterKey, flags) {
+        if (this.protocolVersion < RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
+            logger.warn(`Cannot send Router Key PDU on protocol version ${this.protocolVersion}`);
+            return;
+        }
+        const skiBuf = Buffer.from(rpkiRouterKey.ski, 'hex');
+        const spkiBuf = Buffer.from(rpkiRouterKey.spki, 'hex');
+        if (skiBuf.length !== 20) {
+            logger.error(`Router Key SKI must be 20 bytes, got ${skiBuf.length}`);
+            return;
+        }
+        const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 20 + 4 + spkiBuf.length;
+        const buffer = Buffer.alloc(totalLen);
         let position = 0;
 
-        buffer[position] = this.protocolVersion; // Version
-        position++;
-        buffer[position] = RpkiConst.RPKI_MSG_TYPE.IPV6_PREFIX; // Type
-        position++;
-        buffer.writeUInt16BE(0, position); // Reserved
-        position += 2;
-        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 24, position); // Length
+        buffer[position++] = this.protocolVersion;
+        buffer[position++] = RpkiConst.RPKI_MSG_TYPE.ROUTER_KEY;
+        // RFC 8210 §5.10: header bytes 2-3 = Flags(1) + zero(1)
+        buffer[position++] = flags;
+        buffer[position++] = 0;
+        buffer.writeUInt32BE(totalLen, position);
         position += 4;
 
-        buffer[position] = RpkiConst.RPKI_FLAGS.WITHDRAWAL; // Flags
-        position++;
-        buffer[position] = rpkiRoa.mask; // Prefix Length
-        position++;
-        buffer[position] = rpkiRoa.maxLength; // Max Length
-        position++;
-        buffer[position] = 0; // Padding
-        position++;
-
-        // Write IPv6 prefix
-        const ipBytesArray = ipToBytes(rpkiRoa.ip);
-        for (let i = 0; i < 16; i++) {
-            buffer[position + i] = ipBytesArray[i];
-        }
-        position += 16;
-
-        buffer.writeUInt32BE(rpkiRoa.asn, position); // ASN
+        skiBuf.copy(buffer, position);
+        position += 20;
+        buffer.writeUInt32BE(parseInt(rpkiRouterKey.asn, 10), position);
         position += 4;
+        spkiBuf.copy(buffer, position);
 
         this.sendMessage(buffer);
     }
 
+    sendRouterKey(rpkiRouterKey) {
+        this.writeRouterKeyPdu(rpkiRouterKey, RpkiConst.RPKI_FLAGS.UPDATE);
+    }
+
+    withdrawRouterKey(rpkiRouterKey) {
+        this.writeRouterKeyPdu(rpkiRouterKey, RpkiConst.RPKI_FLAGS.WITHDRAWAL);
+    }
+
+    // ASPA PDU (draft-ietf-sidrops-8210bis §5.12, v2+)
+    // Header(8: Version|Type|Flags|Zero|Length) + Customer ASN(4) + Provider ASNs(4*N)
+    // 注：最新草案中 ASPA 不绑定 AFI（customer-provider 关系是 AFI-agnostic 的）
+    writeAspaPdu(rpkiAspa, flags) {
+        if (this.protocolVersion < RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+            logger.warn(`Cannot send ASPA PDU on protocol version ${this.protocolVersion}`);
+            return;
+        }
+        const providerCount = rpkiAspa.providerAsns.length;
+        const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 4 + 4 * providerCount;
+        const buffer = Buffer.alloc(totalLen);
+        let position = 0;
+
+        buffer[position++] = this.protocolVersion;
+        buffer[position++] = RpkiConst.RPKI_MSG_TYPE.ASPA;
+        buffer[position++] = flags;
+        buffer[position++] = 0; // zero per RFC
+        buffer.writeUInt32BE(totalLen, position);
+        position += 4;
+
+        buffer.writeUInt32BE(parseInt(rpkiAspa.customerAsn, 10), position);
+        position += 4;
+        for (let i = 0; i < providerCount; i++) {
+            buffer.writeUInt32BE(parseInt(rpkiAspa.providerAsns[i], 10), position);
+            position += 4;
+        }
+
+        this.sendMessage(buffer);
+    }
+
+    sendAspa(rpkiAspa) {
+        this.writeAspaPdu(rpkiAspa, RpkiConst.RPKI_FLAGS.UPDATE);
+    }
+
+    withdrawAspa(rpkiAspa) {
+        this.writeAspaPdu(rpkiAspa, RpkiConst.RPKI_FLAGS.WITHDRAWAL);
+    }
+
     sendEndOfData() {
-        if (this.protocolVersion > RpkiConst.RPKI_PROTOCOL_VERSION.V0) {
-            // Header + SessionID(2) + Serial(4) + Refresh(4) + Retry(4) + Expire(4)
-            const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH + 18);
+        if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
+            // RFC 8210 §5.8: Header(8, sessionID in bytes 2-3) + Serial(4) + Refresh(4) + Retry(4) + Expire(4)
+            // Total = 24
+            const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 16;
+            const buffer = Buffer.alloc(totalLen);
 
-            buffer[0] = this.protocolVersion; // Version
-            buffer[1] = RpkiConst.RPKI_MSG_TYPE.END_OF_DATA; // Type
-            buffer.writeUInt16BE(0, 2); // Reserved
-            buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 18, 4); // Length
+            buffer[0] = this.protocolVersion;
+            buffer[1] = RpkiConst.RPKI_MSG_TYPE.END_OF_DATA;
+            buffer.writeUInt16BE(this.sessionId, 2);
+            buffer.writeUInt32BE(totalLen, 4);
 
-            buffer.writeUInt16BE(this.sessionId, RpkiConst.RPKI_HEADER_LENGTH); // Session ID
-            buffer.writeUInt32BE(1, RpkiConst.RPKI_HEADER_LENGTH + 2); // Serial Number
-
-            // Default intervals (in seconds)
-            buffer.writeUInt32BE(3600, RpkiConst.RPKI_HEADER_LENGTH + 6); // Refresh: 1 hour
-            buffer.writeUInt32BE(600, RpkiConst.RPKI_HEADER_LENGTH + 10); // Retry: 10 minutes
-            buffer.writeUInt32BE(7200, RpkiConst.RPKI_HEADER_LENGTH + 14); // Expire: 2 hours
+            buffer.writeUInt32BE(1, RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
+            buffer.writeUInt32BE(3600, RpkiConst.RPKI_HEADER_LENGTH + 4); // Refresh
+            buffer.writeUInt32BE(600, RpkiConst.RPKI_HEADER_LENGTH + 8); // Retry
+            buffer.writeUInt32BE(7200, RpkiConst.RPKI_HEADER_LENGTH + 12); // Expire
 
             this.sendMessage(buffer);
         } else {
-            const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH + 4);
-            let position = 0;
+            // RFC 6810 §5.8: Header(8, sessionID in bytes 2-3) + Serial(4). Total = 12
+            const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 4;
+            const buffer = Buffer.alloc(totalLen);
 
-            buffer[position] = this.protocolVersion; // Version
-            position++;
-            buffer[position] = RpkiConst.RPKI_MSG_TYPE.END_OF_DATA; // Type
-            position++;
-            buffer.writeUInt16BE(this.sessionId, position); // Reserved
-            position += 2;
-            buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 4, position); // Length
-            position += 4;
-
-            buffer.writeUInt32BE(0, position); // Serial Number
-            position += 4;
+            buffer[0] = this.protocolVersion;
+            buffer[1] = RpkiConst.RPKI_MSG_TYPE.END_OF_DATA;
+            buffer.writeUInt16BE(this.sessionId, 2);
+            buffer.writeUInt32BE(totalLen, 4);
+            buffer.writeUInt32BE(0, RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
 
             this.sendMessage(buffer);
         }
     }
 
     sendCacheReset() {
-        // Create Cache Reset message
         const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH);
 
-        buffer[0] = this.protocolVersion; // Version
-        buffer[1] = RpkiConst.RPKI_MSG_TYPE.CACHE_RESET; // Type
-        buffer.writeUInt16BE(0, 2); // Reserved
-        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH, 4); // Length
+        buffer[0] = this.protocolVersion;
+        buffer[1] = RpkiConst.RPKI_MSG_TYPE.CACHE_RESET;
+        buffer.writeUInt16BE(0, 2);
+        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH, 4);
 
         this.sendMessage(buffer);
     }
 
+    // Error Report PDU: Header + ErrorCode(2 in reserved) + Length(4) + EncapPduLen(4) + EncapPdu + ErrTextLen(4) + ErrText
     sendError(errorCode) {
-        // Create Error message
-        // Header + ErrorCode(2)
-        const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH + 2);
+        const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH + 8);
 
-        buffer[0] = this.protocolVersion; // Version
-        buffer[1] = RpkiConst.RPKI_MSG_TYPE.ERROR; // Type
-        buffer.writeUInt16BE(0, 2); // Reserved
-        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 2, 4); // Length
-
-        buffer.writeUInt16BE(errorCode, RpkiConst.RPKI_HEADER_LENGTH); // Error Code
+        buffer[0] = this.protocolVersion;
+        buffer[1] = RpkiConst.RPKI_MSG_TYPE.ERROR_REPORT;
+        buffer.writeUInt16BE(errorCode, 2);
+        buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 8, 4);
+        buffer.writeUInt32BE(0, RpkiConst.RPKI_HEADER_LENGTH); // Encapsulated PDU length = 0
+        buffer.writeUInt32BE(0, RpkiConst.RPKI_HEADER_LENGTH + 4); // Error text length = 0
 
         this.sendMessage(buffer);
     }
 
     sendRoaData() {
-        const roaList = this.rpkiWorker.rpkiRoaMap.values();
-        for (const roa of roaList) {
+        for (const roa of this.rpkiWorker.rpkiRoaMap.values()) {
             this.sendSingleRoaData(roa);
         }
     }
 
-    withdrawRoaData() {
-        const roaList = this.rpkiWorker.rpkiRoaMap.values();
-        for (const roa of roaList) {
-            this.withdrawSingleRoaData(roa);
+    sendRouterKeyData() {
+        for (const rk of this.rpkiWorker.rpkiRouterKeyMap.values()) {
+            this.sendRouterKey(rk);
         }
     }
 
-    // Notification methods to inform the front-end
-    notifyRoaUpdate() {
-        // Convert ROA data to array for easier consumption by front-end
-        const roaArray = Array.from(this.roaData.values());
-
-        // Notify front-end of ROA update
-        this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.ROA_UPDATE, {
-            serverInfo: `${this.remoteIp}:${this.remotePort}`,
-            roaData: roaArray
-        });
+    sendAspaData() {
+        for (const aspa of this.rpkiWorker.rpkiAspaMap.values()) {
+            this.sendAspa(aspa);
+        }
     }
 
-    notifyRoaComplete() {
-        // Notify front-end that all ROA data has been received
-        this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.ROA_COMPLETE, {
-            serverInfo: `${this.remoteIp}:${this.remotePort}`,
-            totalRoaEntries: this.roaData.size
-        });
+    withdrawRoaData() {
+        for (const roa of this.rpkiWorker.rpkiRoaMap.values()) {
+            this.withdrawSingleRoaData(roa);
+        }
     }
 
     sendSingleRoaData(rpkiRoa) {
@@ -565,7 +418,8 @@ class RpkiSession {
             localIp: this.localIp,
             localPort: this.localPort,
             remoteIp: this.remoteIp,
-            remotePort: this.remotePort
+            remotePort: this.remotePort,
+            protocolVersion: this.protocolVersion
         };
     }
 }

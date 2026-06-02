@@ -5,6 +5,8 @@
             <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
                 <a-tab-pane key="rpki-config" tab="RPKI配置" />
                 <a-tab-pane key="rpki-roa-config" tab="RPKI ROA配置" />
+                <a-tab-pane key="rpki-router-key-config" tab="Router Key (v1+)" />
+                <a-tab-pane key="rpki-aspa-config" tab="ASPA (v2)" />
             </a-tabs>
         </div>
 

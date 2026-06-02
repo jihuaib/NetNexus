@@ -25,6 +25,8 @@ import BgpLocRibStatisReport from '../view/bmp/BgpLocRibStatisReport.vue';
 import RpkiMain from '../view/rpki/RpkiMain.vue';
 import RpkiConfig from '../view/rpki/RpkiConfig.vue';
 import RpkiRoaConfig from '../view/rpki/RpkiRoaConfig.vue';
+import RpkiRouterKeyConfig from '../view/rpki/RpkiRouterKeyConfig.vue';
+import RpkiAspaConfig from '../view/rpki/RpkiAspaConfig.vue';
 import FtpMain from '../view/ftp/FtpMain.vue';
 import FtpConfig from '../view/ftp/FtpConfig.vue';
 import SnmpMain from '../view/snmp/SnmpMain.vue';
@@ -216,6 +218,18 @@ const routes = [
                         path: 'rpki-roa-config',
                         name: 'RpkiRoaConfig',
                         component: RpkiRoaConfig,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'rpki-router-key-config',
+                        name: 'RpkiRouterKeyConfig',
+                        component: RpkiRouterKeyConfig,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'rpki-aspa-config',
+                        name: 'RpkiAspaConfig',
+                        component: RpkiAspaConfig,
                         meta: { keepAlive: true }
                     }
                 ]
