@@ -1139,9 +1139,14 @@ export const createRpkiAspaValidationRules = () => {
                         .map(s => s.trim())
                         .filter(s => s.length > 0);
                     if (parts.length === 0) return false;
-                    return parts.every(p => validators.asn(p));
+                    const providerAsns = parts.map(p => Number(p));
+                    const hasInvalidAsn = providerAsns.some(
+                        asn => !Number.isInteger(asn) || asn < 0 || asn > 4294967295
+                    );
+                    if (hasInvalidAsn) return false;
+                    return providerAsns.length === 1 || !providerAsns.includes(0);
                 },
-                message: 'Provider ASN 必须是逗号分隔的有效 ASN 列表'
+                message: 'Provider ASN 必须是逗号分隔的有效 ASN 列表；AS0 只能单独配置'
             }
         ],
         afiFlags: [

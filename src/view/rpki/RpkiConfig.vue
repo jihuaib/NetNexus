@@ -109,15 +109,15 @@
                                 <a-form-item label="ASPA编码格式" name="aspaFormat">
                                     <a-radio-group v-model:value="rpkiConfig.aspaFormat">
                                         <a-radio :value="RPKI_ASPA_FORMAT.LATEST">
-                                            最新 (draft-19+)
+                                            最新 (current 8210bis)
                                         </a-radio>
                                         <a-radio :value="RPKI_ASPA_FORMAT.LEGACY">
                                             兼容 (draft-10 / 华为 VRP)
                                         </a-radio>
                                     </a-radio-group>
                                     <div style="color: #999; font-size: 12px; line-height: 1.5">
-                                        最新格式遵循 draft-ietf-sidrops-8210bis-19+ 规范；兼容格式包含 Provider AS Count 字段且
-                                        byte3 为 AFI flags，适用于华为 VRP 等老旧设备。仅在协议 v2 协商成功时生效。
+                                        最新格式遵循当前 draft-ietf-sidrops-8210bis 规范；兼容格式按 draft-10 在 body 中携带
+                                        Flags、AFI Flags 和 Provider AS Count，适用于华为 VRP 等老旧设备。仅在协议 v2 协商成功时生效。
                                     </div>
                                 </a-form-item>
                             </a-col>

@@ -445,7 +445,10 @@ class RpkiSession {
     }
 
     sendAspaData() {
-        for (const aspa of this.rpkiWorker.rpkiAspaMap.values()) {
+        const sortedAspas = [...this.rpkiWorker.rpkiAspaMap.values()].sort(
+            (a, b) => Number(a.customerAsn) - Number(b.customerAsn)
+        );
+        for (const aspa of sortedAspas) {
             this.sendAspa(aspa);
         }
     }

@@ -54,6 +54,16 @@ function assertBufEq(actualBuf, expectedHex, label) {
     assert(ok, label);
 }
 
+function assertThrows(fn, label) {
+    let threw = false;
+    try {
+        fn();
+    } catch (_err) {
+        threw = true;
+    }
+    assert(threw, label);
+}
+
 function section(name) {
     console.log(`\n[${name}]`);
 }
@@ -234,6 +244,21 @@ section('ASPA PDU (type 11, v2, draft-ietf-sidrops-8210bis §5.12)');
     assertEq(sentBuffers[1].readUInt32BE(8), 65000, 'ASPA withdraw Customer ASN');
 }
 
+section('ASPA Provider ASN list canonicalization');
+{
+    const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    const aspa = new RpkiAspa(65000, [65002, 65001, 65001], 0);
+    assertEq(aspa.providerAsns.join(','), '65001,65002', 'ASPA Provider ASNs are unique and increasing');
+
+    session.sendAspa(aspa);
+    assertEq(sentBuffers[0].readUInt32BE(12), 65001, 'ASPA Provider ASN[0] sorted');
+    assertEq(sentBuffers[0].readUInt32BE(16), 65002, 'ASPA Provider ASN[1] sorted');
+    assertThrows(
+        () => new RpkiAspa(65000, [0, 65001], 0),
+        'ASPA Provider ASNs reject AS0 mixed with other providers'
+    );
+}
+
 section('ASPA PDU LEGACY format (draft-10, Huawei VRP compat)');
 {
     const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
@@ -326,12 +351,15 @@ section('Version negotiation - handleResetQuery (RFC 8210 §7)');
 {
     // v2 client → server accepts, sends Router Keys + ASPA
     const { session, sentBuffers, rpkiWorker } = makeMockSession();
+    rpkiWorker.rpkiAspaMap.set('b', new RpkiAspa(65002, [65003], 0));
     rpkiWorker.rpkiAspaMap.set('a', new RpkiAspa(65000, [65001], 0));
     session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
     session.handleResetQuery({ version: 2, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
     assertEq(session.protocolVersion, 2, 'Negotiated to v2');
-    const hasAspa = sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA);
-    assert(hasAspa, 'ASPA PDU sent for v2 client');
+    const aspaPdus = sentBuffers.filter(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA);
+    assertEq(aspaPdus.length, 2, 'ASPA PDUs sent for v2 client');
+    assertEq(aspaPdus[0].readUInt32BE(8), 65000, 'ASPA PDUs sorted by Customer ASN');
+    assertEq(aspaPdus[1].readUInt32BE(8), 65002, 'ASPA PDUs sorted by Customer ASN after lower CASN');
 }
 {
     // v3 client (unsupported) → server rejects with Error Report code=4

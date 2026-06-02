@@ -5,6 +5,7 @@ const logger = require('../log/logger');
 const WorkerWithPromise = require('../worker/workerWithPromise');
 const { getNetworkAddress } = require('../utils/ipUtils');
 const RpkiConst = require('../const/rpkiConst');
+const RpkiAspa = require('../worker/rpkiAspa');
 const EventDispatcher = require('../utils/eventDispatcher');
 
 class RpkiApp {
@@ -404,16 +405,20 @@ class RpkiApp {
             if (index !== -1) {
                 return errorResponse('ASPA已存在 (Customer ASN 重复)');
             }
+            const normalizedAspa = {
+                ...aspa,
+                providerAsns: RpkiAspa.normalizeProviderAsns(aspa.providerAsns)
+            };
 
             if (this.worker) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, aspa);
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, normalizedAspa);
                 if (result.status !== 'success') {
                     logger.error(`worker ASPA添加失败: ${result.msg}`);
                     return errorResponse(result.msg);
                 }
             }
 
-            currentList.push(aspa);
+            currentList.push(normalizedAspa);
             this.store.set(this.rpkiAspaFileKey, currentList);
             return successResponse(null, 'ASPA保存成功');
         } catch (error) {
