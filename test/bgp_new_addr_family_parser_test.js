@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { parseBgpPacket } = require('../electron/utils/bgpPacketParser');
+const { parseBgpPacket, getBgpPacketSummary } = require('../electron/utils/bgpPacketParser');
 const BgpConst = require('../electron/const/bgpConst');
 const { getAddrFamilyType, getAfiAndSafi } = require('../electron/utils/bgpUtils');
 const BmpSession = require('../electron/worker/bmpSession');
@@ -30,9 +30,9 @@ function updatePacket(attrs, nlri = Buffer.alloc(0)) {
     ]);
 }
 
-function parseUpdateWithMpReach(afi, safi, nextHop, nlri) {
+function parseUpdateWithMpReach(afi, safi, nextHop, nlri, extraAttrs = []) {
     const value = Buffer.concat([u16(afi), Buffer.from([safi, nextHop.length]), nextHop, Buffer.from([0]), nlri]);
-    return parseBgpPacket(updatePacket([pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, value)]));
+    return parseBgpPacket(updatePacket([pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, value), ...extraAttrs]));
 }
 
 function parseUpdateWithMpUnreach(afi, safi, nlri) {
@@ -61,6 +61,34 @@ function labelEntry(label, bottom = true) {
     return Buffer.from([(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
 }
 
+function evpnRaw24(value) {
+    return Buffer.from([(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
+}
+
+function encapsulationExtCommunity(tunnelType) {
+    return pathAttr(
+        BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES,
+        Buffer.concat([Buffer.from([0x03, 0x0c, 0, 0, 0, 0]), u16(tunnelType)]),
+        BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+    );
+}
+
+function tunnelEncapsulationAttr(tunnelType) {
+    return pathAttr(
+        BgpConst.BGP_PATH_ATTR.TUNNEL_ENCAPSULATION,
+        Buffer.concat([u16(tunnelType), u16(0)]),
+        BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+    );
+}
+
+function pmsiTunnelAttr(tunnelType, raw24, tunnelIdentifier = Buffer.alloc(0)) {
+    return pathAttr(
+        BgpConst.BGP_PATH_ATTR.PMSI_TUNNEL,
+        Buffer.concat([Buffer.from([0, tunnelType]), evpnRaw24(raw24), tunnelIdentifier]),
+        BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+    );
+}
+
 function tlv(type, value) {
     return Buffer.concat([u16(type), u16(value.length), value]);
 }
@@ -77,8 +105,15 @@ function evpnNlri(routeType, body) {
     return Buffer.concat([Buffer.from([routeType, body.length]), body]);
 }
 
+function evpnIpField(...octets) {
+    return Buffer.from([octets.length * 8, ...octets]);
+}
+
 const rd65000 = Buffer.from([0, 0, 0xfd, 0xe8, 0, 0, 0, 1]);
 const esi = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+const multicastSource = evpnIpField(192, 0, 2, 1);
+const multicastGroup = evpnIpField(239, 1, 1, 1);
+const originatorRouter = evpnIpField(10, 0, 0, 1);
 
 assert.equal(
     getAddrFamilyType(BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC),
@@ -100,9 +135,17 @@ assert.equal(
     getAddrFamilyType(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS),
     BgpConst.BGP_ADDR_FAMILY.LINK_STATE
 );
+assert.equal(
+    getAddrFamilyType(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN),
+    BgpConst.BGP_ADDR_FAMILY.LINK_STATE_VPN
+);
 assert.deepEqual(getAfiAndSafi(BgpConst.BGP_ADDR_FAMILY.LINK_STATE), {
     afi: BgpConst.BGP_AFI_TYPE.AFI_BGP_LS,
     safi: BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS
+});
+assert.deepEqual(getAfiAndSafi(BgpConst.BGP_ADDR_FAMILY.LINK_STATE_VPN), {
+    afi: BgpConst.BGP_AFI_TYPE.AFI_BGP_LS,
+    safi: BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN
 });
 assert.equal(getAfiAndSafi(BgpConst.BGP_ADDR_FAMILY.IPV4_QP).safi, 241);
 assert.equal(getAfiAndSafi(BgpConst.BGP_ADDR_FAMILY.IPV6_QP).safi, 241);
@@ -224,12 +267,15 @@ const vpnv4Packet = parseUpdateWithMpReach(
     BgpConst.BGP_AFI_TYPE.AFI_IPV4,
     BgpConst.BGP_SAFI_TYPE.SAFI_VPN,
     Buffer.concat([rd65000, Buffer.from([192, 0, 2, 254])]),
-    Buffer.concat([Buffer.from([112]), labelEntry(0), rd65000, Buffer.from([203, 0, 113])])
+    Buffer.concat([Buffer.from([112]), labelEntry(100), rd65000, Buffer.from([203, 0, 113])])
 );
 const vpnv4Route = firstReachRoute(vpnv4Packet);
 assert.equal(vpnv4Packet.pathAttributes[0].mpReach.nextHop, '192.0.2.254');
 assert.equal(vpnv4Route.prefix, '203.0.113.0');
-assert.equal(vpnv4Route.displayPrefix, '65000:1:203.0.113.0');
+assert.equal(vpnv4Route.displayPrefix, undefined);
+assert.equal(vpnv4Route.rd, '65000:1');
+assert.equal(vpnv4Route.labels[0].label, 100);
+assert.equal(vpnv4Route.labels[0].bottom, true);
 const vpnv4BmpRoute = {};
 new BmpSession({ sendEvent() {} }, {}).setRouteNlri(
     vpnv4BmpRoute,
@@ -237,7 +283,9 @@ new BmpSession({ sendEvent() {} }, {}).setRouteNlri(
     BgpConst.BGP_AFI_TYPE.AFI_IPV4,
     BgpConst.BGP_SAFI_TYPE.SAFI_VPN
 );
-assert.equal(vpnv4BmpRoute.ip, '65000:1:203.0.113.0');
+assert.equal(vpnv4BmpRoute.ip, '203.0.113.0');
+assert.equal(vpnv4BmpRoute.rd, '65000:1');
+assert.equal(vpnv4BmpRoute.labels, '100(BOS)');
 
 const vpnv6Packet = parseUpdateWithMpReach(
     BgpConst.BGP_AFI_TYPE.AFI_IPV6,
@@ -248,12 +296,24 @@ const vpnv6Packet = parseUpdateWithMpReach(
         rd65000,
         Buffer.from([0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
     ]),
-    Buffer.concat([Buffer.from([120]), labelEntry(0), rd65000, Buffer.from([0x20, 0x01, 0x0d, 0xb8])])
+    Buffer.concat([Buffer.from([120]), labelEntry(101), rd65000, Buffer.from([0x20, 0x01, 0x0d, 0xb8])])
 );
 const vpnv6Route = firstReachRoute(vpnv6Packet);
 assert.equal(vpnv6Packet.pathAttributes[0].mpReach.nextHop, '2001:db8::1, fe80::1');
 assert.equal(vpnv6Route.prefix, '2001:db8::');
-assert.equal(vpnv6Route.displayPrefix, '65000:1:2001:db8::');
+assert.equal(vpnv6Route.displayPrefix, undefined);
+assert.equal(vpnv6Route.rd, '65000:1');
+assert.equal(vpnv6Route.labels[0].label, 101);
+const vpnv6BmpRoute = {};
+new BmpSession({ sendEvent() {} }, {}).setRouteNlri(
+    vpnv6BmpRoute,
+    vpnv6Route,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+    BgpConst.BGP_SAFI_TYPE.SAFI_VPN
+);
+assert.equal(vpnv6BmpRoute.ip, '2001:db8::');
+assert.equal(vpnv6BmpRoute.rd, '65000:1');
+assert.equal(vpnv6BmpRoute.labels, '101(BOS)');
 
 const evpnEthernetAdPacket = parseUpdateWithMpReach(
     BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
@@ -290,6 +350,11 @@ assert.equal(evpnMacIp.valid, true);
 assert.equal(evpnMacIp.macAddress, 'aa:bb:cc:dd:ee:ff');
 assert.equal(evpnMacIp.ipAddress, '192.0.2.10');
 assert.equal(evpnMacIp.labels[0].label, 200);
+assert.equal(evpnMacIp.labels[0].mplsLabel, 200);
+assert.equal(evpnMacIp.labels[0].raw24, 3201);
+assert.equal(evpnMacIp.labels[0].vni, 3201);
+assert.equal(evpnMacIp.labels[0].type, 'unknown');
+assert.equal(evpnMacIp.labels[0].display, 'MPLS 200(BOS)/VNI 3201');
 assert.ok(evpnMacIp.prefix.includes('mac=aa:bb:cc:dd:ee:ff:ip=192.0.2.10'));
 const evpnBmpRoute = {};
 new BmpSession({ sendEvent() {} }, {}).setRouteNlri(
@@ -300,8 +365,69 @@ new BmpSession({ sendEvent() {} }, {}).setRouteNlri(
 );
 assert.equal(evpnBmpRoute.afi, BgpConst.BGP_AFI_TYPE.AFI_L2VPN);
 assert.equal(evpnBmpRoute.safi, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN);
+assert.equal(evpnBmpRoute.labels, 'MPLS 200(BOS)/VNI 3201');
 assert.equal(evpnBmpRoute.nlriDetail.macAddress, 'aa:bb:cc:dd:ee:ff');
 assert.equal(evpnBmpRoute.nlriDetail.ethernetTagId, 100);
+
+const evpnVxlanMacIpPacket = parseUpdateWithMpReach(
+    BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+    BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+    Buffer.alloc(0),
+    evpnNlri(
+        2,
+        Buffer.concat([
+            rd65000,
+            esi,
+            u32(100),
+            Buffer.from([48, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x11, 32, 192, 0, 2, 11]),
+            evpnRaw24(10000)
+        ])
+    ),
+    [encapsulationExtCommunity(8)]
+);
+const evpnVxlanExtCommunity = evpnVxlanMacIpPacket.pathAttributes
+    .find(item => item.typeCode === BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES)
+    .extCommunities.find(community => community.encapsulation);
+assert.equal(evpnVxlanExtCommunity.encapsulation.tunnelTypeName, 'VXLAN');
+const evpnVxlanMacIp = firstReachRoute(evpnVxlanMacIpPacket);
+assert.equal(evpnVxlanMacIp.encapsulationType, 'vni');
+assert.equal(evpnVxlanMacIp.labels[0].raw24, 10000);
+assert.equal(evpnVxlanMacIp.labels[0].mplsLabel, 625);
+assert.equal(evpnVxlanMacIp.labels[0].vni, 10000);
+assert.equal(evpnVxlanMacIp.labels[0].type, 'vni');
+assert.equal(evpnVxlanMacIp.labels[0].display, 'VNI 10000');
+const evpnVxlanBmpRoute = {};
+new BmpSession({ sendEvent() {} }, {}).setRouteNlri(
+    evpnVxlanBmpRoute,
+    evpnVxlanMacIp,
+    BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+    BgpConst.BGP_SAFI_TYPE.SAFI_EVPN
+);
+assert.equal(evpnVxlanBmpRoute.labels, 'VNI 10000');
+
+const evpnMplsTunnelAttrRoute = firstReachRoute(
+    parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+        Buffer.alloc(0),
+        evpnNlri(
+            2,
+            Buffer.concat([
+                rd65000,
+                esi,
+                u32(100),
+                Buffer.from([48, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x22, 32, 192, 0, 2, 12]),
+                labelEntry(201)
+            ])
+        ),
+        [tunnelEncapsulationAttr(10)]
+    )
+);
+assert.equal(evpnMplsTunnelAttrRoute.encapsulationType, 'mpls');
+assert.equal(evpnMplsTunnelAttrRoute.labels[0].label, 201);
+assert.equal(evpnMplsTunnelAttrRoute.labels[0].raw24, 3217);
+assert.equal(evpnMplsTunnelAttrRoute.labels[0].type, 'mpls');
+assert.equal(evpnMplsTunnelAttrRoute.labels[0].display, 'MPLS 201(BOS)');
 
 const evpnInclusiveMulticast = firstReachRoute(
     parseUpdateWithMpReach(
@@ -315,6 +441,21 @@ assert.equal(evpnInclusiveMulticast.valid, true);
 assert.equal(evpnInclusiveMulticast.originatingRouterIp, '10.0.0.1');
 assert.ok(evpnInclusiveMulticast.prefix.includes('evpn:imet:65000:1'));
 
+const evpnVxlanImetPacket = parseUpdateWithMpReach(
+    BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+    BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+    Buffer.alloc(0),
+    evpnNlri(3, Buffer.concat([rd65000, u32(100), Buffer.from([32, 10, 0, 0, 3])])),
+    [encapsulationExtCommunity(8), pmsiTunnelAttr(6, 10000, Buffer.from([10, 0, 0, 3]))]
+);
+const evpnVxlanImet = firstReachRoute(evpnVxlanImetPacket);
+const pmsiAttr = evpnVxlanImetPacket.pathAttributes.find(item => item.typeCode === BgpConst.BGP_PATH_ATTR.PMSI_TUNNEL);
+assert.equal(pmsiAttr.pmsiTunnel.tunnelTypeName, 'Ingress Replication');
+assert.equal(pmsiAttr.pmsiTunnel.label.display, 'VNI 10000');
+assert.equal(evpnVxlanImet.encapsulationType, 'vni');
+assert.equal(evpnVxlanImet.pmsiTunnel.label.raw24, 10000);
+assert.equal(evpnVxlanImet.labels[0].display, 'VNI 10000');
+
 const evpnEthernetSegment = firstReachRoute(
     parseUpdateWithMpReach(
         BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
@@ -327,40 +468,164 @@ assert.equal(evpnEthernetSegment.valid, true);
 assert.equal(evpnEthernetSegment.originatingRouterIp, '10.0.0.2');
 assert.ok(evpnEthernetSegment.prefix.includes('evpn:es:65000:1'));
 
-const evpnIpPrefix = firstReachRoute(
+const evpnIpPrefixPacket = parseUpdateWithMpReach(
+    BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+    BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+    Buffer.alloc(0),
+    evpnNlri(
+        5,
+        Buffer.concat([
+            rd65000,
+            esi,
+            u32(100),
+            Buffer.from([24, 203, 0, 113, 0, 192, 0, 2, 1]),
+            labelEntry(300)
+        ])
+    )
+);
+const evpnIpPrefix = firstReachRoute(evpnIpPrefixPacket);
+assert.equal(evpnIpPrefix.valid, true);
+assert.equal(evpnIpPrefix.ipPrefix, '203.0.113.0');
+assert.equal(evpnIpPrefix.length, 24);
+assert.equal(evpnIpPrefix.nlriLength, 34);
+assert.equal(evpnIpPrefix.gatewayIp, '192.0.2.1');
+assert.equal(evpnIpPrefix.labels[0].label, 300);
+assert.ok(evpnIpPrefix.prefix.includes('evpn:ip-prefix:65000:1:tag=100:203.0.113.0/24'));
+assert.ok(
+    getBgpPacketSummary(evpnIpPrefixPacket).includes(
+        'evpn:ip-prefix:65000:1:tag=100:203.0.113.0/24:gw=192.0.2.1/34'
+    )
+);
+
+const evpnSelectiveMulticast = firstReachRoute(
     parseUpdateWithMpReach(
         BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
         BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
         Buffer.alloc(0),
         evpnNlri(
-            5,
+            6,
+            Buffer.concat([rd65000, u32(100), multicastSource, multicastGroup, originatorRouter, Buffer.from([0x03])])
+        )
+    )
+);
+assert.equal(evpnSelectiveMulticast.valid, true);
+assert.equal(evpnSelectiveMulticast.routeTypeName, 'Selective Multicast Ethernet Tag');
+assert.equal(evpnSelectiveMulticast.ethernetTagId, 100);
+assert.equal(evpnSelectiveMulticast.sourceAddress, '192.0.2.1');
+assert.equal(evpnSelectiveMulticast.groupAddress, '239.1.1.1');
+assert.equal(evpnSelectiveMulticast.originatorRouterIp, '10.0.0.1');
+assert.equal(evpnSelectiveMulticast.flags, 0x03);
+assert.ok(evpnSelectiveMulticast.prefix.includes('evpn:smet:65000:1'));
+
+const evpnMembershipSync = firstReachRoute(
+    parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+        Buffer.alloc(0),
+        evpnNlri(
+            7,
             Buffer.concat([
                 rd65000,
                 esi,
                 u32(100),
-                Buffer.from([24, 203, 0, 113, 0, 192, 0, 2, 1]),
-                labelEntry(300)
+                multicastSource,
+                multicastGroup,
+                originatorRouter,
+                Buffer.from([0x02])
             ])
         )
     )
 );
-assert.equal(evpnIpPrefix.valid, true);
-assert.equal(evpnIpPrefix.ipPrefix, '203.0.113.0');
-assert.equal(evpnIpPrefix.length, 24);
-assert.equal(evpnIpPrefix.gatewayIp, '192.0.2.1');
-assert.equal(evpnIpPrefix.labels[0].label, 300);
-assert.ok(evpnIpPrefix.prefix.includes('evpn:ip-prefix:65000:1:tag=100:203.0.113.0/24'));
+assert.equal(evpnMembershipSync.valid, true);
+assert.equal(evpnMembershipSync.routeTypeName, 'Multicast Membership Report Synch');
+assert.equal(evpnMembershipSync.esi, '00:01:02:03:04:05:06:07:08:09');
+assert.equal(evpnMembershipSync.groupAddress, '239.1.1.1');
+assert.equal(evpnMembershipSync.flags, 0x02);
+assert.ok(evpnMembershipSync.prefix.includes('evpn:membership-sync:65000:1'));
+
+const evpnLeaveSync = firstReachRoute(
+    parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+        Buffer.alloc(0),
+        evpnNlri(
+            8,
+            Buffer.concat([
+                rd65000,
+                esi,
+                u32(100),
+                multicastSource,
+                multicastGroup,
+                originatorRouter,
+                u32(0),
+                Buffer.from([10, 0x01])
+            ])
+        )
+    )
+);
+assert.equal(evpnLeaveSync.valid, true);
+assert.equal(evpnLeaveSync.routeTypeName, 'Multicast Leave Synch');
+assert.equal(evpnLeaveSync.maximumResponseTime, 10);
+assert.equal(evpnLeaveSync.flags, 0x01);
+assert.ok(evpnLeaveSync.prefix.includes('evpn:leave-sync:65000:1'));
+
+const evpnPerRegionIpmsi = firstReachRoute(
+    parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+        Buffer.alloc(0),
+        evpnNlri(9, Buffer.concat([rd65000, u32(100), Buffer.from('0102030405060708', 'hex')]))
+    )
+);
+assert.equal(evpnPerRegionIpmsi.valid, true);
+assert.equal(evpnPerRegionIpmsi.routeTypeName, 'Per-Region I-PMSI A-D');
+assert.equal(evpnPerRegionIpmsi.regionId, '01:02:03:04:05:06:07:08');
+assert.equal(evpnPerRegionIpmsi.regionIdHex, '0102030405060708');
+assert.ok(evpnPerRegionIpmsi.prefix.includes('evpn:per-region-ipmsi:65000:1'));
+
+const evpnSPmsiBody = Buffer.concat([rd65000, u32(100), multicastSource, multicastGroup, originatorRouter]);
+const evpnSPmsi = firstReachRoute(
+    parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+        Buffer.alloc(0),
+        evpnNlri(10, evpnSPmsiBody)
+    )
+);
+assert.equal(evpnSPmsi.valid, true);
+assert.equal(evpnSPmsi.routeTypeName, 'S-PMSI A-D');
+assert.equal(evpnSPmsi.sourceAddress, '192.0.2.1');
+assert.equal(evpnSPmsi.groupAddress, '239.1.1.1');
+assert.ok(evpnSPmsi.prefix.includes('evpn:spmsi:65000:1'));
+
+const evpnLeafAd = firstReachRoute(
+    parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+        Buffer.alloc(0),
+        evpnNlri(11, Buffer.concat([evpnNlri(10, evpnSPmsiBody), evpnIpField(10, 0, 0, 2)]))
+    )
+);
+assert.equal(evpnLeafAd.valid, true);
+assert.equal(evpnLeafAd.routeTypeName, 'Leaf A-D');
+assert.equal(evpnLeafAd.rd, '65000:1');
+assert.equal(evpnLeafAd.routeKeyRouteType, 10);
+assert.equal(evpnLeafAd.routeKeyRouteTypeName, 'S-PMSI A-D');
+assert.equal(evpnLeafAd.routeKeyRoute.prefix, evpnSPmsi.prefix);
+assert.equal(evpnLeafAd.originatorRouterIp, '10.0.0.2');
+assert.ok(evpnLeafAd.prefix.includes('evpn:leaf-ad:key=evpn:spmsi:65000:1'));
 
 const unknownEvpnType = firstReachRoute(
     parseUpdateWithMpReach(
         BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
         BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
         Buffer.alloc(0),
-        evpnNlri(9, Buffer.from([1, 2, 3]))
+        evpnNlri(99, Buffer.from([1, 2, 3]))
     )
 );
 assert.equal(unknownEvpnType.prefix, '010203');
 assert.equal(unknownEvpnType.rd, null);
+assert.equal(unknownEvpnType.routeTypeName, 'Unknown (99)');
 assert.equal(unknownEvpnType.rawNlri, '010203');
 
 const nodeDescriptor = tlv(256, tlv(512, Buffer.from([0, 0, 0xfd, 0xe8])));
@@ -376,6 +641,30 @@ const bgpLsPrefix = firstReachRoute(
 assert.equal(bgpLsPrefix.valid, true);
 assert.equal(bgpLsPrefix.prefix, 'bgp-ls:IPv4 Prefix:203.0.113.0/24');
 assert.equal(bgpLsPrefix.length, 24);
+
+const bgpLsVpnPrefix = firstReachRoute(
+    parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_BGP_LS,
+        BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN,
+        Buffer.alloc(0),
+        bgpLsNlri(3, Buffer.concat([rd65000, bgpLsBody(3, [nodeDescriptor, ipv4Reachability])]))
+    )
+);
+assert.equal(bgpLsVpnPrefix.valid, true);
+assert.equal(bgpLsVpnPrefix.prefix, 'bgp-ls-vpn:IPv4 Prefix:203.0.113.0/24');
+assert.equal(bgpLsVpnPrefix.rd, '65000:1');
+assert.equal(bgpLsVpnPrefix.vpn, true);
+assert.equal(bgpLsVpnPrefix.length, 24);
+const bgpLsVpnBmpRoute = {};
+new BmpSession({ sendEvent() {} }, {}).setRouteNlri(
+    bgpLsVpnBmpRoute,
+    bgpLsVpnPrefix,
+    BgpConst.BGP_AFI_TYPE.AFI_BGP_LS,
+    BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN
+);
+assert.equal(bgpLsVpnBmpRoute.ip, 'bgp-ls-vpn:IPv4 Prefix:203.0.113.0/24');
+assert.equal(bgpLsVpnBmpRoute.rd, '65000:1');
+assert.equal(bgpLsVpnBmpRoute.safi, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN);
 
 const remoteNodeDescriptor = tlv(257, tlv(512, Buffer.from([0, 0, 0xfd, 0xe8])));
 const linkDescriptors = [
@@ -394,6 +683,18 @@ const bgpLsLink = firstReachRoute(
 );
 assert.equal(bgpLsLink.valid, true);
 assert.equal(bgpLsLink.prefix, 'bgp-ls:Link:10.0.0.1->10.0.0.2');
+
+const bgpLsVpnLink = firstReachRoute(
+    parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_BGP_LS,
+        BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN,
+        Buffer.alloc(0),
+        bgpLsNlri(2, Buffer.concat([rd65000, bgpLsBody(3, linkDescriptors)]))
+    )
+);
+assert.equal(bgpLsVpnLink.valid, true);
+assert.equal(bgpLsVpnLink.prefix, 'bgp-ls-vpn:Link:10.0.0.1->10.0.0.2');
+assert.equal(bgpLsVpnLink.rd, '65000:1');
 
 const unknownBgpLsType = firstReachRoute(
     parseUpdateWithMpReach(

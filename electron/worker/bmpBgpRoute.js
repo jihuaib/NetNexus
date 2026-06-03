@@ -1,4 +1,5 @@
 const { getAddrFamilyType } = require('../utils/bgpUtils');
+const { getBgpPacketSummary } = require('../utils/bgpPacketParser');
 const BmpConst = require('../const/bmpConst');
 
 class BmpBgpRoute {
@@ -50,6 +51,13 @@ class BmpBgpRoute {
         return { pathId, rd, ip, mask };
     }
 
+    getPacketSummary() {
+        if (this.bgpPacket && !Array.isArray(this.bgpPacket)) {
+            return getBgpPacketSummary(this.bgpPacket);
+        }
+        return null;
+    }
+
     getRouteInfo() {
         let addrFamilyType = null;
         if (this.afi && this.safi) {
@@ -78,6 +86,7 @@ class BmpBgpRoute {
             routeType: this.routeType,
             rawNlri: this.rawNlri,
             nlriDetail: this.nlriDetail,
+            summary: this.getPacketSummary(),
             parserValid: this.parserValid,
             parseErrors: this.parseErrors,
             parseWarnings: this.parseWarnings,

@@ -35,7 +35,8 @@ export const BGP_ADDR_FAMILY = {
     IPV6_FLOWSPEC: 11,
     IPV4_LABEL_UNICAST: 12,
     IPV6_LABEL_UNICAST: 13,
-    LINK_STATE: 14
+    LINK_STATE: 14,
+    LINK_STATE_VPN: 15
 };
 
 // IP Type Values, 需要和后台定义保持一致, 后台会
@@ -67,7 +68,8 @@ export const ADDRESS_FAMILY_NAME = {
     [BGP_ADDR_FAMILY.IPV6_FLOWSPEC]: 'IPv6 FlowSpec',
     [BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST]: 'IPv4 Label',
     [BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST]: 'IPv6 Label',
-    [BGP_ADDR_FAMILY.LINK_STATE]: 'Link-State'
+    [BGP_ADDR_FAMILY.LINK_STATE]: 'Link-State',
+    [BGP_ADDR_FAMILY.LINK_STATE_VPN]: 'Link-State VPN'
 };
 
 export const getAddrFamilyType = (afi, safi) => {
@@ -85,6 +87,7 @@ export const getAddrFamilyType = (afi, safi) => {
     if (afi === 2 && safi === 241) return BGP_ADDR_FAMILY.IPV6_QP;
     if (afi === 25 && safi === 70) return BGP_ADDR_FAMILY.L2VPN_EVPN;
     if (afi === 16388 && safi === 71) return BGP_ADDR_FAMILY.LINK_STATE;
+    if (afi === 16388 && safi === 72) return BGP_ADDR_FAMILY.LINK_STATE_VPN;
     return null;
 };
 

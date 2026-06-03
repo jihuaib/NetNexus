@@ -78,6 +78,8 @@ function getBgpSafiName(safi) {
             return 'MVPN';
         case BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS:
             return 'BGP-LS';
+        case BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN:
+            return 'BGP-LS-VPN';
         case BgpConst.BGP_SAFI_TYPE.SAFI_EVPN:
             return 'EVPN';
         case BgpConst.BGP_SAFI_TYPE.SAFI_VPN:
@@ -150,6 +152,10 @@ function getBgpPathAttrTypeName(typeCode) {
             return 'AS4_PATH';
         case BgpConst.BGP_PATH_ATTR.AS4_AGGREGATOR:
             return 'AS4_AGGREGATOR';
+        case BgpConst.BGP_PATH_ATTR.PMSI_TUNNEL:
+            return 'PMSI_TUNNEL';
+        case BgpConst.BGP_PATH_ATTR.TUNNEL_ENCAPSULATION:
+            return 'TUNNEL_ENCAPSULATION';
         case BgpConst.BGP_PATH_ATTR.PATH_OTC:
             return 'OTC';
         default:
@@ -362,6 +368,9 @@ function getAddrFamilyType(afi, safi) {
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.LINK_STATE;
             }
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN) {
+                addrFamily = BgpConst.BGP_ADDR_FAMILY.LINK_STATE_VPN;
+            }
             break;
     }
 
@@ -428,6 +437,10 @@ function getAfiAndSafi(addrFamily) {
         case BgpConst.BGP_ADDR_FAMILY.LINK_STATE:
             afi = BgpConst.BGP_AFI_TYPE.AFI_BGP_LS;
             safi = BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS;
+            break;
+        case BgpConst.BGP_ADDR_FAMILY.LINK_STATE_VPN:
+            afi = BgpConst.BGP_AFI_TYPE.AFI_BGP_LS;
+            safi = BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN;
             break;
     }
 

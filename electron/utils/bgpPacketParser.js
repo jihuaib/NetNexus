@@ -523,6 +523,7 @@ function parseFlowSpecNlri(buffer, position, afi) {
             prefix: formatted,
             rd: null,
             length: nlriLength,
+            nlriLength,
             components,
             rawNlri: nlriBuffer.toString('hex'),
             valid: errors.length === 0,
@@ -902,26 +903,29 @@ function findBgpLsTlv(tlvs, type) {
     return null;
 }
 
-function buildBgpLsRoutePrefix(nlriType, protocolId, identifier, tlvs) {
+function buildBgpLsRoutePrefix(nlriType, protocolId, identifier, tlvs, isVpn = false) {
+    const namespace = isVpn ? 'bgp-ls-vpn' : 'bgp-ls';
     const typeName = BGP_LS_NLRI_TYPE_NAMES[nlriType] || `Type ${nlriType}`;
     const protocolName = BGP_LS_PROTOCOL_NAMES[protocolId] || `Protocol ${protocolId}`;
     const reachability = findBgpLsTlv(tlvs, 265);
     if (reachability) {
-        return `bgp-ls:${typeName}:${reachability.value}`;
+        return `${namespace}:${typeName}:${reachability.value}`;
     }
 
     const localAddress = findBgpLsTlv(tlvs, 259) || findBgpLsTlv(tlvs, 261);
     const remoteAddress = findBgpLsTlv(tlvs, 260) || findBgpLsTlv(tlvs, 262);
     if (localAddress || remoteAddress) {
-        return `bgp-ls:${typeName}:${localAddress ? localAddress.value : '?'}->${remoteAddress ? remoteAddress.value : '?'}`;
+        return `${namespace}:${typeName}:${localAddress ? localAddress.value : '?'}->${
+            remoteAddress ? remoteAddress.value : '?'
+        }`;
     }
 
     const localNode = findBgpLsTlv(tlvs, 256);
     const nodeSummary = localNode && localNode.children ? localNode.children.map(child => child.value).join(',') : '';
-    return `bgp-ls:${typeName}:${protocolName}:id=${identifier}${nodeSummary ? `:${nodeSummary}` : ''}`;
+    return `${namespace}:${typeName}:${protocolName}:id=${identifier}${nodeSummary ? `:${nodeSummary}` : ''}`;
 }
 
-function parseBgpLsNlri(buffer, position) {
+function parseBgpLsNlri(buffer, position, hasRd = false) {
     const errors = [];
     const warnings = [];
     if (position + 4 > buffer.length) {
@@ -950,16 +954,29 @@ function parseBgpLsNlri(buffer, position) {
 
     const nlriEnd = Math.min(position + nlriLength, buffer.length);
     const rawNlri = buffer.subarray(position, nlriEnd);
+    let rd = null;
+    if (hasRd) {
+        if (position + BgpConst.BGP_RD_LEN <= nlriEnd) {
+            rd = rdBufferToString(buffer.subarray(position, position + BgpConst.BGP_RD_LEN));
+            position += BgpConst.BGP_RD_LEN;
+        } else {
+            errors.push('BGP-LS VPN RD is truncated');
+            position = nlriEnd;
+        }
+    }
+
     if (!BGP_LS_NLRI_TYPE_NAMES[nlriType]) {
         return {
             position: nlriEnd,
             route: {
-                prefix: `bgp-ls:type-${nlriType}:0x${rawNlri.toString('hex')}`,
-                rd: null,
+                prefix: `${hasRd ? 'bgp-ls-vpn' : 'bgp-ls'}:type-${nlriType}:0x${rawNlri.toString('hex')}`,
+                rd,
                 length: nlriLength * 8,
+                nlriLength,
                 routeType: nlriType,
                 descriptors: [],
                 rawNlri: rawNlri.toString('hex'),
+                vpn: hasRd,
                 valid: errors.length === 0,
                 errors,
                 warnings
@@ -990,21 +1007,25 @@ function parseBgpLsNlri(buffer, position) {
     if ((nlriType === 3 || nlriType === 4) && !reachability) {
         warnings.push('BGP-LS Prefix NLRI is missing IP Reachability TLV');
     }
-    const routePrefix = buildBgpLsRoutePrefix(nlriType, protocolId, identifier, tlvs);
-    const routeLength = reachability ? parseInt(reachability.value.split('/').pop(), 10) : nlriLength * 8;
+    const routePrefix = buildBgpLsRoutePrefix(nlriType, protocolId, identifier, tlvs, hasRd);
+    const routeLength = reachability
+        ? parseInt(reachability.value.split('/').pop(), 10)
+        : Math.max(nlriLength - (hasRd ? BgpConst.BGP_RD_LEN : 0), 0) * 8;
 
     return {
         position: nlriEnd,
         route: {
             prefix: routePrefix,
-            rd: null,
+            rd,
             length: routeLength,
+            nlriLength,
             routeType: nlriType,
             protocolId,
             protocol: BGP_LS_PROTOCOL_NAMES[protocolId] || protocolId,
             identifier,
             descriptors: tlvs,
             rawNlri: rawNlri.toString('hex'),
+            vpn: hasRd,
             valid: errors.length === 0,
             errors,
             warnings
@@ -1013,20 +1034,53 @@ function parseBgpLsNlri(buffer, position) {
 }
 
 function parseRouteDistinguisherNlri(buffer, position, afi) {
-    let prefixLength = buffer[position];
+    const errors = [];
+    const nlriBitLength = buffer[position];
     position += 1;
+    const valueStart = position;
+    const nlriEnd = position + Math.ceil(nlriBitLength / 8);
+    const boundedNlriEnd = Math.min(nlriEnd, buffer.length);
 
-    position += 3;
-    const rdBuffer = buffer.subarray(position, position + BgpConst.BGP_RD_LEN);
-    const rd = rdBufferToString(rdBuffer);
-    position += BgpConst.BGP_RD_LEN;
+    if (nlriEnd > buffer.length) {
+        errors.push('VPN NLRI length exceeds remaining buffer');
+    }
+    if (nlriBitLength < 24 + (BgpConst.BGP_RD_LEN << 3)) {
+        errors.push(`VPN NLRI length is too short: ${nlriBitLength}`);
+    }
 
-    prefixLength -= 3 << 3;
-    prefixLength -= BgpConst.BGP_RD_LEN << 3;
+    const { labels, labelBits, position: rdPosition } = parseMplsLabelStack(
+        buffer,
+        position,
+        nlriBitLength,
+        boundedNlriEnd
+    );
+    position = rdPosition;
+    if (labels.length === 0) {
+        errors.push('VPN NLRI has no MPLS label');
+    } else if (!labels[labels.length - 1].bottom) {
+        errors.push('VPN label stack does not contain bottom-of-stack bit');
+    }
 
+    let rd = null;
+    if (position + BgpConst.BGP_RD_LEN <= boundedNlriEnd) {
+        rd = rdBufferToString(buffer.subarray(position, position + BgpConst.BGP_RD_LEN));
+    } else {
+        errors.push('VPN RD is truncated');
+    }
+    position = Math.min(position + BgpConst.BGP_RD_LEN, boundedNlriEnd);
+
+    const prefixLength = Math.max(nlriBitLength - labelBits - (BgpConst.BGP_RD_LEN << 3), 0);
+    const maxPrefixLength =
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
+    if (prefixLength > maxPrefixLength) {
+        errors.push(`VPN prefix length ${prefixLength} exceeds AFI maximum ${maxPrefixLength}`);
+    }
     const prefixBytes = Math.ceil(prefixLength / 8);
-    const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-    position += prefixBytes;
+    if (position + prefixBytes > boundedNlriEnd) {
+        errors.push('VPN prefix is truncated');
+    }
+    const prefixBuffer = buffer.subarray(position, Math.min(position + prefixBytes, boundedNlriEnd));
+    position = Math.min(position + prefixBytes, boundedNlriEnd);
 
     const prefix =
         afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6
@@ -1037,9 +1091,13 @@ function parseRouteDistinguisherNlri(buffer, position, afi) {
         position,
         route: {
             prefix,
-            displayPrefix: `${rd}:${prefix}`,
             rd,
-            length: prefixLength
+            length: prefixLength,
+            labels,
+            nlriBits: nlriBitLength,
+            rawNlri: buffer.subarray(valueStart, boundedNlriEnd).toString('hex'),
+            valid: errors.length === 0,
+            errors
         }
     };
 }
@@ -1049,8 +1107,116 @@ const EVPN_ROUTE_TYPE_NAMES = {
     2: 'MAC/IP Advertisement',
     3: 'Inclusive Multicast Ethernet Tag',
     4: 'Ethernet Segment',
-    5: 'IP Prefix'
+    5: 'IP Prefix',
+    6: 'Selective Multicast Ethernet Tag',
+    7: 'Multicast Membership Report Synch',
+    8: 'Multicast Leave Synch',
+    9: 'Per-Region I-PMSI A-D',
+    10: 'S-PMSI A-D',
+    11: 'Leaf A-D'
 };
+
+const BGP_TUNNEL_TYPE = {
+    MPLS_IN_IP_WITH_IPSEC: 6,
+    VXLAN: 8,
+    NVGRE: 9,
+    MPLS: 10,
+    MPLS_IN_GRE: 11,
+    VXLAN_GPE: 12,
+    MPLS_IN_UDP: 13,
+    GENEVE: 19
+};
+
+const BGP_TUNNEL_TYPE_NAMES = {
+    0: 'Reserved',
+    1: 'L2TPv3 over IP',
+    2: 'GRE',
+    3: 'Transmit tunnel endpoint',
+    4: 'IPsec in Tunnel-mode',
+    5: 'IP in IP tunnel with IPsec Transport Mode',
+    [BGP_TUNNEL_TYPE.MPLS_IN_IP_WITH_IPSEC]: 'MPLS-in-IP tunnel with IPsec Transport Mode',
+    7: 'IP in IP',
+    [BGP_TUNNEL_TYPE.VXLAN]: 'VXLAN',
+    [BGP_TUNNEL_TYPE.NVGRE]: 'NVGRE',
+    [BGP_TUNNEL_TYPE.MPLS]: 'MPLS',
+    [BGP_TUNNEL_TYPE.MPLS_IN_GRE]: 'MPLS in GRE',
+    [BGP_TUNNEL_TYPE.VXLAN_GPE]: 'VXLAN GPE',
+    [BGP_TUNNEL_TYPE.MPLS_IN_UDP]: 'MPLS in UDP',
+    14: 'IPv6 Tunnel',
+    15: 'SR Policy',
+    16: 'Bare',
+    17: 'SR Tunnel',
+    18: 'Cloud Security',
+    [BGP_TUNNEL_TYPE.GENEVE]: 'Geneve',
+    20: 'Any-Encapsulation',
+    21: 'GTP',
+    22: 'Dynamic Path Selection',
+    23: 'Originating PE',
+    24: 'Dynamic Path Selection Policy',
+    25: 'SDWAN-Hybrid',
+    26: 'X-over-UDP',
+    27: 'Distributed Etherlink Switch',
+    28: 'ESP-Protected-Payload'
+};
+
+const EVPN_VNI_TUNNEL_TYPES = new Set([
+    BGP_TUNNEL_TYPE.VXLAN,
+    BGP_TUNNEL_TYPE.NVGRE,
+    BGP_TUNNEL_TYPE.VXLAN_GPE,
+    BGP_TUNNEL_TYPE.GENEVE
+]);
+
+const EVPN_MPLS_TUNNEL_TYPES = new Set([
+    BGP_TUNNEL_TYPE.MPLS_IN_IP_WITH_IPSEC,
+    BGP_TUNNEL_TYPE.MPLS,
+    BGP_TUNNEL_TYPE.MPLS_IN_GRE,
+    BGP_TUNNEL_TYPE.MPLS_IN_UDP
+]);
+
+const PMSI_TUNNEL_TYPE_NAMES = {
+    0: 'No tunnel information',
+    1: 'RSVP-TE P2MP LSP',
+    2: 'mLDP P2MP LSP',
+    3: 'PIM-SSM Tree',
+    4: 'PIM-SM Tree',
+    5: 'BIDIR-PIM Tree',
+    6: 'Ingress Replication',
+    7: 'mLDP MP2MP LSP'
+};
+
+const EXT_COMMUNITY_TYPE_TRANSITIVE_OPAQUE = 0x03;
+const EXT_COMMUNITY_TYPE_NON_TRANSITIVE_OPAQUE = 0x43;
+const EXT_COMMUNITY_SUB_TYPE_ENCAPSULATION = 0x0c;
+
+function getBgpTunnelTypeName(tunnelType) {
+    return BGP_TUNNEL_TYPE_NAMES[tunnelType] || `Unknown (${tunnelType})`;
+}
+
+function getPmsiTunnelTypeName(tunnelType) {
+    return PMSI_TUNNEL_TYPE_NAMES[tunnelType] || `Unknown (${tunnelType})`;
+}
+
+function getEvpnLabelTypeForTunnel(tunnelType) {
+    if (EVPN_VNI_TUNNEL_TYPES.has(tunnelType)) {
+        return 'vni';
+    }
+    if (EVPN_MPLS_TUNNEL_TYPES.has(tunnelType)) {
+        return 'mpls';
+    }
+    return 'unknown';
+}
+
+function buildBgpTunnelEncapsulation(tunnelType, source) {
+    const labelType = getEvpnLabelTypeForTunnel(tunnelType);
+    return {
+        source,
+        tunnelType,
+        tunnelTypeName: getBgpTunnelTypeName(tunnelType),
+        labelType,
+        isVni: labelType === 'vni',
+        isMpls: labelType === 'mpls'
+    };
+}
 
 function readEvpnRd(buffer, position, errors) {
     if (position + BgpConst.BGP_RD_LEN > buffer.length) {
@@ -1089,6 +1255,46 @@ function formatMacAddress(buffer) {
     return formatColonHex(buffer);
 }
 
+function formatEvpnLabel(label, labelType) {
+    const mplsText = `MPLS ${label.mplsLabel}${label.bottom ? '(BOS)' : ''}`;
+    if (labelType === 'vni') {
+        return `VNI ${label.vni}`;
+    }
+    if (labelType === 'mpls') {
+        return mplsText;
+    }
+    return `${mplsText}/VNI ${label.vni}`;
+}
+
+function annotateEvpnLabel(label, encapsulation) {
+    if (!label) {
+        return null;
+    }
+
+    const labelType = encapsulation?.labelType || 'unknown';
+    return {
+        ...label,
+        type: labelType,
+        interpretation: labelType,
+        display: formatEvpnLabel(label, labelType)
+    };
+}
+
+function buildEvpnLabel(raw24) {
+    const mplsLabel = raw24 >> 4;
+    const label = {
+        label: mplsLabel,
+        mplsLabel,
+        vni: raw24,
+        raw24,
+        rawHex: raw24.toString(16).padStart(6, '0'),
+        exp: (raw24 >> 1) & 0x07,
+        bottom: (raw24 & 0x01) === 1
+    };
+
+    return annotateEvpnLabel(label, null);
+}
+
 function readEvpnUint32(buffer, position, fieldName, errors) {
     if (position + 4 > buffer.length) {
         errors.push(`EVPN ${fieldName} is truncated`);
@@ -1104,6 +1310,21 @@ function readEvpnUint32(buffer, position, fieldName, errors) {
     };
 }
 
+function readEvpnUint8(buffer, position, fieldName, errors) {
+    if (position >= buffer.length) {
+        errors.push(`EVPN ${fieldName} is truncated`);
+        return {
+            value: null,
+            position: buffer.length
+        };
+    }
+
+    return {
+        value: buffer[position],
+        position: position + 1
+    };
+}
+
 function readEvpnLabel(buffer, position, fieldName, errors) {
     if (position + 3 > buffer.length) {
         errors.push(`EVPN ${fieldName} is truncated`);
@@ -1115,13 +1336,54 @@ function readEvpnLabel(buffer, position, fieldName, errors) {
 
     const entry = (buffer[position] << 16) | (buffer[position + 1] << 8) | buffer[position + 2];
     return {
-        label: {
-            label: entry >> 4,
-            exp: (entry >> 1) & 0x07,
-            bottom: (entry & 0x01) === 1
-        },
+        label: buildEvpnLabel(entry),
         position: position + 3
     };
+}
+
+function readEvpnIpAddressField(buffer, position, fieldName, errors) {
+    const lengthResult = readEvpnUint8(buffer, position, `${fieldName} Length`, errors);
+    if (lengthResult.value === null) {
+        return {
+            length: null,
+            ip: null,
+            position: lengthResult.position
+        };
+    }
+
+    const ipResult = parseEvpnIpByLength(buffer, lengthResult.position, lengthResult.value, fieldName, errors);
+    return {
+        length: lengthResult.value,
+        ip: ipResult.ip,
+        position: ipResult.position
+    };
+}
+
+function parseEvpnMulticastSourceGroupOrigin(buffer, position, errors) {
+    const sourceResult = readEvpnIpAddressField(buffer, position, 'Multicast Source Address', errors);
+    position = sourceResult.position;
+    const groupResult = readEvpnIpAddressField(buffer, position, 'Multicast Group Address', errors);
+    position = groupResult.position;
+    const originatorResult = readEvpnIpAddressField(buffer, position, 'Originator Router Address', errors);
+    position = originatorResult.position;
+
+    return {
+        position,
+        fields: {
+            sourceLength: sourceResult.length,
+            sourceAddress: sourceResult.ip,
+            groupLength: groupResult.length,
+            groupAddress: groupResult.ip,
+            originatorLength: originatorResult.length,
+            originatorRouterIp: originatorResult.ip
+        }
+    };
+}
+
+function addEvpnTrailingByteError(buffer, position, routeName, errors) {
+    if (position !== buffer.length) {
+        errors.push(`EVPN ${routeName} route has trailing bytes`);
+    }
 }
 
 function parseEvpnIpByLength(buffer, position, bitLength, fieldName, errors) {
@@ -1179,6 +1441,7 @@ function buildEvpnRoute(routeType, routeLength, routeValue, parsed) {
         prefix: parsed.prefix,
         rd: parsed.rd || null,
         length: parsed.length,
+        nlriLength: routeLength,
         routeType,
         routeTypeName: EVPN_ROUTE_TYPE_NAMES[routeType] || `Unknown (${routeType})`,
         rawNlri: routeValue.toString('hex'),
@@ -1421,6 +1684,298 @@ function parseEvpnIpPrefixRoute(routeType, routeLength, routeValue) {
     });
 }
 
+function parseEvpnSelectiveMulticastEthernetTagRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const tagResult = readEvpnUint32(routeValue, position, 'Ethernet Tag ID', errors);
+    position = tagResult.position;
+    const multicastResult = parseEvpnMulticastSourceGroupOrigin(routeValue, position, errors);
+    position = multicastResult.position;
+    const flagsResult = readEvpnUint8(routeValue, position, 'Flags', errors);
+    position = flagsResult.position;
+    addEvpnTrailingByteError(routeValue, position, 'Selective Multicast Ethernet Tag', errors);
+
+    const rd = rdResult.rd;
+    const ethernetTagId = tagResult.value;
+    const source = multicastResult.fields.sourceAddress || '*';
+    const group = multicastResult.fields.groupAddress || '?';
+    const originator = multicastResult.fields.originatorRouterIp || '?';
+    const prefix = `evpn:smet:${rd || '?'}:tag=${ethernetTagId ?? '?'}:source=${source}:group=${group}:origin=${originator}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            ethernetTagId,
+            ...multicastResult.fields,
+            flags: flagsResult.value
+        }
+    });
+}
+
+function parseEvpnMulticastMembershipReportSynchRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const esiResult = readEvpnBytes(routeValue, position, 10, 'ESI', errors);
+    position = esiResult.position;
+    const tagResult = readEvpnUint32(routeValue, position, 'Ethernet Tag ID', errors);
+    position = tagResult.position;
+    const multicastResult = parseEvpnMulticastSourceGroupOrigin(routeValue, position, errors);
+    position = multicastResult.position;
+    const flagsResult = readEvpnUint8(routeValue, position, 'Flags', errors);
+    position = flagsResult.position;
+    addEvpnTrailingByteError(routeValue, position, 'Multicast Membership Report Synch', errors);
+
+    const rd = rdResult.rd;
+    const esi = formatColonHex(esiResult.value);
+    const ethernetTagId = tagResult.value;
+    const source = multicastResult.fields.sourceAddress || '*';
+    const group = multicastResult.fields.groupAddress || '?';
+    const originator = multicastResult.fields.originatorRouterIp || '?';
+    const prefix = `evpn:membership-sync:${rd || '?'}:esi=${esi || '?'}:tag=${ethernetTagId ?? '?'}:source=${source}:group=${group}:origin=${originator}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            esi,
+            ethernetTagId,
+            ...multicastResult.fields,
+            flags: flagsResult.value
+        }
+    });
+}
+
+function parseEvpnMulticastLeaveSynchRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const esiResult = readEvpnBytes(routeValue, position, 10, 'ESI', errors);
+    position = esiResult.position;
+    const tagResult = readEvpnUint32(routeValue, position, 'Ethernet Tag ID', errors);
+    position = tagResult.position;
+    const multicastResult = parseEvpnMulticastSourceGroupOrigin(routeValue, position, errors);
+    position = multicastResult.position;
+    const reservedResult = readEvpnUint32(routeValue, position, 'Reserved', errors);
+    position = reservedResult.position;
+    const maximumResponseTimeResult = readEvpnUint8(routeValue, position, 'Maximum Response Time', errors);
+    position = maximumResponseTimeResult.position;
+    const flagsResult = readEvpnUint8(routeValue, position, 'Flags', errors);
+    position = flagsResult.position;
+    addEvpnTrailingByteError(routeValue, position, 'Multicast Leave Synch', errors);
+
+    const rd = rdResult.rd;
+    const esi = formatColonHex(esiResult.value);
+    const ethernetTagId = tagResult.value;
+    const source = multicastResult.fields.sourceAddress || '*';
+    const group = multicastResult.fields.groupAddress || '?';
+    const originator = multicastResult.fields.originatorRouterIp || '?';
+    const prefix = `evpn:leave-sync:${rd || '?'}:esi=${esi || '?'}:tag=${ethernetTagId ?? '?'}:source=${source}:group=${group}:origin=${originator}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            esi,
+            ethernetTagId,
+            ...multicastResult.fields,
+            reserved: reservedResult.value,
+            maximumResponseTime: maximumResponseTimeResult.value,
+            flags: flagsResult.value
+        }
+    });
+}
+
+function parseEvpnPerRegionIPmsiAdRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    if (routeLength !== 20) {
+        errors.push(`EVPN Per-Region I-PMSI A-D route length must be 20 octets: ${routeLength}`);
+    }
+
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const tagResult = readEvpnUint32(routeValue, position, 'Ethernet Tag ID', errors);
+    position = tagResult.position;
+    const regionResult = readEvpnBytes(routeValue, position, 8, 'Region ID', errors);
+    position = regionResult.position;
+    addEvpnTrailingByteError(routeValue, position, 'Per-Region I-PMSI A-D', errors);
+
+    const rd = rdResult.rd;
+    const ethernetTagId = tagResult.value;
+    const regionId = formatColonHex(regionResult.value);
+    const prefix = `evpn:per-region-ipmsi:${rd || '?'}:tag=${ethernetTagId ?? '?'}:region=${regionId || '?'}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            ethernetTagId,
+            regionId,
+            regionIdHex: regionResult.value.toString('hex')
+        }
+    });
+}
+
+function parseEvpnSPmsiAdRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    let position = 0;
+    const rdResult = readEvpnRd(routeValue, position, errors);
+    position = rdResult.position;
+    const tagResult = readEvpnUint32(routeValue, position, 'Ethernet Tag ID', errors);
+    position = tagResult.position;
+    const multicastResult = parseEvpnMulticastSourceGroupOrigin(routeValue, position, errors);
+    position = multicastResult.position;
+    addEvpnTrailingByteError(routeValue, position, 'S-PMSI A-D', errors);
+
+    const rd = rdResult.rd;
+    const ethernetTagId = tagResult.value;
+    const source = multicastResult.fields.sourceAddress || '*';
+    const group = multicastResult.fields.groupAddress || '?';
+    const originator = multicastResult.fields.originatorRouterIp || '?';
+    const prefix = `evpn:spmsi:${rd || '?'}:tag=${ethernetTagId ?? '?'}:source=${source}:group=${group}:origin=${originator}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            ethernetTagId,
+            ...multicastResult.fields
+        }
+    });
+}
+
+function findEvpnLeafAdOriginator(routeValue) {
+    const candidates = [
+        { bitLength: BgpConst.IP_HOST_LEN, byteLength: BgpConst.IP_HOST_BYTE_LEN },
+        { bitLength: BgpConst.IPV6_HOST_LEN, byteLength: BgpConst.IPV6_HOST_BYTE_LEN }
+    ]
+        .map(candidate => {
+            const lengthPosition = routeValue.length - candidate.byteLength - 1;
+            if (lengthPosition < 0 || routeValue[lengthPosition] !== candidate.bitLength) {
+                return null;
+            }
+
+            const routeKey = routeValue.subarray(0, lengthPosition);
+            return {
+                ...candidate,
+                lengthPosition,
+                routeKeyLooksLikeEvpnNlri: routeKey.length >= 2 && routeKey[1] + 2 === routeKey.length
+            };
+        })
+        .filter(Boolean);
+
+    if (candidates.length === 0) {
+        return null;
+    }
+
+    candidates.sort((a, b) => {
+        const evpnScore = Number(b.routeKeyLooksLikeEvpnNlri) - Number(a.routeKeyLooksLikeEvpnNlri);
+        if (evpnScore !== 0) {
+            return evpnScore;
+        }
+        return a.byteLength - b.byteLength;
+    });
+
+    return candidates[0];
+}
+
+function buildEvpnLeafAdRouteKeyFields(routeKey, errors) {
+    const fields = {
+        routeKeyHex: routeKey.toString('hex')
+    };
+
+    if (routeKey.length < 2) {
+        return fields;
+    }
+
+    const routeKeyRouteType = routeKey[0];
+    const routeKeyRouteLength = routeKey[1];
+    fields.routeKeyRouteType = routeKeyRouteType;
+    fields.routeKeyRouteTypeName = EVPN_ROUTE_TYPE_NAMES[routeKeyRouteType] || `Unknown (${routeKeyRouteType})`;
+    fields.routeKeyRouteLength = routeKeyRouteLength;
+
+    if (routeKeyRouteLength + 2 !== routeKey.length) {
+        errors.push(`EVPN Leaf A-D route key length is inconsistent: ${routeKeyRouteLength}`);
+        return fields;
+    }
+
+    if (routeKeyRouteType !== 11) {
+        const keyRoute = parseEvpnNlri(routeKey, 0).route;
+        fields.routeKeyPrefix = keyRoute.prefix;
+        fields.routeKeyRoute = {
+            prefix: keyRoute.prefix,
+            rd: keyRoute.rd,
+            routeType: keyRoute.routeType,
+            routeTypeName: keyRoute.routeTypeName,
+            length: keyRoute.length,
+            valid: keyRoute.valid !== false,
+            errors: keyRoute.errors || []
+        };
+    }
+
+    return fields;
+}
+
+function parseEvpnLeafAdRoute(routeType, routeLength, routeValue) {
+    const errors = [];
+    const originator = findEvpnLeafAdOriginator(routeValue);
+    let routeKey = routeValue;
+    let originatorLength = null;
+    let originatorRouterIp = null;
+    let position = routeValue.length;
+
+    if (originator) {
+        routeKey = routeValue.subarray(0, originator.lengthPosition);
+        originatorLength = originator.bitLength;
+        const originatorResult = parseEvpnIpByLength(
+            routeValue,
+            originator.lengthPosition + 1,
+            originator.bitLength,
+            'Originator Router Address',
+            errors
+        );
+        originatorRouterIp = originatorResult.ip;
+        position = originatorResult.position;
+    } else {
+        errors.push('EVPN Leaf A-D originator address length is unsupported or truncated');
+    }
+
+    addEvpnTrailingByteError(routeValue, position, 'Leaf A-D', errors);
+    const routeKeyFields = buildEvpnLeafAdRouteKeyFields(routeKey, errors);
+    const rd = routeKeyFields.routeKeyRoute?.rd || null;
+    const keyText = routeKeyFields.routeKeyPrefix || routeKeyFields.routeKeyHex || '?';
+    const prefix = `evpn:leaf-ad:key=${keyText}:origin=${originatorRouterIp || '?'}`;
+
+    return buildEvpnRoute(routeType, routeLength, routeValue, {
+        prefix,
+        rd,
+        length: routeLength,
+        errors,
+        fields: {
+            routeKeyLength: routeKey.length,
+            ...routeKeyFields,
+            originatorLength,
+            originatorRouterIp
+        }
+    });
+}
+
 function parseEvpnNlri(buffer, position) {
     const routeType = buffer[position];
     position += 1;
@@ -1456,6 +2011,36 @@ function parseEvpnNlri(buffer, position) {
                 position,
                 route: parseEvpnIpPrefixRoute(routeType, routeLength, routeValue)
             };
+        case 6:
+            return {
+                position,
+                route: parseEvpnSelectiveMulticastEthernetTagRoute(routeType, routeLength, routeValue)
+            };
+        case 7:
+            return {
+                position,
+                route: parseEvpnMulticastMembershipReportSynchRoute(routeType, routeLength, routeValue)
+            };
+        case 8:
+            return {
+                position,
+                route: parseEvpnMulticastLeaveSynchRoute(routeType, routeLength, routeValue)
+            };
+        case 9:
+            return {
+                position,
+                route: parseEvpnPerRegionIPmsiAdRoute(routeType, routeLength, routeValue)
+            };
+        case 10:
+            return {
+                position,
+                route: parseEvpnSPmsiAdRoute(routeType, routeLength, routeValue)
+            };
+        case 11:
+            return {
+                position,
+                route: parseEvpnLeafAdRoute(routeType, routeLength, routeValue)
+            };
     }
 
     return {
@@ -1464,7 +2049,9 @@ function parseEvpnNlri(buffer, position) {
             prefix: routeValue.toString('hex'),
             rd: null,
             length: routeLength,
+            nlriLength: routeLength,
             routeType,
+            routeTypeName: EVPN_ROUTE_TYPE_NAMES[routeType] || `Unknown (${routeType})`,
             rawNlri: routeValue.toString('hex')
         }
     };
@@ -1507,6 +2094,7 @@ function parseFallbackNlri(buffer, position) {
             prefix: routeValue.toString('hex'),
             rd: null,
             length: routeLength,
+            nlriLength: routeLength,
             routeType,
             rawNlri: routeValue.toString('hex')
         }
@@ -1550,8 +2138,11 @@ function parseNlriEntry(buffer, position, afi, safi, isWithdrawn = false) {
         return parseFlowSpecNlri(buffer, position, afi);
     }
 
-    if (afi === BgpConst.BGP_AFI_TYPE.AFI_BGP_LS && safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS) {
-        return parseBgpLsNlri(buffer, position);
+    if (
+        afi === BgpConst.BGP_AFI_TYPE.AFI_BGP_LS &&
+        (safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS || safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN)
+    ) {
+        return parseBgpLsNlri(buffer, position, safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN);
     }
 
     if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
@@ -1783,6 +2374,7 @@ function parseUpdateMessage(buffer, context) {
     const pathAttributesEnd = position + pathAttributesLength;
     const { pathAttributes, nextPosition } = parsePathAttributes(buffer, position, pathAttributesEnd, context);
     position = nextPosition;
+    annotateEvpnPathAttributes(pathAttributes);
     const attributeErrors = [];
     pathAttributes.forEach(attr => {
         if (attr.valid === false && Array.isArray(attr.errors)) {
@@ -1936,6 +2528,18 @@ function parsePathAttributes(buffer, startPosition, endPosition, context) {
                 attribute.extCommunities = parseExtCommunities(attributeValue);
                 break;
             }
+            case BgpConst.BGP_PATH_ATTR.PMSI_TUNNEL: {
+                attribute.pmsiTunnel = parsePmsiTunnelAttribute(attributeValue);
+                attribute.valid = attribute.pmsiTunnel.valid;
+                attribute.errors = attribute.pmsiTunnel.errors;
+                break;
+            }
+            case BgpConst.BGP_PATH_ATTR.TUNNEL_ENCAPSULATION: {
+                attribute.tunnelEncapsulation = parseTunnelEncapsulationAttribute(attributeValue);
+                attribute.valid = attribute.tunnelEncapsulation.valid;
+                attribute.errors = attribute.tunnelEncapsulation.errors;
+                break;
+            }
             case BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI: {
                 // MP_REACH_NLRI
                 attribute.mpReach = parseMpReachNlri(attributeValue, context);
@@ -2070,12 +2674,224 @@ function parseExtCommunities(buffer) {
 
     for (let i = 0; i < buffer.length; i += 8) {
         const subBuffer = buffer.subarray(i, i + 8);
-        extCommunities.push({
-            formatted: extCommunitiesBufferToString(subBuffer)
-        });
+        if (subBuffer.length !== 8) {
+            extCommunities.push({
+                rawHex: subBuffer.toString('hex'),
+                valid: false,
+                formatted: `truncated(${subBuffer.toString('hex')})`
+            });
+            continue;
+        }
+
+        const type = subBuffer[0];
+        const subType = subBuffer[1];
+        const community = {
+            type,
+            subType,
+            rawHex: subBuffer.toString('hex'),
+            valueHex: subBuffer.subarray(2).toString('hex'),
+            valid: true
+        };
+
+        try {
+            community.formatted = extCommunitiesBufferToString(subBuffer);
+        } catch (error) {
+            community.formatted = `unknown(${type}|${subType})`;
+            community.error = error.message;
+        }
+
+        const isEncapsulation =
+            (type === EXT_COMMUNITY_TYPE_TRANSITIVE_OPAQUE || type === EXT_COMMUNITY_TYPE_NON_TRANSITIVE_OPAQUE) &&
+            subType === EXT_COMMUNITY_SUB_TYPE_ENCAPSULATION;
+        if (isEncapsulation) {
+            const tunnelType = subBuffer.readUInt16BE(6);
+            community.encapsulation = buildBgpTunnelEncapsulation(tunnelType, 'extended-community');
+            community.formatted = `Encapsulation ${community.encapsulation.tunnelTypeName} (${tunnelType})`;
+        }
+
+        extCommunities.push(community);
     }
 
     return extCommunities;
+}
+
+function parsePmsiTunnelAttribute(buffer) {
+    const errors = [];
+    if (buffer.length < 5) {
+        errors.push(`PMSI Tunnel attribute is truncated: ${buffer.length} octets`);
+        return {
+            valid: false,
+            errors,
+            flags: buffer.length > 0 ? buffer[0] : null,
+            tunnelType: buffer.length > 1 ? buffer[1] : null,
+            tunnelTypeName: buffer.length > 1 ? getPmsiTunnelTypeName(buffer[1]) : null,
+            label: null,
+            labelPresent: false,
+            tunnelIdentifierHex: buffer.length > 2 ? buffer.subarray(2).toString('hex') : ''
+        };
+    }
+
+    const raw24 = (buffer[2] << 16) | (buffer[3] << 8) | buffer[4];
+    const label = buildEvpnLabel(raw24);
+    return {
+        valid: true,
+        errors,
+        flags: buffer[0],
+        tunnelType: buffer[1],
+        tunnelTypeName: getPmsiTunnelTypeName(buffer[1]),
+        label,
+        labelPresent: raw24 !== 0,
+        tunnelIdentifierHex: buffer.subarray(5).toString('hex')
+    };
+}
+
+function parseTunnelEncapsulationAttribute(buffer) {
+    const tlvs = [];
+    const errors = [];
+    let position = 0;
+
+    while (position < buffer.length) {
+        if (position + 4 > buffer.length) {
+            errors.push(`Tunnel Encapsulation TLV header is truncated at offset ${position}`);
+            break;
+        }
+
+        const tunnelType = buffer.readUInt16BE(position);
+        position += 2;
+        const length = buffer.readUInt16BE(position);
+        position += 2;
+        if (position + length > buffer.length) {
+            errors.push(`Tunnel Encapsulation TLV ${tunnelType} length exceeds attribute: ${length}`);
+            break;
+        }
+
+        const value = buffer.subarray(position, position + length);
+        position += length;
+        tlvs.push({
+            ...buildBgpTunnelEncapsulation(tunnelType, 'tunnel-encapsulation-attribute'),
+            length,
+            valueHex: value.toString('hex')
+        });
+    }
+
+    return {
+        tlvs,
+        valid: errors.length === 0,
+        errors
+    };
+}
+
+function buildEvpnEncapsulationSummary(pathAttributes) {
+    const encapsulations = [];
+
+    pathAttributes.forEach(attr => {
+        if (Array.isArray(attr.extCommunities)) {
+            attr.extCommunities.forEach(community => {
+                if (community.encapsulation) {
+                    encapsulations.push(community.encapsulation);
+                }
+            });
+        }
+
+        if (Array.isArray(attr.tunnelEncapsulation?.tlvs)) {
+            encapsulations.push(...attr.tunnelEncapsulation.tlvs);
+        }
+    });
+
+    if (encapsulations.length === 0) {
+        return null;
+    }
+
+    const uniqueByTunnelType = new Map();
+    encapsulations.forEach(encapsulation => {
+        uniqueByTunnelType.set(encapsulation.tunnelType, encapsulation);
+    });
+    const uniqueEncapsulations = Array.from(uniqueByTunnelType.values());
+    const hasVni = uniqueEncapsulations.some(encapsulation => encapsulation.labelType === 'vni');
+    const hasMpls = uniqueEncapsulations.some(encapsulation => encapsulation.labelType === 'mpls');
+    const hasUnknown = uniqueEncapsulations.some(encapsulation => encapsulation.labelType === 'unknown');
+    const labelType = hasVni && !hasMpls && !hasUnknown ? 'vni' : hasMpls && !hasVni && !hasUnknown ? 'mpls' : 'unknown';
+
+    return {
+        labelType,
+        isVni: labelType === 'vni',
+        isMpls: labelType === 'mpls',
+        tunnelType: uniqueEncapsulations.length === 1 ? uniqueEncapsulations[0].tunnelType : null,
+        tunnelTypeName: uniqueEncapsulations.length === 1 ? uniqueEncapsulations[0].tunnelTypeName : null,
+        tunnelTypes: uniqueEncapsulations.map(encapsulation => encapsulation.tunnelType),
+        tunnelTypeNames: uniqueEncapsulations.map(encapsulation => encapsulation.tunnelTypeName),
+        encapsulations: uniqueEncapsulations
+    };
+}
+
+function annotatePmsiTunnel(pmsiTunnel, encapsulation) {
+    if (!pmsiTunnel) {
+        return null;
+    }
+
+    const annotated = {
+        ...pmsiTunnel,
+        label: annotateEvpnLabel(pmsiTunnel.label, encapsulation)
+    };
+    annotated.labels = annotated.labelPresent && annotated.label ? [annotated.label] : [];
+    return annotated;
+}
+
+function annotateEvpnRoute(route, encapsulation, pmsiTunnel) {
+    if (!route || route.routeType === undefined) {
+        return;
+    }
+
+    if (encapsulation) {
+        route.encapsulation = encapsulation;
+        route.encapsulationType = encapsulation.labelType;
+    }
+
+    if (pmsiTunnel && route.routeType === 3) {
+        route.pmsiTunnel = annotatePmsiTunnel(pmsiTunnel, encapsulation);
+        if ((!Array.isArray(route.labels) || route.labels.length === 0) && route.pmsiTunnel.labels.length > 0) {
+            route.labels = route.pmsiTunnel.labels;
+        }
+    }
+
+    if (Array.isArray(route.labels)) {
+        route.labels = route.labels.map(label => annotateEvpnLabel(label, encapsulation));
+    }
+}
+
+function annotateEvpnNlriList(nlriList, afi, safi, encapsulation, pmsiTunnel) {
+    if (afi !== BgpConst.BGP_AFI_TYPE.AFI_L2VPN || safi !== BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) {
+        return;
+    }
+
+    nlriList.forEach(route => annotateEvpnRoute(route, encapsulation, pmsiTunnel));
+}
+
+function annotateEvpnPathAttributes(pathAttributes) {
+    const encapsulation = buildEvpnEncapsulationSummary(pathAttributes);
+    let pmsiTunnel = null;
+
+    pathAttributes.forEach(attr => {
+        if (attr.pmsiTunnel) {
+            attr.pmsiTunnel = annotatePmsiTunnel(attr.pmsiTunnel, encapsulation);
+            pmsiTunnel = attr.pmsiTunnel;
+        }
+    });
+
+    pathAttributes.forEach(attr => {
+        if (attr.mpReach) {
+            annotateEvpnNlriList(attr.mpReach.nlri, attr.mpReach.afi, attr.mpReach.safi, encapsulation, pmsiTunnel);
+        }
+        if (attr.mpUnreach) {
+            annotateEvpnNlriList(
+                attr.mpUnreach.withdrawnRoutes,
+                attr.mpUnreach.afi,
+                attr.mpUnreach.safi,
+                encapsulation,
+                pmsiTunnel
+            );
+        }
+    });
 }
 
 /**
@@ -2216,6 +3032,37 @@ function parseMpUnreachNlri(buffer, context) {
  * @param {Object} parsedPacket - The parsed BGP packet object
  * @returns {String} Human-readable summary
  */
+function isVariableLengthSummaryNlri(afi, safi) {
+    return (
+        safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN ||
+        safi === BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC ||
+        (afi === BgpConst.BGP_AFI_TYPE.AFI_BGP_LS &&
+            (safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS || safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS_VPN))
+    );
+}
+
+function getBgpSummaryRouteLength(route, afi, safi) {
+    if (isVariableLengthSummaryNlri(afi, safi)) {
+        if (route.nlriLength !== undefined && route.nlriLength !== null) {
+            return route.nlriLength;
+        }
+        if (typeof route.rawNlri === 'string') {
+            return Math.ceil(route.rawNlri.length / 2);
+        }
+    }
+
+    return route.length;
+}
+
+function formatBgpSummaryRoute(route, afi, safi, indent, includePathId = true) {
+    if (route.dqpn !== undefined) {
+        return `${indent}- DIP:${route.prefix}/${route.length}, DQPN:=${route.dqpn}/${route.dqpnBits}`;
+    }
+
+    const pathId = includePathId && route.pathId !== undefined ? `${route.pathId} ` : '';
+    return `${indent}- ${pathId}${route.prefix}/${getBgpSummaryRouteLength(route, afi, safi)}`;
+}
+
 function getBgpPacketSummary(parsedPacket) {
     if (!parsedPacket || !parsedPacket.valid) {
         return `Invalid BGP packet: ${parsedPacket?.error || 'Unknown error'}`;
@@ -2283,7 +3130,7 @@ function getBgpPacketSummary(parsedPacket) {
             if (parsedPacket.withdrawnRoutes && parsedPacket.withdrawnRoutes.length > 0) {
                 summary += '\nWithdrawn Routes:';
                 parsedPacket.withdrawnRoutes.forEach(route => {
-                    summary += `\n  - ${route.prefix}/${route.length}`;
+                    summary += `\n${formatBgpSummaryRoute(route, null, null, '  ', false)}`;
                 });
             }
 
@@ -2318,6 +3165,17 @@ function getBgpPacketSummary(parsedPacket) {
                         if (attr.extCommunities) {
                             summary += `: ${attr.extCommunities.map(c => c.formatted).join(' ')}`;
                         }
+                    } else if (attr.typeCode === BgpConst.BGP_PATH_ATTR.PMSI_TUNNEL) {
+                        if (attr.pmsiTunnel) {
+                            summary += `: ${attr.pmsiTunnel.tunnelTypeName}`;
+                            if (attr.pmsiTunnel.labelPresent && attr.pmsiTunnel.label) {
+                                summary += ` ${attr.pmsiTunnel.label.display}`;
+                            }
+                        }
+                    } else if (attr.typeCode === BgpConst.BGP_PATH_ATTR.TUNNEL_ENCAPSULATION) {
+                        if (attr.tunnelEncapsulation) {
+                            summary += `: ${attr.tunnelEncapsulation.tlvs.map(tlv => tlv.tunnelTypeName).join(', ')}`;
+                        }
                     } else if (attr.typeCode === BgpConst.BGP_PATH_ATTR.MED) {
                         summary += `: ${attr.med}`;
                     } else if (attr.typeCode === BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI) {
@@ -2327,11 +3185,7 @@ function getBgpPacketSummary(parsedPacket) {
                         if (attr.mpReach.nlri && attr.mpReach.nlri.length > 0) {
                             summary += '\n    - Routes:';
                             attr.mpReach.nlri.forEach(route => {
-                                if (route.dqpn !== undefined) {
-                                    summary += `\n      - DIP:${route.prefix}/${route.length}, DQPN:=${route.dqpn}/${route.dqpnBits}`;
-                                } else {
-                                    summary += `\n      - ${route.pathId} ${route.prefix}/${route.length}`;
-                                }
+                                summary += `\n${formatBgpSummaryRoute(route, attr.mpReach.afi, attr.mpReach.safi, '      ')}`;
                             });
                         }
                     } else if (attr.typeCode === BgpConst.BGP_PATH_ATTR.MP_UNREACH_NLRI) {
@@ -2341,11 +3195,12 @@ function getBgpPacketSummary(parsedPacket) {
                         if (attr.mpUnreach.withdrawnRoutes && attr.mpUnreach.withdrawnRoutes.length > 0) {
                             summary += '\n    - Routes:';
                             attr.mpUnreach.withdrawnRoutes.forEach(route => {
-                                if (route.dqpn !== undefined) {
-                                    summary += `\n      - DIP:${route.prefix}/${route.length}, DQPN:=${route.dqpn}/${route.dqpnBits}`;
-                                } else {
-                                    summary += `\n      - ${route.pathId} ${route.prefix}/${route.length}`;
-                                }
+                                summary += `\n${formatBgpSummaryRoute(
+                                    route,
+                                    attr.mpUnreach.afi,
+                                    attr.mpUnreach.safi,
+                                    '      '
+                                )}`;
                             });
                         }
                     } else if (attr.typeCode === BgpConst.BGP_PATH_ATTR.PATH_OTC) {
@@ -2357,7 +3212,7 @@ function getBgpPacketSummary(parsedPacket) {
             if (parsedPacket.nlri && parsedPacket.nlri.length > 0) {
                 summary += '\nRoutes:';
                 parsedPacket.nlri.forEach(route => {
-                    summary += `\n  - ${route.pathId} ${route.prefix}/${route.length}`;
+                    summary += `\n${formatBgpSummaryRoute(route, null, null, '  ')}`;
                 });
             }
             break;

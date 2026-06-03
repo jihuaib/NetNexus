@@ -192,7 +192,11 @@
             width="500px"
             @close="closeDetailsDrawer"
         >
-            <pre v-if="currentDetails">{{ JSON.stringify(currentDetails, null, 2) }}</pre>
+            <template v-if="currentDetails">
+                <pre v-if="currentDetails.summary" class="route-summary-pre">{{ currentDetails.summary }}</pre>
+                <a-divider v-if="currentDetails.summary" orientation="left">结构化数据</a-divider>
+                <pre>{{ JSON.stringify(currentDetails, null, 2) }}</pre>
+            </template>
         </a-drawer>
     </div>
 </template>
@@ -717,6 +721,15 @@
     :deep(.route-stale-row) {
         color: #8c6d1f;
         background-color: #fffbe6;
+    }
+
+    .route-summary-pre {
+        padding: 8px;
+        margin-bottom: 8px;
+        white-space: pre-wrap;
+        background-color: #f6f8fa;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
     }
 
     :deep(.ant-table-body) {

@@ -85,6 +85,47 @@ function bgpUpdate(prefix = '203.0.113.0') {
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, body);
 }
 
+function evpnRaw24(value) {
+    return Buffer.from([(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
+}
+
+function evpnNlri(routeType, body) {
+    return Buffer.concat([Buffer.from([routeType, body.length]), body]);
+}
+
+function bgpUpdateEvpnVxlan(vni = 10000) {
+    const rd65000 = Buffer.from([0, 0, 0xfd, 0xe8, 0, 0, 0, 1]);
+    const esi = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    const evpnRoute = evpnNlri(
+        2,
+        Buffer.concat([
+            rd65000,
+            esi,
+            u32(100),
+            Buffer.from([48, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 32, 192, 0, 2, 10]),
+            evpnRaw24(vni)
+        ])
+    );
+    const mpReachValue = Buffer.concat([
+        u16(BgpConst.BGP_AFI_TYPE.AFI_L2VPN),
+        Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, 4]),
+        ip('10.0.0.1'),
+        Buffer.from([0]),
+        evpnRoute
+    ]);
+    const vxlanEncapsulationCommunity = Buffer.concat([Buffer.from([0x03, 0x0c, 0, 0, 0, 0]), u16(8)]);
+    const attrs = Buffer.concat([
+        pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, mpReachValue, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL),
+        pathAttr(
+            BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES,
+            vxlanEncapsulationCommunity,
+            BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+        )
+    ]);
+    const body = Buffer.concat([u16(0), u16(attrs.length), attrs]);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, body);
+}
+
 function bgpNotification() {
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.NOTIFICATION, Buffer.from([6, 3]));
 }
@@ -300,6 +341,41 @@ assert.equal(routeMap.size, 1);
 assert.equal([...routeMap.values()][0].ip, '203.0.113.0');
 assert.equal([...routeMap.values()][0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
 assert.ok(events.some(event => event.type === BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE));
+
+const { session: evpnBmpSession } = makeSession();
+evpnBmpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        peerUpPayloadForAf(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN)
+    )
+);
+evpnBmpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdateEvpnVxlan())
+        ])
+    )
+);
+const evpnBgpSession = evpnBmpSession.bgpSessionMap.get(bgpSessionKey);
+const evpnRouteMap = evpnBgpSession.bgpRoutes
+    .get(`${BgpConst.BGP_AFI_TYPE.AFI_L2VPN}|${BgpConst.BGP_SAFI_TYPE.SAFI_EVPN}`)
+    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
+const evpnRoute = [...evpnRouteMap.values()][0];
+assert.equal(evpnRoute.labels, 'VNI 10000');
+assert.equal(evpnRoute.nlriDetail.encapsulationType, 'vni');
+assert.equal(evpnRoute.nlriDetail.labels[0].raw24, 10000);
+assert.equal(evpnRoute.nlriDetail.labels[0].mplsLabel, 625);
+const evpnRouteInfo = evpnRoute.getRouteInfo();
+assert.ok(evpnRouteInfo.summary.includes('BGP UPDATE Message'));
+assert.ok(evpnRouteInfo.summary.includes('Path Attributes:'));
+assert.ok(evpnRouteInfo.summary.includes('EXTENDED_COMMUNITIES: Encapsulation VXLAN (8)'));
+assert.ok(evpnRouteInfo.summary.includes('MP_REACH_NLRI'));
+assert.ok(evpnRouteInfo.summary.includes('L2VPN/EVPN'));
+assert.ok(evpnRouteInfo.summary.includes('evpn:mac-ip:65000:1:tag=100:mac=aa:bb:cc:dd:ee:ff:ip=192.0.2.10'));
 
 const { session: staleRefreshSession } = makeSession();
 staleRefreshSession.processMessage(

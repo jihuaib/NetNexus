@@ -476,7 +476,7 @@ class BmpSession {
         route.afi = afi;
         route.safi = safi;
         route.labels = Array.isArray(nlri.labels)
-            ? nlri.labels.map(label => `${label.label}${label.bottom ? '(BOS)' : ''}`).join(',')
+            ? nlri.labels.map(label => label.display || `${label.label}${label.bottom ? '(BOS)' : ''}`).join(',')
             : null;
         route.routeType = nlri.routeType || null;
         route.rawNlri = nlri.rawNlri || null;
