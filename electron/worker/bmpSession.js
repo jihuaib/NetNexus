@@ -462,6 +462,9 @@ class BmpSession {
                 case BgpConst.BGP_PATH_ATTR.PATH_OTC:
                     route.otc = attr.otc;
                     break;
+                case BgpConst.BGP_PATH_ATTR.PREFIX_SID:
+                    route.prefixSid = attr.prefixSid?.formatted || null;
+                    break;
                 case BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI:
                     route.nextHop = attr.mpReach.nextHop;
             }

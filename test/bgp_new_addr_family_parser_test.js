@@ -12,6 +12,10 @@ function u32(value) {
     return Buffer.from([(value >> 24) & 0xff, (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
 }
 
+function u24(value) {
+    return Buffer.from([(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
+}
+
 function pathAttr(typeCode, value, flags = BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL) {
     if (value.length > 255) {
         return Buffer.concat([Buffer.from([flags | BgpConst.BGP_PATH_ATTR_FLAGS.EXTENDED_LENGTH, typeCode]), u16(value.length), value]);
@@ -85,6 +89,35 @@ function pmsiTunnelAttr(tunnelType, raw24, tunnelIdentifier = Buffer.alloc(0)) {
     return pathAttr(
         BgpConst.BGP_PATH_ATTR.PMSI_TUNNEL,
         Buffer.concat([Buffer.from([0, tunnelType]), evpnRaw24(raw24), tunnelIdentifier]),
+        BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+    );
+}
+
+function prefixSidAttr(labelIndex, srgbStart, srgbRange) {
+    const labelIndexTlv = Buffer.concat([Buffer.from([1]), u16(7), Buffer.from([0]), u16(0), u32(labelIndex)]);
+    const originatorSrgbTlv = Buffer.concat([Buffer.from([3]), u16(8), u16(0), u24(srgbStart), u24(srgbRange)]);
+    return pathAttr(
+        BgpConst.BGP_PATH_ATTR.PREFIX_SID,
+        Buffer.concat([labelIndexTlv, originatorSrgbTlv]),
+        BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+    );
+}
+
+function srv6ServicePrefixSidAttr(serviceTlvType, sidHex, endpointBehavior) {
+    const sidStructureSubSubTlv = Buffer.concat([Buffer.from([1]), u16(6), Buffer.from([48, 16, 16, 0, 0, 0])]);
+    const sidInformationValue = Buffer.concat([
+        Buffer.from([0]),
+        Buffer.from(sidHex, 'hex'),
+        u16(endpointBehavior),
+        Buffer.from([0, 0]),
+        sidStructureSubSubTlv
+    ]);
+    const sidInformationSubTlv = Buffer.concat([Buffer.from([1]), u16(sidInformationValue.length), sidInformationValue]);
+    const serviceTlvValue = Buffer.concat([Buffer.from([0]), sidInformationSubTlv]);
+    const serviceTlv = Buffer.concat([Buffer.from([serviceTlvType]), u16(serviceTlvValue.length), serviceTlvValue]);
+    return pathAttr(
+        BgpConst.BGP_PATH_ATTR.PREFIX_SID,
+        serviceTlv,
         BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
     );
 }
@@ -225,6 +258,50 @@ assert.equal(ipv4LabeledUnicast.prefix, '192.0.2.0');
 assert.equal(ipv4LabeledUnicast.length, 24);
 assert.equal(ipv4LabeledUnicast.labels[0].label, 100);
 assert.equal(ipv4LabeledUnicast.labels[0].bottom, true);
+
+const prefixSidPacket = parseUpdateWithMpReach(
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+    Buffer.from([1, 1, 1, 1]),
+    Buffer.concat([Buffer.from([48]), labelEntry(101), Buffer.from([192, 0, 2])]),
+    [prefixSidAttr(2001, 16000, 8000)]
+);
+const prefixSidAttrParsed = prefixSidPacket.pathAttributes.find(
+    attr => attr.typeCode === BgpConst.BGP_PATH_ATTR.PREFIX_SID
+);
+assert.equal(prefixSidPacket.valid, true);
+assert.ok(prefixSidAttrParsed);
+assert.equal(prefixSidAttrParsed.prefixSid.labelIndex.labelIndex, 2001);
+assert.equal(prefixSidAttrParsed.prefixSid.originatorSrgb.ranges[0].start, 16000);
+assert.equal(prefixSidAttrParsed.prefixSid.originatorSrgb.ranges[0].range, 8000);
+assert.equal(prefixSidAttrParsed.prefixSid.formatted, 'Label-Index 2001, SRGB 16000+8000');
+assert.ok(getBgpPacketSummary(prefixSidPacket).includes('PREFIX_SID: Label-Index 2001, SRGB 16000+8000'));
+const prefixSidBmpRoute = {};
+new BmpSession({ sendEvent() {} }, {}).setRouteAttributes(prefixSidBmpRoute, prefixSidPacket);
+assert.equal(prefixSidBmpRoute.prefixSid, 'Label-Index 2001, SRGB 16000+8000');
+
+const srv6PrefixSidPacket = parseUpdateWithMpReach(
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    Buffer.from([1, 1, 1, 1]),
+    Buffer.concat([Buffer.from([24]), Buffer.from([203, 0, 113])]),
+    [srv6ServicePrefixSidAttr(5, '20010db8000000000000000000000001', 19)]
+);
+const srv6PrefixSidAttrParsed = srv6PrefixSidPacket.pathAttributes.find(
+    attr => attr.typeCode === BgpConst.BGP_PATH_ATTR.PREFIX_SID
+);
+const srv6Service = srv6PrefixSidAttrParsed.prefixSid.srv6Services[0];
+const srv6SidInfo = srv6Service.sidInfos[0];
+assert.equal(srv6PrefixSidPacket.valid, true);
+assert.equal(srv6Service.serviceType, 'l3');
+assert.equal(srv6SidInfo.sid, '2001:db8::1');
+assert.equal(srv6SidInfo.endpointBehavior, 19);
+assert.equal(srv6SidInfo.endpointBehaviorName, 'End.DT4');
+assert.equal(srv6SidInfo.sidStructure.locatorBlockLength, 48);
+assert.equal(srv6SidInfo.sidStructure.locatorNodeLength, 16);
+assert.equal(srv6SidInfo.sidStructure.functionLength, 16);
+assert.equal(srv6PrefixSidAttrParsed.prefixSid.formatted, 'SRv6 L3 2001:db8::1 End.DT4');
+assert.ok(getBgpPacketSummary(srv6PrefixSidPacket).includes('PREFIX_SID: SRv6 L3 2001:db8::1 End.DT4'));
 
 const ipv6LabeledUnicast = firstReachRoute(
     parseUpdateWithMpReach(

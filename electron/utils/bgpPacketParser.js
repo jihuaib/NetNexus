@@ -1188,12 +1188,68 @@ const EXT_COMMUNITY_TYPE_TRANSITIVE_OPAQUE = 0x03;
 const EXT_COMMUNITY_TYPE_NON_TRANSITIVE_OPAQUE = 0x43;
 const EXT_COMMUNITY_SUB_TYPE_ENCAPSULATION = 0x0c;
 
+const BGP_PREFIX_SID_TLV_TYPE_NAMES = {
+    0: 'Reserved',
+    1: 'Label-Index',
+    2: 'Deprecated',
+    3: 'Originator SRGB',
+    4: 'Deprecated',
+    5: 'SRv6 L3 Service',
+    6: 'SRv6 L2 Service',
+    7: 'SRv6 Transport',
+    255: 'Reserved'
+};
+
+const SRV6_SERVICE_SUB_TLV_TYPE_NAMES = {
+    1: 'SRv6 SID Information'
+};
+
+const SRV6_SERVICE_DATA_SUB_SUB_TLV_TYPE_NAMES = {
+    1: 'SRv6 SID Structure'
+};
+
+const SRV6_ENDPOINT_BEHAVIOR_NAMES = {
+    1: 'End',
+    2: 'End with PSP',
+    3: 'End with USP',
+    4: 'End with PSP & USP',
+    5: 'End.X',
+    9: 'End.T',
+    16: 'End.DX6',
+    17: 'End.DX4',
+    18: 'End.DT6',
+    19: 'End.DT4',
+    20: 'End.DT46',
+    21: 'End.B6',
+    22: 'End.B6.Encaps',
+    23: 'End.DX2',
+    24: 'End.DX2V',
+    25: 'End.DT2U',
+    26: 'End.DT2M'
+};
+
 function getBgpTunnelTypeName(tunnelType) {
     return BGP_TUNNEL_TYPE_NAMES[tunnelType] || `Unknown (${tunnelType})`;
 }
 
 function getPmsiTunnelTypeName(tunnelType) {
     return PMSI_TUNNEL_TYPE_NAMES[tunnelType] || `Unknown (${tunnelType})`;
+}
+
+function getBgpPrefixSidTlvTypeName(type) {
+    return BGP_PREFIX_SID_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
+}
+
+function getSrv6ServiceSubTlvTypeName(type) {
+    return SRV6_SERVICE_SUB_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
+}
+
+function getSrv6ServiceDataSubSubTlvTypeName(type) {
+    return SRV6_SERVICE_DATA_SUB_SUB_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
+}
+
+function getSrv6EndpointBehaviorName(behavior) {
+    return SRV6_ENDPOINT_BEHAVIOR_NAMES[behavior] || `Unknown (${behavior})`;
 }
 
 function getEvpnLabelTypeForTunnel(tunnelType) {
@@ -2540,6 +2596,13 @@ function parsePathAttributes(buffer, startPosition, endPosition, context) {
                 attribute.errors = attribute.tunnelEncapsulation.errors;
                 break;
             }
+            case BgpConst.BGP_PATH_ATTR.PREFIX_SID: {
+                attribute.prefixSid = parseBgpPrefixSidAttribute(attributeValue);
+                attribute.valid = attribute.prefixSid.valid;
+                attribute.errors = attribute.prefixSid.errors;
+                attribute.warnings = attribute.prefixSid.warnings;
+                break;
+            }
             case BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI: {
                 // MP_REACH_NLRI
                 attribute.mpReach = parseMpReachNlri(attributeValue, context);
@@ -2779,6 +2842,288 @@ function parseTunnelEncapsulationAttribute(buffer) {
         valid: errors.length === 0,
         errors
     };
+}
+
+function readUint24BE(buffer, position) {
+    return (buffer[position] << 16) | (buffer[position + 1] << 8) | buffer[position + 2];
+}
+
+function parseBgpPrefixSidLabelIndexTlv(value, errors) {
+    if (value.length !== 7) {
+        errors.push(`BGP Prefix-SID Label-Index TLV length must be 7 octets: ${value.length}`);
+    }
+
+    return {
+        reserved: value.length >= 1 ? value[0] : null,
+        flags: value.length >= 3 ? value.readUInt16BE(1) : null,
+        labelIndex: value.length >= 7 ? value.readUInt32BE(3) : null
+    };
+}
+
+function parseBgpPrefixSidOriginatorSrgbTlv(value, errors) {
+    if (value.length < 8 || (value.length - 2) % 6 !== 0) {
+        errors.push(`BGP Prefix-SID Originator SRGB TLV length must be 2 + non-zero multiple of 6 octets: ${value.length}`);
+    }
+
+    const flags = value.length >= 2 ? value.readUInt16BE(0) : null;
+    const ranges = [];
+    let position = 2;
+    while (position + 6 <= value.length) {
+        const start = readUint24BE(value, position);
+        const range = readUint24BE(value, position + 3);
+        ranges.push({
+            start,
+            range,
+            end: range > 0 ? start + range - 1 : start
+        });
+        position += 6;
+    }
+
+    return {
+        flags,
+        ranges
+    };
+}
+
+function parseSrv6ServiceDataSubSubTlvs(buffer, errors) {
+    const subSubTlvs = [];
+    let position = 0;
+
+    while (position < buffer.length) {
+        if (position + 3 > buffer.length) {
+            errors.push(`SRv6 Service Data Sub-Sub-TLV header is truncated at offset ${position}`);
+            break;
+        }
+
+        const type = buffer[position];
+        const length = buffer.readUInt16BE(position + 1);
+        const valueStart = position + 3;
+        const valueEnd = valueStart + length;
+        if (valueEnd > buffer.length) {
+            errors.push(`SRv6 Service Data Sub-Sub-TLV ${type} length exceeds parent: ${length}`);
+            break;
+        }
+
+        const value = buffer.subarray(valueStart, valueEnd);
+        const subSubTlv = {
+            type,
+            typeName: getSrv6ServiceDataSubSubTlvTypeName(type),
+            length,
+            rawValue: value.toString('hex')
+        };
+
+        if (type === 1) {
+            if (length !== 6) {
+                errors.push(`SRv6 SID Structure Sub-Sub-TLV length must be 6 octets: ${length}`);
+            }
+            subSubTlv.sidStructure = {
+                locatorBlockLength: value.length >= 1 ? value[0] : null,
+                locatorNodeLength: value.length >= 2 ? value[1] : null,
+                functionLength: value.length >= 3 ? value[2] : null,
+                argumentLength: value.length >= 4 ? value[3] : null,
+                transpositionLength: value.length >= 5 ? value[4] : null,
+                transpositionOffset: value.length >= 6 ? value[5] : null
+            };
+        }
+
+        subSubTlvs.push(subSubTlv);
+        position = valueEnd;
+    }
+
+    return subSubTlvs;
+}
+
+function parseSrv6SidInformationSubTlv(value, errors) {
+    if (value.length < 21) {
+        errors.push(`SRv6 SID Information Sub-TLV length must be at least 21 octets: ${value.length}`);
+    }
+
+    const sidBuffer = value.length >= 17 ? value.subarray(1, 17) : Buffer.alloc(0);
+    const endpointBehavior = value.length >= 19 ? value.readUInt16BE(17) : null;
+    const subSubTlvBuffer = value.length > 21 ? value.subarray(21) : Buffer.alloc(0);
+    const subSubTlvs = parseSrv6ServiceDataSubSubTlvs(subSubTlvBuffer, errors);
+    const sidStructureSubSubTlv = subSubTlvs.find(subSubTlv => subSubTlv.type === 1 && subSubTlv.sidStructure);
+
+    return {
+        reserved: value.length >= 1 ? value[0] : null,
+        sid: sidBuffer.length === BgpConst.IPV6_HOST_BYTE_LEN ? ipv6BufferToString(sidBuffer, BgpConst.IPV6_HOST_LEN) : null,
+        sidHex: sidBuffer.toString('hex'),
+        endpointBehavior,
+        endpointBehaviorName: endpointBehavior !== null ? getSrv6EndpointBehaviorName(endpointBehavior) : null,
+        reserved2: value.length >= 20 ? value[19] : null,
+        flags: value.length >= 21 ? value[20] : null,
+        subSubTlvs,
+        sidStructure: sidStructureSubSubTlv?.sidStructure || null
+    };
+}
+
+function parseSrv6ServiceSubTlvs(buffer, errors) {
+    const subTlvs = [];
+    const sidInfos = [];
+    let position = 0;
+
+    while (position < buffer.length) {
+        if (position + 3 > buffer.length) {
+            errors.push(`SRv6 Service Sub-TLV header is truncated at offset ${position}`);
+            break;
+        }
+
+        const type = buffer[position];
+        const length = buffer.readUInt16BE(position + 1);
+        const valueStart = position + 3;
+        const valueEnd = valueStart + length;
+        if (valueEnd > buffer.length) {
+            errors.push(`SRv6 Service Sub-TLV ${type} length exceeds service TLV: ${length}`);
+            break;
+        }
+
+        const value = buffer.subarray(valueStart, valueEnd);
+        const subTlv = {
+            type,
+            typeName: getSrv6ServiceSubTlvTypeName(type),
+            length,
+            rawValue: value.toString('hex')
+        };
+
+        if (type === 1) {
+            subTlv.sidInformation = parseSrv6SidInformationSubTlv(value, errors);
+            sidInfos.push(subTlv.sidInformation);
+        }
+
+        subTlvs.push(subTlv);
+        position = valueEnd;
+    }
+
+    return {
+        subTlvs,
+        sidInfos
+    };
+}
+
+function parseBgpPrefixSidSrv6ServiceTlv(type, value, errors) {
+    if (value.length < 1) {
+        errors.push(`BGP Prefix-SID ${getBgpPrefixSidTlvTypeName(type)} TLV is truncated`);
+    }
+
+    const serviceTlv = {
+        serviceType: type === 5 ? 'l3' : type === 6 ? 'l2' : 'transport',
+        reserved: value.length >= 1 ? value[0] : null,
+        subTlvs: [],
+        sidInfos: []
+    };
+
+    const parsedSubTlvs = parseSrv6ServiceSubTlvs(value.length > 1 ? value.subarray(1) : Buffer.alloc(0), errors);
+    serviceTlv.subTlvs = parsedSubTlvs.subTlvs;
+    serviceTlv.sidInfos = parsedSubTlvs.sidInfos;
+    return serviceTlv;
+}
+
+function formatBgpPrefixSid(prefixSid) {
+    if (!prefixSid || !Array.isArray(prefixSid.tlvs)) {
+        return '';
+    }
+
+    const parts = [];
+    if (prefixSid.labelIndex?.labelIndex !== null && prefixSid.labelIndex?.labelIndex !== undefined) {
+        parts.push(`Label-Index ${prefixSid.labelIndex.labelIndex}`);
+    }
+    if (prefixSid.originatorSrgb?.ranges?.length > 0) {
+        const ranges = prefixSid.originatorSrgb.ranges.map(range => `${range.start}+${range.range}`).join(',');
+        parts.push(`SRGB ${ranges}`);
+    }
+    if (Array.isArray(prefixSid.srv6Services)) {
+        prefixSid.srv6Services.forEach(service => {
+            service.sidInfos.forEach(sidInfo => {
+                const serviceName = service.serviceType === 'l2' ? 'SRv6 L2' : service.serviceType === 'l3' ? 'SRv6 L3' : 'SRv6';
+                parts.push(`${serviceName} ${sidInfo.sid || sidInfo.sidHex} ${sidInfo.endpointBehaviorName || ''}`.trim());
+            });
+        });
+    }
+    if (parts.length === 0 && prefixSid.tlvs.length > 0) {
+        parts.push(prefixSid.tlvs.map(tlv => `${tlv.typeName}(${tlv.length})`).join(', '));
+    }
+
+    return parts.join(', ');
+}
+
+function parseBgpPrefixSidAttribute(buffer) {
+    const tlvs = [];
+    const errors = [];
+    const warnings = [];
+    const seenRecognizedTypes = new Set();
+    let labelIndex = null;
+    let originatorSrgb = null;
+    const srv6Services = [];
+    let position = 0;
+
+    while (position < buffer.length) {
+        if (position + 3 > buffer.length) {
+            errors.push(`BGP Prefix-SID TLV header is truncated at offset ${position}`);
+            break;
+        }
+
+        const type = buffer[position];
+        const length = buffer.readUInt16BE(position + 1);
+        const valueStart = position + 3;
+        const valueEnd = valueStart + length;
+        if (valueEnd > buffer.length) {
+            errors.push(`BGP Prefix-SID TLV ${type} length exceeds attribute: ${length}`);
+            break;
+        }
+
+        const value = buffer.subarray(valueStart, valueEnd);
+        const tlv = {
+            type,
+            typeName: getBgpPrefixSidTlvTypeName(type),
+            length,
+            rawValue: value.toString('hex')
+        };
+
+        if ((type === 1 || type === 3) && seenRecognizedTypes.has(type)) {
+            warnings.push(`Duplicate BGP Prefix-SID ${tlv.typeName} TLV ignored`);
+            tlv.ignored = true;
+            tlvs.push(tlv);
+            position = valueEnd;
+            continue;
+        }
+
+        switch (type) {
+            case 1:
+                tlv.labelIndex = parseBgpPrefixSidLabelIndexTlv(value, errors);
+                labelIndex = tlv.labelIndex;
+                seenRecognizedTypes.add(type);
+                break;
+            case 3:
+                tlv.originatorSrgb = parseBgpPrefixSidOriginatorSrgbTlv(value, errors);
+                originatorSrgb = tlv.originatorSrgb;
+                seenRecognizedTypes.add(type);
+                break;
+            case 5:
+            case 6:
+            case 7:
+                tlv.srv6Service = parseBgpPrefixSidSrv6ServiceTlv(type, value, errors);
+                srv6Services.push(tlv.srv6Service);
+                break;
+            default:
+                break;
+        }
+
+        tlvs.push(tlv);
+        position = valueEnd;
+    }
+
+    const prefixSid = {
+        tlvs,
+        labelIndex,
+        originatorSrgb,
+        srv6Services,
+        valid: errors.length === 0,
+        errors,
+        warnings
+    };
+    prefixSid.formatted = formatBgpPrefixSid(prefixSid);
+
+    return prefixSid;
 }
 
 function buildEvpnEncapsulationSummary(pathAttributes) {
@@ -3175,6 +3520,10 @@ function getBgpPacketSummary(parsedPacket) {
                     } else if (attr.typeCode === BgpConst.BGP_PATH_ATTR.TUNNEL_ENCAPSULATION) {
                         if (attr.tunnelEncapsulation) {
                             summary += `: ${attr.tunnelEncapsulation.tlvs.map(tlv => tlv.tunnelTypeName).join(', ')}`;
+                        }
+                    } else if (attr.typeCode === BgpConst.BGP_PATH_ATTR.PREFIX_SID) {
+                        if (attr.prefixSid?.formatted) {
+                            summary += `: ${attr.prefixSid.formatted}`;
                         }
                     } else if (attr.typeCode === BgpConst.BGP_PATH_ATTR.MED) {
                         summary += `: ${attr.med}`;

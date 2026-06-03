@@ -325,6 +325,12 @@
     const detailsDrawerTitle = ref('');
     const currentDetails = ref(null);
 
+    const getClientKey = client =>
+        `${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`;
+
+    const getSessionKey = session =>
+        `${session.sessionType}|${session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
+
     // View peer details
     const viewSessionDetails = record => {
         currentDetails.value = record;
@@ -376,16 +382,12 @@
             const data = result.data;
             if (data) {
                 // 特定客户端终止的情况
-                const existingIndex = clientList.value.findIndex(
-                    client =>
-                        `${client.localIp || ''}-${client.localPort || ''}-${client.remoteIp || ''}-${client.remotePort || ''}` ===
-                        `${data.localIp || ''}-${data.localPort || ''}-${data.remoteIp || ''}-${data.remotePort || ''}`
-                );
+                const existingIndex = clientList.value.findIndex(client => getClientKey(client) === getClientKey(data));
                 if (existingIndex !== -1) {
                     clientList.value.splice(existingIndex, 1);
 
-                    if (clientList.value.length > 0 && !activeClientKey.value) {
-                        activeClientKey.value = `${clientList.value[0].localIp}|${clientList.value[0].localPort}|${clientList.value[0].remoteIp}|${clientList.value[0].remotePort}`;
+                    if (getClientKey(data) === activeClientKey.value) {
+                        activeClientKey.value = clientList.value.length > 0 ? getClientKey(clientList.value[0]) : '';
                     }
                 }
             } else {
@@ -393,11 +395,13 @@
                 clientList.value = [];
                 activeClientKey.value = '';
                 bgpSessionList.value = [];
+                resetSessionAndRouteSelection();
             }
 
             if (clientList.value.length === 0) {
                 activeClientKey.value = '';
                 bgpSessionList.value = [];
+                resetSessionAndRouteSelection();
             }
         } else {
             console.error('termination handler error', result.msg);
@@ -408,12 +412,15 @@
         if (result.status !== 'success' || !result.data) return;
         const update = result.data;
 
-        const clientKey = `${update.client.localIp}|${update.client.localPort}|${update.client.remoteIp}|${update.client.remotePort}`;
+        const clientKey = getClientKey(update.client);
         if (clientKey !== activeClientKey.value) return;
 
-        const sessKey = `${update.session.sessionType}|${update.session.sessionRd}|${update.session.sessionIp}|${update.session.sessionAs}`;
+        const sessKey = getSessionKey(update.session);
         if (sessKey === activeBgpSessionKey.value) {
-            if (update.af === activeLocRibAf.value && update.ribType === activeLocRibType.value) {
+            if (
+                sameSelectorValue(update.af, activeLocRibAf.value) &&
+                sameSelectorValue(update.ribType, activeLocRibType.value)
+            ) {
                 bgpRoutePagination.value.current = 1;
                 loadBgpRoutes();
             }
@@ -424,7 +431,7 @@
         if (result.status !== 'success' || !result.data) return;
         const data = result.data;
 
-        const clientKey = `${data.client.localIp}|${data.client.localPort}|${data.client.remoteIp}|${data.client.remotePort}`;
+        const clientKey = getClientKey(data.client);
         if (clientKey !== activeClientKey.value) return;
         loadBgpSessionList();
     };
@@ -432,18 +439,14 @@
     const onClientListUpdate = result => {
         if (result.status === 'success') {
             // 存在则更新，否则添加
-            const existingIndex = clientList.value.findIndex(
-                client =>
-                    `${client.localIp || ''}-${client.localPort || ''}-${client.remoteIp || ''}-${client.remotePort || ''}` ===
-                    `${result.data.localIp || ''}-${result.data.localPort || ''}-${result.data.remoteIp || ''}-${result.data.remotePort || ''}`
-            );
+            const existingIndex = clientList.value.findIndex(client => getClientKey(client) === getClientKey(result.data));
             if (existingIndex !== -1) {
                 clientList.value[existingIndex] = result.data;
             } else {
                 clientList.value.push(result.data);
             }
             if (clientList.value.length > 0 && !activeClientKey.value) {
-                activeClientKey.value = `${clientList.value[0].localIp}|${clientList.value[0].localPort}|${clientList.value[0].remoteIp}|${clientList.value[0].remotePort}`;
+                activeClientKey.value = getClientKey(clientList.value[0]);
             }
         } else {
             message.error('客户端列表获取失败');
@@ -458,7 +461,7 @@
 
                 // 设置默认选中第一个客户端
                 if (clientList.value.length > 0 && !activeClientKey.value) {
-                    activeClientKey.value = `${clientList.value[0].localIp}|${clientList.value[0].localPort}|${clientList.value[0].remoteIp}|${clientList.value[0].remotePort}`;
+                    activeClientKey.value = getClientKey(clientList.value[0]);
                 }
             }
         } catch (error) {
@@ -467,10 +470,77 @@
         }
     };
 
+    const activeBgpSessionKey = ref('');
+    const activeLocRibAf = ref(null);
+    const activeLocRibType = ref('');
+    const bgpRouteList = ref([]);
+    const routeStateFilter = ref(BMP_ROUTE_STATE_FILTER.ALL);
+    const routeSummary = ref({ active: 0, stale: 0, total: 0 });
+    let sessionListRequestId = 0;
+    let routeListRequestId = 0;
+
+    const resetRouteData = () => {
+        bgpRouteList.value = [];
+        bgpRoutePagination.value.total = 0;
+        routeSummary.value = { active: 0, stale: 0, total: 0 };
+    };
+
+    const resetSessionAndRouteSelection = () => {
+        activeBgpSessionKey.value = '';
+        activeLocRibAf.value = null;
+        activeLocRibType.value = '';
+        resetRouteData();
+    };
+
+    const sameSelectorValue = (left, right) => `${left}` === `${right}`;
+
+    const getActiveSession = () => {
+        return bgpSessionList.value.find(session => getSessionKey(session) === activeBgpSessionKey.value) || null;
+    };
+
+    const syncActiveRouteSelectors = session => {
+        const enabledAddrFamilyTypes = Array.isArray(session?.enabledAddrFamilyTypes) ? session.enabledAddrFamilyTypes : [];
+        const ribTypes = Array.isArray(session?.ribTypes) ? session.ribTypes : [];
+
+        if (!session || enabledAddrFamilyTypes.length === 0 || ribTypes.length === 0) {
+            activeLocRibAf.value = null;
+            activeLocRibType.value = '';
+            resetRouteData();
+            return false;
+        }
+
+        if (!enabledAddrFamilyTypes.some(af => sameSelectorValue(af, activeLocRibAf.value))) {
+            activeLocRibAf.value = enabledAddrFamilyTypes[0];
+        }
+        if (!ribTypes.some(ribType => sameSelectorValue(ribType, activeLocRibType.value))) {
+            activeLocRibType.value = ribTypes[0];
+        }
+
+        return true;
+    };
+
+    const isActiveRouteSelectionValid = () => {
+        const session = getActiveSession();
+        if (!session) return false;
+
+        const enabledAddrFamilyTypes = Array.isArray(session.enabledAddrFamilyTypes) ? session.enabledAddrFamilyTypes : [];
+        const ribTypes = Array.isArray(session.ribTypes) ? session.ribTypes : [];
+        return (
+            enabledAddrFamilyTypes.some(af => sameSelectorValue(af, activeLocRibAf.value)) &&
+            ribTypes.some(ribType => sameSelectorValue(ribType, activeLocRibType.value))
+        );
+    };
+
     // 加载BGP会话列表
     const loadBgpSessionList = async () => {
-        if (!activeClientKey.value) return;
+        if (!activeClientKey.value) {
+            bgpSessionList.value = [];
+            resetSessionAndRouteSelection();
+            return;
+        }
 
+        const requestId = ++sessionListRequestId;
+        const requestClientKey = activeClientKey.value;
         try {
             const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
             const clientInfo = {
@@ -481,51 +551,58 @@
             };
 
             const bgpSessionListResult = await window.bmpApi.getBgpSessions(clientInfo);
+            if (requestId !== sessionListRequestId || requestClientKey !== activeClientKey.value) {
+                return;
+            }
+
             if (bgpSessionListResult.status === 'success') {
                 bgpSessionList.value = bgpSessionListResult.data || [];
                 if (bgpSessionList.value.length > 0) {
                     const first = bgpSessionList.value[0];
-                    const key = `${first.sessionType}|${first.sessionRd}|${first.sessionIp}|${first.sessionAs}`;
-                    activeBgpSessionKey.value = key;
-                    if (first.enabledAddrFamilyTypes.length > 0) {
-                        activeLocRibAf.value = first.enabledAddrFamilyTypes[0];
+                    const activeSessionExists = bgpSessionList.value.some(
+                        session => getSessionKey(session) === activeBgpSessionKey.value
+                    );
+                    if (!activeSessionExists) {
+                        activeBgpSessionKey.value = getSessionKey(first);
                     }
-                    if (first.ribTypes.length > 0) {
-                        activeLocRibType.value = first.ribTypes[0];
-                    }
+                    const canLoadRoutes = syncActiveRouteSelectors(getActiveSession());
                     bgpRoutePagination.value.current = 1;
-                    loadBgpRoutes();
+                    if (canLoadRoutes) {
+                        loadBgpRoutes();
+                    }
+                } else {
+                    resetSessionAndRouteSelection();
                 }
             } else {
                 bgpSessionList.value = [];
+                resetSessionAndRouteSelection();
                 message.error('获取BGP邻居列表失败');
             }
         } catch (error) {
+            if (requestId !== sessionListRequestId || requestClientKey !== activeClientKey.value) {
+                return;
+            }
             console.error(error);
             bgpSessionList.value = [];
+            resetSessionAndRouteSelection();
             message.error('获取BGP邻居列表失败');
         }
     };
 
-    const activeBgpSessionKey = ref('');
-    const activeLocRibAf = ref(null);
-    const activeLocRibType = ref('');
-    const bgpRouteList = ref([]);
-    const routeStateFilter = ref(BMP_ROUTE_STATE_FILTER.ALL);
-    const routeSummary = ref({ active: 0, stale: 0, total: 0 });
-
     // 监听activeClientKey变化，加载对应的peer列表 AND instances
-    watch(activeClientKey, _newKey => {
-        activeBgpSessionKey.value = '';
-        bgpRouteList.value = [];
+    watch(activeClientKey, newKey => {
         bgpSessionList.value = [];
-        loadBgpSessionList();
+        resetSessionAndRouteSelection();
+        if (newKey) {
+            loadBgpSessionList();
+        }
     });
 
     onActivated(async () => {
         clientList.value = [];
         activeClientKey.value = '';
         bgpSessionList.value = [];
+        resetSessionAndRouteSelection();
 
         EventBus.on('bmp:sessionUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onSessionUpdate);
         EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onClientListUpdate);
@@ -533,10 +610,6 @@
         EventBus.on('bmp:routeUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onRouteUpdate);
 
         await loadClientList();
-        // 如果有选中的客户端，则加载对应的BGP会话列表
-        if (activeClientKey.value) {
-            await loadBgpSessionList();
-        }
     });
 
     onDeactivated(() => {
@@ -599,8 +672,25 @@
     ];
 
     const loadBgpRoutes = async () => {
-        if (!activeClientKey.value || !activeBgpSessionKey.value || !activeLocRibAf.value || !activeLocRibType.value)
+        if (
+            !activeClientKey.value ||
+            !activeBgpSessionKey.value ||
+            activeLocRibAf.value === null ||
+            activeLocRibAf.value === undefined ||
+            !activeLocRibType.value
+        ) {
+            resetRouteData();
             return;
+        }
+
+        if (!isActiveRouteSelectionValid()) {
+            syncActiveRouteSelectors(getActiveSession());
+            return;
+        }
+
+        const requestId = ++routeListRequestId;
+        const requestKey = `${activeClientKey.value}|${activeBgpSessionKey.value}|${activeLocRibAf.value}|${activeLocRibType.value}|${bgpRoutePagination.value.current}|${routeStateFilter.value}`;
+
         const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
         const [sessionType, sessionRd, sessionIp, sessionAs] = activeBgpSessionKey.value.split('|');
 
@@ -621,23 +711,37 @@
                 pageSize,
                 routeStateFilter.value
             );
+            const currentKey = `${activeClientKey.value}|${activeBgpSessionKey.value}|${activeLocRibAf.value}|${activeLocRibType.value}|${bgpRoutePagination.value.current}|${routeStateFilter.value}`;
+            if (requestId !== routeListRequestId || requestKey !== currentKey) {
+                return;
+            }
+
             if (res.status === 'success' && res.data) {
                 bgpRouteList.value = res.data.list;
                 bgpRoutePagination.value.total = res.data.total;
                 routeSummary.value = res.data.summary || { active: 0, stale: 0, total: 0 };
             } else {
-                bgpRouteList.value = [];
-                bgpRoutePagination.value.total = 0;
-                routeSummary.value = { active: 0, stale: 0, total: 0 };
+                resetRouteData();
             }
         } catch (e) {
+            if (requestId !== routeListRequestId) {
+                return;
+            }
+            resetRouteData();
             console.error(e);
             message.error('Load routes failed');
         }
     };
 
     const purgeStaleRoutes = async () => {
-        if (!activeClientKey.value || !activeBgpSessionKey.value || !activeLocRibAf.value || !activeLocRibType.value)
+        if (
+            !activeClientKey.value ||
+            !activeBgpSessionKey.value ||
+            activeLocRibAf.value === null ||
+            activeLocRibAf.value === undefined ||
+            !activeLocRibType.value ||
+            !isActiveRouteSelectionValid()
+        )
             return;
         const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
         const [sessionType, sessionRd, sessionIp, sessionAs] = activeBgpSessionKey.value.split('|');
@@ -665,9 +769,16 @@
         }
     };
 
-    watch(activeBgpSessionKey, _newKey => {
+    watch(activeBgpSessionKey, newKey => {
         bgpRoutePagination.value.current = 1;
-        loadBgpRoutes();
+        if (!newKey) {
+            resetRouteData();
+            return;
+        }
+
+        if (syncActiveRouteSelectors(getActiveSession())) {
+            loadBgpRoutes();
+        }
     });
 
     watch([activeLocRibAf, activeLocRibType], () => {

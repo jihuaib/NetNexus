@@ -158,6 +158,8 @@ function getBgpPathAttrTypeName(typeCode) {
             return 'TUNNEL_ENCAPSULATION';
         case BgpConst.BGP_PATH_ATTR.PATH_OTC:
             return 'OTC';
+        case BgpConst.BGP_PATH_ATTR.PREFIX_SID:
+            return 'PREFIX_SID';
         default:
             return `Unknown (${typeCode})`;
     }

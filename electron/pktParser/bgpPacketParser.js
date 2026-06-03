@@ -9,7 +9,7 @@
 const logger = require('../log/logger');
 
 const BgpConst = require('../const/bgpConst');
-const { ipv4BufferToString } = require('../utils/ipUtils');
+const { ipv4BufferToString, ipv6BufferToString } = require('../utils/ipUtils');
 const {
     getBgpPacketTypeName,
     getBgpOpenCapabilityName,
@@ -21,6 +21,426 @@ const {
     getBgpOriginType,
     getBgpAsPathTypeName
 } = require('../utils/bgpUtils');
+
+const BGP_PREFIX_SID_TLV_TYPE_NAMES = {
+    0: 'Reserved',
+    1: 'Label-Index',
+    2: 'Deprecated',
+    3: 'Originator SRGB',
+    4: 'Deprecated',
+    5: 'SRv6 L3 Service',
+    6: 'SRv6 L2 Service',
+    7: 'SRv6 Transport',
+    255: 'Reserved'
+};
+
+const SRV6_SERVICE_SUB_TLV_TYPE_NAMES = {
+    1: 'SRv6 SID Information'
+};
+
+const SRV6_SERVICE_DATA_SUB_SUB_TLV_TYPE_NAMES = {
+    1: 'SRv6 SID Structure'
+};
+
+const SRV6_ENDPOINT_BEHAVIOR_NAMES = {
+    1: 'End',
+    5: 'End.X',
+    9: 'End.T',
+    16: 'End.DX6',
+    17: 'End.DX4',
+    18: 'End.DT6',
+    19: 'End.DT4',
+    20: 'End.DT46',
+    23: 'End.DX2',
+    24: 'End.DX2V',
+    25: 'End.DT2U',
+    26: 'End.DT2M'
+};
+
+function getBgpPrefixSidTlvTypeName(type) {
+    return BGP_PREFIX_SID_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
+}
+
+function getSrv6ServiceSubTlvTypeName(type) {
+    return SRV6_SERVICE_SUB_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
+}
+
+function getSrv6ServiceDataSubSubTlvTypeName(type) {
+    return SRV6_SERVICE_DATA_SUB_SUB_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
+}
+
+function getSrv6EndpointBehaviorName(behavior) {
+    return SRV6_ENDPOINT_BEHAVIOR_NAMES[behavior] || `Unknown (${behavior})`;
+}
+
+function readUint24BE(buffer, position) {
+    return (buffer[position] << 16) | (buffer[position + 1] << 8) | buffer[position + 2];
+}
+
+function addSrv6SidStructureNode(buffer, sidInfoNode, subSubOffset, length) {
+    const structureNode = {
+        name: 'SID Structure',
+        offset: subSubOffset,
+        length,
+        value: '',
+        children: []
+    };
+
+    const fields = [
+        ['Locator Block Length', 0],
+        ['Locator Node Length', 1],
+        ['Function Length', 2],
+        ['Argument Length', 3],
+        ['Transposition Length', 4],
+        ['Transposition Offset', 5]
+    ];
+    fields.forEach(([name, relativeOffset]) => {
+        if (relativeOffset < length) {
+            structureNode.children.push({
+                name,
+                offset: subSubOffset + relativeOffset,
+                length: 1,
+                value: buffer[subSubOffset + relativeOffset],
+                children: []
+            });
+        }
+    });
+    structureNode.value = structureNode.children.map(child => `${child.name}: ${child.value}`).join(', ');
+    sidInfoNode.children.push(structureNode);
+}
+
+function addSrv6ServiceDataSubSubTlvs(buffer, sidInfoNode, startOffset, endOffset) {
+    let offset = startOffset;
+    while (offset < endOffset) {
+        if (offset + 3 > endOffset) {
+            sidInfoNode.children.push({
+                name: 'Malformed Sub-Sub-TLV',
+                offset,
+                length: endOffset - offset,
+                value: 'Truncated SRv6 Service Data Sub-Sub-TLV header',
+                children: []
+            });
+            break;
+        }
+
+        const type = buffer[offset];
+        const length = buffer.readUInt16BE(offset + 1);
+        const valueOffset = offset + 3;
+        const subSubNode = {
+            name: `Sub-Sub-TLV ${type} (${getSrv6ServiceDataSubSubTlvTypeName(type)})`,
+            offset,
+            length: Math.min(3 + length, endOffset - offset),
+            value: '',
+            children: [
+                {
+                    name: 'Type',
+                    offset,
+                    length: 1,
+                    value: `${type} (${getSrv6ServiceDataSubSubTlvTypeName(type)})`,
+                    children: []
+                },
+                {
+                    name: 'Length',
+                    offset: offset + 1,
+                    length: 2,
+                    value: length,
+                    children: []
+                }
+            ]
+        };
+        sidInfoNode.children.push(subSubNode);
+
+        if (valueOffset + length > endOffset) {
+            subSubNode.value = 'Malformed: length exceeds SID Information Sub-TLV';
+            break;
+        }
+
+        if (type === 1) {
+            addSrv6SidStructureNode(buffer, subSubNode, valueOffset, length);
+        } else {
+            subSubNode.value = buffer.subarray(valueOffset, valueOffset + length).toString('hex');
+        }
+        offset = valueOffset + length;
+    }
+}
+
+function addSrv6SidInformationNode(buffer, serviceNode, offset, length) {
+    const sidInfoNode = {
+        name: 'SRv6 SID Information',
+        offset,
+        length,
+        value: '',
+        children: []
+    };
+    serviceNode.children.push(sidInfoNode);
+
+    if (length < 21) {
+        sidInfoNode.value = 'Malformed: length must be at least 21';
+        return;
+    }
+
+    const sid = ipv6BufferToString(buffer.subarray(offset + 1, offset + 17), BgpConst.IPV6_HOST_LEN);
+    const behavior = buffer.readUInt16BE(offset + 17);
+    sidInfoNode.value = `${sid} ${getSrv6EndpointBehaviorName(behavior)}`;
+    sidInfoNode.children.push(
+        {
+            name: 'Reserved',
+            offset,
+            length: 1,
+            value: buffer[offset],
+            children: []
+        },
+        {
+            name: 'SRv6 SID',
+            offset: offset + 1,
+            length: 16,
+            value: sid,
+            children: []
+        },
+        {
+            name: 'Endpoint Behavior',
+            offset: offset + 17,
+            length: 2,
+            value: `${behavior} (${getSrv6EndpointBehaviorName(behavior)})`,
+            children: []
+        },
+        {
+            name: 'Reserved',
+            offset: offset + 19,
+            length: 1,
+            value: buffer[offset + 19],
+            children: []
+        },
+        {
+            name: 'Flags',
+            offset: offset + 20,
+            length: 1,
+            value: `0x${buffer[offset + 20].toString(16).padStart(2, '0')}`,
+            children: []
+        }
+    );
+
+    addSrv6ServiceDataSubSubTlvs(buffer, sidInfoNode, offset + 21, offset + length);
+}
+
+function addSrv6ServiceTlvDetails(buffer, prefixSidNode, tlvNode, type, valueOffset, length) {
+    const serviceName = type === 5 ? 'SRv6 L3' : type === 6 ? 'SRv6 L2' : 'SRv6';
+    if (length >= 1) {
+        tlvNode.children.push({
+            name: 'Reserved',
+            offset: valueOffset,
+            length: 1,
+            value: buffer[valueOffset],
+            children: []
+        });
+    }
+
+    let offset = valueOffset + 1;
+    const endOffset = valueOffset + length;
+    const sidSummaries = [];
+    while (offset < endOffset) {
+        if (offset + 3 > endOffset) {
+            tlvNode.children.push({
+                name: 'Malformed Sub-TLV',
+                offset,
+                length: endOffset - offset,
+                value: 'Truncated SRv6 Service Sub-TLV header',
+                children: []
+            });
+            break;
+        }
+
+        const subType = buffer[offset];
+        const subLength = buffer.readUInt16BE(offset + 1);
+        const subValueOffset = offset + 3;
+        const subNode = {
+            name: `Sub-TLV ${subType} (${getSrv6ServiceSubTlvTypeName(subType)})`,
+            offset,
+            length: Math.min(3 + subLength, endOffset - offset),
+            value: '',
+            children: []
+        };
+        tlvNode.children.push(subNode);
+
+        if (subValueOffset + subLength > endOffset) {
+            subNode.value = 'Malformed: length exceeds service TLV';
+            break;
+        }
+
+        if (subType === 1) {
+            addSrv6SidInformationNode(buffer, subNode, subValueOffset, subLength);
+            if (subLength >= 19) {
+                const sid = ipv6BufferToString(buffer.subarray(subValueOffset + 1, subValueOffset + 17), BgpConst.IPV6_HOST_LEN);
+                const behavior = buffer.readUInt16BE(subValueOffset + 17);
+                sidSummaries.push(`${sid} ${getSrv6EndpointBehaviorName(behavior)}`);
+            }
+        } else {
+            subNode.value = buffer.subarray(subValueOffset, subValueOffset + subLength).toString('hex');
+        }
+        offset = subValueOffset + subLength;
+    }
+
+    if (sidSummaries.length > 0) {
+        tlvNode.value = `${serviceName} ${sidSummaries.join(', ')}`;
+        prefixSidNode.value = prefixSidNode.value
+            ? `${prefixSidNode.value}, ${tlvNode.value}`
+            : tlvNode.value;
+    }
+}
+
+function addPrefixSidTlvDetails(buffer, prefixSidNode, tlvNode, type, valueOffset, length) {
+    if (type === 1) {
+        if (length >= 1) {
+            tlvNode.children.push({
+                name: 'Reserved',
+                offset: valueOffset,
+                length: 1,
+                value: buffer[valueOffset],
+                children: []
+            });
+        }
+        if (length >= 3) {
+            tlvNode.children.push({
+                name: 'Flags',
+                offset: valueOffset + 1,
+                length: 2,
+                value: `0x${buffer.readUInt16BE(valueOffset + 1).toString(16).padStart(4, '0')}`,
+                children: []
+            });
+        }
+        if (length >= 7) {
+            const labelIndex = buffer.readUInt32BE(valueOffset + 3);
+            tlvNode.children.push({
+                name: 'Label Index',
+                offset: valueOffset + 3,
+                length: 4,
+                value: labelIndex,
+                children: []
+            });
+            tlvNode.value = `Label-Index ${labelIndex}`;
+            prefixSidNode.value = prefixSidNode.value ? `${prefixSidNode.value}, Label-Index ${labelIndex}` : `Label-Index ${labelIndex}`;
+        }
+        return;
+    }
+
+    if (type === 3) {
+        if (length >= 2) {
+            tlvNode.children.push({
+                name: 'Flags',
+                offset: valueOffset,
+                length: 2,
+                value: `0x${buffer.readUInt16BE(valueOffset).toString(16).padStart(4, '0')}`,
+                children: []
+            });
+        }
+
+        const ranges = [];
+        let rangeOffset = valueOffset + 2;
+        let rangeIndex = 1;
+        while (rangeOffset + 6 <= valueOffset + length) {
+            const start = readUint24BE(buffer, rangeOffset);
+            const range = readUint24BE(buffer, rangeOffset + 3);
+            ranges.push(`${start}+${range}`);
+            tlvNode.children.push({
+                name: `SRGB Range ${rangeIndex}`,
+                offset: rangeOffset,
+                length: 6,
+                value: `${start}+${range}`,
+                children: [
+                    {
+                        name: 'Start Label',
+                        offset: rangeOffset,
+                        length: 3,
+                        value: start,
+                        children: []
+                    },
+                    {
+                        name: 'Range Size',
+                        offset: rangeOffset + 3,
+                        length: 3,
+                        value: range,
+                        children: []
+                    }
+                ]
+            });
+            rangeOffset += 6;
+            rangeIndex += 1;
+        }
+        tlvNode.value = ranges.length > 0 ? `SRGB ${ranges.join(',')}` : 'SRGB';
+        if (ranges.length > 0) {
+            prefixSidNode.value = prefixSidNode.value ? `${prefixSidNode.value}, SRGB ${ranges.join(',')}` : `SRGB ${ranges.join(',')}`;
+        }
+    }
+
+    if (type === 5 || type === 6 || type === 7) {
+        addSrv6ServiceTlvDetails(buffer, prefixSidNode, tlvNode, type, valueOffset, length);
+    }
+}
+
+function addPrefixSidAttributeNode(buffer, attrNode, valueOffset, attrLength) {
+    const prefixSidNode = {
+        name: 'PREFIX_SID',
+        offset: valueOffset,
+        length: attrLength,
+        value: '',
+        children: []
+    };
+    attrNode.children.push(prefixSidNode);
+
+    let tlvOffset = valueOffset;
+    const attrEnd = valueOffset + attrLength;
+    while (tlvOffset < attrEnd) {
+        if (tlvOffset + 3 > attrEnd) {
+            prefixSidNode.children.push({
+                name: 'Malformed TLV',
+                offset: tlvOffset,
+                length: attrEnd - tlvOffset,
+                value: 'Truncated Prefix-SID TLV header',
+                children: []
+            });
+            break;
+        }
+
+        const type = buffer[tlvOffset];
+        const length = buffer.readUInt16BE(tlvOffset + 1);
+        const valueOffsetForTlv = tlvOffset + 3;
+        const tlvEnd = valueOffsetForTlv + length;
+        const tlvNode = {
+            name: `TLV ${type} (${getBgpPrefixSidTlvTypeName(type)})`,
+            offset: tlvOffset,
+            length: Math.min(3 + length, attrEnd - tlvOffset),
+            value: '',
+            children: [
+                {
+                    name: 'Type',
+                    offset: tlvOffset,
+                    length: 1,
+                    value: `${type} (${getBgpPrefixSidTlvTypeName(type)})`,
+                    children: []
+                },
+                {
+                    name: 'Length',
+                    offset: tlvOffset + 1,
+                    length: 2,
+                    value: length,
+                    children: []
+                }
+            ]
+        };
+        prefixSidNode.children.push(tlvNode);
+
+        if (tlvEnd > attrEnd) {
+            tlvNode.value = 'Malformed: length exceeds attribute';
+            break;
+        }
+
+        addPrefixSidTlvDetails(buffer, prefixSidNode, tlvNode, type, valueOffsetForTlv, length);
+        if (!tlvNode.value) {
+            tlvNode.value = buffer.subarray(valueOffsetForTlv, tlvEnd).toString('hex');
+        }
+        tlvOffset = tlvEnd;
+    }
+}
 
 /**
  * Parse a BGP packet into a tree structure
@@ -897,6 +1317,10 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
                         };
                         mpUnreachNode.children.push(withdrawnDataNode);
                     }
+                    break;
+                }
+                case BgpConst.BGP_PATH_ATTR.PREFIX_SID: {
+                    addPrefixSidAttributeNode(buffer, attrNode, valueOffset, attrLength);
                     break;
                 }
                 default: {
