@@ -158,24 +158,24 @@ function parseNextHop(buffer, position, nextHopLength, afi, safi) {
         (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
         safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN
     ) {
-        if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IP_HOST_BYTE_LEN) {
+        // RD(8) + IPv4(4) = 12 bytes
+        if (nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IP_HOST_BYTE_LEN) {
             return ipv4BufferToString(
                 buffer.subarray(position + BgpConst.BGP_RD_LEN, position + BgpConst.BGP_RD_LEN + BgpConst.IP_HOST_BYTE_LEN),
                 BgpConst.IP_HOST_LEN
             );
         }
 
-        if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) {
+        // RD(8) + IPv6(16) = 24 bytes (VPNv6 or VPNv4 from IPv6 neighbor)
+        if (nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) {
             return ipv6BufferToString(
                 buffer.subarray(position + BgpConst.BGP_RD_LEN, position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
                 BgpConst.IPV6_HOST_LEN
             );
         }
 
-        if (
-            afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 &&
-            nextHopLength === (BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) * 2
-        ) {
+        // RD(8) + IPv6(16) + RD(8) + IPv6(16) = 48 bytes (global + link-local)
+        if (nextHopLength === (BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) * 2) {
             const globalNextHop = ipv6BufferToString(
                 buffer.subarray(position + BgpConst.BGP_RD_LEN, position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
                 BgpConst.IPV6_HOST_LEN
@@ -1193,7 +1193,7 @@ const BGP_PREFIX_SID_TLV_TYPE_NAMES = {
     1: 'Label-Index',
     2: 'Deprecated',
     3: 'Originator SRGB',
-    4: 'Deprecated',
+    4: 'SRv6-VPN SID (Deprecated)',
     5: 'SRv6 L3 Service',
     6: 'SRv6 L2 Service',
     7: 'SRv6 Transport',
@@ -1209,23 +1209,183 @@ const SRV6_SERVICE_DATA_SUB_SUB_TLV_TYPE_NAMES = {
 };
 
 const SRV6_ENDPOINT_BEHAVIOR_NAMES = {
+    0: 'Reserved',
     1: 'End',
     2: 'End with PSP',
     3: 'End with USP',
     4: 'End with PSP & USP',
     5: 'End.X',
+    6: 'End.X with PSP',
+    7: 'End.X with USP',
+    8: 'End.X with PSP & USP',
     9: 'End.T',
+    10: 'End.T with PSP',
+    11: 'End.T with USP',
+    12: 'End.T with PSP & USP',
+    13: 'End.B6.Insert',
+    14: 'End.B6.Encaps',
+    15: 'End.BM',
     16: 'End.DX6',
     17: 'End.DX4',
     18: 'End.DT6',
     19: 'End.DT4',
     20: 'End.DT46',
-    21: 'End.B6',
-    22: 'End.B6.Encaps',
-    23: 'End.DX2',
-    24: 'End.DX2V',
-    25: 'End.DT2U',
-    26: 'End.DT2M'
+    21: 'End.DX2',
+    22: 'End.DX2V',
+    23: 'End.DT2U',
+    24: 'End.DT2M',
+    25: 'Reserved',
+    26: 'End.B6.Insert.Red',
+    27: 'End.B6.Encaps.Red',
+    28: 'End with USD',
+    29: 'End with PSP & USD',
+    30: 'End with USP & USD',
+    31: 'End with PSP, USP & USD',
+    32: 'End.X with USD',
+    33: 'End.X with PSP & USD',
+    34: 'End.X with USP & USD',
+    35: 'End.X with PSP, USP & USD',
+    36: 'End.T with USD',
+    37: 'End.T with PSP & USD',
+    38: 'End.T with USP & USD',
+    39: 'End.T with PSP, USP & USD',
+    40: 'End.MAP',
+    41: 'End.Limit',
+    42: 'End with NEXT-ONLY-CSID',
+    43: 'End with NEXT-CSID',
+    44: 'End with NEXT-CSID & PSP',
+    45: 'End with NEXT-CSID & USP',
+    46: 'End with NEXT-CSID, PSP & USP',
+    47: 'End with NEXT-CSID & USD',
+    48: 'End with NEXT-CSID, PSP & USD',
+    49: 'End with NEXT-CSID, USP & USD',
+    50: 'End with NEXT-CSID, PSP, USP & USD',
+    51: 'End.X with NEXT-ONLY-CSID',
+    52: 'End.X with NEXT-CSID',
+    53: 'End.X with NEXT-CSID & PSP',
+    54: 'End.X with NEXT-CSID & USP',
+    55: 'End.X with NEXT-CSID, PSP & USP',
+    56: 'End.X with NEXT-CSID & USD',
+    57: 'End.X with NEXT-CSID, PSP & USD',
+    58: 'End.X with NEXT-CSID, USP & USD',
+    59: 'End.X with NEXT-CSID, PSP, USP & USD',
+    60: 'uDX6 (End.DX6 with NEXT-CSID)',
+    61: 'uDX4 (End.DX4 with NEXT-CSID)',
+    62: 'uDT6 (End.DT6 with NEXT-CSID)',
+    63: 'uDT4 (End.DT4 with NEXT-CSID)',
+    64: 'uDT46 (End.DT46 with NEXT-CSID)',
+    65: 'uDX2 (End.DX2 with NEXT-CSID)',
+    66: 'uDX2V (End.DX2V with NEXT-CSID)',
+    67: 'uDT2U (End.DT2U with NEXT-CSID)',
+    68: 'uDT2M (End.DT2M with NEXT-CSID)',
+    69: 'End.M.GTP6.D',
+    70: 'End.M.GTP6.Di',
+    71: 'End.M.GTP6.E',
+    72: 'End.M.GTP4.E',
+    73: 'End.DTM',
+    74: 'End.M (Mirror SID)',
+    75: 'End.Replicate',
+    76: 'End.DTMC4',
+    77: 'End.DTMC6',
+    78: 'End.DTMC46',
+    79: 'End.BXC',
+    80: 'End.BXC with PSP',
+    81: 'End.BXC with USP',
+    82: 'End.BXC with USD',
+    83: 'End.BXC with PSP, USP & USD',
+    84: 'End.NSH - NSH Segment',
+    85: 'End.T with NEXT-CSID',
+    86: 'End.T with NEXT-CSID & PSP',
+    87: 'End.T with NEXT-CSID & USP',
+    88: 'End.T with NEXT-CSID, PSP & USP',
+    89: 'End.T with NEXT-CSID & USD',
+    90: 'End.T with NEXT-CSID, PSP & USD',
+    91: 'End.T with NEXT-CSID, USP & USD',
+    92: 'End.T with NEXT-CSID, PSP, USP & USD',
+    93: 'End.B6.Encaps with NEXT-CSID',
+    94: 'End.B6.Encaps.Red with NEXT-CSID',
+    95: 'End.BM with NEXT-CSID',
+    96: 'End.LBS with NEXT-CSID',
+    97: 'End.XLBS with NEXT-CSID',
+    98: 'End.B6.Encaps.Red with NEXT-CSID, PSP & USD',
+    99: 'End.B6.Insert.Red with NEXT-CSID, PSP & USD',
+    100: 'End.PSID',
+    101: 'End with REPLACE-CSID',
+    102: 'End with REPLACE-CSID & PSP',
+    103: 'End with REPLACE-CSID & USP',
+    104: 'End with REPLACE-CSID, PSP & USP',
+    105: 'End.X with REPLACE-CSID',
+    106: 'End.X with REPLACE-CSID & PSP',
+    107: 'End.X with REPLACE-CSID & USP',
+    108: 'End.X with REPLACE-CSID, PSP & USP',
+    109: 'End.T with REPLACE-CSID',
+    110: 'End.T with REPLACE-CSID & PSP',
+    111: 'End.T with REPLACE-CSID & USP',
+    112: 'End.T with REPLACE-CSID, PSP & USP',
+    114: 'End.B6.Encaps with REPLACE-CSID',
+    115: 'End.BM with REPLACE-CSID',
+    116: 'End.DX6 with REPLACE-CSID',
+    117: 'End.DX4 with REPLACE-CSID',
+    118: 'End.DT6 with REPLACE-CSID',
+    119: 'End.DT4 with REPLACE-CSID',
+    120: 'End.DT46 with REPLACE-CSID',
+    121: 'End.DX2 with REPLACE-CSID',
+    122: 'End.DX2V with REPLACE-CSID',
+    123: 'End.DT2U with REPLACE-CSID',
+    124: 'End.DT2M with REPLACE-CSID',
+    127: 'End.B6.Encaps.Red with REPLACE-CSID',
+    128: 'End with REPLACE-CSID & USD',
+    129: 'End with REPLACE-CSID, PSP & USD',
+    130: 'End with REPLACE-CSID, USP & USD',
+    131: 'End with REPLACE-CSID, PSP, USP & USD',
+    132: 'End.X with REPLACE-CSID & USD',
+    133: 'End.X with REPLACE-CSID, PSP & USD',
+    134: 'End.X with REPLACE-CSID, USP & USD',
+    135: 'End.X with REPLACE-CSID, PSP, USP & USD',
+    136: 'End.T with REPLACE-CSID & USD',
+    137: 'End.T with REPLACE-CSID, PSP & USD',
+    138: 'End.T with REPLACE-CSID, USP & USD',
+    139: 'End.T with REPLACE-CSID, PSP, USP & USD',
+    140: 'End.LBS with REPLACE-CSID',
+    141: 'End.XLBS with REPLACE-CSID',
+    142: 'End.DTM46',
+    143: 'End.DXM4',
+    144: 'End.DXM6',
+    145: 'End.DXM2',
+    150: 'End.XU',
+    151: 'End.XU with PSP',
+    152: 'End.XU with USP',
+    153: 'End.XU with USD',
+    154: 'End.XU with PSP, USP & USD',
+    155: 'End.XU with REPPLACE-CSID',
+    156: 'End.XU with REPPLACE-CSID & PSP',
+    157: 'End.XU with REPPLACE-CSID & PSP & USP & USD',
+    158: 'End.DX1',
+    159: 'End.DX1 with NEXT-CSID',
+    160: 'End.DX1 with REPLACE-CSID',
+    161: 'End.AN - SR-aware function',
+    162: 'End.AS - Static proxy',
+    163: 'End.AD - Dynamic proxy',
+    164: 'End.AM - Masquerading proxy',
+    165: 'End.AM - Masquerading proxy with NAT',
+    166: 'End.AM - Masquerading proxy with Caching',
+    167: 'End.AM - Masquerading proxy with NAT & Caching',
+    168: 'End.M.GTP6.E.Red',
+    169: 'End.AN.CI.S',
+    170: 'End.AN.CI.D.A',
+    171: 'End.AN.CI.D.T',
+    172: 'End.AN.CI.D.V',
+    173: 'End.AN.CI.D.D',
+    180: 'End.AS with REPLACE-CSID',
+    181: 'End.AS with NEXT-CSID',
+    182: 'End.AD with REPLACE-CSID',
+    183: 'End.AD with NEXT-CSID',
+    184: 'End.AM with REPLACE-CSID',
+    185: 'End.AM with NEXT-CSID',
+    186: 'End.AMN with REPLACE-CSID',
+    187: 'End.AMN with NEXT-CSID',
+    32767: 'The SID defined in [RFC8754]',
+    65535: 'Opaque'
 };
 
 function getBgpTunnelTypeName(tunnelType) {
@@ -2939,7 +3099,9 @@ function parseSrv6SidInformationSubTlv(value, errors) {
     }
 
     const sidBuffer = value.length >= 17 ? value.subarray(1, 17) : Buffer.alloc(0);
-    const endpointBehavior = value.length >= 19 ? value.readUInt16BE(17) : null;
+    const flags = value.length >= 18 ? value[17] : null;
+    const endpointBehavior = value.length >= 20 ? value.readUInt16BE(18) : null;
+    const reserved2 = value.length >= 21 ? value[20] : null;
     const subSubTlvBuffer = value.length > 21 ? value.subarray(21) : Buffer.alloc(0);
     const subSubTlvs = parseSrv6ServiceDataSubSubTlvs(subSubTlvBuffer, errors);
     const sidStructureSubSubTlv = subSubTlvs.find(subSubTlv => subSubTlv.type === 1 && subSubTlv.sidStructure);
@@ -2950,8 +3112,8 @@ function parseSrv6SidInformationSubTlv(value, errors) {
         sidHex: sidBuffer.toString('hex'),
         endpointBehavior,
         endpointBehaviorName: endpointBehavior !== null ? getSrv6EndpointBehaviorName(endpointBehavior) : null,
-        reserved2: value.length >= 20 ? value[19] : null,
-        flags: value.length >= 21 ? value[20] : null,
+        reserved2,
+        flags,
         subSubTlvs,
         sidStructure: sidStructureSubSubTlv?.sidStructure || null
     };
@@ -3006,7 +3168,7 @@ function parseBgpPrefixSidSrv6ServiceTlv(type, value, errors) {
     }
 
     const serviceTlv = {
-        serviceType: type === 5 ? 'l3' : type === 6 ? 'l2' : 'transport',
+        serviceType: type === 5 ? 'l3' : type === 6 ? 'l2' : type === 4 ? 'vpn' : 'transport',
         reserved: value.length >= 1 ? value[0] : null,
         subTlvs: [],
         sidInfos: []
@@ -3034,7 +3196,7 @@ function formatBgpPrefixSid(prefixSid) {
     if (Array.isArray(prefixSid.srv6Services)) {
         prefixSid.srv6Services.forEach(service => {
             service.sidInfos.forEach(sidInfo => {
-                const serviceName = service.serviceType === 'l2' ? 'SRv6 L2' : service.serviceType === 'l3' ? 'SRv6 L3' : 'SRv6';
+                const serviceName = service.serviceType === 'l2' ? 'SRv6 L2' : service.serviceType === 'l3' ? 'SRv6 L3' : service.serviceType === 'vpn' ? 'SRv6 VPN' : 'SRv6';
                 parts.push(`${serviceName} ${sidInfo.sid || sidInfo.sidHex} ${sidInfo.endpointBehaviorName || ''}`.trim());
             });
         });
@@ -3098,6 +3260,7 @@ function parseBgpPrefixSidAttribute(buffer) {
                 originatorSrgb = tlv.originatorSrgb;
                 seenRecognizedTypes.add(type);
                 break;
+            case 4:
             case 5:
             case 6:
             case 7:

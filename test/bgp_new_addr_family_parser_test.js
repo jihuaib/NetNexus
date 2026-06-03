@@ -108,8 +108,9 @@ function srv6ServicePrefixSidAttr(serviceTlvType, sidHex, endpointBehavior) {
     const sidInformationValue = Buffer.concat([
         Buffer.from([0]),
         Buffer.from(sidHex, 'hex'),
-        u16(endpointBehavior),
-        Buffer.from([0, 0]),
+        Buffer.from([0]), // Flags (1 byte)
+        u16(endpointBehavior), // Endpoint Behavior (2 bytes)
+        Buffer.from([0]), // Reserved (1 byte)
         sidStructureSubSubTlv
     ]);
     const sidInformationSubTlv = Buffer.concat([Buffer.from([1]), u16(sidInformationValue.length), sidInformationValue]);
@@ -302,6 +303,27 @@ assert.equal(srv6SidInfo.sidStructure.locatorNodeLength, 16);
 assert.equal(srv6SidInfo.sidStructure.functionLength, 16);
 assert.equal(srv6PrefixSidAttrParsed.prefixSid.formatted, 'SRv6 L3 2001:db8::1 End.DT4');
 assert.ok(getBgpPacketSummary(srv6PrefixSidPacket).includes('PREFIX_SID: SRv6 L3 2001:db8::1 End.DT4'));
+
+const srv6VpnPrefixSidPacket = parseUpdateWithMpReach(
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    Buffer.from([1, 1, 1, 1]),
+    Buffer.concat([Buffer.from([24]), Buffer.from([203, 0, 113])]),
+    [srv6ServicePrefixSidAttr(4, '20010db8000000000000000000000001', 19)]
+);
+const srv6VpnPrefixSidAttrParsed = srv6VpnPrefixSidPacket.pathAttributes.find(
+    attr => attr.typeCode === BgpConst.BGP_PATH_ATTR.PREFIX_SID
+);
+const srv6VpnService = srv6VpnPrefixSidAttrParsed.prefixSid.srv6Services[0];
+const srv6VpnSidInfo = srv6VpnService.sidInfos[0];
+assert.equal(srv6VpnPrefixSidPacket.valid, true);
+assert.equal(srv6VpnService.serviceType, 'vpn');
+assert.equal(srv6VpnSidInfo.sid, '2001:db8::1');
+assert.equal(srv6VpnSidInfo.endpointBehavior, 19);
+assert.equal(srv6VpnSidInfo.endpointBehaviorName, 'End.DT4');
+assert.equal(srv6VpnPrefixSidAttrParsed.prefixSid.formatted, 'SRv6 VPN 2001:db8::1 End.DT4');
+assert.ok(getBgpPacketSummary(srv6VpnPrefixSidPacket).includes('PREFIX_SID: SRv6 VPN 2001:db8::1 End.DT4'));
+
 
 const ipv6LabeledUnicast = firstReachRoute(
     parseUpdateWithMpReach(
