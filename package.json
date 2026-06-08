@@ -54,6 +54,7 @@
         "dist": "electron-builder --win --x64",
         "dist:mac": "electron-builder --mac --x64",
         "dist:mac:arm64": "electron-builder --mac --arm64",
+        "dist:mac:all": "electron-builder --mac",
         "dist:mac:universal": "electron-builder --mac --universal",
         "prepack": "npm run build",
         "prepack:mac": "npm run build",
@@ -61,6 +62,7 @@
         "predist": "npm run build",
         "predist:mac": "npm run build",
         "predist:mac:arm64": "npm run build",
+        "predist:mac:all": "npm run build",
         "predist:mac:universal": "npm run build",
         "format": "prettier --write .",
         "release": "node scripts/release.js",
@@ -97,7 +99,8 @@
             "releaseType": "release"
         },
         "directories": {
-            "buildResources": "electron/assets"
+            "buildResources": "electron/assets",
+            "output": "release"
         },
         "win": {
             "target": [

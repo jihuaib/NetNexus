@@ -19,7 +19,7 @@ Usage: node release.js [options]
 
 Options:
   --help, -h          显示帮助信息
-  --gitee-only        只发布到 Gitee（不编译，需要先有 tag 和 dist 文件）
+  --gitee-only        只发布到 Gitee（不编译，需要先有 tag 和 release 文件）
   --win               构建 Windows 版本
   --mac               构建 macOS 版本
 Examples:
@@ -132,9 +132,9 @@ async function createGiteeRelease() {
     }
 
     // Step 2: Upload files
-    const distPath = path.join(__dirname, '../dist');
+    const distPath = path.join(__dirname, '../release');
     if (!fs.existsSync(distPath)) {
-        console.log('⚠️  dist directory not found, skipping file upload');
+        console.log('⚠️  release directory not found, skipping file upload');
         return;
     }
 
@@ -150,7 +150,7 @@ async function createGiteeRelease() {
         );
 
     if (files.length === 0) {
-        console.log('⚠️  No installation files found in dist directory');
+        console.log('⚠️  No installation files found in release directory');
         return;
     }
 
