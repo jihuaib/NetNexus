@@ -129,11 +129,15 @@ contextBridge.exposeInMainWorld('bmpApi', {
     // 数据获取
     getClientList: () => ipcRenderer.invoke('bmp:getClientList'),
     getBgpSessions: client => ipcRenderer.invoke('bmp:getBgpSessions', client),
-    getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState) =>
-        ipcRenderer.invoke('bmp:getBgpRoutes', client, session, af, ribType, page, pageSize, routeState),
+    getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState, prefixFilter) =>
+        ipcRenderer.invoke('bmp:getBgpRoutes', client, session, af, ribType, page, pageSize, routeState, prefixFilter),
+    getBgpRouteDetail: (client, session, af, ribType, routeKey) =>
+        ipcRenderer.invoke('bmp:getBgpRouteDetail', client, session, af, ribType, routeKey),
     getBgpInstances: client => ipcRenderer.invoke('bmp:getBgpInstances', client),
-    getBgpInstanceRoutes: (client, instance, page, pageSize, routeState) =>
-        ipcRenderer.invoke('bmp:getBgpInstanceRoutes', client, instance, page, pageSize, routeState),
+    getBgpInstanceRoutes: (client, instance, page, pageSize, routeState, prefixFilter) =>
+        ipcRenderer.invoke('bmp:getBgpInstanceRoutes', client, instance, page, pageSize, routeState, prefixFilter),
+    getBgpInstanceRouteDetail: (client, instance, routeKey) =>
+        ipcRenderer.invoke('bmp:getBgpInstanceRouteDetail', client, instance, routeKey),
     purgeStaleBgpRoutes: (client, session, af, ribType) =>
         ipcRenderer.invoke('bmp:purgeStaleBgpRoutes', client, session, af, ribType),
     purgeStaleBgpInstanceRoutes: (client, instance) =>
@@ -155,7 +159,9 @@ contextBridge.exposeInMainWorld('rpkiApi', {
     // roa操作
     addRoa: roa => ipcRenderer.invoke('rpki:addRoa', roa),
     deleteRoa: roa => ipcRenderer.invoke('rpki:deleteRoa', roa),
-    getRoaList: () => ipcRenderer.invoke('rpki:getRoaList'),
+    deleteAllRoa: () => ipcRenderer.invoke('rpki:deleteAllRoa'),
+    getRoaList: options => ipcRenderer.invoke('rpki:getRoaList', options),
+    importRoaJson: () => ipcRenderer.invoke('rpki:importRoaJson'),
     getClientList: () => ipcRenderer.invoke('rpki:getClientList'),
 
     // router key (v1+)

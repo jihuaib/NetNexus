@@ -36,6 +36,7 @@ class SystemApp {
         this.deploymentConfigFileKey = 'DeploymentConfig';
         this.keychainsFileKey = 'keychains';
         this.appVersionFileKey = 'appVersion';
+        this.currentLogLevel = DEFAULT_LOG_SETTINGS.logLevel;
 
         this.store = new Store({
             name: 'Settings Data',
@@ -320,16 +321,17 @@ class SystemApp {
 
     handleSaveGeneralSettings(settings) {
         try {
-            this.store.set(this.generalSettingsFileKey, settings);
-
-            if (settings.logLevel) {
-                logger.raw().transports.file.level = settings.logLevel;
-                this.bgpApp.logLevel = settings.logLevel;
-                this.bmpApp.logLevel = settings.logLevel;
-                this.rpkiApp.logLevel = settings.logLevel;
-                this.ftpApp.logLevel = settings.logLevel;
-                this.snmpApp.logLevel = settings.logLevel;
+            const logLevel = settings.logLevel || DEFAULT_LOG_SETTINGS.logLevel;
+            const normalizedSettings = {
+                ...settings
+            };
+            delete normalizedSettings.logLevel;
+            if (Object.keys(normalizedSettings).length > 0) {
+                this.store.set(this.generalSettingsFileKey, normalizedSettings);
+            } else {
+                this.store.delete(this.generalSettingsFileKey);
             }
+            this.applyLogLevel(logLevel);
             return successResponse(null, 'Settings saved successfully');
         } catch (error) {
             logger.error('Error saving settings:', error.message);
@@ -339,11 +341,14 @@ class SystemApp {
 
     handleGetGeneralSettings() {
         try {
-            const settings = this.store.get(this.generalSettingsFileKey);
-            if (!settings) {
-                return successResponse(null, 'Settings not found');
-            }
-            return successResponse(settings, 'Settings loaded successfully');
+            const settings = this.purgeStoredLogLevel();
+            return successResponse(
+                {
+                    ...(settings || {}),
+                    logLevel: this.currentLogLevel
+                },
+                'Settings loaded successfully'
+            );
         } catch (error) {
             logger.error('Error getting settings:', error.message);
             return errorResponse(error.message);
@@ -450,22 +455,45 @@ class SystemApp {
         this.showSoftwareInfo();
     }
 
-    loadSettings() {
-        const settings = this.store.get(this.generalSettingsFileKey);
+    applyLogLevel(logLevel) {
+        this.currentLogLevel = logLevel || DEFAULT_LOG_SETTINGS.logLevel;
+        logger.setLevel(this.currentLogLevel);
+        this.bgpApp.logLevel = this.currentLogLevel;
+        this.bmpApp.logLevel = this.currentLogLevel;
+        this.rpkiApp.logLevel = this.currentLogLevel;
+        this.ftpApp.logLevel = this.currentLogLevel;
+        this.snmpApp.logLevel = this.currentLogLevel;
+    }
 
-        // 加载通用设置
-        let logLevel = DEFAULT_LOG_SETTINGS.logLevel;
-        if (settings) {
-            if (settings.logLevel) {
-                logLevel = settings.logLevel;
-            }
+    purgeStoredLogLevel() {
+        const settings = this.store.get(this.generalSettingsFileKey);
+        if (!settings || typeof settings !== 'object') {
+            return null;
         }
-        logger.raw().transports.file.level = logLevel;
-        this.bgpApp.logLevel = logLevel;
-        this.bmpApp.logLevel = logLevel;
-        this.rpkiApp.logLevel = logLevel;
-        this.ftpApp.logLevel = logLevel;
-        this.snmpApp.logLevel = logLevel;
+
+        if (!Object.prototype.hasOwnProperty.call(settings, 'logLevel')) {
+            return settings;
+        }
+
+        const sanitizedSettings = {
+            ...settings
+        };
+        delete sanitizedSettings.logLevel;
+
+        if (Object.keys(sanitizedSettings).length > 0) {
+            this.store.set(this.generalSettingsFileKey, sanitizedSettings);
+            return sanitizedSettings;
+        }
+
+        this.store.delete(this.generalSettingsFileKey);
+        return null;
+    }
+
+    loadSettings() {
+        this.purgeStoredLogLevel();
+
+        // 日志级别不再持久化，启动时固定关闭。设置页保存后仅当前运行期间生效。
+        this.applyLogLevel(DEFAULT_LOG_SETTINGS.logLevel);
 
         // 加载工具设置
         let maxMessageHistory = DEFAULT_TOOLS_SETTINGS.packetParser.maxMessageHistory;

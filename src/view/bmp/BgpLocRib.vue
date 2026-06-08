@@ -74,6 +74,14 @@
                                                         过期
                                                     </a-radio-button>
                                                 </a-radio-group>
+                                                <a-input
+                                                    v-model:value="routePrefixFilter"
+                                                    allow-clear
+                                                    placeholder="Prefix 或 Prefix/Mask"
+                                                    style="width: 220px"
+                                                    @pressEnter="searchInstanceRoutes"
+                                                />
+                                                <a-button type="primary" @click="searchInstanceRoutes">查询</a-button>
                                                 <a-tag color="green">当前 {{ routeSummary.active }}</a-tag>
                                                 <a-tag color="orange">过期 {{ routeSummary.stale }}</a-tag>
                                                 <a-button
@@ -146,9 +154,11 @@
             @close="closeDetailsDrawer"
         >
             <template v-if="currentDetails">
-                <pre v-if="currentDetails.summary" class="route-summary-pre">{{ currentDetails.summary }}</pre>
-                <a-divider v-if="currentDetails.summary" orientation="left">结构化数据</a-divider>
-                <pre>{{ JSON.stringify(currentDetails, null, 2) }}</pre>
+                <template v-if="detailsDrawerMode === 'route'">
+                    <pre v-if="currentDetails.summary" class="route-summary-pre">{{ currentDetails.summary }}</pre>
+                    <a-empty v-else description="暂无解析结果" />
+                </template>
+                <pre v-else>{{ JSON.stringify(currentDetails, null, 2) }}</pre>
             </template>
         </a-drawer>
     </div>
@@ -297,11 +307,13 @@
     // Details drawer
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
+    const detailsDrawerMode = ref('json');
     const currentDetails = ref(null);
 
     // Close details drawer
     const closeDetailsDrawer = () => {
         detailsDrawerVisible.value = false;
+        detailsDrawerMode.value = 'json';
         currentDetails.value = null;
     };
 
@@ -348,8 +360,7 @@
         const instKey = `${update.instance.instanceType}|${update.instance.instanceRd}|${update.instance.addrFamilyType}`;
 
         if (instKey === activeInstanceKey.value) {
-            bgpRoutePagination.value.current = 1;
-            loadInstanceRoutes();
+            scheduleRouteRefresh();
         }
     };
 
@@ -403,7 +414,33 @@
 
     const bgpRouteList = ref([]);
     const routeStateFilter = ref(BMP_ROUTE_STATE_FILTER.ALL);
+    const routePrefixFilter = ref('');
+    const appliedRoutePrefixFilter = ref('');
     const routeSummary = ref({ active: 0, stale: 0, total: 0 });
+    const ROUTE_AUTO_REFRESH_INTERVAL_MS = 1500;
+    let routeAutoRefreshTimer = null;
+    let lastRouteAutoRefreshAt = 0;
+
+    const clearScheduledRouteRefresh = () => {
+        if (routeAutoRefreshTimer) {
+            clearTimeout(routeAutoRefreshTimer);
+            routeAutoRefreshTimer = null;
+        }
+    };
+
+    const scheduleRouteRefresh = () => {
+        if (routeAutoRefreshTimer) {
+            return;
+        }
+
+        const delay = Math.max(0, ROUTE_AUTO_REFRESH_INTERVAL_MS - (Date.now() - lastRouteAutoRefreshAt));
+        routeAutoRefreshTimer = setTimeout(() => {
+            routeAutoRefreshTimer = null;
+            lastRouteAutoRefreshAt = Date.now();
+            bgpRoutePagination.value.current = 1;
+            loadInstanceRoutes();
+        }, delay);
+    };
 
     // Instance Logic
     const bgpInstances = ref([]);
@@ -438,6 +475,12 @@
         }
     };
 
+    const searchInstanceRoutes = () => {
+        appliedRoutePrefixFilter.value = (routePrefixFilter.value || '').trim();
+        bgpRoutePagination.value.current = 1;
+        loadInstanceRoutes();
+    };
+
     const loadInstanceRoutes = async () => {
         if (!activeClientKey.value) return;
 
@@ -459,7 +502,8 @@
                 instance,
                 page,
                 pageSize,
-                routeStateFilter.value
+                routeStateFilter.value,
+                appliedRoutePrefixFilter.value
             );
             if (res.status === 'success' && res.data) {
                 bgpRouteList.value = res.data.list;
@@ -504,19 +548,50 @@
     };
 
     const viewInstanceDetails = record => {
+        detailsDrawerMode.value = 'json';
         currentDetails.value = record;
         detailsDrawerTitle.value = `Instance 详情: ${record.instanceRd}`;
         detailsDrawerVisible.value = true;
     };
 
-    const viewRouteDetails = record => {
-        currentDetails.value = record;
+    const viewRouteDetails = async record => {
+        detailsDrawerMode.value = 'route';
         detailsDrawerTitle.value = `路由详情: ${record.ip || ''}`;
         detailsDrawerVisible.value = true;
+        currentDetails.value = null;
+
+        if (!activeClientKey.value || !activeInstanceKey.value) {
+            currentDetails.value = record;
+            return;
+        }
+
+        const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
+        const client = { localIp, localPort, remoteIp, remotePort };
+        const instance = {
+            instanceType: activeInstanceKey.value.split('|')[0],
+            instanceRd: activeInstanceKey.value.split('|')[1],
+            addrFamilyType: activeInstanceKey.value.split('|')[2]
+        };
+        const routeKey = record.routeKey || `${record.pathId}|${record.rd}|${record.ip}|${record.mask}`;
+
+        try {
+            const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey);
+            if (res.status === 'success' && res.data) {
+                currentDetails.value = res.data;
+            } else {
+                currentDetails.value = record;
+                message.error('查询路由详情失败');
+            }
+        } catch (error) {
+            console.error(error);
+            currentDetails.value = record;
+            message.error('查询路由详情失败');
+        }
     };
 
     // 监听activeClientKey变化，加载对应的peer列表 AND instances
     watch(activeClientKey, _newKey => {
+        clearScheduledRouteRefresh();
         activeInstanceKey.value = '';
         bgpRouteList.value = [];
         bgpInstances.value = [];
@@ -541,6 +616,7 @@
     });
 
     onDeactivated(() => {
+        clearScheduledRouteRefresh();
         EventBus.off('bmp:instanceUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB);
         EventBus.off('bmp:instanceRouteUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB);
         EventBus.off('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB);

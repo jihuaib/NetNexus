@@ -162,7 +162,9 @@
 
                 <a-form-item :wrapper-col="{ offset: 8, span: 16 }">
                     <a-space size="middle">
-                        <a-button type="primary" @click="generateRoutes">生成MVPN路由</a-button>
+                        <a-button type="primary" :loading="routesGenerating" @click="generateRoutes">
+                            生成MVPN路由
+                        </a-button>
                         <a-button type="primary" danger :disabled="!hasRoutes" @click="deleteRoutes">
                             删除MVPN路由
                         </a-button>
@@ -232,7 +234,7 @@
 </template>
 
 <script setup>
-    import { onMounted, ref, computed, watch, onActivated } from 'vue';
+    import { onMounted, ref, computed, watch, onActivated, nextTick } from 'vue';
     import { message } from 'ant-design-vue';
     import { UnorderedListOutlined, DeleteOutlined } from '@ant-design/icons-vue';
     import { BGP_ADDR_FAMILY, DEFAULT_VALUES, BGP_MVPN_ROUTE_TYPE } from '../../const/bgpConst';
@@ -309,6 +311,7 @@
     const sentRoutes = ref([]);
     const hasRoutes = computed(() => pagination.value.total > 0);
     const activeMvpnTab = ref(null);
+    const routesGenerating = ref(false);
 
     const getRouteColumns = type => {
         const commonColumns = [
@@ -429,6 +432,10 @@
     };
 
     const generateRoutes = async () => {
+        if (routesGenerating.value) {
+            return;
+        }
+
         try {
             const hasErrors = validator.validate(ipv4MvpnData.value);
             if (hasErrors) {
@@ -459,6 +466,9 @@
                 config = ipv4MvpnData.value;
             }
 
+            routesGenerating.value = true;
+            await nextTick();
+
             const saveResult = await window.bgpApi.saveIpv4MvpnRouteConfig(config);
             if (saveResult.status !== 'success') {
                 message.error(saveResult.msg || '配置文件保存失败');
@@ -476,6 +486,8 @@
             }
         } catch (e) {
             message.error(`MVPN路由生成失败: ${e.message}`);
+        } finally {
+            routesGenerating.value = false;
         }
     };
 

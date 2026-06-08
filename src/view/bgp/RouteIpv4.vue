@@ -47,7 +47,7 @@
                     </a-button>
                 </a-form-item>
                 <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                    <a-button type="primary" @click="generateRoutes">生成IPv4路由</a-button>
+                    <a-button type="primary" :loading="routesGenerating" @click="generateRoutes">生成IPv4路由</a-button>
                 </a-form-item>
 
                 <!-- 路由列表 -->
@@ -122,7 +122,7 @@
 </template>
 
 <script setup>
-    import { onMounted, ref, computed, onActivated } from 'vue';
+    import { onMounted, ref, computed, onActivated, nextTick } from 'vue';
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import RouteViewsImportModal from '../../components/RouteViewsImportModal.vue';
     import { message, Modal } from 'ant-design-vue';
@@ -167,6 +167,7 @@
 
     const sentRoutes = ref([]);
     const hasRoutes = computed(() => pagination.value.total > 0);
+    const routesGenerating = ref(false);
 
     const customRouteAttrVisible = ref(false);
 
@@ -285,12 +286,19 @@
     };
 
     const generateRoutes = async () => {
+        if (routesGenerating.value) {
+            return;
+        }
+
         try {
             const hasErrors = validator.validate(ipv4Data.value);
             if (hasErrors) {
                 message.error('请检查IPv4路由配置信息是否正确');
                 return;
             }
+
+            routesGenerating.value = true;
+            await nextTick();
 
             const payload = JSON.parse(JSON.stringify(ipv4Data.value));
             const saveResult = await window.bgpApi.saveIpv4UNCRouteConfig(payload);
@@ -309,6 +317,8 @@
             }
         } catch (e) {
             message.error(`IPv4路由生成失败: ${e.message}`);
+        } finally {
+            routesGenerating.value = false;
         }
     };
 

@@ -17,11 +17,45 @@ try {
 log.transports.file.maxSize = 5 * 1024 * 1024; // 5MB
 log.transports.file.maxFiles = 3; // 最多保留3个日志文件
 log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}';
-log.transports.file.level = 'warn';
+log.transports.file.level = false;
+if (log.transports.console) {
+    log.transports.console.level = false;
+}
+
+const LOG_LEVEL_OFF = 'off';
+const LOG_LEVELS = {
+    debug: 10,
+    info: 20,
+    warn: 30,
+    error: 40
+};
 
 class Logger {
     constructor() {
         this.logger = log;
+        this.logLevel = LOG_LEVEL_OFF;
+    }
+
+    normalizeLevel(level) {
+        return Object.prototype.hasOwnProperty.call(LOG_LEVELS, level) ? level : LOG_LEVEL_OFF;
+    }
+
+    setLevel(level) {
+        this.logLevel = this.normalizeLevel(level);
+        const transportLevel = this.logLevel === LOG_LEVEL_OFF ? false : this.logLevel;
+        if (this.logger.transports.file) {
+            this.logger.transports.file.level = transportLevel;
+        }
+        if (this.logger.transports.console) {
+            this.logger.transports.console.level = transportLevel;
+        }
+    }
+
+    shouldLog(level) {
+        if (this.logLevel === LOG_LEVEL_OFF) {
+            return false;
+        }
+        return LOG_LEVELS[level] >= LOG_LEVELS[this.logLevel];
     }
 
     // 获取调用函数、文件、行号
@@ -51,18 +85,22 @@ class Logger {
 
     // 日志接口
     info(...args) {
+        if (!this.shouldLog('info')) return;
         this.logger.info(this.buildPrefix(), ...args);
     }
 
     warn(...args) {
+        if (!this.shouldLog('warn')) return;
         this.logger.warn(this.buildPrefix(), ...args);
     }
 
     error(...args) {
+        if (!this.shouldLog('error')) return;
         this.logger.error(this.buildPrefix(), ...args);
     }
 
     debug(...args) {
+        if (!this.shouldLog('debug')) return;
         this.logger.debug(this.buildPrefix(), ...args);
     }
 

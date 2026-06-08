@@ -1,7 +1,7 @@
 const net = require('net');
 const util = require('util');
 const BgpConst = require('../const/bgpConst');
-const { genRouteIps } = require('../utils/ipUtils');
+const { forEachGeneratedRouteIp } = require('../utils/ipUtils');
 const { getAfiAndSafi, getAddrFamilyType } = require('../utils/bgpUtils');
 const logger = require('../log/logger');
 const WorkerMessageHandler = require('./workerMessageHandler');
@@ -180,7 +180,7 @@ class BgpWorker {
 
         // 设置日志级别
         if (this.bgpConfigData.logLevel) {
-            logger.raw().transports.file.level = this.bgpConfigData.logLevel;
+            logger.setLevel(this.bgpConfigData.logLevel);
             logger.info(`Worker log level set to: ${this.bgpConfigData.logLevel}`);
         }
 
@@ -545,14 +545,8 @@ class BgpWorker {
 
         // 生成路由IP
         const ipType = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
-        const routes = genRouteIps(ipType, config.prefix, config.mask, config.count);
-        if (routes.length === 0) {
-            this.messageHandler.sendSuccessResponse(messageId, null, '路由生成成功');
-            return;
-        }
-
         let hasRouteChanged = false;
-        routes.forEach(route => {
+        const generatedCount = forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, route => {
             const key = BgpRoute.makeKey(route.ip, route.mask);
             if (!instance.routeMap.has(key)) {
                 const bgpRoute = new BgpRoute(instance);
@@ -562,6 +556,10 @@ class BgpWorker {
                 hasRouteChanged = true;
             }
         });
+        if (generatedCount === 0) {
+            this.messageHandler.sendSuccessResponse(messageId, null, '路由生成成功');
+            return;
+        }
 
         if (instance.customAttr !== config.customAttr) {
             instance.customAttr = config.customAttr;
@@ -592,15 +590,8 @@ class BgpWorker {
 
         // 生成路由IP
         const ipType = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
-        const routes = genRouteIps(ipType, config.prefix, config.mask, config.count);
-        if (routes.length === 0) {
-            this.messageHandler.sendSuccessResponse(messageId, null, '路由删除成功');
-            return;
-        }
-
         const withdrawnRoutes = [];
-
-        routes.forEach(route => {
+        const generatedCount = forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, route => {
             const key = BgpRoute.makeKey(route.ip, route.mask);
             if (instance.routeMap.has(key)) {
                 const bgpRoute = instance.routeMap.get(key);
@@ -608,6 +599,10 @@ class BgpWorker {
                 withdrawnRoutes.push(bgpRoute);
             }
         });
+        if (generatedCount === 0) {
+            this.messageHandler.sendSuccessResponse(messageId, null, '路由删除成功');
+            return;
+        }
 
         if (withdrawnRoutes.length > 0) {
             instance.withdrawRoute(withdrawnRoutes);
@@ -668,16 +663,9 @@ class BgpWorker {
         // 生成路由：IPv4 QP 使用 IPv4 前缀格式，IPv6 QP 使用 IPv6 前缀格式
         const ipType =
             config.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
-        const { genRouteIps } = require('../utils/ipUtils');
-        const routes = genRouteIps(ipType, config.prefix, config.mask, config.count);
-        if (routes.length === 0) {
-            this.messageHandler.sendSuccessResponse(messageId, null, 'QP路由生成成功');
-            return;
-        }
-
         let hasRouteChanged = false;
         const startDqpn = parseInt(config.startDqpn) || 0;
-        routes.forEach((route, index) => {
+        const generatedCount = forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, (route, index) => {
             const dqpn = startDqpn + index;
             const key = BgpRoute.makeQpKey(dqpn, route.ip, route.mask);
             if (!instance.routeMap.has(key)) {
@@ -696,6 +684,10 @@ class BgpWorker {
                 }
             }
         });
+        if (generatedCount === 0) {
+            this.messageHandler.sendSuccessResponse(messageId, null, 'QP路由生成成功');
+            return;
+        }
 
         if (instance.customAttr !== config.customAttr) {
             instance.customAttr = config.customAttr;
@@ -720,16 +712,9 @@ class BgpWorker {
 
         const ipType =
             config.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
-        const { genRouteIps } = require('../utils/ipUtils');
-        const routes = genRouteIps(ipType, config.prefix, config.mask, config.count);
-        if (routes.length === 0) {
-            this.messageHandler.sendSuccessResponse(messageId, null, 'QP路由删除成功');
-            return;
-        }
-
         const withdrawnRoutes = [];
         const startDqpn = parseInt(config.startDqpn) || 0;
-        routes.forEach((route, index) => {
+        const generatedCount = forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, (route, index) => {
             const dqpn = startDqpn + index;
             const key = BgpRoute.makeQpKey(dqpn, route.ip, route.mask);
             if (instance.routeMap.has(key)) {
@@ -738,6 +723,10 @@ class BgpWorker {
                 withdrawnRoutes.push(bgpRoute);
             }
         });
+        if (generatedCount === 0) {
+            this.messageHandler.sendSuccessResponse(messageId, null, 'QP路由删除成功');
+            return;
+        }
 
         if (withdrawnRoutes.length > 0) {
             instance.withdrawRoute(withdrawnRoutes);
@@ -837,16 +826,58 @@ class BgpWorker {
             return;
         }
 
-        const routes = [];
-        instance.routeMap.forEach((route, _) => {
-            const routeInfo = route.getRouteInfo();
-            routes.push(routeInfo);
-        });
+        const currentPage = Math.max(1, parseInt(page, 10) || 1);
+        const currentPageSize = Math.max(1, parseInt(pageSize, 10) || 10);
+        const total = instance.routeMap.size;
+        const startIndex = (currentPage - 1) * currentPageSize;
+        const list = [];
 
-        const total = routes.length;
-        const list = routes.slice((page - 1) * pageSize, page * pageSize);
+        let index = 0;
+        for (const route of instance.routeMap.values()) {
+            if (index >= startIndex) {
+                list.push(route.getRouteInfo());
+                if (list.length >= currentPageSize) {
+                    break;
+                }
+            }
+            index += 1;
+        }
 
         this.messageHandler.sendSuccessResponse(messageId, { list, total }, '路由查询成功');
+    }
+
+    getMvpnBaseIp(config) {
+        if (config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.INTRA_AS_I_PMSI_AD) {
+            return config.originatingRouterIp;
+        }
+
+        if (
+            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.S_PMSI_AD ||
+            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_ACTIVE_AD ||
+            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.SHARED_TREE_JOIN ||
+            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_TREE_JOIN
+        ) {
+            return config.groupIp;
+        }
+
+        return '';
+    }
+
+    forEachMvpnGeneratedIp(config, callback) {
+        const baseIp = this.getMvpnBaseIp(config);
+        if (baseIp) {
+            return forEachGeneratedRouteIp(
+                BgpConst.IP_TYPE.IPV4,
+                baseIp,
+                BgpConst.IP_HOST_LEN,
+                config.count,
+                callback
+            );
+        }
+
+        // Types without IP increment (for example Type 2) keep the existing single-entry behavior.
+        callback({ ip: '' }, 0);
+        return 1;
     }
 
     generateMvpnRoutes(messageId, config) {
@@ -860,33 +891,7 @@ class BgpWorker {
 
         let hasRouteChanged = false;
 
-        let baseIp = '';
-        if (config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.INTRA_AS_I_PMSI_AD) {
-            baseIp = config.originatingRouterIp;
-        } else if (
-            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.S_PMSI_AD ||
-            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_ACTIVE_AD ||
-            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.SHARED_TREE_JOIN ||
-            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_TREE_JOIN
-        ) {
-            baseIp = config.groupIp;
-        }
-
-        let ips = [];
-        if (baseIp) {
-            ips = genRouteIps(BgpConst.IP_TYPE.IPV4, baseIp, BgpConst.IP_HOST_LEN, config.count);
-        } else {
-            // types without IP increment (e.g. Type 2), treat as single or implement RD increment if needed.
-            // For now, if no base IP found, generate 1 entry (loop once)
-            ips = [{ ip: '' }];
-        }
-
-        if (ips.length === 0) {
-            this.messageHandler.sendSuccessResponse(messageId, null, '路由生成成功');
-            return;
-        }
-
-        ips.forEach(ipObj => {
+        const generatedCount = this.forEachMvpnGeneratedIp(config, ipObj => {
             const currentIp = ipObj.ip;
 
             // Construct dynamic values based on the incrementing IP
@@ -944,6 +949,10 @@ class BgpWorker {
                 hasRouteChanged = true;
             }
         });
+        if (generatedCount === 0) {
+            this.messageHandler.sendSuccessResponse(messageId, null, '路由生成成功');
+            return;
+        }
 
         if (instance.rt !== config.rt) {
             instance.rt = config.rt;
@@ -953,7 +962,7 @@ class BgpWorker {
             instance.sendRoute();
         }
 
-        this.messageHandler.sendSuccessResponse(messageId, null, `MVPN路由生成成功，共${ips.length}条`);
+        this.messageHandler.sendSuccessResponse(messageId, null, `MVPN路由生成成功，共${generatedCount}条`);
     }
 
     deleteMvpnRoutes(messageId, config) {
@@ -965,32 +974,8 @@ class BgpWorker {
             return;
         }
 
-        let baseIp = '';
-        if (config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.INTRA_AS_I_PMSI_AD) {
-            baseIp = config.originatingRouterIp;
-        } else if (
-            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.S_PMSI_AD ||
-            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_ACTIVE_AD ||
-            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.SHARED_TREE_JOIN ||
-            config.routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_TREE_JOIN
-        ) {
-            baseIp = config.groupIp;
-        }
-
-        let ips = [];
-        if (baseIp) {
-            ips = genRouteIps(BgpConst.IP_TYPE.IPV4, baseIp, BgpConst.IP_HOST_LEN, config.count);
-        } else {
-            ips = [{ ip: '' }];
-        }
-
-        if (ips.length === 0) {
-            this.messageHandler.sendSuccessResponse(messageId, null, '路由删除成功');
-            return;
-        }
-
         const withdrawnRoutes = [];
-        ips.forEach(ipObj => {
+        const generatedCount = this.forEachMvpnGeneratedIp(config, ipObj => {
             const currentIp = ipObj.ip;
 
             // Construct dynamic values based on the incrementing IP
@@ -1012,6 +997,10 @@ class BgpWorker {
                 withdrawnRoutes.push(bgpRoute);
             }
         });
+        if (generatedCount === 0) {
+            this.messageHandler.sendSuccessResponse(messageId, null, '路由删除成功');
+            return;
+        }
 
         if (withdrawnRoutes.length > 0) {
             instance.withdrawRoute(withdrawnRoutes);

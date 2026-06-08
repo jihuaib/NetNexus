@@ -31,7 +31,7 @@ class WorkerMessageHandler {
 
         parentPort.on('message', message => {
             const { messageId, op, data } = message;
-            logger.info(`recv msg: ${JSON.stringify(message)}`);
+            logger.info(`recv msg: ${JSON.stringify(this.summarizeMessage(message))}`);
 
             if (!op) {
                 this.sendErrorResponse(messageId, 'Invalid message format: missing operation');
@@ -51,6 +51,27 @@ class WorkerMessageHandler {
                 this.sendErrorResponse(messageId, `No handler registered for operation: ${op}`);
             }
         });
+    }
+
+    summarizeMessage(message) {
+        const summarize = value => {
+            if (Array.isArray(value)) {
+                return `[Array(${value.length})]`;
+            }
+            if (value && typeof value === 'object') {
+                const summary = {};
+                for (const [key, item] of Object.entries(value)) {
+                    summary[key] = Array.isArray(item) ? `[Array(${item.length})]` : item;
+                }
+                return summary;
+            }
+            return value;
+        };
+
+        return {
+            ...message,
+            data: summarize(message.data)
+        };
     }
 
     // worker注册消息处理器

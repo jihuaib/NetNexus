@@ -6,7 +6,10 @@ const BmpSession = require('./bmpSession');
 const SshTunnel = require('./sshTunnel');
 const { getAfiAndSafi } = require('../utils/bgpUtils');
 const BmpBgpSession = require('./bmpBgpSession');
+const BmpBgpRoute = require('./bmpBgpRoute');
 const BmpConst = require('../const/bmpConst');
+const { buildRoutePrefixQuery, routeMatchesPrefixQuery } = require('../utils/routePrefixUtils');
+const RouteUpdateAggregator = require('../utils/routeUpdateAggregator');
 
 class BmpWorker {
     constructor() {
@@ -18,6 +21,9 @@ class BmpWorker {
         this.sshTunnel = null; // SSH隧道（用于MD5认证）
 
         this.bmpSessionMap = new Map(); // bmp会话map
+        this.routeUpdateAggregator = new RouteUpdateAggregator();
+        this.routeUpdateFlushTimer = null;
+        this.routeUpdateFlushIntervalMs = 1000;
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler();
@@ -29,10 +35,18 @@ class BmpWorker {
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST, this.getClientList.bind(this));
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_BGP_SESSIONS, this.getBgpSessions.bind(this));
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTES, this.getBgpRoutes.bind(this));
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTE_DETAIL,
+            this.getBgpRouteDetail.bind(this)
+        );
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCES, this.getBgpInstances.bind(this));
         this.messageHandler.registerHandler(
             BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_ROUTES,
             this.getBgpInstanceRoutes.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_ROUTE_DETAIL,
+            this.getBgpInstanceRouteDetail.bind(this)
         );
         this.messageHandler.registerHandler(
             BmpConst.BMP_REQ_TYPES.PURGE_STALE_BGP_ROUTES,
@@ -50,6 +64,51 @@ class BmpWorker {
             BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_STATISTICS_REPORTS,
             this.getBgpInstanceStatisticsReports.bind(this)
         );
+    }
+
+    enqueueRouteUpdateEvent(update) {
+        this.routeUpdateAggregator.enqueueRouteUpdate(update);
+        this.scheduleRouteUpdateFlush();
+    }
+
+    enqueueInstanceRouteUpdateEvent(update) {
+        this.routeUpdateAggregator.enqueueInstanceRouteUpdate(update);
+        this.scheduleRouteUpdateFlush();
+    }
+
+    scheduleRouteUpdateFlush() {
+        if (this.routeUpdateFlushTimer) {
+            return;
+        }
+
+        this.routeUpdateFlushTimer = setTimeout(() => {
+            this.flushRouteUpdateEvents();
+        }, this.routeUpdateFlushIntervalMs);
+    }
+
+    flushRouteUpdateEvents() {
+        if (this.routeUpdateFlushTimer) {
+            clearTimeout(this.routeUpdateFlushTimer);
+            this.routeUpdateFlushTimer = null;
+        }
+
+        const routeUpdates = this.routeUpdateAggregator.flushRouteUpdates();
+        const instanceRouteUpdates = this.routeUpdateAggregator.flushInstanceRouteUpdates();
+
+        routeUpdates.forEach(update => {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE, { data: update });
+        });
+        instanceRouteUpdates.forEach(update => {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE, { data: update });
+        });
+    }
+
+    clearRouteUpdateAggregation() {
+        if (this.routeUpdateFlushTimer) {
+            clearTimeout(this.routeUpdateFlushTimer);
+            this.routeUpdateFlushTimer = null;
+        }
+        this.routeUpdateAggregator.clear();
     }
 
     async startTcpServer(messageId) {
@@ -183,7 +242,7 @@ class BmpWorker {
 
         // 设置日志级别
         if (this.bmpConfigData.logLevel) {
-            logger.raw().transports.file.level = this.bmpConfigData.logLevel;
+            logger.setLevel(this.bmpConfigData.logLevel);
             logger.info(`Worker log level set to: ${this.bmpConfigData.logLevel}`);
         }
         logger.info(`BMPv4 TLV draft set to draft-${this.bmpConfigData.bmpV4TlvDraft}`);
@@ -275,6 +334,7 @@ class BmpWorker {
 
     async stopBmp(messageId) {
         logger.info('Stopping BMP server...');
+        this.clearRouteUpdateAggregation();
 
         // 停止SSH隧道和代理
         if (this.sshTunnel) {
@@ -403,60 +463,30 @@ class BmpWorker {
         );
     }
 
-    getBgpInstanceRoutes(messageId, data) {
-        const { client, instance, page, pageSize, routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE } = data;
+    getBmpSessionByClient(client) {
         const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
-        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
-        const routeList = [];
-        if (!bmpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
-            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
-            return;
-        }
-
-        const { afi, safi } = getAfiAndSafi(instance.addrFamilyType);
-
-        const bgpInstKey = BmpBgpSession.makeKey(instance.instanceType, instance.instanceRd, afi, safi);
-        const bgpInstance = bmpSession.bgpInstanceMap.get(bgpInstKey);
-        if (!bgpInstance) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在BGP实例 ${bgpInstKey}`);
-            this.messageHandler.sendErrorResponse(messageId, 'BGP实例不存在');
-            return;
-        }
-
-        const summary = { active: 0, stale: 0, total: 0 };
-        bgpInstance.bgpRoutes.forEach((route, _) => {
-            summary.total += 1;
-            if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
-                summary.stale += 1;
-            } else {
-                summary.active += 1;
-            }
-
-            if (
-                routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ALL ||
-                route.routeState === routeState ||
-                (!route.routeState && routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE)
-            ) {
-                routeList.push(route.getRouteInfo());
-            }
-        });
-
-        const total = routeList.length;
-        const list = routeList.slice((page - 1) * pageSize, page * pageSize);
-
-        this.messageHandler.sendSuccessResponse(messageId, { list, total, summary }, 'BGP实例获取路由列表成功');
+        return {
+            bmpSessionKey,
+            bmpSession: this.bmpSessionMap.get(bmpSessionKey)
+        };
     }
 
-    getBgpRoutes(messageId, data) {
-        const { client, session, af, ribType, page, pageSize, routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE } = data;
-        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
-        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
-        const routeList = [];
+    getRouteKey(routeKey, routeInfo) {
+        if (routeKey) {
+            return routeKey;
+        }
+
+        if (!routeInfo) {
+            return '';
+        }
+
+        return BmpBgpRoute.makeKey(routeInfo.pathId, routeInfo.rd, routeInfo.ip, routeInfo.mask);
+    }
+
+    getBgpSessionRouteMap(client, session, af, ribType) {
+        const { bmpSessionKey, bmpSession } = this.getBmpSessionByClient(client);
         if (!bmpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
-            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
-            return;
+            return { error: 'BMP会话不存在', log: `BMP会话 ${bmpSessionKey} 不存在` };
         }
 
         const bgpSessionKey = BmpBgpSession.makeKey(
@@ -467,55 +497,200 @@ class BmpWorker {
         );
         const bgpSession = bmpSession.bgpSessionMap.get(bgpSessionKey);
         if (!bgpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在BGP会话 ${bgpSessionKey}`);
-            this.messageHandler.sendErrorResponse(messageId, 'BGP会话不存在');
-            return;
+            return { error: 'BGP会话不存在', log: `BMP会话 ${bmpSessionKey} 不存在BGP会话 ${bgpSessionKey}` };
         }
 
         const { afi, safi } = getAfiAndSafi(af);
         const afKey = `${afi}|${safi}`;
         const ribTypeRouteMap = bgpSession.bgpRoutes.get(afKey);
         if (!ribTypeRouteMap) {
-            logger.error(`BGP会话 ${bgpSessionKey} 不存在地址族 ${afKey}`);
-            this.messageHandler.sendErrorResponse(messageId, '地址族不存在');
-            return;
+            return { error: '地址族不存在', log: `BGP会话 ${bgpSessionKey} 不存在地址族 ${afKey}` };
         }
 
         const routeMap = ribTypeRouteMap.get(ribType);
         if (!routeMap) {
-            logger.error(`BGP会话 ${bgpSessionKey} 不存在 ribType ${ribType}`);
-            this.messageHandler.sendErrorResponse(messageId, 'ribType不存在');
-            return;
+            return { error: 'ribType不存在', log: `BGP会话 ${bgpSessionKey} 不存在 ribType ${ribType}` };
         }
 
-        const summary = { active: 0, stale: 0, total: 0 };
-        routeMap.forEach((route, _) => {
-            summary.total += 1;
-            if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
-                summary.stale += 1;
-            } else {
-                summary.active += 1;
+        return { bmpSession, bgpSession, routeMap, afi, safi };
+    }
+
+    getBgpInstanceRouteMap(client, instance) {
+        const { bmpSessionKey, bmpSession } = this.getBmpSessionByClient(client);
+        if (!bmpSession) {
+            return { error: 'BMP会话不存在', log: `BMP会话 ${bmpSessionKey} 不存在` };
+        }
+
+        const { afi, safi } = getAfiAndSafi(instance.addrFamilyType);
+        const bgpInstKey = BmpBgpSession.makeKey(instance.instanceType, instance.instanceRd, afi, safi);
+        const bgpInstance = bmpSession.bgpInstanceMap.get(bgpInstKey);
+        if (!bgpInstance) {
+            return { error: 'BGP实例不存在', log: `BMP会话 ${bmpSessionKey} 不存在BGP实例 ${bgpInstKey}` };
+        }
+
+        return { bmpSession, bgpInstance, routeMap: bgpInstance.bgpRoutes, afi, safi };
+    }
+
+    sendRouteLookupError(messageId, lookup) {
+        if (!lookup.error) {
+            return false;
+        }
+
+        logger.error(lookup.log || lookup.error);
+        this.messageHandler.sendErrorResponse(messageId, lookup.error);
+        return true;
+    }
+
+    isRouteStateMatched(route, routeState) {
+        if (routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ALL) {
+            return true;
+        }
+
+        const state = route.routeState || BmpConst.BMP_ROUTE_STATE.ACTIVE;
+        return state === routeState;
+    }
+
+    getPagedRouteResult(routeMap, options) {
+        const page = Math.max(1, Number(options.page) || 1);
+        const pageSize = Math.max(1, Number(options.pageSize) || 10);
+        const routeState = options.routeState || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE;
+        const prefixQuery = buildRoutePrefixQuery(options.prefixFilter);
+        const start = (page - 1) * pageSize;
+        const list = [];
+        let total = 0;
+
+        const appendRoute = route => {
+            if (!route || !this.isRouteStateMatched(route, routeState)) {
+                return;
             }
 
             if (
-                routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ALL ||
-                route.routeState === routeState ||
-                (!route.routeState && routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE)
+                (prefixQuery.mode === 'scan' || prefixQuery.mode === 'index-or-scan') &&
+                !routeMatchesPrefixQuery(route, prefixQuery)
             ) {
-                routeList.push(route.getRouteInfo());
+                return;
             }
-        });
 
-        const total = routeList.length;
-        const list = routeList.slice((page - 1) * pageSize, page * pageSize);
+            if (total >= start && list.length < pageSize) {
+                list.push(route.getRouteListInfo());
+            }
+            total += 1;
+        };
+
+        const canUsePrefixIndex =
+            (prefixQuery.mode === 'index' || prefixQuery.mode === 'index-or-scan') &&
+            typeof options.getIndexedRouteKeys === 'function';
+        const indexedRouteKeys = canUsePrefixIndex ? options.getIndexedRouteKeys(prefixQuery.key) : [];
+
+        if (canUsePrefixIndex && (prefixQuery.mode === 'index' || indexedRouteKeys.length > 0)) {
+            indexedRouteKeys.forEach(routeKey => {
+                appendRoute(routeMap.get(routeKey));
+            });
+        } else {
+            routeMap.forEach(route => {
+                appendRoute(route);
+            });
+        }
+
+        return { list, total };
+    }
+
+    getBgpInstanceRoutes(messageId, data) {
+        const {
+            client,
+            instance,
+            page,
+            pageSize,
+            routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
+            prefixFilter
+        } = data;
+        const lookup = this.getBgpInstanceRouteMap(client, instance);
+        if (this.sendRouteLookupError(messageId, lookup)) {
+            return;
+        }
+
+        const { list, total } = this.getPagedRouteResult(lookup.routeMap, {
+            page,
+            pageSize,
+            routeState,
+            prefixFilter,
+            getIndexedRouteKeys: prefixKey => lookup.bgpInstance.getRouteKeysByPrefix(prefixKey)
+        });
+        const summary = lookup.bgpInstance.getRouteSummary();
+
+        this.messageHandler.sendSuccessResponse(messageId, { list, total, summary }, 'BGP实例获取路由列表成功');
+    }
+
+    getBgpInstanceRouteDetail(messageId, data) {
+        const { client, instance, routeKey, route } = data;
+        const lookup = this.getBgpInstanceRouteMap(client, instance);
+        if (this.sendRouteLookupError(messageId, lookup)) {
+            return;
+        }
+
+        const key = this.getRouteKey(routeKey, route);
+        const bgpRoute = lookup.routeMap.get(key);
+        if (!bgpRoute) {
+            this.messageHandler.sendErrorResponse(messageId, '路由不存在');
+            return;
+        }
+
+        this.messageHandler.sendSuccessResponse(messageId, bgpRoute.getRouteInfo(), 'BGP实例获取路由详情成功');
+    }
+
+    getBgpRoutes(messageId, data) {
+        const {
+            client,
+            session,
+            af,
+            ribType,
+            page,
+            pageSize,
+            routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
+            prefixFilter
+        } = data;
+        const lookup = this.getBgpSessionRouteMap(client, session, af, ribType);
+        if (this.sendRouteLookupError(messageId, lookup)) {
+            return;
+        }
+
+        const { list, total } = this.getPagedRouteResult(lookup.routeMap, {
+            page,
+            pageSize,
+            routeState,
+            prefixFilter,
+            getIndexedRouteKeys: prefixKey =>
+                lookup.bgpSession.getRouteKeysByPrefix(lookup.afi, lookup.safi, ribType, prefixKey)
+        });
+        const summary = lookup.bgpSession.getRouteSummary(lookup.afi, lookup.safi, ribType);
 
         this.messageHandler.sendSuccessResponse(messageId, { list, total, summary }, '获取路由列表成功');
     }
 
-    purgeStaleRouteMap(routeMap) {
+    getBgpRouteDetail(messageId, data) {
+        const { client, session, af, ribType, routeKey, route } = data;
+        const lookup = this.getBgpSessionRouteMap(client, session, af, ribType);
+        if (this.sendRouteLookupError(messageId, lookup)) {
+            return;
+        }
+
+        const key = this.getRouteKey(routeKey, route);
+        const bgpRoute = lookup.routeMap.get(key);
+        if (!bgpRoute) {
+            this.messageHandler.sendErrorResponse(messageId, '路由不存在');
+            return;
+        }
+
+        this.messageHandler.sendSuccessResponse(messageId, bgpRoute.getRouteInfo(), '获取路由详情成功');
+    }
+
+    purgeStaleRouteMap(routeMap, onDelete) {
         let deleted = 0;
         routeMap.forEach((route, key) => {
             if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
+                if (typeof onDelete === 'function') {
+                    onDelete(route, key);
+                }
                 routeMap.delete(key);
                 deleted += 1;
             }
@@ -542,7 +717,10 @@ class BmpWorker {
             return;
         }
 
-        const deleted = this.purgeStaleRouteMap(bgpInstance.bgpRoutes);
+        const deleted = this.purgeStaleRouteMap(bgpInstance.bgpRoutes, (route, key) => {
+            bgpInstance.removeRouteFromPrefixIndex(key, route);
+            bgpInstance.recordRouteDelete(route);
+        });
         this.messageHandler.sendSuccessResponse(messageId, { deleted }, 'BGP实例过期路由清理成功');
     }
 
@@ -577,7 +755,10 @@ class BmpWorker {
             return;
         }
 
-        const deleted = this.purgeStaleRouteMap(routeMap);
+        const deleted = this.purgeStaleRouteMap(routeMap, (route, key) => {
+            bgpSession.removeRouteFromPrefixIndex(afi, safi, ribType, key, route);
+            bgpSession.recordRouteDelete(afi, safi, ribType, route);
+        });
         this.messageHandler.sendSuccessResponse(messageId, { deleted }, '过期路由清理成功');
     }
 

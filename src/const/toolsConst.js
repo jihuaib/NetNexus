@@ -29,7 +29,7 @@ export const DEFAULT_TOOLS_SETTINGS = {
 
 // 默认日志设置
 export const DEFAULT_LOG_SETTINGS = {
-    logLevel: 'warn'
+    logLevel: 'off'
 };
 
 export const START_LAYER_NAME = {

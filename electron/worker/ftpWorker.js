@@ -240,7 +240,7 @@ class FtpWorker {
 
         // 设置日志级别
         if (this.ftpConfig.logLevel) {
-            logger.raw().transports.file.level = this.ftpConfig.logLevel;
+            logger.setLevel(this.ftpConfig.logLevel);
             logger.info(`Worker log level set to: ${this.ftpConfig.logLevel}`);
         }
         // 启动tcp服务器

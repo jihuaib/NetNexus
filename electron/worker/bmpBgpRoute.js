@@ -51,6 +51,21 @@ class BmpBgpRoute {
         return { pathId, rd, ip, mask };
     }
 
+    getRouteKey() {
+        return BmpBgpRoute.makeKey(this.pathId, this.rd, this.ip, this.mask);
+    }
+
+    getAddrFamilyType() {
+        if (this.afi && this.safi) {
+            return getAddrFamilyType(this.afi, this.safi);
+        } else if (this.BmpBgpSession) {
+            return getAddrFamilyType(this.BmpBgpSession.afi, this.BmpBgpSession.safi);
+        } else if (this.BmpBgpInstance) {
+            return getAddrFamilyType(this.BmpBgpInstance.afi, this.BmpBgpInstance.safi);
+        }
+        return null;
+    }
+
     getPacketSummary() {
         if (this.bgpPacket && !Array.isArray(this.bgpPacket)) {
             return getBgpPacketSummary(this.bgpPacket);
@@ -58,17 +73,33 @@ class BmpBgpRoute {
         return null;
     }
 
-    getRouteInfo() {
-        let addrFamilyType = null;
-        if (this.afi && this.safi) {
-            addrFamilyType = getAddrFamilyType(this.afi, this.safi);
-        } else if (this.BmpBgpSession) {
-            addrFamilyType = getAddrFamilyType(this.BmpBgpSession.afi, this.BmpBgpSession.safi);
-        } else if (this.BmpBgpInstance) {
-            addrFamilyType = getAddrFamilyType(this.BmpBgpInstance.afi, this.BmpBgpInstance.safi);
-        }
+    getRouteListInfo() {
         return {
-            addrFamilyType: addrFamilyType,
+            routeKey: this.getRouteKey(),
+            addrFamilyType: this.getAddrFamilyType(),
+            afi: this.afi,
+            safi: this.safi,
+            ip: this.ip,
+            mask: this.mask,
+            rd: this.rd,
+            origin: this.origin,
+            asPath: this.asPath,
+            med: this.med,
+            nextHop: this.nextHop,
+            pathId: this.pathId,
+            labels: this.labels,
+            parserValid: this.parserValid,
+            parseErrors: this.parseErrors,
+            parseWarnings: this.parseWarnings,
+            routeState: this.routeState
+        };
+    }
+
+    getRouteInfo(options = {}) {
+        const { includeSummary = true } = options;
+        const routeInfo = {
+            routeKey: this.getRouteKey(),
+            addrFamilyType: this.getAddrFamilyType(),
             afi: this.afi,
             safi: this.safi,
             ip: this.ip,
@@ -86,7 +117,6 @@ class BmpBgpRoute {
             routeType: this.routeType,
             rawNlri: this.rawNlri,
             nlriDetail: this.nlriDetail,
-            summary: this.getPacketSummary(),
             parserValid: this.parserValid,
             parseErrors: this.parseErrors,
             parseWarnings: this.parseWarnings,
@@ -97,6 +127,10 @@ class BmpBgpRoute {
             staleAt: this.staleAt,
             staleReason: this.staleReason
         };
+        if (includeSummary) {
+            routeInfo.summary = this.getPacketSummary();
+        }
+        return routeInfo;
     }
 
     markActive(ribEpoch = 0) {

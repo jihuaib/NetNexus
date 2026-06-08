@@ -96,7 +96,9 @@ const RPKI_REQ_TYPES = {
     ADD_ROUTER_KEY: 6,
     DELETE_ROUTER_KEY: 7,
     ADD_ASPA: 8,
-    DELETE_ASPA: 9
+    DELETE_ASPA: 9,
+    ADD_ROA_BATCH: 10,
+    DELETE_ROA_BATCH: 11
 };
 
 module.exports = {

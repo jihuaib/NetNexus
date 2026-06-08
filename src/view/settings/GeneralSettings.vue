@@ -4,6 +4,7 @@
             <a-form :model="settingsForm" layout="vertical">
                 <a-form-item label="日志级别" name="logLevel">
                     <a-select v-model:value="settingsForm.logLevel" style="width: 100%">
+                        <a-select-option value="off">关闭</a-select-option>
                         <a-select-option value="debug">debug</a-select-option>
                         <a-select-option value="info">info</a-select-option>
                         <a-select-option value="warn">warn</a-select-option>
@@ -33,7 +34,10 @@
         try {
             const settings = await window.commonApi.getGeneralSettings();
             if (settings.status === 'success' && settings.data) {
-                settingsForm.value = settings.data;
+                settingsForm.value = {
+                    ...DEFAULT_LOG_SETTINGS,
+                    ...settings.data
+                };
             }
         } catch (error) {
             console.error('获取设置失败', error);

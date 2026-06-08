@@ -1,4 +1,5 @@
-const { app } = require('electron');
+const fs = require('fs');
+const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
@@ -7,6 +8,20 @@ const { getNetworkAddress } = require('../utils/ipUtils');
 const RpkiConst = require('../const/rpkiConst');
 const RpkiAspa = require('../worker/rpkiAspa');
 const EventDispatcher = require('../utils/eventDispatcher');
+const {
+    getRoaDataFilePath,
+    makeRoaStorageKey,
+    normalizeRoaObject,
+    fileExists,
+    ensureParentDir,
+    writeLine,
+    closeWriteStream,
+    iterateJsonlRoas,
+    readJsonlPage,
+    countJsonlRows,
+    writeRoasToJsonl,
+    parseRoaJsonFile
+} = require('../utils/rpkiRoaImport');
 
 class RpkiApp {
     constructor(ipcMain, store, keychainManager) {
@@ -14,6 +29,7 @@ class RpkiApp {
         this.store = store;
         this.rpkiConfigFileKey = 'rpki-config';
         this.rpkiRoaFileKey = 'rpki-roa';
+        this.rpkiRoaMetaFileKey = 'rpki-roa-meta';
         this.rpkiRouterKeyFileKey = 'rpki-router-key';
         this.rpkiAspaFileKey = 'rpki-aspa';
         this.isDev = !app.isPackaged;
@@ -40,7 +56,9 @@ class RpkiApp {
         // roa
         this.ipcMain.handle('rpki:addRoa', this.handleAddRoa.bind(this));
         this.ipcMain.handle('rpki:deleteRoa', this.handleDeleteRoa.bind(this));
+        this.ipcMain.handle('rpki:deleteAllRoa', this.handleDeleteAllRoa.bind(this));
         this.ipcMain.handle('rpki:getRoaList', this.handleGetRoaList.bind(this));
+        this.ipcMain.handle('rpki:importRoaJson', this.handleImportRoaJson.bind(this));
 
         // router key (v1+)
         this.ipcMain.handle('rpki:addRouterKey', this.handleAddRouterKey.bind(this));
@@ -112,21 +130,8 @@ class RpkiApp {
 
             this.worker.addEventListener(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, this.rpkiClientConnectionHandler);
 
-            // 加载roa配置
-            const roaList = await this.handleGetRoaList();
-            if (roaList.status === 'success') {
-                const roaListData = roaList.data;
-                for (const roa of roaListData) {
-                    const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROA, roa);
-                    if (result.status === 'success') {
-                        logger.info(`worker RPKI ROA恢复成功: ${JSON.stringify(roa)}`);
-                    } else {
-                        logger.error(`worker RPKI ROA恢复失败: ${JSON.stringify(roa)} ${result.msg}`);
-                    }
-                }
-            } else {
-                logger.error(`RPKI ROA配置加载失败: ${roaList.msg}`);
-            }
+            // 加载 ROA 配置。百万级 ROA 不能逐条 IPC，必须按批次灌入 worker。
+            await this.loadRoaStorageToWorker(false);
 
             // 加载 router key 配置 (v1+)
             const rkList = await this.handleGetRouterKeyList();
@@ -197,6 +202,105 @@ class RpkiApp {
         }
     }
 
+    getRoaDataFilePath() {
+        return getRoaDataFilePath(app.getPath('userData'));
+    }
+
+    async ensureRoaFileStorage() {
+        const filePath = this.getRoaDataFilePath();
+        await ensureParentDir(filePath);
+
+        if (await fileExists(filePath)) {
+            const meta = this.store.get(this.rpkiRoaMetaFileKey);
+            if (!meta || typeof meta.count !== 'number') {
+                await this.updateRoaMeta(await countJsonlRows(filePath));
+            }
+            return filePath;
+        }
+
+        const legacyList = this.store.get(this.rpkiRoaFileKey);
+        if (Array.isArray(legacyList) && legacyList.length > 0) {
+            const count = await writeRoasToJsonl(filePath, legacyList);
+            await this.updateRoaMeta(count);
+            logger.info(`旧版 RPKI ROA 配置已迁移到 JSONL: ${count}`);
+            return filePath;
+        }
+
+        await fs.promises.writeFile(filePath, '', 'utf8');
+        await this.updateRoaMeta(0);
+        return filePath;
+    }
+
+    async updateRoaMeta(count) {
+        this.store.set(this.rpkiRoaMetaFileKey, {
+            storageVersion: 2,
+            count,
+            updatedAt: new Date().toISOString()
+        });
+    }
+
+    async getRoaTotalCount(filePath) {
+        const meta = this.store.get(this.rpkiRoaMetaFileKey);
+        if (meta && typeof meta.count === 'number') {
+            return meta.count;
+        }
+
+        const count = await countJsonlRows(filePath);
+        await this.updateRoaMeta(count);
+        return count;
+    }
+
+    async loadRoaFileToWorker(filePath, announce = false) {
+        if (!this.worker) {
+            return { added: 0, skipped: 0 };
+        }
+
+        const batchSize = 5000;
+        let batch = [];
+        let added = 0;
+        let skipped = 0;
+
+        const flush = async () => {
+            if (batch.length === 0) {
+                return;
+            }
+            const currentBatch = batch;
+            batch = [];
+            const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROA_BATCH, {
+                roas: currentBatch,
+                announce
+            });
+            added += result.data?.added || 0;
+            skipped += result.data?.skipped || 0;
+        };
+
+        for await (const roa of iterateJsonlRoas(filePath)) {
+            batch.push(roa);
+            if (batch.length >= batchSize) {
+                await flush();
+            }
+        }
+        await flush();
+
+        logger.info(`worker RPKI ROA批量加载完成: added=${added}, skipped=${skipped}, announce=${announce}`);
+        return { added, skipped };
+    }
+
+    async loadRoaStorageToWorker(announce = false) {
+        const filePath = await this.ensureRoaFileStorage();
+        return this.loadRoaFileToWorker(filePath, announce);
+    }
+
+    async findRoaInStorage(filePath, targetRoa) {
+        const targetKey = makeRoaStorageKey(targetRoa);
+        for await (const roa of iterateJsonlRoas(filePath)) {
+            if (makeRoaStorageKey(roa) === targetKey) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     async handleStopRpki() {
         if (null === this.worker) {
             logger.error('RPKI未启动');
@@ -242,33 +346,21 @@ class RpkiApp {
 
     async handleAddRoa(event, roa) {
         try {
-            let currentRoaList = [];
-            const config = this.store.get(this.rpkiRoaFileKey);
-            if (config) {
-                currentRoaList = config;
+            const normalizedRoa = normalizeRoaObject(roa);
+            if (!normalizedRoa) {
+                return errorResponse('RPKI ROA配置格式无效');
             }
 
-            logger.info(`handleAddRoa: ${JSON.stringify(roa)}`);
+            const filePath = await this.ensureRoaFileStorage();
+            logger.info(`handleAddRoa: ${JSON.stringify(normalizedRoa)}`);
 
             // 检查是否已经存在
-            const index = currentRoaList.findIndex(
-                item =>
-                    item.asn === roa.asn &&
-                    item.ip === roa.ip &&
-                    item.mask === roa.mask &&
-                    item.maxLength === roa.maxLength
-            );
-            if (index !== -1) {
-                return errorResponse('RPKI ROA配置已经存在');
-            }
-
-            const isCovered = currentRoaList.some(item => this.isRoaSame(item, roa));
-            if (isCovered) {
+            if (await this.findRoaInStorage(filePath, normalizedRoa)) {
                 return errorResponse('RPKI ROA配置已经存在');
             }
 
             if (this.worker) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROA, roa);
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROA, normalizedRoa);
                 if (result.status === 'success') {
                     logger.info(`worker RPKI ROA配置添加成功`);
                 } else {
@@ -276,8 +368,9 @@ class RpkiApp {
                 }
             }
 
-            currentRoaList.push(roa);
-            this.store.set(this.rpkiRoaFileKey, currentRoaList);
+            await fs.promises.appendFile(filePath, `${JSON.stringify(normalizedRoa)}\n`, 'utf8');
+            const total = await this.getRoaTotalCount(filePath);
+            await this.updateRoaMeta(total + 1);
             return successResponse(null, 'RPKI ROA配置文件保存成功');
         } catch (error) {
             logger.error('Error adding ROA:', error.message);
@@ -287,28 +380,39 @@ class RpkiApp {
 
     async handleDeleteRoa(event, roa) {
         try {
-            let currentRoaList = [];
-            const config = this.store.get(this.rpkiRoaFileKey);
-            if (config) {
-                currentRoaList = config;
+            const normalizedRoa = normalizeRoaObject(roa);
+            if (!normalizedRoa) {
+                return errorResponse('RPKI ROA配置格式无效');
             }
 
-            logger.info(`handleDeleteRoa: ${JSON.stringify(roa)}`);
+            const filePath = await this.ensureRoaFileStorage();
+            const tempPath = `${filePath}.${process.pid}.${Date.now()}.delete.tmp`;
+            const targetKey = makeRoaStorageKey(normalizedRoa);
+            const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
+            let removed = false;
+            let count = 0;
 
-            // 找到roa，删除
-            const index = currentRoaList.findIndex(
-                item =>
-                    item.asn === roa.asn &&
-                    item.ip === roa.ip &&
-                    item.mask === roa.mask &&
-                    item.maxLength === roa.maxLength
-            );
-            if (index !== -1) {
-                currentRoaList.splice(index, 1);
+            logger.info(`handleDeleteRoa: ${JSON.stringify(normalizedRoa)}`);
+
+            try {
+                for await (const item of iterateJsonlRoas(filePath)) {
+                    if (makeRoaStorageKey(item) === targetKey) {
+                        removed = true;
+                        continue;
+                    }
+                    await writeLine(stream, JSON.stringify(item));
+                    count += 1;
+                }
+                await closeWriteStream(stream);
+                await fs.promises.rename(tempPath, filePath);
+            } catch (error) {
+                stream.destroy();
+                await fs.promises.unlink(tempPath).catch(() => {});
+                throw error;
             }
 
-            if (this.worker) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA, roa);
+            if (this.worker && removed) {
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA, normalizedRoa);
                 if (result.status === 'success') {
                     logger.info(`worker RPKI ROA删除成功`);
                 } else {
@@ -316,7 +420,7 @@ class RpkiApp {
                 }
             }
 
-            this.store.set(this.rpkiRoaFileKey, currentRoaList);
+            await this.updateRoaMeta(count);
             return successResponse(null, 'RPKI ROA配置文件保存成功');
         } catch (error) {
             logger.error('Error deleting ROA:', error.message);
@@ -324,17 +428,147 @@ class RpkiApp {
         }
     }
 
-    async handleGetRoaList() {
+    async handleDeleteAllRoa() {
         try {
-            let currentRoaList = [];
-            const config = this.store.get(this.rpkiRoaFileKey);
-            if (config) {
-                currentRoaList = config;
+            const filePath = await this.ensureRoaFileStorage();
+            const total = await this.getRoaTotalCount(filePath);
+
+            if (this.worker && total > 0) {
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA_BATCH, {
+                    all: true
+                });
+                logger.info(`worker RPKI ROA批量删除成功: ${JSON.stringify(result.data)}`);
+            }
+
+            await fs.promises.writeFile(filePath, '', 'utf8');
+            await this.updateRoaMeta(0);
+            return successResponse({ deleted: total }, 'RPKI ROA批量删除成功');
+        } catch (error) {
+            logger.error('Error deleting all ROA:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetRoaList(event, options = null) {
+        try {
+            const filePath = await this.ensureRoaFileStorage();
+            const total = await this.getRoaTotalCount(filePath);
+
+            if (options && typeof options === 'object') {
+                const page = Math.max(1, Number(options.page) || 1);
+                const pageSize = Math.min(1000, Math.max(1, Number(options.pageSize) || 10));
+                const items = await readJsonlPage(filePath, page, pageSize);
+                return successResponse(
+                    {
+                        items,
+                        total,
+                        page,
+                        pageSize
+                    },
+                    'RPKI ROA配置文件加载成功'
+                );
+            }
+
+            const currentRoaList = [];
+            for await (const roa of iterateJsonlRoas(filePath)) {
+                currentRoaList.push(roa);
             }
             return successResponse(currentRoaList, 'RPKI ROA配置文件加载成功');
         } catch (error) {
             logger.error('Error getting ROA list:', error.message);
             return errorResponse(error.message);
+        }
+    }
+
+    async handleImportRoaJson(event) {
+        try {
+            const options = {
+                title: '导入 ROA JSON 文件',
+                properties: ['openFile'],
+                filters: [
+                    { name: 'JSON', extensions: ['json'] },
+                    { name: 'All Files', extensions: ['*'] }
+                ]
+            };
+            const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
+            const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+
+            if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+                return successResponse({ cancelled: true }, '已取消导入');
+            }
+
+            const stats = await this.importRoaJsonFile(result.filePaths[0]);
+            return successResponse(stats, 'ROA JSON导入完成');
+        } catch (error) {
+            logger.error('Error importing ROA JSON:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async importRoaJsonFile(importFilePath) {
+        const filePath = await this.ensureRoaFileStorage();
+        const tempPath = `${filePath}.${process.pid}.${Date.now()}.import.tmp`;
+        const importedOnlyPath = `${filePath}.${process.pid}.${Date.now()}.imported.tmp`;
+        const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
+        const importedOnlyStream = fs.createWriteStream(importedOnlyPath, { encoding: 'utf8' });
+        const existingKeys = new Set();
+        const stats = {
+            filePath: importFilePath,
+            existing: 0,
+            parsed: 0,
+            imported: 0,
+            duplicate: 0,
+            invalid: 0,
+            total: 0
+        };
+
+        try {
+            for await (const roa of iterateJsonlRoas(filePath)) {
+                const key = makeRoaStorageKey(roa);
+                if (existingKeys.has(key)) {
+                    continue;
+                }
+                existingKeys.add(key);
+                await writeLine(stream, JSON.stringify(roa));
+                stats.existing += 1;
+            }
+
+            const parseStats = await parseRoaJsonFile(importFilePath, async roa => {
+                const key = makeRoaStorageKey(roa);
+                if (existingKeys.has(key)) {
+                    stats.duplicate += 1;
+                    return;
+                }
+
+                existingKeys.add(key);
+                const line = JSON.stringify(roa);
+                await writeLine(stream, line);
+                await writeLine(importedOnlyStream, line);
+                stats.imported += 1;
+            });
+
+            stats.parsed = parseStats.valid;
+            stats.invalid = parseStats.invalid;
+            stats.total = stats.existing + stats.imported;
+
+            await closeWriteStream(stream);
+            await closeWriteStream(importedOnlyStream);
+            await fs.promises.rename(tempPath, filePath);
+            await this.updateRoaMeta(stats.total);
+
+            if (this.worker && stats.imported > 0) {
+                await this.loadRoaFileToWorker(importedOnlyPath, true);
+            }
+
+            await fs.promises.unlink(importedOnlyPath).catch(() => {});
+            logger.info(`ROA JSON导入完成: ${JSON.stringify(stats)}`);
+            return stats;
+        } catch (error) {
+            stream.destroy();
+            importedOnlyStream.destroy();
+            await fs.promises.unlink(tempPath).catch(() => {});
+            await fs.promises.unlink(importedOnlyPath).catch(() => {});
+            throw error;
         }
     }
 

@@ -31,7 +31,7 @@ class SnmpWorker {
 
             // 设置日志级别
             if (this.snmpConfig.logLevel) {
-                logger.raw().transports.file.level = this.snmpConfig.logLevel;
+                logger.setLevel(this.snmpConfig.logLevel);
                 logger.info(`Worker log level set to: ${this.snmpConfig.logLevel}`);
             }
 

@@ -26,6 +26,7 @@ RPKI (Resource Public Key Infrastructure) 验证器是一个专业的路由源�
 - Max Length 设置
 - ROA 有效期管理
 - 批量导入和导出功能
+- 支持导入 Routinator/RIPE Validator/OctoRPKI 常见 JSON ROA/VRP 文件
 
 ![RPKI ROA 记录](images/rpki/rpki-roa.png)
 
@@ -46,6 +47,13 @@ RPKI (Resource Public Key Infrastructure) 验证器是一个专业的路由源�
    - 添加或导入 ROA 记录
    - 设置路由前缀和 AS 号码
    - 配置 Max Length 参数
+
+#### JSON ROA 导入
+- 在 "ROA列表" 页面点击 "导入JSON"，选择下载的 ROA/VRP JSON 文件
+- 支持 `roas`、`vrps`、根数组和 SLURM `prefixAssertions` 等常见结构
+- 支持字段名 `asn`/`ASN`、`prefix`/`IP Prefix`、`maxLength`/`max_length`/`maxPrefixLength`
+- 导入时会自动跳过重复 ROA，并将主机地址归一化为网络地址
+- ROA 数据以 JSONL 文件保存并分页加载，适合 100w 级别数据
 
 4. **执行路由验证**
    - 导入需要验证的路由

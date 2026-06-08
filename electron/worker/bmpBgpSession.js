@@ -1,5 +1,6 @@
 const { getAddrFamilyType } = require('../utils/bgpUtils');
 const { toSerializableTlvs } = require('../utils/bmpUtils');
+const { getRoutePrefixIndexKeys } = require('../utils/routePrefixUtils');
 const BmpConst = require('../const/bmpConst');
 
 class BmpBgpSession {
@@ -37,6 +38,8 @@ class BmpBgpSession {
         this.addPathMap = new Map();
 
         this.bgpRoutes = new Map();
+        this.routePrefixIndexes = new Map();
+        this.routeSummaries = new Map();
         this.ribEpochMap = new Map();
     }
 
@@ -79,6 +82,156 @@ class BmpBgpSession {
         return `${afi}|${safi}|${ribType}`;
     }
 
+    static normalizeRouteState(routeState) {
+        return routeState === BmpConst.BMP_ROUTE_STATE.STALE
+            ? BmpConst.BMP_ROUTE_STATE.STALE
+            : BmpConst.BMP_ROUTE_STATE.ACTIVE;
+    }
+
+    getRouteTableKey(afi, safi, ribType) {
+        return `${afi}|${safi}|${ribType}`;
+    }
+
+    getRouteSummary(afi = null, safi = null, ribType = null) {
+        if (
+            afi !== null &&
+            afi !== undefined &&
+            safi !== null &&
+            safi !== undefined &&
+            ribType !== null &&
+            ribType !== undefined
+        ) {
+            const summary = this.ensureRouteTableSummary(afi, safi, ribType);
+            return { ...summary };
+        }
+
+        const summary = { active: 0, stale: 0, total: 0 };
+        this.routeSummaries.forEach(item => {
+            summary.active += item.active;
+            summary.stale += item.stale;
+            summary.total += item.total;
+        });
+        return summary;
+    }
+
+    ensureRouteTableSummary(afi, safi, ribType) {
+        const key = this.getRouteTableKey(afi, safi, ribType);
+        if (!this.routeSummaries.has(key)) {
+            this.routeSummaries.set(key, { active: 0, stale: 0, total: 0 });
+        }
+        return this.routeSummaries.get(key);
+    }
+
+    updateSummaryStateCount(summary, routeState, delta) {
+        const state = BmpBgpSession.normalizeRouteState(routeState);
+        if (state === BmpConst.BMP_ROUTE_STATE.STALE) {
+            summary.stale = Math.max(0, summary.stale + delta);
+        } else {
+            summary.active = Math.max(0, summary.active + delta);
+        }
+    }
+
+    recordRouteAdd(afi, safi, ribType, route) {
+        const summary = this.ensureRouteTableSummary(afi, safi, ribType);
+        summary.total += 1;
+        this.updateSummaryStateCount(summary, route.routeState, 1);
+    }
+
+    recordRouteDelete(afi, safi, ribType, route) {
+        const summary = this.ensureRouteTableSummary(afi, safi, ribType);
+        summary.total = Math.max(0, summary.total - 1);
+        this.updateSummaryStateCount(summary, route.routeState, -1);
+    }
+
+    recordRouteStateChange(afi, safi, ribType, previousState, nextState) {
+        const previous = BmpBgpSession.normalizeRouteState(previousState);
+        const next = BmpBgpSession.normalizeRouteState(nextState);
+        if (previous === next) {
+            return;
+        }
+
+        const summary = this.ensureRouteTableSummary(afi, safi, ribType);
+        this.updateSummaryStateCount(summary, previous, -1);
+        this.updateSummaryStateCount(summary, next, 1);
+    }
+
+    ensureRoutePrefixIndex(afi, safi, ribType) {
+        const tableKey = this.getRouteTableKey(afi, safi, ribType);
+        if (!this.routePrefixIndexes.has(tableKey)) {
+            this.routePrefixIndexes.set(tableKey, new Map());
+        }
+        return this.routePrefixIndexes.get(tableKey);
+    }
+
+    addRouteKeyToPrefixIndex(prefixIndex, prefixKey, routeKey) {
+        const existing = prefixIndex.get(prefixKey);
+        if (!existing) {
+            prefixIndex.set(prefixKey, routeKey);
+            return;
+        }
+
+        if (existing instanceof Set) {
+            existing.add(routeKey);
+            return;
+        }
+
+        if (existing !== routeKey) {
+            prefixIndex.set(prefixKey, new Set([existing, routeKey]));
+        }
+    }
+
+    removeRouteKeyFromPrefixIndex(prefixIndex, prefixKey, routeKey) {
+        const existing = prefixIndex.get(prefixKey);
+        if (!existing) {
+            return;
+        }
+
+        if (!(existing instanceof Set)) {
+            if (existing === routeKey) {
+                prefixIndex.delete(prefixKey);
+            }
+            return;
+        }
+
+        existing.delete(routeKey);
+        if (existing.size === 0) {
+            prefixIndex.delete(prefixKey);
+            return;
+        }
+
+        if (existing.size === 1) {
+            prefixIndex.set(prefixKey, existing.values().next().value);
+        }
+    }
+
+    addRouteToPrefixIndex(afi, safi, ribType, routeKey, route) {
+        const prefixIndex = this.ensureRoutePrefixIndex(afi, safi, ribType);
+        getRoutePrefixIndexKeys(route).forEach(prefixKey => {
+            this.addRouteKeyToPrefixIndex(prefixIndex, prefixKey, routeKey);
+        });
+    }
+
+    removeRouteFromPrefixIndex(afi, safi, ribType, routeKey, route) {
+        const tableKey = this.getRouteTableKey(afi, safi, ribType);
+        const prefixIndex = this.routePrefixIndexes.get(tableKey);
+        if (!prefixIndex) {
+            return;
+        }
+
+        getRoutePrefixIndexKeys(route).forEach(prefixKey => {
+            this.removeRouteKeyFromPrefixIndex(prefixIndex, prefixKey, routeKey);
+        });
+    }
+
+    getRouteKeysByPrefix(afi, safi, ribType, prefixKey) {
+        const tableKey = this.getRouteTableKey(afi, safi, ribType);
+        const routeKeys = this.routePrefixIndexes.get(tableKey)?.get(prefixKey);
+        if (!routeKeys) {
+            return [];
+        }
+        return routeKeys instanceof Set ? routeKeys : [routeKeys];
+    }
+
     getRibEpoch(afi, safi, ribType) {
         const key = BmpBgpSession.makeRibEpochKey(afi, safi, ribType);
         if (!this.ribEpochMap.has(key)) {
@@ -109,29 +262,16 @@ class BmpBgpSession {
             let changed = 0;
             if (routeMap) {
                 routeMap.forEach(route => {
+                    const previousState = route.routeState;
                     route.markStale(reason, staleEpoch);
-                    changed += 1;
+                    if (BmpBgpSession.normalizeRouteState(previousState) !== BmpConst.BMP_ROUTE_STATE.STALE) {
+                        this.recordRouteStateChange(afi, safi, ribType, previousState, route.routeState);
+                        changed += 1;
+                    }
                 });
             }
             return { afi, safi, ribType, staleEpoch, changed };
         });
-    }
-
-    getRouteSummary() {
-        const summary = { active: 0, stale: 0, total: 0 };
-        this.bgpRoutes.forEach(ribTypeRouteMap => {
-            ribTypeRouteMap.forEach(routeMap => {
-                routeMap.forEach(route => {
-                    summary.total += 1;
-                    if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
-                        summary.stale += 1;
-                    } else {
-                        summary.active += 1;
-                    }
-                });
-            });
-        });
-        return summary;
     }
 
     getSessionInfo() {
@@ -191,6 +331,8 @@ class BmpBgpSession {
 
     closeSession() {
         this.bgpRoutes.clear();
+        this.routePrefixIndexes.clear();
+        this.routeSummaries.clear();
         this.recvAddPathMap.clear();
         this.sendAddPathMap.clear();
         this.addPathReceiveMap.clear();

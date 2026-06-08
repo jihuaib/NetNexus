@@ -28,7 +28,7 @@ const DEFAULT_TOOLS_SETTINGS = {
 
 // 默认日志设置
 const DEFAULT_LOG_SETTINGS = {
-    logLevel: 'warn'
+    logLevel: 'off'
 };
 
 // 默认更新设置

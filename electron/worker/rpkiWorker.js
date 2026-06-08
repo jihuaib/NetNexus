@@ -30,7 +30,12 @@ class RpkiWorker {
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.START_RPKI, this.startRpki.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.STOP_RPKI, this.stopRpki.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ROA, this.addRoa.bind(this));
+        this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ROA_BATCH, this.addRoaBatch.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA, this.deleteRoa.bind(this));
+        this.messageHandler.registerHandler(
+            RpkiConst.RPKI_REQ_TYPES.DELETE_ROA_BATCH,
+            this.deleteRoaBatch.bind(this)
+        );
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.GET_CLIENT_LIST, this.getClientList.bind(this));
         this.messageHandler.registerHandler(
             RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY,
@@ -283,7 +288,7 @@ class RpkiWorker {
 
         // 设置日志级别
         if (this.rpkiConfigData.logLevel) {
-            logger.raw().transports.file.level = this.rpkiConfigData.logLevel;
+            logger.setLevel(this.rpkiConfigData.logLevel);
             logger.info(`Worker log level set to: ${this.rpkiConfigData.logLevel}`);
         }
         // 如果启用了认证（MD5 或 TCP-AO），使用SSH隧道
@@ -443,16 +448,32 @@ class RpkiWorker {
     }
 
     sendSingleRoaData(rpkiRoa) {
-        const rpkiSession = this.rpkiSessionMap.values();
-        for (const session of rpkiSession) {
+        for (const session of this.rpkiSessionMap.values()) {
             session.sendSingleRoaData(rpkiRoa);
         }
     }
 
+    sendRoaBatchData(roas) {
+        if (!Array.isArray(roas) || roas.length === 0) {
+            return;
+        }
+        for (const session of this.rpkiSessionMap.values()) {
+            session.sendRoaBatchData(roas);
+        }
+    }
+
     withdrawSingleRoaData(rpkiRoa) {
-        const rpkiSession = this.rpkiSessionMap.values();
-        for (const session of rpkiSession) {
+        for (const session of this.rpkiSessionMap.values()) {
             session.withdrawSingleRoaData(rpkiRoa);
+        }
+    }
+
+    withdrawRoaBatchData(roas) {
+        if (!Array.isArray(roas) || roas.length === 0) {
+            return;
+        }
+        for (const session of this.rpkiSessionMap.values()) {
+            session.withdrawRoaBatchData(roas);
         }
     }
 
@@ -472,6 +493,37 @@ class RpkiWorker {
         this.messageHandler.sendSuccessResponse(messageId, null, 'RPKI ROA配置添加成功');
     }
 
+    addRoaBatch(messageId, payload) {
+        const roas = Array.isArray(payload) ? payload : payload?.roas || [];
+        const announce = Boolean(payload?.announce);
+        let added = 0;
+        let skipped = 0;
+        const addedRoas = [];
+
+        for (const roa of roas) {
+            const key = RpkiRoa.makeKey(roa.ip, roa.mask, roa.asn, roa.maxLength);
+            if (this.rpkiRoaMap.has(key)) {
+                skipped += 1;
+                continue;
+            }
+
+            const rpkiRoa = new RpkiRoa(roa.ip, roa.mask, roa.asn, roa.maxLength, roa.ipType);
+            this.rpkiRoaMap.set(key, rpkiRoa);
+            added += 1;
+            addedRoas.push(rpkiRoa);
+        }
+
+        if (announce) {
+            this.sendRoaBatchData(addedRoas);
+        }
+
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            { added, skipped, total: this.rpkiRoaMap.size },
+            'RPKI ROA批量添加成功'
+        );
+    }
+
     deleteRoa(messageId, roa) {
         const key = RpkiRoa.makeKey(roa.ip, roa.mask, roa.asn, roa.maxLength);
         if (!this.rpkiRoaMap.has(key)) {
@@ -487,6 +539,40 @@ class RpkiWorker {
 
         this.rpkiRoaMap.delete(key);
         this.messageHandler.sendSuccessResponse(messageId, null, 'RPKI ROA配置删除成功');
+    }
+
+    deleteRoaBatch(messageId, payload) {
+        const deleteAll = Boolean(payload?.all);
+        const inputRoas = Array.isArray(payload?.roas) ? payload.roas : [];
+        let deletedRoas = [];
+        let notFound = 0;
+
+        if (deleteAll) {
+            deletedRoas = Array.from(this.rpkiRoaMap.values());
+            this.rpkiRoaMap.clear();
+        } else {
+            for (const roa of inputRoas) {
+                const key = RpkiRoa.makeKey(roa.ip, roa.mask, roa.asn, roa.maxLength);
+                const rpkiRoa = this.rpkiRoaMap.get(key);
+                if (!rpkiRoa) {
+                    notFound += 1;
+                    continue;
+                }
+                deletedRoas.push(rpkiRoa);
+                this.rpkiRoaMap.delete(key);
+            }
+        }
+
+        this.withdrawRoaBatchData(deletedRoas);
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            {
+                deleted: deletedRoas.length,
+                notFound,
+                total: this.rpkiRoaMap.size
+            },
+            'RPKI ROA批量删除成功'
+        );
     }
 
     getClientList(messageId) {
