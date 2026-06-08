@@ -129,6 +129,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -145,5 +150,6 @@ jobs:
           else
             gh release create "$RELEASE_TAG" release-assets/* \
               --title "NetNexus $RELEASE_TAG" \
-              --notes "自动发布 $RELEASE_TAG"
+              --notes "自动发布 $RELEASE_TAG" \
+              --target "$GITHUB_SHA"
           fi
