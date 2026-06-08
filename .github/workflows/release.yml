@@ -125,8 +125,10 @@ jobs:
       - build-windows
       - build-macos
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - name: Checkout
@@ -142,6 +144,13 @@ jobs:
 
       - name: List release assets
         run: ls -lah release-assets
+
+      - name: Verify release token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "RELEASE_TOKEN secret is not configured"
+            exit 1
+          fi
 
       - name: Create or update release
         run: |
