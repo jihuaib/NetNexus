@@ -68,7 +68,7 @@
                         <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
                             <a-space>
                                 <a-button type="primary" html-type="submit" :loading="submitLoading">添加ROA</a-button>
-                                <a-button :loading="importLoading" @click="importRoaJson">
+                                <a-button @click="showRoaImportModal">
                                     <template #icon><UploadOutlined /></template>
                                     导入JSON
                                 </a-button>
@@ -118,6 +118,8 @@
                 </a-card>
             </a-col>
         </a-row>
+
+        <RpkiRoaImportModal v-model:open="roaImportModalVisible" @imported="handleRoaImported" />
     </div>
 </template>
 
@@ -125,6 +127,7 @@
     import { ref, onMounted, watch } from 'vue';
     import { Modal, message } from 'ant-design-vue';
     import { UploadOutlined } from '@ant-design/icons-vue';
+    import RpkiRoaImportModal from '../../components/RpkiRoaImportModal.vue';
     import { FormValidator, createRpkiRoaConfigValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES } from '../../const/rpkiConst';
     import { IP_TYPE } from '../../const/bgpConst';
@@ -145,9 +148,9 @@
     });
 
     const submitLoading = ref(false);
-    const importLoading = ref(false);
     const deleteAllLoading = ref(false);
     const tableLoading = ref(false);
+    const roaImportModalVisible = ref(false);
     const ROA_PAGE_SIZE = 10;
 
     // ROA列表
@@ -307,29 +310,12 @@
         }
     };
 
-    const importRoaJson = async () => {
-        importLoading.value = true;
-        try {
-            const result = await window.rpkiApi.importRoaJson();
-            if (result.status !== 'success') {
-                message.error(result.msg || 'ROA JSON导入失败');
-                return;
-            }
+    const showRoaImportModal = () => {
+        roaImportModalVisible.value = true;
+    };
 
-            if (result.data?.cancelled) {
-                return;
-            }
-
-            const stats = result.data || {};
-            message.success(
-                `ROA导入完成：新增 ${stats.imported || 0} 条，重复 ${stats.duplicate || 0} 条，无效 ${stats.invalid || 0} 条`
-            );
-            fetchRoaList(1);
-        } catch (error) {
-            message.error(`ROA JSON导入出错: ${error.message}`);
-        } finally {
-            importLoading.value = false;
-        }
+    const handleRoaImported = () => {
+        fetchRoaList(1);
     };
 
     const confirmDeleteAllRoa = () => {

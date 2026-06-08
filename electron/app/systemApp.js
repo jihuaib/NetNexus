@@ -61,7 +61,7 @@ class SystemApp {
         this.dhcpApp = new DhcpApp(ipc, this.programStore);
         this.ntpApp = new NtpApp(ipc, this.programStore);
         this.updaterApp = new AppUpdater(ipc, win);
-        this.nativeApp = new NativeApp(ipc, this.programStore);
+        this.nativeApp = new NativeApp(ipc);
         this.toolsApp = new ToolsApp(ipc, this.programStore);
     }
 
@@ -361,19 +361,14 @@ class SystemApp {
 
             let maxMessageHistory = DEFAULT_TOOLS_SETTINGS.packetParser.maxMessageHistory;
             let maxStringHistory = DEFAULT_TOOLS_SETTINGS.stringGenerator.maxStringHistory;
-            let maxFormatterHistory = DEFAULT_TOOLS_SETTINGS.formatter.maxFormatterHistory;
             if (settings.packetParser && settings.packetParser.maxMessageHistory) {
                 maxMessageHistory = settings.packetParser.maxMessageHistory;
             }
             if (settings.stringGenerator && settings.stringGenerator.maxStringHistory) {
                 maxStringHistory = settings.stringGenerator.maxStringHistory;
             }
-            if (settings.formatter && settings.formatter.maxFormatterHistory) {
-                maxFormatterHistory = settings.formatter.maxFormatterHistory;
-            }
             this.toolsApp.setMaxMessageHistory(maxMessageHistory);
             this.toolsApp.setMaxStringHistory(maxStringHistory);
-            this.nativeApp.setMaxFormatterHistory(maxFormatterHistory);
 
             return successResponse(null, 'Settings saved successfully');
         } catch (error) {
@@ -499,7 +494,6 @@ class SystemApp {
         let maxMessageHistory = DEFAULT_TOOLS_SETTINGS.packetParser.maxMessageHistory;
         let maxStringHistory = DEFAULT_TOOLS_SETTINGS.stringGenerator.maxStringHistory;
         let maxFtpUser = DEFAULT_TOOLS_SETTINGS.ftpServer.maxFtpUser;
-        let maxFormatterHistory = DEFAULT_TOOLS_SETTINGS.formatter.maxFormatterHistory;
         const toolsSettings = this.store.get(this.toolsSettingsFileKey);
         if (toolsSettings && toolsSettings.packetParser) {
             if (toolsSettings.packetParser.maxMessageHistory) {
@@ -516,15 +510,9 @@ class SystemApp {
                 maxFtpUser = toolsSettings.ftpServer.maxFtpUser;
             }
         }
-        if (toolsSettings && toolsSettings.formatter) {
-            if (toolsSettings.formatter.maxFormatterHistory) {
-                maxFormatterHistory = toolsSettings.formatter.maxFormatterHistory;
-            }
-        }
         this.toolsApp.setMaxMessageHistory(maxMessageHistory);
         this.toolsApp.setMaxStringHistory(maxStringHistory);
         this.ftpApp.setMaxFtpUser(maxFtpUser);
-        this.nativeApp.setMaxFormatterHistory(maxFormatterHistory);
 
         // 加载更新设置并应用
         let updateSetting = DEFAULT_UPDATE_SETTINGS;
@@ -549,7 +537,6 @@ class SystemApp {
         const isFtpRunning = this.ftpApp.getFtpRunning();
         const isSnmpRunning = this.snmpApp.getSnmpRunning();
         const isNtpRunning = this.ntpApp.getNtpRunning();
-        const isNativeRunning = this.nativeApp.getPacketCaptureRunning();
 
         if (
             isBgpRunning ||
@@ -557,8 +544,7 @@ class SystemApp {
             isRpkiRunning ||
             isFtpRunning ||
             isSnmpRunning ||
-            isNtpRunning ||
-            isNativeRunning
+            isNtpRunning
         ) {
             const { response } = await dialog.showMessageBox(this.win, {
                 type: 'warning',
@@ -589,9 +575,6 @@ class SystemApp {
                 }
                 if (isNtpRunning) {
                     await this.ntpApp.handleStopNtp();
-                }
-                if (isNativeRunning) {
-                    await this.nativeApp.handleStopPacketCapture();
                 }
 
                 return true;

@@ -273,6 +273,30 @@
         }
     };
 
+    const getTrapTotal = payload => {
+        if (Array.isArray(payload)) {
+            return payload.length;
+        }
+
+        const total = Number(payload?.totalTraps);
+        if (Number.isFinite(total)) {
+            return total;
+        }
+
+        return Array.isArray(payload?.list) ? payload.list.length : 0;
+    };
+
+    const loadTrapCount = async () => {
+        try {
+            const result = await window.snmpApi.getTrapList();
+            if (result.status === 'success') {
+                trapCount.value = getTrapTotal(result.data);
+            }
+        } catch (error) {
+            console.error(error);
+        }
+    };
+
     const startSnmp = async () => {
         try {
             const hasErrors = validatorSnmpConfig.validate(formData.value);
@@ -293,6 +317,7 @@
             const startResult = await window.snmpApi.startSnmp(payload);
             if (startResult.status === 'success') {
                 isServerRunning.value = true;
+                trapCount.value = 0;
                 message.success('SNMP服务启动成功');
             } else {
                 message.error(startResult.msg || 'SNMP服务启动失败');
@@ -311,6 +336,7 @@
             if (result.status === 'success') {
                 message.success('SNMP服务器停止成功');
                 isServerRunning.value = false;
+                trapCount.value = 0;
             } else {
                 message.error(result.msg || 'SNMP服务停止失败');
             }
@@ -327,15 +353,22 @@
 
     const handleSnmpEvent = respData => {
         if (respData.status === 'success') {
-            const type = respData.data.type;
+            const payload = respData.data || {};
+            const type = payload.type;
             if (type === SNMP_SUB_EVT_TYPES.TRAP_RECEIVED) {
                 trapCount.value++;
+            } else if (type === SNMP_SUB_EVT_TYPES.TRAP_BATCH_RECEIVED) {
+                trapCount.value += Number(payload.data?.changedCount) || 0;
+            } else if (type === SNMP_SUB_EVT_TYPES.SERVER_STATUS && payload.data?.status === 'stopped') {
+                trapCount.value = 0;
+                isServerRunning.value = false;
             }
         }
     };
 
-    onActivated(() => {
+    onActivated(async () => {
         EventBus.on('snmp:event', SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_CONFIG, handleSnmpEvent);
+        await loadTrapCount();
     });
 
     onDeactivated(() => {

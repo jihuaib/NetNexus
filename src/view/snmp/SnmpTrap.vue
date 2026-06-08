@@ -70,7 +70,7 @@
             <!-- Trap列表表格 -->
             <a-table
                 :columns="columns"
-                :data-source="filteredTraps"
+                :data-source="traps"
                 :loading="loading"
                 :pagination="pagination"
                 :scroll="{ y: 400 }"
@@ -164,7 +164,7 @@
 </template>
 
 <script setup>
-    import { ref, reactive, computed, onActivated, onDeactivated } from 'vue';
+    import { ref, reactive, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
     import { DeleteOutlined, EyeOutlined } from '@ant-design/icons-vue';
     import { SNMP_TRAP_STATUS, SNMP_SUB_EVT_TYPES, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
@@ -178,6 +178,11 @@
     const detailModalVisible = ref(false);
     const selectedTrap = ref(null);
     const traps = ref([]);
+    const TRAP_LIST_REFRESH_INTERVAL_MS = 1000;
+    let trapListLoading = false;
+    let trapListRefreshTimer = null;
+    let lastTrapListRefreshAt = 0;
+    let pendingTrapListRefresh = false;
 
     // 统计数据
     const totalTraps = ref(0);
@@ -283,33 +288,6 @@
         }
     ];
 
-    // 筛选后的数据
-    const filteredTraps = computed(() => {
-        let result = [...traps.value];
-
-        if (filters.version) {
-            result = result.filter(trap => trap.version === filters.version);
-        }
-
-        if (filters.sourceIp) {
-            result = result.filter(trap => trap.sourceIp.includes(filters.sourceIp));
-        }
-
-        if (filters.community) {
-            result = result.filter(trap => trap.community && trap.community.includes(filters.community));
-        }
-
-        if (filters.timeRange && filters.timeRange.length === 2) {
-            const [start, end] = filters.timeRange;
-            result = result.filter(trap => {
-                const trapTime = dayjs(trap.timestamp);
-                return trapTime.isAfter(start) && trapTime.isBefore(end);
-            });
-        }
-
-        return result;
-    });
-
     const getVersionColor = version => {
         const colors = {
             v1: 'blue',
@@ -343,12 +321,184 @@
         return dayjs(timestamp).format('YYYY-MM-DD HH:mm:ss');
     };
 
+    const toQueryTime = value => {
+        if (!value) {
+            return null;
+        }
+
+        return typeof value.toISOString === 'function' ? value.toISOString() : dayjs(value).toISOString();
+    };
+
+    const buildTrapListQuery = () => {
+        const query = {
+            page: pagination.current,
+            pageSize: pagination.pageSize,
+            filters: {
+                version: filters.version,
+                sourceIp: (filters.sourceIp || '').trim(),
+                community: (filters.community || '').trim()
+            }
+        };
+
+        if (filters.timeRange && filters.timeRange.length === 2) {
+            query.filters.timeRange = {
+                start: toQueryTime(filters.timeRange[0]),
+                end: toQueryTime(filters.timeRange[1])
+            };
+        }
+
+        return query;
+    };
+
+    const getPageStatsFallback = list => {
+        const now = dayjs();
+        const todayStart = now.startOf('day');
+        const recentStart = now.subtract(1, 'hour');
+        const sourceIps = new Set();
+        let today = 0;
+        let recent = 0;
+
+        list.forEach(trap => {
+            if (trap.sourceIp) {
+                sourceIps.add(trap.sourceIp);
+            }
+
+            const trapTime = dayjs(trap.timestamp);
+            if (trapTime.isAfter(todayStart) || trapTime.isSame(todayStart)) {
+                today++;
+            }
+            if (trapTime.isAfter(recentStart)) {
+                recent++;
+            }
+        });
+
+        return {
+            todayTraps: today,
+            recentTraps: recent,
+            onlineAgents: sourceIps.size
+        };
+    };
+
+    const normalizeTrapListPayload = payload => {
+        if (Array.isArray(payload)) {
+            const stats = getPageStatsFallback(payload);
+            return {
+                list: payload,
+                page: 1,
+                pageSize: pagination.pageSize,
+                total: payload.length,
+                totalTraps: payload.length,
+                ...stats
+            };
+        }
+
+        const list = Array.isArray(payload?.list) ? payload.list : [];
+        const fallbackStats = getPageStatsFallback(list);
+        const page = Number(payload?.page);
+        const pageSize = Number(payload?.pageSize);
+        const filteredTotal = Number(payload?.total);
+        const receivedTotal = Number(payload?.totalTraps);
+        const todayTotal = Number(payload?.todayTraps);
+        const recentTotal = Number(payload?.recentTraps);
+        const agentTotal = Number(payload?.onlineAgents);
+
+        return {
+            list,
+            page: Number.isFinite(page) ? page : pagination.current,
+            pageSize: Number.isFinite(pageSize) ? pageSize : pagination.pageSize,
+            total: Number.isFinite(filteredTotal) ? filteredTotal : list.length,
+            totalTraps: Number.isFinite(receivedTotal) ? receivedTotal : list.length,
+            todayTraps: Number.isFinite(todayTotal) ? todayTotal : fallbackStats.todayTraps,
+            recentTraps: Number.isFinite(recentTotal) ? recentTotal : fallbackStats.recentTraps,
+            onlineAgents: Number.isFinite(agentTotal) ? agentTotal : fallbackStats.onlineAgents
+        };
+    };
+
+    const setTrapPage = payload => {
+        traps.value = payload.list;
+        pagination.current = payload.page;
+        pagination.pageSize = payload.pageSize;
+        pagination.total = payload.total;
+        totalTraps.value = payload.totalTraps;
+        todayTraps.value = payload.todayTraps;
+        recentTraps.value = payload.recentTraps;
+        onlineAgents.value = payload.onlineAgents;
+    };
+
+    const clearScheduledTrapRefresh = () => {
+        if (trapListRefreshTimer) {
+            clearTimeout(trapListRefreshTimer);
+            trapListRefreshTimer = null;
+        }
+        pendingTrapListRefresh = false;
+    };
+
+    const scheduleTrapListRefresh = () => {
+        if (trapListRefreshTimer) {
+            return;
+        }
+
+        const delay = Math.max(0, TRAP_LIST_REFRESH_INTERVAL_MS - (Date.now() - lastTrapListRefreshAt));
+        trapListRefreshTimer = setTimeout(() => {
+            trapListRefreshTimer = null;
+            lastTrapListRefreshAt = Date.now();
+            pagination.current = 1;
+            loadTrapList(false);
+        }, delay);
+    };
+
+    const loadTrapList = async (showLoading = true) => {
+        if (trapListLoading) {
+            pendingTrapListRefresh = true;
+            return;
+        }
+
+        try {
+            trapListLoading = true;
+            if (showLoading) {
+                loading.value = true;
+            }
+
+            const result = await window.snmpApi.getTrapList(buildTrapListQuery());
+            if (result.status === 'success') {
+                setTrapPage(normalizeTrapListPayload(result.data));
+            } else if (showLoading) {
+                message.error(result.msg || '获取Trap列表失败');
+            }
+        } catch (error) {
+            if (showLoading) {
+                message.error('获取Trap列表失败: ' + error.message);
+            }
+        } finally {
+            trapListLoading = false;
+            if (showLoading) {
+                loading.value = false;
+            }
+
+            if (pendingTrapListRefresh) {
+                pendingTrapListRefresh = false;
+                scheduleTrapListRefresh();
+            }
+        }
+    };
+
     const clearHistory = async () => {
         try {
             clearLoading.value = true;
             const result = await window.snmpApi.clearTrapHistory();
             if (result.status === 'success') {
-                message.success('历史记录清空成功');
+                clearScheduledTrapRefresh();
+                setTrapPage({
+                    list: [],
+                    page: 1,
+                    pageSize: pagination.pageSize,
+                    total: 0,
+                    totalTraps: 0,
+                    todayTraps: 0,
+                    recentTraps: 0,
+                    onlineAgents: 0
+                });
+                message.success(result.msg || '历史记录清空成功');
             } else {
                 message.error(result.msg || '清空失败');
             }
@@ -361,26 +511,18 @@
 
     const handleFilterChange = () => {
         pagination.current = 1;
-        // 筛选是在前端进行的，不需要重新请求数据
+        loadTrapList();
     };
 
     const handleTableChange = pag => {
         pagination.current = pag.current;
         pagination.pageSize = pag.pageSize;
+        loadTrapList();
     };
 
     const showTrapDetail = trap => {
         selectedTrap.value = trap;
         detailModalVisible.value = true;
-    };
-
-    // 接收新的Trap事件
-    const onTrapReceived = trapData => {
-        // 在列表顶部添加新的Trap
-        traps.value.unshift(trapData);
-        // 更新统计数据
-        totalTraps.value++;
-        recentTraps.value++;
     };
 
     defineExpose({
@@ -391,18 +533,33 @@
 
     const handleSnmpEvent = respData => {
         if (respData.status === 'success') {
-            const type = respData.data.type;
-            if (type === SNMP_SUB_EVT_TYPES.TRAP_RECEIVED) {
-                onTrapReceived(respData.data.data);
+            const payload = respData.data || {};
+            const type = payload.type;
+            if (type === SNMP_SUB_EVT_TYPES.TRAP_BATCH_RECEIVED || type === SNMP_SUB_EVT_TYPES.TRAP_RECEIVED) {
+                scheduleTrapListRefresh();
+            } else if (type === SNMP_SUB_EVT_TYPES.SERVER_STATUS && payload.data?.status === 'stopped') {
+                clearScheduledTrapRefresh();
+                setTrapPage({
+                    list: [],
+                    page: 1,
+                    pageSize: pagination.pageSize,
+                    total: 0,
+                    totalTraps: 0,
+                    todayTraps: 0,
+                    recentTraps: 0,
+                    onlineAgents: 0
+                });
             }
         }
     };
 
-    onActivated(() => {
+    onActivated(async () => {
         EventBus.on('snmp:event', SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_TRAP, handleSnmpEvent);
+        await loadTrapList();
     });
 
     onDeactivated(() => {
+        clearScheduledTrapRefresh();
         EventBus.off('snmp:event', SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_TRAP);
     });
 </script>

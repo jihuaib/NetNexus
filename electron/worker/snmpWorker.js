@@ -12,6 +12,13 @@ class SnmpWorker {
         this.sessionMap = new Map(); // SNMP会话映射
         this.agentMap = new Map(); // 代理映射
         this.trapCounter = 0;
+        this.trapHistory = [];
+        this.maxTrapHistory = SnmpConst.DEFAULT_SNMP_SETTINGS.maxTrapHistory;
+        this.pendingTrapUpdateCount = 0;
+        this.pendingTrapLatestTrap = null;
+        this.pendingTrapSourceIps = new Set();
+        this.trapUpdateFlushTimer = null;
+        this.trapUpdateFlushIntervalMs = 1000;
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler();
@@ -20,6 +27,71 @@ class SnmpWorker {
         // 注册消息处理器
         this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.START_SNMP, this.startSnmp.bind(this));
         this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.STOP_SNMP, this.stopSnmp.bind(this));
+        this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.GET_TRAP_LIST, this.getTrapList.bind(this));
+        this.messageHandler.registerHandler(
+            SnmpConst.SNMP_REQ_TYPES.CLEAR_TRAP_HISTORY,
+            this.clearTrapHistory.bind(this)
+        );
+    }
+
+    enqueueTrapUpdateEvent(trapData) {
+        this.pendingTrapUpdateCount++;
+        this.pendingTrapLatestTrap = trapData;
+        if (trapData.sourceIp) {
+            this.pendingTrapSourceIps.add(trapData.sourceIp);
+        }
+        this.scheduleTrapUpdateFlush();
+    }
+
+    scheduleTrapUpdateFlush() {
+        if (this.trapUpdateFlushTimer) {
+            return;
+        }
+
+        this.trapUpdateFlushTimer = setTimeout(() => {
+            this.flushTrapUpdateEvents();
+        }, this.trapUpdateFlushIntervalMs);
+    }
+
+    flushTrapUpdateEvents() {
+        if (this.trapUpdateFlushTimer) {
+            clearTimeout(this.trapUpdateFlushTimer);
+            this.trapUpdateFlushTimer = null;
+        }
+
+        if (this.pendingTrapUpdateCount === 0) {
+            return;
+        }
+
+        const latestTrap = this.pendingTrapLatestTrap;
+        const update = {
+            changedCount: this.pendingTrapUpdateCount,
+            totalTraps: this.trapCounter,
+            historyCount: this.trapHistory.length,
+            sourceIpCount: this.pendingTrapSourceIps.size,
+            latestTrapAt: latestTrap?.timestamp || null,
+            latestSourceIp: latestTrap?.sourceIp || null
+        };
+
+        this.pendingTrapUpdateCount = 0;
+        this.pendingTrapLatestTrap = null;
+        this.pendingTrapSourceIps.clear();
+
+        this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
+            type: SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_BATCH_RECEIVED,
+            data: update
+        });
+    }
+
+    clearTrapUpdateAggregation() {
+        if (this.trapUpdateFlushTimer) {
+            clearTimeout(this.trapUpdateFlushTimer);
+            this.trapUpdateFlushTimer = null;
+        }
+
+        this.pendingTrapUpdateCount = 0;
+        this.pendingTrapLatestTrap = null;
+        this.pendingTrapSourceIps.clear();
     }
 
     /**
@@ -28,6 +100,10 @@ class SnmpWorker {
     async startSnmp(messageId, config) {
         try {
             this.snmpConfig = config;
+            this.maxTrapHistory = Number(config.maxTrapHistory) || SnmpConst.DEFAULT_SNMP_SETTINGS.maxTrapHistory;
+            this.trapHistory = [];
+            this.trapCounter = 0;
+            this.clearTrapUpdateAggregation();
 
             // 设置日志级别
             if (this.snmpConfig.logLevel) {
@@ -260,11 +336,8 @@ class SnmpWorker {
 
             logger.info(`处理Trap: ${trapData.id} 来自 ${rinfo.address}:${rinfo.port}`);
 
-            // 发送Trap接收事件
-            this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
-                type: SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_RECEIVED,
-                data: trapData
-            });
+            this.recordTrap(trapData);
+            this.enqueueTrapUpdateEvent(trapData);
 
             // 更新代理信息
             this.updateAgentInfo(rinfo.address, trapData);
@@ -280,6 +353,13 @@ class SnmpWorker {
                     sourcePort: rinfo.port
                 }
             });
+        }
+    }
+
+    recordTrap(trapData) {
+        this.trapHistory.unshift(trapData);
+        if (this.trapHistory.length > this.maxTrapHistory) {
+            this.trapHistory.length = this.maxTrapHistory;
         }
     }
 
@@ -333,11 +413,107 @@ class SnmpWorker {
         }
     }
 
+    filterTrapHistory(query = {}) {
+        const filters = query.filters || {};
+        let list = this.trapHistory;
+
+        if (filters.version) {
+            list = list.filter(trap => trap.version === filters.version);
+        }
+
+        if (filters.sourceIp) {
+            list = list.filter(trap => trap.sourceIp?.includes(filters.sourceIp));
+        }
+
+        if (filters.community) {
+            list = list.filter(trap => trap.community?.includes(filters.community));
+        }
+
+        if (filters.timeRange?.start && filters.timeRange?.end) {
+            const startTime = Date.parse(filters.timeRange.start);
+            const endTime = Date.parse(filters.timeRange.end);
+            if (!Number.isNaN(startTime) && !Number.isNaN(endTime)) {
+                list = list.filter(trap => {
+                    const trapTime = Date.parse(trap.timestamp);
+                    return !Number.isNaN(trapTime) && trapTime >= startTime && trapTime <= endTime;
+                });
+            }
+        }
+
+        return list;
+    }
+
+    getTrapStats() {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const recentStart = now.getTime() - 60 * 60 * 1000;
+        const sourceIps = new Set();
+        let todayTraps = 0;
+        let recentTraps = 0;
+
+        this.trapHistory.forEach(trap => {
+            if (trap.sourceIp) {
+                sourceIps.add(trap.sourceIp);
+            }
+
+            const trapTime = Date.parse(trap.timestamp);
+            if (Number.isNaN(trapTime)) {
+                return;
+            }
+            if (trapTime >= todayStart) {
+                todayTraps++;
+            }
+            if (trapTime >= recentStart) {
+                recentTraps++;
+            }
+        });
+
+        return {
+            totalTraps: this.trapCounter,
+            historyCount: this.trapHistory.length,
+            todayTraps,
+            recentTraps,
+            onlineAgents: sourceIps.size
+        };
+    }
+
+    getTrapList(messageId, query = {}) {
+        const pageSize = Math.max(1, Number(query.pageSize) || 20);
+        const totalList = this.filterTrapHistory(query);
+        const total = totalList.length;
+        const maxPage = Math.max(1, Math.ceil(total / pageSize));
+        const page = Math.min(Math.max(1, Number(query.page) || 1), maxPage);
+        const startIndex = (page - 1) * pageSize;
+        const list = totalList.slice(startIndex, startIndex + pageSize);
+
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            {
+                list,
+                page,
+                pageSize,
+                total,
+                ...this.getTrapStats(),
+                maxTrapHistory: this.maxTrapHistory
+            },
+            '获取Trap列表成功'
+        );
+    }
+
+    clearTrapHistory(messageId) {
+        this.trapHistory = [];
+        this.trapCounter = 0;
+        this.clearTrapUpdateAggregation();
+        this.messageHandler.sendSuccessResponse(messageId, null, 'Trap历史已清空');
+    }
+
     /**
      * 停止SNMP服务器
      */
     stopSnmp(messageId) {
         try {
+            this.flushTrapUpdateEvents();
+
             if (this.server) {
                 this.server.close();
                 this.server = null;
@@ -352,7 +528,9 @@ class SnmpWorker {
             this.snmpConfig = null;
             this.sessionMap.clear();
             this.agentMap.clear();
+            this.trapHistory = [];
             this.trapCounter = 0;
+            this.clearTrapUpdateAggregation();
 
             logger.info('SNMP服务器停止成功');
             this.messageHandler.sendSuccessResponse(messageId, null, 'SNMP协议停止成功');

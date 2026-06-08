@@ -295,6 +295,7 @@ async function parseRoaJsonFile(filePath, onRoa) {
     let collectDepth = 0;
     let collectInString = false;
     let collectEscape = false;
+    let stopped = false;
 
     const handleObject = async objectText => {
         stats.objects += 1;
@@ -312,11 +313,18 @@ async function parseRoaJsonFile(filePath, onRoa) {
         }
 
         stats.valid += 1;
-        await onRoa(roa);
+        const shouldContinue = await onRoa(roa);
+        if (shouldContinue === false) {
+            stopped = true;
+        }
     };
 
     for await (const chunk of input) {
         for (let i = 0; i < chunk.length; i++) {
+            if (stopped) {
+                break;
+            }
+
             const ch = chunk[i];
 
             if (collecting) {
@@ -432,9 +440,13 @@ async function parseRoaJsonFile(filePath, onRoa) {
                 lastString = null;
             }
         }
+
+        if (stopped) {
+            break;
+        }
     }
 
-    if (collecting || inString || collectInString) {
+    if (!stopped && (collecting || inString || collectInString)) {
         throw new Error('ROA JSON文件不完整或格式错误');
     }
 

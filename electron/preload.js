@@ -161,7 +161,8 @@ contextBridge.exposeInMainWorld('rpkiApi', {
     deleteRoa: roa => ipcRenderer.invoke('rpki:deleteRoa', roa),
     deleteAllRoa: () => ipcRenderer.invoke('rpki:deleteAllRoa'),
     getRoaList: options => ipcRenderer.invoke('rpki:getRoaList', options),
-    importRoaJson: () => ipcRenderer.invoke('rpki:importRoaJson'),
+    selectRoaJsonFile: () => ipcRenderer.invoke('rpki:selectRoaJsonFile'),
+    importRoaJson: options => ipcRenderer.invoke('rpki:importRoaJson', options),
     getClientList: () => ipcRenderer.invoke('rpki:getClientList'),
 
     // router key (v1+)
@@ -210,7 +211,9 @@ contextBridge.exposeInMainWorld('snmpApi', {
 
     // snmp服务
     startSnmp: config => ipcRenderer.invoke('snmp:startSnmp', config),
-    stopSnmp: () => ipcRenderer.invoke('snmp:stopSnmp')
+    stopSnmp: () => ipcRenderer.invoke('snmp:stopSnmp'),
+    getTrapList: query => ipcRenderer.invoke('snmp:getTrapList', query),
+    clearTrapHistory: () => ipcRenderer.invoke('snmp:clearTrapHistory')
 });
 
 // ntp模块
@@ -225,19 +228,9 @@ contextBridge.exposeInMainWorld('ntpApi', {
 
 // 依赖本地工具模块
 contextBridge.exposeInMainWorld('nativeApi', {
-    // 抓包工具模块
-    getNetworkInterfaces: () => ipcRenderer.invoke('native:getNetworkInterfaces'),
+    // 网络信息工具模块
     getNetworkInfo: () => ipcRenderer.invoke('native:getNetworkInfo'),
     manageNetwork: config => ipcRenderer.invoke('native:manageNetwork', config),
-    startPacketCapture: config => ipcRenderer.invoke('native:startPacketCapture', config),
-    stopPacketCapture: () => ipcRenderer.invoke('native:stopPacketCapture'),
-    getPacketHistory: () => ipcRenderer.invoke('native:getPacketHistory'),
-    exportPacketsToPcap: packets => ipcRenderer.invoke('native:exportPacketsToPcap', packets),
-
-    // 格式化工具模块
-    formatData: formatterData => ipcRenderer.invoke('native:formatData', formatterData),
-    getFormatterHistory: () => ipcRenderer.invoke('native:getFormatterHistory'),
-    clearFormatterHistory: () => ipcRenderer.invoke('native:clearFormatterHistory'),
 
     // 端口监听工具模块
     getListeningPorts: () => ipcRenderer.invoke('native:getListeningPorts'),

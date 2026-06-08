@@ -3,8 +3,6 @@ import Main from '../view/Main.vue';
 import ToolMain from '../view/tools/ToolMain.vue';
 import StringGenerator from '../view/tools/StringGenerator.vue';
 import PacketParser from '../view/tools/PacketParser.vue';
-import Formatter from '../view/tools/Formatter.vue';
-import PacketCapture from '../view/tools/PacketCapture.vue';
 import PortMonitor from '../view/tools/PortMonitor.vue';
 import NetworkInfo from '../view/tools/NetworkInfo.vue';
 import TcpAoMac from '../view/tools/TcpAoMac.vue';
@@ -68,18 +66,6 @@ const routes = [
                         path: 'packet-parser',
                         name: 'PacketParser',
                         component: PacketParser,
-                        meta: { keepAlive: true }
-                    },
-                    {
-                        path: 'formatter',
-                        name: 'Formatter',
-                        component: Formatter,
-                        meta: { keepAlive: true }
-                    },
-                    {
-                        path: 'packet-capture',
-                        name: 'PacketCapture',
-                        component: PacketCapture,
                         meta: { keepAlive: true }
                     },
                     {

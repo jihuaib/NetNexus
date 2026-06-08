@@ -58,6 +58,7 @@ class RpkiApp {
         this.ipcMain.handle('rpki:deleteRoa', this.handleDeleteRoa.bind(this));
         this.ipcMain.handle('rpki:deleteAllRoa', this.handleDeleteAllRoa.bind(this));
         this.ipcMain.handle('rpki:getRoaList', this.handleGetRoaList.bind(this));
+        this.ipcMain.handle('rpki:selectRoaJsonFile', this.handleSelectRoaJsonFile.bind(this));
         this.ipcMain.handle('rpki:importRoaJson', this.handleImportRoaJson.bind(this));
 
         // router key (v1+)
@@ -480,24 +481,58 @@ class RpkiApp {
         }
     }
 
-    async handleImportRoaJson(event) {
+    async showRoaJsonOpenDialog(event) {
+        const options = {
+            title: '导入 ROA JSON 文件',
+            properties: ['openFile'],
+            filters: [
+                { name: 'JSON', extensions: ['json'] },
+                { name: 'All Files', extensions: ['*'] }
+            ]
+        };
+        const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
+        return win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options);
+    }
+
+    async handleSelectRoaJsonFile(event) {
         try {
-            const options = {
-                title: '导入 ROA JSON 文件',
-                properties: ['openFile'],
-                filters: [
-                    { name: 'JSON', extensions: ['json'] },
-                    { name: 'All Files', extensions: ['*'] }
-                ]
-            };
-            const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
-            const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+            const result = await this.showRoaJsonOpenDialog(event);
 
             if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-                return successResponse({ cancelled: true }, '已取消导入');
+                return successResponse(null, '已取消选择');
             }
 
-            const stats = await this.importRoaJsonFile(result.filePaths[0]);
+            return successResponse(result.filePaths[0], 'ROA JSON文件选择成功');
+        } catch (error) {
+            logger.error('Error selecting ROA JSON:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    normalizeRoaImportLimit(limit) {
+        const value = Number(limit);
+        if (!Number.isFinite(value) || value <= 0) {
+            return null;
+        }
+        return Math.floor(value);
+    }
+
+    async handleImportRoaJson(event, importOptions = {}) {
+        try {
+            let importFilePath = importOptions?.filePath;
+            if (!importFilePath) {
+                const result = await this.showRoaJsonOpenDialog(event);
+
+                if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+                    return successResponse({ cancelled: true }, '已取消导入');
+                }
+
+                importFilePath = result.filePaths[0];
+            }
+
+            const stats = await this.importRoaJsonFile(importFilePath, {
+                limit: this.normalizeRoaImportLimit(importOptions?.limit)
+            });
             return successResponse(stats, 'ROA JSON导入完成');
         } catch (error) {
             logger.error('Error importing ROA JSON:', error.message);
@@ -505,15 +540,17 @@ class RpkiApp {
         }
     }
 
-    async importRoaJsonFile(importFilePath) {
+    async importRoaJsonFile(importFilePath, options = {}) {
         const filePath = await this.ensureRoaFileStorage();
         const tempPath = `${filePath}.${process.pid}.${Date.now()}.import.tmp`;
         const importedOnlyPath = `${filePath}.${process.pid}.${Date.now()}.imported.tmp`;
         const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
         const importedOnlyStream = fs.createWriteStream(importedOnlyPath, { encoding: 'utf8' });
         const existingKeys = new Set();
+        const importLimit = this.normalizeRoaImportLimit(options.limit);
         const stats = {
             filePath: importFilePath,
+            limit: importLimit,
             existing: 0,
             parsed: 0,
             imported: 0,
@@ -545,6 +582,10 @@ class RpkiApp {
                 await writeLine(stream, line);
                 await writeLine(importedOnlyStream, line);
                 stats.imported += 1;
+
+                if (importLimit && stats.imported >= importLimit) {
+                    return false;
+                }
             });
 
             stats.parsed = parseStats.valid;

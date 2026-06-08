@@ -46,19 +46,18 @@ BGP 监控协议工具，提供实时路由监控、数据分析和统计报告�
 ### 🛠️开发工具集
 
 #### [工具集合](docs/TOOLS.md)
-包含格式化工具、报文解析器、报文捕获工具、字符串生成器、端口监控器、网络信息管理等多种实用工具。
+包含报文解析器、字符串生成器、端口监控器、网络信息管理、TCP-AO MAC 计算等多种实用工具。
 
 **核心工具**:
-- **格式化工具**: JSON/XML/YAML/SQL 等格式化和验证
 - **报文解析器**: 网络协议报文分析和解析
-- **报文捕获**: 实时网络流量捕获和分析
 - **字符串生成器**: 多种模式的字符串生成工具
 - **端口监控器**: 系统端口和网络连接实时监控
 - **网络信息**: 网络接口管理和 IP 地址配置
+- **TCP-AO MAC**: TCP-AO 报文认证码计算
 
 ### 🚀 未来计划
 
-- JSON 解析与格式化工具
+- JSON 解析工具
 - 网络连接测试工具
 - 编码/解码转换工具
 - IP 地址计算工具
@@ -232,10 +231,9 @@ NetNexus/
 │   │   ├── tools/          # 工具集合视图
 │   │   │   ├── StringGenerator.vue  # 字符串生成器
 │   │   │   ├── PacketParser.vue     # 报文解析器
-│   │   │   ├── Formatter.vue        # 格式化工具
-│   │   │   ├── PacketCapture.vue    # 报文捕获
 │   │   │   ├── PortMonitor.vue      # 端口监控器
-│   │   │   └── NetworkInfo.vue      # 网络信息
+│   │   │   ├── NetworkInfo.vue      # 网络信息
+│   │   │   └── TcpAoMac.vue         # TCP-AO MAC
 │   │   └── settings/       # 设置视图
 │   │       ├── GeneralSettings.vue      # 通用设置
 │   │       ├── ToolsSettings.vue        # 工具设置

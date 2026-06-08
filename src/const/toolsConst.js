@@ -21,9 +21,6 @@ export const DEFAULT_TOOLS_SETTINGS = {
     },
     stringGenerator: {
         maxStringHistory: 10
-    },
-    formatter: {
-        maxFormatterHistory: 10
     }
 };
 
@@ -46,6 +43,5 @@ export const PROTOCOL_TYPE_NAME = {
 
 export const TOOLS_EVENT_PAGE_ID = {
     PAGE_ID_TOOLS_UPDATE_SETTINGS: 1,
-    PAGE_ID_TOOLS_UPDATE_NOTIFICATION: 2,
-    PAGE_ID_TOOLS_PACKET_CAPTURE: 3
+    PAGE_ID_TOOLS_UPDATE_NOTIFICATION: 2
 };

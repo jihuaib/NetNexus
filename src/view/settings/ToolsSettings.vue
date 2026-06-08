@@ -21,15 +21,6 @@
                         style="width: 100%"
                     />
                 </a-form-item>
-                <a-divider>格式化工具</a-divider>
-                <a-form-item label="格式化历史记录最大存储条数" name="maxFormatterHistory">
-                    <a-input-number
-                        v-model:value="settingsForm.formatter.maxFormatterHistory"
-                        :min="10"
-                        :max="1000"
-                        style="width: 100%"
-                    />
-                </a-form-item>
                 <a-form-item>
                     <a-button type="primary" @click="saveSettings">保存设置</a-button>
                 </a-form-item>
@@ -50,9 +41,6 @@
         },
         stringGenerator: {
             maxStringHistory: DEFAULT_TOOLS_SETTINGS.stringGenerator.maxStringHistory
-        },
-        formatter: {
-            maxFormatterHistory: DEFAULT_TOOLS_SETTINGS.formatter.maxFormatterHistory
         }
     });
 
@@ -66,9 +54,6 @@
                 }
                 if (settings.data.stringGenerator) {
                     settingsForm.value.stringGenerator = settings.data.stringGenerator;
-                }
-                if (settings.data.formatter) {
-                    settingsForm.value.formatter = settings.data.formatter;
                 }
             }
         } catch (error) {

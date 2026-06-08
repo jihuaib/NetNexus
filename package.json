@@ -191,13 +191,11 @@
         "wait-port": "^1.1.0"
     },
     "dependencies": {
-        "cap": "^0.2.1",
         "electron-log": "^5.3.3",
         "electron-store": "^8.2.0",
         "electron-updater": "^6.1.7",
         "iconv-lite": "^0.6.3",
         "ipaddr.js": "^2.1.0",
-        "libxmljs2": "^0.30.1",
         "ssh2": "^1.15.0"
     }
 }
