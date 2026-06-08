@@ -1,8 +1,8 @@
 const assert = require('assert');
-const { parseBgpPacket, getBgpPacketSummary } = require('../electron/utils/bgpPacketParser');
-const BgpConst = require('../electron/const/bgpConst');
-const { getAddrFamilyType, getAfiAndSafi } = require('../electron/utils/bgpUtils');
-const BmpSession = require('../electron/worker/bmpSession');
+const { parseBgpPacket, getBgpPacketSummary } = require('../../electron/utils/bgpPacketParser');
+const BgpConst = require('../../electron/const/bgpConst');
+const { getAddrFamilyType, getAfiAndSafi } = require('../../electron/utils/bgpUtils');
+const BmpSession = require('../../electron/worker/bmpSession');
 
 function u16(value) {
     return Buffer.from([(value >> 8) & 0xff, value & 0xff]);

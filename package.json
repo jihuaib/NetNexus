@@ -1,7 +1,7 @@
 {
     "name": "net-nexus",
     "private": true,
-    "version": "4.0.9",
+    "version": "4.0.10",
     "main": "electron/main.js",
     "description": "一个基于 Vue3 + Ant Design Vue + Electron 开发的网络和开发辅助工具集，包含BGP模拟器、BMP监控器、RPKI验证器、报文解析器、字符串生成器等多种网络工具",
     "keywords": [
@@ -67,6 +67,7 @@
         "release:mac": "node scripts/release.js --mac",
         "prerelease": "npm run build",
         "prerelease:mac": "npm run build",
+        "test": "node test/ci/run-tests.js",
         "lint": "eslint --ext .js,.vue src electron",
         "lint:fix": "eslint --fix --ext .js,.vue src electron",
         "postinstall": "electron-rebuild && npm run install-deps:arch && node scripts/patch-electron-builder.js",

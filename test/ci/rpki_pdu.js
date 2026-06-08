@@ -13,12 +13,12 @@ const path = require('path');
 // 静默 logger（避免写文件副作用）
 process.env.NODE_ENV = 'test';
 
-const RpkiSession = require(path.join(__dirname, '..', 'electron', 'worker', 'rpkiSession.js'));
-const RpkiRoa = require(path.join(__dirname, '..', 'electron', 'worker', 'rpkiRoa.js'));
-const RpkiRouterKey = require(path.join(__dirname, '..', 'electron', 'worker', 'rpkiRouterKey.js'));
-const RpkiAspa = require(path.join(__dirname, '..', 'electron', 'worker', 'rpkiAspa.js'));
-const RpkiConst = require(path.join(__dirname, '..', 'electron', 'const', 'rpkiConst.js'));
-const BgpConst = require(path.join(__dirname, '..', 'electron', 'const', 'bgpConst.js'));
+const RpkiSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpkiSession.js'));
+const RpkiRoa = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpkiRoa.js'));
+const RpkiRouterKey = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpkiRouterKey.js'));
+const RpkiAspa = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpkiAspa.js'));
+const RpkiConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'rpkiConst.js'));
+const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
 
 // ============ 测试基础设施 ============
 let passed = 0;

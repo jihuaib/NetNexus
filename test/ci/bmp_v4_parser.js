@@ -1,10 +1,10 @@
 const assert = require('assert');
-const BmpConst = require('../electron/const/bmpConst');
-const BgpConst = require('../electron/const/bgpConst');
-const BmpSession = require('../electron/worker/bmpSession');
-const BmpBgpSession = require('../electron/worker/bmpBgpSession');
-const BmpBgpInstance = require('../electron/worker/bmpBgpInstance');
-const BmpBgpRoute = require('../electron/worker/bmpBgpRoute');
+const BmpConst = require('../../electron/const/bmpConst');
+const BgpConst = require('../../electron/const/bgpConst');
+const BmpSession = require('../../electron/worker/bmpSession');
+const BmpBgpSession = require('../../electron/worker/bmpBgpSession');
+const BmpBgpInstance = require('../../electron/worker/bmpBgpInstance');
+const BmpBgpRoute = require('../../electron/worker/bmpBgpRoute');
 
 function u16(value) {
     return Buffer.from([(value >> 8) & 0xff, value & 0xff]);
