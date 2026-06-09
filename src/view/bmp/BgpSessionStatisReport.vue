@@ -15,9 +15,7 @@
                                 :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
                             >
                                 <template #tab>
-                                    <a-tooltip :title="formatClientTitle(client)" placement="right">
-                                        <span class="client-tab-label">{{ formatClientTab(client) }}</span>
-                                    </a-tooltip>
+                                    <span class="client-tab-label">{{ formatClientTab(client) }}</span>
                                 </template>
                                 <div v-if="getClientReports(client).length > 0">
                                     <a-tabs>
@@ -106,11 +104,6 @@
 
     const formatClientTab = client => {
         return client.remoteIp || '-';
-    };
-
-    const formatClientTitle = client => {
-        const sysDesc = client.sysDesc || client.sysName || '-';
-        return `${sysDesc} | ${client.remoteIp || '-'}:${client.remotePort || '-'} -> ${client.localIp || '-'}:${client.localPort || '-'}`;
     };
 
     const columns = [
