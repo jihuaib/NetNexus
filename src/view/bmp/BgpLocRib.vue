@@ -27,12 +27,14 @@
                                             :tab="`${formatVrfTableName(instance)} | ${ADDRESS_FAMILY_NAME[instance.addrFamilyType]}`"
                                         >
                                             <a-table
+                                                class="detail-table"
                                                 :columns="bgpInstanceColumns"
                                                 :data-source="[instance]"
                                                 :pagination="false"
                                                 size="small"
                                                 style="margin-bottom: 8px"
                                                 row-key="peerIp"
+                                                :scroll="{ x: 1290 }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'addPath'">
@@ -107,24 +109,10 @@
                                                             : ''
                                                 "
                                                 size="small"
-                                                :scroll="{ y: 320 }"
+                                                :scroll="{ x: 980, y: 320 }"
                                             >
                                                 <template #bodyCell="{ column, record }">
-                                                    <template v-if="column.key === 'routeState'">
-                                                        <a-tag
-                                                            :color="
-                                                                record.routeState === BMP_ROUTE_STATE.STALE
-                                                                    ? 'orange'
-                                                                    : 'green'
-                                                            "
-                                                        >
-                                                            {{
-                                                                BMP_ROUTE_STATE_NAME[record.routeState] ||
-                                                                BMP_ROUTE_STATE_NAME[BMP_ROUTE_STATE.ACTIVE]
-                                                            }}
-                                                        </a-tag>
-                                                    </template>
-                                                    <template v-else-if="column.key === 'routeAction'">
+                                                    <template v-if="column.key === 'routeAction'">
                                                         <a-button type="link" size="small" @click="viewRouteDetails(record)">
                                                             查询详情
                                                         </a-button>
@@ -172,7 +160,6 @@
         BMP_EVENT_PAGE_ID,
         BMP_ROUTE_STATE,
         BMP_ROUTE_STATE_FILTER,
-        BMP_ROUTE_STATE_NAME,
         getBmpLocRibFlagsName
     } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME } from '../../const/bgpConst';
@@ -636,41 +623,16 @@
     });
 
     const bgpRouteColumns = [
-        {
-            title: '状态',
-            dataIndex: 'routeState',
-            key: 'routeState',
-            width: 80
-        },
-        {
-            title: 'Addr Family',
-            dataIndex: 'addrFamilyType',
-            key: 'addrFamilyType',
-            ellipsis: true,
-            width: 100,
-            customRender: ({ text }) => ADDRESS_FAMILY_NAME[text] || text
-        },
-        { title: 'Path ID', dataIndex: 'pathId', key: 'pathId', ellipsis: true, width: 100 },
-        { title: 'RD', dataIndex: 'rd', key: 'rd', ellipsis: true, width: 100 },
-        { title: 'Labels', dataIndex: 'labels', key: 'labels', ellipsis: true, width: 100 },
-        {
-            title: 'Parse',
-            dataIndex: 'parserValid',
-            key: 'parserValid',
-            ellipsis: true,
-            width: 120,
-            customRender: ({ record }) => {
-                if (record.parserValid === false) return record.parseErrors || 'Invalid';
-                return record.parseWarnings || 'OK';
-            }
-        },
         { title: 'Prefix', dataIndex: 'ip', key: 'ip', ellipsis: true, width: 120 },
         { title: 'Mask', dataIndex: 'mask', key: 'mask', ellipsis: true, width: 60 },
-        { title: 'Origin', dataIndex: 'origin', key: 'origin', ellipsis: true, width: 80 },
-        { title: 'AS Path', dataIndex: 'asPath', key: 'asPath', ellipsis: true },
         { title: 'Next Hop', dataIndex: 'nextHop', key: 'nextHop', ellipsis: true, width: 120 },
+        { title: 'AS Path', dataIndex: 'asPath', key: 'asPath', ellipsis: true, width: 180 },
+        { title: 'RD', dataIndex: 'rd', key: 'rd', ellipsis: true, width: 100 },
+        { title: 'Path ID', dataIndex: 'pathId', key: 'pathId', ellipsis: true, width: 100 },
+        { title: 'Labels', dataIndex: 'labels', key: 'labels', ellipsis: true, width: 100 },
+        { title: 'Origin', dataIndex: 'origin', key: 'origin', ellipsis: true, width: 80 },
         { title: 'MED', dataIndex: 'med', key: 'med', ellipsis: true, width: 80 },
-        { title: '操作', key: 'routeAction', width: 100 }
+        { title: '详情', key: 'routeAction', fixed: 'right', width: 100 }
     ];
 
     watch(activeInstanceKey, newKey => {
