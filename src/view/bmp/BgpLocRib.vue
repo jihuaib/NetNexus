@@ -29,11 +29,10 @@
                                             <a-table
                                                 :columns="bgpInstanceColumns"
                                                 :data-source="[instance]"
-                                                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
+                                                :pagination="false"
                                                 size="small"
                                                 style="margin-bottom: 8px"
                                                 row-key="peerIp"
-                                                :scroll="{ y: 180 }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'addPath'">
