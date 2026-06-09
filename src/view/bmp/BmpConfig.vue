@@ -35,86 +35,52 @@
                         </a-row>
 
                         <!-- 认证配置 -->
-                        <template v-if="bmpConfig.enableAuth">
-                            <a-alert
-                                v-if="!serverDeploymentStatus"
-                                type="info"
-                                message="认证需要服务器部署"
-                                show-icon
-                                style="margin-bottom: 16px"
-                            >
-                                <template #description>
-                                    使用 认证需要先在 Linux 服务器上部署代理程序。
-                                    <a style="margin-left: 8px" @click="openDeploymentSettings">前往服务器部署设置 →</a>
-                                </template>
-                            </a-alert>
-
-                            <a-row>
-                                <a-col :span="24">
-                                    <a-form-item label="本地监听端口" name="localPort">
-                                        <a-tooltip
-                                            :title="validationErrors.localPort"
-                                            :open="!!validationErrors.localPort"
-                                        >
-                                            <a-input
-                                                v-model:value="bmpConfig.localPort"
-                                                :status="validationErrors.localPort ? 'error' : ''"
-                                            />
-                                        </a-tooltip>
-                                    </a-form-item>
-                                </a-col>
-                            </a-row>
-                            <a-row>
-                                <a-col :span="12">
-                                    <a-form-item label="路由器IP" name="peerIP">
-                                        <a-tooltip :title="validationErrors.peerIP" :open="!!validationErrors.peerIP">
-                                            <a-input
-                                                v-model:value="bmpConfig.peerIP"
-                                                :status="validationErrors.peerIP ? 'error' : ''"
-                                            />
-                                        </a-tooltip>
-                                    </a-form-item>
-                                </a-col>
-                                <a-col :span="12">
-                                    <a-form-item label="认证模式" name="authMode">
-                                        <a-radio-group v-model:value="bmpConfig.authMode">
-                                            <a-radio value="md5">MD5 密钥</a-radio>
-                                            <a-radio value="keychain">Keychain</a-radio>
-                                        </a-radio-group>
-                                    </a-form-item>
-                                </a-col>
-                            </a-row>
-
-                            <!-- MD5 模式 -->
-                            <a-row v-if="bmpConfig.authMode === 'md5'">
-                                <a-col :span="24">
-                                    <a-form-item label="MD5密钥" name="md5Password">
-                                        <a-tooltip
-                                            :title="validationErrors.md5Password"
-                                            :open="!!validationErrors.md5Password"
-                                        >
-                                            <a-input-password
-                                                v-model:value="bmpConfig.md5Password"
-                                                :status="validationErrors.md5Password ? 'error' : ''"
-                                            />
-                                        </a-tooltip>
-                                    </a-form-item>
-                                </a-col>
-                            </a-row>
-
-                            <!-- Keychain 模式 -->
-                            <a-row v-if="bmpConfig.authMode === 'keychain'">
-                                <a-col :span="24">
-                                    <a-form-item label="选择 Keychain" name="keychainId">
-                                        <a-select v-model:value="bmpConfig.keychainId" placeholder="请选择 Keychain">
-                                            <a-select-option v-for="kc in keychains" :key="kc.id" :value="kc.id">
-                                                {{ kc.name }} ({{ kc.keys.length }} 个密钥)
-                                            </a-select-option>
-                                        </a-select>
-                                    </a-form-item>
-                                </a-col>
-                            </a-row>
-                        </template>
+                        <a-row :gutter="12">
+                            <a-col :span="8">
+                                <a-form-item label="本地监听端口" name="localPort">
+                                    <a-tooltip
+                                        :title="validationErrors.localPort"
+                                        :open="bmpConfig.enableAuth && !!validationErrors.localPort"
+                                    >
+                                        <a-input
+                                            v-model:value="bmpConfig.localPort"
+                                            :disabled="!bmpConfig.enableAuth"
+                                            :status="bmpConfig.enableAuth && validationErrors.localPort ? 'error' : ''"
+                                        />
+                                    </a-tooltip>
+                                </a-form-item>
+                            </a-col>
+                            <a-col :span="8">
+                                <a-form-item label="路由器IP" name="peerIP">
+                                    <a-tooltip
+                                        :title="validationErrors.peerIP"
+                                        :open="bmpConfig.enableAuth && !!validationErrors.peerIP"
+                                    >
+                                        <a-input
+                                            v-model:value="bmpConfig.peerIP"
+                                            :disabled="!bmpConfig.enableAuth"
+                                            :status="bmpConfig.enableAuth && validationErrors.peerIP ? 'error' : ''"
+                                        />
+                                    </a-tooltip>
+                                </a-form-item>
+                            </a-col>
+                            <a-col :span="8">
+                                <a-form-item label="MD5密钥" name="md5Password">
+                                    <a-tooltip
+                                        :title="validationErrors.md5Password"
+                                        :open="bmpConfig.enableAuth && !!validationErrors.md5Password"
+                                    >
+                                        <a-input-password
+                                            v-model:value="bmpConfig.md5Password"
+                                            :disabled="!bmpConfig.enableAuth"
+                                            :status="
+                                                bmpConfig.enableAuth && validationErrors.md5Password ? 'error' : ''
+                                            "
+                                        />
+                                    </a-tooltip>
+                                </a-form-item>
+                            </a-col>
+                        </a-row>
 
                         <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
                             <a-space>
@@ -203,8 +169,6 @@
         name: 'BmpConfig'
     });
 
-    const emit = defineEmits(['openSettings']);
-
     const labelCol = { style: { width: '100px' } };
     const wrapperCol = { span: 40 };
 
@@ -213,16 +177,12 @@
         bmpV4TlvDraft: DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT,
         localPort: '11019',
         enableAuth: false,
-        authMode: 'md5', // 'md5' or 'keychain'
         peerIP: '',
-        md5Password: '',
-        keychainId: ''
+        md5Password: ''
     });
 
     const serverLoading = ref(false);
     const serverRunning = ref(false);
-    const serverDeploymentStatus = ref(false);
-    const keychains = ref([]);
 
     const getClientTlvCount = record => {
         return (record.rawTlvs || []).length + (record.terminationTlvs || []).length;
@@ -320,9 +280,9 @@
     const detailsDrawerTitle = ref('');
     const currentDetails = ref(null);
 
-    // Open deployment settings
-    const openDeploymentSettings = () => {
-        emit('openSettings', 'server-deployment');
+    const isServerDeployed = async () => {
+        const deploymentStatus = await window.commonApi.getServerDeploymentStatus();
+        return deploymentStatus.status === 'success' && deploymentStatus.data.success;
     };
 
     const startBmp = async () => {
@@ -332,7 +292,7 @@
             return;
         }
 
-        if (!serverDeploymentStatus.value && bmpConfig.value.enableAuth) {
+        if (bmpConfig.value.enableAuth && !(await isServerDeployed())) {
             message.error('请先部署服务器');
             return;
         }
@@ -459,26 +419,13 @@
             bmpConfig.value.port = savedConfig.data.port || DEFAULT_VALUES.DEFAULT_BMP_PORT;
             bmpConfig.value.bmpV4TlvDraft = normalizeBmpV4TlvDraft(savedConfig.data.bmpV4TlvDraft);
             bmpConfig.value.enableAuth = savedConfig.data.enableAuth || false;
-            bmpConfig.value.authMode = savedConfig.data.authMode || 'md5';
             bmpConfig.value.localPort = savedConfig.data.localPort;
             bmpConfig.value.peerIP = savedConfig.data.peerIP || '';
             bmpConfig.value.md5Password = savedConfig.data.md5Password || '';
-            bmpConfig.value.keychainId = savedConfig.data.keychainId || '';
         } else {
             console.error('配置文件加载失败', savedConfig.msg);
         }
 
-        // 加载 Keychains
-        const keychainsResult = await window.commonApi.loadKeychains();
-        if (keychainsResult.status === 'success') {
-            keychains.value = keychainsResult.data || [];
-        }
-
-        // 检查服务器部署状态
-        const deploymentStatus = await window.commonApi.getServerDeploymentStatus();
-        if (deploymentStatus.status === 'success' && deploymentStatus.data.success) {
-            serverDeploymentStatus.value = true;
-        }
     });
 </script>
 

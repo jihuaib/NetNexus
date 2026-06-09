@@ -41,7 +41,7 @@ BGP 监控协议工具，提供实时路由监控、数据分析和统计报告�
 内置的 NTP 时间服务器，支持标准时间响应、时间偏移模拟和请求日志查看。
 
 #### [设置](docs/SETTINGS.md)
-应用设置和配置管理，包括通用设置、工具配置、服务器部署、Keychain 管理和自动更新等。
+应用设置和配置管理，包括通用设置、工具配置、服务器部署和自动更新等。
 
 ### 🛠️开发工具集
 
@@ -179,8 +179,7 @@ NetNexus/
 │   ├── utils/              # 工具函数库
 │   │   ├── bgpUtils.js     # BGP 工具函数
 │   │   ├── bmpUtils.js     # BMP 工具函数
-│   │   ├── routeViewsUtils.js  # RouteViews 数据处理
-│   │   └── keychainUtils.js    # Keychain 管理
+│   │   └── routeViewsUtils.js  # RouteViews 数据处理
 │   ├── pktParser/          # 报文解析器
 │   │   ├── bgpParser.js    # BGP 报文解析
 │   │   ├── bmpParser.js    # BMP 报文解析
@@ -238,7 +237,6 @@ NetNexus/
 │   │       ├── GeneralSettings.vue      # 通用设置
 │   │       ├── ToolsSettings.vue        # 工具设置
 │   │       ├── UpdateSettings.vue       # 更新设置
-│   │       ├── KeychainSettings.vue     # Keychain 设置
 │   │       └── ServerDeployment.vue     # 服务器部署
 │   ├── App.vue             # 应用根组件
 │   └── main.js             # 渲染进程入口

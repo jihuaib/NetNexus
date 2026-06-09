@@ -98,15 +98,20 @@
                         </div>
 
                         <div class="panel-block">
-                            <div class="panel-title">KDF 与消息构造</div>
+                            <div class="panel-title panel-title-row">
+                                <span>KDF 与消息构造</span>
+                                <a-tooltip v-if="isPlainAlgo && !skipKdf">
+                                    <template #title>
+                                        非 H 算法固定使用 <code>hash(kdfInput ‖ key)</code> 派生 Traffic Key，MAC
+                                        固定使用 <code>hash(msg ‖ key)</code>。
+                                    </template>
+                                    <InfoCircleOutlined class="mode-info-icon" />
+                                </a-tooltip>
+                            </div>
 
                             <a-form-item v-if="isKdfAlgo" class="compact-item compact-flag">
                                 <a-checkbox v-model:checked="skipKdf">跳过 KDF（直接用 master key）</a-checkbox>
                             </a-form-item>
-                            <div v-if="isPlainAlgo && !skipKdf" class="field-hint mode-note">
-                                非 H 算法固定使用 `hash(kdfInput ‖ key)` 派生 Traffic Key，MAC 固定使用 `hash(msg ‖
-                                key)`。
-                            </div>
 
                             <a-form-item label="TCP 选项" class="compact-item">
                                 <div class="stacked-checks">
@@ -178,6 +183,7 @@
 
 <script setup>
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
+    import { InfoCircleOutlined } from '@ant-design/icons-vue';
     import { ref, computed, onMounted } from 'vue';
     import { message } from 'ant-design-vue';
     import { FormValidator, createTcpAoMacValidationRules } from '../../utils/validationCommon';
@@ -363,6 +369,24 @@
         letter-spacing: 0.01em;
     }
 
+    .panel-title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .mode-info-icon {
+        flex: 0 0 auto;
+        color: #64748b;
+        cursor: help;
+        font-size: 14px;
+    }
+
+    .mode-info-icon:hover {
+        color: #1677ff;
+    }
+
     .compact-item:last-child {
         margin-bottom: 0;
     }
@@ -428,10 +452,6 @@
         font-size: 12px;
         color: #64748b;
         margin-top: 4px;
-    }
-
-    .mode-note {
-        margin-bottom: 10px;
     }
 
     .result-row {

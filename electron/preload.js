@@ -25,12 +25,6 @@ contextBridge.exposeInMainWorld('commonApi', {
     testSSHConnection: config => ipcRenderer.invoke('common:testSSHConnection', config),
     getServerDeploymentStatus: () => ipcRenderer.invoke('common:getServerDeploymentStatus'),
 
-    // Keychain 管理
-    saveKeychain: keychain => ipcRenderer.invoke('common:saveKeychain', keychain),
-    loadKeychains: () => ipcRenderer.invoke('common:loadKeychains'),
-    deleteKeychain: id => ipcRenderer.invoke('common:deleteKeychain', id),
-    getActiveKey: (keychainId, time) => ipcRenderer.invoke('common:getActiveKey', keychainId, time),
-
     // 提供一个统一的事件监听接口给渲染进程，由渲染进程的 EventBus 负责分发
     onUnifiedEvent: callback => {
         const subscription = (event, { type, data }) => callback({ type, data });

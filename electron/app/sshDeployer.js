@@ -106,12 +106,10 @@ class SshDeployer {
 
             // 使用临时目录上传文件，然后用 sudo 移动到 /opt
             const tempMd5Dir = '/tmp/tcp-md5-proxy';
-            const tempAoDir = '/tmp/tcp-ao-proxy';
             const md5ProxyDir = '/opt/tcp-md5-proxy';
-            const aoProxyDir = '/opt/tcp-ao-proxy';
 
             // 创建临时目录
-            await this.execCommand(`mkdir -p ${tempMd5Dir} ${tempAoDir}`);
+            await this.execCommand(`mkdir -p ${tempMd5Dir}`);
             logger.info('Created temp directories');
 
             // 读取 scripts 目录中的所有文件
@@ -128,30 +126,21 @@ class SshDeployer {
                     continue;
                 }
 
-                // 根据文件名决定上传到哪个目录
-                let targetDir;
-                if (file.includes('tcp-ao')) {
-                    targetDir = tempAoDir;
-                } else if (file.includes('tcp-md5')) {
-                    targetDir = tempMd5Dir;
-                } else {
-                    // 默认上传到两个目录（如通用工具脚本）
-                    targetDir = tempMd5Dir;
+                if (!file.includes('tcp-md5')) {
+                    continue;
                 }
 
-                await this.uploadFile(localPath, `${targetDir}/${file}`);
-                logger.info(`Uploaded ${file} to ${targetDir}`);
+                await this.uploadFile(localPath, `${tempMd5Dir}/${file}`);
+                logger.info(`Uploaded ${file} to ${tempMd5Dir}`);
             }
 
             // 创建目标目录并移动文件
-            await this.execCommand(`sudo mkdir -p ${md5ProxyDir} ${aoProxyDir}`);
+            await this.execCommand(`sudo mkdir -p ${md5ProxyDir}`);
             await this.execCommand(`sudo cp -r ${tempMd5Dir}/* ${md5ProxyDir}/`);
-            await this.execCommand(`sudo cp -r ${tempAoDir}/* ${aoProxyDir}/`);
             logger.info('Moved files to target directories');
 
             // Make scripts executable
             await this.execCommand(`sudo chmod +x ${md5ProxyDir}/*.sh`);
-            await this.execCommand(`sudo chmod +x ${aoProxyDir}/*.sh`);
             logger.info('Made scripts executable');
 
             // Install gcc if not present
@@ -170,18 +159,6 @@ class SshDeployer {
             await this.execCommand(`sudo gcc -g -o ${md5ProxyDir}/tcp-md5-helper ${md5ProxyDir}/tcp-md5-helper.c`);
             logger.info('TCP MD5 helper compiled successfully');
 
-            // Try to compile TCP-AO helper
-            logger.info('Attempting to compile TCP-AO helper...');
-            try {
-                await this.execCommand(
-                    `cd ${aoProxyDir} && sudo gcc -o tcp-ao-helper tcp-ao-helper.c tcp-ao-json-parser.c -std=c99`
-                );
-                logger.info('TCP-AO helper compiled successfully');
-                logger.info('✅ TCP-AO is available on this system');
-            } catch (error) {
-                logger.warn('TCP-AO compilation failed (kernel may not support TCP-AO)');
-            }
-
             // Disable firewall
             await this.disableFirewall();
 
@@ -189,11 +166,8 @@ class SshDeployer {
 
             return {
                 md5ProxyDir,
-                aoProxyDir,
                 md5HelperPath: `${md5ProxyDir}/tcp-md5-helper`,
-                aoHelperPath: `${aoProxyDir}/tcp-ao-helper`,
-                md5ScriptPath: `${md5ProxyDir}/tcp-md5-proxy.sh`,
-                aoScriptPath: `${aoProxyDir}/tcp-ao-proxy.sh`
+                md5ScriptPath: `${md5ProxyDir}/tcp-md5-proxy.sh`
             };
         } catch (error) {
             logger.error(`Deployment failed: ${error.message}`);

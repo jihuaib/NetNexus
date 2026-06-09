@@ -250,11 +250,10 @@ class BmpWorker {
         }
         logger.info(`BMPv4 TLV draft set to draft-${this.bmpConfigData.bmpV4TlvDraft}`);
 
-        // 如果启用了认证（MD5 或 TCP-AO），使用SSH隧道
-        if (bmpConfigData.enableAuth && (bmpConfigData.md5Password || bmpConfigData.useTcpAo)) {
+        // 如果启用了 MD5 认证，使用 SSH 隧道启动远端代理。
+        if (bmpConfigData.enableAuth && bmpConfigData.md5Password) {
             try {
-                const authType = bmpConfigData.useTcpAo ? 'TCP-AO' : 'TCP MD5';
-                logger.info(`${authType} authentication enabled, creating SSH tunnel...`);
+                logger.info('TCP MD5 authentication enabled, creating SSH tunnel...');
 
                 // 提取SSH服务器地址
                 const sshHost = bmpConfigData.serverAddress;
@@ -267,21 +266,8 @@ class BmpWorker {
                     password: bmpConfigData.sshPassword
                 });
 
-                // 准备代理配置
-                let proxyConfig;
-                if (bmpConfigData.useTcpAo) {
-                    // TCP-AO 模式
-                    logger.info('Using TCP-AO proxy with keychain');
-                    proxyConfig = {
-                        useTcpAo: true,
-                        tcpAoKeysJson: bmpConfigData.tcpAoKeysJson
-                    };
-                } else {
-                    // TCP MD5 模式
-                    logger.info('Using TCP MD5 proxy');
-                    const md5Password = bmpConfigData.md5Password;
-                    proxyConfig = md5Password;
-                }
+                logger.info('Using TCP MD5 proxy');
+                const proxyConfig = bmpConfigData.md5Password;
 
                 // 启动远程代理
                 // 代理监听 bmpConfigData.port (路由器连接这个端口)
@@ -304,7 +290,7 @@ class BmpWorker {
                 await this.sshTunnel.startProxy(
                     'bmp', // 协议类型
                     bmpConfigData.peerIP, // BMP路由器IP（peer IP）
-                    proxyConfig, // 代理配置（MD5密码 或 TCP-AO配置）
+                    proxyConfig, // MD5密码
                     bmpConfigData.port, // Linux监听端口（路由器连接）
                     `${windowsIp}:${localPort}` // 转发到 Windows 的 localPort
                 );
@@ -347,16 +333,7 @@ class BmpWorker {
                     const localPort = this.bmpConfigData.localPort;
                     const _sshHost = this.bmpConfigData.serverAddress;
 
-                    // 准备代理配置
-                    let proxyConfig;
-                    if (this.bmpConfigData.useTcpAo) {
-                        proxyConfig = {
-                            useTcpAo: true,
-                            tcpAoKeysJson: this.bmpConfigData.tcpAoKeysJson
-                        };
-                    } else {
-                        proxyConfig = this.bmpConfigData.md5Password;
-                    }
+                    const proxyConfig = this.bmpConfigData.md5Password;
 
                     // 获取 Windows 客户端 IP（与 startProxy 保持一致）
                     let windowsIp = 'localhost';

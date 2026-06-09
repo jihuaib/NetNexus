@@ -96,15 +96,14 @@ npm run release:mac:universal # 构建并发布 macOS universal 版本
 **应用模块** (`electron/app/`):
 - `systemApp.js`: 中央协调器，管理所有应用模块、设置存储（electron-store）和版本兼容性
 - `bgpApp.js`: BGP 模拟器管理
-- `bmpApp.js`: BMP 监控器管理（使用 KeychainManager）
-- `rpkiApp.js`: RPKI 验证器管理（使用 KeychainManager）
+- `bmpApp.js`: BMP 监控器管理
+- `rpkiApp.js`: RPKI 验证器管理
 - `ftpApp.js`: FTP 服务器管理
 - `snmpApp.js`: SNMP 管理器
 - `toolsApp.js`: 开发工具协调
 - `nativeApp.js`: 原生功能（报文抓包使用 `cap` 模块、XML 解析使用 `libxmljs2`），两者均为动态加载的 native 模块，加载时会去除 Windows UNC 路径前缀 `\\?\`
 - `sshDeployer.js`: 通过 SSH 将 BMP MD5 代理部署到 Linux 服务器
 - `updater.js`: 自动更新功能
-- `keychainManager.js`: 管理 BMP/RPKI 的认证密钥链
 
 **工作进程** (`electron/worker/`):
 - 每个协议都有专用的 worker 文件来处理会话、实例和路由
