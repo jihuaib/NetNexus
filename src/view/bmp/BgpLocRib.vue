@@ -706,4 +706,8 @@
         border: 1px solid #e5e7eb;
         border-radius: 4px;
     }
+
+    .route-table :deep(.ant-table-body) {
+        height: 270px;
+    }
 </style>

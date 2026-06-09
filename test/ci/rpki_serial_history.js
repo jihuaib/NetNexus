@@ -49,6 +49,56 @@ function makeWorker() {
     return { worker, responses, errors, notifications, directPayloadPushes };
 }
 
+function makeSocket(localAddress, localPort) {
+    return {
+        localAddress,
+        localPort,
+        destroyed: false,
+        destroy() {
+            this.destroyed = true;
+        },
+        write() {
+            return true;
+        }
+    };
+}
+
+{
+    const worker = new RpkiWorker();
+    const events = [];
+    worker.rpkiConfigData = { aspaFormat: RpkiConst.RPKI_ASPA_FORMAT.LEGACY };
+    worker.messageHandler.sendEvent = (type, payload) => events.push({ type, payload });
+
+    const v1Session = worker.createRpkiSession(makeSocket('127.0.0.1', 8282), '10.0.0.1', 10001);
+    const v2Session = worker.createRpkiSession(makeSocket('127.0.0.1', 8282), '10.0.0.2', 10002);
+    v1Session.negotiateVersion(RpkiConst.RPKI_PROTOCOL_VERSION.V1);
+    v2Session.negotiateVersion(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+
+    assert.strictEqual(v1Session.protocolVersion, 1, 'one RPKI client should keep its negotiated v1');
+    assert.strictEqual(v2Session.protocolVersion, 2, 'another RPKI client should keep its negotiated v2');
+    assert.strictEqual(v1Session.aspaFormat, RpkiConst.RPKI_ASPA_FORMAT.LEGACY);
+    assert.strictEqual(v2Session.aspaFormat, RpkiConst.RPKI_ASPA_FORMAT.LEGACY);
+
+    const oldSocket = makeSocket('127.0.0.1', 8282);
+    const oldSession = worker.createRpkiSession(oldSocket, '10.0.0.3', 10003);
+    oldSession.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V2;
+    oldSession.sessionId = 0xabcd;
+    oldSession.messageBuffer = Buffer.from([0xff]);
+
+    const newSession = worker.createRpkiSession(makeSocket('127.0.0.1', 8282), '10.0.0.3', 10003);
+
+    assert.notStrictEqual(newSession, oldSession, 'same-key reconnect should create a fresh RPKI session object');
+    assert.strictEqual(oldSocket.destroyed, true, 'same-key reconnect should close the old socket');
+    assert.strictEqual(newSession.protocolVersion, RpkiConst.RPKI_PROTOCOL_VERSION.V0);
+    assert.strictEqual(newSession.sessionId, null);
+    assert.strictEqual(newSession.messageBuffer.length, 0);
+    assert.deepStrictEqual(
+        events.map(event => event.payload.opType),
+        ['add', 'add', 'add', 'delete', 'add'],
+        'same-key reconnect should emit delete for the old session before add for the fresh one'
+    );
+}
+
 const { worker, responses, errors, notifications, directPayloadPushes } = makeWorker();
 
 worker.addRoa('add-roa', {

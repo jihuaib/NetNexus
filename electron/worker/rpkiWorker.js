@@ -56,6 +56,32 @@ class RpkiWorker {
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA_BATCH, this.deleteAspaBatch.bind(this));
     }
 
+    createRpkiSession(socket, clientAddress, clientPort) {
+        const sessionKey = RpkiSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
+        const existingSession = this.rpkiSessionMap.get(sessionKey);
+        if (existingSession) {
+            existingSession.closeSession();
+            this.rpkiSessionMap.delete(sessionKey);
+        }
+
+        const rpkiSession = new RpkiSession(this.messageHandler, this);
+        this.rpkiSessionMap.set(sessionKey, rpkiSession);
+
+        rpkiSession.socket = socket;
+        rpkiSession.localIp = socket.localAddress;
+        rpkiSession.localPort = socket.localPort;
+        rpkiSession.remoteIp = clientAddress;
+        rpkiSession.remotePort = clientPort;
+        rpkiSession.aspaFormat = this.rpkiConfigData?.aspaFormat || RpkiConst.RPKI_ASPA_FORMAT.LATEST;
+
+        this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
+            opType: 'add',
+            data: rpkiSession.getClientInfo()
+        });
+
+        return rpkiSession;
+    }
+
     async startTcpServer(messageId) {
         try {
             this.server = net.createServer(socket => {
@@ -136,33 +162,7 @@ class RpkiWorker {
                 });
 
                 // 创建RPKI会话
-                let rpkiSession = null;
-                const sessionKey = RpkiSession.makeKey(
-                    socket.localAddress,
-                    socket.localPort,
-                    clientAddress,
-                    clientPort
-                );
-                rpkiSession = this.rpkiSessionMap.get(sessionKey);
-                if (rpkiSession) {
-                    rpkiSession.closeSession();
-                    this.rpkiSessionMap.delete(sessionKey);
-                } else {
-                    rpkiSession = new RpkiSession(this.messageHandler, this);
-                }
-                this.rpkiSessionMap.set(sessionKey, rpkiSession);
-
-                rpkiSession.socket = socket;
-                rpkiSession.localIp = socket.localAddress;
-                rpkiSession.localPort = socket.localPort;
-                rpkiSession.remoteIp = clientAddress;
-                rpkiSession.remotePort = clientPort;
-                rpkiSession.aspaFormat = this.rpkiConfigData.aspaFormat || RpkiConst.RPKI_ASPA_FORMAT.LATEST;
-
-                this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
-                    opType: 'add',
-                    data: rpkiSession.getClientInfo()
-                });
+                this.createRpkiSession(socket, clientAddress, clientPort);
             });
 
             this.ipv6Server = net.createServer(socket => {
@@ -243,33 +243,7 @@ class RpkiWorker {
                 });
 
                 // 创建RPKI会话
-                let rpkiSession = null;
-                const sessionKey = RpkiSession.makeKey(
-                    socket.localAddress,
-                    socket.localPort,
-                    clientAddress,
-                    clientPort
-                );
-                rpkiSession = this.rpkiSessionMap.get(sessionKey);
-                if (rpkiSession) {
-                    rpkiSession.closeSession();
-                    this.rpkiSessionMap.delete(sessionKey);
-                } else {
-                    rpkiSession = new RpkiSession(this.messageHandler, this);
-                }
-                this.rpkiSessionMap.set(sessionKey, rpkiSession);
-
-                rpkiSession.socket = socket;
-                rpkiSession.localIp = socket.localAddress;
-                rpkiSession.localPort = socket.localPort;
-                rpkiSession.remoteIp = clientAddress;
-                rpkiSession.remotePort = clientPort;
-                rpkiSession.aspaFormat = this.rpkiConfigData.aspaFormat || RpkiConst.RPKI_ASPA_FORMAT.LATEST;
-
-                this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
-                    opType: 'add',
-                    data: rpkiSession.getClientInfo()
-                });
+                this.createRpkiSession(socket, clientAddress, clientPort);
             });
 
             // 启动ipv4服务器并监听端口

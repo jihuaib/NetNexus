@@ -66,6 +66,35 @@ class BmpWorker {
         );
     }
 
+    createBmpSession(socket, clientAddress, clientPort) {
+        const sessionKey = BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
+        this.removeBmpSessionByKey(sessionKey);
+
+        const bmpSession = new BmpSession(this.messageHandler, this);
+        this.bmpSessionMap.set(sessionKey, bmpSession);
+
+        bmpSession.socket = socket;
+        bmpSession.localIp = socket.localAddress;
+        bmpSession.localPort = socket.localPort;
+        bmpSession.remoteIp = clientAddress;
+        bmpSession.remotePort = clientPort;
+
+        return bmpSession;
+    }
+
+    removeBmpSessionByKey(sessionKey) {
+        const bmpSession = this.bmpSessionMap.get(sessionKey);
+        if (!bmpSession) {
+            return null;
+        }
+
+        this.bmpSessionMap.delete(sessionKey);
+        const clientInfo = bmpSession.getClientInfo();
+        bmpSession.closeSession();
+        this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: clientInfo });
+        return bmpSession;
+    }
+
     enqueueRouteUpdateEvent(update) {
         this.routeUpdateAggregator.enqueueRouteUpdate(update);
         this.scheduleRouteUpdateFlush();
@@ -119,12 +148,11 @@ class BmpWorker {
 
                 logger.info(`ipv4 Client connected from ${clientAddress}:${clientPort}`);
                 logger.info(`ipv4 localAddress: ${socket.localAddress}:${socket.localPort}`);
+                const sessionKey = BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
 
                 // 当接收到数据时处理数据
                 socket.on('data', data => {
-                    const bmpSession = this.bmpSessionMap.get(
-                        BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort)
-                    );
+                    const bmpSession = this.bmpSessionMap.get(sessionKey);
                     if (!bmpSession) {
                         logger.error(`ipv4 Client ${clientAddress}:${clientPort} not found in bmpSessionMap`);
                         socket.destroy();
@@ -135,33 +163,21 @@ class BmpWorker {
 
                 socket.on('end', () => {
                     logger.info(`ipv4 Client ${clientAddress}:${clientPort} end`);
+                    this.removeBmpSessionByKey(sessionKey);
                 });
 
                 socket.on('close', () => {
                     logger.info(`ipv4 Client ${clientAddress}:${clientPort} close`);
+                    this.removeBmpSessionByKey(sessionKey);
                 });
 
                 socket.on('error', err => {
                     logger.error(`ipv4 TCP Error from ${clientAddress}:${clientPort}: ${err.message}`);
+                    this.removeBmpSessionByKey(sessionKey);
                 });
 
                 // 创建BMP会话
-                let bmpSession = null;
-                const sessionKey = BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
-                bmpSession = this.bmpSessionMap.get(sessionKey);
-                if (bmpSession) {
-                    bmpSession.closeSession();
-                    this.bmpSessionMap.delete(sessionKey);
-                } else {
-                    bmpSession = new BmpSession(this.messageHandler, this);
-                }
-                this.bmpSessionMap.set(sessionKey, bmpSession);
-
-                bmpSession.socket = socket;
-                bmpSession.localIp = socket.localAddress;
-                bmpSession.localPort = socket.localPort;
-                bmpSession.remoteIp = clientAddress;
-                bmpSession.remotePort = clientPort;
+                this.createBmpSession(socket, clientAddress, clientPort);
             });
 
             this.ipv6Server = net.createServer(socket => {
@@ -170,12 +186,11 @@ class BmpWorker {
 
                 logger.info(`ipv6 Client connected from ${clientAddress}:${clientPort}`);
                 logger.info(`ipv6 localAddress: ${socket.localAddress}:${socket.localPort}`);
+                const sessionKey = BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
 
                 // 当接收到数据时处理数据
                 socket.on('data', data => {
-                    const bmpSession = this.bmpSessionMap.get(
-                        BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort)
-                    );
+                    const bmpSession = this.bmpSessionMap.get(sessionKey);
                     if (!bmpSession) {
                         logger.error(`ipv6 Client ${clientAddress}:${clientPort} not found in bmpSessionMap`);
                         socket.destroy();
@@ -186,33 +201,21 @@ class BmpWorker {
 
                 socket.on('end', () => {
                     logger.info(`ipv6 Client ${clientAddress}:${clientPort} end`);
+                    this.removeBmpSessionByKey(sessionKey);
                 });
 
                 socket.on('close', () => {
                     logger.info(`ipv6 Client ${clientAddress}:${clientPort} close`);
+                    this.removeBmpSessionByKey(sessionKey);
                 });
 
                 socket.on('error', err => {
                     logger.error(`ipv6 TCP Error from ${clientAddress}:${clientPort}: ${err.message}`);
+                    this.removeBmpSessionByKey(sessionKey);
                 });
 
                 // 创建BMP会话
-                let bmpSession = null;
-                const sessionKey = BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
-                bmpSession = this.bmpSessionMap.get(sessionKey);
-                if (bmpSession) {
-                    bmpSession.closeSession();
-                    this.bmpSessionMap.delete(sessionKey);
-                } else {
-                    bmpSession = new BmpSession(this.messageHandler, this);
-                }
-                this.bmpSessionMap.set(sessionKey, bmpSession);
-
-                bmpSession.socket = socket;
-                bmpSession.localIp = socket.localAddress;
-                bmpSession.localPort = socket.localPort;
-                bmpSession.remoteIp = clientAddress;
-                bmpSession.remotePort = clientPort;
+                this.createBmpSession(socket, clientAddress, clientPort);
             });
 
             // 启动ipv4服务器并监听端口
