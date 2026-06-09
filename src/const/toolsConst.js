@@ -14,6 +14,11 @@ export const START_LAYER = {
     L5: 4
 };
 
+export const TRANSPORT_PROTOCOL = {
+    TCP: 6,
+    UDP: 17
+};
+
 // 默认工具设置
 export const DEFAULT_TOOLS_SETTINGS = {
     packetParser: {
@@ -39,6 +44,11 @@ export const START_LAYER_NAME = {
 export const PROTOCOL_TYPE_NAME = {
     [PROTOCOL_TYPE.AUTO]: '自动识别',
     [PROTOCOL_TYPE.BGP]: 'BGP'
+};
+
+export const TRANSPORT_PROTOCOL_NAME = {
+    [TRANSPORT_PROTOCOL.TCP]: 'TCP',
+    [TRANSPORT_PROTOCOL.UDP]: 'UDP'
 };
 
 export const TOOLS_EVENT_PAGE_ID = {

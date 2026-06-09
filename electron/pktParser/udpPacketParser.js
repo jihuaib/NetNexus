@@ -4,6 +4,8 @@
  * Parses UDP protocol packets from raw buffers and returns structured data.
  */
 
+const registry = require('./registryInstance');
+
 /**
  * Parse a UDP packet into a tree structure
  * @param {Buffer} buffer - The raw UDP packet buffer
@@ -85,28 +87,15 @@ function parseUdpPacket(buffer, tree, offset = 0) {
         // Parse Payload
         let payload = null;
         if (buffer.length > offset + 8) {
-            // 根据端口判断下一层协议
             let nextLayer = null;
-            let type = 0;
+            let type = null;
 
-            if (sourcePort === 53 || destPort === 53) {
-                nextLayer = 'dns';
-                type = 53;
-            } else if (sourcePort === 67 || sourcePort === 68 || destPort === 67 || destPort === 68) {
-                nextLayer = 'dhcp';
-                type = 67; // Using 67 as the primary DHCP port
-            } else if (sourcePort === 123 || destPort === 123) {
-                nextLayer = 'ntp';
-                type = 123;
-            } else if (sourcePort === 1812 || destPort === 1812 || sourcePort === 1813 || destPort === 1813) {
-                nextLayer = 'radius';
-                type = 1812;
-            } else if (sourcePort === 161 || destPort === 161 || sourcePort === 162 || destPort === 162) {
-                nextLayer = 'snmp';
-                type = 161;
-            } else if (sourcePort === 520 || destPort === 520) {
-                nextLayer = 'rip';
-                type = 520;
+            if (registry.hasProtocolForPort(sourcePort)) {
+                nextLayer = registry.getProtocolByPort(sourcePort);
+                type = sourcePort;
+            } else if (registry.hasProtocolForPort(destPort)) {
+                nextLayer = registry.getProtocolByPort(destPort);
+                type = destPort;
             }
 
             payload = {

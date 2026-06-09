@@ -38,6 +38,8 @@ function getBgpOpenCapabilityName(code) {
             return 'BGP Role';
         case BgpConst.BGP_OPEN_CAP_CODE.EXTENDED_NEXT_HOP_ENCODING:
             return 'Extended Next Hop Encoding';
+        case BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH:
+            return 'ADD-PATH';
         default:
             return `Unknown (${code})`;
     }

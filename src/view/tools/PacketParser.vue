@@ -6,7 +6,15 @@
                     <a-select v-model:value="formState.startLayer">
                         <a-select-option :value="START_LAYER.L2">数据链路层</a-select-option>
                         <a-select-option :value="START_LAYER.L3">网络层</a-select-option>
+                        <a-select-option :value="START_LAYER.L4">传输层</a-select-option>
                         <a-select-option :value="START_LAYER.L5">应用层</a-select-option>
+                    </a-select>
+                </a-form-item>
+
+                <a-form-item v-if="formState.startLayer === START_LAYER.L4" label="传输协议" name="transportProtocol">
+                    <a-select v-model:value="formState.transportProtocol">
+                        <a-select-option :value="TRANSPORT_PROTOCOL.TCP">TCP</a-select-option>
+                        <a-select-option :value="TRANSPORT_PROTOCOL.UDP">UDP</a-select-option>
                     </a-select>
                 </a-form-item>
 
@@ -97,7 +105,14 @@
     import { ref, onMounted } from 'vue';
     import { message } from 'ant-design-vue';
     import { FormValidator, createPacketDataValidationRules } from '../../utils/validationCommon';
-    import { PROTOCOL_TYPE, START_LAYER, START_LAYER_NAME, PROTOCOL_TYPE_NAME } from '../../const/toolsConst';
+    import {
+        PROTOCOL_TYPE,
+        START_LAYER,
+        START_LAYER_NAME,
+        PROTOCOL_TYPE_NAME,
+        TRANSPORT_PROTOCOL,
+        TRANSPORT_PROTOCOL_NAME
+    } from '../../const/toolsConst';
     defineOptions({
         name: 'PacketParser'
     });
@@ -114,6 +129,7 @@
 
     const formState = ref({
         startLayer: START_LAYER.L2,
+        transportProtocol: TRANSPORT_PROTOCOL.TCP,
         protocolType: PROTOCOL_TYPE.AUTO,
         protocolPort: '',
         packetData: ''
@@ -135,6 +151,15 @@
             key: 'startLayer',
             customRender: ({ text }) => {
                 return START_LAYER_NAME[text];
+            }
+        },
+        {
+            title: '传输协议',
+            dataIndex: 'transportProtocol',
+            key: 'transportProtocol',
+            customRender: ({ text, record }) => {
+                if (record.startLayer !== START_LAYER.L4) return '-';
+                return TRANSPORT_PROTOCOL_NAME[text || TRANSPORT_PROTOCOL.TCP];
             }
         },
         {
@@ -201,6 +226,7 @@
         // 更新表单数据
         formState.value = {
             startLayer: record.startLayer || START_LAYER.L2,
+            transportProtocol: record.transportProtocol || TRANSPORT_PROTOCOL.TCP,
             protocolType: record.protocolType || PROTOCOL_TYPE.AUTO,
             protocolPort: record.protocolPort || '',
             packetData: record.packetData || ''
@@ -242,7 +268,8 @@
                 protocolType: formState.value.protocolType,
                 protocolPort: formState.value.protocolPort,
                 packetData: formState.value.packetData,
-                startLayer: formState.value.startLayer
+                startLayer: formState.value.startLayer,
+                transportProtocol: formState.value.transportProtocol
             };
 
             let resp;

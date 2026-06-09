@@ -118,6 +118,7 @@ class ToolsApp {
                 element.packetData === data.packetData &&
                 element.protocolPort === data.protocolPort &&
                 element.protocolType === data.protocolType &&
+                element.transportProtocol === data.transportProtocol &&
                 element.startLayer === data.startLayer
             ) {
                 isExist = true;

@@ -36,6 +36,9 @@ import DhcpLeaseList from '../view/dhcp/DhcpLeaseList.vue';
 import NtpMain from '../view/ntp/NtpMain.vue';
 import NtpConfig from '../view/ntp/NtpConfig.vue';
 import NtpRequestLog from '../view/ntp/NtpRequestLog.vue';
+import TftpMain from '../view/tftp/TftpMain.vue';
+import TftpConfig from '../view/tftp/TftpConfig.vue';
+import TftpTransferLog from '../view/tftp/TftpTransferLog.vue';
 import store from '../store';
 
 const routes = [
@@ -306,6 +309,30 @@ const routes = [
                         path: 'ntp-request-log',
                         name: 'NtpRequestLog',
                         component: NtpRequestLog,
+                        meta: { keepAlive: true }
+                    }
+                ]
+            },
+            {
+                path: '/tftp',
+                name: 'TftpMain',
+                component: TftpMain,
+                meta: { keepAlive: true },
+                children: [
+                    {
+                        path: '/',
+                        redirect: '/tftp/tftp-config'
+                    },
+                    {
+                        path: 'tftp-config',
+                        name: 'TftpConfig',
+                        component: TftpConfig,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'tftp-transfer-log',
+                        name: 'TftpTransferLog',
+                        component: TftpTransferLog,
                         meta: { keepAlive: true }
                     }
                 ]

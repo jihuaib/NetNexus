@@ -9,7 +9,7 @@
 const logger = require('../log/logger');
 
 const BgpConst = require('../const/bgpConst');
-const { ipv4BufferToString, ipv6BufferToString } = require('../utils/ipUtils');
+const { ipv4BufferToString, ipv6BufferToString, getIpTypeName, extCommunitiesBufferToString } = require('../utils/ipUtils');
 const {
     getBgpPacketTypeName,
     getBgpOpenCapabilityName,
@@ -19,8 +19,43 @@ const {
     getBgpPathAttrTypeName,
     getBgpNotificationErrorName,
     getBgpOriginType,
-    getBgpAsPathTypeName
+    getBgpAsPathTypeName,
+    getBgpAddPathTypeName
 } = require('../utils/bgpUtils');
+
+const BGP_TUNNEL_TYPE_NAMES = {
+    0: 'Reserved',
+    1: 'L2TPv3 over IP',
+    2: 'GRE',
+    3: 'Transmit tunnel endpoint',
+    4: 'IPsec in Tunnel-mode',
+    5: 'IP in IP tunnel with IPsec Transport Mode',
+    6: 'MPLS-in-IP tunnel with IPsec Transport Mode',
+    7: 'IP in IP',
+    8: 'VXLAN',
+    9: 'NVGRE',
+    10: 'MPLS',
+    11: 'MPLS in GRE',
+    12: 'VXLAN GPE',
+    13: 'MPLS in UDP',
+    14: 'IPv6 Tunnel',
+    15: 'MPLS in UDP with DTLS',
+    16: 'SR Policy',
+    17: 'SR Tunnel',
+    19: 'Geneve'
+};
+
+const PMSI_TUNNEL_TYPE_NAMES = {
+    0: 'No tunnel information',
+    1: 'RSVP-TE P2MP LSP',
+    2: 'mLDP P2MP LSP',
+    3: 'PIM-SSM Tree',
+    4: 'PIM-SM Tree',
+    5: 'BIDIR-PIM Tree',
+    6: 'Ingress Replication',
+    7: 'mLDP MP2MP LSP',
+    8: 'BIER'
+};
 
 const BGP_PREFIX_SID_TLV_TYPE_NAMES = {
     0: 'Reserved',
@@ -226,6 +261,14 @@ function getBgpPrefixSidTlvTypeName(type) {
     return BGP_PREFIX_SID_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
 }
 
+function getBgpTunnelTypeName(type) {
+    return BGP_TUNNEL_TYPE_NAMES[type] || `Unknown (${type})`;
+}
+
+function getPmsiTunnelTypeName(type) {
+    return PMSI_TUNNEL_TYPE_NAMES[type] || `Unknown (${type})`;
+}
+
 function getSrv6ServiceSubTlvTypeName(type) {
     return SRV6_SERVICE_SUB_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
 }
@@ -240,6 +283,146 @@ function getSrv6EndpointBehaviorName(behavior) {
 
 function readUint24BE(buffer, position) {
     return (buffer[position] << 16) | (buffer[position + 1] << 8) | buffer[position + 2];
+}
+
+function createTreeNode(name, offset, length, value = '', children = []) {
+    return {
+        name,
+        offset,
+        length,
+        value,
+        children
+    };
+}
+
+function addLeafNode(parentNode, name, offset, length, value = '') {
+    const node = createTreeNode(name, offset, length, value);
+    parentNode.children.push(node);
+    return node;
+}
+
+function formatHex(buffer, start, end) {
+    return buffer.subarray(start, end).toString('hex');
+}
+
+function isSimpleIpNlri(afi, safi) {
+    return (
+        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
+        safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    );
+}
+
+function formatIpPrefix(buffer, offset, prefixLength, afi) {
+    const prefixBytes = Math.ceil(prefixLength / 8);
+    const prefixBuffer = buffer.subarray(offset, offset + prefixBytes);
+    if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) {
+        return ipv6BufferToString(prefixBuffer, prefixLength);
+    }
+    return ipv4BufferToString(prefixBuffer, prefixLength);
+}
+
+function formatNextHop(buffer, offset, nextHopLength, afi, safi) {
+    if (nextHopLength === 0) {
+        return '';
+    }
+
+    if (
+        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
+        safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN
+    ) {
+        if (nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IP_HOST_BYTE_LEN) {
+            return ipv4BufferToString(
+                buffer.subarray(offset + BgpConst.BGP_RD_LEN, offset + BgpConst.BGP_RD_LEN + BgpConst.IP_HOST_BYTE_LEN),
+                BgpConst.IP_HOST_LEN
+            );
+        }
+        if (nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) {
+            return ipv6BufferToString(
+                buffer.subarray(offset + BgpConst.BGP_RD_LEN, offset + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
+                BgpConst.IPV6_HOST_LEN
+            );
+        }
+        if (nextHopLength === (BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) * 2) {
+            const globalNextHop = ipv6BufferToString(
+                buffer.subarray(offset + BgpConst.BGP_RD_LEN, offset + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
+                BgpConst.IPV6_HOST_LEN
+            );
+            const linkLocalOffset = offset + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN + BgpConst.BGP_RD_LEN;
+            const linkLocalNextHop = ipv6BufferToString(
+                buffer.subarray(linkLocalOffset, linkLocalOffset + BgpConst.IPV6_HOST_BYTE_LEN),
+                BgpConst.IPV6_HOST_LEN
+            );
+            return `${globalNextHop}, ${linkLocalNextHop}`;
+        }
+    }
+
+    if (nextHopLength === BgpConst.IP_HOST_BYTE_LEN) {
+        return ipv4BufferToString(buffer.subarray(offset, offset + BgpConst.IP_HOST_BYTE_LEN), BgpConst.IP_HOST_LEN);
+    }
+    if (nextHopLength === BgpConst.IPV6_HOST_BYTE_LEN) {
+        return ipv6BufferToString(buffer.subarray(offset, offset + BgpConst.IPV6_HOST_BYTE_LEN), BgpConst.IPV6_HOST_LEN);
+    }
+    if (nextHopLength === BgpConst.IPV6_HOST_BYTE_LEN * 2) {
+        const globalNextHop = ipv6BufferToString(
+            buffer.subarray(offset, offset + BgpConst.IPV6_HOST_BYTE_LEN),
+            BgpConst.IPV6_HOST_LEN
+        );
+        const linkLocalNextHop = ipv6BufferToString(
+            buffer.subarray(offset + BgpConst.IPV6_HOST_BYTE_LEN, offset + BgpConst.IPV6_HOST_BYTE_LEN * 2),
+            BgpConst.IPV6_HOST_LEN
+        );
+        return `${globalNextHop}, ${linkLocalNextHop}`;
+    }
+
+    return formatHex(buffer, offset, offset + nextHopLength);
+}
+
+function addSimpleNlriNodes(parentNode, buffer, offset, endOffset, afi, nodeName = 'NLRI') {
+    const nlriNode = createTreeNode(nodeName, offset, endOffset - offset, '', []);
+    parentNode.children.push(nlriNode);
+
+    let position = offset;
+    let routeIndex = 0;
+    const routes = [];
+    while (position < endOffset) {
+        const prefixLength = buffer[position];
+        const prefixBytes = Math.ceil(prefixLength / 8);
+        const routeLength = 1 + prefixBytes;
+        if (position + routeLength > endOffset) {
+            nlriNode.children.push(
+                createTreeNode('Malformed Route', position, endOffset - position, 'Prefix length exceeds NLRI data', [])
+            );
+            break;
+        }
+
+        const routeNode = createTreeNode(`Route ${routeIndex + 1}`, position, routeLength, '', []);
+        nlriNode.children.push(routeNode);
+        addLeafNode(routeNode, 'Prefix Length', position, 1, prefixLength);
+        position += 1;
+
+        let prefix = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? '::' : '0.0.0.0';
+        if (prefixBytes > 0) {
+            prefix = formatIpPrefix(buffer, position, prefixLength, afi);
+            addLeafNode(routeNode, 'Prefix', position, prefixBytes, prefix);
+            position += prefixBytes;
+        }
+
+        routeNode.value = `${prefix}/${prefixLength}`;
+        routes.push(routeNode.value);
+        routeIndex += 1;
+    }
+
+    nlriNode.value = routes.join(', ');
+    return nlriNode;
+}
+
+function formatMplsLabel(raw24) {
+    if (raw24 === 0) {
+        return 'No Label';
+    }
+    const label = raw24 >> 4;
+    const bottom = (raw24 & 0x1) === 1;
+    return `Label ${label}${bottom ? ' (Bottom)' : ''}`;
 }
 
 function addSrv6SidStructureNode(buffer, sidInfoNode, subSubOffset, length) {
@@ -620,7 +803,7 @@ function addPrefixSidAttributeNode(buffer, attrNode, valueOffset, attrLength) {
 function parseBgpPacket(buffer, tree, offset = 0) {
     try {
         // 检查缓冲区是否有效
-        if (!Buffer.isBuffer(buffer) || buffer.length < BgpConst.BGP_HEAD_LEN) {
+        if (!Buffer.isBuffer(buffer) || buffer.length < offset + BgpConst.BGP_HEAD_LEN) {
             return {
                 valid: false,
                 error: 'Invalid buffer or buffer too small'
@@ -671,6 +854,7 @@ function parseBgpPacket(buffer, tree, offset = 0) {
         };
         headerNode.children.push(lengthNode);
         curOffset += 2;
+        const messageEndOffset = offset + length;
 
         // 解析类型
         const type = buffer[curOffset];
@@ -686,10 +870,10 @@ function parseBgpPacket(buffer, tree, offset = 0) {
         curOffset += 1;
 
         // 检查缓冲区是否包含完整的数据包
-        if (buffer.length < length) {
+        if (buffer.length < messageEndOffset) {
             return {
                 valid: false,
-                error: `Incomplete packet: expected ${length} bytes, got ${buffer.length}`,
+                error: `Incomplete packet: expected ${length} bytes from offset ${offset}, got ${buffer.length - offset}`,
                 tree
             };
         }
@@ -700,13 +884,13 @@ function parseBgpPacket(buffer, tree, offset = 0) {
 
         switch (type) {
             case BgpConst.BGP_PACKET_TYPE.OPEN:
-                newOffset = parseOpenMessageTree(buffer, curOffset, headerNode);
+                newOffset = parseOpenMessageTree(buffer, curOffset, headerNode, messageEndOffset);
                 break;
             case BgpConst.BGP_PACKET_TYPE.UPDATE:
-                newOffset = parseUpdateMessageTree(buffer, curOffset, headerNode);
+                newOffset = parseUpdateMessageTree(buffer, curOffset, headerNode, messageEndOffset);
                 break;
             case BgpConst.BGP_PACKET_TYPE.NOTIFICATION:
-                newOffset = parseNotificationMessageTree(buffer, curOffset, headerNode);
+                newOffset = parseNotificationMessageTree(buffer, curOffset, headerNode, messageEndOffset);
                 break;
             case BgpConst.BGP_PACKET_TYPE.KEEPALIVE:
                 // Keepalive没有额外数据
@@ -714,7 +898,7 @@ function parseBgpPacket(buffer, tree, offset = 0) {
                 newOffset = curOffset;
                 break;
             case BgpConst.BGP_PACKET_TYPE.ROUTE_REFRESH:
-                newOffset = parseRouteRefreshMessageTree(buffer, curOffset, headerNode);
+                newOffset = parseRouteRefreshMessageTree(buffer, curOffset, headerNode, messageEndOffset);
                 break;
             default:
                 return {
@@ -750,7 +934,7 @@ function parseBgpPacket(buffer, tree, offset = 0) {
  * @param {Object} parentNode - Parent tree node to attach the parsing results
  * @returns {number} The new offset after parsing the message
  */
-function parseOpenMessageTree(buffer, curOffset, parentNode) {
+function parseOpenMessageTree(buffer, curOffset, parentNode, messageEndOffset) {
     // 版本
     const version = buffer[curOffset];
     const versionNode = {
@@ -822,9 +1006,16 @@ function parseOpenMessageTree(buffer, curOffset, parentNode) {
         };
         parentNode.children.push(optParamsNode);
 
-        const optParamsEnd = curOffset + optParamLen;
+        const optParamsEnd = Math.min(curOffset + optParamLen, messageEndOffset);
 
         while (curOffset < optParamsEnd) {
+            if (curOffset + 2 > optParamsEnd) {
+                optParamsNode.children.push(
+                    createTreeNode('Malformed Parameter', curOffset, optParamsEnd - curOffset, 'Truncated parameter header')
+                );
+                break;
+            }
+
             const paramType = buffer[curOffset];
             const paramLen = buffer[curOffset + 1];
 
@@ -871,9 +1062,16 @@ function parseOpenMessageTree(buffer, curOffset, parentNode) {
                 paramNode.children.push(capabilitiesNode);
 
                 let capOffset = curOffset;
-                const capEndOffset = capOffset + paramLen;
+                const capEndOffset = Math.min(capOffset + paramLen, optParamsEnd);
 
                 while (capOffset < capEndOffset) {
+                    if (capOffset + 2 > capEndOffset) {
+                        capabilitiesNode.children.push(
+                            createTreeNode('Malformed Capability', capOffset, capEndOffset - capOffset, 'Truncated capability header')
+                        );
+                        break;
+                    }
+
                     const capCode = buffer[capOffset];
                     const capLen = buffer[capOffset + 1];
 
@@ -978,6 +1176,96 @@ function parseOpenMessageTree(buffer, curOffset, parentNode) {
                                 }
                                 break;
 
+                            case BgpConst.BGP_OPEN_CAP_CODE.EXTENDED_NEXT_HOP_ENCODING: {
+                                let tupleOffset = valueOffset;
+                                let tupleIndex = 0;
+                                const tupleEnd = valueOffset + capLen;
+                                const tupleSummaries = [];
+                                while (tupleOffset + 6 <= tupleEnd) {
+                                    const afi = buffer.readUInt16BE(tupleOffset);
+                                    const safi = buffer.readUInt16BE(tupleOffset + 2);
+                                    const nextHopAfi = buffer.readUInt16BE(tupleOffset + 4);
+                                    const tupleNode = createTreeNode(
+                                        `Next Hop Tuple ${tupleIndex + 1}`,
+                                        tupleOffset,
+                                        6,
+                                        `${getBgpAfiName(afi)}/${getBgpSafiName(safi)}/${getIpTypeName(nextHopAfi)}`,
+                                        []
+                                    );
+                                    capabilityNode.children.push(tupleNode);
+                                    addLeafNode(tupleNode, 'AFI', tupleOffset, 2, `${afi} (${getBgpAfiName(afi)})`);
+                                    addLeafNode(tupleNode, 'SAFI', tupleOffset + 2, 2, `${safi} (${getBgpSafiName(safi)})`);
+                                    addLeafNode(
+                                        tupleNode,
+                                        'Next Hop AFI',
+                                        tupleOffset + 4,
+                                        2,
+                                        `${nextHopAfi} (${getIpTypeName(nextHopAfi)})`
+                                    );
+                                    tupleSummaries.push(tupleNode.value);
+                                    tupleOffset += 6;
+                                    tupleIndex += 1;
+                                }
+                                if (tupleOffset < tupleEnd) {
+                                    capabilityNode.children.push(
+                                        createTreeNode(
+                                            'Trailing Data',
+                                            tupleOffset,
+                                            tupleEnd - tupleOffset,
+                                            formatHex(buffer, tupleOffset, tupleEnd),
+                                            []
+                                        )
+                                    );
+                                }
+                                capabilityNode.value = tupleSummaries.join(', ');
+                                break;
+                            }
+
+                            case BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH: {
+                                let tupleOffset = valueOffset;
+                                let tupleIndex = 0;
+                                const tupleEnd = valueOffset + capLen;
+                                const tupleSummaries = [];
+                                while (tupleOffset + 4 <= tupleEnd) {
+                                    const afi = buffer.readUInt16BE(tupleOffset);
+                                    const safi = buffer[tupleOffset + 2];
+                                    const sendReceive = buffer[tupleOffset + 3];
+                                    const tupleNode = createTreeNode(
+                                        `ADD-PATH Tuple ${tupleIndex + 1}`,
+                                        tupleOffset,
+                                        4,
+                                        `${getBgpAfiName(afi)}/${getBgpSafiName(safi)}: ${getBgpAddPathTypeName(sendReceive)}`,
+                                        []
+                                    );
+                                    capabilityNode.children.push(tupleNode);
+                                    addLeafNode(tupleNode, 'AFI', tupleOffset, 2, `${afi} (${getBgpAfiName(afi)})`);
+                                    addLeafNode(tupleNode, 'SAFI', tupleOffset + 2, 1, `${safi} (${getBgpSafiName(safi)})`);
+                                    addLeafNode(
+                                        tupleNode,
+                                        'Send/Receive',
+                                        tupleOffset + 3,
+                                        1,
+                                        `${sendReceive} (${getBgpAddPathTypeName(sendReceive)})`
+                                    );
+                                    tupleSummaries.push(tupleNode.value);
+                                    tupleOffset += 4;
+                                    tupleIndex += 1;
+                                }
+                                if (tupleOffset < tupleEnd) {
+                                    capabilityNode.children.push(
+                                        createTreeNode(
+                                            'Trailing Data',
+                                            tupleOffset,
+                                            tupleEnd - tupleOffset,
+                                            formatHex(buffer, tupleOffset, tupleEnd),
+                                            []
+                                        )
+                                    );
+                                }
+                                capabilityNode.value = tupleSummaries.join(', ');
+                                break;
+                            }
+
                             default: {
                                 const valueNode = {
                                     name: 'Value',
@@ -991,9 +1279,9 @@ function parseOpenMessageTree(buffer, curOffset, parentNode) {
                         }
                     }
 
-                    capOffset += capLen;
+                    capOffset = Math.min(capOffset + capLen, capEndOffset);
                 }
-                curOffset += paramLen;
+                curOffset = Math.min(curOffset + paramLen, optParamsEnd);
             } else {
                 // For other parameter types
                 const paramValueNode = {
@@ -1004,12 +1292,206 @@ function parseOpenMessageTree(buffer, curOffset, parentNode) {
                     children: []
                 };
                 paramNode.children.push(paramValueNode);
-                curOffset += paramLen;
+                curOffset = Math.min(curOffset + paramLen, optParamsEnd);
             }
         }
     }
 
     return curOffset;
+}
+
+function addAsPathNode(buffer, attrNode, valueOffset, attrValueEnd, nodeName = 'AS_PATH', asnSize = 4) {
+    const asPathNode = createTreeNode(nodeName, valueOffset, attrValueEnd - valueOffset, '', []);
+    attrNode.children.push(asPathNode);
+
+    let segmentOffset = valueOffset;
+    let segmentIndex = 0;
+    const segmentSummaries = [];
+    while (segmentOffset < attrValueEnd) {
+        if (segmentOffset + 2 > attrValueEnd) {
+            asPathNode.children.push(
+                createTreeNode('Malformed Segment', segmentOffset, attrValueEnd - segmentOffset, 'Truncated AS_PATH segment header')
+            );
+            break;
+        }
+
+        const segmentType = buffer[segmentOffset];
+        const segmentTypeName = getBgpAsPathTypeName(segmentType);
+        const segmentLength = buffer[segmentOffset + 1];
+        const segmentByteLength = 2 + segmentLength * asnSize;
+        const segmentNode = createTreeNode(
+            `Segment ${segmentIndex + 1} (${segmentTypeName})`,
+            segmentOffset,
+            Math.min(segmentByteLength, attrValueEnd - segmentOffset),
+            segmentTypeName,
+            []
+        );
+        asPathNode.children.push(segmentNode);
+        addLeafNode(segmentNode, 'Type', segmentOffset, 1, `${segmentType} (${segmentTypeName})`);
+        addLeafNode(segmentNode, 'Length', segmentOffset + 1, 1, segmentLength);
+
+        segmentOffset += 2;
+        const asNumbers = [];
+        for (let i = 0; i < segmentLength; i++) {
+            if (segmentOffset + asnSize > attrValueEnd) {
+                segmentNode.children.push(
+                    createTreeNode('Malformed AS Number', segmentOffset, attrValueEnd - segmentOffset, 'Truncated AS number')
+                );
+                segmentOffset = attrValueEnd;
+                break;
+            }
+
+            const asn = asnSize === 2 ? buffer.readUInt16BE(segmentOffset) : buffer.readUInt32BE(segmentOffset);
+            asNumbers.push(asn);
+            addLeafNode(segmentNode, `AS${i + 1}`, segmentOffset, asnSize, asn);
+            segmentOffset += asnSize;
+        }
+
+        segmentNode.value =
+            segmentType === BgpConst.BGP_AS_PATH_TYPE.AS_SEQUENCE
+                ? `${segmentTypeName}: ${asNumbers.join(' ')}`
+                : `${segmentTypeName}: {${asNumbers.join(' ')}}`;
+        segmentSummaries.push(segmentNode.value);
+        segmentIndex += 1;
+    }
+
+    asPathNode.value = segmentSummaries.join(' ');
+}
+
+function addAggregatorNode(buffer, attrNode, valueOffset, attrLength, asnSize, nodeName) {
+    const attrValueEnd = valueOffset + attrLength;
+    const aggregatorNode = createTreeNode(nodeName, valueOffset, attrLength, '', []);
+    attrNode.children.push(aggregatorNode);
+
+    if (attrLength < asnSize + 4) {
+        aggregatorNode.value = 'Truncated';
+        if (attrLength > 0) {
+            addLeafNode(aggregatorNode, 'Raw Value', valueOffset, attrLength, formatHex(buffer, valueOffset, attrValueEnd));
+        }
+        return;
+    }
+
+    const aggregatorAs = asnSize === 2 ? buffer.readUInt16BE(valueOffset) : buffer.readUInt32BE(valueOffset);
+    const aggregatorIpOffset = valueOffset + asnSize;
+    const aggregatorIp = ipv4BufferToString(buffer.subarray(aggregatorIpOffset, aggregatorIpOffset + 4), BgpConst.IP_HOST_LEN);
+
+    addLeafNode(aggregatorNode, 'AS', valueOffset, asnSize, aggregatorAs);
+    addLeafNode(aggregatorNode, 'IP', aggregatorIpOffset, 4, aggregatorIp);
+    aggregatorNode.value = `AS: ${aggregatorAs}, IP: ${aggregatorIp}`;
+}
+
+function addExtendedCommunitiesNode(buffer, attrNode, valueOffset, attrValueEnd) {
+    const extNode = createTreeNode('Extended Communities', valueOffset, attrValueEnd - valueOffset, '', []);
+    attrNode.children.push(extNode);
+
+    const communities = [];
+    let commOffset = valueOffset;
+    let index = 0;
+    while (commOffset < attrValueEnd) {
+        const commLength = Math.min(8, attrValueEnd - commOffset);
+        const commBuffer = buffer.subarray(commOffset, commOffset + commLength);
+        let formatted;
+        try {
+            formatted = commLength === 8 ? extCommunitiesBufferToString(commBuffer) : `truncated(${commBuffer.toString('hex')})`;
+        } catch (_error) {
+            formatted = `unknown(${commBuffer.toString('hex')})`;
+        }
+
+        const commNode = createTreeNode(`Extended Community ${index + 1}`, commOffset, commLength, formatted, []);
+        extNode.children.push(commNode);
+        if (commLength >= 1) {
+            addLeafNode(commNode, 'Type', commOffset, 1, `0x${buffer[commOffset].toString(16).padStart(2, '0')}`);
+        }
+        if (commLength >= 2) {
+            addLeafNode(commNode, 'Sub-Type', commOffset + 1, 1, `0x${buffer[commOffset + 1].toString(16).padStart(2, '0')}`);
+        }
+        if (commLength > 2) {
+            addLeafNode(commNode, 'Value', commOffset + 2, commLength - 2, formatHex(buffer, commOffset + 2, commOffset + commLength));
+        }
+        communities.push(formatted);
+        commOffset += commLength;
+        index += 1;
+    }
+
+    extNode.value = communities.join(', ');
+}
+
+function addPmsiTunnelNode(buffer, attrNode, valueOffset, attrValueEnd) {
+    const pmsiNode = createTreeNode('PMSI Tunnel', valueOffset, attrValueEnd - valueOffset, '', []);
+    attrNode.children.push(pmsiNode);
+
+    if (attrValueEnd - valueOffset < 5) {
+        pmsiNode.value = 'Truncated';
+        addLeafNode(pmsiNode, 'Raw Value', valueOffset, attrValueEnd - valueOffset, formatHex(buffer, valueOffset, attrValueEnd));
+        return;
+    }
+
+    const flags = buffer[valueOffset];
+    const tunnelType = buffer[valueOffset + 1];
+    const rawLabel = readUint24BE(buffer, valueOffset + 2);
+    const label = formatMplsLabel(rawLabel);
+    const tunnelTypeName = getPmsiTunnelTypeName(tunnelType);
+
+    addLeafNode(pmsiNode, 'Flags', valueOffset, 1, `0x${flags.toString(16).padStart(2, '0')}`);
+    addLeafNode(pmsiNode, 'Tunnel Type', valueOffset + 1, 1, `${tunnelType} (${tunnelTypeName})`);
+    addLeafNode(pmsiNode, 'MPLS Label', valueOffset + 2, 3, label);
+    if (valueOffset + 5 < attrValueEnd) {
+        addLeafNode(
+            pmsiNode,
+            'Tunnel Identifier',
+            valueOffset + 5,
+            attrValueEnd - valueOffset - 5,
+            formatHex(buffer, valueOffset + 5, attrValueEnd)
+        );
+    }
+
+    pmsiNode.value = `${tunnelTypeName}, ${label}`;
+}
+
+function addTunnelEncapsulationNode(buffer, attrNode, valueOffset, attrValueEnd) {
+    const encapNode = createTreeNode('Tunnel Encapsulation', valueOffset, attrValueEnd - valueOffset, '', []);
+    attrNode.children.push(encapNode);
+
+    let tlvOffset = valueOffset;
+    let tlvIndex = 0;
+    const summaries = [];
+    while (tlvOffset < attrValueEnd) {
+        if (tlvOffset + 4 > attrValueEnd) {
+            encapNode.children.push(
+                createTreeNode('Malformed TLV', tlvOffset, attrValueEnd - tlvOffset, 'Truncated tunnel TLV header')
+            );
+            break;
+        }
+
+        const tunnelType = buffer.readUInt16BE(tlvOffset);
+        const tunnelTypeName = getBgpTunnelTypeName(tunnelType);
+        const tlvLength = buffer.readUInt16BE(tlvOffset + 2);
+        const valueStart = tlvOffset + 4;
+        const valueEnd = Math.min(valueStart + tlvLength, attrValueEnd);
+        const tlvNode = createTreeNode(
+            `Tunnel TLV ${tlvIndex + 1}`,
+            tlvOffset,
+            Math.min(4 + tlvLength, attrValueEnd - tlvOffset),
+            tunnelTypeName,
+            []
+        );
+        encapNode.children.push(tlvNode);
+        addLeafNode(tlvNode, 'Tunnel Type', tlvOffset, 2, `${tunnelType} (${tunnelTypeName})`);
+        addLeafNode(tlvNode, 'Length', tlvOffset + 2, 2, tlvLength);
+        if (valueStart < valueEnd) {
+            addLeafNode(tlvNode, 'Value', valueStart, valueEnd - valueStart, formatHex(buffer, valueStart, valueEnd));
+        }
+
+        summaries.push(tunnelTypeName);
+        if (valueStart + tlvLength > attrValueEnd) {
+            tlvNode.value = `${tunnelTypeName} (length exceeds attribute)`;
+            break;
+        }
+        tlvOffset = valueStart + tlvLength;
+        tlvIndex += 1;
+    }
+
+    encapNode.value = summaries.join(', ');
 }
 
 /**
@@ -1018,7 +1500,7 @@ function parseOpenMessageTree(buffer, curOffset, parentNode) {
  * @param {Object} parentNode - Parent tree node to attach the parsing results
  * @returns {number} The new offset after parsing the message
  */
-function parseUpdateMessageTree(buffer, curOffset, parentNode) {
+function parseUpdateMessageTree(buffer, curOffset, parentNode, messageEndOffset) {
     // Withdrawn Routes Length
     const withdrawnRoutesLength = buffer.readUInt16BE(curOffset);
     const withdrawnRoutesLengthNode = {
@@ -1042,7 +1524,7 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
         };
         parentNode.children.push(withdrawnRoutesNode);
 
-        const withdrawnRoutesEnd = curOffset + withdrawnRoutesLength;
+        const withdrawnRoutesEnd = Math.min(curOffset + withdrawnRoutesLength, messageEndOffset);
         let routeIndex = 0;
 
         while (curOffset < withdrawnRoutesEnd) {
@@ -1116,7 +1598,7 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
         };
         parentNode.children.push(pathAttributesNode);
 
-        const pathAttributesEnd = curOffset + pathAttributesLength;
+        const pathAttributesEnd = Math.min(curOffset + pathAttributesLength, messageEndOffset);
 
         while (curOffset < pathAttributesEnd) {
             const attrFlags = buffer[curOffset];
@@ -1128,6 +1610,8 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
             const attrLength = extendedLength ? buffer.readUInt16BE(curOffset + 2) : buffer[curOffset + 2];
 
             const headerLength = 2 + attrLengthSize; // Flags + Type + Length field
+            const valueOffset = curOffset + headerLength;
+            const attrValueEnd = Math.min(valueOffset + attrLength, pathAttributesEnd);
 
             const attrNode = {
                 name: `Attribute (Type: ${attrTypeCode} - ${getBgpPathAttrTypeName(attrTypeCode)})`,
@@ -1176,9 +1660,6 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
                 children: []
             };
             attrNode.children.push(attrLengthNode);
-
-            // Attribute Value
-            const valueOffset = curOffset + headerLength;
 
             // Parse attribute value based on type
             switch (attrTypeCode) {
@@ -1388,6 +1869,51 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
                     communitiesNode.value = communities.join(', ');
                     break;
                 }
+                case BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES: {
+                    addExtendedCommunitiesNode(buffer, attrNode, valueOffset, attrValueEnd);
+                    break;
+                }
+                case BgpConst.BGP_PATH_ATTR.ORIGINATOR_ID: {
+                    const originatorId = ipv4BufferToString(buffer.subarray(valueOffset, valueOffset + 4), BgpConst.IP_HOST_LEN);
+                    attrNode.children.push(createTreeNode('Originator ID', valueOffset, attrLength, originatorId, []));
+                    break;
+                }
+                case BgpConst.BGP_PATH_ATTR.CLUSTER_LIST: {
+                    const clusterListNode = createTreeNode('Cluster List', valueOffset, attrLength, '', []);
+                    attrNode.children.push(clusterListNode);
+                    const clusters = [];
+                    let clusterOffset = valueOffset;
+                    let clusterIndex = 0;
+                    while (clusterOffset + 4 <= attrValueEnd) {
+                        const clusterId = ipv4BufferToString(
+                            buffer.subarray(clusterOffset, clusterOffset + 4),
+                            BgpConst.IP_HOST_LEN
+                        );
+                        clusters.push(clusterId);
+                        addLeafNode(clusterListNode, `Cluster ID ${clusterIndex + 1}`, clusterOffset, 4, clusterId);
+                        clusterOffset += 4;
+                        clusterIndex += 1;
+                    }
+                    if (clusterOffset < attrValueEnd) {
+                        addLeafNode(
+                            clusterListNode,
+                            'Trailing Data',
+                            clusterOffset,
+                            attrValueEnd - clusterOffset,
+                            formatHex(buffer, clusterOffset, attrValueEnd)
+                        );
+                    }
+                    clusterListNode.value = clusters.join(', ');
+                    break;
+                }
+                case BgpConst.BGP_PATH_ATTR.AS4_PATH: {
+                    addAsPathNode(buffer, attrNode, valueOffset, attrValueEnd, 'AS4_PATH');
+                    break;
+                }
+                case BgpConst.BGP_PATH_ATTR.AS4_AGGREGATOR: {
+                    addAggregatorNode(buffer, attrNode, valueOffset, attrValueEnd - valueOffset, 4, 'AS4 Aggregator');
+                    break;
+                }
                 case BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI: {
                     const mpReachNode = {
                         name: 'MP_REACH_NLRI',
@@ -1420,26 +1946,41 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
                     };
                     mpReachNode.children.push(safiNode);
 
-                    // length
+                    // Next Hop Length
+                    const nextHopLength = buffer[valueOffset + 3];
                     const lengthNode = {
-                        name: 'Length',
+                        name: 'Next Hop Length',
                         offset: valueOffset + 3,
                         length: 1,
-                        value: buffer[valueOffset + 3],
+                        value: nextHopLength,
                         children: []
                     };
                     mpReachNode.children.push(lengthNode);
 
-                    // The rest of MP_REACH_NLRI parsing could be implemented here
-                    // but it's complex due to variable formats based on AFI/SAFI
-                    const remainingDataNode = {
-                        name: 'Next Hop & NLRI Data',
-                        offset: valueOffset + 4,
-                        length: attrLength - 4,
-                        value: buffer.subarray(valueOffset + 4, valueOffset + attrLength).toString('hex'),
-                        children: []
-                    };
-                    mpReachNode.children.push(remainingDataNode);
+                    const nextHopOffset = valueOffset + 4;
+                    const nextHopEnd = Math.min(nextHopOffset + nextHopLength, attrValueEnd);
+                    const nextHop = formatNextHop(buffer, nextHopOffset, nextHopEnd - nextHopOffset, afi, safi);
+                    addLeafNode(mpReachNode, 'Next Hop', nextHopOffset, nextHopEnd - nextHopOffset, nextHop);
+
+                    const reservedOffset = nextHopEnd;
+                    if (reservedOffset < attrValueEnd) {
+                        addLeafNode(mpReachNode, 'Reserved', reservedOffset, 1, buffer[reservedOffset]);
+                    }
+
+                    const nlriOffset = reservedOffset + 1;
+                    if (nlriOffset < attrValueEnd) {
+                        if (isSimpleIpNlri(afi, safi)) {
+                            addSimpleNlriNodes(mpReachNode, buffer, nlriOffset, attrValueEnd, afi, 'NLRI');
+                        } else {
+                            addLeafNode(
+                                mpReachNode,
+                                'NLRI Data',
+                                nlriOffset,
+                                attrValueEnd - nlriOffset,
+                                formatHex(buffer, nlriOffset, attrValueEnd)
+                            );
+                        }
+                    }
                     break;
                 }
                 case BgpConst.BGP_PATH_ATTR.MP_UNREACH_NLRI: {
@@ -1474,16 +2015,36 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
                     };
                     mpUnreachNode.children.push(safiNode);
 
-                    // The rest of MP_UNREACH_NLRI parsing could be implemented here
                     if (attrLength > 3) {
-                        const withdrawnDataNode = {
-                            name: 'Withdrawn Routes Data',
-                            offset: valueOffset + 3,
-                            length: attrLength - 3,
-                            value: buffer.subarray(valueOffset + 3, valueOffset + attrLength).toString('hex'),
-                            children: []
-                        };
-                        mpUnreachNode.children.push(withdrawnDataNode);
+                        const withdrawnOffset = valueOffset + 3;
+                        if (isSimpleIpNlri(afi, safi)) {
+                            addSimpleNlriNodes(mpUnreachNode, buffer, withdrawnOffset, attrValueEnd, afi, 'Withdrawn Routes');
+                        } else {
+                            addLeafNode(
+                                mpUnreachNode,
+                                'Withdrawn Routes Data',
+                                withdrawnOffset,
+                                attrValueEnd - withdrawnOffset,
+                                formatHex(buffer, withdrawnOffset, attrValueEnd)
+                            );
+                        }
+                    }
+                    break;
+                }
+                case BgpConst.BGP_PATH_ATTR.PMSI_TUNNEL: {
+                    addPmsiTunnelNode(buffer, attrNode, valueOffset, attrValueEnd);
+                    break;
+                }
+                case BgpConst.BGP_PATH_ATTR.TUNNEL_ENCAPSULATION: {
+                    addTunnelEncapsulationNode(buffer, attrNode, valueOffset, attrValueEnd);
+                    break;
+                }
+                case BgpConst.BGP_PATH_ATTR.PATH_OTC: {
+                    if (attrValueEnd - valueOffset >= 4) {
+                        const otc = buffer.readUInt32BE(valueOffset);
+                        addLeafNode(attrNode, 'Only-To-Customer AS', valueOffset, 4, otc);
+                    } else {
+                        addLeafNode(attrNode, 'Only-To-Customer AS', valueOffset, attrValueEnd - valueOffset, 'Truncated');
                     }
                     break;
                 }
@@ -1508,7 +2069,7 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
     }
 
     // NLRI (Network Layer Reachability Information)
-    const nlriLength = buffer.length - curOffset;
+    const nlriLength = messageEndOffset - curOffset;
     if (nlriLength > 0) {
         const nlriNode = {
             name: 'NLRI',
@@ -1520,7 +2081,7 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
         parentNode.children.push(nlriNode);
 
         let routeIndex = 0;
-        while (curOffset < buffer.length) {
+        while (curOffset < messageEndOffset) {
             const prefixLength = buffer[curOffset];
             const prefixBytes = Math.ceil(prefixLength / 8);
 
@@ -1577,7 +2138,7 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode) {
  * @param {Object} parentNode - Parent tree node to attach the parsing results
  * @returns {number} The new offset after parsing the message
  */
-function parseNotificationMessageTree(buffer, curOffset, parentNode) {
+function parseNotificationMessageTree(buffer, curOffset, parentNode, messageEndOffset) {
     // Error Code
     const errorCode = buffer[curOffset];
     const errorCodeNode = {
@@ -1603,13 +2164,13 @@ function parseNotificationMessageTree(buffer, curOffset, parentNode) {
     curOffset += 1;
 
     // Data
-    const dataLength = buffer.length - curOffset;
+    const dataLength = messageEndOffset - curOffset;
     if (dataLength > 0) {
         const dataNode = {
             name: 'Data',
             offset: curOffset,
             length: dataLength,
-            value: buffer.subarray(curOffset, buffer.length).toString('hex'),
+            value: buffer.subarray(curOffset, messageEndOffset).toString('hex'),
             children: []
         };
         parentNode.children.push(dataNode);
@@ -1625,7 +2186,12 @@ function parseNotificationMessageTree(buffer, curOffset, parentNode) {
  * @param {Object} parentNode - Parent tree node to attach the parsing results
  * @returns {number} The new offset after parsing the message
  */
-function parseRouteRefreshMessageTree(buffer, curOffset, parentNode) {
+function parseRouteRefreshMessageTree(buffer, curOffset, parentNode, messageEndOffset) {
+    if (curOffset + 4 > messageEndOffset) {
+        parentNode.children.push(createTreeNode('Malformed Route Refresh', curOffset, messageEndOffset - curOffset, 'Truncated'));
+        return messageEndOffset;
+    }
+
     // AFI
     const afi = buffer.readUInt16BE(curOffset);
     const afiNode = {

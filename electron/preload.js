@@ -223,6 +223,16 @@ contextBridge.exposeInMainWorld('ntpApi', {
     clearRequestHistory: () => ipcRenderer.invoke('ntp:clearRequestHistory')
 });
 
+// tftp模块
+contextBridge.exposeInMainWorld('tftpApi', {
+    saveTftpConfig: config => ipcRenderer.invoke('tftp:saveTftpConfig', config),
+    getTftpConfig: () => ipcRenderer.invoke('tftp:getTftpConfig'),
+    startTftp: config => ipcRenderer.invoke('tftp:startTftp', config),
+    stopTftp: () => ipcRenderer.invoke('tftp:stopTftp'),
+    getTransferList: () => ipcRenderer.invoke('tftp:getTransferList'),
+    clearTransferHistory: () => ipcRenderer.invoke('tftp:clearTransferHistory')
+});
+
 // 依赖本地工具模块
 contextBridge.exposeInMainWorld('nativeApi', {
     // 网络信息工具模块

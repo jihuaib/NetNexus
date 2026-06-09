@@ -2,7 +2,7 @@ const { parentPort } = require('worker_threads');
 const { parseBgpPacket } = require('../pktParser/bgpPacketParser');
 const registry = require('../pktParser/packetParserRegistry');
 const { hexStringToBuffer } = require('../utils/commonUtils');
-const { PROTOCOL_TYPE, START_LAYER } = require('../const/toolsConst');
+const { PROTOCOL_TYPE, START_LAYER, TRANSPORT_PROTOCOL } = require('../const/toolsConst');
 
 // 处理传入的消息
 parentPort.on('message', data => {
@@ -81,6 +81,21 @@ parentPort.on('message', data => {
                     result = registry.parse('ip', ipType, tree, buffer, 0);
                     break;
                 }
+                case START_LAYER.L4: {
+                    const transportProtocol = data.transportProtocol || TRANSPORT_PROTOCOL.TCP;
+                    const isUdp = transportProtocol === TRANSPORT_PROTOCOL.UDP;
+                    tree = {
+                        name: `${isUdp ? 'UDP Datagram' : 'TCP Segment'} ${buffer.length} bytes`,
+                        offset: 0,
+                        length: buffer.length,
+                        value: '',
+                        children: []
+                    };
+                    result = isUdp
+                        ? registry.parse('udp', TRANSPORT_PROTOCOL.UDP, tree, buffer, 0)
+                        : registry.parse('tcp', TRANSPORT_PROTOCOL.TCP, tree, buffer, 0);
+                    break;
+                }
                 default:
                     result = {
                         valid: false,
@@ -89,7 +104,7 @@ parentPort.on('message', data => {
             }
         } finally {
             // 清理注册的解析器，防止影响后续解析
-            if (data.protocolType === PROTOCOL_TYPE.BGP && customBgpPort) {
+            if (customBgpPort) {
                 registry.unregisterParser('bgp', customBgpPort);
             }
         }

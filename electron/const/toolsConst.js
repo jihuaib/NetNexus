@@ -10,6 +10,11 @@ const START_LAYER = {
     L5: 4
 };
 
+const TRANSPORT_PROTOCOL = {
+    TCP: 6,
+    UDP: 17
+};
+
 // 默认工具设置
 const DEFAULT_TOOLS_SETTINGS = {
     packetParser: {
@@ -37,6 +42,7 @@ const DEFAULT_UPDATE_SETTINGS = {
 module.exports = {
     PROTOCOL_TYPE,
     START_LAYER,
+    TRANSPORT_PROTOCOL,
     DEFAULT_TOOLS_SETTINGS,
     DEFAULT_LOG_SETTINGS,
     DEFAULT_UPDATE_SETTINGS

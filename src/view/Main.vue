@@ -88,7 +88,8 @@
         FolderOutlined,
         CodeOutlined,
         WifiOutlined,
-        ClockCircleOutlined
+        ClockCircleOutlined,
+        SwapOutlined
     } from '@ant-design/icons-vue';
     import SettingsDialog from '../components/SettingsDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
@@ -159,6 +160,13 @@
             label: 'NTP服务器',
             title: 'NTP服务器',
             route: '/ntp'
+        },
+        {
+            key: 'TFTP服务器',
+            icon: h(SwapOutlined),
+            label: 'TFTP服务器',
+            title: 'TFTP服务器',
+            route: '/tftp'
         }
     ]);
 

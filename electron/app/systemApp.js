@@ -15,6 +15,7 @@ const FtpApp = require('./ftpApp');
 const SnmpApp = require('./snmpApp');
 const DhcpApp = require('./dhcpApp');
 const NtpApp = require('./ntpApp');
+const TftpApp = require('./tftpApp');
 const AppUpdater = require('./updater');
 const NativeApp = require('./nativeApp');
 const FtpConst = require('../const/ftpConst');
@@ -55,6 +56,7 @@ class SystemApp {
         this.snmpApp = new SnmpApp(ipc, this.programStore);
         this.dhcpApp = new DhcpApp(ipc, this.programStore);
         this.ntpApp = new NtpApp(ipc, this.programStore);
+        this.tftpApp = new TftpApp(ipc, this.programStore);
         this.updaterApp = new AppUpdater(ipc, win);
         this.nativeApp = new NativeApp(ipc);
         this.toolsApp = new ToolsApp(ipc, this.programStore);
@@ -402,6 +404,7 @@ class SystemApp {
         this.rpkiApp.logLevel = this.currentLogLevel;
         this.ftpApp.logLevel = this.currentLogLevel;
         this.snmpApp.logLevel = this.currentLogLevel;
+        this.tftpApp.logLevel = this.currentLogLevel;
     }
 
     purgeStoredLogLevel() {
@@ -481,6 +484,7 @@ class SystemApp {
         const isFtpRunning = this.ftpApp.getFtpRunning();
         const isSnmpRunning = this.snmpApp.getSnmpRunning();
         const isNtpRunning = this.ntpApp.getNtpRunning();
+        const isTftpRunning = this.tftpApp.getTftpRunning();
 
         if (
             isBgpRunning ||
@@ -488,7 +492,8 @@ class SystemApp {
             isRpkiRunning ||
             isFtpRunning ||
             isSnmpRunning ||
-            isNtpRunning
+            isNtpRunning ||
+            isTftpRunning
         ) {
             const { response } = await dialog.showMessageBox(this.win, {
                 type: 'warning',
@@ -519,6 +524,9 @@ class SystemApp {
                 }
                 if (isNtpRunning) {
                     await this.ntpApp.handleStopNtp();
+                }
+                if (isTftpRunning) {
+                    await this.tftpApp.handleStopTftp();
                 }
 
                 return true;
