@@ -21,6 +21,11 @@ class RpkiWorker {
         this.rpkiRoaMap = new Map(); // rpki roa map
         this.rpkiRouterKeyMap = new Map(); // rpki router key map (v1+)
         this.rpkiAspaMap = new Map(); // rpki aspa map (v2+)
+        this.cacheSerial = 1; // RPKI-RTR cache serial number advertised in Notify/End of Data.
+        this.serialHistory = [];
+        this.serialHistoryOperationCount = 0;
+        this.maxSerialHistoryEntries = 1024;
+        this.maxSerialHistoryOperations = 200000;
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler();
@@ -46,7 +51,9 @@ class RpkiWorker {
             this.deleteRouterKey.bind(this)
         );
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, this.addAspa.bind(this));
+        this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA_BATCH, this.addAspaBatch.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, this.deleteAspa.bind(this));
+        this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA_BATCH, this.deleteAspaBatch.bind(this));
     }
 
     async startTcpServer(messageId) {
@@ -444,6 +451,7 @@ class RpkiWorker {
         this.rpkiRoaMap.clear();
         this.rpkiRouterKeyMap.clear();
         this.rpkiAspaMap.clear();
+        this.clearSerialHistory();
         this.messageHandler.sendSuccessResponse(messageId, null, 'rpki协议停止成功');
     }
 
@@ -451,6 +459,88 @@ class RpkiWorker {
         for (const session of this.rpkiSessionMap.values()) {
             session.sendSingleRoaData(rpkiRoa);
         }
+    }
+
+    bumpCacheSerial() {
+        this.cacheSerial = (this.cacheSerial + 1) >>> 0;
+        logger.info(`RPKI cache serial updated: ${this.cacheSerial}`);
+        return this.cacheSerial;
+    }
+
+    sendSerialNotify() {
+        for (const session of this.rpkiSessionMap.values()) {
+            session.sendSerialNotify();
+        }
+    }
+
+    bumpSerialAndNotify(changed) {
+        if (!changed) {
+            return;
+        }
+        this.bumpCacheSerial();
+        this.sendSerialNotify();
+    }
+
+    trimSerialHistory() {
+        while (
+            this.serialHistory.length > this.maxSerialHistoryEntries ||
+            this.serialHistoryOperationCount > this.maxSerialHistoryOperations
+        ) {
+            const removed = this.serialHistory.shift();
+            this.serialHistoryOperationCount -= removed?.operations?.length || 0;
+        }
+    }
+
+    clearSerialHistory() {
+        this.serialHistory = [];
+        this.serialHistoryOperationCount = 0;
+    }
+
+    recordSerialDeltaAndNotify(operations) {
+        const serialOperations = (operations || []).filter(Boolean);
+        if (serialOperations.length === 0) {
+            return;
+        }
+
+        const serial = this.bumpCacheSerial();
+        this.serialHistory.push({
+            serial,
+            operations: serialOperations
+        });
+        this.serialHistoryOperationCount += serialOperations.length;
+        this.trimSerialHistory();
+        this.sendSerialNotify();
+    }
+
+    getDeltaOperationsSince(serial) {
+        const requestedSerial = Number(serial) >>> 0;
+        const currentSerial = this.cacheSerial >>> 0;
+        if (requestedSerial === currentSerial) {
+            return [];
+        }
+
+        const expectedFirstSerial = (requestedSerial + 1) >>> 0;
+        const firstIndex = this.serialHistory.findIndex(entry => entry.serial === expectedFirstSerial);
+        if (firstIndex === -1) {
+            return null;
+        }
+
+        const entries = this.serialHistory.slice(firstIndex);
+        if (entries.length === 0 || entries[entries.length - 1].serial !== currentSerial) {
+            return null;
+        }
+
+        const operations = [];
+        let expectedSerial = expectedFirstSerial;
+        for (const entry of entries) {
+            if (entry.serial !== expectedSerial) {
+                return null;
+            }
+            operations.push(...entry.operations);
+            expectedSerial = (expectedSerial + 1) >>> 0;
+        }
+
+        return operations;
     }
 
     sendRoaBatchData(roas) {
@@ -487,8 +577,7 @@ class RpkiWorker {
         const rpkiRoa = new RpkiRoa(roa.ip, roa.mask, roa.asn, roa.maxLength, roa.ipType);
         this.rpkiRoaMap.set(key, rpkiRoa);
 
-        // 发送ROA数据
-        this.sendSingleRoaData(rpkiRoa);
+        this.recordSerialDeltaAndNotify([{ type: 'roa', action: 'announce', data: rpkiRoa }]);
 
         this.messageHandler.sendSuccessResponse(messageId, null, 'RPKI ROA配置添加成功');
     }
@@ -514,7 +603,9 @@ class RpkiWorker {
         }
 
         if (announce) {
-            this.sendRoaBatchData(addedRoas);
+            this.recordSerialDeltaAndNotify(
+                addedRoas.map(rpkiRoa => ({ type: 'roa', action: 'announce', data: rpkiRoa }))
+            );
         }
 
         this.messageHandler.sendSuccessResponse(
@@ -534,10 +625,8 @@ class RpkiWorker {
 
         const rpkiRoa = this.rpkiRoaMap.get(key);
 
-        // 发送ROA数据
-        this.withdrawSingleRoaData(rpkiRoa);
-
         this.rpkiRoaMap.delete(key);
+        this.recordSerialDeltaAndNotify([{ type: 'roa', action: 'withdraw', data: rpkiRoa }]);
         this.messageHandler.sendSuccessResponse(messageId, null, 'RPKI ROA配置删除成功');
     }
 
@@ -563,7 +652,9 @@ class RpkiWorker {
             }
         }
 
-        this.withdrawRoaBatchData(deletedRoas);
+        this.recordSerialDeltaAndNotify(
+            deletedRoas.map(rpkiRoa => ({ type: 'roa', action: 'withdraw', data: rpkiRoa }))
+        );
         this.messageHandler.sendSuccessResponse(
             messageId,
             {
@@ -609,7 +700,7 @@ class RpkiWorker {
         }
         const rk = new RpkiRouterKey(payload.ski, payload.asn, payload.spki);
         this.rpkiRouterKeyMap.set(key, rk);
-        this.sendSingleRouterKey(rk);
+        this.recordSerialDeltaAndNotify([{ type: 'routerKey', action: 'announce', data: rk }]);
         this.messageHandler.sendSuccessResponse(messageId, null, 'RouterKey添加成功');
     }
 
@@ -621,8 +712,8 @@ class RpkiWorker {
             return;
         }
         const rk = this.rpkiRouterKeyMap.get(key);
-        this.withdrawSingleRouterKey(rk);
         this.rpkiRouterKeyMap.delete(key);
+        this.recordSerialDeltaAndNotify([{ type: 'routerKey', action: 'withdraw', data: rk }]);
         this.messageHandler.sendSuccessResponse(messageId, null, 'RouterKey删除成功');
     }
 
@@ -635,6 +726,19 @@ class RpkiWorker {
         }
     }
 
+    sendAspaBatch(aspas) {
+        if (!Array.isArray(aspas) || aspas.length === 0) {
+            return;
+        }
+        for (const session of this.rpkiSessionMap.values()) {
+            if (session.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+                for (const aspa of aspas) {
+                    session.sendAspa(aspa);
+                }
+            }
+        }
+    }
+
     withdrawSingleAspa(aspa) {
         for (const session of this.rpkiSessionMap.values()) {
             if (session.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
@@ -643,17 +747,91 @@ class RpkiWorker {
         }
     }
 
-    addAspa(messageId, payload) {
-        const key = RpkiAspa.makeKey(payload.customerAsn);
-        if (this.rpkiAspaMap.has(key)) {
-            logger.error(`RPKI ASPA已存在: ${key}`);
-            this.messageHandler.sendErrorResponse(messageId, 'ASPA已存在');
+    replaceSingleAspa(oldAspa, newAspa) {
+        for (const session of this.rpkiSessionMap.values()) {
+            session.replaceAspa(oldAspa, newAspa);
+        }
+    }
+
+    replaceAspaBatch(replacements) {
+        if (!Array.isArray(replacements) || replacements.length === 0) {
             return;
         }
+        for (const session of this.rpkiSessionMap.values()) {
+            if (session.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+                for (const replacement of replacements) {
+                    session.replaceAspa(replacement.oldAspa, replacement.newAspa);
+                }
+            }
+        }
+    }
+
+    announceAspaOperations(operations) {
+        if (!Array.isArray(operations) || operations.length === 0) {
+            return;
+        }
+        for (const session of this.rpkiSessionMap.values()) {
+            if (session.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+                for (const operation of operations) {
+                    if (operation.oldAspa) {
+                        session.replaceAspa(operation.oldAspa, operation.newAspa);
+                    } else {
+                        session.sendAspa(operation.newAspa);
+                    }
+                }
+            }
+        }
+    }
+
+    addAspa(messageId, payload) {
+        const key = RpkiAspa.makeKey(payload.customerAsn);
+        const oldAspa = this.rpkiAspaMap.get(key);
         const aspa = new RpkiAspa(payload.customerAsn, payload.providerAsns, payload.afiFlags);
         this.rpkiAspaMap.set(key, aspa);
-        this.sendSingleAspa(aspa);
-        this.messageHandler.sendSuccessResponse(messageId, null, 'ASPA添加成功');
+        this.recordSerialDeltaAndNotify([
+            oldAspa
+                ? { type: 'aspa', action: 'replace', oldData: oldAspa, newData: aspa }
+                : { type: 'aspa', action: 'announce', data: aspa }
+        ]);
+        this.messageHandler.sendSuccessResponse(messageId, null, oldAspa ? 'ASPA覆盖成功' : 'ASPA添加成功');
+    }
+
+    addAspaBatch(messageId, payload) {
+        const aspas = Array.isArray(payload) ? payload : payload?.aspas || [];
+        const announce = Boolean(payload?.announce);
+        let added = 0;
+        let overwritten = 0;
+        const operations = [];
+
+        for (const payloadAspa of aspas) {
+            const key = RpkiAspa.makeKey(payloadAspa.customerAsn);
+            const oldAspa = this.rpkiAspaMap.get(key);
+            const aspa = new RpkiAspa(payloadAspa.customerAsn, payloadAspa.providerAsns, payloadAspa.afiFlags);
+            this.rpkiAspaMap.set(key, aspa);
+
+            if (oldAspa) {
+                overwritten += 1;
+            } else {
+                added += 1;
+            }
+            operations.push({ oldAspa, newAspa: aspa });
+        }
+
+        if (announce) {
+            this.recordSerialDeltaAndNotify(
+                operations.map(operation =>
+                    operation.oldAspa
+                        ? { type: 'aspa', action: 'replace', oldData: operation.oldAspa, newData: operation.newAspa }
+                        : { type: 'aspa', action: 'announce', data: operation.newAspa }
+                )
+            );
+        }
+
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            { added, overwritten, total: this.rpkiAspaMap.size },
+            'ASPA批量添加成功'
+        );
     }
 
     deleteAspa(messageId, payload) {
@@ -664,10 +842,33 @@ class RpkiWorker {
             return;
         }
         const aspa = this.rpkiAspaMap.get(key);
-        this.withdrawSingleAspa(aspa);
         this.rpkiAspaMap.delete(key);
+        this.recordSerialDeltaAndNotify([{ type: 'aspa', action: 'withdraw', data: aspa }]);
         this.messageHandler.sendSuccessResponse(messageId, null, 'ASPA删除成功');
+    }
+
+    deleteAspaBatch(messageId, payload) {
+        const deleteAll = Boolean(payload?.all);
+        if (!deleteAll) {
+            this.messageHandler.sendErrorResponse(messageId, '不支持的ASPA批量删除请求');
+            return;
+        }
+
+        const deletedAspas = Array.from(this.rpkiAspaMap.values());
+        this.rpkiAspaMap.clear();
+
+        this.recordSerialDeltaAndNotify(deletedAspas.map(aspa => ({ type: 'aspa', action: 'withdraw', data: aspa })));
+
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            { deleted: deletedAspas.length, total: this.rpkiAspaMap.size },
+            'ASPA批量删除成功'
+        );
     }
 }
 
-new RpkiWorker(); // 启动监听
+if (require.main === module) {
+    new RpkiWorker(); // 启动监听
+}
+
+module.exports = RpkiWorker;

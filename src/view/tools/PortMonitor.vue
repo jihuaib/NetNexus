@@ -49,7 +49,7 @@
                 :pagination="{
                     pageSize: 20,
                     showSizeChanger: false,
-                    showTotal: total => `共 ${total} 条`,
+                    showTotal: total => '共 ' + total + ' 条，每页 20 条',
                     position: ['bottomCenter']
                 }"
                 size="small"

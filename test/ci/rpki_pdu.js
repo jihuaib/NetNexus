@@ -24,6 +24,7 @@ const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', '
 let passed = 0;
 let failed = 0;
 const failures = [];
+const asyncChecks = [];
 
 function assert(cond, label) {
     if (cond) {
@@ -68,6 +69,16 @@ function section(name) {
     console.log(`\n[${name}]`);
 }
 
+function scheduleAsyncCheck(label, promise) {
+    asyncChecks.push(
+        promise.catch(err => {
+            failed++;
+            failures.push(`${label}: ${err.message}`);
+            console.log(`  ✗ ${label}: ${err.message}`);
+        })
+    );
+}
+
 // ============ Mock ============
 function makeMockSession(version = RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
     const sentBuffers = [];
@@ -78,7 +89,8 @@ function makeMockSession(version = RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
     const rpkiWorker = {
         rpkiRoaMap: new Map(),
         rpkiRouterKeyMap: new Map(),
-        rpkiAspaMap: new Map()
+        rpkiAspaMap: new Map(),
+        cacheSerial: 1
     };
     const session = new RpkiSession(messageHandler, rpkiWorker);
     session.socket = {
@@ -125,6 +137,19 @@ section('Cache Reset PDU (type 8, RFC 6810 §5.9)');
     assertBufEq(sentBuffers[0], '01 08 0000 00000008', 'Cache Reset wire format');
 }
 
+section('Serial Notify PDU (type 0, RFC 8210 §5.2)');
+{
+    const { session, rpkiWorker } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V1);
+    rpkiWorker.cacheSerial = 42;
+    const notifyPdu = session.buildSerialNotifyPdu();
+    assertEq(notifyPdu.length, 12, 'Serial Notify total length = 12');
+    assertEq(notifyPdu[0], 1, 'Serial Notify version = 1');
+    assertEq(notifyPdu[1], RpkiConst.RPKI_MSG_TYPE.SERIAL_NOTIFY, 'Serial Notify PDU type = 0');
+    assertEq(notifyPdu.readUInt16BE(2), 0xabcd, 'Serial Notify session ID');
+    assertEq(notifyPdu.readUInt32BE(4), 12, 'Serial Notify length field = 12');
+    assertEq(notifyPdu.readUInt32BE(8), 42, 'Serial Notify serial number');
+}
+
 section('IPv4 Prefix PDU (type 4, RFC 6810 §5.6)');
 {
     const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V1);
@@ -164,8 +189,8 @@ section('End of Data v0 (RFC 6810 §5.8)');
 {
     const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V0);
     session.sendEndOfData();
-    // version=0, type=7, sessionId=0xABCD, length=12, serial=0
-    assertBufEq(sentBuffers[0], '00 07 ABCD 0000000C 00000000', 'End of Data v0 wire format');
+    // version=0, type=7, sessionId=0xABCD, length=12, serial=1
+    assertBufEq(sentBuffers[0], '00 07 ABCD 0000000C 00000001', 'End of Data v0 wire format');
     assertEq(sentBuffers[0].length, 12, 'End of Data v0 length = 12');
 }
 
@@ -244,19 +269,24 @@ section('ASPA PDU (type 11, v2, draft-ietf-sidrops-8210bis §5.12)');
     assertEq(sentBuffers[1].readUInt32BE(8), 65000, 'ASPA withdraw Customer ASN');
 }
 
-section('ASPA Provider ASN list canonicalization');
+section('ASPA Provider ASN list preserves user input');
 {
     const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
     const aspa = new RpkiAspa(65000, [65002, 65001, 65001], 0);
-    assertEq(aspa.providerAsns.join(','), '65001,65002', 'ASPA Provider ASNs are unique and increasing');
+    assertEq(aspa.providerAsns.join(','), '65002,65001,65001', 'ASPA Provider ASNs preserve order and duplicates');
 
     session.sendAspa(aspa);
-    assertEq(sentBuffers[0].readUInt32BE(12), 65001, 'ASPA Provider ASN[0] sorted');
-    assertEq(sentBuffers[0].readUInt32BE(16), 65002, 'ASPA Provider ASN[1] sorted');
-    assertThrows(
-        () => new RpkiAspa(65000, [0, 65001], 0),
-        'ASPA Provider ASNs reject AS0 mixed with other providers'
-    );
+    assertEq(sentBuffers[0].readUInt32BE(12), 65002, 'ASPA Provider ASN[0] as entered');
+    assertEq(sentBuffers[0].readUInt32BE(16), 65001, 'ASPA Provider ASN[1] as entered');
+    assertEq(sentBuffers[0].readUInt32BE(20), 65001, 'ASPA duplicate Provider ASN is sent');
+
+    const mixedAs0 = new RpkiAspa(65000, [0, 65001], 0);
+    assertEq(mixedAs0.providerAsns.join(','), '0,65001', 'ASPA Provider ASNs allow AS0 mixed with others');
+
+    const emptyAspa = new RpkiAspa(65000, [], 0);
+    session.sendAspa(emptyAspa);
+    assertEq(sentBuffers[1].length, 12, 'ASPA empty Provider ASN list is sent as zero-provider announcement');
+    assertEq(sentBuffers[1][2], RpkiConst.RPKI_FLAGS.UPDATE, 'ASPA empty Provider ASN list flag = UPDATE');
 }
 
 section('ASPA PDU LEGACY format (draft-10, Huawei VRP compat)');
@@ -303,6 +333,56 @@ section('ASPA PDU LEGACY Both AFI splits into IPv4 and IPv6 PDUs');
     assertEq(sentBuffers[1][9], 1, 'ASPA LEGACY Both second PDU AFI = IPv6');
     assertEq(sentBuffers[0].readUInt16BE(10), 2, 'ASPA LEGACY Both IPv4 Provider AS Count = 2');
     assertEq(sentBuffers[1].readUInt16BE(10), 2, 'ASPA LEGACY Both IPv6 Provider AS Count = 2');
+}
+
+section('ASPA replacement semantics (latest and VRP legacy)');
+{
+    const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    const bothAfi = RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4 | RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6;
+    const oldAspa = new RpkiAspa(65000, [65001], bothAfi);
+    const newAspa = new RpkiAspa(65000, [65002, 65003], RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4);
+
+    session.replaceAspa(oldAspa, newAspa);
+
+    assertEq(sentBuffers.length, 1, 'LATEST replacement sends one announcement');
+    assertEq(sentBuffers[0][2], RpkiConst.RPKI_FLAGS.UPDATE, 'LATEST replacement flag = UPDATE');
+    assertEq(sentBuffers[0].readUInt32BE(8), 65000, 'LATEST replacement Customer ASN');
+    assertEq(sentBuffers[0].readUInt32BE(12), 65002, 'LATEST replacement Provider ASN[0]');
+    assertEq(sentBuffers[0].readUInt32BE(16), 65003, 'LATEST replacement Provider ASN[1]');
+}
+{
+    const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    session.aspaFormat = RpkiConst.RPKI_ASPA_FORMAT.LEGACY;
+    const oldAspa = new RpkiAspa(65000, [65001], RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4);
+    const newAspa = new RpkiAspa(65000, [65002], RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4);
+
+    session.replaceAspa(oldAspa, newAspa);
+
+    assertEq(sentBuffers.length, 1, 'ASPA LEGACY same-AFI replacement sends only one announcement');
+    assertEq(sentBuffers[0][8], RpkiConst.RPKI_FLAGS.UPDATE, 'ASPA LEGACY same-AFI replacement flag = UPDATE');
+    assertEq(sentBuffers[0][9], 0, 'ASPA LEGACY same-AFI replacement AFI = IPv4');
+    assertEq(sentBuffers[0].readUInt16BE(10), 1, 'ASPA LEGACY same-AFI replacement Provider AS Count = 1');
+    assertEq(sentBuffers[0].readUInt32BE(12), 65000, 'ASPA LEGACY same-AFI replacement Customer ASN');
+    assertEq(sentBuffers[0].readUInt32BE(16), 65002, 'ASPA LEGACY same-AFI replacement Provider ASN');
+}
+{
+    const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    session.aspaFormat = RpkiConst.RPKI_ASPA_FORMAT.LEGACY;
+    const bothAfi = RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4 | RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6;
+    const oldAspa = new RpkiAspa(65000, [65001], bothAfi);
+    const newAspa = new RpkiAspa(65000, [65002], RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4);
+
+    session.replaceAspa(oldAspa, newAspa);
+
+    assertEq(sentBuffers.length, 2, 'ASPA LEGACY removed AFI sends replacement plus withdrawal');
+    assertEq(sentBuffers[0][8], RpkiConst.RPKI_FLAGS.UPDATE, 'ASPA LEGACY removed AFI first PDU = UPDATE');
+    assertEq(sentBuffers[0][9], 0, 'ASPA LEGACY removed AFI replacement AFI = IPv4');
+    assertEq(sentBuffers[0].readUInt16BE(10), 1, 'ASPA LEGACY removed AFI replacement Provider AS Count = 1');
+    assertEq(sentBuffers[0].readUInt32BE(16), 65002, 'ASPA LEGACY removed AFI replacement Provider ASN');
+    assertEq(sentBuffers[1][8], RpkiConst.RPKI_FLAGS.WITHDRAWAL, 'ASPA LEGACY removed AFI second PDU = WITHDRAWAL');
+    assertEq(sentBuffers[1][9], 1, 'ASPA LEGACY removed AFI withdrawal AFI = IPv6');
+    assertEq(sentBuffers[1].readUInt16BE(10), 0, 'ASPA LEGACY removed AFI withdrawal Provider AS Count = 0');
+    assertEq(sentBuffers[1].readUInt32BE(12), 65000, 'ASPA LEGACY removed AFI withdrawal Customer ASN');
 }
 
 section('ASPA cannot send on v1');
@@ -358,8 +438,8 @@ section('Version negotiation - handleResetQuery (RFC 8210 §7)');
     assertEq(session.protocolVersion, 2, 'Negotiated to v2');
     const aspaPdus = sentBuffers.filter(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA);
     assertEq(aspaPdus.length, 2, 'ASPA PDUs sent for v2 client');
-    assertEq(aspaPdus[0].readUInt32BE(8), 65000, 'ASPA PDUs sorted by Customer ASN');
-    assertEq(aspaPdus[1].readUInt32BE(8), 65002, 'ASPA PDUs sorted by Customer ASN after lower CASN');
+    assertEq(aspaPdus[0].readUInt32BE(8), 65002, 'ASPA PDUs preserve insertion order');
+    assertEq(aspaPdus[1].readUInt32BE(8), 65000, 'ASPA PDUs do not sort by Customer ASN');
 }
 {
     // v3 client (unsupported) → server rejects with Error Report code=4
@@ -387,6 +467,110 @@ section('Buffered message reassembly');
     assertEq(processed, 1, 'One complete PDU processed, partial buffered');
 }
 
+section('Serial Query response semantics');
+{
+    const { session, sentBuffers, rpkiWorker } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    rpkiWorker.cacheSerial = 9;
+    const buf = Buffer.alloc(12);
+    buf[0] = RpkiConst.RPKI_PROTOCOL_VERSION.V2;
+    buf[1] = RpkiConst.RPKI_MSG_TYPE.SERIAL_QUERY;
+    buf.writeUInt16BE(0xabcd, 2);
+    buf.writeUInt32BE(12, 4);
+    buf.writeUInt32BE(9, 8);
+    session.handleSerialQuery({ version: 2, type: 1, reserved: 0xabcd, length: 12 }, buf);
+    scheduleAsyncCheck(
+        'Current Serial Query async response',
+        session.sendQueue.then(() => {
+            assertEq(sentBuffers.length, 2, 'Current Serial Query sends Cache Response + End of Data');
+            assertEq(
+                sentBuffers[0][1],
+                RpkiConst.RPKI_MSG_TYPE.CACHE_RESPONSE,
+                'Current Serial Query first PDU = Cache Response'
+            );
+            assertEq(
+                sentBuffers[1][1],
+                RpkiConst.RPKI_MSG_TYPE.END_OF_DATA,
+                'Current Serial Query second PDU = End of Data'
+            );
+            assertEq(sentBuffers[1].readUInt32BE(8), 9, 'Current Serial Query End of Data serial');
+        })
+    );
+}
+{
+    const { session, sentBuffers, rpkiWorker } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    rpkiWorker.cacheSerial = 9;
+    rpkiWorker.getDeltaOperationsSince = serial => {
+        if (serial !== 8) return null;
+        return [
+            {
+                type: 'roa',
+                action: 'announce',
+                data: new RpkiRoa('192.0.2.0', 24, 65001, 24, BgpConst.IP_TYPE.IPV4)
+            },
+            {
+                type: 'aspa',
+                action: 'announce',
+                data: new RpkiAspa(65000, [65001, 65001], RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4)
+            }
+        ];
+    };
+    const buf = Buffer.alloc(12);
+    buf[0] = RpkiConst.RPKI_PROTOCOL_VERSION.V2;
+    buf[1] = RpkiConst.RPKI_MSG_TYPE.SERIAL_QUERY;
+    buf.writeUInt16BE(0xabcd, 2);
+    buf.writeUInt32BE(12, 4);
+    buf.writeUInt32BE(8, 8);
+    session.handleSerialQuery({ version: 2, type: 1, reserved: 0xabcd, length: 12 }, buf);
+    scheduleAsyncCheck(
+        'Stale Serial Query with history async response',
+        session.sendQueue.then(() => {
+            assertEq(sentBuffers.length, 4, 'Stale Serial Query with history sends Cache Response + deltas + End of Data');
+            assertEq(
+                sentBuffers[0][1],
+                RpkiConst.RPKI_MSG_TYPE.CACHE_RESPONSE,
+                'Delta Serial Query first PDU = Cache Response'
+            );
+            assertEq(sentBuffers[1][1], RpkiConst.RPKI_MSG_TYPE.IPV4_PREFIX, 'Delta Serial Query includes ROA announce');
+            assertEq(sentBuffers[2][1], RpkiConst.RPKI_MSG_TYPE.ASPA, 'Delta Serial Query includes ASPA announce');
+            assertEq(sentBuffers[2].readUInt32BE(16), 65001, 'Delta Serial Query preserves ASPA duplicate Provider ASN');
+            assertEq(sentBuffers[3][1], RpkiConst.RPKI_MSG_TYPE.END_OF_DATA, 'Delta Serial Query final PDU = End of Data');
+            assertEq(sentBuffers[3].readUInt32BE(8), 9, 'Delta Serial Query End of Data serial');
+        })
+    );
+}
+{
+    const { session, sentBuffers, rpkiWorker } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    rpkiWorker.cacheSerial = 9;
+    rpkiWorker.getDeltaOperationsSince = () => null;
+    const buf = Buffer.alloc(12);
+    buf[0] = RpkiConst.RPKI_PROTOCOL_VERSION.V2;
+    buf[1] = RpkiConst.RPKI_MSG_TYPE.SERIAL_QUERY;
+    buf.writeUInt16BE(0xabcd, 2);
+    buf.writeUInt32BE(12, 4);
+    buf.writeUInt32BE(8, 8);
+    session.handleSerialQuery({ version: 2, type: 1, reserved: 0xabcd, length: 12 }, buf);
+    assertEq(sentBuffers.length, 1, 'Stale Serial Query without history sends Cache Reset');
+    assertEq(sentBuffers[0][1], RpkiConst.RPKI_MSG_TYPE.CACHE_RESET, 'Stale Serial Query without history PDU = Cache Reset');
+}
+{
+    const { session, sentBuffers, rpkiWorker } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    rpkiWorker.cacheSerial = 9;
+    const buf = Buffer.alloc(12);
+    buf[0] = RpkiConst.RPKI_PROTOCOL_VERSION.V2;
+    buf[1] = RpkiConst.RPKI_MSG_TYPE.SERIAL_QUERY;
+    buf.writeUInt16BE(0xbeef, 2);
+    buf.writeUInt32BE(12, 4);
+    buf.writeUInt32BE(9, 8);
+    session.handleSerialQuery({ version: 2, type: 1, reserved: 0xbeef, length: 12 }, buf);
+    assertEq(sentBuffers.length, 1, 'Session ID mismatch sends Error Report');
+    assertEq(sentBuffers[0][1], RpkiConst.RPKI_MSG_TYPE.ERROR_REPORT, 'Session ID mismatch PDU = Error Report');
+    assertEq(
+        sentBuffers[0].readUInt16BE(2),
+        RpkiConst.RPKI_ERROR_CODE.CORRUPT_DATA,
+        'Session ID mismatch Error code = 0 (CORRUPT_DATA)'
+    );
+}
+
 section('Version mismatch in Serial Query (RFC 8210 §7)');
 {
     const { session, sentBuffers } = makeMockSession();
@@ -408,12 +592,19 @@ section('Version mismatch in Serial Query (RFC 8210 §7)');
 }
 
 // ============ 收尾 ============
-console.log(`\n========================================`);
-console.log(`Passed: ${passed}`);
-console.log(`Failed: ${failed}`);
-if (failed > 0) {
-    console.log(`\nFailures:`);
-    failures.forEach(f => console.log(`  - ${f}`));
-    process.exit(1);
-}
-process.exit(0);
+Promise.all(asyncChecks)
+    .then(() => {
+        console.log(`\n========================================`);
+        console.log(`Passed: ${passed}`);
+        console.log(`Failed: ${failed}`);
+        if (failed > 0) {
+            console.log(`\nFailures:`);
+            failures.forEach(f => console.log(`  - ${f}`));
+            process.exit(1);
+        }
+        process.exit(0);
+    })
+    .catch(err => {
+        console.log(`\nUnhandled async test error: ${err.stack || err.message}`);
+        process.exit(1);
+    });

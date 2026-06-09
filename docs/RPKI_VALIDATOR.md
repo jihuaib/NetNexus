@@ -53,7 +53,8 @@ RPKI (Resource Public Key Infrastructure) 验证器是一个专业的路由源�
 - 支持 `roas`、`vrps`、根数组和 SLURM `prefixAssertions` 等常见结构
 - 支持字段名 `asn`/`ASN`、`prefix`/`IP Prefix`、`maxLength`/`max_length`/`maxPrefixLength`
 - 导入时会自动跳过重复 ROA，并将主机地址归一化为网络地址
-- ROA 数据以 JSONL 文件保存并分页加载，适合 100w 级别数据
+- ROA 数据以 JSONL 文件保存并分页加载，列表支持按 IP 类型、Prefix/Prefix Mask、ASN 查询
+- ROA 查询使用运行时索引加速；100w 条本地基准中索引构建约 3.8 秒，索引后分页、精确前缀和 ASN 查询均为毫秒级
 
 4. **执行路由验证**
    - 导入需要验证的路由

@@ -12,8 +12,8 @@
                 :columns="columns"
                 :data-source="requestList"
                 :loading="loading"
-                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'] }"
-                :scroll="{ y: 520, x: 1200 }"
+                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
+                :scroll="{ y: 520 }"
                 row-key="id"
                 size="small"
             >

@@ -16,12 +16,24 @@ const {
     ensureParentDir,
     writeLine,
     closeWriteStream,
+    renameWithRetry,
     iterateJsonlRoas,
     readJsonlPage,
     countJsonlRows,
     writeRoasToJsonl,
     parseRoaJsonFile
 } = require('../utils/rpkiRoaImport');
+const {
+    getAspaDataFilePath,
+    makeAspaStorageKey,
+    normalizeAspaObject,
+    iterateJsonlAspas,
+    readAspaJsonlPage,
+    countJsonlAspas,
+    writeAspasToJsonl,
+    parseAspaJsonFile
+} = require('../utils/rpkiAspaImport');
+const RpkiRoaQueryIndex = require('../utils/rpkiRoaQueryIndex');
 
 class RpkiApp {
     constructor(ipcMain, store, keychainManager) {
@@ -32,6 +44,7 @@ class RpkiApp {
         this.rpkiRoaMetaFileKey = 'rpki-roa-meta';
         this.rpkiRouterKeyFileKey = 'rpki-router-key';
         this.rpkiAspaFileKey = 'rpki-aspa';
+        this.rpkiAspaMetaFileKey = 'rpki-aspa-meta';
         this.isDev = !app.isPackaged;
         this.worker = null;
         this.eventDispatcher = null; // 添加事件发送器
@@ -42,6 +55,7 @@ class RpkiApp {
         this.logLevel = null;
 
         this.rpkiClientConnectionHandler = null;
+        this.roaQueryIndex = new RpkiRoaQueryIndex();
 
         this.registerHandlers();
     }
@@ -69,6 +83,9 @@ class RpkiApp {
         // aspa (v2+)
         this.ipcMain.handle('rpki:addAspa', this.handleAddAspa.bind(this));
         this.ipcMain.handle('rpki:deleteAspa', this.handleDeleteAspa.bind(this));
+        this.ipcMain.handle('rpki:deleteAllAspa', this.handleDeleteAllAspa.bind(this));
+        this.ipcMain.handle('rpki:selectAspaJsonFile', this.handleSelectAspaJsonFile.bind(this));
+        this.ipcMain.handle('rpki:importAspaJson', this.handleImportAspaJson.bind(this));
         this.ipcMain.handle('rpki:getAspaList', this.handleGetAspaList.bind(this));
     }
 
@@ -145,16 +162,8 @@ class RpkiApp {
                 }
             }
 
-            // 加载 ASPA 配置 (v2+)
-            const aspaList = await this.handleGetAspaList();
-            if (aspaList.status === 'success') {
-                for (const aspa of aspaList.data) {
-                    const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, aspa);
-                    if (result.status !== 'success') {
-                        logger.error(`worker RPKI ASPA恢复失败: ${result.msg}`);
-                    }
-                }
-            }
+            // 加载 ASPA 配置。ASPA 也按批次灌入 worker，避免百万级数据逐条 IPC。
+            await this.loadAspaStorageToWorker(false);
 
             if (rpkiConfigData.enableAuth) {
                 // 设置 SSH 部署配置
@@ -292,14 +301,93 @@ class RpkiApp {
         return this.loadRoaFileToWorker(filePath, announce);
     }
 
-    async findRoaInStorage(filePath, targetRoa) {
-        const targetKey = makeRoaStorageKey(targetRoa);
-        for await (const roa of iterateJsonlRoas(filePath)) {
-            if (makeRoaStorageKey(roa) === targetKey) {
-                return true;
+    getAspaDataFilePath() {
+        return getAspaDataFilePath(app.getPath('userData'));
+    }
+
+    async ensureAspaFileStorage() {
+        const filePath = this.getAspaDataFilePath();
+        await ensureParentDir(filePath);
+
+        if (await fileExists(filePath)) {
+            const meta = this.store.get(this.rpkiAspaMetaFileKey);
+            if (!meta || typeof meta.count !== 'number') {
+                await this.updateAspaMeta(await countJsonlAspas(filePath));
+            }
+            return filePath;
+        }
+
+        const legacyList = this.store.get(this.rpkiAspaFileKey);
+        if (Array.isArray(legacyList) && legacyList.length > 0) {
+            const count = await writeAspasToJsonl(filePath, legacyList);
+            await this.updateAspaMeta(count);
+            logger.info(`旧版 RPKI ASPA 配置已迁移到 JSONL: ${count}`);
+            return filePath;
+        }
+
+        await fs.promises.writeFile(filePath, '', 'utf8');
+        await this.updateAspaMeta(0);
+        return filePath;
+    }
+
+    async updateAspaMeta(count) {
+        this.store.set(this.rpkiAspaMetaFileKey, {
+            storageVersion: 2,
+            count,
+            updatedAt: new Date().toISOString()
+        });
+    }
+
+    async getAspaTotalCount(filePath) {
+        const meta = this.store.get(this.rpkiAspaMetaFileKey);
+        if (meta && typeof meta.count === 'number') {
+            return meta.count;
+        }
+
+        const count = await countJsonlAspas(filePath);
+        await this.updateAspaMeta(count);
+        return count;
+    }
+
+    async loadAspaFileToWorker(filePath, announce = false) {
+        if (!this.worker) {
+            return { added: 0, overwritten: 0 };
+        }
+
+        const batchSize = 5000;
+        let batch = [];
+        let added = 0;
+        let overwritten = 0;
+
+        const flush = async () => {
+            if (batch.length === 0) {
+                return;
+            }
+            const currentBatch = batch;
+            batch = [];
+            const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA_BATCH, {
+                aspas: currentBatch,
+                announce
+            });
+            added += result.data?.added || 0;
+            overwritten += result.data?.overwritten || 0;
+        };
+
+        for await (const aspa of iterateJsonlAspas(filePath)) {
+            batch.push(aspa);
+            if (batch.length >= batchSize) {
+                await flush();
             }
         }
-        return false;
+        await flush();
+
+        logger.info(`worker RPKI ASPA批量加载完成: added=${added}, overwritten=${overwritten}, announce=${announce}`);
+        return { added, overwritten };
+    }
+
+    async loadAspaStorageToWorker(announce = false) {
+        const filePath = await this.ensureAspaFileStorage();
+        return this.loadAspaFileToWorker(filePath, announce);
     }
 
     async handleStopRpki() {
@@ -356,7 +444,7 @@ class RpkiApp {
             logger.info(`handleAddRoa: ${JSON.stringify(normalizedRoa)}`);
 
             // 检查是否已经存在
-            if (await this.findRoaInStorage(filePath, normalizedRoa)) {
+            if (await this.roaQueryIndex.hasRoa(filePath, normalizedRoa)) {
                 return errorResponse('RPKI ROA配置已经存在');
             }
 
@@ -369,9 +457,12 @@ class RpkiApp {
                 }
             }
 
-            await fs.promises.appendFile(filePath, `${JSON.stringify(normalizedRoa)}\n`, 'utf8');
+            const appendOffset = (await fs.promises.stat(filePath)).size;
+            const line = JSON.stringify(normalizedRoa);
+            await fs.promises.appendFile(filePath, `${line}\n`, 'utf8');
             const total = await this.getRoaTotalCount(filePath);
             await this.updateRoaMeta(total + 1);
+            await this.roaQueryIndex.markAppended(filePath, normalizedRoa, appendOffset, Buffer.byteLength(line));
             return successResponse(null, 'RPKI ROA配置文件保存成功');
         } catch (error) {
             logger.error('Error adding ROA:', error.message);
@@ -405,7 +496,7 @@ class RpkiApp {
                     count += 1;
                 }
                 await closeWriteStream(stream);
-                await fs.promises.rename(tempPath, filePath);
+                await renameWithRetry(tempPath, filePath);
             } catch (error) {
                 stream.destroy();
                 await fs.promises.unlink(tempPath).catch(() => {});
@@ -422,6 +513,7 @@ class RpkiApp {
             }
 
             await this.updateRoaMeta(count);
+            this.roaQueryIndex.invalidate();
             return successResponse(null, 'RPKI ROA配置文件保存成功');
         } catch (error) {
             logger.error('Error deleting ROA:', error.message);
@@ -443,11 +535,20 @@ class RpkiApp {
 
             await fs.promises.writeFile(filePath, '', 'utf8');
             await this.updateRoaMeta(0);
+            this.roaQueryIndex.invalidate();
             return successResponse({ deleted: total }, 'RPKI ROA批量删除成功');
         } catch (error) {
             logger.error('Error deleting all ROA:', error.message);
             return errorResponse(error.message);
         }
+    }
+
+    hasRoaListFilters(options) {
+        return Boolean(
+            String(options?.ipType || '').trim() ||
+                String(options?.asn || '').trim() ||
+                String(options?.prefixFilter || '').trim()
+        );
     }
 
     async handleGetRoaList(event, options = null) {
@@ -458,13 +559,25 @@ class RpkiApp {
             if (options && typeof options === 'object') {
                 const page = Math.max(1, Number(options.page) || 1);
                 const pageSize = Math.min(1000, Math.max(1, Number(options.pageSize) || 10));
-                const items = await readJsonlPage(filePath, page, pageSize);
+                const result = this.hasRoaListFilters(options)
+                    ? await this.roaQueryIndex.query(filePath, {
+                          ...options,
+                          page,
+                          pageSize
+                      })
+                    : {
+                          items: await readJsonlPage(filePath, page, pageSize),
+                          total,
+                          page,
+                          pageSize
+                      };
                 return successResponse(
                     {
-                        items,
-                        total,
-                        page,
-                        pageSize
+                        items: result.items,
+                        total: result.total,
+                        page: result.page,
+                        pageSize: result.pageSize,
+                        storageTotal: total
                     },
                     'RPKI ROA配置文件加载成功'
                 );
@@ -594,8 +707,9 @@ class RpkiApp {
 
             await closeWriteStream(stream);
             await closeWriteStream(importedOnlyStream);
-            await fs.promises.rename(tempPath, filePath);
+            await renameWithRetry(tempPath, filePath);
             await this.updateRoaMeta(stats.total);
+            this.roaQueryIndex.invalidate();
 
             if (this.worker && stats.imported > 0) {
                 await this.loadRoaFileToWorker(importedOnlyPath, true);
@@ -674,61 +788,325 @@ class RpkiApp {
 
     // ============ ASPA (v2+) ============
     async handleAddAspa(event, aspa) {
+        let tempPath = null;
+        let stream = null;
         try {
-            let currentList = this.store.get(this.rpkiAspaFileKey) || [];
-            const index = currentList.findIndex(item => item.customerAsn === aspa.customerAsn);
-            if (index !== -1) {
-                return errorResponse('ASPA已存在 (Customer ASN 重复)');
-            }
-            const normalizedAspa = {
+            const filePath = await this.ensureAspaFileStorage();
+            tempPath = `${filePath}.${process.pid}.${Date.now()}.add.tmp`;
+            stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
+            const storedAspa = normalizeAspaObject({
                 ...aspa,
-                providerAsns: RpkiAspa.normalizeProviderAsns(aspa.providerAsns)
-            };
+                providerAsns: RpkiAspa.parseProviderAsns(aspa.providerAsns)
+            });
+            if (!storedAspa) {
+                throw new Error('ASPA配置无效');
+            }
+
+            const key = makeAspaStorageKey(storedAspa);
+            let replaced = false;
+            let total = 0;
+
+            for await (const item of iterateJsonlAspas(filePath)) {
+                const itemKey = makeAspaStorageKey(item);
+                if (itemKey === key) {
+                    if (!replaced) {
+                        await writeLine(stream, JSON.stringify(storedAspa));
+                        replaced = true;
+                        total += 1;
+                    }
+                    continue;
+                }
+
+                await writeLine(stream, JSON.stringify(item));
+                total += 1;
+            }
+
+            if (!replaced) {
+                await writeLine(stream, JSON.stringify(storedAspa));
+                total += 1;
+            }
+
+            await closeWriteStream(stream);
+            stream = null;
 
             if (this.worker) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, normalizedAspa);
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, storedAspa);
                 if (result.status !== 'success') {
                     logger.error(`worker ASPA添加失败: ${result.msg}`);
                     return errorResponse(result.msg);
                 }
             }
 
-            currentList.push(normalizedAspa);
-            this.store.set(this.rpkiAspaFileKey, currentList);
-            return successResponse(null, 'ASPA保存成功');
+            await renameWithRetry(tempPath, filePath);
+            tempPath = null;
+            await this.updateAspaMeta(total);
+            return successResponse(null, replaced ? 'ASPA覆盖成功' : 'ASPA保存成功');
         } catch (error) {
+            if (stream) {
+                stream.destroy();
+            }
+            if (tempPath) {
+                await fs.promises.unlink(tempPath).catch(() => {});
+            }
             logger.error('Error adding ASPA:', error.message);
             return errorResponse(error.message);
         }
     }
 
     async handleDeleteAspa(event, aspa) {
+        let tempPath = null;
+        let stream = null;
         try {
-            let currentList = this.store.get(this.rpkiAspaFileKey) || [];
-            const index = currentList.findIndex(item => item.customerAsn === aspa.customerAsn);
-            if (index !== -1) {
-                currentList.splice(index, 1);
+            const filePath = await this.ensureAspaFileStorage();
+            tempPath = `${filePath}.${process.pid}.${Date.now()}.delete.tmp`;
+            stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
+            const key = RpkiAspa.makeKey(aspa.customerAsn);
+            let deletedAspa = null;
+            let total = 0;
+
+            for await (const item of iterateJsonlAspas(filePath)) {
+                if (makeAspaStorageKey(item) === key) {
+                    if (!deletedAspa) {
+                        deletedAspa = item;
+                    }
+                    continue;
+                }
+                await writeLine(stream, JSON.stringify(item));
+                total += 1;
             }
 
-            if (this.worker) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, aspa);
+            await closeWriteStream(stream);
+            stream = null;
+
+            if (this.worker && deletedAspa) {
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, deletedAspa);
                 if (result.status !== 'success') {
                     logger.error(`worker ASPA删除失败: ${result.msg}`);
                 }
             }
 
-            this.store.set(this.rpkiAspaFileKey, currentList);
+            await renameWithRetry(tempPath, filePath);
+            tempPath = null;
+            await this.updateAspaMeta(total);
             return successResponse(null, 'ASPA删除成功');
         } catch (error) {
+            if (stream) {
+                stream.destroy();
+            }
+            if (tempPath) {
+                await fs.promises.unlink(tempPath).catch(() => {});
+            }
             logger.error('Error deleting ASPA:', error.message);
             return errorResponse(error.message);
         }
     }
 
-    async handleGetAspaList() {
+    async handleDeleteAllAspa() {
         try {
-            const list = this.store.get(this.rpkiAspaFileKey) || [];
-            return successResponse(list, 'ASPA列表加载成功');
+            const filePath = await this.ensureAspaFileStorage();
+            const total = await this.getAspaTotalCount(filePath);
+
+            if (this.worker && total > 0) {
+                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA_BATCH, {
+                    all: true
+                });
+                if (result.status !== 'success') {
+                    logger.error(`worker ASPA批量删除失败: ${result.msg}`);
+                }
+            }
+
+            await fs.promises.writeFile(filePath, '', 'utf8');
+            await this.updateAspaMeta(0);
+            return successResponse({ deleted: total }, 'ASPA批量删除成功');
+        } catch (error) {
+            logger.error('Error deleting all ASPA:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async showAspaJsonOpenDialog(event) {
+        const options = {
+            title: '导入 ASPA JSON 文件',
+            properties: ['openFile'],
+            filters: [
+                { name: 'JSON', extensions: ['json'] },
+                { name: 'All Files', extensions: ['*'] }
+            ]
+        };
+        const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
+        return win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options);
+    }
+
+    async handleSelectAspaJsonFile(event) {
+        try {
+            const result = await this.showAspaJsonOpenDialog(event);
+
+            if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+                return successResponse(null, '已取消选择');
+            }
+
+            return successResponse(result.filePaths[0], 'ASPA JSON文件选择成功');
+        } catch (error) {
+            logger.error('Error selecting ASPA JSON:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    normalizeAspaImportLimit(limit) {
+        const value = Number(limit);
+        if (!Number.isFinite(value) || value <= 0) {
+            return null;
+        }
+        return Math.floor(value);
+    }
+
+    async handleImportAspaJson(event, importOptions = {}) {
+        try {
+            let importFilePath = importOptions?.filePath;
+            if (!importFilePath) {
+                const result = await this.showAspaJsonOpenDialog(event);
+
+                if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+                    return successResponse({ cancelled: true }, '已取消导入');
+                }
+
+                importFilePath = result.filePaths[0];
+            }
+
+            const stats = await this.importAspaJsonFile(importFilePath, {
+                limit: this.normalizeAspaImportLimit(importOptions?.limit)
+            });
+            return successResponse(stats, 'ASPA JSON导入完成');
+        } catch (error) {
+            logger.error('Error importing ASPA JSON:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async importAspaJsonFile(importFilePath, options = {}) {
+        const filePath = await this.ensureAspaFileStorage();
+        const tempPath = `${filePath}.${process.pid}.${Date.now()}.import.tmp`;
+        const importedOpsPath = `${filePath}.${process.pid}.${Date.now()}.imported.tmp`;
+        const importLimit = this.normalizeAspaImportLimit(options.limit);
+        const importedOpsStream = fs.createWriteStream(importedOpsPath, { encoding: 'utf8' });
+        let stream = null;
+        const existingKeys = new Set();
+        const touchedKeys = new Set();
+        const latestImportedByKey = new Map();
+        const importedOrder = [];
+        let importSequence = 0;
+        const stats = {
+            filePath: importFilePath,
+            limit: importLimit,
+            existing: 0,
+            parsed: 0,
+            imported: 0,
+            overwritten: 0,
+            invalid: 0,
+            total: 0
+        };
+
+        try {
+            for await (const aspa of iterateJsonlAspas(filePath)) {
+                const key = makeAspaStorageKey(aspa);
+                if (existingKeys.has(key)) {
+                    continue;
+                }
+                existingKeys.add(key);
+                stats.existing += 1;
+            }
+
+            const parseStats = await parseAspaJsonFile(importFilePath, async aspa => {
+                const key = makeAspaStorageKey(aspa);
+                if (existingKeys.has(key) || touchedKeys.has(key)) {
+                    stats.overwritten += 1;
+                } else {
+                    stats.imported += 1;
+                }
+
+                touchedKeys.add(key);
+                importSequence += 1;
+                latestImportedByKey.set(key, { aspa, sequence: importSequence });
+                importedOrder.push({ key, sequence: importSequence });
+                await writeLine(importedOpsStream, JSON.stringify(aspa));
+
+                if (importLimit && importSequence >= importLimit) {
+                    return false;
+                }
+            });
+
+            stats.parsed = parseStats.valid;
+            stats.invalid = parseStats.invalid;
+
+            await closeWriteStream(importedOpsStream);
+
+            stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
+            let finalTotal = 0;
+            for await (const aspa of iterateJsonlAspas(filePath)) {
+                const key = makeAspaStorageKey(aspa);
+                if (touchedKeys.has(key)) {
+                    continue;
+                }
+                await writeLine(stream, JSON.stringify(aspa));
+                finalTotal += 1;
+            }
+
+            for (const item of importedOrder) {
+                const latest = latestImportedByKey.get(item.key);
+                if (!latest || latest.sequence !== item.sequence) {
+                    continue;
+                }
+                await writeLine(stream, JSON.stringify(latest.aspa));
+                finalTotal += 1;
+            }
+
+            stats.total = finalTotal;
+            await closeWriteStream(stream);
+            stream = null;
+            await renameWithRetry(tempPath, filePath);
+            await this.updateAspaMeta(stats.total);
+
+            if (this.worker && importSequence > 0) {
+                await this.loadAspaFileToWorker(importedOpsPath, true);
+            }
+
+            await fs.promises.unlink(importedOpsPath).catch(() => {});
+            logger.info(`ASPA JSON导入完成: ${JSON.stringify(stats)}`);
+            return stats;
+        } catch (error) {
+            importedOpsStream.destroy();
+            if (stream) {
+                stream.destroy();
+            }
+            await fs.promises.unlink(tempPath).catch(() => {});
+            await fs.promises.unlink(importedOpsPath).catch(() => {});
+            throw error;
+        }
+    }
+
+    async handleGetAspaList(event, options = null) {
+        try {
+            const filePath = await this.ensureAspaFileStorage();
+            const total = await this.getAspaTotalCount(filePath);
+
+            if (options && typeof options === 'object') {
+                const page = Math.max(1, Number(options.page) || 1);
+                const pageSize = Math.min(1000, Math.max(1, Number(options.pageSize) || 20));
+                const items = await readAspaJsonlPage(filePath, page, pageSize);
+                return successResponse(
+                    {
+                        items,
+                        total,
+                        page,
+                        pageSize,
+                        storageTotal: total
+                    },
+                    'ASPA列表加载成功'
+                );
+            }
+
+            const items = await readAspaJsonlPage(filePath, 1, Math.min(total || 20, 1000));
+            return successResponse(items, 'ASPA列表加载成功');
         } catch (error) {
             logger.error('Error getting ASPA list:', error.message);
             return errorResponse(error.message);

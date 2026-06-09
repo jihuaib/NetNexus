@@ -147,8 +147,8 @@
                     size="small"
                     row-key="oid"
                     class="varbind-detail-table"
-                    :pagination="{ pageSize: 5, showSizeChanger: false, position: ['bottomCenter'] }"
-                    :scroll="{ y: 180, x: 700 }"
+                    :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
+                    :scroll="{ y: 180 }"
                 >
                     <template #bodyCell="{ column, record }">
                         <template v-if="column.key === 'value'">
@@ -203,9 +203,9 @@
         current: 1,
         pageSize: 20,
         total: 0,
-        showSizeChanger: true,
+        showSizeChanger: false,
         showQuickJumper: true,
-        showTotal: (total, range) => `共 ${total} 条记录，显示 ${range[0]}-${range[1]} 条`
+        showTotal: total => '共 ' + total + ' 条，每页 20 条'
     });
 
     // 表格列定义
@@ -395,7 +395,6 @@
         const list = Array.isArray(payload?.list) ? payload.list : [];
         const fallbackStats = getPageStatsFallback(list);
         const page = Number(payload?.page);
-        const pageSize = Number(payload?.pageSize);
         const filteredTotal = Number(payload?.total);
         const receivedTotal = Number(payload?.totalTraps);
         const todayTotal = Number(payload?.todayTraps);
@@ -405,7 +404,7 @@
         return {
             list,
             page: Number.isFinite(page) ? page : pagination.current,
-            pageSize: Number.isFinite(pageSize) ? pageSize : pagination.pageSize,
+            pageSize: pagination.pageSize,
             total: Number.isFinite(filteredTotal) ? filteredTotal : list.length,
             totalTraps: Number.isFinite(receivedTotal) ? receivedTotal : list.length,
             todayTraps: Number.isFinite(todayTotal) ? todayTotal : fallbackStats.todayTraps,
@@ -417,7 +416,6 @@
     const setTrapPage = payload => {
         traps.value = payload.list;
         pagination.current = payload.page;
-        pagination.pageSize = payload.pageSize;
         pagination.total = payload.total;
         totalTraps.value = payload.totalTraps;
         todayTraps.value = payload.todayTraps;
@@ -516,7 +514,6 @@
 
     const handleTableChange = pag => {
         pagination.current = pag.current;
-        pagination.pageSize = pag.pageSize;
         loadTrapList();
     };
 

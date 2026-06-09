@@ -63,7 +63,8 @@
             <a-table
                 :columns="instanceColumns"
                 :data-source="instanceInfoList"
-                :pagination="false"
+                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
+                :scroll="{ y: 240 }"
                 size="middle"
                 class="instance-table"
             >
@@ -253,5 +254,10 @@
         display: flex;
         align-items: center;
         justify-content: center;
+    }
+
+    .instance-table :deep(.ant-table-body) {
+        height: 240px !important;
+        overflow-y: auto !important;
     }
 </style>

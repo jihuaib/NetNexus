@@ -71,9 +71,6 @@
                     <div class="route-list-header">
                         <UnorderedListOutlined />
                         <span class="header-text">已生成IPv6-QP路由列表</span>
-                        <a-tag v-if="pagination.total > 0" color="blue">
-                            {{ pagination.total }}
-                        </a-tag>
                         <a-button
                             :disabled="!hasRoutes"
                             type="primary"
@@ -219,11 +216,11 @@
 
     const pagination = ref({
         current: 1,
-        pageSize: 10,
+        pageSize: 20,
         total: 0,
         showSizeChanger: false,
         position: ['bottomCenter'],
-        showTotal: total => `共 ${total} 条`
+        showTotal: total => `共 ${total} 条，每页 20 条`
     });
 
     onMounted(async () => {
@@ -240,7 +237,6 @@
 
     const handleTableChange = (pag, _filters, _sorter) => {
         pagination.value.current = pag.current;
-        pagination.value.pageSize = pag.pageSize;
         refreshRoutes();
     };
 

@@ -173,7 +173,10 @@ contextBridge.exposeInMainWorld('rpkiApi', {
     // aspa (v2+)
     addAspa: aspa => ipcRenderer.invoke('rpki:addAspa', aspa),
     deleteAspa: aspa => ipcRenderer.invoke('rpki:deleteAspa', aspa),
-    getAspaList: () => ipcRenderer.invoke('rpki:getAspaList')
+    deleteAllAspa: () => ipcRenderer.invoke('rpki:deleteAllAspa'),
+    selectAspaJsonFile: () => ipcRenderer.invoke('rpki:selectAspaJsonFile'),
+    importAspaJson: options => ipcRenderer.invoke('rpki:importAspaJson', options),
+    getAspaList: options => ipcRenderer.invoke('rpki:getAspaList', options)
 });
 
 // ftp模块

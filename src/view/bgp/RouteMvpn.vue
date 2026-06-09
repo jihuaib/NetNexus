@@ -176,7 +176,6 @@
                     <div class="route-list-header">
                         <UnorderedListOutlined />
                         <span class="header-text">已生成MVPN路由列表</span>
-                        <a-tag v-if="pagination.total > 0" color="blue">总计: {{ pagination.total }}</a-tag>
                     </div>
 
                     <!-- 按路由类型分组显示 -->
@@ -184,7 +183,7 @@
                         <a-tab-pane
                             v-for="group in groupedMvpnRoutes"
                             :key="group.type"
-                            :tab="`${group.typeName} (${group.routes.length})`"
+                            :tab="group.typeName"
                         >
                             <a-table
                                 :data-source="group.routes"
@@ -261,11 +260,11 @@
 
     const pagination = ref({
         current: 1,
-        pageSize: 10,
+        pageSize: 20,
         total: 0,
         showSizeChanger: false,
         position: ['bottomCenter'],
-        showTotal: total => `共 ${total} 条`
+        showTotal: total => `共 ${total} 条，每页 20 条`
     });
 
     const validationErrors = ref({
@@ -427,7 +426,6 @@
 
     const handleTableChange = (pag, _filters, _sorter) => {
         pagination.value.current = pag.current;
-        pagination.value.pageSize = pag.pageSize;
         refreshRoutes();
     };
 

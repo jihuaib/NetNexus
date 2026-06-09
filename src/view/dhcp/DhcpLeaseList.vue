@@ -10,7 +10,7 @@
                         :columns="columns"
                         :data-source="leaseList"
                         :row-key="record => `${record.version}-${record.id}`"
-                        :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'] }"
+                        :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
                         :scroll="{ y: 500 }"
                         size="small"
                     >

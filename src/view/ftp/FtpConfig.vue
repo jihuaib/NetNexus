@@ -112,7 +112,7 @@
                             :columns="clientColumns"
                             :data-source="clientList"
                             :row-key="record => `${record.remoteIp}|${record.remotePort}`"
-                            :pagination="{ pageSize: 10, showSizeChanger: false, position: ['bottomCenter'] }"
+                            :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
                             :scroll="{ y: 200 }"
                             size="small"
                         >
@@ -139,7 +139,7 @@
                 <a-table
                     :columns="userListColumns"
                     :data-source="userList"
-                    :pagination="{ pageSize: 5, showSizeChanger: false, position: ['bottomCenter'] }"
+                    :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
                     :scroll="{ y: 200 }"
                     size="small"
                 >

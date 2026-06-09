@@ -21,7 +21,7 @@
             <a-table
                 :columns="columns"
                 :data-source="filteredInterfaces"
-                :pagination="false"
+                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
                 :scroll="{ y: 150 }"
                 size="small"
                 row-key="name"

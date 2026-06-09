@@ -83,11 +83,12 @@
         <!-- ROA列表 -->
         <a-row class="mt-margin-top-10">
             <a-col :span="24">
-                <a-card :title="`ROA列表（共 ${roaPagination.total} 条）`">
+                <a-card :title="roaListTitle">
                     <template #extra>
                         <a-button
+                            class="roa-delete-all-button"
                             danger
-                            :disabled="roaPagination.total === 0"
+                            :disabled="roaStorageTotal === 0"
                             :loading="deleteAllLoading"
                             @click="confirmDeleteAllRoa"
                         >
@@ -95,7 +96,33 @@
                         </a-button>
                     </template>
                     <div>
+                        <div class="roa-query-toolbar">
+                            <a-space wrap>
+                                <a-radio-group v-model:value="roaQuery.ipType" size="small">
+                                    <a-radio-button value="">全部</a-radio-button>
+                                    <a-radio-button :value="String(IP_TYPE.IPV4)">IPv4</a-radio-button>
+                                    <a-radio-button :value="String(IP_TYPE.IPV6)">IPv6</a-radio-button>
+                                </a-radio-group>
+                                <a-input
+                                    v-model:value="roaQuery.prefixFilter"
+                                    allow-clear
+                                    placeholder="Prefix 或 Prefix/Mask"
+                                    class="roa-query-input"
+                                    @press-enter="searchRoaList"
+                                />
+                                <a-input
+                                    v-model:value="roaQuery.asn"
+                                    allow-clear
+                                    placeholder="ASN"
+                                    class="roa-query-small-input"
+                                    @press-enter="searchRoaList"
+                                />
+                                <a-button type="primary" @click="searchRoaList">查询</a-button>
+                                <a-button @click="resetRoaQuery">重置</a-button>
+                            </a-space>
+                        </div>
                         <a-table
+                            class="roa-table"
                             :columns="roaColumns"
                             :data-source="roaList"
                             :row-key="record => `${record.asn}-${record.ip}-${record.mask}-${record.maxLength}-${record.ipType}`"
@@ -124,7 +151,7 @@
 </template>
 
 <script setup>
-    import { ref, onMounted, watch } from 'vue';
+    import { computed, ref, onMounted, watch } from 'vue';
     import { Modal, message } from 'ant-design-vue';
     import { UploadOutlined } from '@ant-design/icons-vue';
     import RpkiRoaImportModal from '../../components/RpkiRoaImportModal.vue';
@@ -151,16 +178,34 @@
     const deleteAllLoading = ref(false);
     const tableLoading = ref(false);
     const roaImportModalVisible = ref(false);
-    const ROA_PAGE_SIZE = 10;
+    const ROA_PAGE_SIZE = 20;
 
     // ROA列表
     const roaList = ref([]);
+    const roaStorageTotal = ref(0);
     const roaPagination = ref({
         current: 1,
         pageSize: ROA_PAGE_SIZE,
         total: 0,
         showSizeChanger: false,
+        showTotal: total => `共 ${total} 条，每页 ${ROA_PAGE_SIZE} 条`,
         position: ['bottomCenter']
+    });
+    const createEmptyRoaQuery = () => ({
+        ipType: '',
+        prefixFilter: '',
+        asn: ''
+    });
+    const roaQuery = ref(createEmptyRoaQuery());
+    const appliedRoaQuery = ref(createEmptyRoaQuery());
+    const hasAppliedRoaQuery = computed(() => {
+        return Object.values(appliedRoaQuery.value).some(value => String(value || '').trim() !== '');
+    });
+    const roaListTitle = computed(() => {
+        if (hasAppliedRoaQuery.value) {
+            return `ROA列表（匹配 ${roaPagination.value.total} / 共 ${roaStorageTotal.value} 条）`;
+        }
+        return `ROA列表（共 ${roaStorageTotal.value || roaPagination.value.total} 条）`;
     });
     const roaColumns = [
         {
@@ -195,7 +240,9 @@
         },
         {
             title: '操作',
-            key: 'action'
+            key: 'action',
+            fixed: 'right',
+            width: 80
         }
     ];
 
@@ -321,7 +368,7 @@
     const confirmDeleteAllRoa = () => {
         Modal.confirm({
             title: '确认批量删除ROA？',
-            content: `将删除全部 ${roaPagination.value.total} 条 ROA。RPKI服务运行时会向客户端批量发送撤销报文。`,
+            content: `将删除全部 ${roaStorageTotal.value} 条 ROA。RPKI服务运行时会向客户端批量发送撤销报文。`,
             okText: '删除',
             okType: 'danger',
             cancelText: '取消',
@@ -346,6 +393,25 @@
         }
     };
 
+    const normalizeRoaQuery = query => {
+        return {
+            ipType: query.ipType || '',
+            prefixFilter: (query.prefixFilter || '').trim(),
+            asn: (query.asn || '').trim()
+        };
+    };
+
+    const searchRoaList = () => {
+        appliedRoaQuery.value = normalizeRoaQuery(roaQuery.value);
+        fetchRoaList(1);
+    };
+
+    const resetRoaQuery = () => {
+        roaQuery.value = createEmptyRoaQuery();
+        appliedRoaQuery.value = createEmptyRoaQuery();
+        fetchRoaList(1);
+    };
+
     const handleTableChange = pagination => {
         fetchRoaList(pagination.current);
     };
@@ -354,10 +420,15 @@
     const fetchRoaList = async (page = roaPagination.value.current) => {
         tableLoading.value = true;
         try {
-            const result = await window.rpkiApi.getRoaList({ page, pageSize: ROA_PAGE_SIZE });
+            const result = await window.rpkiApi.getRoaList({
+                page,
+                pageSize: ROA_PAGE_SIZE,
+                ...appliedRoaQuery.value
+            });
             if (result.status === 'success') {
                 if (Array.isArray(result.data)) {
                     roaList.value = result.data;
+                    roaStorageTotal.value = result.data.length;
                     roaPagination.value = {
                         ...roaPagination.value,
                         current: page,
@@ -368,6 +439,7 @@
                 }
 
                 roaList.value = result.data.items || [];
+                roaStorageTotal.value = result.data.storageTotal ?? result.data.total ?? 0;
                 roaPagination.value = {
                     ...roaPagination.value,
                     current: result.data.page || page,
@@ -390,6 +462,40 @@
 </script>
 
 <style scoped>
+    .roa-query-toolbar {
+        display: block;
+        margin-bottom: 16px;
+    }
+
+    .roa-table {
+        margin-top: 16px;
+    }
+
+    .roa-query-input {
+        width: 220px;
+    }
+
+    .roa-query-small-input {
+        width: 120px;
+    }
+
+    .roa-delete-all-button:disabled,
+    .roa-delete-all-button.ant-btn-disabled {
+        color: #8c8c8c !important;
+        background: #f0f0f0 !important;
+        border-color: #bfbfbf !important;
+        opacity: 1 !important;
+    }
+
+    .roa-delete-all-button:disabled:hover,
+    .roa-delete-all-button.ant-btn-disabled:hover,
+    .roa-delete-all-button:disabled:focus,
+    .roa-delete-all-button.ant-btn-disabled:focus {
+        color: #8c8c8c !important;
+        background: #f0f0f0 !important;
+        border-color: #bfbfbf !important;
+    }
+
     :deep(.ant-table-body) {
         height: 300px !important;
         overflow-y: auto !important;

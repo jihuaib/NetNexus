@@ -1,32 +1,28 @@
 const fs = require('fs');
-const { once } = require('events');
-const readline = require('readline');
 const path = require('path');
-const ipaddr = require('ipaddr.js');
-const BgpConst = require('../const/bgpConst');
-const { getNetworkAddress } = require('./ipUtils');
+const readline = require('readline');
+const RpkiAspa = require('../worker/rpkiAspa');
+const RpkiConst = require('../const/rpkiConst');
+const { ensureParentDir, writeLine, closeWriteStream, renameWithRetry } = require('./rpkiRoaImport');
 
-const ROA_ARRAY_KEYS = new Set([
-    'roas',
-    'roa',
-    'vrps',
-    'validatedRoas',
-    'validated_roas',
-    'validatedRoaPayloads',
-    'prefixAssertions',
-    'prefix_assertions',
+const ASPA_ARRAY_KEYS = new Set([
+    'aspas',
+    'aspa',
+    'aspaRecords',
+    'aspa_records',
+    'customerProviderAuthorizations',
+    'customer_provider_authorizations',
     'data',
     'items',
-    'records',
-    'routes'
+    'records'
 ]);
 
-function getRoaDataFilePath(userDataPath) {
-    return path.join(userDataPath, 'rpki-roa.jsonl');
+function getAspaDataFilePath(userDataPath) {
+    return path.join(userDataPath, 'rpki-aspa.jsonl');
 }
 
-function makeRoaStorageKey(roa) {
-    return `${roa.ip}|${roa.mask}|${roa.asn}|${roa.maxLength}`;
+function makeAspaStorageKey(aspa) {
+    return RpkiAspa.makeKey(aspa.customerAsn);
 }
 
 function pickField(object, names) {
@@ -49,109 +45,158 @@ function normalizeAsn(value) {
     return String(asn);
 }
 
-function normalizeInteger(value) {
+function normalizeProviderAsnValue(value) {
     if (typeof value === 'string') {
-        value = value.trim();
+        value = value.trim().replace(/^AS/i, '');
     }
-    const num = Number(value);
-    return Number.isInteger(num) ? num : null;
+    const asn = Number(value);
+    if (!Number.isInteger(asn) || asn < 0 || asn > 0xffffffff) {
+        return null;
+    }
+    return asn;
 }
 
-function getPrefixParts(item) {
-    const prefix = pickField(item, [
-        'prefix',
-        'ipPrefix',
-        'ip_prefix',
-        'IP Prefix',
-        'route',
-        'network',
-        'cidr'
-    ]);
+function splitProviderString(value) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return [];
+    }
+    return trimmed
+        .split(/[,\s]+/)
+        .map(item => item.trim())
+        .filter(Boolean);
+}
 
-    if (typeof prefix === 'string' && prefix.includes('/')) {
-        const slashIndex = prefix.lastIndexOf('/');
-        return {
-            ip: prefix.slice(0, slashIndex).trim(),
-            mask: normalizeInteger(prefix.slice(slashIndex + 1))
-        };
+function normalizeProviderAsns(value) {
+    if (value === undefined || value === null) {
+        return null;
     }
 
-    const ip = pickField(item, ['ip', 'addr', 'address']);
-    const mask = pickField(item, ['mask', 'prefixLength', 'prefix_length', 'length']);
-    if (typeof ip === 'string' && mask !== undefined) {
-        return {
-            ip: ip.trim(),
-            mask: normalizeInteger(mask)
-        };
+    const rawValues = Array.isArray(value) ? value : typeof value === 'string' ? splitProviderString(value) : null;
+    if (!rawValues) {
+        return null;
+    }
+
+    const providerAsns = [];
+    for (const item of rawValues) {
+        const asn = normalizeProviderAsnValue(item);
+        if (asn === null) {
+            return null;
+        }
+        providerAsns.push(asn);
+    }
+
+    try {
+        return RpkiAspa.parseProviderAsns(providerAsns);
+    } catch (_) {
+        return null;
+    }
+}
+
+function normalizeAfiToken(value) {
+    if (typeof value === 'number') {
+        return Number.isInteger(value) && value >= 1 && value <= 3 ? value : null;
+    }
+
+    if (typeof value !== 'string') {
+        return null;
+    }
+
+    const normalized = value.trim().toLowerCase().replace(/[\s_]+/g, '');
+    if (!normalized) {
+        return null;
+    }
+
+    if (['1', 'ipv4', 'ip4', 'v4', 'afiipv4'].includes(normalized)) {
+        return RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4;
+    }
+    if (['2', 'ipv6', 'ip6', 'v6', 'afiipv6'].includes(normalized)) {
+        return RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6;
+    }
+    if (
+        ['3', 'both', 'all', 'ipv4+ipv6', 'ipv6+ipv4', 'ipv4,ipv6', 'ipv6,ipv4', 'ipv4/ipv6'].includes(
+            normalized
+        ) ||
+        ((normalized.includes('ipv4') || normalized.includes('v4')) &&
+            (normalized.includes('ipv6') || normalized.includes('v6')))
+    ) {
+        return RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4 | RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6;
     }
 
     return null;
 }
 
-function normalizeRoaObject(item) {
+function normalizeAfiFlags(value) {
+    if (value === undefined || value === null || value === '') {
+        return RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4 | RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6;
+    }
+
+    if (Array.isArray(value)) {
+        let flags = 0;
+        for (const item of value) {
+            const token = normalizeAfiToken(item);
+            if (!token) {
+                return null;
+            }
+            flags |= token;
+        }
+        return flags === 1 || flags === 2 || flags === 3 ? flags : null;
+    }
+
+    return normalizeAfiToken(value);
+}
+
+function normalizeAspaObject(item) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
         return null;
     }
 
-    const asn = normalizeAsn(
+    const customerAsn = normalizeAsn(
         pickField(item, [
-            'asn',
-            'ASN',
-            'originAsn',
-            'origin_asn',
-            'originAS',
-            'origin_as',
-            'sourceAs',
-            'source_as',
-            'asID',
-            'asid'
+            'customerAsn',
+            'customer_asn',
+            'customerASN',
+            'customerAS',
+            'customer_as',
+            'customer',
+            'customerAsid',
+            'customer_asid',
+            'customerASID',
+            'Customer ASN'
         ])
     );
-    if (!asn) {
+    if (!customerAsn) {
         return null;
     }
 
-    const prefixParts = getPrefixParts(item);
-    if (!prefixParts || !prefixParts.ip || prefixParts.mask === null) {
+    const providerAsns = normalizeProviderAsns(
+        pickField(item, [
+            'providerAsns',
+            'provider_asns',
+            'providerASNs',
+            'providers',
+            'provider',
+            'providerAsSet',
+            'provider_as_set',
+            'providerSet',
+            'Provider ASNs'
+        ])
+    );
+    if (!providerAsns) {
         return null;
     }
 
-    let parsedIp;
-    try {
-        parsedIp = ipaddr.parse(prefixParts.ip);
-    } catch (_) {
-        return null;
-    }
-
-    const ipType = parsedIp.kind() === 'ipv4' ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
-    const maxMask = ipType === BgpConst.IP_TYPE.IPV4 ? 32 : 128;
-    const mask = prefixParts.mask;
-    const maxLengthValue = pickField(item, [
-        'maxLength',
-        'max_length',
-        'maxPrefixLength',
-        'max_prefix_length',
-        'maximalLength',
-        'Max Length',
-        'max'
-    ]);
-    const maxLength = maxLengthValue === undefined || maxLengthValue === null ? mask : normalizeInteger(maxLengthValue);
-
-    if (mask < 0 || mask > maxMask || maxLength === null || maxLength < mask || maxLength > maxMask) {
-        return null;
-    }
-
-    const network = getNetworkAddress(prefixParts.ip, mask);
-    if (!network) {
+    const afiFlags = normalizeAfiFlags(
+        pickField(item, ['afiFlags', 'afi_flags', 'afi', 'addressFamily', 'address_family', 'ipType', 'family'])
+    );
+    if (!afiFlags) {
         return null;
     }
 
     return {
-        ipType,
-        asn,
-        ip: network.slice(0, network.lastIndexOf('/')),
-        mask: String(mask),
-        maxLength: String(maxLength)
+        customerAsn,
+        providerAsns,
+        afiFlags
     };
 }
 
@@ -163,77 +208,7 @@ function safeJsonParse(line) {
     }
 }
 
-async function fileExists(filePath) {
-    try {
-        await fs.promises.access(filePath, fs.constants.F_OK);
-        return true;
-    } catch (_) {
-        return false;
-    }
-}
-
-async function ensureParentDir(filePath) {
-    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-}
-
-async function writeLine(stream, line) {
-    if (!stream.write(`${line}\n`)) {
-        await once(stream, 'drain');
-    }
-}
-
-async function closeWriteStream(stream) {
-    if (!stream || stream.destroyed) {
-        return;
-    }
-
-    await new Promise((resolve, reject) => {
-        let settled = false;
-        let finished = false;
-        let closed = false;
-
-        const cleanup = () => {
-            stream.off('error', onError);
-            stream.off('finish', onFinish);
-            stream.off('close', onClose);
-        };
-        const maybeResolve = () => {
-            if (settled || !finished || !closed) {
-                return;
-            }
-            settled = true;
-            cleanup();
-            resolve();
-        };
-        const onError = error => {
-            if (settled) {
-                return;
-            }
-            settled = true;
-            cleanup();
-            reject(error);
-        };
-        const onFinish = () => {
-            finished = true;
-            maybeResolve();
-        };
-        const onClose = () => {
-            closed = true;
-            maybeResolve();
-        };
-
-        stream.once('error', onError);
-        stream.once('finish', onFinish);
-        stream.once('close', onClose);
-        stream.end();
-    });
-}
-
-async function closeReadStream(input, rl = null) {
-    if (rl) {
-        rl.close();
-    }
-
+async function closeReadStream(input) {
     if (!input || input.closed) {
         return;
     }
@@ -246,32 +221,16 @@ async function closeReadStream(input, rl = null) {
     });
 }
 
-function isRetryableRenameError(error) {
-    return ['EBUSY', 'EPERM', 'EACCES'].includes(error?.code);
-}
-
-function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function renameWithRetry(sourcePath, targetPath, options = {}) {
-    const retries = Number.isInteger(options.retries) ? options.retries : 20;
-    const delayMs = Number.isInteger(options.delayMs) ? options.delayMs : 50;
-
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-        try {
-            await fs.promises.rename(sourcePath, targetPath);
-            return;
-        } catch (error) {
-            if (attempt >= retries || !isRetryableRenameError(error)) {
-                throw error;
-            }
-            await delay(delayMs * (attempt + 1));
-        }
+async function fileExists(filePath) {
+    try {
+        await fs.promises.access(filePath, fs.constants.F_OK);
+        return true;
+    } catch (_) {
+        return false;
     }
 }
 
-async function* iterateJsonlRoas(filePath) {
+async function* iterateJsonlAspas(filePath) {
     if (!(await fileExists(filePath))) {
         return;
     }
@@ -289,27 +248,28 @@ async function* iterateJsonlRoas(filePath) {
                 continue;
             }
             const parsed = safeJsonParse(trimmed);
-            const roa = normalizeRoaObject(parsed);
-            if (roa) {
-                yield roa;
+            const aspa = normalizeAspaObject(parsed);
+            if (aspa) {
+                yield aspa;
             }
         }
     } finally {
-        await closeReadStream(input, rl);
+        rl.close();
+        await closeReadStream(input);
     }
 }
 
-async function readJsonlPage(filePath, page, pageSize) {
+async function readAspaJsonlPage(filePath, page, pageSize) {
     const safePage = Math.max(1, Number(page) || 1);
-    const safePageSize = Math.min(1000, Math.max(1, Number(pageSize) || 10));
+    const safePageSize = Math.min(1000, Math.max(1, Number(pageSize) || 20));
     const startIndex = (safePage - 1) * safePageSize;
     const endIndex = startIndex + safePageSize;
     const items = [];
     let index = 0;
 
-    for await (const roa of iterateJsonlRoas(filePath)) {
+    for await (const aspa of iterateJsonlAspas(filePath)) {
         if (index >= startIndex && index < endIndex) {
-            items.push(roa);
+            items.push(aspa);
         }
         index += 1;
         if (index >= endIndex) {
@@ -320,35 +280,44 @@ async function readJsonlPage(filePath, page, pageSize) {
     return items;
 }
 
-async function countJsonlRows(filePath) {
+async function countJsonlAspas(filePath) {
     let count = 0;
-    for await (const _roa of iterateJsonlRoas(filePath)) {
+    for await (const _aspa of iterateJsonlAspas(filePath)) {
         count += 1;
     }
     return count;
 }
 
-async function writeRoasToJsonl(filePath, roas) {
+async function writeAspasToJsonl(filePath, aspas) {
     await ensureParentDir(filePath);
     const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
-    const seen = new Set();
-    let count = 0;
+    const latestByKey = new Map();
+    const order = [];
+    let sequence = 0;
 
     try {
-        for (const item of roas || []) {
-            const roa = normalizeRoaObject(item);
-            if (!roa) {
+        for (const item of aspas || []) {
+            const aspa = normalizeAspaObject(item);
+            if (!aspa) {
                 continue;
             }
-            const key = makeRoaStorageKey(roa);
-            if (seen.has(key)) {
+            const key = makeAspaStorageKey(aspa);
+            sequence += 1;
+            latestByKey.set(key, { aspa, sequence });
+            order.push({ key, sequence });
+        }
+
+        let count = 0;
+        for (const item of order) {
+            const latest = latestByKey.get(item.key);
+            if (!latest || latest.sequence !== item.sequence) {
                 continue;
             }
-            seen.add(key);
-            await writeLine(stream, JSON.stringify(roa));
+            await writeLine(stream, JSON.stringify(latest.aspa));
             count += 1;
         }
+
         await closeWriteStream(stream);
         await renameWithRetry(tempPath, filePath);
         return count;
@@ -359,7 +328,7 @@ async function writeRoasToJsonl(filePath, roas) {
     }
 }
 
-async function parseRoaJsonFile(filePath, onRoa) {
+async function parseAspaJsonFile(filePath, onAspa) {
     const stats = {
         objects: 0,
         valid: 0,
@@ -385,17 +354,17 @@ async function parseRoaJsonFile(filePath, onRoa) {
         try {
             parsed = JSON.parse(objectText);
         } catch (error) {
-            throw new Error(`ROA JSON对象解析失败: ${error.message}`);
+            throw new Error(`ASPA JSON对象解析失败: ${error.message}`);
         }
 
-        const roa = normalizeRoaObject(parsed);
-        if (!roa) {
+        const aspa = normalizeAspaObject(parsed);
+        if (!aspa) {
             stats.invalid += 1;
             return;
         }
 
         stats.valid += 1;
-        const shouldContinue = await onRoa(roa);
+        const shouldContinue = await onAspa(aspa);
         if (shouldContinue === false) {
             stopped = true;
         }
@@ -471,7 +440,7 @@ async function parseRoaJsonFile(filePath, onRoa) {
 
                 if (ch === '[') {
                     const key = pendingKey;
-                    const target = stack.length === 0 || ROA_ARRAY_KEYS.has(key);
+                    const target = stack.length === 0 || ASPA_ARRAY_KEYS.has(key);
                     stack.push({ type: 'array', target });
                     pendingKey = null;
                     lastString = null;
@@ -533,24 +502,20 @@ async function parseRoaJsonFile(filePath, onRoa) {
     }
 
     if (!stopped && (collecting || inString || collectInString)) {
-        throw new Error('ROA JSON文件不完整或格式错误');
+        throw new Error('ASPA JSON文件不完整或格式错误');
     }
 
     return stats;
 }
 
 module.exports = {
-    getRoaDataFilePath,
-    makeRoaStorageKey,
-    normalizeRoaObject,
+    getAspaDataFilePath,
+    makeAspaStorageKey,
+    normalizeAspaObject,
     fileExists,
-    ensureParentDir,
-    writeLine,
-    closeWriteStream,
-    renameWithRetry,
-    iterateJsonlRoas,
-    readJsonlPage,
-    countJsonlRows,
-    writeRoasToJsonl,
-    parseRoaJsonFile
+    iterateJsonlAspas,
+    readAspaJsonlPage,
+    countJsonlAspas,
+    writeAspasToJsonl,
+    parseAspaJsonFile
 };

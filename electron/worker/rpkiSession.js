@@ -163,9 +163,24 @@ class RpkiSession {
         }
         const sessionId = message.readUInt16BE(2);
         const serial = message.readUInt32BE(RpkiConst.RPKI_HEADER_LENGTH);
-        logger.info(`Serial Query: sessionId=${sessionId}, serial=${serial}`);
-        // 模拟器实现：直接发送 Cache Reset，让客户端重新拉取全量
-        this.sendCacheReset();
+        const currentSerial = this.getCurrentSerial();
+        logger.info(`Serial Query: sessionId=${sessionId}, serial=${serial}, currentSerial=${currentSerial}`);
+
+        if (this.sessionId === null || sessionId !== this.sessionId) {
+            logger.error(`Serial Query sessionId mismatch: got ${sessionId}, expected ${this.sessionId}`);
+            this.sendError(RpkiConst.RPKI_ERROR_CODE.CORRUPT_DATA);
+            return;
+        }
+
+        const deltaOperations = this.rpkiWorker.getDeltaOperationsSince
+            ? this.rpkiWorker.getDeltaOperationsSince(serial)
+            : null;
+        if (serial !== currentSerial && !deltaOperations) {
+            this.sendCacheReset();
+            return;
+        }
+
+        this.sendSerialQueryResponse(deltaOperations || []);
     }
 
     handleErrorReport(message) {
@@ -260,7 +275,7 @@ class RpkiSession {
 
         buffer[0] = this.protocolVersion;
         buffer[1] = RpkiConst.RPKI_MSG_TYPE.CACHE_RESPONSE;
-        if (!this.sessionId) {
+        if (this.sessionId === null) {
             this.sessionId = Math.floor(Math.random() * 65536);
         }
         buffer.writeUInt16BE(this.sessionId, 2);
@@ -271,6 +286,30 @@ class RpkiSession {
 
     sendCacheResponse() {
         this.sendMessage(this.buildCacheResponsePdu());
+    }
+
+    getCurrentSerial() {
+        return Number.isInteger(this.rpkiWorker?.cacheSerial) ? this.rpkiWorker.cacheSerial >>> 0 : 1;
+    }
+
+    buildSerialNotifyPdu() {
+        const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 4;
+        const buffer = Buffer.alloc(totalLen);
+
+        buffer[0] = this.protocolVersion;
+        buffer[1] = RpkiConst.RPKI_MSG_TYPE.SERIAL_NOTIFY;
+        buffer.writeUInt16BE(this.sessionId, 2);
+        buffer.writeUInt32BE(totalLen, 4);
+        buffer.writeUInt32BE(this.getCurrentSerial(), RpkiConst.RPKI_HEADER_LENGTH);
+
+        return buffer;
+    }
+
+    sendSerialNotify() {
+        if (this.sessionId === null) {
+            return;
+        }
+        this.enqueueSend(() => this.writeBuffer(this.buildSerialNotifyPdu()));
     }
 
     buildPrefixPdu(rpkiRoa, flags, isIpv6) {
@@ -324,16 +363,16 @@ class RpkiSession {
 
     // Router Key PDU (RFC 8210 §5.10, v1+)
     // Header(8: Version|Type|Flags|Zero|Length) + SKI(20) + ASN(4) + SPKI(variable)
-    writeRouterKeyPdu(rpkiRouterKey, flags) {
+    buildRouterKeyPdu(rpkiRouterKey, flags) {
         if (this.protocolVersion < RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
             logger.warn(`Cannot send Router Key PDU on protocol version ${this.protocolVersion}`);
-            return;
+            return null;
         }
         const skiBuf = Buffer.from(rpkiRouterKey.ski, 'hex');
         const spkiBuf = Buffer.from(rpkiRouterKey.spki, 'hex');
         if (skiBuf.length !== 20) {
             logger.error(`Router Key SKI must be 20 bytes, got ${skiBuf.length}`);
-            return;
+            return null;
         }
         const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 20 + 4 + spkiBuf.length;
         const buffer = Buffer.alloc(totalLen);
@@ -353,7 +392,14 @@ class RpkiSession {
         position += 4;
         spkiBuf.copy(buffer, position);
 
-        this.sendMessage(buffer);
+        return buffer;
+    }
+
+    writeRouterKeyPdu(rpkiRouterKey, flags) {
+        const buffer = this.buildRouterKeyPdu(rpkiRouterKey, flags);
+        if (buffer) {
+            this.sendMessage(buffer);
+        }
     }
 
     sendRouterKey(rpkiRouterKey) {
@@ -386,7 +432,7 @@ class RpkiSession {
         return legacyAfiFlags.length > 0 ? legacyAfiFlags : [0];
     }
 
-    writeAspaLegacyPdu(rpkiAspa, flags, legacyAfiFlags) {
+    buildAspaLegacyPdu(rpkiAspa, flags, legacyAfiFlags) {
         const isWithdrawal = flags === RpkiConst.RPKI_FLAGS.WITHDRAWAL;
         const providerCount = isWithdrawal ? 0 : rpkiAspa.providerAsns.length;
         const totalLen = RpkiConst.RPKI_HEADER_LENGTH + 8 + 4 * providerCount;
@@ -411,21 +457,24 @@ class RpkiSession {
             position += 4;
         }
 
-        this.sendMessage(buffer);
+        return buffer;
     }
 
-    writeAspaPdu(rpkiAspa, flags) {
+    writeAspaLegacyPdu(rpkiAspa, flags, legacyAfiFlags) {
+        this.sendMessage(this.buildAspaLegacyPdu(rpkiAspa, flags, legacyAfiFlags));
+    }
+
+    buildAspaPdus(rpkiAspa, flags) {
         if (this.protocolVersion < RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
             logger.warn(`Cannot send ASPA PDU on protocol version ${this.protocolVersion}`);
-            return;
+            return [];
         }
         const providerCount = rpkiAspa.providerAsns.length;
         const isLegacy = this.aspaFormat === RpkiConst.RPKI_ASPA_FORMAT.LEGACY;
         if (isLegacy) {
-            for (const legacyAfiFlags of this.getLegacyAspaAfiFlags(rpkiAspa)) {
-                this.writeAspaLegacyPdu(rpkiAspa, flags, legacyAfiFlags);
-            }
-            return;
+            return this.getLegacyAspaAfiFlags(rpkiAspa).map(legacyAfiFlags =>
+                this.buildAspaLegacyPdu(rpkiAspa, flags, legacyAfiFlags)
+            );
         }
 
         const isWithdrawal = flags === RpkiConst.RPKI_FLAGS.WITHDRAWAL;
@@ -449,7 +498,13 @@ class RpkiSession {
             position += 4;
         }
 
-        this.sendMessage(buffer);
+        return [buffer];
+    }
+
+    writeAspaPdu(rpkiAspa, flags) {
+        for (const buffer of this.buildAspaPdus(rpkiAspa, flags)) {
+            this.sendMessage(buffer);
+        }
     }
 
     sendAspa(rpkiAspa) {
@@ -458,6 +513,91 @@ class RpkiSession {
 
     withdrawAspa(rpkiAspa) {
         this.writeAspaPdu(rpkiAspa, RpkiConst.RPKI_FLAGS.WITHDRAWAL);
+    }
+
+    buildAspaReplacementPdus(oldAspa, newAspa) {
+        if (this.protocolVersion < RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+            logger.warn(`Cannot replace ASPA PDU on protocol version ${this.protocolVersion}`);
+            return [];
+        }
+
+        if (this.aspaFormat !== RpkiConst.RPKI_ASPA_FORMAT.LEGACY) {
+            return this.buildAspaPdus(newAspa, RpkiConst.RPKI_FLAGS.UPDATE);
+        }
+
+        const buffers = [];
+        const oldAfiFlags = new Set(this.getLegacyAspaAfiFlags(oldAspa));
+        const newAfiFlags = new Set(this.getLegacyAspaAfiFlags(newAspa));
+
+        for (const legacyAfiFlags of newAfiFlags) {
+            buffers.push(this.buildAspaLegacyPdu(newAspa, RpkiConst.RPKI_FLAGS.UPDATE, legacyAfiFlags));
+        }
+        for (const legacyAfiFlags of oldAfiFlags) {
+            if (!newAfiFlags.has(legacyAfiFlags)) {
+                buffers.push(this.buildAspaLegacyPdu(oldAspa, RpkiConst.RPKI_FLAGS.WITHDRAWAL, legacyAfiFlags));
+            }
+        }
+
+        return buffers;
+    }
+
+    replaceAspa(oldAspa, newAspa) {
+        if (this.protocolVersion < RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+            logger.warn(`Cannot replace ASPA PDU on protocol version ${this.protocolVersion}`);
+            return;
+        }
+
+        for (const buffer of this.buildAspaReplacementPdus(oldAspa, newAspa)) {
+            this.sendMessage(buffer);
+        }
+    }
+
+    buildDeltaOperationBuffers(operation) {
+        if (!operation || !operation.type) {
+            return [];
+        }
+
+        if (operation.type === 'roa') {
+            const flags =
+                operation.action === 'withdraw' ? RpkiConst.RPKI_FLAGS.WITHDRAWAL : RpkiConst.RPKI_FLAGS.UPDATE;
+            const roa = operation.data;
+            const isIpv6 = roa.ipType !== BgpConst.IP_TYPE.IPV4;
+            return [this.buildPrefixPdu(roa, flags, isIpv6)];
+        }
+
+        if (operation.type === 'routerKey') {
+            const flags =
+                operation.action === 'withdraw' ? RpkiConst.RPKI_FLAGS.WITHDRAWAL : RpkiConst.RPKI_FLAGS.UPDATE;
+            const buffer = this.buildRouterKeyPdu(operation.data, flags);
+            return buffer ? [buffer] : [];
+        }
+
+        if (operation.type === 'aspa') {
+            if (operation.action === 'replace') {
+                return this.buildAspaReplacementPdus(operation.oldData, operation.newData);
+            }
+            const flags =
+                operation.action === 'withdraw' ? RpkiConst.RPKI_FLAGS.WITHDRAWAL : RpkiConst.RPKI_FLAGS.UPDATE;
+            return this.buildAspaPdus(operation.data, flags);
+        }
+
+        return [];
+    }
+
+    async writeDeltaOperations(operations) {
+        for (const operation of operations || []) {
+            for (const buffer of this.buildDeltaOperationBuffers(operation)) {
+                await this.writeBuffer(buffer);
+            }
+        }
+    }
+
+    sendSerialQueryResponse(operations) {
+        this.enqueueSend(async () => {
+            await this.writeBuffer(this.buildCacheResponsePdu());
+            await this.writeDeltaOperations(operations);
+            await this.writeBuffer(this.buildEndOfDataPdu());
+        });
     }
 
     buildEndOfDataPdu() {
@@ -472,7 +612,7 @@ class RpkiSession {
             buffer.writeUInt16BE(this.sessionId, 2);
             buffer.writeUInt32BE(totalLen, 4);
 
-            buffer.writeUInt32BE(1, RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
+            buffer.writeUInt32BE(this.getCurrentSerial(), RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
             buffer.writeUInt32BE(3600, RpkiConst.RPKI_HEADER_LENGTH + 4); // Refresh
             buffer.writeUInt32BE(600, RpkiConst.RPKI_HEADER_LENGTH + 8); // Retry
             buffer.writeUInt32BE(7200, RpkiConst.RPKI_HEADER_LENGTH + 12); // Expire
@@ -487,7 +627,7 @@ class RpkiSession {
             buffer[1] = RpkiConst.RPKI_MSG_TYPE.END_OF_DATA;
             buffer.writeUInt16BE(this.sessionId, 2);
             buffer.writeUInt32BE(totalLen, 4);
-            buffer.writeUInt32BE(0, RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
+            buffer.writeUInt32BE(this.getCurrentSerial(), RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
 
             return buffer;
         }
@@ -565,10 +705,7 @@ class RpkiSession {
     }
 
     sendAspaData() {
-        const sortedAspas = [...this.rpkiWorker.rpkiAspaMap.values()].sort(
-            (a, b) => Number(a.customerAsn) - Number(b.customerAsn)
-        );
-        for (const aspa of sortedAspas) {
+        for (const aspa of this.rpkiWorker.rpkiAspaMap.values()) {
             this.sendAspa(aspa);
         }
     }

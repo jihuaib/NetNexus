@@ -29,11 +29,11 @@
                                             <a-table
                                                 :columns="bgpInstanceColumns"
                                                 :data-source="[instance]"
-                                                :pagination="false"
+                                                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
                                                 size="small"
                                                 style="margin-bottom: 8px"
                                                 row-key="peerIp"
-                                                :scroll="{ x: 'max-content' }"
+                                                :scroll="{ y: 180 }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'addPath'">
@@ -79,7 +79,7 @@
                                                     allow-clear
                                                     placeholder="Prefix 或 Prefix/Mask"
                                                     style="width: 220px"
-                                                    @pressEnter="searchInstanceRoutes"
+                                                    @press-enter="searchInstanceRoutes"
                                                 />
                                                 <a-button type="primary" @click="searchInstanceRoutes">查询</a-button>
                                                 <a-tag color="green">当前 {{ routeSummary.active }}</a-tag>
@@ -108,7 +108,7 @@
                                                             : ''
                                                 "
                                                 size="small"
-                                                :scroll="{ y: 320, x: 'max-content' }"
+                                                :scroll="{ y: 320 }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeState'">
@@ -625,14 +625,13 @@
 
     const bgpRoutePagination = ref({
         current: 1,
-        pageSize: 10,
+        pageSize: 20,
         total: 0,
         showSizeChanger: false,
         position: ['bottomCenter'],
-        showTotal: total => `共 ${total} 条`,
-        onChange: (page, pageSize) => {
+        showTotal: total => '共 ' + total + ' 条，每页 20 条',
+        onChange: page => {
             bgpRoutePagination.value.current = page;
-            bgpRoutePagination.value.pageSize = pageSize;
             loadInstanceRoutes();
         }
     });

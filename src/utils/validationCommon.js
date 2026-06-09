@@ -1130,23 +1130,20 @@ export const createRpkiAspaValidationRules = () => {
             { validator: validators.asn, message: '请输入有效的 Customer ASN' }
         ],
         providerAsnsRaw: [
-            { required: true, message: '请输入 Provider ASN 列表（逗号分隔）' },
             {
                 validator: value => {
-                    if (!value) return false;
+                    if (!value || String(value).trim() === '') return true;
                     const parts = value
                         .split(',')
                         .map(s => s.trim())
                         .filter(s => s.length > 0);
-                    if (parts.length === 0) return false;
                     const providerAsns = parts.map(p => Number(p));
                     const hasInvalidAsn = providerAsns.some(
                         asn => !Number.isInteger(asn) || asn < 0 || asn > 4294967295
                     );
-                    if (hasInvalidAsn) return false;
-                    return providerAsns.length === 1 || !providerAsns.includes(0);
+                    return !hasInvalidAsn;
                 },
-                message: 'Provider ASN 必须是逗号分隔的有效 ASN 列表；AS0 只能单独配置'
+                message: 'Provider ASN 必须是逗号分隔的 0-4294967295 整数列表'
             }
         ],
         afiFlags: [

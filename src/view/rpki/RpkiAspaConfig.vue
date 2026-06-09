@@ -56,6 +56,10 @@
                                 <a-button type="primary" html-type="submit" :loading="submitLoading">
                                     添加 ASPA
                                 </a-button>
+                                <a-button @click="showAspaImportModal">
+                                    <template #icon><UploadOutlined /></template>
+                                    导入JSON
+                                </a-button>
                                 <a-button @click="resetForm">重置</a-button>
                             </a-space>
                         </a-form-item>
@@ -66,14 +70,27 @@
 
         <a-row class="mt-margin-top-10">
             <a-col :span="24">
-                <a-card title="ASPA 列表">
+                <a-card :title="aspaListTitle">
+                    <template #extra>
+                        <a-button
+                            class="aspa-delete-all-button"
+                            danger
+                            :disabled="aspaStorageTotal === 0"
+                            :loading="deleteAllLoading"
+                            @click="confirmDeleteAllAspa"
+                        >
+                            批量删除
+                        </a-button>
+                    </template>
                     <a-table
                         :columns="aspaColumns"
                         :data-source="aspaList"
                         :row-key="record => `${record.customerAsn}`"
-                        :pagination="{ pageSize: 10, showSizeChanger: false, position: ['bottomCenter'] }"
+                        :pagination="aspaPagination"
                         :scroll="{ y: 200 }"
+                        :loading="tableLoading"
                         size="small"
+                        @change="handleTableChange"
                     >
                         <template #bodyCell="{ column, record }">
                             <template v-if="column.key === 'providerAsns'">
@@ -90,12 +107,16 @@
                 </a-card>
             </a-col>
         </a-row>
+
+        <RpkiAspaImportModal v-model:open="aspaImportModalVisible" @imported="handleAspaImported" />
     </div>
 </template>
 
 <script setup>
-    import { ref, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { computed, ref, onMounted } from 'vue';
+    import { message, Modal } from 'ant-design-vue';
+    import { UploadOutlined } from '@ant-design/icons-vue';
+    import RpkiAspaImportModal from '../../components/RpkiAspaImportModal.vue';
     import { FormValidator, createRpkiAspaValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES, RPKI_ASPA_AFI_FLAGS } from '../../const/rpkiConst';
 
@@ -111,7 +132,21 @@
     });
 
     const submitLoading = ref(false);
+    const deleteAllLoading = ref(false);
+    const tableLoading = ref(false);
+    const aspaImportModalVisible = ref(false);
+    const ASPA_PAGE_SIZE = 20;
     const aspaList = ref([]);
+    const aspaStorageTotal = ref(0);
+    const aspaPagination = ref({
+        current: 1,
+        pageSize: ASPA_PAGE_SIZE,
+        total: 0,
+        showSizeChanger: false,
+        showTotal: total => `共 ${total} 条，每页 ${ASPA_PAGE_SIZE} 条`,
+        position: ['bottomCenter']
+    });
+    const aspaListTitle = computed(() => `ASPA 列表（共 ${aspaStorageTotal.value || aspaPagination.value.total} 条）`);
     const aspaColumns = [
         { title: 'Customer ASN', dataIndex: 'customerAsn', key: 'customerAsn', ellipsis: true },
         { title: 'Provider ASNs', key: 'providerAsns', ellipsis: true },
@@ -153,8 +188,8 @@
             };
             const result = await window.rpkiApi.addAspa(payload);
             if (result.status === 'success') {
-                message.success('ASPA 添加成功');
-                fetchList();
+                message.success(result.msg || 'ASPA 保存成功');
+                fetchList(aspaPagination.value.current);
             } else {
                 message.error(result.msg || '添加失败');
             }
@@ -173,12 +208,24 @@
         };
     };
 
+    const showAspaImportModal = () => {
+        aspaImportModalVisible.value = true;
+    };
+
+    const handleAspaImported = () => {
+        fetchList(1);
+    };
+
     const deleteAspa = async record => {
         try {
             const result = await window.rpkiApi.deleteAspa({ customerAsn: record.customerAsn });
             if (result.status === 'success') {
                 message.success('删除成功');
-                fetchList();
+                const nextPage =
+                    aspaList.value.length === 1 && aspaPagination.value.current > 1
+                        ? aspaPagination.value.current - 1
+                        : aspaPagination.value.current;
+                fetchList(nextPage);
             } else {
                 message.error(result.msg || '删除失败');
             }
@@ -187,14 +234,71 @@
         }
     };
 
-    const fetchList = async () => {
+    const deleteAllAspa = async () => {
+        deleteAllLoading.value = true;
         try {
-            const result = await window.rpkiApi.getAspaList();
+            const result = await window.rpkiApi.deleteAllAspa();
             if (result.status === 'success') {
-                aspaList.value = result.data;
+                message.success(`ASPA批量删除成功：删除 ${result.data?.deleted || 0} 条`);
+                fetchList(1);
+            } else {
+                message.error(result.msg || 'ASPA批量删除失败');
+            }
+        } catch (e) {
+            message.error(`ASPA批量删除出错: ${e.message}`);
+        } finally {
+            deleteAllLoading.value = false;
+        }
+    };
+
+    const confirmDeleteAllAspa = () => {
+        Modal.confirm({
+            title: '确认批量删除ASPA？',
+            content: `将删除全部 ${aspaStorageTotal.value} 条 ASPA。RPKI服务运行时会向客户端批量发送撤销报文。`,
+            okText: '删除',
+            okType: 'danger',
+            cancelText: '取消',
+            onOk: deleteAllAspa
+        });
+    };
+
+    const handleTableChange = pagination => {
+        fetchList(pagination.current);
+    };
+
+    const fetchList = async (page = aspaPagination.value.current) => {
+        tableLoading.value = true;
+        try {
+            const result = await window.rpkiApi.getAspaList({
+                page,
+                pageSize: ASPA_PAGE_SIZE
+            });
+            if (result.status === 'success') {
+                if (Array.isArray(result.data)) {
+                    aspaList.value = result.data;
+                    aspaStorageTotal.value = result.data.length;
+                    aspaPagination.value = {
+                        ...aspaPagination.value,
+                        current: page,
+                        pageSize: ASPA_PAGE_SIZE,
+                        total: result.data.length
+                    };
+                    return;
+                }
+
+                aspaList.value = result.data.items || [];
+                aspaStorageTotal.value = result.data.storageTotal ?? result.data.total ?? 0;
+                aspaPagination.value = {
+                    ...aspaPagination.value,
+                    current: result.data.page || page,
+                    pageSize: ASPA_PAGE_SIZE,
+                    total: result.data.total || 0
+                };
             }
         } catch (e) {
             console.error(e);
+        } finally {
+            tableLoading.value = false;
         }
     };
 
@@ -204,6 +308,23 @@
 </script>
 
 <style scoped>
+    .aspa-delete-all-button:disabled,
+    .aspa-delete-all-button.ant-btn-disabled {
+        color: #8c8c8c !important;
+        background: #f0f0f0 !important;
+        border-color: #bfbfbf !important;
+        opacity: 1 !important;
+    }
+
+    .aspa-delete-all-button:disabled:hover,
+    .aspa-delete-all-button.ant-btn-disabled:hover,
+    .aspa-delete-all-button:disabled:focus,
+    .aspa-delete-all-button.ant-btn-disabled:focus {
+        color: #8c8c8c !important;
+        background: #f0f0f0 !important;
+        border-color: #bfbfbf !important;
+    }
+
     :deep(.ant-table-body) {
         height: 200px !important;
         overflow-y: auto !important;

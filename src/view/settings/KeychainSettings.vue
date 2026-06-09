@@ -13,7 +13,8 @@
             <a-table
                 :columns="keychainColumns"
                 :data-source="keychains"
-                :pagination="false"
+                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
+                :scroll="{ y: 360 }"
                 :expanded-row-keys="expandedKeys"
                 row-key="id"
                 @expand="onExpand"
@@ -43,7 +44,8 @@
                         <a-table
                             :columns="keyColumns"
                             :data-source="record.keys"
-                            :pagination="false"
+                            :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
+                            :scroll="{ y: 240 }"
                             size="small"
                             :row-key="key => key.keyId"
                         >
@@ -411,5 +413,9 @@
 <style scoped>
     .keychain-settings-container {
         max-width: 100%;
+    }
+
+    :deep(.ant-table-body) {
+        overflow-y: auto !important;
     }
 </style>

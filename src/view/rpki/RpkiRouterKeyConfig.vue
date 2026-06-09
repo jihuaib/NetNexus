@@ -63,7 +63,7 @@
                         :columns="rkColumns"
                         :data-source="rkList"
                         :row-key="record => `${record.ski}-${record.asn}`"
-                        :pagination="{ pageSize: 10, showSizeChanger: false, position: ['bottomCenter'] }"
+                        :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
                         :scroll="{ y: 200 }"
                         size="small"
                     >

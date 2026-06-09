@@ -40,11 +40,11 @@
                                                 class="report-table"
                                                 :columns="columns"
                                                 :data-source="report.statistics"
-                                                :pagination="false"
+                                                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
                                                 :row-key="record => `${record.type}|${record.afi || ''}|${record.safi || ''}`"
                                                 size="small"
                                                 bordered
-                                                :scroll="{ y: 320, x: 'max-content' }"
+                                                :scroll="{ y: 320 }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'typeName'">

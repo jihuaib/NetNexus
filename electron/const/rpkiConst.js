@@ -98,7 +98,9 @@ const RPKI_REQ_TYPES = {
     ADD_ASPA: 8,
     DELETE_ASPA: 9,
     ADD_ROA_BATCH: 10,
-    DELETE_ROA_BATCH: 11
+    DELETE_ROA_BATCH: 11,
+    DELETE_ASPA_BATCH: 12,
+    ADD_ASPA_BATCH: 13
 };
 
 module.exports = {
