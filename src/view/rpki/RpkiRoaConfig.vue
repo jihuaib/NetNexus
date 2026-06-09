@@ -65,7 +65,7 @@
                                 </a-form-item>
                             </a-col>
                         </a-row>
-                        <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                        <a-form-item class="rpki-form-actions" :wrapper-col="{ span: 24 }">
                             <a-space>
                                 <a-button type="primary" html-type="submit" :loading="submitLoading">添加ROA</a-button>
                                 <a-button @click="showRoaImportModal">
@@ -462,6 +462,11 @@
 </script>
 
 <style scoped>
+    .rpki-form-actions :deep(.ant-form-item-control-input-content) {
+        display: flex;
+        justify-content: center;
+    }
+
     .roa-query-toolbar {
         display: block;
         margin-bottom: 16px;

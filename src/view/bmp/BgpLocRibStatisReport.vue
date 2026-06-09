@@ -343,12 +343,21 @@
     }
 
     .client-tab-label {
-        display: inline-block;
-        max-width: 104px;
+        display: block;
+        max-width: 112px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        vertical-align: bottom;
+    }
+
+    .client-tabs :deep(.ant-tabs-tab) {
+        justify-content: flex-start;
+        padding: 8px;
+        text-align: left;
+    }
+
+    .client-tabs :deep(.ant-tabs-tab-btn) {
+        width: 100%;
     }
 
     .no-result-message {

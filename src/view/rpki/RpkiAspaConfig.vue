@@ -51,7 +51,7 @@
                                 </a-form-item>
                             </a-col>
                         </a-row>
-                        <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                        <a-form-item class="rpki-form-actions" :wrapper-col="{ span: 24 }">
                             <a-space>
                                 <a-button type="primary" html-type="submit" :loading="submitLoading">
                                     添加 ASPA
@@ -308,6 +308,11 @@
 </script>
 
 <style scoped>
+    .rpki-form-actions :deep(.ant-form-item-control-input-content) {
+        display: flex;
+        justify-content: center;
+    }
+
     .aspa-delete-all-button:disabled,
     .aspa-delete-all-button.ant-btn-disabled {
         color: #8c8c8c !important;
