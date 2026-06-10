@@ -531,12 +531,14 @@ class MibRegistry {
             roots.push(node);
         });
 
+        this.annotateQueryOids(nodes);
         return roots;
     }
 
     toOidTreeNode(oid, definition = {}) {
         const objectName = definition.ObjectName || definition.NAME || oid;
         const moduleName = definition.ModuleName || '';
+        const accessCapabilities = this.getAccessCapabilities(definition);
 
         return {
             key: oid,
@@ -548,9 +550,80 @@ class MibRegistry {
             pathName: definition.NameSpace || '',
             macro: definition.MACRO || '',
             syntax: this.formatSyntax(definition.SYNTAX),
-            maxAccess: definition['MAX-ACCESS'] || '',
+            maxAccess: definition['MAX-ACCESS'] || definition.ACCESS || '',
             status: definition.STATUS || '',
+            ...accessCapabilities,
             children: []
+        };
+    }
+
+    annotateQueryOids(nodes) {
+        for (const [oid, node] of nodes.entries()) {
+            const parentOid = this.findNearestParentOid(oid, nodes);
+            const parentNode = parentOid ? nodes.get(parentOid) : null;
+            const isTableColumn = this.isTableColumnNode(node, parentNode);
+            const isScalar = Boolean((node.canGet || node.canSet) && !isTableColumn);
+
+            node.isScalar = isScalar;
+            node.isTableColumn = isTableColumn;
+            node.queryOid = isScalar ? `${node.oid}.0` : node.oid;
+        }
+    }
+
+    isTableColumnNode(node, parentNode) {
+        if (!node || !parentNode || !(node.canGet || node.canSet)) {
+            return false;
+        }
+
+        const parentMacro = String(parentNode.macro || '').toUpperCase();
+        const parentAccess = String(parentNode.maxAccess || '').toLowerCase();
+        if (parentMacro !== 'OBJECT-TYPE' || parentAccess !== 'not-accessible') {
+            return false;
+        }
+
+        if (/Entry$/i.test(parentNode.objectName || '')) {
+            return true;
+        }
+
+        const siblingValueNodeCount = (parentNode.children || []).filter(child => child.canGet || child.canSet).length;
+        return siblingValueNodeCount > 1 && !this.isPrimitiveSyntax(parentNode.syntax);
+    }
+
+    isPrimitiveSyntax(syntax = '') {
+        return /^(Integer|Integer32|Unsigned32|Counter32|Counter64|Gauge32|TimeTicks|OctetString|ObjectIdentifier|OID|IpAddress|Boolean)$/i.test(
+            String(syntax).replace(/\s+/g, '')
+        );
+    }
+
+    getAccessCapabilities(definition = {}) {
+        const macro = String(definition.MACRO || '').toUpperCase();
+        const access = String(definition['MAX-ACCESS'] || definition.ACCESS || '').toLowerCase();
+        const isObjectType = macro === 'OBJECT-TYPE';
+        const isNotification = macro === 'NOTIFICATION-TYPE' || macro === 'TRAP-TYPE';
+        const canGet = isObjectType && ['read-only', 'read-write', 'read-create'].includes(access);
+        const canSet = isObjectType && ['read-write', 'read-create', 'write-only'].includes(access);
+        const notifyOnly = isNotification || access === 'accessible-for-notify';
+        let nodeRole = 'container';
+
+        if (canSet) {
+            nodeRole = 'read-write';
+        } else if (canGet) {
+            nodeRole = 'read-only';
+        } else if (notifyOnly) {
+            nodeRole = 'notify-only';
+        } else if (access === 'not-accessible') {
+            nodeRole = 'not-accessible';
+        } else if (isObjectType) {
+            nodeRole = 'object';
+        } else if (isNotification) {
+            nodeRole = 'notification';
+        }
+
+        return {
+            canGet,
+            canSet,
+            notifyOnly,
+            nodeRole
         };
     }
 
@@ -615,9 +688,10 @@ class MibRegistry {
             pathName,
             macro: match.definition.MACRO || null,
             syntax: this.formatSyntax(match.definition.SYNTAX),
-            maxAccess: match.definition['MAX-ACCESS'] || null,
+            maxAccess: match.definition['MAX-ACCESS'] || match.definition.ACCESS || null,
             status: match.definition.STATUS || null,
-            description: match.definition.DESCRIPTION || null
+            description: match.definition.DESCRIPTION || null,
+            ...this.getAccessCapabilities(match.definition)
         };
     }
 

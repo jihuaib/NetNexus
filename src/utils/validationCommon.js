@@ -1177,6 +1177,12 @@ export const createRpkiAspaValidationRules = () => {
  */
 export const createSnmpConfigValidationRules = () => {
     return {
+        targetHost: [
+            {
+                validator: value => validators.required(String(value || '').trim()),
+                message: '请输入目标地址'
+            }
+        ],
         port: [
             {
                 required: true,
@@ -1187,10 +1193,29 @@ export const createSnmpConfigValidationRules = () => {
                 message: '端口范围1-65535'
             }
         ],
+        queryPort: [
+            {
+                required: true,
+                message: '请输入查询端口'
+            },
+            {
+                validator: value => validators.range(1, 65535)(value),
+                message: '查询端口范围1-65535'
+            },
+            {
+                validator: (value, formData) => {
+                    if (formData.enableQueryMonitor === false) {
+                        return true;
+                    }
+                    return Number(value) !== Number(formData.port);
+                },
+                message: '查询端口不能与Trap端口相同'
+            }
+        ],
         supportedVersions: [
             {
-                validator: validators.arrayNotEmpty,
-                message: '请至少选择一个SNMP版本'
+                validator: value => Array.isArray(value) && value.length === 1,
+                message: '请选择一个SNMP版本'
             }
         ],
         community: [

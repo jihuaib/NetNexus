@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container snmp-mib-page">
+    <div class="mt-container snmp-mib-page" @click="hideContextMenu">
         <a-card title="MIB 管理" class="mib-card">
             <div class="mib-workspace">
                 <div class="mib-toolbar">
@@ -55,13 +55,23 @@
                                 :selected-keys="treeSelectedKeys"
                                 :tree-data="mibStatus.oidTree"
                                 block-node
+                                @right-click="handleTreeRightClick"
                                 @select="handleTreeSelect"
                             >
-                                <template #title="{ title, oid, moduleName, macro }">
+                                <template #title="{ title, oid, moduleName, macro, canGet, canSet, notifyOnly, nodeRole }">
                                     <span class="mib-node-title">
                                         <span class="mib-node-name">{{ title }}</span>
                                         <span class="mib-node-oid">{{ oid }}</span>
                                         <span v-if="macro" class="mib-node-macro">{{ macro }}</span>
+                                        <span
+                                            v-if="getNodeRoleText({ canGet, canSet, notifyOnly, nodeRole })"
+                                            :class="[
+                                                'mib-node-role',
+                                                getNodeRoleClass({ canGet, canSet, notifyOnly, nodeRole })
+                                            ]"
+                                        >
+                                            {{ getNodeRoleText({ canGet, canSet, notifyOnly, nodeRole }) }}
+                                        </span>
                                         <span v-if="moduleName" class="mib-node-module">{{ moduleName }}</span>
                                     </span>
                                 </template>
@@ -102,6 +112,14 @@
                                     </a-descriptions-item>
                                     <a-descriptions-item label="访问">
                                         {{ selectedOidNode.maxAccess || '-' }}
+                                    </a-descriptions-item>
+                                    <a-descriptions-item v-if="selectedOidNode.canGet || selectedOidNode.canSet" label="查询OID">
+                                        <a-typography-text copyable>
+                                            {{ selectedOidNode.queryOid || selectedOidNode.oid }}
+                                        </a-typography-text>
+                                    </a-descriptions-item>
+                                    <a-descriptions-item label="能力">
+                                        {{ getNodeAbilityText(selectedOidNode) }}
                                     </a-descriptions-item>
                                     <a-descriptions-item label="状态">
                                         {{ selectedOidNode.status || '-' }}
@@ -185,18 +203,153 @@
                 </a-descriptions-item>
             </a-descriptions>
         </a-modal>
+
+        <a-modal
+            v-model:open="getModalOpen"
+            title="SNMP GET"
+            ok-text="发送 GET"
+            cancel-text="取消"
+            :confirm-loading="getSending"
+            width="680px"
+            @ok="sendGetRequest"
+        >
+            <a-alert
+                v-if="getTargetNode?.isTableColumn"
+                type="warning"
+                show-icon
+                message="表字段需要指定行索引"
+                description="请在OID最后补具体行索引，例如接口表第1行追加 .1。"
+                class="mib-request-alert"
+            />
+            <a-form :model="getForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
+                <a-form-item label="目标">
+                    <div class="mib-request-readonly">{{ getRequestTargetText(getForm) }}</div>
+                </a-form-item>
+                <a-form-item label="版本">
+                    <div class="mib-request-readonly">{{ getRequestAuthText(getForm) }}</div>
+                </a-form-item>
+                <a-form-item label="OID">
+                    <a-input v-model:value="getForm.oid" />
+                </a-form-item>
+            </a-form>
+
+            <a-descriptions v-if="getResult" :column="1" bordered size="small" class="mib-request-result">
+                <a-descriptions-item label="OID">
+                    <a-typography-text copyable>
+                        {{ getResult.oid }}
+                    </a-typography-text>
+                </a-descriptions-item>
+                <a-descriptions-item label="类型">
+                    {{ getResult.type || '-' }}
+                </a-descriptions-item>
+                <a-descriptions-item label="值">
+                    <a-typography-text copyable>
+                        {{ getResult.value }}
+                    </a-typography-text>
+                </a-descriptions-item>
+            </a-descriptions>
+        </a-modal>
+
+        <a-modal
+            v-model:open="setModalOpen"
+            title="SNMP SET"
+            ok-text="发送 SET"
+            cancel-text="取消"
+            :confirm-loading="setSending"
+            width="680px"
+            @ok="sendSetRequest"
+        >
+            <a-alert
+                v-if="setTargetNode?.isTableColumn"
+                type="warning"
+                show-icon
+                message="表字段需要指定行索引"
+                description="请在OID最后补具体行索引，例如接口表第1行追加 .1。"
+                class="mib-request-alert"
+            />
+            <a-form :model="setForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
+                <a-form-item label="目标">
+                    <div class="mib-request-readonly">{{ getRequestTargetText(setForm) }}</div>
+                </a-form-item>
+                <a-form-item label="版本">
+                    <div class="mib-request-readonly">{{ getRequestAuthText(setForm) }}</div>
+                </a-form-item>
+                <a-form-item label="OID">
+                    <a-input v-model:value="setForm.oid" />
+                </a-form-item>
+                <a-row :gutter="12">
+                    <a-col :span="12">
+                        <a-form-item label="类型">
+                            <a-select v-model:value="setForm.type">
+                                <a-select-option v-for="option in setTypeOptions" :key="option.value" :value="option.value">
+                                    {{ option.label }}
+                                </a-select-option>
+                            </a-select>
+                        </a-form-item>
+                    </a-col>
+                    <a-col :span="12">
+                        <a-form-item label="值">
+                            <a-input v-model:value="setForm.value" placeholder="请输入SET值" />
+                        </a-form-item>
+                    </a-col>
+                </a-row>
+            </a-form>
+        </a-modal>
+
+        <div
+            v-if="contextMenu.visible"
+            class="mib-context-menu"
+            :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+            @click.stop
+        >
+            <div class="mib-context-menu-title">
+                {{ contextMenu.node?.moduleQualifiedName || contextMenu.node?.objectName || 'OID节点' }}
+            </div>
+            <a-menu class="mib-context-menu-list" :selectable="false" @click="handleContextMenuClick">
+                <a-menu-item key="copy">
+                    <template #icon><CopyOutlined /></template>
+                    复制OID
+                </a-menu-item>
+                <a-menu-item key="parse">
+                    <template #icon><SearchOutlined /></template>
+                    解析OID
+                </a-menu-item>
+                <a-menu-divider />
+                <a-menu-item key="get" :disabled="!canGetNode(contextMenu.node)">
+                    <template #icon><ApiOutlined /></template>
+                    GET 查询
+                </a-menu-item>
+                <a-menu-item key="set" :disabled="!canSetNode(contextMenu.node)">
+                    <template #icon><EditOutlined /></template>
+                    SET 设置
+                </a-menu-item>
+                <a-menu-item key="notify" :disabled="!isNotifyNode(contextMenu.node)">
+                    <template #icon><BellOutlined /></template>
+                    Trap变量
+                </a-menu-item>
+            </a-menu>
+            <div class="mib-context-menu-hint">
+                {{ getNodeAbilityText(contextMenu.node) }}
+            </div>
+        </div>
     </div>
 </template>
 
 <script setup>
-    import { computed, ref, onActivated, onMounted } from 'vue';
+    import { computed, reactive, ref, onActivated, onMounted } from 'vue';
     import { message } from 'ant-design-vue';
+    import { DEFAULT_VALUES } from '../../const/snmpConst';
     import {
+        ApiOutlined,
+        BellOutlined,
+        CopyOutlined,
         DeleteOutlined,
+        EditOutlined,
         FileSearchOutlined,
         FolderOpenOutlined,
         InfoCircleOutlined,
-        ReloadOutlined
+        ReloadOutlined,
+        SearchOutlined
     } from '@ant-design/icons-vue';
 
     defineOptions({ name: 'SnmpMib' });
@@ -206,10 +359,26 @@
     const oidQuery = ref('');
     const oidResult = ref(null);
     const oidResultModalOpen = ref(false);
+    const getModalOpen = ref(false);
+    const getSending = ref(false);
+    const getTargetNode = ref(null);
+    const getResult = ref(null);
+    const setModalOpen = ref(false);
+    const setSending = ref(false);
+    const setTargetNode = ref(null);
     const mibFiles = ref([]);
     const treeExpandedKeys = ref([]);
     const treeSelectedKeys = ref([]);
     const selectedOidNode = ref(null);
+    const contextMenu = reactive({
+        visible: false,
+        x: 0,
+        y: 0,
+        node: null
+    });
+    const CONTEXT_MENU_WIDTH = 196;
+    const CONTEXT_MENU_HEIGHT = 238;
+    const CONTEXT_MENU_MARGIN = 8;
     const mibStatus = ref({
         loadedFiles: [],
         failedFiles: [],
@@ -221,6 +390,32 @@
         cacheHit: false,
         oidTree: []
     });
+    const getForm = reactive({
+        targetHost: DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST,
+        targetPort: DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT,
+        version: 'v2c',
+        community: DEFAULT_VALUES.DEFAULT_COMMUNITY,
+        oid: ''
+    });
+    const setForm = reactive({
+        targetHost: DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST,
+        targetPort: DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT,
+        version: 'v2c',
+        community: DEFAULT_VALUES.DEFAULT_COMMUNITY,
+        oid: '',
+        type: 'OctetString',
+        value: ''
+    });
+    const setTypeOptions = [
+        { label: 'Integer', value: 'Integer' },
+        { label: 'OctetString', value: 'OctetString' },
+        { label: 'OID', value: 'OID' },
+        { label: 'IpAddress', value: 'IpAddress' },
+        { label: 'Counter32', value: 'Counter32' },
+        { label: 'Gauge32 / Unsigned32', value: 'Gauge32' },
+        { label: 'TimeTicks', value: 'TimeTicks' },
+        { label: 'Counter64', value: 'Counter64' }
+    ];
 
     const compiledFileCount = computed(() => mibStatus.value.loadedFiles.length);
     const failedFileCount = computed(() => mibStatus.value.failedFiles.length);
@@ -276,6 +471,103 @@
         }
 
         return null;
+    };
+
+    const canGetNode = node => Boolean(node?.canGet);
+    const canSetNode = node => Boolean(node?.canSet);
+    const isNotifyNode = node => Boolean(node?.notifyOnly);
+
+    const getNodeRoleText = node => {
+        if (!node) return '';
+        if (node.canSet) return 'GET/SET';
+        if (node.canGet) return 'GET';
+        if (node.notifyOnly) return 'Trap';
+        if (node.nodeRole === 'not-accessible') return '不可访问';
+        return '';
+    };
+
+    const getNodeRoleClass = node => {
+        if (!node) return '';
+        if (node.canSet) return 'is-write';
+        if (node.canGet) return 'is-read';
+        if (node.notifyOnly) return 'is-notify';
+        if (node.nodeRole === 'not-accessible') return 'is-disabled';
+        return '';
+    };
+
+    const getNodeAbilityText = node => {
+        if (!node) return '-';
+        if (node.canSet && node.isTableColumn) return '表字段可GET/SET，需要指定表行索引';
+        if (node.canSet && node.isScalar) return '标量可GET/SET，查询时自动追加 .0';
+        if (node.canSet) return '允许GET查询和SET设置';
+        if (node.canGet && node.isTableColumn) return '表字段可GET，需要指定表行索引';
+        if (node.canGet && node.isScalar) return '标量可GET，查询时自动追加 .0';
+        if (node.canGet) return '允许GET查询，不允许SET';
+        if (node.notifyOnly) return '仅用于Trap/Inform通知变量';
+        if (node.nodeRole === 'not-accessible') return '不可直接GET/SET，多为表、行或分组节点';
+        return '分组或标识节点，不直接承载查询值';
+    };
+
+    const getEffectiveQueryOid = node => {
+        if (!node?.oid) {
+            return '';
+        }
+        return node.queryOid || (node.isScalar ? `${node.oid}.0` : node.oid);
+    };
+
+    const getRequestTargetText = form => `${form.targetHost || '-'}:${form.targetPort || '-'}`;
+
+    const getRequestAuthText = form => {
+        const version = form.version ? String(form.version).toUpperCase() : '-';
+        return `${version} / ${form.community || '-'}`;
+    };
+
+    const getConfiguredSessionVersion = versions => {
+        if (!Array.isArray(versions) || versions.length === 0 || !versions[0]) {
+            return 'v2c';
+        }
+        return ['v1', 'v2c'].includes(versions[0]) ? versions[0] : '';
+    };
+
+    const inferSetType = syntax => {
+        const normalized = String(syntax || '')
+            .replace(/[\s_-]+/g, '')
+            .toLowerCase();
+        if (!normalized) return 'OctetString';
+        if (
+            normalized.includes('displaystring') ||
+            normalized.includes('octetstring') ||
+            normalized.includes('physaddress')
+        ) {
+            return 'OctetString';
+        }
+        if (normalized.includes('objectidentifier') || normalized === 'oid') {
+            return 'OID';
+        }
+        if (normalized.includes('ipaddress')) {
+            return 'IpAddress';
+        }
+        if (normalized.includes('counter64')) {
+            return 'Counter64';
+        }
+        if (normalized.includes('counter32') || normalized === 'counter') {
+            return 'Counter32';
+        }
+        if (normalized.includes('gauge') || normalized.includes('unsigned32')) {
+            return 'Gauge32';
+        }
+        if (normalized.includes('timeticks')) {
+            return 'TimeTicks';
+        }
+        if (
+            normalized.includes('integer') ||
+            normalized.includes('truthvalue') ||
+            normalized.includes('rowstatus') ||
+            normalized.includes('enumeration')
+        ) {
+            return 'Integer';
+        }
+        return 'OctetString';
     };
 
     const selectOidNode = oid => {
@@ -420,6 +712,193 @@
     const handleTreeSelect = selectedKeys => {
         treeSelectedKeys.value = selectedKeys;
         selectedOidNode.value = selectedKeys.length > 0 ? findTreeNode(mibStatus.value.oidTree, selectedKeys[0]) : null;
+    };
+
+    const getContextMenuPosition = event => {
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const maxX = Math.max(CONTEXT_MENU_MARGIN, viewportWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_MARGIN);
+        const maxY = Math.max(CONTEXT_MENU_MARGIN, viewportHeight - CONTEXT_MENU_HEIGHT - CONTEXT_MENU_MARGIN);
+
+        return {
+            x: Math.min(Math.max(CONTEXT_MENU_MARGIN, event.clientX), maxX),
+            y: Math.min(Math.max(CONTEXT_MENU_MARGIN, event.clientY), maxY)
+        };
+    };
+
+    const handleTreeRightClick = ({ event, node }) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const key = node?.key || node?.eventKey || node?.dataRef?.key;
+        const matchedNode = findTreeNode(mibStatus.value.oidTree, key) || node?.dataRef || node;
+        if (!matchedNode?.key) {
+            return;
+        }
+
+        treeSelectedKeys.value = [matchedNode.key];
+        selectedOidNode.value = matchedNode;
+        contextMenu.node = matchedNode;
+        const position = getContextMenuPosition(event);
+        contextMenu.x = position.x;
+        contextMenu.y = position.y;
+        contextMenu.visible = true;
+    };
+
+    const hideContextMenu = () => {
+        contextMenu.visible = false;
+    };
+
+    const handleContextMenuClick = ({ key }) => {
+        const actions = {
+            copy: copyContextOid,
+            parse: parseContextOid,
+            get: showGetCapability,
+            set: showSetCapability,
+            notify: showNotifyCapability
+        };
+        actions[key]?.();
+    };
+
+    const copyContextOid = async () => {
+        const oid = contextMenu.node?.oid;
+        if (!oid) {
+            return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(oid);
+            message.success('OID已复制');
+        } catch (error) {
+            oidQuery.value = oid;
+            message.warning('复制失败，已填入OID输入框');
+        } finally {
+            hideContextMenu();
+        }
+    };
+
+    const parseContextOid = async () => {
+        if (!contextMenu.node?.oid) {
+            return;
+        }
+
+        oidQuery.value = contextMenu.node.oid;
+        hideContextMenu();
+        await translateOid();
+    };
+
+    const showGetCapability = async () => {
+        const node = contextMenu.node;
+        if (!node?.oid) {
+            return;
+        }
+
+        hideContextMenu();
+        await loadRequestDefaults(getForm);
+        getTargetNode.value = node;
+        getForm.oid = getEffectiveQueryOid(node);
+        getResult.value = null;
+        getModalOpen.value = true;
+    };
+
+    const showSetCapability = async () => {
+        const node = contextMenu.node;
+        hideContextMenu();
+        if (!node?.canSet) {
+            return;
+        }
+
+        await loadRequestDefaults(setForm);
+        setTargetNode.value = node;
+        setForm.oid = getEffectiveQueryOid(node);
+        setForm.type = inferSetType(node.syntax);
+        setForm.value = '';
+        setModalOpen.value = true;
+    };
+
+    const showNotifyCapability = () => {
+        hideContextMenu();
+        message.info('该节点用于Trap/Inform变量绑定，不用于普通GET/SET');
+    };
+
+    const loadRequestDefaults = async form => {
+        try {
+            const result = await window.snmpApi.getSnmpConfig();
+            const config = result.status === 'success' && result.data ? result.data : {};
+            const versions = Array.isArray(config.supportedVersions) ? config.supportedVersions : [];
+            form.targetHost = config.targetHost || DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST;
+            form.targetPort = config.queryPort || DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT;
+            form.community = config.community || DEFAULT_VALUES.DEFAULT_COMMUNITY;
+            form.version = getConfiguredSessionVersion(versions);
+        } catch (error) {
+            form.targetHost = DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST;
+            form.targetPort = DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT;
+            form.community = DEFAULT_VALUES.DEFAULT_COMMUNITY;
+            form.version = 'v2c';
+        }
+    };
+
+    const sendGetRequest = async () => {
+        await loadRequestDefaults(getForm);
+        if (!getForm.targetHost || !getForm.targetPort || !getForm.version) {
+            message.warning('请在SNMP配置中填写GET目标并启用SNMPv1/v2c');
+            return;
+        }
+
+        if (!getForm.oid) {
+            message.warning('请填写OID');
+            return;
+        }
+
+        try {
+            getSending.value = true;
+            const result = await window.snmpApi.sendGetRequest({ oid: getForm.oid });
+            if (result.status === 'success') {
+                const varbind = result.data?.varbinds?.[0] || null;
+                getResult.value = varbind;
+                message.success('GET查询成功');
+                return;
+            }
+
+            message.error(result.msg || 'GET查询失败');
+        } catch (error) {
+            message.error('GET查询失败: ' + error.message);
+        } finally {
+            getSending.value = false;
+        }
+    };
+
+    const sendSetRequest = async () => {
+        await loadRequestDefaults(setForm);
+        if (!setForm.targetHost || !setForm.targetPort || !setForm.version) {
+            message.warning('请在SNMP配置中填写SET目标并启用SNMPv1/v2c');
+            return;
+        }
+
+        if (!setForm.oid || !setForm.value) {
+            message.warning('请填写OID和值');
+            return;
+        }
+
+        try {
+            setSending.value = true;
+            const result = await window.snmpApi.sendSetRequest({
+                oid: setForm.oid,
+                type: setForm.type,
+                value: setForm.value
+            });
+            if (result.status === 'success') {
+                setModalOpen.value = false;
+                const varbind = result.data?.varbinds?.[0];
+                message.success(`SET成功${varbind?.value !== undefined ? `: ${varbind.value}` : ''}`);
+                return;
+            }
+
+            message.error(result.msg || 'SET发送失败');
+        } catch (error) {
+            message.error('SET发送失败: ' + error.message);
+        } finally {
+            setSending.value = false;
+        }
     };
 
     const translateOid = async () => {
@@ -628,6 +1107,35 @@
         color: #1677ff;
     }
 
+    .mib-node-role {
+        flex-shrink: 0;
+        padding: 0 5px;
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 18px;
+        white-space: nowrap;
+    }
+
+    .mib-node-role.is-read {
+        color: #0958d9;
+        background: #e6f4ff;
+    }
+
+    .mib-node-role.is-write {
+        color: #389e0d;
+        background: #f6ffed;
+    }
+
+    .mib-node-role.is-notify {
+        color: #d46b08;
+        background: #fff7e6;
+    }
+
+    .mib-node-role.is-disabled {
+        color: #8c8c8c;
+        background: #f5f5f5;
+    }
+
     .mib-detail-scroll {
         padding: 8px;
     }
@@ -677,6 +1185,83 @@
 
     .oid-result-detail :deep(.ant-descriptions-item-label) {
         width: 92px;
+    }
+
+    .mib-request-alert {
+        margin-bottom: 10px;
+    }
+
+    .mib-request-readonly {
+        min-height: 32px;
+        overflow: hidden;
+        padding: 0 11px;
+        color: #262626;
+        line-height: 30px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        background: #fafafa;
+        border: 1px solid #f0f0f0;
+        border-radius: 6px;
+    }
+
+    .mib-request-form :deep(.ant-form-item) {
+        margin-bottom: 10px;
+    }
+
+    .mib-request-result {
+        margin-top: 10px;
+    }
+
+    .mib-request-result :deep(.ant-descriptions-item-label) {
+        width: 86px;
+    }
+
+    .mib-context-menu {
+        position: fixed;
+        z-index: 1200;
+        width: 196px;
+        max-height: calc(100vh - 16px);
+        padding: 4px 0;
+        overflow-y: auto;
+        background: #fff;
+        border: 1px solid #f0f0f0;
+        border-radius: 6px;
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+    }
+
+    .mib-context-menu-title {
+        overflow: hidden;
+        padding: 5px 12px 6px;
+        color: #262626;
+        font-weight: 600;
+        font-size: 13px;
+        line-height: 20px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        border-bottom: 1px solid #f0f0f0;
+    }
+
+    .mib-context-menu-list {
+        border-inline-end: 0;
+    }
+
+    .mib-context-menu-list :deep(.ant-menu-item) {
+        height: 30px;
+        margin: 2px 4px;
+        line-height: 30px;
+        border-radius: 4px;
+    }
+
+    .mib-context-menu-list :deep(.ant-menu-item-divider) {
+        margin: 4px 0;
+    }
+
+    .mib-context-menu-hint {
+        padding: 6px 12px 4px;
+        color: #8c8c8c;
+        font-size: 12px;
+        line-height: 18px;
+        border-top: 1px solid #f0f0f0;
     }
 
     @media (max-width: 900px) {

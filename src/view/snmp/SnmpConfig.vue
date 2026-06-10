@@ -1,40 +1,76 @@
 <template>
     <div class="mt-container snmp-config-page">
         <div class="snmp-config-layout">
-            <a-card title="SNMP Trap 服务器配置" class="snmp-config-card">
+            <a-card title="SNMP 服务配置" class="snmp-config-card">
                 <a-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol" class="snmp-config-form">
                     <div class="config-section">
                         <div class="config-section-title">基础配置</div>
                         <a-row :gutter="12">
-                            <a-col :span="8">
-                                <a-form-item label="监听端口" name="port">
+                            <a-col :span="6">
+                                <a-form-item label="目标地址" name="targetHost">
+                                    <a-tooltip
+                                        :title="validationSnmpConfigErrors.targetHost"
+                                        :open="!!validationSnmpConfigErrors.targetHost"
+                                    >
+                                        <a-input
+                                            v-model:value="formData.targetHost"
+                                            placeholder="例如 127.0.0.1"
+                                            allow-clear
+                                            :status="validationSnmpConfigErrors.targetHost ? 'error' : ''"
+                                        />
+                                    </a-tooltip>
+                                </a-form-item>
+                            </a-col>
+                            <a-col :span="6">
+                                <a-form-item label="Trap端口" name="port">
                                     <a-tooltip
                                         :title="validationSnmpConfigErrors.port"
                                         :open="!!validationSnmpConfigErrors.port"
                                     >
                                         <a-input
                                             v-model:value="formData.port"
-                                            placeholder="请输入监听端口"
+                                            placeholder="请输入Trap端口"
                                             :status="validationSnmpConfigErrors.port ? 'error' : ''"
                                         />
                                     </a-tooltip>
                                 </a-form-item>
                             </a-col>
-                            <a-col :span="16">
+                            <a-col :span="6">
+                                <a-form-item label="查询端口" name="queryPort">
+                                    <a-tooltip
+                                        :title="validationSnmpConfigErrors.queryPort"
+                                        :open="!!validationSnmpConfigErrors.queryPort"
+                                    >
+                                        <a-input
+                                            v-model:value="formData.queryPort"
+                                            placeholder="请输入查询端口"
+                                            :status="validationSnmpConfigErrors.queryPort ? 'error' : ''"
+                                        />
+                                    </a-tooltip>
+                                </a-form-item>
+                            </a-col>
+                            <a-col :span="6">
+                                <a-form-item label="查询Agent" name="enableQueryMonitor">
+                                    <a-switch
+                                        v-model:checked="formData.enableQueryMonitor"
+                                        checked-children="启用"
+                                        un-checked-children="关闭"
+                                    />
+                                </a-form-item>
+                            </a-col>
+                        </a-row>
+                        <a-row :gutter="12">
+                            <a-col :span="24">
                                 <a-form-item label="SNMP版本" name="supportedVersions">
                                     <a-tooltip
                                         :title="validationSnmpConfigErrors.supportedVersions"
                                         :open="!!validationSnmpConfigErrors.supportedVersions"
                                     >
-                                        <a-checkbox-group
-                                            v-model:value="formData.supportedVersions"
-                                            :status="validationSnmpConfigErrors.supportedVersions ? 'error' : ''"
-                                            class="version-checkbox-group"
-                                        >
-                                            <a-checkbox value="v1">SNMPv1</a-checkbox>
-                                            <a-checkbox value="v2c">SNMPv2c</a-checkbox>
-                                            <a-checkbox value="v3">SNMPv3</a-checkbox>
-                                        </a-checkbox-group>
+                                        <a-radio-group v-model:value="selectedSnmpVersion" class="version-radio-group">
+                                            <a-radio value="v1">SNMPv1</a-radio>
+                                            <a-radio value="v2c">SNMPv2c</a-radio>
+                                            <a-radio value="v3">SNMPv3</a-radio>
+                                        </a-radio-group>
                                     </a-tooltip>
                                 </a-form-item>
                             </a-col>
@@ -181,6 +217,14 @@
                     <a-descriptions-item label="监听端口">
                         {{ formData.port }}
                     </a-descriptions-item>
+                    <a-descriptions-item label="目标地址">
+                        {{ formData.targetHost }}
+                    </a-descriptions-item>
+                    <a-descriptions-item label="查询Agent">
+                        <a-tag :color="formData.enableQueryMonitor ? 'green' : 'default'">
+                            {{ formData.enableQueryMonitor ? `端口 ${formData.queryPort}` : '未启用' }}
+                        </a-tag>
+                    </a-descriptions-item>
                     <a-descriptions-item label="支持版本">
                         <div class="status-version-tags">
                             <a-tag v-for="version in formData.supportedVersions" :key="version" color="blue">
@@ -191,6 +235,9 @@
                     <a-descriptions-item label="Trap数量">
                         {{ trapCount }}
                     </a-descriptions-item>
+                    <a-descriptions-item label="查询数量">
+                        {{ queryCount }}
+                    </a-descriptions-item>
                 </a-descriptions>
             </a-card>
         </div>
@@ -198,7 +245,7 @@
 </template>
 
 <script setup>
-    import { ref, onMounted, onActivated, onDeactivated } from 'vue';
+    import { computed, ref, onMounted, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
     import { DEFAULT_VALUES, SNMP_SECURITY_LEVEL, SNMP_SUB_EVT_TYPES, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
     import { FormValidator, createSnmpConfigValidationRules } from '../../utils/validationCommon';
@@ -206,16 +253,34 @@
 
     defineOptions({ name: 'SnmpConfig' });
 
-    const labelCol = { style: { width: '92px' } };
+    const labelCol = { style: { width: '82px' } };
     const wrapperCol = { style: { flex: 1, minWidth: 0 } };
 
     const serverLoading = ref(false);
     const isServerRunning = ref(false);
     const trapCount = ref(0);
+    const queryCount = ref(0);
+
+    const normalizeSupportedVersions = versions => {
+        const list = Array.isArray(versions) ? versions : [versions].filter(Boolean);
+        if (list.includes('v2c')) {
+            return ['v2c'];
+        }
+        if (list.includes('v1')) {
+            return ['v1'];
+        }
+        if (list.includes('v3')) {
+            return ['v3'];
+        }
+        return [DEFAULT_VALUES.DEFAULT_VERSION];
+    };
 
     const formData = ref({
+        targetHost: DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST,
         port: DEFAULT_VALUES.DEFAULT_SNMP_PORT,
-        supportedVersions: ['v2c'],
+        queryPort: DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT,
+        enableQueryMonitor: DEFAULT_VALUES.DEFAULT_SNMP_QUERY_MONITOR,
+        supportedVersions: [DEFAULT_VALUES.DEFAULT_VERSION],
         community: DEFAULT_VALUES.DEFAULT_COMMUNITY,
         v3Username: '',
         securityLevel: SNMP_SECURITY_LEVEL.NO_AUTH_NO_PRIV,
@@ -226,7 +291,9 @@
     });
 
     const validationSnmpConfigErrors = ref({
+        targetHost: '',
         port: '',
+        queryPort: '',
         supportedVersions: '',
         community: '',
         v3Username: '',
@@ -241,11 +308,27 @@
     let validatorSnmpConfig = new FormValidator(validationSnmpConfigErrors);
     validatorSnmpConfig.addRules(createSnmpConfigValidationRules());
 
+    const selectedSnmpVersion = computed({
+        get: () => normalizeSupportedVersions(formData.value.supportedVersions)[0],
+        set: version => {
+            formData.value.supportedVersions = version ? [version] : [];
+        }
+    });
+
     const loadConfig = async () => {
         try {
             const result = await window.snmpApi.getSnmpConfig();
             if (result.status === 'success' && result.data) {
-                formData.value = result.data;
+                const storedConfig = { ...result.data };
+                delete storedConfig.targetPort;
+                storedConfig.supportedVersions = normalizeSupportedVersions(storedConfig.supportedVersions);
+                formData.value = {
+                    ...formData.value,
+                    ...storedConfig,
+                    targetHost: result.data.targetHost || DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST,
+                    queryPort: result.data.queryPort || DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT,
+                    enableQueryMonitor: result.data.enableQueryMonitor !== false
+                };
             }
         } catch (error) {
             message.error('加载配置失败: ' + error.message);
@@ -265,11 +348,35 @@
         return Array.isArray(payload?.list) ? payload.list.length : 0;
     };
 
+    const getQueryTotal = payload => {
+        if (Array.isArray(payload)) {
+            return payload.length;
+        }
+
+        const total = Number(payload?.totalQueries);
+        if (Number.isFinite(total)) {
+            return total;
+        }
+
+        return Array.isArray(payload?.list) ? payload.list.length : 0;
+    };
+
     const loadTrapCount = async () => {
         try {
             const result = await window.snmpApi.getTrapList();
             if (result.status === 'success') {
                 trapCount.value = getTrapTotal(result.data);
+            }
+        } catch (error) {
+            console.error(error);
+        }
+    };
+
+    const loadQueryCount = async () => {
+        try {
+            const result = await window.snmpApi.getQueryList();
+            if (result.status === 'success') {
+                queryCount.value = getQueryTotal(result.data);
             }
         } catch (error) {
             console.error(error);
@@ -297,6 +404,7 @@
             if (startResult.status === 'success') {
                 isServerRunning.value = true;
                 trapCount.value = 0;
+                queryCount.value = 0;
                 message.success('SNMP服务启动成功');
             } else {
                 message.error(startResult.msg || 'SNMP服务启动失败');
@@ -316,6 +424,7 @@
                 message.success('SNMP服务器停止成功');
                 isServerRunning.value = false;
                 trapCount.value = 0;
+                queryCount.value = 0;
             } else {
                 message.error(result.msg || 'SNMP服务停止失败');
             }
@@ -338,8 +447,11 @@
                 trapCount.value++;
             } else if (type === SNMP_SUB_EVT_TYPES.TRAP_BATCH_RECEIVED) {
                 trapCount.value += Number(payload.data?.changedCount) || 0;
+            } else if (type === SNMP_SUB_EVT_TYPES.QUERY_BATCH_RECEIVED) {
+                queryCount.value += Number(payload.data?.changedCount) || 0;
             } else if (type === SNMP_SUB_EVT_TYPES.SERVER_STATUS && payload.data?.status === 'stopped') {
                 trapCount.value = 0;
+                queryCount.value = 0;
                 isServerRunning.value = false;
             }
         }
@@ -348,6 +460,7 @@
     onActivated(async () => {
         EventBus.on('snmp:event', SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_CONFIG, handleSnmpEvent);
         await loadTrapCount();
+        await loadQueryCount();
     });
 
     onDeactivated(() => {
@@ -432,7 +545,7 @@
         line-height: 20px;
     }
 
-    .version-checkbox-group,
+    .version-radio-group,
     .security-radio-group {
         display: flex;
         flex-wrap: wrap;

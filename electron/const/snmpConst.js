@@ -10,7 +10,9 @@ const SNMP_SUB_EVT_TYPES = {
     TRAP_PROCESSED: 4,
     TRAP_ERROR: 5,
     SERVER_STATUS: 6,
-    TRAP_BATCH_RECEIVED: 7
+    TRAP_BATCH_RECEIVED: 7,
+    QUERY_BATCH_RECEIVED: 8,
+    QUERY_ERROR: 9
 };
 
 // SNMP请求-响应类型
@@ -21,7 +23,9 @@ const SNMP_REQ_TYPES = {
     GET_TRAP_DETAIL: 4,
     CLEAR_TRAP_HISTORY: 5,
     UPDATE_CONFIG: 6,
-    COMPILE_MIBS: 7
+    COMPILE_MIBS: 7,
+    GET_QUERY_LIST: 8,
+    CLEAR_QUERY_HISTORY: 9
 };
 
 const MIB_REQ_TYPES = {
@@ -61,22 +65,12 @@ const SNMP_SECURITY_LEVEL = {
 // 默认设置
 const DEFAULT_SNMP_SETTINGS = {
     maxTrapHistory: 1000,
+    maxQueryHistory: 1000,
+    targetHost: '127.0.0.1',
     port: 162,
+    queryPort: 10161,
+    enableQueryMonitor: true,
     timeout: 5000
-};
-
-const SNMP_BER_ASN1_TAG = {
-    SEQUENCE: 0x30,
-    INTEGER: 0x02,
-    OCTET_STRING: 0x04,
-    OBJECT_IDENTIFIER: 0x06,
-    NULL: 0x05,
-    IP_ADDRESS: 0x40,
-    COUNTER32: 0x41,
-    GAUGE32: 0x42,
-    TIME_TICKS: 0x43,
-    OPAQUE: 0x44,
-    COUNTER64: 0x46
 };
 
 module.exports = {
@@ -87,6 +81,5 @@ module.exports = {
     SNMP_PDU_TYPE,
     SNMP_SECURITY_LEVEL,
     DEFAULT_SNMP_SETTINGS,
-    SNMP_SUB_EVT_TYPES,
-    SNMP_BER_ASN1_TAG
+    SNMP_SUB_EVT_TYPES
 };

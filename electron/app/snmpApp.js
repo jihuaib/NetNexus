@@ -1,4 +1,5 @@
 const path = require('path');
+const snmp = require('net-snmp');
 const { app, BrowserWindow, dialog } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
@@ -34,12 +35,37 @@ class SnmpApp {
         this.ipcMain.handle('snmp:stopSnmp', this.handleStopSnmp.bind(this));
         this.ipcMain.handle('snmp:getTrapList', this.handleGetTrapList.bind(this));
         this.ipcMain.handle('snmp:clearTrapHistory', this.handleClearTrapHistory.bind(this));
+        this.ipcMain.handle('snmp:getQueryList', this.handleGetQueryList.bind(this));
+        this.ipcMain.handle('snmp:clearQueryHistory', this.handleClearQueryHistory.bind(this));
         this.ipcMain.handle('snmp:selectMibFiles', this.handleSelectMibFiles.bind(this));
         this.ipcMain.handle('snmp:selectMibDirectory', this.handleSelectMibDirectory.bind(this));
         this.ipcMain.handle('snmp:compileMibs', this.handleCompileMibs.bind(this));
         this.ipcMain.handle('snmp:getMibStatus', this.handleGetMibStatus.bind(this));
         this.ipcMain.handle('snmp:clearMibs', this.handleClearMibs.bind(this));
         this.ipcMain.handle('snmp:translateOid', this.handleTranslateOid.bind(this));
+        this.ipcMain.handle('snmp:sendGetRequest', this.handleSendGetRequest.bind(this));
+        this.ipcMain.handle('snmp:sendSetRequest', this.handleSendSetRequest.bind(this));
+    }
+
+    normalizeSupportedVersions(versions) {
+        const list = Array.isArray(versions) ? versions : [versions].filter(Boolean);
+        if (list.includes('v2c')) {
+            return ['v2c'];
+        }
+        if (list.includes('v1')) {
+            return ['v1'];
+        }
+        if (list.includes('v3')) {
+            return ['v3'];
+        }
+        return ['v2c'];
+    }
+
+    normalizeSnmpConfig(config = {}) {
+        return {
+            ...config,
+            supportedVersions: this.normalizeSupportedVersions(config.supportedVersions)
+        };
     }
 
     /**
@@ -47,8 +73,9 @@ class SnmpApp {
      */
     async handleSaveSnmpConfig(_event, config) {
         try {
-            logger.info('handleSaveSnmpConfig', config);
-            this.store.set(this.snmpConfigFileKey, config);
+            const normalizedConfig = this.normalizeSnmpConfig(config);
+            logger.info('handleSaveSnmpConfig', normalizedConfig);
+            this.store.set(this.snmpConfigFileKey, normalizedConfig);
             return successResponse(null, '配置保存成功');
         } catch (error) {
             logger.error('保存SNMP配置失败:', error);
@@ -65,7 +92,7 @@ class SnmpApp {
             if (!config) {
                 return successResponse(null, '获取默认配置');
             }
-            return successResponse(config, '配置获取成功');
+            return successResponse(this.normalizeSnmpConfig(config), '配置获取成功');
         } catch (error) {
             logger.error('获取SNMP配置失败:', error);
             return errorResponse('配置获取失败: ' + error.message);
@@ -78,19 +105,20 @@ class SnmpApp {
     async handleStartSnmp(event, config) {
         const webContents = event.sender;
         try {
+            const runtimeConfig = this.normalizeSnmpConfig(config);
             if (this.worker !== null) {
                 logger.error('SNMP协议已经启动');
                 return errorResponse('SNMP协议已经启动');
             }
 
-            logger.info(`启动SNMP服务器: ${JSON.stringify(config)}`);
+            logger.info(`启动SNMP服务器: ${JSON.stringify(runtimeConfig)}`);
 
             // 获取日志级别配置
             if (this.logLevel) {
-                config.logLevel = this.logLevel;
+                runtimeConfig.logLevel = this.logLevel;
             }
-            config.mibFiles = this.getStoredMibFilePaths();
-            config.mibCacheFilePath = this.getMibCacheFilePath();
+            runtimeConfig.mibFiles = this.getStoredMibFilePaths();
+            runtimeConfig.mibCacheFilePath = this.getMibCacheFilePath();
 
             const workerPath = this.isDev
                 ? path.join(__dirname, '../worker/snmpWorker.js')
@@ -108,7 +136,7 @@ class SnmpApp {
 
             this.worker.addEventListener(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, this.snmpTrapEventHandler);
 
-            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.START_SNMP, config);
+            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.START_SNMP, runtimeConfig);
 
             if (result.status === 'success') {
                 logger.info(`SNMP服务器启动成功: ${JSON.stringify(result)}`);
@@ -192,6 +220,54 @@ class SnmpApp {
         } catch (error) {
             logger.error('清空Trap历史失败:', error);
             return errorResponse('清空Trap历史失败: ' + error.message);
+        }
+    }
+
+    /**
+     * 获取SNMP查询历史列表
+     */
+    async handleGetQueryList(_event, query = {}) {
+        try {
+            if (this.worker === null) {
+                return successResponse(
+                    {
+                        list: [],
+                        page: Number(query.page) || 1,
+                        pageSize: Number(query.pageSize) || 20,
+                        total: 0,
+                        totalQueries: 0,
+                        historyCount: 0,
+                        todayQueries: 0,
+                        recentQueries: 0,
+                        sourceCount: 0,
+                        maxQueryHistory: SnmpConst.DEFAULT_SNMP_SETTINGS.maxQueryHistory
+                    },
+                    'SNMP服务器未启动'
+                );
+            }
+
+            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.GET_QUERY_LIST, query);
+            return successResponse(result.data || [], result.msg || '获取查询列表成功');
+        } catch (error) {
+            logger.error('获取查询列表失败:', error);
+            return errorResponse('获取查询列表失败: ' + error.message);
+        }
+    }
+
+    /**
+     * 清空SNMP查询历史
+     */
+    async handleClearQueryHistory() {
+        try {
+            if (this.worker === null) {
+                return successResponse(null, 'SNMP服务器未启动');
+            }
+
+            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.CLEAR_QUERY_HISTORY, null);
+            return successResponse(null, result.msg || '查询历史已清空');
+        } catch (error) {
+            logger.error('清空查询历史失败:', error);
+            return errorResponse('清空查询历史失败: ' + error.message);
         }
     }
 
@@ -320,6 +396,237 @@ class SnmpApp {
             logger.error('OID解析失败:', error);
             return errorResponse('OID解析失败: ' + error.message);
         }
+    }
+
+    async handleSendGetRequest(_event, request = {}) {
+        let session = null;
+        try {
+            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
+            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
+            const oid = String(request.oid || '').trim();
+            const version = this.getConfiguredSessionVersion(storedConfig);
+            const community = storedConfig.community || 'public';
+            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
+
+            if (!targetHost) {
+                return errorResponse('请输入目标地址');
+            }
+
+            if (!oid) {
+                return errorResponse('请输入GET OID');
+            }
+
+            const snmpVersion = this.getSessionVersion(version);
+            if (snmpVersion === null) {
+                return errorResponse('当前GET发送暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
+            }
+
+            session = snmp.createSession(targetHost, community, {
+                port,
+                version: snmpVersion,
+                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
+                retries: Number(request.retries) || 0
+            });
+
+            const varbinds = await this.sendGetOids(session, [oid]);
+            const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
+            if (firstError) {
+                return errorResponse('GET失败: ' + snmp.varbindError(firstError));
+            }
+
+            return successResponse(
+                {
+                    targetHost,
+                    targetPort: port,
+                    version,
+                    varbinds: varbinds.map(varbind => this.formatSessionVarbind(varbind))
+                },
+                'GET查询成功'
+            );
+        } catch (error) {
+            logger.error('发送SNMP GET失败:', error);
+            return errorResponse('发送SNMP GET失败: ' + error.message);
+        } finally {
+            if (session) {
+                try {
+                    session.close();
+                } catch (error) {
+                    logger.warn('关闭SNMP GET会话失败:', error.message);
+                }
+            }
+        }
+    }
+
+    async handleSendSetRequest(_event, request = {}) {
+        let session = null;
+        try {
+            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
+            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
+            const oid = String(request.oid || '').trim();
+            const version = this.getConfiguredSessionVersion(storedConfig);
+            const community = storedConfig.community || 'public';
+            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
+
+            if (!targetHost) {
+                return errorResponse('请输入目标地址');
+            }
+
+            if (!oid) {
+                return errorResponse('请输入SET OID');
+            }
+
+            const snmpVersion = this.getSessionVersion(version);
+            if (snmpVersion === null) {
+                return errorResponse('当前SET发送暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
+            }
+
+            const objectType = this.getSetObjectType(request.type);
+            const value = this.castSetValue(objectType, request.value);
+
+            session = snmp.createSession(targetHost, community, {
+                port,
+                version: snmpVersion,
+                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
+                retries: Number(request.retries) || 0
+            });
+
+            const varbinds = await this.sendSetVarbinds(session, [
+                {
+                    oid,
+                    type: objectType,
+                    value
+                }
+            ]);
+            const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
+            if (firstError) {
+                return errorResponse('SET失败: ' + snmp.varbindError(firstError));
+            }
+
+            return successResponse(
+                {
+                    targetHost,
+                    targetPort: port,
+                    version,
+                    varbinds: varbinds.map(varbind => this.formatSessionVarbind(varbind))
+                },
+                'SET发送成功'
+            );
+        } catch (error) {
+            logger.error('发送SNMP SET失败:', error);
+            return errorResponse('发送SNMP SET失败: ' + error.message);
+        } finally {
+            if (session) {
+                try {
+                    session.close();
+                } catch (error) {
+                    logger.warn('关闭SNMP SET会话失败:', error.message);
+                }
+            }
+        }
+    }
+
+    sendGetOids(session, oids) {
+        return new Promise((resolve, reject) => {
+            session.get(oids, (error, result) => {
+                if (error) {
+                    reject(error);
+                    return;
+                }
+                resolve(result || []);
+            });
+        });
+    }
+
+    sendSetVarbinds(session, varbinds) {
+        return new Promise((resolve, reject) => {
+            session.set(varbinds, (error, result) => {
+                if (error) {
+                    reject(error);
+                    return;
+                }
+                resolve(result || []);
+            });
+        });
+    }
+
+    formatSessionVarbind(varbind) {
+        return {
+            oid: varbind.oid,
+            type: snmp.ObjectType[varbind.type] || varbind.type,
+            value: Buffer.isBuffer(varbind.value) ? varbind.value.toString() : varbind.value
+        };
+    }
+
+    getSessionVersion(version) {
+        const versionMap = {
+            v1: snmp.Version1,
+            v2c: snmp.Version2c
+        };
+        return versionMap[version] ?? null;
+    }
+
+    getConfiguredSessionVersion(config = {}) {
+        const versions = Array.isArray(config.supportedVersions) ? config.supportedVersions : [];
+        if (versions.length === 0 || !versions[0]) {
+            return 'v2c';
+        }
+        return ['v1', 'v2c'].includes(versions[0]) ? versions[0] : '';
+    }
+
+    getSetObjectType(type = '') {
+        const normalized = String(type || '')
+            .replace(/[\s_-]+/g, '')
+            .toLowerCase();
+        const typeMap = {
+            integer: snmp.ObjectType.Integer,
+            integer32: snmp.ObjectType.Integer,
+            boolean: snmp.ObjectType.Integer,
+            truthvalue: snmp.ObjectType.Integer,
+            rowstatus: snmp.ObjectType.Integer,
+            octetstring: snmp.ObjectType.OctetString,
+            displaystring: snmp.ObjectType.OctetString,
+            string: snmp.ObjectType.OctetString,
+            objectidentifier: snmp.ObjectType.OID,
+            oid: snmp.ObjectType.OID,
+            ipaddress: snmp.ObjectType.IpAddress,
+            counter: snmp.ObjectType.Counter,
+            counter32: snmp.ObjectType.Counter,
+            gauge: snmp.ObjectType.Gauge,
+            gauge32: snmp.ObjectType.Gauge,
+            unsigned32: snmp.ObjectType.Gauge,
+            timeticks: snmp.ObjectType.TimeTicks,
+            counter64: snmp.ObjectType.Counter64
+        };
+
+        const objectType = typeMap[normalized];
+        if (!objectType) {
+            throw new Error(`不支持的SET类型: ${type || '-'}`);
+        }
+        return objectType;
+    }
+
+    castSetValue(objectType, value) {
+        if (value === null || value === undefined || value === '') {
+            throw new Error('请输入SET值');
+        }
+
+        if (
+            [
+                snmp.ObjectType.Integer,
+                snmp.ObjectType.Counter,
+                snmp.ObjectType.Gauge,
+                snmp.ObjectType.TimeTicks,
+                snmp.ObjectType.Counter64
+            ].includes(objectType)
+        ) {
+            const numberValue = Number(value);
+            if (!Number.isFinite(numberValue)) {
+                throw new Error('数值类型必须输入数字');
+            }
+            return numberValue;
+        }
+
+        return String(value);
     }
 
     getStoredMibFilePaths() {
