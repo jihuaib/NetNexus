@@ -921,6 +921,19 @@ export const createBmpConfigValidationRules = () => {
                 message: '请输入1024-65535之间的数字'
             }
         ],
+        pathMarkingTlvType: [
+            {
+                required: true,
+                message: '请输入Path TLV类型'
+            },
+            {
+                validator: value => {
+                    const type = Number(value);
+                    return Number.isInteger(type) && type >= 1 && type <= 0x3fff;
+                },
+                message: '请输入1-16383之间的整数'
+            }
+        ],
         localPort: [
             {
                 validator: validators.conditionalRequired(formData => formData.enableAuth),

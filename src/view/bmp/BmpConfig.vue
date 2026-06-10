@@ -16,13 +16,30 @@
                                 </a-form-item>
                             </a-col>
                         </a-row>
-                        <a-row>
-                            <a-col :span="24">
+                        <a-row :gutter="12">
+                            <a-col :span="12">
                                 <a-form-item label="v4 TLV格式" name="bmpV4TlvDraft">
                                     <a-radio-group v-model:value="bmpConfig.bmpV4TlvDraft" button-style="solid">
                                         <a-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_20">draft-20</a-radio-button>
                                         <a-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_19">draft-19</a-radio-button>
                                     </a-radio-group>
+                                </a-form-item>
+                            </a-col>
+                            <a-col :span="12">
+                                <a-form-item label="Path TLV类型" name="pathMarkingTlvType">
+                                    <a-tooltip
+                                        :title="validationErrors.pathMarkingTlvType"
+                                        :open="!!validationErrors.pathMarkingTlvType"
+                                    >
+                                        <a-input-number
+                                            v-model:value="bmpConfig.pathMarkingTlvType"
+                                            :min="1"
+                                            :max="16383"
+                                            :precision="0"
+                                            style="width: 100%"
+                                            :status="validationErrors.pathMarkingTlvType ? 'error' : ''"
+                                        />
+                                    </a-tooltip>
                                 </a-form-item>
                             </a-col>
                         </a-row>
@@ -153,7 +170,7 @@
 </template>
 
 <script setup>
-    import { ref, onMounted, onActivated, onDeactivated } from 'vue';
+    import { ref, onMounted, onActivated, onDeactivated, watch } from 'vue';
     import { message } from 'ant-design-vue';
     import { FormValidator, createBmpConfigValidationRules } from '../../utils/validationCommon';
     import {
@@ -161,7 +178,8 @@
         BMP_EVENT_PAGE_ID,
         BMP_V4_TLV_DRAFT,
         getBmpVersionName,
-        getBmpV4TlvDraftName
+        getBmpV4TlvDraftName,
+        getDefaultPathMarkingTlvType
     } from '../../const/bmpConst';
     import EventBus from '../../utils/eventBus';
 
@@ -175,6 +193,7 @@
     const bmpConfig = ref({
         port: DEFAULT_VALUES.DEFAULT_BMP_PORT,
         bmpV4TlvDraft: DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT,
+        pathMarkingTlvType: getDefaultPathMarkingTlvType(DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT),
         localPort: '11019',
         enableAuth: false,
         peerIP: '',
@@ -192,6 +211,13 @@
         return Number(draft) === BMP_V4_TLV_DRAFT.DRAFT_19
             ? BMP_V4_TLV_DRAFT.DRAFT_19
             : BMP_V4_TLV_DRAFT.DRAFT_20;
+    };
+
+    const normalizePathMarkingTlvType = (value, draft) => {
+        const type = Number(value);
+        return Number.isInteger(type) && type >= 1 && type <= 0x3fff
+            ? type
+            : getDefaultPathMarkingTlvType(draft);
     };
 
     // Initiation messages list
@@ -258,6 +284,7 @@
 
     const validationErrors = ref({
         port: '',
+        pathMarkingTlvType: '',
         localPort: '',
         peerIP: '',
         md5Password: ''
@@ -300,6 +327,10 @@
         try {
             const payload = JSON.parse(JSON.stringify(bmpConfig.value));
             payload.bmpV4TlvDraft = normalizeBmpV4TlvDraft(payload.bmpV4TlvDraft);
+            payload.pathMarkingTlvType = normalizePathMarkingTlvType(
+                payload.pathMarkingTlvType,
+                payload.bmpV4TlvDraft
+            );
             const saveResult = await window.bmpApi.saveBmpConfig(payload);
             if (saveResult.status !== 'success') {
                 message.error(saveResult.msg || '配置文件保存失败');
@@ -401,6 +432,20 @@
         }
     };
 
+    watch(
+        () => bmpConfig.value.bmpV4TlvDraft,
+        (newDraft, oldDraft) => {
+            const nextDraft = normalizeBmpV4TlvDraft(newDraft);
+            const previousDraft = normalizeBmpV4TlvDraft(oldDraft);
+            const currentType = Number(bmpConfig.value.pathMarkingTlvType);
+            const previousDefault = getDefaultPathMarkingTlvType(previousDraft);
+
+            if (!Number.isInteger(currentType) || currentType === previousDefault) {
+                bmpConfig.value.pathMarkingTlvType = getDefaultPathMarkingTlvType(nextDraft);
+            }
+        }
+    );
+
     onActivated(async () => {
         EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_CONFIG, onInitiationHandler);
         EventBus.on('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_CONFIG, onTerminationHandler);
@@ -417,7 +462,12 @@
         const savedConfig = await window.bmpApi.loadBmpConfig();
         if (savedConfig.status === 'success' && savedConfig.data) {
             bmpConfig.value.port = savedConfig.data.port || DEFAULT_VALUES.DEFAULT_BMP_PORT;
-            bmpConfig.value.bmpV4TlvDraft = normalizeBmpV4TlvDraft(savedConfig.data.bmpV4TlvDraft);
+            const savedDraft = normalizeBmpV4TlvDraft(savedConfig.data.bmpV4TlvDraft);
+            bmpConfig.value.bmpV4TlvDraft = savedDraft;
+            bmpConfig.value.pathMarkingTlvType = normalizePathMarkingTlvType(
+                savedConfig.data.pathMarkingTlvType,
+                savedDraft
+            );
             bmpConfig.value.enableAuth = savedConfig.data.enableAuth || false;
             bmpConfig.value.localPort = savedConfig.data.localPort;
             bmpConfig.value.peerIP = savedConfig.data.peerIP || '';

@@ -153,7 +153,7 @@
                                                             : ''
                                                 "
                                                 size="small"
-                                                :scroll="{ x: 980, y: 320 }"
+                                                :scroll="{ x: 1320, y: 320 }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
@@ -698,6 +698,14 @@
         { title: 'Labels', dataIndex: 'labels', key: 'labels', ellipsis: true, width: 100 },
         { title: 'Origin', dataIndex: 'origin', key: 'origin', ellipsis: true, width: 80 },
         { title: 'MED', dataIndex: 'med', key: 'med', ellipsis: true, width: 80 },
+        { title: 'Path Status', dataIndex: 'pathStatusText', key: 'pathStatusText', ellipsis: true, width: 160 },
+        {
+            title: 'Reason',
+            dataIndex: 'pathStatusReasonText',
+            key: 'pathStatusReasonText',
+            ellipsis: true,
+            width: 180
+        },
         { title: '详情', key: 'routeAction', fixed: 'right', width: 100 }
     ];
 

@@ -242,6 +242,15 @@ class BmpWorker {
             Number(this.bmpConfigData.bmpV4TlvDraft) === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
                 ? BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
                 : BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20;
+        const defaultPathMarkingTlvType =
+            this.bmpConfigData.bmpV4TlvDraft === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+                ? BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE_LEGACY.PATH_MARKING
+                : BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.PATH_MARKING;
+        const pathMarkingTlvType = Number(this.bmpConfigData.pathMarkingTlvType);
+        this.bmpConfigData.pathMarkingTlvType =
+            Number.isInteger(pathMarkingTlvType) && pathMarkingTlvType >= 1 && pathMarkingTlvType <= 0x3fff
+                ? pathMarkingTlvType
+                : defaultPathMarkingTlvType;
 
         // 设置日志级别
         if (this.bmpConfigData.logLevel) {
@@ -249,6 +258,7 @@ class BmpWorker {
             logger.info(`Worker log level set to: ${this.bmpConfigData.logLevel}`);
         }
         logger.info(`BMPv4 TLV draft set to draft-${this.bmpConfigData.bmpV4TlvDraft}`);
+        logger.info(`BMP Path Marking TLV type set to ${this.bmpConfigData.pathMarkingTlvType}`);
 
         // 如果启用了 MD5 认证，使用 SSH 隧道启动远端代理。
         if (bmpConfigData.enableAuth && bmpConfigData.md5Password) {

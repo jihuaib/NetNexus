@@ -85,6 +85,16 @@ function bgpUpdate(prefix = '203.0.113.0') {
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, body);
 }
 
+function bgpUpdateMulti(prefixes = ['203.0.120.0', '203.0.121.0']) {
+    const attrs = Buffer.concat([
+        pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+        pathAttr(BgpConst.BGP_PATH_ATTR.NEXT_HOP, ip('192.0.2.254'))
+    ]);
+    const nlris = Buffer.concat(prefixes.map(prefix => Buffer.concat([Buffer.from([24]), ip(prefix).subarray(0, 3)])));
+    const body = Buffer.concat([u16(0), u16(attrs.length), attrs, nlris]);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, body);
+}
+
 function evpnRaw24(value) {
     return Buffer.from([(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
 }
@@ -204,6 +214,18 @@ function indexedTlv(type, index, value) {
 
 function tlv(type, value) {
     return Buffer.concat([u16(type), u16(value.length), value]);
+}
+
+function groupValue(indexes) {
+    return Buffer.concat(indexes.map(index => u16(index)));
+}
+
+function pathMarkingValue(status, reason = null) {
+    if (reason === null || reason === undefined) {
+        return u32(status);
+    }
+
+    return Buffer.concat([u32(status), u16(reason)]);
 }
 
 function makeSession(config = {}) {
@@ -341,6 +363,115 @@ assert.equal(routeMap.size, 1);
 assert.equal([...routeMap.values()][0].ip, '203.0.113.0');
 assert.equal([...routeMap.values()][0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
 assert.ok(events.some(event => event.type === BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE));
+
+const { session: pathMarkingGroupSession } = makeSession();
+pathMarkingGroupSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+pathMarkingGroupSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.GROUP, 0x800b, groupValue([1, 2])),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.PATH_MARKING,
+                0x800b,
+                pathMarkingValue(
+                    BmpConst.BMP_PATH_STATUS.BEST | BmpConst.BMP_PATH_STATUS.PRIMARY,
+                    BmpConst.BMP_PATH_STATUS_REASON.NOT_PREFERRED_ROUTER_ID
+                )
+            ),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                bgpUpdateMulti(['203.0.120.0', '203.0.121.0'])
+            )
+        ])
+    )
+);
+const pathMarkingGroupBgpSession = pathMarkingGroupSession.bgpSessionMap.get(bgpSessionKey);
+const pathMarkingGroupRouteMap = pathMarkingGroupBgpSession.bgpRoutes
+    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
+const pathMarkingGroupRoutes = [...pathMarkingGroupRouteMap.values()];
+assert.equal(pathMarkingGroupRoutes.length, 2);
+pathMarkingGroupRoutes.forEach(route => {
+    assert.equal(route.pathStatus, BmpConst.BMP_PATH_STATUS.BEST | BmpConst.BMP_PATH_STATUS.PRIMARY);
+    assert.deepEqual(route.pathStatusNames, ['Best', 'Primary']);
+    assert.equal(route.pathStatusText, 'Best, Primary');
+    assert.equal(route.pathStatusReason, BmpConst.BMP_PATH_STATUS_REASON.NOT_PREFERRED_ROUTER_ID);
+    assert.equal(route.pathStatusReasonName, 'Not preferred for router ID');
+    assert.equal(route.pathStatusTlvs[0].rawIndex, 0x800b);
+    assert.equal(route.pathStatusTlvs[0].group, true);
+});
+
+const { session: pathMarkingIndexSession } = makeSession();
+pathMarkingIndexSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+pathMarkingIndexSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.PATH_MARKING,
+                2,
+                pathMarkingValue(BmpConst.BMP_PATH_STATUS.BACKUP)
+            ),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                bgpUpdateMulti(['203.0.122.0', '203.0.123.0'])
+            )
+        ])
+    )
+);
+const pathMarkingIndexBgpSession = pathMarkingIndexSession.bgpSessionMap.get(bgpSessionKey);
+const pathMarkingIndexRouteMap = pathMarkingIndexBgpSession.bgpRoutes
+    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
+const pathMarkingIndexRoutes = [...pathMarkingIndexRouteMap.values()];
+const unmarkedRoute = pathMarkingIndexRoutes.find(route => route.ip === '203.0.122.0');
+const markedRoute = pathMarkingIndexRoutes.find(route => route.ip === '203.0.123.0');
+assert.equal(unmarkedRoute.pathStatus, null);
+assert.equal(markedRoute.pathStatus, BmpConst.BMP_PATH_STATUS.BACKUP);
+assert.equal(markedRoute.pathStatusText, 'Backup');
+
+const { session: draft19PathMarkingSession } = makeSession({
+    bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+});
+draft19PathMarkingSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+draft19PathMarkingSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE_LEGACY.PATH_MARKING,
+                0,
+                pathMarkingValue(BmpConst.BMP_PATH_STATUS.STALE)
+            ),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE_LEGACY.BGP_MESSAGE, 0, bgpUpdate('203.0.124.0'))
+        ])
+    )
+);
+const draft19PathMarkingBgpSession = draft19PathMarkingSession.bgpSessionMap.get(bgpSessionKey);
+const draft19PathMarkingRoute = [
+    ...draft19PathMarkingBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
+        .values()
+][0];
+assert.equal(draft19PathMarkingRoute.ip, '203.0.124.0');
+assert.equal(draft19PathMarkingRoute.pathStatus, BmpConst.BMP_PATH_STATUS.STALE);
+assert.equal(draft19PathMarkingRoute.pathStatusText, 'Stale');
 
 const { session: evpnBmpSession } = makeSession();
 evpnBmpSession.processMessage(
