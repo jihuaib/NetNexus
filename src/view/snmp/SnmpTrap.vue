@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container">
+    <div class="mt-container snmp-trap-page">
         <a-card title="SNMP Trap 监控" class="trap-card">
             <template #extra>
                 <a-space>
@@ -62,6 +62,7 @@
                         v-model:value="filters.timeRange"
                         show-time
                         format="YYYY-MM-DD HH:mm:ss"
+                        style="width: 100%"
                         @change="handleFilterChange"
                     />
                 </a-col>
@@ -73,7 +74,7 @@
                 :data-source="traps"
                 :loading="loading"
                 :pagination="pagination"
-                :scroll="{ y: 400 }"
+                :scroll="{ x: 1200, y: 'calc(100vh - 350px)' }"
                 row-key="id"
                 class="mt-margin-top-10 trap-list-table"
                 @change="handleTableChange"
@@ -105,9 +106,14 @@
         </a-card>
 
         <!-- Trap详情模态框 -->
-        <a-modal v-model:open="detailModalVisible" title="Trap 详情" :footer="null" class="modal-xlarge">
+        <a-modal
+            v-model:open="detailModalVisible"
+            title="Trap 详情"
+            :footer="null"
+            class="modal-xlarge trap-detail-modal"
+        >
             <div v-if="selectedTrap" class="trap-detail">
-                <a-divider>基本信息</a-divider>
+                <div class="trap-detail-section-title">基本信息</div>
                 <a-descriptions :column="2" bordered size="small">
                     <a-descriptions-item label="Trap ID">{{ selectedTrap.id }}</a-descriptions-item>
                     <a-descriptions-item label="接收时间">
@@ -131,29 +137,44 @@
                     <a-descriptions-item v-if="selectedTrap.enterpriseOid" label="企业OID">
                         {{ selectedTrap.enterpriseOid }}
                     </a-descriptions-item>
-                    <a-descriptions-item v-if="selectedTrap.genericType" label="通用类型">
-                        {{ selectedTrap.genericType }}
+                    <a-descriptions-item v-if="selectedTrap.enterpriseName" label="企业名称">
+                        {{ selectedTrap.enterpriseName }}
                     </a-descriptions-item>
-                    <a-descriptions-item v-if="selectedTrap.specificType" label="特定类型">
-                        {{ selectedTrap.specificTrap }}
+                    <a-descriptions-item v-if="selectedTrap.trapOid" label="Trap OID">
+                        {{ selectedTrap.trapOid }}
+                    </a-descriptions-item>
+                    <a-descriptions-item v-if="selectedTrap.trapName" label="Trap 名称">
+                        {{ selectedTrap.trapName }}
+                    </a-descriptions-item>
+                    <a-descriptions-item
+                        v-if="hasTrapField(selectedTrap.genericType) || hasTrapField(selectedTrap.specificType)"
+                        label="Trap类型"
+                    >
+                        <div class="trap-type-inline">
+                            <span v-if="hasTrapField(selectedTrap.genericType)">通用: {{ selectedTrap.genericType }}</span>
+                            <span v-if="hasTrapField(selectedTrap.specificType)">特定: {{ selectedTrap.specificType }}</span>
+                        </div>
                     </a-descriptions-item>
                 </a-descriptions>
 
                 <!-- 变量绑定 -->
-                <a-divider>变量绑定 (Variable Bindings)</a-divider>
+                <div class="trap-detail-section-title">变量绑定 (Variable Bindings)</div>
                 <a-table
                     :columns="varbindColumns"
                     :data-source="selectedTrap.varbinds || []"
                     size="small"
                     row-key="oid"
                     class="varbind-detail-table"
-                    :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                    :scroll="{ y: 180 }"
+                    :pagination="false"
+                    :scroll="{ x: 900, y: 180 }"
                 >
                     <template #bodyCell="{ column, record }">
                         <template v-if="column.key === 'value'">
                             <div class="varbind-value">
                                 <a-typography-text copyable>{{ record.value }}</a-typography-text>
+                                <div v-if="record.valueName" class="varbind-value-name">
+                                    {{ record.valueName }}
+                                </div>
                             </div>
                         </template>
                     </template>
@@ -251,6 +272,13 @@
             ellipsis: true
         },
         {
+            title: 'Trap名称',
+            dataIndex: 'trapName',
+            key: 'trapName',
+            width: 180,
+            ellipsis: true
+        },
+        {
             title: '状态',
             dataIndex: 'status',
             key: 'status',
@@ -270,7 +298,14 @@
             title: 'OID',
             dataIndex: 'oid',
             key: 'oid',
-            width: 300,
+            width: 260,
+            ellipsis: true
+        },
+        {
+            title: '名称',
+            dataIndex: 'oidName',
+            key: 'oidName',
+            width: 220,
             ellipsis: true
         },
         {
@@ -320,6 +355,8 @@
     const formatTimestamp = timestamp => {
         return dayjs(timestamp).format('YYYY-MM-DD HH:mm:ss');
     };
+
+    const hasTrapField = value => value !== null && value !== undefined && value !== '';
 
     const toQueryTime = value => {
         if (!value) {
@@ -562,19 +599,129 @@
 </script>
 
 <style scoped>
+    .snmp-trap-page {
+        height: calc(100vh - 68px);
+        overflow: hidden;
+    }
+
+    .trap-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .trap-card :deep(.ant-card-body) {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .stats-row,
+    .filter-row {
+        flex-shrink: 0;
+    }
+
+    .stats-row :deep(.ant-statistic-title) {
+        margin-bottom: 2px;
+        font-size: 13px;
+    }
+
+    .stats-row :deep(.ant-statistic-content) {
+        font-size: 20px;
+        line-height: 28px;
+    }
+
+    .filter-row {
+        margin-top: 8px;
+    }
+
     .varbind-value {
-        width: 100px;
+        min-width: 120px;
+    }
+
+    .varbind-value-name {
+        margin-top: 4px;
+        color: #666;
+        font-size: 12px;
     }
 
     /* Trap 列表表格样式 */
+    .trap-list-table {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .trap-list-table :deep(.ant-spin-nested-loading),
+    .trap-list-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .trap-list-table :deep(.ant-table) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
     .trap-list-table :deep(.ant-table-body) {
-        height: 400px !important;
+        height: calc(100vh - 350px) !important;
         overflow-y: auto !important;
     }
 
+    .trap-detail {
+        min-height: 0;
+    }
+
+    .trap-detail-section-title {
+        margin: 8px 0;
+        color: #262626;
+        font-weight: 600;
+        line-height: 22px;
+    }
+
+    .trap-detail-section-title:first-child {
+        margin-top: 0;
+    }
+
+    .trap-detail :deep(.ant-descriptions-item-label) {
+        width: 92px;
+    }
+
+    .trap-detail :deep(.ant-descriptions-item-content) {
+        min-width: 0;
+        word-break: break-all;
+    }
+
+    .trap-type-inline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        line-height: 22px;
+    }
+
     /* 变量绑定详情表格样式 */
+    .varbind-detail-table {
+        min-height: 0;
+    }
+
     .varbind-detail-table :deep(.ant-table-body) {
         height: 180px !important;
         overflow-y: auto !important;
+    }
+
+    @media (max-height: 760px) {
+        .trap-list-table :deep(.ant-table-body) {
+            height: calc(100vh - 365px) !important;
+        }
+
+        .varbind-detail-table :deep(.ant-table-body) {
+            height: 150px !important;
+        }
     }
 </style>

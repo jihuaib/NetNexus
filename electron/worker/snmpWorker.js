@@ -1,13 +1,22 @@
-const dgram = require('dgram');
+const snmp = require('net-snmp');
 const logger = require('../log/logger');
 const WorkerMessageHandler = require('./workerMessageHandler');
 const SnmpConst = require('../const/snmpConst');
-const Asn1Parser = require('../utils/asn1Parser');
+const MibRegistry = require('../utils/mibRegistry');
+
+const SNMP_TRAP_OID = '1.3.6.1.6.3.1.1.4.1.0';
+const GENERIC_TRAP_OIDS = {
+    0: '1.3.6.1.6.3.1.1.5.1',
+    1: '1.3.6.1.6.3.1.1.5.2',
+    2: '1.3.6.1.6.3.1.1.5.3',
+    3: '1.3.6.1.6.3.1.1.5.4',
+    4: '1.3.6.1.6.3.1.1.5.5',
+    5: '1.3.6.1.6.3.1.1.5.6'
+};
 
 class SnmpWorker {
     constructor() {
-        this.server = null;
-        this.ipv6Server = null;
+        this.receiver = null;
         this.snmpConfig = null;
         this.sessionMap = new Map(); // SNMP会话映射
         this.agentMap = new Map(); // 代理映射
@@ -19,6 +28,7 @@ class SnmpWorker {
         this.pendingTrapSourceIps = new Set();
         this.trapUpdateFlushTimer = null;
         this.trapUpdateFlushIntervalMs = 1000;
+        this.mibRegistry = new MibRegistry();
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler();
@@ -32,6 +42,7 @@ class SnmpWorker {
             SnmpConst.SNMP_REQ_TYPES.CLEAR_TRAP_HISTORY,
             this.clearTrapHistory.bind(this)
         );
+        this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, this.compileMibs.bind(this));
     }
 
     enqueueTrapUpdateEvent(trapData) {
@@ -97,7 +108,7 @@ class SnmpWorker {
     /**
      * 启动SNMP服务器
      */
-    async startSnmp(messageId, config) {
+    async startSnmp(messageId, config = {}) {
         try {
             this.snmpConfig = config;
             this.maxTrapHistory = Number(config.maxTrapHistory) || SnmpConst.DEFAULT_SNMP_SETTINGS.maxTrapHistory;
@@ -105,254 +116,278 @@ class SnmpWorker {
             this.trapCounter = 0;
             this.clearTrapUpdateAggregation();
 
-            // 设置日志级别
             if (this.snmpConfig.logLevel) {
                 logger.setLevel(this.snmpConfig.logLevel);
                 logger.info(`Worker log level set to: ${this.snmpConfig.logLevel}`);
             }
 
-            // 启动IPv4服务器
-            await this.startUdpServer();
+            const mibSummary = this.mibRegistry.loadOrCompileMibFiles(config.mibFiles || [], {
+                cacheFilePath: config.mibCacheFilePath || ''
+            });
+            if (mibSummary.failedFiles.length > 0) {
+                logger.warn(`部分MIB编译失败: ${JSON.stringify(mibSummary.failedFiles)}`);
+            }
 
-            // 启动IPv6服务器
-            await this.startUdpServerV6();
+            this.receiver = snmp.createReceiver(this.buildReceiverOptions(config), this.handleReceiverCallback.bind(this));
+            this.configureAuthorizer(this.receiver.getAuthorizer(), config);
+            await this.waitForReceiverSockets();
 
             logger.info(`SNMP Trap服务器启动成功，监听端口: ${config.port}`);
-            this.messageHandler.sendSuccessResponse(messageId, null, 'SNMP协议启动成功');
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                {
+                    mib: mibSummary
+                },
+                'SNMP协议启动成功'
+            );
 
-            // 发送服务器状态事件
             this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
                 type: SnmpConst.SNMP_SUB_EVT_TYPES.SERVER_STATUS,
                 data: {
                     status: 'running',
                     port: config.port,
-                    supportedVersions: config.supportedVersions
+                    supportedVersions: config.supportedVersions,
+                    mib: mibSummary
                 }
             });
         } catch (error) {
             logger.error('启动SNMP服务器失败:', error);
+            await this.closeReceiver();
             this.messageHandler.sendErrorResponse(messageId, 'SNMP协议启动失败: ' + error.message);
         }
     }
 
-    /**
-     * 启动IPv4 UDP服务器
-     */
-    async startUdpServer() {
-        return new Promise((resolve, reject) => {
-            try {
-                this.server = dgram.createSocket('udp4');
-
-                this.server.on('message', (msg, rinfo) => {
-                    this.handleSnmpMessage(msg, rinfo, 'ipv4');
-                });
-
-                this.server.on('error', err => {
-                    logger.error('IPv4 UDP服务器错误:', err);
-                    reject(err);
-                });
-
-                this.server.on('listening', () => {
-                    const address = this.server.address();
-                    logger.info(`IPv4 SNMP服务器监听: ${address.address}:${address.port}`);
-                    resolve();
-                });
-
-                this.server.bind(this.snmpConfig.port, '0.0.0.0');
-            } catch (error) {
-                reject(error);
-            }
-        });
+    buildReceiverOptions(config) {
+        const port = Number(config.port) || SnmpConst.DEFAULT_SNMP_SETTINGS.port;
+        return {
+            includeAuthentication: true,
+            disableAuthorization: false,
+            sockets: [
+                { transport: 'udp4', address: '0.0.0.0', port },
+                { transport: 'udp6', address: '::', port }
+            ]
+        };
     }
 
-    /**
-     * 启动IPv6 UDP服务器
-     */
-    async startUdpServerV6() {
-        return new Promise((resolve, reject) => {
-            try {
-                this.ipv6Server = dgram.createSocket('udp6');
-
-                this.ipv6Server.on('message', (msg, rinfo) => {
-                    this.handleSnmpMessage(msg, rinfo, 'ipv6');
-                });
-
-                this.ipv6Server.on('error', err => {
-                    logger.error('IPv6 UDP服务器错误:', err);
-                    reject(err);
-                });
-
-                this.ipv6Server.on('listening', () => {
-                    const address = this.ipv6Server.address();
-                    logger.info(`IPv6 SNMP服务器监听: ${address.address}:${address.port}`);
-                    resolve();
-                });
-
-                this.ipv6Server.bind(this.snmpConfig.port, '::');
-            } catch (error) {
-                reject(error);
-            }
-        });
-    }
-
-    /**
-     * 处理SNMP消息
-     */
-    handleSnmpMessage(buffer, rinfo, ipVersion) {
-        try {
-            logger.info(`收到来自 ${rinfo.address}:${rinfo.port} (${ipVersion}) 的SNMP消息, 长度: ${buffer.length}`);
-
-            // 解析SNMP消息
-            const snmpMessage = this.parseSnmpMessage(buffer);
-            if (!snmpMessage) {
-                logger.error('SNMP消息解析失败');
-                return;
-            }
-
-            logger.info(
-                `解析成功: version=${snmpMessage.version}, community=${snmpMessage.community}, pduType=0x${snmpMessage.pduType.toString(16)}`
-            );
-
-            // 检查是否为Trap消息
-            if (this.isTrapMessage(snmpMessage)) {
-                this.processTrapMessage(snmpMessage, rinfo, buffer);
-            } else {
-                logger.info('收到非Trap SNMP消息，忽略');
-            }
-        } catch (error) {
-            logger.error('处理SNMP消息失败:', error);
+    waitForReceiverSockets() {
+        const sockets = Object.values(this.receiver?.listener?.sockets || {});
+        if (sockets.length === 0) {
+            return Promise.resolve();
         }
-    }
 
-    /**
-     * 解析SNMP消息 - 完整的ASN.1 BER解析
-     */
-    parseSnmpMessage(buffer) {
-        try {
-            const parser = new Asn1Parser(buffer);
+        return new Promise((resolve, reject) => {
+            let settledCount = 0;
+            let done = false;
+            const timer = setTimeout(() => {
+                done = true;
+                resolve();
+            }, 200);
 
-            // 解析SNMP消息序列
-            const messageSequence = parser.parseSequence();
-            if (!messageSequence) {
-                logger.error('SNMP消息不是有效的ASN.1序列');
-                return null;
-            }
-
-            // 解析版本
-            const version = parser.parseInteger();
-            if (version === null) {
-                logger.error('无法解析SNMP版本');
-                return null;
-            }
-
-            // 解析community字符串
-            const community = parser.parseOctetString();
-            if (community === null) {
-                logger.error('无法解析community字符串');
-                return null;
-            }
-
-            // 解析PDU
-            const pduResult = parser.parsePdu();
-            if (!pduResult) {
-                logger.error('无法解析PDU');
-                return null;
-            }
-
-            return {
-                version: this.getVersionString(version),
-                versionNumber: version,
-                community: community,
-                pduType: pduResult.type,
-                requestId: pduResult.requestId || 0,
-                errorStatus: pduResult.errorStatus || 0,
-                errorIndex: pduResult.errorIndex || 0,
-                varbinds: pduResult.varbinds || [],
-                rawData: buffer.toString('hex'),
-                // Trap特有字段
-                enterprise: pduResult.enterprise,
-                agentAddr: pduResult.agentAddr,
-                genericTrap: pduResult.genericTrap,
-                specificTrap: pduResult.specificTrap,
-                timeStamp: pduResult.timeStamp
+            const settle = () => {
+                if (done) {
+                    return;
+                }
+                settledCount++;
+                if (settledCount >= sockets.length) {
+                    done = true;
+                    clearTimeout(timer);
+                    resolve();
+                }
             };
-        } catch (error) {
-            logger.error('解析SNMP消息失败:', error);
-            return null;
+
+            sockets.forEach(socket => {
+                socket.once('listening', settle);
+                socket.once('error', error => {
+                    if (done) {
+                        return;
+                    }
+                    done = true;
+                    clearTimeout(timer);
+                    reject(error);
+                });
+            });
+        });
+    }
+
+    configureAuthorizer(authorizer, config = {}) {
+        const versions = Array.isArray(config.supportedVersions) ? config.supportedVersions : [];
+
+        if (versions.includes('v1') || versions.includes('v2c')) {
+            authorizer.addCommunity(config.community || 'public');
+        }
+
+        if (versions.includes('v3') && config.v3Username) {
+            authorizer.addUser(this.buildV3User(config));
         }
     }
 
-    /**
-     * 获取版本字符串
-     */
-    getVersionString(version) {
-        switch (version) {
-            case 0:
-                return 'v1';
-            case 1:
-                return 'v2c';
-            case 3:
-                return 'v3';
-            default:
-                return `unknown(${version})`;
+    buildV3User(config = {}) {
+        const securityLevelMap = {
+            noAuthNoPriv: snmp.SecurityLevel.noAuthNoPriv,
+            authNoPriv: snmp.SecurityLevel.authNoPriv,
+            authPriv: snmp.SecurityLevel.authPriv
+        };
+        const authProtocolMap = {
+            MD5: snmp.AuthProtocols.md5,
+            SHA: snmp.AuthProtocols.sha,
+            SHA224: snmp.AuthProtocols.sha224,
+            SHA256: snmp.AuthProtocols.sha256,
+            SHA384: snmp.AuthProtocols.sha384,
+            SHA512: snmp.AuthProtocols.sha512
+        };
+        const privProtocolMap = {
+            DES: snmp.PrivProtocols.des,
+            AES: snmp.PrivProtocols.aes,
+            AES256: snmp.PrivProtocols.aes256b
+        };
+
+        const level = securityLevelMap[config.securityLevel] || snmp.SecurityLevel.noAuthNoPriv;
+        const user = {
+            name: config.v3Username,
+            level
+        };
+
+        if (level === snmp.SecurityLevel.authNoPriv || level === snmp.SecurityLevel.authPriv) {
+            const authProtocol = authProtocolMap[config.authProtocol];
+            if (!authProtocol) {
+                throw new Error(`不支持的SNMPv3认证协议: ${config.authProtocol}`);
+            }
+            user.authProtocol = authProtocol;
+            user.authKey = config.authPassword;
         }
+
+        if (level === snmp.SecurityLevel.authPriv) {
+            const privProtocol = privProtocolMap[config.privProtocol];
+            if (!privProtocol) {
+                throw new Error(`不支持的SNMPv3加密协议: ${config.privProtocol}`);
+            }
+            user.privProtocol = privProtocol;
+            user.privKey = config.privPassword;
+        }
+
+        return user;
     }
 
-    /**
-     * 检查是否为Trap消息
-     */
-    isTrapMessage(message) {
-        return (
-            message.pduType === SnmpConst.SNMP_PDU_TYPE.TRAP ||
-            message.pduType === SnmpConst.SNMP_PDU_TYPE.SNMPV2_TRAP ||
-            message.pduType === SnmpConst.SNMP_PDU_TYPE.INFORM_REQUEST
-        );
+    handleReceiverCallback(error, notification) {
+        if (error) {
+            logger.error('SNMP接收器错误:', error);
+            this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
+                type: SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_ERROR,
+                data: {
+                    error: error.message,
+                    sourceIp: error.rinfo?.address || null,
+                    sourcePort: error.rinfo?.port || null
+                }
+            });
+            return;
+        }
+
+        this.processTrapNotification(notification);
     }
 
-    /**
-     * 处理Trap消息
-     */
-    processTrapMessage(message, rinfo, _rawBuffer) {
+    processTrapNotification(notification) {
         try {
+            const pdu = notification?.pdu || {};
+            const rinfo = notification?.rinfo || {};
             this.trapCounter++;
 
-            const trapData = {
+            const trapData = this.enrichTrapData({
                 id: `trap_${Date.now()}_${this.trapCounter}`,
                 timestamp: new Date().toISOString(),
                 sourceIp: rinfo.address,
                 sourcePort: rinfo.port,
-                version: message.version,
-                community: message.community,
-                pduType: message.pduType,
-                requestId: message.requestId,
-                enterpriseOid: message.enterprise,
-                trapType: this.getTrapType(message),
-                specificType: message.specificTrap,
-                genericType: message.genericTrap,
-                varbinds: message.varbinds,
+                version: this.getVersionFromPdu(pdu),
+                community: pdu.community,
+                user: pdu.user,
+                pduType: pdu.type,
+                pduTypeName: this.getPduTypeName(pdu.type),
+                requestId: pdu.id || 0,
+                enterpriseOid: pdu.enterprise || this.getTrapOid(pdu),
+                trapOid: this.getTrapOid(pdu),
+                trapType: this.getTrapType(pdu),
+                specificType: pdu.specific,
+                genericType: pdu.generic,
+                agentAddr: pdu.agentAddr,
+                uptime: pdu.upTime,
+                contextName: pdu.contextName,
+                varbinds: (pdu.varbinds || []).map(varbind => this.mibRegistry.enrichVarbind(varbind)),
                 status: 'received',
-                rawData: message.rawData
-            };
+                rawData: null
+            });
 
             logger.info(`处理Trap: ${trapData.id} 来自 ${rinfo.address}:${rinfo.port}`);
 
             this.recordTrap(trapData);
             this.enqueueTrapUpdateEvent(trapData);
-
-            // 更新代理信息
             this.updateAgentInfo(rinfo.address, trapData);
         } catch (error) {
             logger.error('处理Trap消息失败:', error);
-
-            // 发送Trap错误事件
             this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
                 type: SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_ERROR,
                 data: {
                     error: error.message,
-                    sourceIp: rinfo.address,
-                    sourcePort: rinfo.port
+                    sourceIp: notification?.rinfo?.address || null,
+                    sourcePort: notification?.rinfo?.port || null
                 }
             });
+        }
+    }
+
+    enrichTrapData(trapData) {
+        const trapOidInfo = this.mibRegistry.translateOid(trapData.trapOid);
+        const enterpriseOidInfo = this.mibRegistry.translateOid(trapData.enterpriseOid);
+
+        return {
+            ...trapData,
+            trapName: trapOidInfo.moduleQualifiedName || trapOidInfo.objectName || '',
+            trapPath: trapOidInfo.pathName || '',
+            trapDescription: trapOidInfo.description || '',
+            enterpriseName: enterpriseOidInfo.moduleQualifiedName || enterpriseOidInfo.objectName || '',
+            enterprisePath: enterpriseOidInfo.pathName || ''
+        };
+    }
+
+    getVersionFromPdu(pdu) {
+        if (pdu.type === snmp.PduType.Trap) {
+            return 'v1';
+        }
+
+        if (pdu.user) {
+            return 'v3';
+        }
+
+        return 'v2c';
+    }
+
+    getPduTypeName(pduType) {
+        return snmp.PduType[pduType] || 'Unknown';
+    }
+
+    getTrapOid(pdu) {
+        if (pdu.type === snmp.PduType.Trap) {
+            if (pdu.generic === 6 && pdu.enterprise && Number.isFinite(Number(pdu.specific))) {
+                return `${pdu.enterprise}.${pdu.specific}`;
+            }
+            return GENERIC_TRAP_OIDS[pdu.generic] || pdu.enterprise || '';
+        }
+
+        const trapOidVarbind = (pdu.varbinds || []).find(varbind => varbind.oid === SNMP_TRAP_OID);
+        return trapOidVarbind?.value || '';
+    }
+
+    /**
+     * 获取Trap类型
+     */
+    getTrapType(pdu) {
+        switch (pdu.type) {
+            case snmp.PduType.Trap:
+                return 'SNMPv1 Trap';
+            case snmp.PduType.TrapV2:
+                return 'SNMPv2 Trap';
+            case snmp.PduType.InformRequest:
+                return 'Inform Request';
+            default:
+                return 'Unknown';
         }
     }
 
@@ -364,26 +399,14 @@ class SnmpWorker {
     }
 
     /**
-     * 获取Trap类型
-     */
-    getTrapType(message) {
-        switch (message.pduType) {
-            case SnmpConst.SNMP_PDU_TYPE.TRAP:
-                return 'SNMPv1 Trap';
-            case SnmpConst.SNMP_PDU_TYPE.SNMPV2_TRAP:
-                return 'SNMPv2 Trap';
-            case SnmpConst.SNMP_PDU_TYPE.INFORM_REQUEST:
-                return 'Inform Request';
-            default:
-                return 'Unknown';
-        }
-    }
-
-    /**
      * 更新代理信息
      */
     updateAgentInfo(agentIp, trapData) {
         try {
+            if (!agentIp) {
+                return;
+            }
+
             const agentKey = agentIp;
             let agentInfo = this.agentMap.get(agentKey);
 
@@ -396,7 +419,6 @@ class SnmpWorker {
                     status: 'online'
                 };
 
-                // 发送代理连接事件
                 this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
                     type: SnmpConst.SNMP_SUB_EVT_TYPES.AGENT_CONNECTION,
                     data: agentInfo
@@ -494,7 +516,8 @@ class SnmpWorker {
                 pageSize,
                 total,
                 ...this.getTrapStats(),
-                maxTrapHistory: this.maxTrapHistory
+                maxTrapHistory: this.maxTrapHistory,
+                mib: this.mibRegistry.getSummary()
             },
             '获取Trap列表成功'
         );
@@ -507,24 +530,50 @@ class SnmpWorker {
         this.messageHandler.sendSuccessResponse(messageId, null, 'Trap历史已清空');
     }
 
+    compileMibs(messageId, data = []) {
+        try {
+            const request = this.normalizeMibCompileRequest(data);
+            const summary = this.mibRegistry.loadOrCompileMibFiles(request.filePaths, {
+                cacheFilePath: request.cacheFilePath,
+                force: request.force
+            });
+            this.trapHistory = this.trapHistory.map(trap =>
+                this.enrichTrapData({
+                    ...trap,
+                    varbinds: (trap.varbinds || []).map(varbind => this.mibRegistry.enrichVarbind(varbind))
+                })
+            );
+            this.messageHandler.sendSuccessResponse(messageId, summary, 'MIB编译完成');
+        } catch (error) {
+            logger.error('MIB编译失败:', error);
+            this.messageHandler.sendErrorResponse(messageId, 'MIB编译失败: ' + error.message);
+        }
+    }
+
+    normalizeMibCompileRequest(data = []) {
+        if (Array.isArray(data)) {
+            return {
+                filePaths: data,
+                cacheFilePath: '',
+                force: false
+            };
+        }
+
+        return {
+            filePaths: data.filePaths || data.requestedFiles || [],
+            cacheFilePath: data.cacheFilePath || '',
+            force: Boolean(data.force)
+        };
+    }
+
     /**
      * 停止SNMP服务器
      */
-    stopSnmp(messageId) {
+    async stopSnmp(messageId) {
         try {
             this.flushTrapUpdateEvents();
+            await this.closeReceiver();
 
-            if (this.server) {
-                this.server.close();
-                this.server = null;
-            }
-
-            if (this.ipv6Server) {
-                this.ipv6Server.close();
-                this.ipv6Server = null;
-            }
-
-            // 清空配置和会话
             this.snmpConfig = null;
             this.sessionMap.clear();
             this.agentMap.clear();
@@ -535,7 +584,6 @@ class SnmpWorker {
             logger.info('SNMP服务器停止成功');
             this.messageHandler.sendSuccessResponse(messageId, null, 'SNMP协议停止成功');
 
-            // 发送服务器状态事件
             this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
                 type: SnmpConst.SNMP_SUB_EVT_TYPES.SERVER_STATUS,
                 data: {
@@ -546,6 +594,43 @@ class SnmpWorker {
             logger.error('停止SNMP服务器失败:', error);
             this.messageHandler.sendErrorResponse(messageId, 'SNMP协议停止失败: ' + error.message);
         }
+    }
+
+    closeReceiver() {
+        if (!this.receiver) {
+            return Promise.resolve();
+        }
+
+        return new Promise(resolve => {
+            const receiver = this.receiver;
+            const sockets = Object.values(receiver.listener?.sockets || {});
+            const socketCount = sockets.length;
+            let closedCount = 0;
+            let resolved = false;
+
+            const finish = () => {
+                if (resolved) {
+                    return;
+                }
+                resolved = true;
+                this.receiver = null;
+                resolve();
+            };
+
+            if (socketCount === 0) {
+                finish();
+                return;
+            }
+
+            const timer = setTimeout(finish, 500);
+            receiver.close(() => {
+                closedCount++;
+                if (closedCount >= socketCount) {
+                    clearTimeout(timer);
+                    finish();
+                }
+            });
+        });
     }
 }
 

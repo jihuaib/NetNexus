@@ -1,5 +1,5 @@
 const path = require('path');
-const { app } = require('electron');
+const { app, BrowserWindow, dialog } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const WorkerWithPromise = require('../worker/workerWithPromise');
@@ -10,7 +10,9 @@ class SnmpApp {
         this.ipcMain = ipcMain;
         this.store = store;
         this.snmpConfigFileKey = 'snmp-config';
+        this.snmpMibFilesKey = 'snmp-mib-files';
         this.worker = null;
+        this.mibWorker = null;
         this.isDev = !app.isPackaged;
 
         this.snmpTrapEventHandler = null;
@@ -32,6 +34,12 @@ class SnmpApp {
         this.ipcMain.handle('snmp:stopSnmp', this.handleStopSnmp.bind(this));
         this.ipcMain.handle('snmp:getTrapList', this.handleGetTrapList.bind(this));
         this.ipcMain.handle('snmp:clearTrapHistory', this.handleClearTrapHistory.bind(this));
+        this.ipcMain.handle('snmp:selectMibFiles', this.handleSelectMibFiles.bind(this));
+        this.ipcMain.handle('snmp:selectMibDirectory', this.handleSelectMibDirectory.bind(this));
+        this.ipcMain.handle('snmp:compileMibs', this.handleCompileMibs.bind(this));
+        this.ipcMain.handle('snmp:getMibStatus', this.handleGetMibStatus.bind(this));
+        this.ipcMain.handle('snmp:clearMibs', this.handleClearMibs.bind(this));
+        this.ipcMain.handle('snmp:translateOid', this.handleTranslateOid.bind(this));
     }
 
     /**
@@ -81,6 +89,8 @@ class SnmpApp {
             if (this.logLevel) {
                 config.logLevel = this.logLevel;
             }
+            config.mibFiles = this.getStoredMibFilePaths();
+            config.mibCacheFilePath = this.getMibCacheFilePath();
 
             const workerPath = this.isDev
                 ? path.join(__dirname, '../worker/snmpWorker.js')
@@ -182,6 +192,191 @@ class SnmpApp {
         } catch (error) {
             logger.error('清空Trap历史失败:', error);
             return errorResponse('清空Trap历史失败: ' + error.message);
+        }
+    }
+
+    showMibOpenDialog(event) {
+        const options = {
+            title: '导入 MIB 文件',
+            properties: ['openFile', 'multiSelections'],
+            filters: [
+                { name: '所有支持的 MIB 文件', extensions: ['*'] },
+                { name: '常见 MIB 后缀', extensions: ['mib', 'txt', 'my'] }
+            ]
+        };
+        const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
+        return win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options);
+    }
+
+    async handleSelectMibFiles(event) {
+        try {
+            const result = await this.showMibOpenDialog(event);
+
+            if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+                return successResponse([], '已取消选择');
+            }
+
+            return successResponse(result.filePaths, 'MIB文件选择成功');
+        } catch (error) {
+            logger.error('选择MIB文件失败:', error);
+            return errorResponse('选择MIB文件失败: ' + error.message);
+        }
+    }
+
+    async handleSelectMibDirectory(event) {
+        try {
+            const options = {
+                title: '导入 MIB 目录',
+                properties: ['openDirectory']
+            };
+            const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
+            const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+
+            if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+                return successResponse(null, '已取消选择');
+            }
+
+            return successResponse(result.filePaths[0], 'MIB目录选择成功');
+        } catch (error) {
+            logger.error('选择MIB目录失败:', error);
+            return errorResponse('选择MIB目录失败: ' + error.message);
+        }
+    }
+
+    async handleCompileMibs(_event, filePaths = []) {
+        try {
+            const selectedFiles = this.normalizeFilePaths(filePaths);
+            const requestedFiles = selectedFiles.length > 0 ? selectedFiles : this.getStoredMibFilePaths();
+            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS, {
+                filePaths: requestedFiles,
+                cacheFilePath: this.getMibCacheFilePath(),
+                force: true
+            });
+            const summary = result.data;
+
+            this.store.set(this.snmpMibFilesKey, requestedFiles);
+
+            if (this.worker) {
+                const workerResult = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, {
+                    filePaths: requestedFiles,
+                    cacheFilePath: this.getMibCacheFilePath()
+                });
+                summary.worker = workerResult.data;
+            }
+
+            return successResponse(summary, 'MIB编译完成');
+        } catch (error) {
+            logger.error('MIB编译失败:', error);
+            return errorResponse('MIB编译失败: ' + error.message);
+        }
+    }
+
+    async handleGetMibStatus() {
+        try {
+            const storedFiles = this.getStoredMibFilePaths();
+            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS, {
+                requestedFiles: storedFiles,
+                cacheFilePath: this.getMibCacheFilePath()
+            });
+            return successResponse(result.data, result.msg || '获取MIB状态成功');
+        } catch (error) {
+            logger.error('获取MIB状态失败:', error);
+            return errorResponse('获取MIB状态失败: ' + error.message);
+        }
+    }
+
+    async handleClearMibs() {
+        try {
+            this.store.set(this.snmpMibFilesKey, []);
+            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.CLEAR_MIBS, {
+                cacheFilePath: this.getMibCacheFilePath()
+            });
+
+            if (this.worker) {
+                await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, {
+                    filePaths: [],
+                    cacheFilePath: this.getMibCacheFilePath(),
+                    force: true
+                });
+            }
+
+            return successResponse(result.data, result.msg || 'MIB配置已清空');
+        } catch (error) {
+            logger.error('清空MIB配置失败:', error);
+            return errorResponse('清空MIB配置失败: ' + error.message);
+        }
+    }
+
+    async handleTranslateOid(_event, oid) {
+        try {
+            const storedFiles = this.getStoredMibFilePaths();
+            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.TRANSLATE_OID, {
+                oid,
+                requestedFiles: storedFiles,
+                cacheFilePath: this.getMibCacheFilePath()
+            });
+            return successResponse(result.data, result.msg || 'OID解析成功');
+        } catch (error) {
+            logger.error('OID解析失败:', error);
+            return errorResponse('OID解析失败: ' + error.message);
+        }
+    }
+
+    getStoredMibFilePaths() {
+        const stored = this.store.get(this.snmpMibFilesKey);
+        return this.normalizeFilePaths(stored);
+    }
+
+    getMibCacheFilePath() {
+        return path.join(app.getPath('userData'), 'snmp-mib-cache.json');
+    }
+
+    normalizeFilePaths(filePaths) {
+        if (!Array.isArray(filePaths)) {
+            return [];
+        }
+
+        const seen = new Set();
+        const normalized = [];
+        filePaths.forEach(filePath => {
+            if (!filePath || typeof filePath !== 'string') {
+                return;
+            }
+
+            const trimmed = filePath.trim();
+            if (!trimmed || seen.has(trimmed)) {
+                return;
+            }
+
+            seen.add(trimmed);
+            normalized.push(trimmed);
+        });
+
+        return normalized;
+    }
+
+    getMibWorker() {
+        if (this.mibWorker) {
+            return this.mibWorker;
+        }
+
+        const workerPath = this.isDev
+            ? path.join(__dirname, '../worker/mibWorker.js')
+            : path.join(process.resourcesPath, 'app', 'electron/worker/mibWorker.js');
+        const workerFactory = new WorkerWithPromise(workerPath);
+        this.mibWorker = workerFactory.createLongRunningWorker();
+        this.mibWorker.worker.unref();
+        return this.mibWorker;
+    }
+
+    async sendMibWorkerRequest(op, data = null) {
+        try {
+            return await this.getMibWorker().sendRequest(op, data);
+        } catch (error) {
+            if (/Worker stopped|terminated|Cannot post message/i.test(error.message)) {
+                this.mibWorker = null;
+            }
+            throw error;
         }
     }
 

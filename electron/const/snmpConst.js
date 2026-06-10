@@ -20,7 +20,15 @@ const SNMP_REQ_TYPES = {
     GET_TRAP_LIST: 3,
     GET_TRAP_DETAIL: 4,
     CLEAR_TRAP_HISTORY: 5,
-    UPDATE_CONFIG: 6
+    UPDATE_CONFIG: 6,
+    COMPILE_MIBS: 7
+};
+
+const MIB_REQ_TYPES = {
+    COMPILE_MIBS: 'compileMibs',
+    GET_MIB_STATUS: 'getMibStatus',
+    CLEAR_MIBS: 'clearMibs',
+    TRANSLATE_OID: 'translateOid'
 };
 
 // SNMP版本
@@ -74,6 +82,7 @@ const SNMP_BER_ASN1_TAG = {
 module.exports = {
     SNMP_EVT_TYPES,
     SNMP_REQ_TYPES,
+    MIB_REQ_TYPES,
     SNMP_VERSION,
     SNMP_PDU_TYPE,
     SNMP_SECURITY_LEVEL,

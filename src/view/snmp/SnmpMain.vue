@@ -4,6 +4,7 @@
         <div class="fixed-tabs">
             <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
                 <a-tab-pane key="snmp-config" tab="SNMP配置" />
+                <a-tab-pane key="snmp-mib" tab="MIB管理" />
                 <a-tab-pane key="snmp-trap" tab="Trap监控" />
             </a-tabs>
         </div>
@@ -20,14 +21,16 @@
 </template>
 
 <script setup>
-    import { ref, onActivated } from 'vue';
-    import { useRouter } from 'vue-router';
+    import { ref, onActivated, watch } from 'vue';
+    import { useRoute, useRouter } from 'vue-router';
 
     defineOptions({ name: 'SnmpMain' });
 
+    const route = useRoute();
     const router = useRouter();
     const activeTabKey = ref('snmp-config');
     const currentTab = ref(null);
+    const defaultTabKey = 'snmp-config';
 
     defineExpose({
         clearValidationErrors: () => {
@@ -41,9 +44,18 @@
         router.push(`/snmp/${key}`);
     };
 
+    const syncActiveTab = () => {
+        const childPath = route.path.split('/').filter(Boolean)[1];
+        activeTabKey.value = childPath || defaultTabKey;
+    };
+
+    watch(() => route.path, syncActiveTab, { immediate: true });
+
     onActivated(() => {
-        activeTabKey.value = 'snmp-config';
-        router.push('/snmp/snmp-config');
+        syncActiveTab();
+        if (route.path === '/snmp' || route.path === '/snmp/') {
+            router.replace('/snmp/snmp-config');
+        }
     });
 </script>
 

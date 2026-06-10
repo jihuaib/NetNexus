@@ -210,7 +210,13 @@ contextBridge.exposeInMainWorld('snmpApi', {
     startSnmp: config => ipcRenderer.invoke('snmp:startSnmp', config),
     stopSnmp: () => ipcRenderer.invoke('snmp:stopSnmp'),
     getTrapList: query => ipcRenderer.invoke('snmp:getTrapList', query),
-    clearTrapHistory: () => ipcRenderer.invoke('snmp:clearTrapHistory')
+    clearTrapHistory: () => ipcRenderer.invoke('snmp:clearTrapHistory'),
+    selectMibFiles: () => ipcRenderer.invoke('snmp:selectMibFiles'),
+    selectMibDirectory: () => ipcRenderer.invoke('snmp:selectMibDirectory'),
+    compileMibs: filePaths => ipcRenderer.invoke('snmp:compileMibs', filePaths),
+    getMibStatus: () => ipcRenderer.invoke('snmp:getMibStatus'),
+    clearMibs: () => ipcRenderer.invoke('snmp:clearMibs'),
+    translateOid: oid => ipcRenderer.invoke('snmp:translateOid', oid)
 });
 
 // ntp模块
