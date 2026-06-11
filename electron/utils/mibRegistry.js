@@ -17,6 +17,7 @@ class MibRegistry {
         this.loadedFiles = [];
         this.failedFiles = [];
         this.oidIndex = new Map();
+        this.oidChildIndex = new Map();
         this.cachedModuleNames = null;
         this.cachedBaseModuleNames = null;
         this.cacheHit = false;
@@ -214,6 +215,7 @@ class MibRegistry {
         this.cachedModuleNames = Array.isArray(snapshot.modules) ? snapshot.modules : [];
         this.cachedBaseModuleNames = Array.isArray(snapshot.baseModules) ? snapshot.baseModules : [];
         this.oidIndex = new Map(Array.isArray(snapshot.oidIndexEntries) ? snapshot.oidIndexEntries : []);
+        this.rebuildOidChildIndex();
     }
 
     getFileSignatures(filePaths = []) {
@@ -468,6 +470,25 @@ class MibRegistry {
                 });
             });
         });
+
+        this.rebuildOidChildIndex();
+    }
+
+    rebuildOidChildIndex() {
+        this.oidChildIndex.clear();
+
+        const oids = Array.from(this.oidIndex.keys()).sort(this.compareOid);
+        oids.forEach(oid => {
+            const parentOid = this.findNearestParentOid(oid, this.oidIndex);
+            const parentKey = parentOid || '';
+            if (!this.oidChildIndex.has(parentKey)) {
+                this.oidChildIndex.set(parentKey, []);
+            }
+            if (!this.oidChildIndex.has(oid)) {
+                this.oidChildIndex.set(oid, []);
+            }
+            this.oidChildIndex.get(parentKey).push(oid);
+        });
     }
 
     getModules(includeBase = false) {
@@ -507,8 +528,37 @@ class MibRegistry {
             baseModules: moduleNamesWithBase.filter(moduleName => !moduleNames.includes(moduleName)),
             totalObjects: this.oidIndex.size,
             cacheHit: this.cacheHit,
-            oidTree: this.buildOidTree()
+            oidTree: this.getOidTreeChildren()
         };
+    }
+
+    getOidTreeChildren(parentOid = '') {
+        const normalizedParentOid = this.normalizeOid(parentOid);
+        const childOids = this.oidChildIndex.get(normalizedParentOid) || [];
+
+        return childOids.map(oid =>
+            this.toOidTreeNode(oid, this.oidIndex.get(oid), {
+                parentOid: normalizedParentOid || null
+            })
+        );
+    }
+
+    getOidTreePath(oid) {
+        const normalizedOid = this.normalizeOid(oid);
+        if (!normalizedOid || !this.oidIndex.has(normalizedOid)) {
+            return [];
+        }
+
+        const pathParts = [normalizedOid];
+        let currentOid = normalizedOid;
+        let parentOid = this.findNearestParentOid(currentOid, this.oidIndex);
+        while (parentOid) {
+            pathParts.unshift(parentOid);
+            currentOid = parentOid;
+            parentOid = this.findNearestParentOid(currentOid, this.oidIndex);
+        }
+
+        return pathParts;
     }
 
     buildOidTree() {
@@ -517,7 +567,7 @@ class MibRegistry {
         const oids = Array.from(this.oidIndex.keys()).sort(this.compareOid);
 
         oids.forEach(oid => {
-            nodes.set(oid, this.toOidTreeNode(oid, this.oidIndex.get(oid)));
+            nodes.set(oid, this.toOidTreeNode(oid, this.oidIndex.get(oid), { includeChildren: true }));
         });
 
         oids.forEach(oid => {
@@ -535,10 +585,26 @@ class MibRegistry {
         return roots;
     }
 
-    toOidTreeNode(oid, definition = {}) {
+    toOidTreeNode(oid, definition = {}, options = {}) {
         const objectName = definition.ObjectName || definition.NAME || oid;
         const moduleName = definition.ModuleName || '';
         const accessCapabilities = this.getAccessCapabilities(definition);
+        const parentOid =
+            Object.prototype.hasOwnProperty.call(options, 'parentOid') ?
+                options.parentOid :
+                this.findNearestParentOid(oid, this.oidIndex);
+        const childOids = this.oidChildIndex.get(oid) || [];
+        const queryMetadata = this.getNodeQueryMetadata(
+            oid,
+            {
+                ...accessCapabilities,
+                objectName,
+                macro: definition.MACRO || '',
+                maxAccess: definition['MAX-ACCESS'] || definition.ACCESS || '',
+                syntax: this.formatSyntax(definition.SYNTAX)
+            },
+            parentOid
+        );
 
         return {
             key: oid,
@@ -553,6 +619,9 @@ class MibRegistry {
             maxAccess: definition['MAX-ACCESS'] || definition.ACCESS || '',
             status: definition.STATUS || '',
             ...accessCapabilities,
+            ...queryMetadata,
+            hasChildren: childOids.length > 0,
+            isLeaf: childOids.length === 0,
             children: []
         };
     }
@@ -560,14 +629,47 @@ class MibRegistry {
     annotateQueryOids(nodes) {
         for (const [oid, node] of nodes.entries()) {
             const parentOid = this.findNearestParentOid(oid, nodes);
-            const parentNode = parentOid ? nodes.get(parentOid) : null;
-            const isTableColumn = this.isTableColumnNode(node, parentNode);
-            const isScalar = Boolean((node.canGet || node.canSet) && !isTableColumn);
-
-            node.isScalar = isScalar;
-            node.isTableColumn = isTableColumn;
-            node.queryOid = isScalar ? `${node.oid}.0` : node.oid;
+            Object.assign(node, this.getNodeQueryMetadata(oid, node, parentOid));
         }
+    }
+
+    getNodeQueryMetadata(oid, node, parentOid) {
+        const isTableColumn = this.isTableColumnNodeByOid(node, parentOid);
+        const isScalar = Boolean((node.canGet || node.canSet) && !isTableColumn);
+
+        return {
+            isScalar,
+            isTableColumn,
+            queryOid: isScalar ? `${oid}.0` : oid
+        };
+    }
+
+    isTableColumnNodeByOid(node, parentOid) {
+        if (!node || !parentOid || !(node.canGet || node.canSet)) {
+            return false;
+        }
+
+        const parentDefinition = this.oidIndex.get(parentOid);
+        if (!parentDefinition) {
+            return false;
+        }
+
+        const parentMacro = String(parentDefinition.MACRO || '').toUpperCase();
+        const parentAccess = String(parentDefinition['MAX-ACCESS'] || parentDefinition.ACCESS || '').toLowerCase();
+        if (parentMacro !== 'OBJECT-TYPE' || parentAccess !== 'not-accessible') {
+            return false;
+        }
+
+        const parentObjectName = parentDefinition.ObjectName || parentDefinition.NAME || '';
+        if (/Entry$/i.test(parentObjectName)) {
+            return true;
+        }
+
+        const siblingValueNodeCount = (this.oidChildIndex.get(parentOid) || []).filter(childOid => {
+            const capabilities = this.getAccessCapabilities(this.oidIndex.get(childOid));
+            return capabilities.canGet || capabilities.canSet;
+        }).length;
+        return siblingValueNodeCount > 1 && !this.isPrimitiveSyntax(this.formatSyntax(parentDefinition.SYNTAX));
     }
 
     isTableColumnNode(node, parentNode) {
@@ -676,6 +778,15 @@ class MibRegistry {
             this.safeTranslate(match.oid, snmp.OidFormat.module) ||
             `${match.definition.ModuleName}::${match.definition.ObjectName}`;
         const pathName = this.safeTranslate(match.oid, snmp.OidFormat.path) || match.definition.NameSpace || null;
+        const accessCapabilities = this.getAccessCapabilities(match.definition);
+        const queryMetadata = this.getNodeQueryMetadata(
+            match.oid,
+            {
+                ...accessCapabilities,
+                objectName: match.definition.ObjectName || match.definition.NAME || match.oid
+            },
+            this.findNearestParentOid(match.oid, this.oidIndex)
+        );
 
         return {
             oid: normalizedOid,
@@ -691,7 +802,9 @@ class MibRegistry {
             maxAccess: match.definition['MAX-ACCESS'] || match.definition.ACCESS || null,
             status: match.definition.STATUS || null,
             description: match.definition.DESCRIPTION || null,
-            ...this.getAccessCapabilities(match.definition)
+            treePath: this.getOidTreePath(match.oid),
+            ...accessCapabilities,
+            ...queryMetadata
         };
     }
 

@@ -30,7 +30,6 @@ import FtpConfig from '../view/ftp/FtpConfig.vue';
 import SnmpMain from '../view/snmp/SnmpMain.vue';
 import SnmpConfig from '../view/snmp/SnmpConfig.vue';
 import SnmpMib from '../view/snmp/SnmpMib.vue';
-import SnmpQuery from '../view/snmp/SnmpQuery.vue';
 import SnmpTrap from '../view/snmp/SnmpTrap.vue';
 import DhcpMain from '../view/dhcp/DhcpMain.vue';
 import DhcpConfig from '../view/dhcp/DhcpConfig.vue';
@@ -263,12 +262,6 @@ const routes = [
                         path: 'snmp-mib',
                         name: 'SnmpMib',
                         component: SnmpMib,
-                        meta: { keepAlive: true }
-                    },
-                    {
-                        path: 'snmp-query',
-                        name: 'SnmpQuery',
-                        component: SnmpQuery,
                         meta: { keepAlive: true }
                     },
                     {

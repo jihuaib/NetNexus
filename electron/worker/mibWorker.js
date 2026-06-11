@@ -10,6 +10,10 @@ class MibWorker {
         this.messageHandler.init();
         this.messageHandler.registerHandler(SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS, this.compileMibs.bind(this));
         this.messageHandler.registerHandler(SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS, this.getMibStatus.bind(this));
+        this.messageHandler.registerHandler(
+            SnmpConst.MIB_REQ_TYPES.GET_MIB_TREE_CHILDREN,
+            this.getMibTreeChildren.bind(this)
+        );
         this.messageHandler.registerHandler(SnmpConst.MIB_REQ_TYPES.CLEAR_MIBS, this.clearMibs.bind(this));
         this.messageHandler.registerHandler(SnmpConst.MIB_REQ_TYPES.TRANSLATE_OID, this.translateOid.bind(this));
     }
@@ -59,6 +63,21 @@ class MibWorker {
         } catch (error) {
             logger.error('获取MIB状态失败:', error);
             this.messageHandler.sendErrorResponse(messageId, '获取MIB状态失败: ' + error.message);
+        }
+    }
+
+    getMibTreeChildren(messageId, data = {}) {
+        try {
+            this.compileIfNeeded(data);
+            const parentOid = typeof data.parentOid === 'string' ? data.parentOid : '';
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                this.mibRegistry.getOidTreeChildren(parentOid),
+                '获取MIB树节点成功'
+            );
+        } catch (error) {
+            logger.error('获取MIB树节点失败:', error);
+            this.messageHandler.sendErrorResponse(messageId, '获取MIB树节点失败: ' + error.message);
         }
     }
 

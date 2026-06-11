@@ -16,6 +16,14 @@
                             <template #icon><ReloadOutlined /></template>
                             重新编译
                         </a-button>
+                        <a-button :disabled="mibFiles.length === 0" :loading="projectSaving" @click="showSaveProject">
+                            <template #icon><SaveOutlined /></template>
+                            保存工程
+                        </a-button>
+                        <a-button :loading="projectLoading || projectImporting" @click="showImportProject">
+                            <template #icon><ImportOutlined /></template>
+                            导入工程
+                        </a-button>
                         <a-button danger :disabled="mibFiles.length === 0" @click="clearMibs">
                             <template #icon><DeleteOutlined /></template>
                             清空
@@ -48,18 +56,20 @@
                             <span class="mib-panel-title">OID树</span>
                             <span class="mib-panel-meta">{{ mibStatus.totalObjects }} 个对象</span>
                         </div>
-                        <div class="mib-tree-scroll">
+                        <div ref="treeScrollRef" class="mib-tree-scroll">
                             <a-tree
                                 v-if="mibStatus.oidTree.length > 0"
+                                ref="treeRef"
                                 v-model:expanded-keys="treeExpandedKeys"
                                 :selected-keys="treeSelectedKeys"
                                 :tree-data="mibStatus.oidTree"
                                 block-node
+                                @expand="handleTreeExpand"
                                 @right-click="handleTreeRightClick"
                                 @select="handleTreeSelect"
                             >
                                 <template #title="{ title, oid, moduleName, macro, canGet, canSet, notifyOnly, nodeRole }">
-                                    <span class="mib-node-title">
+                                    <span class="mib-node-title" :data-tree-oid="oid">
                                         <span class="mib-node-name">{{ title }}</span>
                                         <span class="mib-node-oid">{{ oid }}</span>
                                         <span v-if="macro" class="mib-node-macro">{{ macro }}</span>
@@ -205,22 +215,81 @@
         </a-modal>
 
         <a-modal
+            v-model:open="projectSaveOpen"
+            title="保存MIB工程"
+            ok-text="保存"
+            cancel-text="取消"
+            :confirm-loading="projectSaving"
+            width="520px"
+            @ok="saveMibProject"
+        >
+            <a-form :model="projectForm" :label-col="{ style: { width: '72px' } }">
+                <a-form-item label="工程名">
+                    <a-input
+                        v-model:value="projectForm.name"
+                        :maxlength="80"
+                        placeholder="请输入工程名"
+                        @press-enter="saveMibProject"
+                    />
+                </a-form-item>
+                <a-form-item label="内容">
+                    <div class="mib-project-meta">
+                        文件 {{ mibStatus.expandedFileCount }} / 模块 {{ mibStatus.modules.length }} / OID
+                        {{ mibStatus.totalObjects }}
+                    </div>
+                </a-form-item>
+            </a-form>
+        </a-modal>
+
+        <a-modal v-model:open="projectImportOpen" title="导入MIB工程" :footer="null" width="760px">
+            <div class="mib-project-header">
+                <a-tooltip :title="projectRootDir">
+                    <span class="mib-project-root">{{ projectRootDir || 'userData/snmp-mib-projects' }}</span>
+                </a-tooltip>
+                <a-button size="small" :loading="projectLoading" @click="loadMibProjects">刷新</a-button>
+            </div>
+            <a-table
+                :columns="projectColumns"
+                :data-source="mibProjects"
+                :loading="projectLoading"
+                :pagination="{ pageSize: 6, size: 'small' }"
+                row-key="name"
+                size="small"
+                class="mib-project-table"
+            >
+                <template #bodyCell="{ column, record }">
+                    <template v-if="column.key === 'name'">
+                        <a-tooltip :title="record.directory">
+                            <span class="mib-project-name">{{ record.name }}</span>
+                        </a-tooltip>
+                    </template>
+                    <template v-else-if="column.key === 'updatedAt'">
+                        {{ formatProjectTime(record.updatedAt) }}
+                    </template>
+                    <template v-else-if="column.key === 'action'">
+                        <a-button
+                            type="link"
+                            size="small"
+                            :loading="projectImporting && importingProjectName === record.name"
+                            @click="importMibProject(record)"
+                        >
+                            导入
+                        </a-button>
+                    </template>
+                </template>
+            </a-table>
+        </a-modal>
+
+        <a-modal
             v-model:open="getModalOpen"
-            title="SNMP GET"
-            ok-text="发送 GET"
+            :title="getModalTitle"
+            :ok-text="getModalOkText"
             cancel-text="取消"
             :confirm-loading="getSending"
+            :z-index="REQUEST_MODAL_Z_INDEX"
             width="680px"
             @ok="sendGetRequest"
         >
-            <a-alert
-                v-if="getTargetNode?.isTableColumn"
-                type="warning"
-                show-icon
-                message="表字段需要指定行索引"
-                description="请在OID最后补具体行索引，例如接口表第1行追加 .1。"
-                class="mib-request-alert"
-            />
             <a-form :model="getForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
                 <a-form-item label="目标">
                     <div class="mib-request-readonly">{{ getRequestTargetText(getForm) }}</div>
@@ -228,16 +297,43 @@
                 <a-form-item label="版本">
                     <div class="mib-request-readonly">{{ getRequestAuthText(getForm) }}</div>
                 </a-form-item>
-                <a-form-item label="OID">
-                    <a-input v-model:value="getForm.oid" />
+                <a-form-item label="对象">
+                    <div class="mib-request-object">
+                        <div class="mib-request-object-title">
+                            {{ getRequestObjectName(getTargetNode, getForm.oid) }}
+                        </div>
+                        <div class="mib-request-object-meta">
+                            {{ getRequestObjectPath(getTargetNode, getForm.oid) }}
+                        </div>
+                    </div>
+                </a-form-item>
+                <a-form-item label="实际OID">
+                    <div class="mib-oid-input-row">
+                        <a-input v-model:value="getForm.oid" />
+                        <a-button
+                            v-if="getTargetNode?.isTableColumn && !isGetNextMode"
+                            :loading="instanceLoading && instanceTargetForm === 'get'"
+                            @click="showInstanceSelector('get')"
+                        >
+                            选择实例
+                        </a-button>
+                    </div>
                 </a-form-item>
             </a-form>
 
             <a-descriptions v-if="getResult" :column="1" bordered size="small" class="mib-request-result">
-                <a-descriptions-item label="OID">
-                    <a-typography-text copyable>
-                        {{ getResult.oid }}
-                    </a-typography-text>
+                <a-descriptions-item label="对象">
+                    <div class="mib-request-object">
+                        <div class="mib-request-object-title">
+                            {{ getVarbindObjectName(getResult) }}
+                        </div>
+                        <div class="mib-request-object-meta">
+                            {{ getVarbindObjectPath(getResult) }}
+                        </div>
+                        <a-typography-text copyable class="mib-request-object-oid">
+                            {{ getResult.oid }}
+                        </a-typography-text>
+                    </div>
                 </a-descriptions-item>
                 <a-descriptions-item label="类型">
                     {{ getResult.type || '-' }}
@@ -256,17 +352,10 @@
             ok-text="发送 SET"
             cancel-text="取消"
             :confirm-loading="setSending"
+            :z-index="REQUEST_MODAL_Z_INDEX"
             width="680px"
             @ok="sendSetRequest"
         >
-            <a-alert
-                v-if="setTargetNode?.isTableColumn"
-                type="warning"
-                show-icon
-                message="表字段需要指定行索引"
-                description="请在OID最后补具体行索引，例如接口表第1行追加 .1。"
-                class="mib-request-alert"
-            />
             <a-form :model="setForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
                 <a-form-item label="目标">
                     <div class="mib-request-readonly">{{ getRequestTargetText(setForm) }}</div>
@@ -274,8 +363,27 @@
                 <a-form-item label="版本">
                     <div class="mib-request-readonly">{{ getRequestAuthText(setForm) }}</div>
                 </a-form-item>
-                <a-form-item label="OID">
-                    <a-input v-model:value="setForm.oid" />
+                <a-form-item label="对象">
+                    <div class="mib-request-object">
+                        <div class="mib-request-object-title">
+                            {{ getRequestObjectName(setTargetNode, setForm.oid) }}
+                        </div>
+                        <div class="mib-request-object-meta">
+                            {{ getRequestObjectPath(setTargetNode, setForm.oid) }}
+                        </div>
+                    </div>
+                </a-form-item>
+                <a-form-item label="实际OID">
+                    <div class="mib-oid-input-row">
+                        <a-input v-model:value="setForm.oid" />
+                        <a-button
+                            v-if="setTargetNode?.isTableColumn"
+                            :loading="instanceLoading && instanceTargetForm === 'set'"
+                            @click="showInstanceSelector('set')"
+                        >
+                            选择实例
+                        </a-button>
+                    </div>
                 </a-form-item>
                 <a-row :gutter="12">
                     <a-col :span="12">
@@ -294,6 +402,141 @@
                     </a-col>
                 </a-row>
             </a-form>
+        </a-modal>
+
+        <a-modal
+            v-model:open="instanceModalOpen"
+            title="选择实例"
+            :footer="null"
+            :z-index="INSTANCE_MODAL_Z_INDEX"
+            width="760px"
+        >
+            <a-alert
+                v-if="instanceMeta?.limitReached"
+                type="warning"
+                show-icon
+                message="实例数量达到上限"
+                description="仅显示前100条实例，可手动填写实例后缀或提高后台限制后重试。"
+                class="mib-request-alert"
+            />
+            <a-alert
+                v-else-if="instanceMeta?.rows?.length === 0"
+                type="info"
+                show-icon
+                message="未发现实例"
+                description="设备未返回当前字段前缀下的实例，或当前字段没有可访问行。"
+                class="mib-request-alert"
+            />
+            <a-table
+                :columns="instanceColumns"
+                :data-source="instanceRows"
+                :loading="instanceLoading"
+                :pagination="{ pageSize: 8, size: 'small' }"
+                size="small"
+                row-key="oid"
+                class="instance-table"
+            >
+                <template #bodyCell="{ column, record }">
+                    <template v-if="column.key === 'object'">
+                        <div class="instance-object">
+                            <div class="instance-object-title">
+                                {{ getInstanceObjectName(record) }}
+                            </div>
+                            <a-typography-text copyable class="instance-object-oid">
+                                {{ record.oid }}
+                            </a-typography-text>
+                        </div>
+                    </template>
+                    <template v-else-if="column.key === 'value'">
+                        <a-tooltip :title="record.value">
+                            <span class="instance-value">{{ record.value || '-' }}</span>
+                        </a-tooltip>
+                    </template>
+                    <template v-else-if="column.key === 'action'">
+                        <a-button type="link" size="small" @click="selectInstance(record)">选择</a-button>
+                    </template>
+                </template>
+            </a-table>
+        </a-modal>
+
+        <a-modal
+            v-model:open="walkModalOpen"
+            title="SNMP WALK"
+            ok-text="开始 WALK"
+            cancel-text="关闭"
+            :confirm-loading="walkLoading"
+            :z-index="REQUEST_MODAL_Z_INDEX"
+            :width="WALK_MODAL_WIDTH"
+            :body-style="WALK_MODAL_BODY_STYLE"
+            wrap-class-name="walk-modal-wrap"
+            @ok="sendWalkRequest"
+        >
+            <div class="walk-modal-body">
+                <a-form :model="walkForm" :label-col="{ style: { width: '92px' } }" class="mib-request-form walk-form">
+                    <a-row :gutter="12">
+                        <a-col :xs="24" :sm="12">
+                            <a-form-item label="目标">
+                                <div class="mib-request-readonly">{{ getRequestTargetText(walkForm) }}</div>
+                            </a-form-item>
+                        </a-col>
+                        <a-col :xs="24" :sm="12">
+                            <a-form-item label="版本">
+                                <div class="mib-request-readonly">{{ getRequestAuthText(walkForm) }}</div>
+                            </a-form-item>
+                        </a-col>
+                    </a-row>
+                    <a-form-item label="起始对象">
+                        <div class="mib-request-object">
+                            <div class="mib-request-object-title">
+                                {{ getRequestObjectName(walkTargetNode, walkForm.oid) }}
+                            </div>
+                            <div class="mib-request-object-meta">
+                                {{ getRequestObjectPath(walkTargetNode, walkForm.oid) }}
+                            </div>
+                        </div>
+                    </a-form-item>
+                    <a-row :gutter="12">
+                        <a-col :xs="24" :md="12">
+                            <a-form-item label="起始OID">
+                                <a-input v-model:value="walkForm.oid" />
+                            </a-form-item>
+                        </a-col>
+                        <a-col :xs="12" :md="6">
+                            <a-form-item label="上限">
+                                <a-input-number v-model:value="walkForm.limit" :min="1" :max="1000" style="width: 100%" />
+                            </a-form-item>
+                        </a-col>
+                        <a-col :xs="12" :md="6">
+                            <a-form-item label="批量数">
+                                <a-input-number
+                                    v-model:value="walkForm.maxRepetitions"
+                                    :min="1"
+                                    :max="50"
+                                    style="width: 100%"
+                                    :disabled="walkForm.version !== 'v2c'"
+                                />
+                            </a-form-item>
+                        </a-col>
+                    </a-row>
+                </a-form>
+
+                <div v-if="walkMeta" class="walk-summary">
+                    <a-space>
+                        <a-tag color="blue">{{ walkRows.length }} 条</a-tag>
+                        <a-tag v-if="walkMeta.limitReached" color="orange">达到上限</a-tag>
+                        <a-tag v-else color="green">已停止: {{ walkMeta.stoppedBy || '-' }}</a-tag>
+                    </a-space>
+                </div>
+                <div class="walk-output-shell">
+                    <textarea
+                        class="walk-output-textarea"
+                        readonly
+                        spellcheck="false"
+                        :value="walkOutputText || '暂无 WALK 结果'"
+                    />
+                    <div v-if="walkLoading" class="walk-output-loading">WALK 查询中...</div>
+                </div>
+            </div>
         </a-modal>
 
         <div
@@ -319,6 +562,14 @@
                     <template #icon><ApiOutlined /></template>
                     GET 查询
                 </a-menu-item>
+                <a-menu-item key="getNext" :disabled="!contextMenu.node?.oid">
+                    <template #icon><StepForwardOutlined /></template>
+                    GET-NEXT 查询
+                </a-menu-item>
+                <a-menu-item key="walk" :disabled="!contextMenu.node?.oid">
+                    <template #icon><FileSearchOutlined /></template>
+                    WALK 查询
+                </a-menu-item>
                 <a-menu-item key="set" :disabled="!canSetNode(contextMenu.node)">
                     <template #icon><EditOutlined /></template>
                     SET 设置
@@ -336,7 +587,7 @@
 </template>
 
 <script setup>
-    import { computed, reactive, ref, onActivated, onMounted } from 'vue';
+    import { computed, reactive, ref, nextTick, onActivated, onBeforeUnmount, onMounted } from 'vue';
     import { message } from 'ant-design-vue';
     import { DEFAULT_VALUES } from '../../const/snmpConst';
     import {
@@ -347,9 +598,12 @@
         EditOutlined,
         FileSearchOutlined,
         FolderOpenOutlined,
+        ImportOutlined,
         InfoCircleOutlined,
         ReloadOutlined,
-        SearchOutlined
+        SaveOutlined,
+        SearchOutlined,
+        StepForwardOutlined
     } from '@ant-design/icons-vue';
 
     defineOptions({ name: 'SnmpMib' });
@@ -361,24 +615,64 @@
     const oidResultModalOpen = ref(false);
     const getModalOpen = ref(false);
     const getSending = ref(false);
+    const getRequestMode = ref('get');
     const getTargetNode = ref(null);
     const getResult = ref(null);
     const setModalOpen = ref(false);
     const setSending = ref(false);
     const setTargetNode = ref(null);
+    const walkModalOpen = ref(false);
+    const walkLoading = ref(false);
+    const walkTargetNode = ref(null);
+    const walkRows = ref([]);
+    const walkMeta = ref(null);
+    const instanceModalOpen = ref(false);
+    const instanceLoading = ref(false);
+    const instanceTargetForm = ref('get');
+    const instanceRows = ref([]);
+    const instanceMeta = ref(null);
+    const projectSaveOpen = ref(false);
+    const projectSaving = ref(false);
+    const projectImportOpen = ref(false);
+    const projectLoading = ref(false);
+    const projectImporting = ref(false);
+    const importingProjectName = ref('');
+    const projectRootDir = ref('');
+    const mibProjects = ref([]);
     const mibFiles = ref([]);
+    const treeRef = ref(null);
+    const treeScrollRef = ref(null);
     const treeExpandedKeys = ref([]);
     const treeSelectedKeys = ref([]);
     const selectedOidNode = ref(null);
+    const treeLoadingPromises = new Map();
+    const pendingTreeReleaseTimers = new Map();
+    let mibStatusLoaded = false;
+    let mibStatusLoadPromise = null;
     const contextMenu = reactive({
         visible: false,
         x: 0,
         y: 0,
         node: null
     });
+    const projectForm = reactive({
+        name: ''
+    });
     const CONTEXT_MENU_WIDTH = 196;
-    const CONTEXT_MENU_HEIGHT = 238;
+    const CONTEXT_MENU_HEIGHT = 310;
     const CONTEXT_MENU_MARGIN = 8;
+    const TREE_RELEASE_DELAY_MS = 300;
+    const REQUEST_MODAL_Z_INDEX = 1000;
+    const INSTANCE_MODAL_Z_INDEX = 1100;
+    const WALK_MODAL_WIDTH = 'min(920px, calc(100vw - 32px))';
+    const WALK_MODAL_BODY_STYLE = {
+        display: 'flex',
+        flexDirection: 'column',
+        height: 'min(620px, calc(100vh - 170px))',
+        maxWidth: '100%',
+        maxHeight: 'calc(100vh - 170px)',
+        overflow: 'hidden'
+    };
     const mibStatus = ref({
         loadedFiles: [],
         failedFiles: [],
@@ -406,6 +700,15 @@
         type: 'OctetString',
         value: ''
     });
+    const walkForm = reactive({
+        targetHost: DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST,
+        targetPort: DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT,
+        version: 'v2c',
+        community: DEFAULT_VALUES.DEFAULT_COMMUNITY,
+        oid: '',
+        limit: 100,
+        maxRepetitions: 20
+    });
     const setTypeOptions = [
         { label: 'Integer', value: 'Integer' },
         { label: 'OctetString', value: 'OctetString' },
@@ -416,9 +719,85 @@
         { label: 'TimeTicks', value: 'TimeTicks' },
         { label: 'Counter64', value: 'Counter64' }
     ];
+    const instanceColumns = [
+        {
+            title: '实例',
+            dataIndex: 'instance',
+            key: 'instance',
+            width: 120
+        },
+        {
+            title: '对象',
+            dataIndex: 'oid',
+            key: 'object',
+            width: 300
+        },
+        {
+            title: '类型',
+            dataIndex: 'type',
+            key: 'type',
+            width: 110
+        },
+        {
+            title: '值',
+            dataIndex: 'value',
+            key: 'value'
+        },
+        {
+            title: '操作',
+            key: 'action',
+            width: 80
+        }
+    ];
+    const projectColumns = [
+        {
+            title: '工程名',
+            dataIndex: 'name',
+            key: 'name'
+        },
+        {
+            title: '文件',
+            dataIndex: 'fileCount',
+            key: 'fileCount',
+            width: 72
+        },
+        {
+            title: '模块',
+            dataIndex: 'moduleCount',
+            key: 'moduleCount',
+            width: 72
+        },
+        {
+            title: 'OID',
+            dataIndex: 'totalObjects',
+            key: 'totalObjects',
+            width: 86
+        },
+        {
+            title: '更新时间',
+            dataIndex: 'updatedAt',
+            key: 'updatedAt',
+            width: 160
+        },
+        {
+            title: '操作',
+            key: 'action',
+            width: 72
+        }
+    ];
 
     const compiledFileCount = computed(() => mibStatus.value.loadedFiles.length);
     const failedFileCount = computed(() => mibStatus.value.failedFiles.length);
+    const isGetNextMode = computed(() => getRequestMode.value === 'getNext');
+    const getModalTitle = computed(() => (isGetNextMode.value ? 'SNMP GET-NEXT' : 'SNMP GET'));
+    const getModalOkText = computed(() => (isGetNextMode.value ? '发送 GET-NEXT' : '发送 GET'));
+
+    const normalizeTreeNodes = nodes =>
+        (Array.isArray(nodes) ? nodes : []).map(node => ({
+            ...node,
+            children: normalizeTreeNodes(node.children),
+            isLeaf: Boolean(node.isLeaf)
+        }));
 
     const normalizeMibStatus = payload => ({
         loadedFiles: Array.isArray(payload?.loadedFiles) ? payload.loadedFiles : [],
@@ -429,18 +808,11 @@
         totalObjects: Number(payload?.totalObjects) || 0,
         expandedFileCount: Number(payload?.expandedFileCount) || 0,
         cacheHit: Boolean(payload?.cacheHit),
-        oidTree: Array.isArray(payload?.oidTree) ? payload.oidTree : []
+        oidTree: normalizeTreeNodes(payload?.oidTree)
     });
 
-    const buildInitialExpandedKeys = (nodes, maxDepth = 2, depth = 0) => {
-        const keys = [];
-        nodes.forEach(node => {
-            if (depth < maxDepth && node.children?.length > 0) {
-                keys.push(node.key);
-                keys.push(...buildInitialExpandedKeys(node.children, maxDepth, depth + 1));
-            }
-        });
-        return keys;
+    const refreshTreeData = () => {
+        mibStatus.value.oidTree = [...mibStatus.value.oidTree];
     };
 
     const findTreeNode = (nodes, key) => {
@@ -471,6 +843,157 @@
         }
 
         return null;
+    };
+
+    const collectDescendantKeys = node => {
+        const keys = [];
+        (node?.children || []).forEach(child => {
+            keys.push(child.key, ...collectDescendantKeys(child));
+        });
+        return keys;
+    };
+
+    const loadTreeNodeChildren = async node => {
+        const key = node?.key || node?.eventKey || node?.dataRef?.key;
+        if (!key) {
+            return [];
+        }
+
+        const targetNode = findTreeNode(mibStatus.value.oidTree, key);
+        if (!targetNode || targetNode.isLeaf) {
+            return [];
+        }
+
+        if (targetNode.children?.length > 0) {
+            return targetNode.children;
+        }
+
+        if (treeLoadingPromises.has(key)) {
+            return treeLoadingPromises.get(key);
+        }
+
+        const loadPromise = (async () => {
+            const result = await window.snmpApi.getMibTreeChildren(key);
+            if (result.status !== 'success') {
+                message.error(result.msg || '获取MIB树节点失败');
+                return [];
+            }
+
+            const children = normalizeTreeNodes(result.data);
+            if (!treeExpandedKeys.value.includes(key)) {
+                return [];
+            }
+
+            targetNode.children = children;
+            refreshTreeData();
+            return children;
+        })();
+
+        treeLoadingPromises.set(key, loadPromise);
+        try {
+            return await loadPromise;
+        } catch (error) {
+            message.error('获取MIB树节点失败: ' + error.message);
+            return [];
+        } finally {
+            treeLoadingPromises.delete(key);
+        }
+    };
+
+    const releaseTreeNodeChildren = node => {
+        if (!node) {
+            return new Set();
+        }
+
+        const descendantKeys = new Set(collectDescendantKeys(node));
+        node.children = [];
+        refreshTreeData();
+
+        return descendantKeys;
+    };
+
+    const cancelPendingTreeRelease = key => {
+        const timer = pendingTreeReleaseTimers.get(key);
+        if (!timer) {
+            return;
+        }
+
+        clearTimeout(timer);
+        pendingTreeReleaseTimers.delete(key);
+    };
+
+    const clearPendingTreeReleases = () => {
+        pendingTreeReleaseTimers.forEach(timer => clearTimeout(timer));
+        pendingTreeReleaseTimers.clear();
+    };
+
+    const scheduleTreeNodeChildrenRelease = key => {
+        cancelPendingTreeRelease(key);
+
+        const timer = setTimeout(() => {
+            pendingTreeReleaseTimers.delete(key);
+            nextTick(() => {
+                if (treeExpandedKeys.value.includes(key)) {
+                    return;
+                }
+
+                const node = findTreeNode(mibStatus.value.oidTree, key);
+                if (node) {
+                    releaseTreeNodeChildren(node);
+                }
+            });
+        }, TREE_RELEASE_DELAY_MS);
+
+        pendingTreeReleaseTimers.set(key, timer);
+    };
+
+    const loadTreePath = async treePath => {
+        const pathParts = Array.isArray(treePath) ? treePath.filter(Boolean) : [];
+        for (let index = 0; index < pathParts.length - 1; index++) {
+            const node = findTreeNode(mibStatus.value.oidTree, pathParts[index]);
+            if (!node) {
+                return false;
+            }
+
+            treeExpandedKeys.value = Array.from(new Set([...treeExpandedKeys.value, pathParts[index]]));
+            await loadTreeNodeChildren(node);
+        }
+
+        return true;
+    };
+
+    const findRenderedTreeOidElement = oid => {
+        const scrollContainer = treeScrollRef.value;
+        if (!scrollContainer || !oid) {
+            return null;
+        }
+
+        return (
+            Array.from(scrollContainer.querySelectorAll('.mib-node-title')).find(
+                element => element.dataset.treeOid === oid
+            ) || null
+        );
+    };
+
+    const scrollToOidNode = async oid => {
+        if (!oid) {
+            return;
+        }
+
+        await nextTick();
+        treeRef.value?.scrollTo?.({
+            key: oid,
+            align: 'auto',
+            offset: 24
+        });
+        await nextTick();
+
+        const targetElement = findRenderedTreeOidElement(oid);
+        targetElement?.scrollIntoView({
+            block: 'center',
+            inline: 'nearest',
+            behavior: 'smooth'
+        });
     };
 
     const canGetNode = node => Boolean(node?.canGet);
@@ -514,6 +1037,98 @@
         }
         return node.queryOid || (node.isScalar ? `${node.oid}.0` : node.oid);
     };
+
+    const normalizeOidText = oid =>
+        String(oid || '')
+            .trim()
+            .replace(/\.$/, '');
+
+    const getOidInstanceSuffix = (baseOid, oid) => {
+        const normalizedBaseOid = normalizeOidText(baseOid);
+        const normalizedOid = normalizeOidText(oid);
+        if (!normalizedBaseOid || !normalizedOid || normalizedOid === normalizedBaseOid) {
+            return '';
+        }
+        return normalizedOid.startsWith(`${normalizedBaseOid}.`) ? normalizedOid.slice(normalizedBaseOid.length + 1) : '';
+    };
+
+    const appendInstanceSuffix = (text, suffix) => {
+        const displayText = String(text || '').trim();
+        if (!displayText) {
+            return '-';
+        }
+        return suffix ? `${displayText}.${suffix}` : displayText;
+    };
+
+    const getNodeDisplayName = node => node?.moduleQualifiedName || node?.objectName || node?.title || node?.oid || '-';
+
+    const getNodeDisplayPath = node => node?.pathName || node?.oid || '-';
+
+    const getRequestObjectName = (node, oid) =>
+        appendInstanceSuffix(getNodeDisplayName(node), getOidInstanceSuffix(node?.oid, oid));
+
+    const getRequestObjectPath = (node, oid) =>
+        appendInstanceSuffix(getNodeDisplayPath(node), getOidInstanceSuffix(node?.oid, oid));
+
+    const getVarbindObjectName = varbind =>
+        appendInstanceSuffix(varbind?.oidName || varbind?.oidObject || varbind?.oid, varbind?.oidInstance);
+
+    const getVarbindObjectPath = varbind => appendInstanceSuffix(varbind?.oidPath || varbind?.oid, varbind?.oidInstance);
+
+    const getInstanceObjectName = record => {
+        const node = instanceTargetForm.value === 'set' ? setTargetNode.value : getTargetNode.value;
+        const suffix = record?.instance || getOidInstanceSuffix(node?.oid, record?.oid);
+        return appendInstanceSuffix(getNodeDisplayName(node), suffix);
+    };
+
+    const getWalkRowObjectName = record => getVarbindObjectName(record);
+
+    const formatWalkTextValue = value => {
+        if (value === undefined || value === null || value === '') {
+            return '-';
+        }
+        return String(value);
+    };
+
+    const walkOutputText = computed(() =>
+        walkRows.value
+            .map((row, index) =>
+                [
+                    `#${row.index || index + 1} ${getWalkRowObjectName(row)}`,
+                    `OID   : ${row.oid || '-'}`,
+                    `TYPE  : ${row.type || '-'}`,
+                    `VALUE : ${formatWalkTextValue(row.value)}`
+                ].join('\n')
+            )
+            .join('\n\n')
+    );
+
+    const enrichResultVarbind = async varbind => {
+        if (!varbind?.oid) {
+            return varbind;
+        }
+
+        try {
+            const result = await window.snmpApi.translateOid(varbind.oid);
+            if (result.status !== 'success' || !result.data) {
+                return varbind;
+            }
+
+            const info = result.data;
+            return {
+                ...varbind,
+                oidName: info.moduleQualifiedName || info.objectName || '',
+                oidObject: info.objectName || '',
+                oidPath: info.pathName || '',
+                oidInstance: info.instanceSuffix || '',
+                oidMatched: Boolean(info.matched)
+            };
+        } catch (error) {
+            return varbind;
+        }
+    };
+
+    const enrichResultRows = async rows => Promise.all((Array.isArray(rows) ? rows : []).map(enrichResultVarbind));
 
     const getRequestTargetText = form => `${form.targetHost || '-'}:${form.targetPort || '-'}`;
 
@@ -570,7 +1185,11 @@
         return 'OctetString';
     };
 
-    const selectOidNode = oid => {
+    const selectOidNode = async (oid, treePath = []) => {
+        if (treePath.length > 0) {
+            await loadTreePath(treePath);
+        }
+
         const node = findTreeNode(mibStatus.value.oidTree, oid);
         if (!node) {
             return;
@@ -580,10 +1199,12 @@
         treeSelectedKeys.value = [oid];
         treeExpandedKeys.value = Array.from(new Set([...treeExpandedKeys.value, ...ancestors]));
         selectedOidNode.value = node;
+        await scrollToOidNode(oid);
     };
 
     const setMibStatus = payload => {
-        const currentSelectedKey = treeSelectedKeys.value[0];
+        treeLoadingPromises.clear();
+        clearPendingTreeReleases();
         mibStatus.value = normalizeMibStatus(payload);
         mibFiles.value = [
             ...mibStatus.value.loadedFiles.map(file => ({
@@ -597,27 +1218,38 @@
             }))
         ];
 
-        treeExpandedKeys.value = buildInitialExpandedKeys(mibStatus.value.oidTree);
-        if (currentSelectedKey) {
-            selectOidNode(currentSelectedKey);
-        } else {
-            selectedOidNode.value = null;
-            treeSelectedKeys.value = [];
-        }
+        treeExpandedKeys.value = [];
+        treeSelectedKeys.value = [];
+        selectedOidNode.value = null;
+        contextMenu.visible = false;
+        mibStatusLoaded = true;
     };
 
-    const loadMibStatus = async () => {
-        try {
-            mibCompileLoading.value = true;
-            const result = await window.snmpApi.getMibStatus();
-            if (result.status === 'success') {
-                setMibStatus(result.data);
-            }
-        } catch (error) {
-            console.error(error);
-        } finally {
-            mibCompileLoading.value = false;
+    const loadMibStatus = async ({ force = false } = {}) => {
+        if (!force && mibStatusLoaded) {
+            return;
         }
+
+        if (mibStatusLoadPromise) {
+            return mibStatusLoadPromise;
+        }
+
+        mibStatusLoadPromise = (async () => {
+            try {
+                mibCompileLoading.value = true;
+                const result = await window.snmpApi.getMibStatus();
+                if (result.status === 'success') {
+                    setMibStatus(result.data);
+                }
+            } catch (error) {
+                console.error(error);
+            } finally {
+                mibCompileLoading.value = false;
+                mibStatusLoadPromise = null;
+            }
+        })();
+
+        return mibStatusLoadPromise;
     };
 
     const compileMibFiles = async filePaths => {
@@ -693,6 +1325,119 @@
         await compileMibFiles(currentFiles);
     };
 
+    const padTime = value => String(value).padStart(2, '0');
+
+    const formatProjectTimestamp = date => {
+        const year = date.getFullYear();
+        const month = padTime(date.getMonth() + 1);
+        const day = padTime(date.getDate());
+        const hour = padTime(date.getHours());
+        const minute = padTime(date.getMinutes());
+        return `${year}${month}${day}-${hour}${minute}`;
+    };
+
+    const getDefaultProjectName = () => {
+        const moduleName = mibStatus.value.modules[0] || 'mib-project';
+        return `${moduleName}-${formatProjectTimestamp(new Date())}`;
+    };
+
+    const formatProjectTime = value => {
+        if (!value) {
+            return '-';
+        }
+
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return value;
+        }
+
+        return `${date.getFullYear()}-${padTime(date.getMonth() + 1)}-${padTime(date.getDate())} ${padTime(
+            date.getHours()
+        )}:${padTime(date.getMinutes())}`;
+    };
+
+    const showSaveProject = () => {
+        projectForm.name = getDefaultProjectName();
+        projectSaveOpen.value = true;
+    };
+
+    const saveMibProject = async () => {
+        const name = projectForm.name.trim();
+        if (!name) {
+            message.warning('请输入工程名');
+            return;
+        }
+
+        try {
+            projectSaving.value = true;
+            const result = await window.snmpApi.saveMibProject({ name });
+            if (result.status !== 'success') {
+                message.error(result.msg || '保存MIB工程失败');
+                return;
+            }
+
+            projectSaveOpen.value = false;
+            message.success(result.msg || 'MIB工程保存成功');
+            if (projectImportOpen.value) {
+                await loadMibProjects();
+            }
+        } catch (error) {
+            message.error('保存MIB工程失败: ' + error.message);
+        } finally {
+            projectSaving.value = false;
+        }
+    };
+
+    const loadMibProjects = async () => {
+        try {
+            projectLoading.value = true;
+            const result = await window.snmpApi.listMibProjects();
+            if (result.status !== 'success') {
+                message.error(result.msg || '获取MIB工程列表失败');
+                return;
+            }
+
+            projectRootDir.value = result.data?.rootDir || '';
+            mibProjects.value = Array.isArray(result.data?.projects) ? result.data.projects : [];
+        } catch (error) {
+            message.error('获取MIB工程列表失败: ' + error.message);
+        } finally {
+            projectLoading.value = false;
+        }
+    };
+
+    const showImportProject = async () => {
+        projectImportOpen.value = true;
+        await loadMibProjects();
+    };
+
+    const importMibProject = async record => {
+        if (!record?.name || projectImporting.value) {
+            return;
+        }
+
+        try {
+            projectImporting.value = true;
+            mibCompileLoading.value = true;
+            importingProjectName.value = record.name;
+            const result = await window.snmpApi.importMibProject({ name: record.name });
+            if (result.status !== 'success') {
+                message.error(result.msg || '导入MIB工程失败');
+                return;
+            }
+
+            setMibStatus(result.data?.summary || result.data);
+            projectImportOpen.value = false;
+            message.success(result.msg || 'MIB工程导入成功');
+        } catch (error) {
+            message.error('导入MIB工程失败: ' + error.message);
+        } finally {
+            projectImporting.value = false;
+            importingProjectName.value = '';
+            mibCompileLoading.value = false;
+        }
+    };
+
     const clearMibs = async () => {
         try {
             const result = await window.snmpApi.clearMibs();
@@ -707,6 +1452,31 @@
         } catch (error) {
             message.error('清空MIB配置失败: ' + error.message);
         }
+    };
+
+    const handleTreeExpand = async (expandedKeys, { expanded, node }) => {
+        const key = node?.key || node?.eventKey || node?.dataRef?.key;
+        const matchedNode = findTreeNode(mibStatus.value.oidTree, key);
+        if (!matchedNode) {
+            treeExpandedKeys.value = expandedKeys;
+            return;
+        }
+
+        if (expanded) {
+            cancelPendingTreeRelease(matchedNode.key);
+            treeExpandedKeys.value = expandedKeys;
+            await loadTreeNodeChildren(matchedNode);
+            return;
+        }
+
+        const descendantKeys = new Set(collectDescendantKeys(matchedNode));
+        treeExpandedKeys.value = expandedKeys.filter(expandedKey => !descendantKeys.has(expandedKey));
+        if (descendantKeys.has(treeSelectedKeys.value[0])) {
+            treeSelectedKeys.value = [matchedNode.key];
+            selectedOidNode.value = matchedNode;
+        }
+        scheduleTreeNodeChildrenRelease(matchedNode.key);
+        hideContextMenu();
     };
 
     const handleTreeSelect = selectedKeys => {
@@ -753,6 +1523,8 @@
             copy: copyContextOid,
             parse: parseContextOid,
             get: showGetCapability,
+            getNext: () => showGetCapability('getNext'),
+            walk: showWalkCapability,
             set: showSetCapability,
             notify: showNotifyCapability
         };
@@ -786,7 +1558,7 @@
         await translateOid();
     };
 
-    const showGetCapability = async () => {
+    const showGetCapability = async (mode = 'get') => {
         const node = contextMenu.node;
         if (!node?.oid) {
             return;
@@ -794,8 +1566,9 @@
 
         hideContextMenu();
         await loadRequestDefaults(getForm);
+        getRequestMode.value = mode;
         getTargetNode.value = node;
-        getForm.oid = getEffectiveQueryOid(node);
+        getForm.oid = mode === 'getNext' ? node.oid : getEffectiveQueryOid(node);
         getResult.value = null;
         getModalOpen.value = true;
     };
@@ -813,6 +1586,23 @@
         setForm.type = inferSetType(node.syntax);
         setForm.value = '';
         setModalOpen.value = true;
+    };
+
+    const showWalkCapability = async () => {
+        const node = contextMenu.node;
+        hideContextMenu();
+        if (!node?.oid) {
+            return;
+        }
+
+        await loadRequestDefaults(walkForm);
+        walkTargetNode.value = node;
+        walkForm.oid = node.oid;
+        walkForm.limit = 100;
+        walkForm.maxRepetitions = 20;
+        walkRows.value = [];
+        walkMeta.value = null;
+        walkModalOpen.value = true;
     };
 
     const showNotifyCapability = () => {
@@ -837,10 +1627,72 @@
         }
     };
 
+    const showInstanceSelector = async (targetForm = 'get') => {
+        const node = targetForm === 'set' ? setTargetNode.value : getTargetNode.value;
+        const form = targetForm === 'set' ? setForm : getForm;
+        if (!node?.oid) {
+            message.warning('请选择表字段节点');
+            return;
+        }
+
+        try {
+            instanceTargetForm.value = targetForm;
+            instanceModalOpen.value = true;
+            instanceLoading.value = true;
+            instanceRows.value = [];
+            instanceMeta.value = null;
+            await loadRequestDefaults(form);
+
+            const result = await window.snmpApi.listOidInstances({
+                oid: node.oid,
+                limit: 100,
+                maxRepetitions: 20
+            });
+
+            if (result.status !== 'success') {
+                message.error(result.msg || '实例枚举失败');
+                return;
+            }
+
+            const rows = Array.isArray(result.data?.rows) ? result.data.rows : [];
+            instanceRows.value = rows.map(row => ({
+                ...row,
+                value: row.value === undefined || row.value === null ? '' : String(row.value)
+            }));
+            instanceMeta.value = {
+                ...result.data,
+                rows: instanceRows.value
+            };
+
+            if (instanceRows.value.length === 0) {
+                message.info('未发现当前字段下的实例');
+            }
+        } catch (error) {
+            message.error('实例枚举失败: ' + error.message);
+        } finally {
+            instanceLoading.value = false;
+        }
+    };
+
+    const selectInstance = record => {
+        if (!record?.oid) {
+            return;
+        }
+
+        if (instanceTargetForm.value === 'set') {
+            setForm.oid = record.oid;
+        } else {
+            getForm.oid = record.oid;
+        }
+
+        instanceModalOpen.value = false;
+    };
+
     const sendGetRequest = async () => {
         await loadRequestDefaults(getForm);
+        const actionText = isGetNextMode.value ? 'GET-NEXT' : 'GET';
         if (!getForm.targetHost || !getForm.targetPort || !getForm.version) {
-            message.warning('请在SNMP配置中填写GET目标并启用SNMPv1/v2c');
+            message.warning(`请在SNMP配置中填写${actionText}目标并启用SNMPv1/v2c`);
             return;
         }
 
@@ -851,19 +1703,76 @@
 
         try {
             getSending.value = true;
-            const result = await window.snmpApi.sendGetRequest({ oid: getForm.oid });
+            const request = { oid: getForm.oid };
+            const result = isGetNextMode.value
+                ? await window.snmpApi.sendGetNextRequest(request)
+                : await window.snmpApi.sendGetRequest(request);
             if (result.status === 'success') {
                 const varbind = result.data?.varbinds?.[0] || null;
-                getResult.value = varbind;
-                message.success('GET查询成功');
+                getResult.value = await enrichResultVarbind(varbind);
+                message.success(`${actionText}查询成功`);
                 return;
             }
 
-            message.error(result.msg || 'GET查询失败');
+            message.error(result.msg || `${actionText}查询失败`);
         } catch (error) {
-            message.error('GET查询失败: ' + error.message);
+            message.error(`${actionText}查询失败: ` + error.message);
         } finally {
             getSending.value = false;
+        }
+    };
+
+    const sendWalkRequest = async () => {
+        await loadRequestDefaults(walkForm);
+        if (!walkForm.targetHost || !walkForm.targetPort || !walkForm.version) {
+            message.warning('请在SNMP配置中填写WALK目标并启用SNMPv1/v2c');
+            return;
+        }
+
+        if (!walkForm.oid) {
+            message.warning('请填写起始OID');
+            return;
+        }
+
+        try {
+            walkLoading.value = true;
+            walkRows.value = [];
+            walkMeta.value = null;
+
+            const result = await window.snmpApi.sendWalkRequest({
+                oid: walkForm.oid,
+                limit: walkForm.limit,
+                maxRepetitions: walkForm.maxRepetitions
+            });
+
+            if (result.status !== 'success') {
+                message.error(result.msg || 'WALK查询失败');
+                return;
+            }
+
+            const rows = Array.isArray(result.data?.rows) ? result.data.rows : [];
+            const enrichedRows = await enrichResultRows(
+                rows.map((row, index) => ({
+                    ...row,
+                    index: index + 1,
+                    value: row.value === undefined || row.value === null ? '' : String(row.value)
+                }))
+            );
+            walkRows.value = enrichedRows;
+            walkMeta.value = {
+                ...result.data,
+                rows: enrichedRows
+            };
+
+            if (enrichedRows.length === 0) {
+                message.info('WALK未返回当前OID子树下的数据');
+            } else {
+                message.success(`WALK完成，共 ${enrichedRows.length} 条`);
+            }
+        } catch (error) {
+            message.error('WALK查询失败: ' + error.message);
+        } finally {
+            walkLoading.value = false;
         }
     };
 
@@ -889,7 +1798,8 @@
             if (result.status === 'success') {
                 setModalOpen.value = false;
                 const varbind = result.data?.varbinds?.[0];
-                message.success(`SET成功${varbind?.value !== undefined ? `: ${varbind.value}` : ''}`);
+                const objectText = getRequestObjectName(setTargetNode.value, setForm.oid);
+                message.success(`SET成功: ${objectText}${varbind?.value !== undefined ? ` = ${varbind.value}` : ''}`);
                 return;
             }
 
@@ -915,7 +1825,7 @@
                 oidResult.value = result.data;
                 oidResultModalOpen.value = true;
                 if (result.data?.matchedOid) {
-                    selectOidNode(result.data.matchedOid);
+                    await selectOidNode(result.data.matchedOid, result.data.treePath || []);
                 }
             } else {
                 message.error(result.msg || 'OID解析失败');
@@ -937,6 +1847,10 @@
 
     onMounted(() => {
         loadMibStatus();
+    });
+
+    onBeforeUnmount(() => {
+        clearPendingTreeReleases();
     });
 </script>
 
@@ -1187,6 +2101,45 @@
         width: 92px;
     }
 
+    .mib-project-meta {
+        min-height: 32px;
+        padding: 0 11px;
+        color: #262626;
+        line-height: 30px;
+        background: #fafafa;
+        border: 1px solid #f0f0f0;
+        border-radius: 6px;
+    }
+
+    .mib-project-header {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        min-width: 0;
+    }
+
+    .mib-project-root,
+    .mib-project-name {
+        display: inline-block;
+        max-width: 100%;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .mib-project-root {
+        flex: 1;
+        color: #8c8c8c;
+        font-size: 12px;
+    }
+
+    .mib-project-table :deep(.ant-table-cell) {
+        min-width: 0;
+    }
+
     .mib-request-alert {
         margin-bottom: 10px;
     }
@@ -1204,8 +2157,64 @@
         border-radius: 6px;
     }
 
+    .mib-request-object {
+        max-width: 100%;
+        min-width: 0;
+        overflow: hidden;
+        padding: 7px 11px;
+        background: #fafafa;
+        border: 1px solid #f0f0f0;
+        border-radius: 6px;
+    }
+
+    .mib-request-object-title {
+        overflow: hidden;
+        color: #262626;
+        font-weight: 600;
+        line-height: 20px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .mib-request-object-meta,
+    .mib-request-object-oid {
+        display: block;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        color: #8c8c8c;
+        font-size: 12px;
+        line-height: 18px;
+        white-space: normal;
+    }
+
+    .mib-request-object-oid :deep(.ant-typography-copy) {
+        margin-inline-start: 4px;
+    }
+
+    .mib-oid-input-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        min-width: 0;
+    }
+
+    .mib-oid-input-row :deep(.ant-input) {
+        min-width: 0;
+    }
+
+    .mib-oid-input-row :deep(.ant-btn) {
+        flex-shrink: 0;
+    }
+
     .mib-request-form :deep(.ant-form-item) {
         margin-bottom: 10px;
+    }
+
+    .mib-request-form :deep(.ant-form-item-control),
+    .mib-request-form :deep(.ant-form-item-control-input),
+    .mib-request-form :deep(.ant-form-item-control-input-content) {
+        min-width: 0;
     }
 
     .mib-request-result {
@@ -1214,6 +2223,138 @@
 
     .mib-request-result :deep(.ant-descriptions-item-label) {
         width: 86px;
+    }
+
+    .mib-request-result :deep(.ant-descriptions-item-content) {
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    .instance-table {
+        margin-top: 10px;
+    }
+
+    .walk-summary {
+        flex-shrink: 0;
+        margin: 2px 0 8px;
+    }
+
+    .walk-modal-body {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        height: 100%;
+        max-height: 100%;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .walk-form {
+        flex-shrink: 0;
+    }
+
+    .walk-form :deep(.ant-form-item) {
+        margin-bottom: 8px;
+    }
+
+    .walk-output-shell {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .walk-output-textarea {
+        width: 100%;
+        height: 100%;
+        min-height: 180px;
+        overflow: auto;
+        resize: none;
+        padding: 10px 12px;
+        color: #262626;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+        font-size: 12px;
+        line-height: 18px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #fafafa;
+        border: 1px solid #f0f0f0;
+        border-radius: 6px;
+        outline: none;
+    }
+
+    .walk-output-loading {
+        position: absolute;
+        top: 8px;
+        right: 10px;
+        padding: 2px 8px;
+        color: #1677ff;
+        font-size: 12px;
+        line-height: 20px;
+        background: rgba(230, 244, 255, 0.95);
+        border: 1px solid #91caff;
+        border-radius: 4px;
+    }
+
+    :global(.walk-modal-wrap) {
+        overflow: hidden;
+    }
+
+    :global(.walk-modal-wrap .ant-modal) {
+        top: 24px;
+        max-width: calc(100vw - 32px);
+        padding-bottom: 0;
+    }
+
+    :global(.walk-modal-wrap .ant-modal-content) {
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 48px);
+        overflow: hidden;
+    }
+
+    :global(.walk-modal-wrap .ant-modal-body) {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    :global(.walk-modal-wrap .ant-modal-footer) {
+        flex-shrink: 0;
+    }
+
+    .instance-value {
+        display: inline-block;
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        vertical-align: bottom;
+    }
+
+    .instance-object {
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    .instance-object-title {
+        overflow: hidden;
+        color: #262626;
+        line-height: 20px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .instance-object-oid {
+        display: block;
+        overflow: hidden;
+        color: #8c8c8c;
+        font-size: 12px;
+        line-height: 18px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .mib-context-menu {

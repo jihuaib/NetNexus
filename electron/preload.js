@@ -211,16 +211,21 @@ contextBridge.exposeInMainWorld('snmpApi', {
     stopSnmp: () => ipcRenderer.invoke('snmp:stopSnmp'),
     getTrapList: query => ipcRenderer.invoke('snmp:getTrapList', query),
     clearTrapHistory: () => ipcRenderer.invoke('snmp:clearTrapHistory'),
-    getQueryList: query => ipcRenderer.invoke('snmp:getQueryList', query),
-    clearQueryHistory: () => ipcRenderer.invoke('snmp:clearQueryHistory'),
     selectMibFiles: () => ipcRenderer.invoke('snmp:selectMibFiles'),
     selectMibDirectory: () => ipcRenderer.invoke('snmp:selectMibDirectory'),
     compileMibs: filePaths => ipcRenderer.invoke('snmp:compileMibs', filePaths),
     getMibStatus: () => ipcRenderer.invoke('snmp:getMibStatus'),
+    getMibTreeChildren: parentOid => ipcRenderer.invoke('snmp:getMibTreeChildren', parentOid),
+    saveMibProject: payload => ipcRenderer.invoke('snmp:saveMibProject', payload),
+    listMibProjects: () => ipcRenderer.invoke('snmp:listMibProjects'),
+    importMibProject: payload => ipcRenderer.invoke('snmp:importMibProject', payload),
     clearMibs: () => ipcRenderer.invoke('snmp:clearMibs'),
     translateOid: oid => ipcRenderer.invoke('snmp:translateOid', oid),
     sendGetRequest: request => ipcRenderer.invoke('snmp:sendGetRequest', request),
-    sendSetRequest: request => ipcRenderer.invoke('snmp:sendSetRequest', request)
+    sendGetNextRequest: request => ipcRenderer.invoke('snmp:sendGetNextRequest', request),
+    sendWalkRequest: request => ipcRenderer.invoke('snmp:sendWalkRequest', request),
+    sendSetRequest: request => ipcRenderer.invoke('snmp:sendSetRequest', request),
+    listOidInstances: request => ipcRenderer.invoke('snmp:listOidInstances', request)
 });
 
 // ntp模块

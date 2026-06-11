@@ -1201,15 +1201,6 @@ export const createSnmpConfigValidationRules = () => {
             {
                 validator: value => validators.range(1, 65535)(value),
                 message: '查询端口范围1-65535'
-            },
-            {
-                validator: (value, formData) => {
-                    if (formData.enableQueryMonitor === false) {
-                        return true;
-                    }
-                    return Number(value) !== Number(formData.port);
-                },
-                message: '查询端口不能与Trap端口相同'
             }
         ],
         supportedVersions: [

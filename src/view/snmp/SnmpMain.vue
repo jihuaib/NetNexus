@@ -5,7 +5,6 @@
             <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
                 <a-tab-pane key="snmp-config" tab="SNMP配置" />
                 <a-tab-pane key="snmp-mib" tab="MIB管理" />
-                <a-tab-pane key="snmp-query" tab="查询监控" />
                 <a-tab-pane key="snmp-trap" tab="Trap监控" />
             </a-tabs>
         </div>

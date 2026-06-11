@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const snmp = require('net-snmp');
 const { app, BrowserWindow, dialog } = require('electron');
@@ -35,16 +36,21 @@ class SnmpApp {
         this.ipcMain.handle('snmp:stopSnmp', this.handleStopSnmp.bind(this));
         this.ipcMain.handle('snmp:getTrapList', this.handleGetTrapList.bind(this));
         this.ipcMain.handle('snmp:clearTrapHistory', this.handleClearTrapHistory.bind(this));
-        this.ipcMain.handle('snmp:getQueryList', this.handleGetQueryList.bind(this));
-        this.ipcMain.handle('snmp:clearQueryHistory', this.handleClearQueryHistory.bind(this));
         this.ipcMain.handle('snmp:selectMibFiles', this.handleSelectMibFiles.bind(this));
         this.ipcMain.handle('snmp:selectMibDirectory', this.handleSelectMibDirectory.bind(this));
         this.ipcMain.handle('snmp:compileMibs', this.handleCompileMibs.bind(this));
         this.ipcMain.handle('snmp:getMibStatus', this.handleGetMibStatus.bind(this));
+        this.ipcMain.handle('snmp:getMibTreeChildren', this.handleGetMibTreeChildren.bind(this));
+        this.ipcMain.handle('snmp:saveMibProject', this.handleSaveMibProject.bind(this));
+        this.ipcMain.handle('snmp:listMibProjects', this.handleListMibProjects.bind(this));
+        this.ipcMain.handle('snmp:importMibProject', this.handleImportMibProject.bind(this));
         this.ipcMain.handle('snmp:clearMibs', this.handleClearMibs.bind(this));
         this.ipcMain.handle('snmp:translateOid', this.handleTranslateOid.bind(this));
         this.ipcMain.handle('snmp:sendGetRequest', this.handleSendGetRequest.bind(this));
+        this.ipcMain.handle('snmp:sendGetNextRequest', this.handleSendGetNextRequest.bind(this));
+        this.ipcMain.handle('snmp:sendWalkRequest', this.handleSendWalkRequest.bind(this));
         this.ipcMain.handle('snmp:sendSetRequest', this.handleSendSetRequest.bind(this));
+        this.ipcMain.handle('snmp:listOidInstances', this.handleListOidInstances.bind(this));
     }
 
     normalizeSupportedVersions(versions) {
@@ -62,9 +68,12 @@ class SnmpApp {
     }
 
     normalizeSnmpConfig(config = {}) {
+        const restConfig = { ...config };
+        delete restConfig.targetPort;
+        delete restConfig.enableQueryMonitor;
         return {
-            ...config,
-            supportedVersions: this.normalizeSupportedVersions(config.supportedVersions)
+            ...restConfig,
+            supportedVersions: this.normalizeSupportedVersions(restConfig.supportedVersions)
         };
     }
 
@@ -223,54 +232,6 @@ class SnmpApp {
         }
     }
 
-    /**
-     * 获取SNMP查询历史列表
-     */
-    async handleGetQueryList(_event, query = {}) {
-        try {
-            if (this.worker === null) {
-                return successResponse(
-                    {
-                        list: [],
-                        page: Number(query.page) || 1,
-                        pageSize: Number(query.pageSize) || 20,
-                        total: 0,
-                        totalQueries: 0,
-                        historyCount: 0,
-                        todayQueries: 0,
-                        recentQueries: 0,
-                        sourceCount: 0,
-                        maxQueryHistory: SnmpConst.DEFAULT_SNMP_SETTINGS.maxQueryHistory
-                    },
-                    'SNMP服务器未启动'
-                );
-            }
-
-            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.GET_QUERY_LIST, query);
-            return successResponse(result.data || [], result.msg || '获取查询列表成功');
-        } catch (error) {
-            logger.error('获取查询列表失败:', error);
-            return errorResponse('获取查询列表失败: ' + error.message);
-        }
-    }
-
-    /**
-     * 清空SNMP查询历史
-     */
-    async handleClearQueryHistory() {
-        try {
-            if (this.worker === null) {
-                return successResponse(null, 'SNMP服务器未启动');
-            }
-
-            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.CLEAR_QUERY_HISTORY, null);
-            return successResponse(null, result.msg || '查询历史已清空');
-        } catch (error) {
-            logger.error('清空查询历史失败:', error);
-            return errorResponse('清空查询历史失败: ' + error.message);
-        }
-    }
-
     showMibOpenDialog(event) {
         const options = {
             title: '导入 MIB 文件',
@@ -358,6 +319,195 @@ class SnmpApp {
         } catch (error) {
             logger.error('获取MIB状态失败:', error);
             return errorResponse('获取MIB状态失败: ' + error.message);
+        }
+    }
+
+    async handleGetMibTreeChildren(_event, parentOid = '') {
+        try {
+            const storedFiles = this.getStoredMibFilePaths();
+            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.GET_MIB_TREE_CHILDREN, {
+                parentOid,
+                requestedFiles: storedFiles,
+                cacheFilePath: this.getMibCacheFilePath()
+            });
+            return successResponse(result.data, result.msg || '获取MIB树节点成功');
+        } catch (error) {
+            logger.error('获取MIB树节点失败:', error);
+            return errorResponse('获取MIB树节点失败: ' + error.message);
+        }
+    }
+
+    async handleSaveMibProject(_event, payload = {}) {
+        let projectDir = '';
+        let createdProjectDir = false;
+
+        try {
+            const sourcePaths = this.getStoredMibFilePaths();
+            if (sourcePaths.length === 0) {
+                return errorResponse('请先导入并编译MIB文件');
+            }
+
+            const projectName = this.normalizeMibProjectName(payload.name);
+            if (!projectName) {
+                return errorResponse('请输入工程名');
+            }
+
+            const projectRootDir = this.getMibProjectRootDir();
+            fs.mkdirSync(projectRootDir, { recursive: true });
+            projectDir = path.join(projectRootDir, projectName);
+            if (fs.existsSync(projectDir)) {
+                return errorResponse('工程名已存在，请换一个名称');
+            }
+
+            fs.mkdirSync(projectDir);
+            createdProjectDir = true;
+
+            const summary = await this.ensureCurrentMibCache(sourcePaths);
+            const sourceCache = this.readJsonFile(this.getMibCacheFilePath());
+            if (!sourceCache?.snapshot) {
+                throw new Error('当前MIB编译缓存不可用');
+            }
+
+            const mibsDir = path.join(projectDir, 'mibs');
+            fs.mkdirSync(mibsDir, { recursive: true });
+            const copyResult = this.copyMibProjectSources(sourcePaths, mibsDir);
+            if (copyResult.requestedFiles.length === 0 || copyResult.copiedFileCount === 0) {
+                throw new Error('没有可保存的MIB源文件');
+            }
+
+            const now = new Date().toISOString();
+            const projectCachePath = path.join(projectDir, 'mib-cache.json');
+            const projectCache = this.buildProjectMibCache(sourceCache, copyResult, now);
+            fs.writeFileSync(projectCachePath, JSON.stringify(projectCache), 'utf8');
+
+            const manifest = {
+                version: 1,
+                name: projectName,
+                createdAt: now,
+                updatedAt: now,
+                sourceRoots: sourcePaths,
+                requestedFiles: copyResult.requestedFiles,
+                cacheFile: 'mib-cache.json',
+                fileCount: copyResult.copiedFileCount,
+                modules: Array.isArray(summary.modules) ? summary.modules : [],
+                totalObjects: Number(summary.totalObjects) || 0
+            };
+            fs.writeFileSync(path.join(projectDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+
+            return successResponse(
+                {
+                    project: {
+                        ...manifest,
+                        directory: projectDir
+                    },
+                    summary
+                },
+                'MIB工程保存成功'
+            );
+        } catch (error) {
+            logger.error('保存MIB工程失败:', error);
+            if (createdProjectDir && projectDir) {
+                try {
+                    fs.rmSync(projectDir, { recursive: true, force: true });
+                } catch (cleanupError) {
+                    logger.warn('清理失败的MIB工程目录失败:', cleanupError.message);
+                }
+            }
+            return errorResponse('保存MIB工程失败: ' + error.message);
+        }
+    }
+
+    async handleListMibProjects() {
+        try {
+            const rootDir = this.getMibProjectRootDir();
+            if (!fs.existsSync(rootDir)) {
+                return successResponse({ rootDir, projects: [] }, '暂无MIB工程');
+            }
+
+            const projects = fs
+                .readdirSync(rootDir, { withFileTypes: true })
+                .filter(entry => entry.isDirectory())
+                .map(entry => {
+                    const projectDir = path.join(rootDir, entry.name);
+                    try {
+                        const manifest = this.readMibProjectManifest(projectDir);
+                        return this.formatMibProjectRecord(manifest, projectDir);
+                    } catch (error) {
+                        logger.warn(`忽略无效MIB工程 ${projectDir}:`, error.message);
+                        return null;
+                    }
+                })
+                .filter(Boolean)
+                .sort((left, right) => {
+                    const leftTime = Date.parse(left.updatedAt || left.createdAt || '') || 0;
+                    const rightTime = Date.parse(right.updatedAt || right.createdAt || '') || 0;
+                    return rightTime - leftTime;
+                });
+
+            return successResponse({ rootDir, projects }, 'MIB工程列表获取成功');
+        } catch (error) {
+            logger.error('获取MIB工程列表失败:', error);
+            return errorResponse('获取MIB工程列表失败: ' + error.message);
+        }
+    }
+
+    async handleImportMibProject(_event, payload = {}) {
+        try {
+            const projectName = this.normalizeMibProjectName(payload.name || payload.projectName);
+            if (!projectName) {
+                return errorResponse('请选择要导入的工程');
+            }
+
+            const projectDir = path.join(this.getMibProjectRootDir(), projectName);
+            const manifest = this.readMibProjectManifest(projectDir);
+            const requestedFiles = this.normalizeFilePaths(manifest.requestedFiles).filter(filePath =>
+                fs.existsSync(filePath)
+            );
+            if (requestedFiles.length === 0) {
+                return errorResponse('工程内没有可用的MIB源文件');
+            }
+
+            const projectCachePath = path.join(projectDir, manifest.cacheFile || 'mib-cache.json');
+            if (!fs.existsSync(projectCachePath)) {
+                return errorResponse('工程编译缓存不存在');
+            }
+
+            const globalCachePath = this.getMibCacheFilePath();
+            fs.mkdirSync(path.dirname(globalCachePath), { recursive: true });
+            fs.copyFileSync(projectCachePath, globalCachePath);
+            this.store.set(this.snmpMibFilesKey, requestedFiles);
+
+            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS, {
+                requestedFiles,
+                cacheFilePath: globalCachePath
+            });
+            if (result.status !== 'success') {
+                throw new Error(result.msg || '工程MIB缓存加载失败');
+            }
+
+            const summary = result.data || {};
+            if (!summary.cacheHit && fs.existsSync(globalCachePath)) {
+                fs.copyFileSync(globalCachePath, projectCachePath);
+            }
+
+            if (this.worker) {
+                const workerResult = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, {
+                    filePaths: requestedFiles,
+                    cacheFilePath: globalCachePath
+                });
+                summary.worker = workerResult.data;
+            }
+
+            return successResponse(
+                {
+                    project: this.formatMibProjectRecord(manifest, projectDir),
+                    summary
+                },
+                'MIB工程导入成功'
+            );
+        } catch (error) {
+            logger.error('导入MIB工程失败:', error);
+            return errorResponse('导入MIB工程失败: ' + error.message);
         }
     }
 
@@ -457,6 +607,65 @@ class SnmpApp {
         }
     }
 
+    async handleSendGetNextRequest(_event, request = {}) {
+        let session = null;
+        try {
+            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
+            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
+            const oid = String(request.oid || '').trim();
+            const version = this.getConfiguredSessionVersion(storedConfig);
+            const community = storedConfig.community || 'public';
+            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
+
+            if (!targetHost) {
+                return errorResponse('请输入目标地址');
+            }
+
+            if (!oid) {
+                return errorResponse('请输入GET-NEXT OID');
+            }
+
+            const snmpVersion = this.getSessionVersion(version);
+            if (snmpVersion === null) {
+                return errorResponse('当前GET-NEXT发送暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
+            }
+
+            session = snmp.createSession(targetHost, community, {
+                port,
+                version: snmpVersion,
+                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
+                retries: Number(request.retries) || 0
+            });
+
+            const varbinds = await this.sendGetNextOids(session, [oid]);
+            const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
+            if (firstError) {
+                return errorResponse('GET-NEXT失败: ' + snmp.varbindError(firstError));
+            }
+
+            return successResponse(
+                {
+                    targetHost,
+                    targetPort: port,
+                    version,
+                    varbinds: varbinds.map(varbind => this.formatSessionVarbind(varbind))
+                },
+                'GET-NEXT查询成功'
+            );
+        } catch (error) {
+            logger.error('发送SNMP GET-NEXT失败:', error);
+            return errorResponse('发送SNMP GET-NEXT失败: ' + error.message);
+        } finally {
+            if (session) {
+                try {
+                    session.close();
+                } catch (error) {
+                    logger.warn('关闭SNMP GET-NEXT会话失败:', error.message);
+                }
+            }
+        }
+    }
+
     async handleSendSetRequest(_event, request = {}) {
         let session = null;
         try {
@@ -525,9 +734,159 @@ class SnmpApp {
         }
     }
 
+    async handleSendWalkRequest(_event, request = {}) {
+        let session = null;
+        try {
+            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
+            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
+            const baseOid = String(request.oid || '').trim().replace(/\.$/, '');
+            const version = this.getConfiguredSessionVersion(storedConfig);
+            const community = storedConfig.community || 'public';
+            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
+            const limit = Math.max(1, Math.min(Number(request.limit) || 100, 1000));
+            const maxRepetitions = Math.max(1, Math.min(Number(request.maxRepetitions) || 20, 50));
+
+            if (!targetHost) {
+                return errorResponse('请输入目标地址');
+            }
+
+            if (!baseOid) {
+                return errorResponse('请输入WALK起始OID');
+            }
+
+            const snmpVersion = this.getSessionVersion(version);
+            if (snmpVersion === null) {
+                return errorResponse('当前WALK暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
+            }
+
+            session = snmp.createSession(targetHost, community, {
+                port,
+                version: snmpVersion,
+                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
+                retries: Number(request.retries) || 0
+            });
+
+            const summary =
+                version === 'v2c'
+                    ? await this.listOidInstancesWithBulk(session, baseOid, limit, maxRepetitions)
+                    : await this.listOidInstancesWithGetNext(session, baseOid, limit);
+
+            return successResponse(
+                {
+                    targetHost,
+                    targetPort: port,
+                    version,
+                    baseOid,
+                    limit,
+                    maxRepetitions,
+                    ...summary
+                },
+                'WALK查询完成'
+            );
+        } catch (error) {
+            logger.error('发送SNMP WALK失败:', error);
+            return errorResponse('发送SNMP WALK失败: ' + error.message);
+        } finally {
+            if (session) {
+                try {
+                    session.close();
+                } catch (error) {
+                    logger.warn('关闭SNMP WALK会话失败:', error.message);
+                }
+            }
+        }
+    }
+
+    async handleListOidInstances(_event, request = {}) {
+        let session = null;
+        try {
+            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
+            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
+            const baseOid = String(request.oid || '').trim().replace(/\.$/, '');
+            const version = this.getConfiguredSessionVersion(storedConfig);
+            const community = storedConfig.community || 'public';
+            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
+            const limit = Math.max(1, Math.min(Number(request.limit) || 100, 500));
+            const maxRepetitions = Math.max(1, Math.min(Number(request.maxRepetitions) || 20, 50));
+
+            if (!targetHost) {
+                return errorResponse('请输入目标地址');
+            }
+
+            if (!baseOid) {
+                return errorResponse('请输入实例枚举OID');
+            }
+
+            const snmpVersion = this.getSessionVersion(version);
+            if (snmpVersion === null) {
+                return errorResponse('当前实例枚举暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
+            }
+
+            session = snmp.createSession(targetHost, community, {
+                port,
+                version: snmpVersion,
+                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
+                retries: Number(request.retries) || 0
+            });
+
+            const summary =
+                version === 'v2c'
+                    ? await this.listOidInstancesWithBulk(session, baseOid, limit, maxRepetitions)
+                    : await this.listOidInstancesWithGetNext(session, baseOid, limit);
+
+            return successResponse(
+                {
+                    targetHost,
+                    targetPort: port,
+                    version,
+                    baseOid,
+                    limit,
+                    maxRepetitions,
+                    ...summary
+                },
+                '实例枚举完成'
+            );
+        } catch (error) {
+            logger.error('枚举SNMP实例失败:', error);
+            return errorResponse('枚举SNMP实例失败: ' + error.message);
+        } finally {
+            if (session) {
+                try {
+                    session.close();
+                } catch (error) {
+                    logger.warn('关闭SNMP实例枚举会话失败:', error.message);
+                }
+            }
+        }
+    }
+
     sendGetOids(session, oids) {
         return new Promise((resolve, reject) => {
             session.get(oids, (error, result) => {
+                if (error) {
+                    reject(error);
+                    return;
+                }
+                resolve(result || []);
+            });
+        });
+    }
+
+    sendGetNextOids(session, oids) {
+        return new Promise((resolve, reject) => {
+            session.getNext(oids, (error, result) => {
+                if (error) {
+                    reject(error);
+                    return;
+                }
+                resolve(result || []);
+            });
+        });
+    }
+
+    sendGetBulkOids(session, oids, nonRepeaters, maxRepetitions) {
+        return new Promise((resolve, reject) => {
+            session.getBulk(oids, nonRepeaters, maxRepetitions, (error, result) => {
                 if (error) {
                     reject(error);
                     return;
@@ -547,6 +906,143 @@ class SnmpApp {
                 resolve(result || []);
             });
         });
+    }
+
+    async listOidInstancesWithGetNext(session, baseOid, limit) {
+        const rows = [];
+        let currentOid = baseOid;
+        let stoppedBy = 'endOfSubtree';
+
+        while (rows.length < limit) {
+            const varbinds = await this.sendGetNextOids(session, [currentOid]);
+            const varbind = varbinds[0];
+            const result = this.acceptInstanceVarbind(baseOid, currentOid, varbind);
+            if (!result.accepted) {
+                stoppedBy = result.reason;
+                break;
+            }
+
+            rows.push(result.row);
+            currentOid = varbind.oid;
+        }
+
+        return {
+            rows,
+            stoppedBy: rows.length >= limit ? 'limit' : stoppedBy,
+            limitReached: rows.length >= limit
+        };
+    }
+
+    async listOidInstancesWithBulk(session, baseOid, limit, maxRepetitions) {
+        const rows = [];
+        let currentOid = baseOid;
+        let stoppedBy = 'endOfSubtree';
+
+        while (rows.length < limit) {
+            const groups = await this.sendGetBulkOids(session, [currentOid], 0, Math.min(maxRepetitions, limit - rows.length));
+            const varbinds = Array.isArray(groups[0]) ? groups[0] : groups;
+            if (!Array.isArray(varbinds) || varbinds.length === 0) {
+                stoppedBy = 'emptyResponse';
+                break;
+            }
+
+            let acceptedCount = 0;
+            for (const varbind of varbinds) {
+                const result = this.acceptInstanceVarbind(baseOid, currentOid, varbind);
+                if (!result.accepted) {
+                    stoppedBy = result.reason;
+                    return {
+                        rows,
+                        stoppedBy,
+                        limitReached: false
+                    };
+                }
+
+                rows.push(result.row);
+                currentOid = varbind.oid;
+                acceptedCount++;
+
+                if (rows.length >= limit) {
+                    break;
+                }
+            }
+
+            if (acceptedCount === 0) {
+                stoppedBy = 'emptyResponse';
+                break;
+            }
+        }
+
+        return {
+            rows,
+            stoppedBy: rows.length >= limit ? 'limit' : stoppedBy,
+            limitReached: rows.length >= limit
+        };
+    }
+
+    acceptInstanceVarbind(baseOid, previousOid, varbind) {
+        if (!varbind) {
+            return {
+                accepted: false,
+                reason: 'emptyResponse'
+            };
+        }
+
+        if (snmp.isVarbindError(varbind)) {
+            return {
+                accepted: false,
+                reason: snmp.varbindError(varbind) || 'varbindError'
+            };
+        }
+
+        if (!this.isOidInSubtree(baseOid, varbind.oid)) {
+            return {
+                accepted: false,
+                reason: 'endOfSubtree'
+            };
+        }
+
+        if (this.compareOids(varbind.oid, previousOid) <= 0) {
+            return {
+                accepted: false,
+                reason: 'nonIncreasingOid'
+            };
+        }
+
+        return {
+            accepted: true,
+            row: {
+                ...this.formatSessionVarbind(varbind),
+                instance: this.getOidInstanceSuffix(baseOid, varbind.oid)
+            }
+        };
+    }
+
+    isOidInSubtree(baseOid, oid) {
+        return oid === baseOid || String(oid || '').startsWith(`${baseOid}.`);
+    }
+
+    getOidInstanceSuffix(baseOid, oid) {
+        if (!this.isOidInSubtree(baseOid, oid) || oid === baseOid) {
+            return '';
+        }
+        return String(oid).slice(baseOid.length + 1);
+    }
+
+    compareOids(left, right) {
+        const leftParts = String(left || '').split('.').map(Number);
+        const rightParts = String(right || '').split('.').map(Number);
+        const length = Math.max(leftParts.length, rightParts.length);
+
+        for (let index = 0; index < length; index++) {
+            const leftValue = leftParts[index] ?? -1;
+            const rightValue = rightParts[index] ?? -1;
+            if (leftValue !== rightValue) {
+                return leftValue - rightValue;
+            }
+        }
+
+        return 0;
     }
 
     formatSessionVarbind(varbind) {
@@ -627,6 +1123,289 @@ class SnmpApp {
         }
 
         return String(value);
+    }
+
+    async ensureCurrentMibCache(sourcePaths) {
+        const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS, {
+            requestedFiles: sourcePaths,
+            cacheFilePath: this.getMibCacheFilePath()
+        });
+        if (result.status !== 'success') {
+            throw new Error(result.msg || '当前MIB缓存生成失败');
+        }
+        return result.data || {};
+    }
+
+    getMibProjectRootDir() {
+        return path.join(app.getPath('userData'), 'snmp-mib-projects');
+    }
+
+    normalizeMibProjectName(name = '') {
+        return String(name || '')
+            .trim()
+            .replace(/[\\/:*?"<>|]/g, '_')
+            .replace(/\s+/g, '_')
+            .replace(/^\.+/, '')
+            .slice(0, 80);
+    }
+
+    sanitizePathName(name = '') {
+        const safeName = String(name || 'mib')
+            .trim()
+            .replace(/[\\/:*?"<>|]/g, '_')
+            .replace(/^\.+$/, '_');
+        return safeName || 'mib';
+    }
+
+    readJsonFile(filePath) {
+        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    }
+
+    readMibProjectManifest(projectDir) {
+        const manifestPath = path.join(projectDir, 'manifest.json');
+        if (!fs.existsSync(manifestPath)) {
+            throw new Error('工程清单不存在');
+        }
+
+        const manifest = this.readJsonFile(manifestPath);
+        if (!manifest || manifest.version !== 1 || !manifest.name) {
+            throw new Error('工程清单格式无效');
+        }
+
+        return manifest;
+    }
+
+    formatMibProjectRecord(manifest, projectDir) {
+        return {
+            name: manifest.name,
+            projectName: manifest.name,
+            directory: projectDir,
+            createdAt: manifest.createdAt || '',
+            updatedAt: manifest.updatedAt || manifest.createdAt || '',
+            fileCount: Number(manifest.fileCount) || 0,
+            moduleCount: Array.isArray(manifest.modules) ? manifest.modules.length : 0,
+            modules: Array.isArray(manifest.modules) ? manifest.modules : [],
+            totalObjects: Number(manifest.totalObjects) || 0
+        };
+    }
+
+    copyMibProjectSources(sourcePaths, mibsDir) {
+        const requestedFiles = [];
+        const filePathMap = new Map();
+        const usedRootNames = new Set();
+        let copiedFileCount = 0;
+
+        sourcePaths.forEach(sourcePath => {
+            const stat = fs.statSync(sourcePath);
+            const targetName = this.getUniqueTargetName(mibsDir, path.basename(sourcePath), usedRootNames);
+            const targetPath = path.join(mibsDir, targetName);
+
+            if (stat.isFile()) {
+                if (!this.isMibCandidateFile(sourcePath)) {
+                    return;
+                }
+
+                fs.copyFileSync(sourcePath, targetPath);
+                requestedFiles.push(targetPath);
+                filePathMap.set(sourcePath, targetPath);
+                copiedFileCount++;
+                return;
+            }
+
+            if (stat.isDirectory()) {
+                fs.mkdirSync(targetPath, { recursive: true });
+                const directoryFileCount = this.copyMibDirectoryFiles(sourcePath, targetPath, filePathMap);
+                if (directoryFileCount > 0) {
+                    requestedFiles.push(targetPath);
+                    copiedFileCount += directoryFileCount;
+                } else {
+                    fs.rmSync(targetPath, { recursive: true, force: true });
+                }
+                return;
+            }
+
+            throw new Error(`不是文件或目录: ${sourcePath}`);
+        });
+
+        return {
+            requestedFiles: this.normalizeFilePaths(requestedFiles),
+            filePathMap,
+            copiedFileCount
+        };
+    }
+
+    copyMibDirectoryFiles(sourceDir, targetDir, filePathMap) {
+        let copiedFileCount = 0;
+        const usedNames = new Set();
+        const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+
+        entries.forEach(entry => {
+            if (entry.name.startsWith('.')) {
+                return;
+            }
+
+            const sourcePath = path.join(sourceDir, entry.name);
+            const targetName = this.getUniqueTargetName(targetDir, entry.name, usedNames);
+            const targetPath = path.join(targetDir, targetName);
+
+            if (entry.isDirectory()) {
+                fs.mkdirSync(targetPath, { recursive: true });
+                const directoryFileCount = this.copyMibDirectoryFiles(sourcePath, targetPath, filePathMap);
+                if (directoryFileCount === 0) {
+                    fs.rmSync(targetPath, { recursive: true, force: true });
+                    return;
+                }
+
+                copiedFileCount += directoryFileCount;
+                return;
+            }
+
+            if (!entry.isFile() || !this.isMibCandidateFile(sourcePath)) {
+                return;
+            }
+
+            fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+            fs.copyFileSync(sourcePath, targetPath);
+            filePathMap.set(sourcePath, targetPath);
+            copiedFileCount++;
+        });
+
+        return copiedFileCount;
+    }
+
+    getUniqueTargetName(parentDir, rawName, usedNames) {
+        const safeName = this.sanitizePathName(rawName);
+        const parsed = path.parse(safeName);
+        let candidate = safeName;
+        let counter = 2;
+
+        while (usedNames.has(candidate.toLowerCase()) || fs.existsSync(path.join(parentDir, candidate))) {
+            candidate = `${parsed.name}_${counter}${parsed.ext}`;
+            counter++;
+        }
+
+        usedNames.add(candidate.toLowerCase());
+        return candidate;
+    }
+
+    buildProjectMibCache(sourceCache, copyResult, createdAt) {
+        const snapshot = sourceCache.snapshot || {};
+        const requestedFiles = copyResult.requestedFiles;
+        const expandedFiles = this.expandMibInputPaths(requestedFiles);
+
+        return {
+            version: sourceCache.version || 1,
+            createdAt,
+            requestedFiles,
+            fileSignatures: this.getMibFileSignatures(expandedFiles),
+            snapshot: {
+                ...snapshot,
+                requestedFiles,
+                loadedFiles: this.remapMibFilePaths(snapshot.loadedFiles || [], copyResult.filePathMap),
+                failedFiles: this.remapMibFailedFiles(snapshot.failedFiles || [], copyResult.filePathMap)
+            }
+        };
+    }
+
+    remapMibFilePaths(filePaths = [], filePathMap) {
+        return this.normalizeFilePaths(filePaths.map(filePath => filePathMap.get(filePath) || filePath)).filter(
+            filePath => fs.existsSync(filePath)
+        );
+    }
+
+    remapMibFailedFiles(failedFiles = [], filePathMap) {
+        if (!Array.isArray(failedFiles)) {
+            return [];
+        }
+
+        return failedFiles.map(file => {
+            const sourcePath = typeof file === 'string' ? file : file.filePath;
+            if (!sourcePath) {
+                return {
+                    ...(typeof file === 'object' && file ? file : {}),
+                    filePath: '',
+                    fileName: ''
+                };
+            }
+            const filePath = filePathMap.get(sourcePath) || sourcePath;
+            return {
+                ...(typeof file === 'object' && file ? file : {}),
+                filePath,
+                fileName: path.basename(filePath)
+            };
+        });
+    }
+
+    expandMibInputPaths(inputPaths = []) {
+        const files = [];
+        const seen = new Set();
+
+        const addFile = filePath => {
+            if (seen.has(filePath) || !this.isMibCandidateFile(filePath)) {
+                return;
+            }
+
+            seen.add(filePath);
+            files.push(filePath);
+        };
+
+        const visitPath = inputPath => {
+            if (!inputPath || !fs.existsSync(inputPath)) {
+                return;
+            }
+
+            const stat = fs.statSync(inputPath);
+            if (stat.isFile()) {
+                addFile(inputPath);
+                return;
+            }
+
+            if (stat.isDirectory()) {
+                this.walkMibDirectory(inputPath, addFile);
+            }
+        };
+
+        this.normalizeFilePaths(inputPaths).forEach(visitPath);
+        return files;
+    }
+
+    walkMibDirectory(directoryPath, addFile) {
+        fs.readdirSync(directoryPath, { withFileTypes: true }).forEach(entry => {
+            if (entry.name.startsWith('.')) {
+                return;
+            }
+
+            const entryPath = path.join(directoryPath, entry.name);
+            if (entry.isDirectory()) {
+                this.walkMibDirectory(entryPath, addFile);
+                return;
+            }
+
+            if (entry.isFile()) {
+                addFile(entryPath);
+            }
+        });
+    }
+
+    getMibFileSignatures(filePaths = []) {
+        return filePaths
+            .map(filePath => {
+                try {
+                    const stat = fs.statSync(filePath);
+                    return {
+                        filePath,
+                        size: stat.size,
+                        mtimeMs: Math.trunc(stat.mtimeMs)
+                    };
+                } catch (error) {
+                    return null;
+                }
+            })
+            .filter(Boolean);
+    }
+
+    isMibCandidateFile(filePath) {
+        return ['.mib', '.txt', '.my', ''].includes(path.extname(filePath).toLowerCase());
     }
 
     getStoredMibFilePaths() {
