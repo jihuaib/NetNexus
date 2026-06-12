@@ -1,14 +1,9 @@
 <template>
-    <div class="mt-container">
-        <a-row>
+    <div class="mt-container adaptive-list-page">
+        <a-row class="adaptive-form-row">
             <a-col :span="24">
                 <a-card title="RPKI ASPA 配置 (协议 v2)">
-                    <a-form
-                        :model="aspaConfig"
-                        :label-col="labelCol"
-                        :wrapper-col="wrapperCol"
-                        @finish="submitAspa"
-                    >
+                    <a-form :model="aspaConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="submitAspa">
                         <a-row>
                             <a-col :span="24">
                                 <a-form-item label="Customer ASN" name="customerAsn">
@@ -68,9 +63,9 @@
             </a-col>
         </a-row>
 
-        <a-row class="mt-margin-top-10">
+        <a-row class="adaptive-list-row">
             <a-col :span="24">
-                <a-card :title="aspaListTitle">
+                <a-card :title="aspaListTitle" class="adaptive-list-card">
                     <template #extra>
                         <a-button
                             class="aspa-delete-all-button"
@@ -87,9 +82,10 @@
                         :data-source="aspaList"
                         :row-key="record => `${record.customerAsn}`"
                         :pagination="aspaPagination"
-                        :scroll="{ y: 200 }"
+                        :scroll="{ y: '100%' }"
                         :loading="tableLoading"
                         size="small"
+                        class="adaptive-table"
                         @change="handleTableChange"
                     >
                         <template #bodyCell="{ column, record }">
@@ -308,6 +304,44 @@
 </script>
 
 <style scoped>
+    .adaptive-list-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: hidden;
+    }
+
+    .adaptive-form-row {
+        flex: 0 0 auto;
+    }
+
+    .adaptive-list-row {
+        flex: 1 1 0;
+        min-height: 0;
+    }
+
+    .adaptive-list-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-list-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .adaptive-list-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
     .rpki-form-actions :deep(.ant-form-item-control-input-content) {
         display: flex;
         justify-content: center;
@@ -330,8 +364,56 @@
         border-color: #bfbfbf !important;
     }
 
-    :deep(.ant-table-body) {
-        height: 200px !important;
+    .adaptive-table,
+    .adaptive-table :deep(.ant-spin-nested-loading),
+    .adaptive-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .adaptive-table :deep(.ant-table-container),
+    .adaptive-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .adaptive-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
         overflow-y: auto !important;
+    }
+
+    .adaptive-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .adaptive-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

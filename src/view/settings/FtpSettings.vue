@@ -1,6 +1,6 @@
 <template>
     <div class="ftp-settings">
-        <a-card title="FTP设置">
+        <a-card title="FTP设置" class="settings-card">
             <a-form :model="settingsForm" layout="vertical">
                 <a-form-item label="FTP用户最大存储条数" name="maxFtpUser">
                     <a-input-number v-model:value="settingsForm.maxFtpUser" :min="10" :max="1000" style="width: 100%" />

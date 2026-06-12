@@ -1,4 +1,4 @@
-import { IP_TYPE, BGP_MVPN_ROUTE_TYPE } from '../const/bgpConst';
+import { IP_TYPE, BGP_MVPN_ROUTE_TYPE, BGP_QP_ROUTE_GROWTH_MODE, BGP_QP_BSID_MODE } from '../const/bgpConst';
 
 // 通用验证工具和常量
 
@@ -798,7 +798,29 @@ export const createBgpMvpnRouteConfigValidationRules = () => {
     };
 };
 
-export const createBgpIpv4QpRouteConfigValidationRules = () => {
+const QP_MAX_DQPN = 0xffffff;
+
+const isPositiveInteger = value => {
+    const n = Number(value);
+    return Number.isInteger(n) && n > 0;
+};
+
+const isNonNegativeIntegerInRange = (value, max) => {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 0 && n <= max;
+};
+
+const qpRouteGrowthIncludesDqpn = formData =>
+    !formData.routeGrowthMode ||
+    formData.routeGrowthMode === BGP_QP_ROUTE_GROWTH_MODE.DQPN ||
+    formData.routeGrowthMode === BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
+
+const qpRouteGrowthIncludesIp = formData =>
+    !formData.routeGrowthMode ||
+    formData.routeGrowthMode === BGP_QP_ROUTE_GROWTH_MODE.IP ||
+    formData.routeGrowthMode === BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
+
+const createBgpQpRouteConfigValidationRules = (prefixValidator, maskValidator, prefixMessage, maskMessage) => {
     return {
         prefix: [
             {
@@ -806,8 +828,8 @@ export const createBgpIpv4QpRouteConfigValidationRules = () => {
                 message: '请输入前缀'
             },
             {
-                validator: validators.ipv4,
-                message: '请输入有效的IPv4地址'
+                validator: prefixValidator,
+                message: prefixMessage
             }
         ],
         mask: [
@@ -816,14 +838,23 @@ export const createBgpIpv4QpRouteConfigValidationRules = () => {
                 message: '请输入掩码'
             },
             {
-                validator: validators.ipv4Mask,
-                message: '请输入有效的IPv4掩码'
+                validator: maskValidator,
+                message: maskMessage
             }
         ],
         count: [
             {
-                required: true,
+                validator: isPositiveInteger,
                 message: '请输入数量'
+            }
+        ],
+        ipStep: [
+            {
+                validator: (value, formData) => {
+                    if (!qpRouteGrowthIncludesIp(formData)) return true;
+                    return isPositiveInteger(value);
+                },
+                message: 'IP步长必须为正整数'
             }
         ],
         startDqpn: [
@@ -832,11 +863,30 @@ export const createBgpIpv4QpRouteConfigValidationRules = () => {
                 message: '请输入起始DQPN'
             },
             {
-                validator: value => {
-                    const n = parseInt(value, 10);
-                    return !isNaN(n) && n >= 0 && n <= 0xffffff;
-                },
+                validator: value => isNonNegativeIntegerInRange(value, QP_MAX_DQPN),
                 message: 'DQPN范围为 0 ~ 16777215（24bit）'
+            }
+        ],
+        dqpnStep: [
+            {
+                validator: (value, formData) => {
+                    if (!qpRouteGrowthIncludesDqpn(formData)) return true;
+                    return isPositiveInteger(value);
+                },
+                message: 'DQPN步长必须为正整数'
+            },
+            {
+                validator: (value, formData) => {
+                    if (!qpRouteGrowthIncludesDqpn(formData)) return true;
+                    const count = Number(formData.count);
+                    const start = Number(formData.startDqpn);
+                    const step = Number(value);
+                    if (!Number.isInteger(count) || count <= 0 || !Number.isInteger(start) || !Number.isInteger(step)) {
+                        return false;
+                    }
+                    return start + (count - 1) * step <= QP_MAX_DQPN;
+                },
+                message: 'DQPN连续生成超出 24bit 范围'
             }
         ],
         bsid: [
@@ -847,64 +897,35 @@ export const createBgpIpv4QpRouteConfigValidationRules = () => {
             {
                 validator: validators.ipv6,
                 message: '请输入有效的IPv6地址'
+            }
+        ],
+        bsidStep: [
+            {
+                validator: (value, formData) => {
+                    if (formData.bsidMode !== BGP_QP_BSID_MODE.CONTINUOUS) return true;
+                    return isPositiveInteger(value);
+                },
+                message: 'BSID步长必须为正整数'
             }
         ]
     };
 };
 
-export const createBgpIpv6QpRouteConfigValidationRules = () => {
-    return {
-        prefix: [
-            {
-                required: true,
-                message: '请输入前缀'
-            },
-            {
-                validator: validators.ipv6,
-                message: '请输入有效的IPv6地址'
-            }
-        ],
-        mask: [
-            {
-                required: true,
-                message: '请输入掩码'
-            },
-            {
-                validator: validators.ipv6Mask,
-                message: '请输入有效的IPv6掩码'
-            }
-        ],
-        count: [
-            {
-                required: true,
-                message: '请输入数量'
-            }
-        ],
-        startDqpn: [
-            {
-                required: true,
-                message: '请输入起始DQPN'
-            },
-            {
-                validator: value => {
-                    const n = parseInt(value, 10);
-                    return !isNaN(n) && n >= 0 && n <= 0xffffff;
-                },
-                message: 'DQPN范围为 0 ~ 16777215（24bit）'
-            }
-        ],
-        bsid: [
-            {
-                required: true,
-                message: '请输入BSID'
-            },
-            {
-                validator: validators.ipv6,
-                message: '请输入有效的IPv6地址'
-            }
-        ]
-    };
-};
+export const createBgpIpv4QpRouteConfigValidationRules = () =>
+    createBgpQpRouteConfigValidationRules(
+        validators.ipv4,
+        validators.ipv4Mask,
+        '请输入有效的IPv4地址',
+        '请输入有效的IPv4掩码'
+    );
+
+export const createBgpIpv6QpRouteConfigValidationRules = () =>
+    createBgpQpRouteConfigValidationRules(
+        validators.ipv6,
+        validators.ipv6Mask,
+        '请输入有效的IPv6地址',
+        '请输入有效的IPv6掩码'
+    );
 
 /**
  * 创建BMP工具验证规则

@@ -1,6 +1,6 @@
 <template>
-    <div class="mt-container">
-        <a-row>
+    <div class="mt-container adaptive-list-page">
+        <a-row class="adaptive-form-row">
             <a-col :span="24">
                 <a-card title="RPKI服务器配置">
                     <a-form :model="rpkiConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startRpki">
@@ -23,6 +23,21 @@
                                 </a-form-item>
                             </a-col>
                         </a-row>
+                        <a-row>
+                            <a-col :span="24">
+                                <a-form-item label="最高协议版本" name="maxProtocolVersion">
+                                    <a-radio-group v-model:value="rpkiConfig.maxProtocolVersion">
+                                        <a-radio :value="RPKI_PROTOCOL_VERSION.V2">v2 - 支持 ASPA</a-radio>
+                                        <a-radio :value="RPKI_PROTOCOL_VERSION.V1">v1 - 支持 Router Key</a-radio>
+                                        <a-radio :value="RPKI_PROTOCOL_VERSION.V0">v0 - 仅基础 ROA</a-radio>
+                                    </a-radio-group>
+                                    <div style="color: #999; font-size: 12px; line-height: 1.5">
+                                        用于模拟不同能力的 RPKI-RTR cache。客户端请求高于该版本时，服务端返回
+                                        Unsupported Protocol Version 并断开连接，客户端应按错误 PDU 版本重试。
+                                    </div>
+                                </a-form-item>
+                            </a-col>
+                        </a-row>
                         <!-- 认证配置 -->
                         <a-row :gutter="12">
                             <a-col :span="8">
@@ -34,9 +49,7 @@
                                         <a-input
                                             v-model:value="rpkiConfig.localPort"
                                             :disabled="!rpkiConfig.enableAuth"
-                                            :status="
-                                                rpkiConfig.enableAuth && validationErrors.localPort ? 'error' : ''
-                                            "
+                                            :status="rpkiConfig.enableAuth && validationErrors.localPort ? 'error' : ''"
                                         />
                                     </a-tooltip>
                                 </a-form-item>
@@ -75,17 +88,17 @@
                         <a-row>
                             <a-col :span="24">
                                 <a-form-item label="ASPA编码格式" name="aspaFormat">
-                                    <a-radio-group v-model:value="rpkiConfig.aspaFormat">
-                                        <a-radio :value="RPKI_ASPA_FORMAT.LATEST">
-                                            最新 (current 8210bis)
-                                        </a-radio>
-                                        <a-radio :value="RPKI_ASPA_FORMAT.LEGACY">
-                                            兼容 (draft-10 / 华为 VRP)
-                                        </a-radio>
+                                    <a-radio-group
+                                        v-model:value="rpkiConfig.aspaFormat"
+                                        :disabled="rpkiConfig.maxProtocolVersion < RPKI_PROTOCOL_VERSION.V2"
+                                    >
+                                        <a-radio :value="RPKI_ASPA_FORMAT.LATEST">最新 (current 8210bis)</a-radio>
+                                        <a-radio :value="RPKI_ASPA_FORMAT.LEGACY">兼容 (draft-10 / 华为 VRP)</a-radio>
                                     </a-radio-group>
                                     <div style="color: #999; font-size: 12px; line-height: 1.5">
-                                        最新格式遵循当前 draft-ietf-sidrops-8210bis 规范；兼容格式按 draft-10 在 body 中携带
-                                        Flags、AFI Flags 和 Provider AS Count，适用于华为 VRP 等老旧设备。仅在协议 v2 协商成功时生效。
+                                        最新格式遵循当前 draft-ietf-sidrops-8210bis 规范；兼容格式按 draft-10 在 body
+                                        中携带 Flags、AFI Flags 和 Provider AS Count，适用于华为 VRP
+                                        等老旧设备。仅在协议 v2 协商成功时生效。
                                     </div>
                                 </a-form-item>
                             </a-col>
@@ -111,9 +124,9 @@
         </a-row>
 
         <!-- RPKI客户端列表 -->
-        <a-row class="mt-margin-top-10">
+        <a-row class="adaptive-list-row">
             <a-col :span="24">
-                <a-card title="RPKI客户端列表">
+                <a-card title="RPKI客户端列表" class="adaptive-list-card">
                     <div>
                         <a-table
                             :columns="clientColumns"
@@ -122,9 +135,15 @@
                                 record =>
                                     `${record.localIp}|${record.localPort}|${record.remoteIp}|${record.remotePort}`
                             "
-                            :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                            :scroll="{ y: 200 }"
+                            :pagination="{
+                                pageSize: 20,
+                                showSizeChanger: false,
+                                position: ['bottomCenter'],
+                                showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                            }"
+                            :scroll="{ y: '100%' }"
                             size="small"
+                            class="adaptive-table"
                         >
                             <template #bodyCell="{ column, record }">
                                 <template v-if="column.key === 'action'">
@@ -153,7 +172,7 @@
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
     import { FormValidator, createRpkiConfigValidationRules } from '../../utils/validationCommon';
-    import { DEFAULT_VALUES, RPKI_EVENT_PAGE_ID, RPKI_ASPA_FORMAT } from '../../const/rpkiConst';
+    import { DEFAULT_VALUES, RPKI_EVENT_PAGE_ID, RPKI_PROTOCOL_VERSION, RPKI_ASPA_FORMAT } from '../../const/rpkiConst';
     import EventBus from '../../utils/eventBus';
 
     defineOptions({
@@ -169,11 +188,19 @@
         enableAuth: false,
         peerIP: '',
         md5Password: '',
+        maxProtocolVersion: DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION,
         aspaFormat: RPKI_ASPA_FORMAT.LATEST
     });
 
     const serverLoading = ref(false);
     const serverRunning = ref(false);
+
+    const normalizeMaxProtocolVersion = version => {
+        const maxProtocolVersion = Number(version);
+        return Object.values(RPKI_PROTOCOL_VERSION).includes(maxProtocolVersion)
+            ? maxProtocolVersion
+            : DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION;
+    };
 
     // 客户端列表
     const clientList = ref([]);
@@ -369,11 +396,13 @@
                 rpkiConfig.value.localPort = result.data.localPort;
                 rpkiConfig.value.peerIP = result.data.peerIP || '';
                 rpkiConfig.value.md5Password = result.data.md5Password || '';
+                rpkiConfig.value.maxProtocolVersion = normalizeMaxProtocolVersion(
+                    result.data.maxProtocolVersion ?? DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION
+                );
                 rpkiConfig.value.aspaFormat = result.data.aspaFormat || RPKI_ASPA_FORMAT.LATEST;
             } else {
                 console.error('配置文件加载失败', result.msg);
             }
-
         } catch (error) {
             console.error('初始化RPKI配置出错:', error);
         }
@@ -381,8 +410,95 @@
 </script>
 
 <style scoped>
-    :deep(.ant-table-body) {
-        height: 200px !important;
+    .adaptive-list-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: hidden;
+    }
+
+    .adaptive-form-row {
+        flex: 0 0 auto;
+    }
+
+    .adaptive-list-row {
+        flex: 1 1 0;
+        min-height: 0;
+    }
+
+    .adaptive-list-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-list-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .adaptive-list-card :deep(.ant-card-body),
+    .adaptive-list-card :deep(.ant-card-body > div) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table,
+    .adaptive-table :deep(.ant-spin-nested-loading),
+    .adaptive-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .adaptive-table :deep(.ant-table-container),
+    .adaptive-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .adaptive-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
         overflow-y: auto !important;
+    }
+
+    .adaptive-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .adaptive-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

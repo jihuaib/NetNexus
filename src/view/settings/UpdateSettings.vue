@@ -1,6 +1,6 @@
 <template>
     <div class="update-settings">
-        <a-card title="应用更新">
+        <a-card title="应用更新" class="settings-card">
             <!-- 当前版本信息 -->
             <a-row class="version-info">
                 <a-col :span="12">

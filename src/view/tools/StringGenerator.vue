@@ -1,7 +1,13 @@
 <template>
-    <div class="mt-container">
+    <div class="mt-container string-generator-page">
         <a-card title="字符串生成配置" class="string-generator-card">
-            <a-form :model="formState" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="handleFinish">
+            <a-form
+                :model="formState"
+                :label-col="labelCol"
+                :wrapper-col="wrapperCol"
+                class="string-generator-form"
+                @finish="handleFinish"
+            >
                 <!-- 字符串模板输入 -->
                 <a-form-item label="字符串模板" name="template">
                     <a-tooltip :title="validationErrors.template" :open="!!validationErrors.template">
@@ -53,8 +59,10 @@
                 </a-form-item>
 
                 <!-- 结果显示 -->
-                <a-form-item label="生成结果">
-                    <ScrollTextarea v-model:model-value="result" :height="400" />
+                <a-form-item label="生成结果" class="generator-result-item">
+                    <div class="generator-result-textarea-wrap">
+                        <ScrollTextarea v-model:model-value="result" height="100%" />
+                    </div>
                 </a-form-item>
             </a-form>
         </a-card>
@@ -72,7 +80,12 @@
             <a-table
                 :columns="historyColumns"
                 :data-source="generateHistory"
-                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
+                :pagination="{
+                    pageSize: 20,
+                    showSizeChanger: false,
+                    position: ['bottomCenter'],
+                    showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                }"
                 :scroll="{ y: 200 }"
                 size="small"
             >
@@ -244,6 +257,79 @@
 </script>
 
 <style scoped>
+    .string-generator-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .string-generator-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .string-generator-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .string-generator-form {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .string-generator-form :deep(.ant-form-item) {
+        flex: 0 0 auto;
+    }
+
+    .generator-result-item {
+        flex: 1 1 0 !important;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .generator-result-item :deep(.ant-form-item-row),
+    .generator-result-item :deep(.ant-form-item-control),
+    .generator-result-item :deep(.ant-form-item-control-input),
+    .generator-result-item :deep(.ant-form-item-control-input-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .generator-result-item :deep(.ant-form-item-label) {
+        flex: 0 0 auto;
+    }
+
+    .generator-result-item :deep(.ant-form-item-control-input) {
+        align-items: stretch;
+    }
+
+    .generator-result-textarea-wrap {
+        flex: 1 1 0;
+        min-height: 0;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .generator-result-textarea-wrap :deep(textarea.ant-input) {
+        flex: 1 1 0;
+        min-height: 0;
+        width: 100%;
+        height: auto !important;
+    }
+
     :deep(.ant-table-body) {
         height: 200px !important;
         overflow-y: auto !important;

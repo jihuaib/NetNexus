@@ -33,6 +33,8 @@ class BgpSession {
         this.peerType = BgpConst.BGP_PEER_TYPE.PEER_TYPE_INVALID;
 
         this.sessState = BgpConst.BGP_PEER_STATE.IDLE;
+        this.holdTime = 0;
+        this.holdTimer = null;
     }
 
     // 更新session状态
@@ -64,9 +66,12 @@ class BgpSession {
         // 连接建立成功之后就发送open报文
         this.sendOpenMsg();
         this.changeSessionFsmState(BgpConst.BGP_PEER_STATE.OPEN_SENT);
+        this.startHoldTimer();
     }
 
     clearSession() {
+        this.clearHoldTimer();
+        this.packetBuffer = Buffer.alloc(0);
         this.peerCapFlags = 0;
         this.peerAddrFamilyFlags = 0;
         this.peerRole = BgpConst.BGP_ROLE_TYPE.ROLE_INVALID;
@@ -77,6 +82,7 @@ class BgpSession {
     }
 
     resetSession() {
+        this.clearHoldTimer();
         if (this.socket) {
             this.changeSessionFsmState(BgpConst.BGP_PEER_STATE.IDLE);
             this.sendNotification(
@@ -86,6 +92,68 @@ class BgpSession {
             this.socket.destroy();
             this.socket = null;
         }
+    }
+
+    getHoldTimeMs() {
+        const holdTimeSeconds = Number(this.holdTime);
+        if (!Number.isFinite(holdTimeSeconds) || holdTimeSeconds <= 0) {
+            return 0;
+        }
+
+        return Math.floor(holdTimeSeconds) * 1000;
+    }
+
+    clearHoldTimer() {
+        if (this.holdTimer) {
+            clearTimeout(this.holdTimer);
+            this.holdTimer = null;
+        }
+    }
+
+    startHoldTimer() {
+        const holdTimeMs = this.getHoldTimeMs();
+        this.clearHoldTimer();
+
+        if (!this.socket || this.socket.destroyed || holdTimeMs <= 0) {
+            return;
+        }
+
+        this.holdTimer = setTimeout(() => {
+            this.handleHoldTimerExpired();
+        }, holdTimeMs);
+        if (typeof this.holdTimer.unref === 'function') {
+            this.holdTimer.unref();
+        }
+    }
+
+    refreshHoldTimer() {
+        this.startHoldTimer();
+    }
+
+    handleHoldTimerExpired() {
+        if (!this.socket || this.socket.destroyed) {
+            this.clearHoldTimer();
+            return;
+        }
+
+        logger.warn(`${this.peerIp} hold timer expired`);
+        this.clearHoldTimer();
+        this.changeSessionFsmState(BgpConst.BGP_PEER_STATE.IDLE);
+        this.sendNotification(BgpConst.BGP_ERROR_CODE.HOLD_TIMER_EXPIRED, 0);
+        this.socket.destroy();
+        this.socket = null;
+        this.packetBuffer = Buffer.alloc(0);
+    }
+
+    handleSocketClosed(socket) {
+        if (this.socket !== socket) {
+            return;
+        }
+
+        this.clearHoldTimer();
+        this.socket = null;
+        this.packetBuffer = Buffer.alloc(0);
+        this.changeSessionFsmState(BgpConst.BGP_PEER_STATE.IDLE);
     }
 
     static makeKey(vrfIndex, peerIp) {
@@ -138,6 +206,7 @@ class BgpSession {
             // 提取完整的报文
             const packet = this.packetBuffer.subarray(0, header.length);
             const parsedPacket = parseBgpPacket(packet);
+            this.refreshHoldTimer();
 
             if (header.type === BgpConst.BGP_PACKET_TYPE.OPEN) {
                 logger.info(`${this.peerIp} recv open message ${JSON.stringify(parsedPacket)}`);
@@ -310,6 +379,7 @@ class BgpSession {
                 }
             } else if (header.type === BgpConst.BGP_PACKET_TYPE.NOTIFICATION) {
                 logger.info(`${this.peerIp} recv notification message ${getBgpPacketSummary(parsedPacket)}`);
+                this.clearHoldTimer();
                 this.resetPeer();
                 if (this.socket) {
                     this.socket.destroy();
@@ -599,6 +669,10 @@ class BgpSession {
     }
 
     sendNotification(errorCode, errorSubcode) {
+        if (!this.socket || this.socket.destroyed) {
+            return;
+        }
+
         const buffer = this.buildNotificationMsg(errorCode, errorSubcode);
         this.socket.write(buffer);
         const parsedPacket = parseBgpPacket(buffer);

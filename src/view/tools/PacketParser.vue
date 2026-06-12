@@ -1,7 +1,13 @@
 <template>
-    <div class="mt-container">
-        <a-card title="报文解析器">
-            <a-form :model="formState" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="handleParsePacket">
+    <div class="mt-container packet-parser-page">
+        <a-card title="报文解析器" class="packet-parser-card">
+            <a-form
+                :model="formState"
+                :label-col="labelCol"
+                :wrapper-col="wrapperCol"
+                class="packet-parser-form"
+                @finish="handleParsePacket"
+            >
                 <a-form-item label="解析起始层" name="startLayer">
                     <a-select v-model:value="formState.startLayer">
                         <a-select-option :value="START_LAYER.L2">数据链路层</a-select-option>
@@ -38,15 +44,21 @@
                 </a-form-item>
 
                 <!-- 报文输入框 -->
-                <a-form-item label="报文数据" name="packetData">
-                    <a-tooltip :title="validationErrors.packetData" :open="!!validationErrors.packetData">
+                <a-form-item
+                    label="报文数据"
+                    name="packetData"
+                    class="packet-data-item"
+                    :validate-status="validationErrors.packetData ? 'error' : ''"
+                    :help="validationErrors.packetData || ''"
+                >
+                    <div class="packet-data-textarea-wrap">
                         <ScrollTextarea
                             v-model:model-value="formState.packetData"
-                            :height="420"
+                            height="100%"
                             placeholder="请输入16进制格式的报文内容, 如: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF 00 13 01"
                             :status="validationErrors.packetData ? 'error' : ''"
                         />
-                    </a-tooltip>
+                    </div>
                 </a-form-item>
                 <!-- 操作按钮 -->
                 <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
@@ -78,7 +90,12 @@
             <a-table
                 :columns="historyColumns"
                 :data-source="parseHistory"
-                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
+                :pagination="{
+                    pageSize: 20,
+                    showSizeChanger: false,
+                    position: ['bottomCenter'],
+                    showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                }"
                 :scroll="{ y: 200 }"
                 size="small"
             >
@@ -305,6 +322,83 @@
 </script>
 
 <style scoped>
+    .packet-parser-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .packet-parser-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .packet-parser-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .packet-parser-form {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .packet-parser-form :deep(.ant-form-item) {
+        flex: 0 0 auto;
+    }
+
+    .packet-data-item {
+        flex: 1 1 0 !important;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .packet-data-item :deep(.ant-form-item-row),
+    .packet-data-item :deep(.ant-form-item-control),
+    .packet-data-item :deep(.ant-form-item-control-input),
+    .packet-data-item :deep(.ant-form-item-control-input-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .packet-data-item :deep(.ant-form-item-label) {
+        flex: 0 0 auto;
+    }
+
+    .packet-data-item :deep(.ant-form-item-control-input) {
+        align-items: stretch;
+    }
+
+    .packet-data-item :deep(.ant-form-item-explain) {
+        flex: 0 0 auto;
+    }
+
+    .packet-data-textarea-wrap {
+        flex: 1 1 0;
+        min-height: 0;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .packet-data-textarea-wrap :deep(textarea.ant-input) {
+        flex: 1 1 0;
+        min-height: 0;
+        width: 100%;
+        height: auto !important;
+    }
+
     :deep(.ant-table-body) {
         height: 200px !important;
         overflow-y: auto !important;

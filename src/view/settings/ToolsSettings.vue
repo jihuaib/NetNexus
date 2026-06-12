@@ -1,6 +1,6 @@
 <template>
     <div class="tools-settings">
-        <a-card title="Tools设置">
+        <a-card title="Tools设置" class="settings-card">
             <a-form :model="settingsForm" layout="vertical">
                 <a-divider>字符串生成</a-divider>
                 <a-form-item label="字符串生成历史记录最大存储条数" name="maxStringHistory">

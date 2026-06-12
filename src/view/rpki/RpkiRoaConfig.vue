@@ -1,6 +1,6 @@
 <template>
-    <div class="mt-container">
-        <a-row>
+    <div class="mt-container adaptive-list-page">
+        <a-row class="adaptive-form-row">
             <a-col :span="24">
                 <a-card title="RPKI ROA配置">
                     <a-form
@@ -81,9 +81,9 @@
         </a-row>
 
         <!-- ROA列表 -->
-        <a-row class="mt-margin-top-10">
+        <a-row class="adaptive-list-row">
             <a-col :span="24">
-                <a-card :title="roaListTitle">
+                <a-card :title="roaListTitle" class="adaptive-list-card">
                     <template #extra>
                         <a-button
                             class="roa-delete-all-button"
@@ -122,12 +122,15 @@
                             </a-space>
                         </div>
                         <a-table
-                            class="roa-table"
+                            class="roa-table adaptive-table"
                             :columns="roaColumns"
                             :data-source="roaList"
-                            :row-key="record => `${record.asn}-${record.ip}-${record.mask}-${record.maxLength}-${record.ipType}`"
+                            :row-key="
+                                record =>
+                                    `${record.asn}-${record.ip}-${record.mask}-${record.maxLength}-${record.ipType}`
+                            "
                             :pagination="roaPagination"
-                            :scroll="{ y: 200 }"
+                            :scroll="{ y: '100%' }"
                             :loading="tableLoading"
                             size="small"
                             @change="handleTableChange"
@@ -462,18 +465,59 @@
 </script>
 
 <style scoped>
+    .adaptive-list-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: hidden;
+    }
+
+    .adaptive-form-row {
+        flex: 0 0 auto;
+    }
+
+    .adaptive-list-row {
+        flex: 1 1 0;
+        min-height: 0;
+    }
+
+    .adaptive-list-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-list-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .adaptive-list-card :deep(.ant-card-body),
+    .adaptive-list-card :deep(.ant-card-body > div) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
     .rpki-form-actions :deep(.ant-form-item-control-input-content) {
         display: flex;
         justify-content: center;
     }
 
     .roa-query-toolbar {
+        flex: 0 0 auto;
         display: block;
         margin-bottom: 16px;
     }
 
     .roa-table {
-        margin-top: 16px;
+        flex: 1 1 0;
+        margin-top: 0;
     }
 
     .roa-query-input {
@@ -501,8 +545,56 @@
         border-color: #bfbfbf !important;
     }
 
-    :deep(.ant-table-body) {
-        height: 300px !important;
+    .adaptive-table,
+    .adaptive-table :deep(.ant-spin-nested-loading),
+    .adaptive-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .adaptive-table :deep(.ant-table-container),
+    .adaptive-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .adaptive-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
         overflow-y: auto !important;
+    }
+
+    .adaptive-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .adaptive-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

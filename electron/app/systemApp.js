@@ -4,6 +4,7 @@ const Store = require('electron-store');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const { DEFAULT_LOG_SETTINGS, DEFAULT_TOOLS_SETTINGS, DEFAULT_UPDATE_SETTINGS } = require('../const/toolsConst');
+const { DEFAULT_API_SETTINGS } = require('../const/apiConst');
 const fs = require('fs');
 const path = require('path');
 const { getIconPath } = require('../utils/iconUtils');
@@ -19,6 +20,8 @@ const TftpApp = require('./tftpApp');
 const AppUpdater = require('./updater');
 const NativeApp = require('./nativeApp');
 const FtpConst = require('../const/ftpConst');
+const ExternalApiServer = require('./externalApiServer');
+const createBmpApiRoutes = require('./bmpApiRoutes');
 /**
  * 用于系统菜单处理
  */
@@ -32,6 +35,7 @@ class SystemApp {
         this.generalSettingsFileKey = 'GeneralSettings';
         this.toolsSettingsFileKey = 'ToolsSettings';
         this.ftpSettingsFileKey = 'FtpSettings';
+        this.apiSettingsFileKey = 'ApiSettings';
         this.updateSettingsFileKey = 'UpdateSettings';
         this.deploymentConfigFileKey = 'DeploymentConfig';
         this.appVersionFileKey = 'appVersion';
@@ -60,6 +64,22 @@ class SystemApp {
         this.updaterApp = new AppUpdater(ipc, win);
         this.nativeApp = new NativeApp(ipc);
         this.toolsApp = new ToolsApp(ipc, this.programStore);
+        this.externalApiServer = new ExternalApiServer();
+        this.externalApiServer.setRoutes([
+            {
+                method: 'GET',
+                path: '/api/v1/status',
+                handler: async () =>
+                    successResponse(
+                        {
+                            ...this.externalApiServer.getStatus(),
+                            modules: ['bmp']
+                        },
+                        'API服务状态获取成功'
+                    )
+            },
+            ...createBmpApiRoutes(this.bmpApp)
+        ]);
     }
 
     // 添加版本兼容性检查方法
@@ -175,6 +195,9 @@ class SystemApp {
         ipc.handle('common:getToolsSettings', () => this.handleGetToolsSettings());
         ipc.handle('common:saveFtpSettings', (event, settings) => this.handleSaveFtpSettings(settings));
         ipc.handle('common:getFtpSettings', () => this.handleGetFtpSettings());
+        ipc.handle('common:saveApiSettings', (event, settings) => this.handleSaveApiSettings(settings));
+        ipc.handle('common:getApiSettings', () => this.handleGetApiSettings());
+        ipc.handle('common:getApiServerStatus', () => this.handleGetApiServerStatus());
         ipc.handle('common:saveUpdateSettings', (event, settings) => this.handleSaveUpdateSettings(settings));
         ipc.handle('common:getUpdateSettings', () => this.handleGetUpdateSettings());
         ipc.handle('common:selectDirectory', () => this.handleSelectDirectory());
@@ -367,6 +390,65 @@ class SystemApp {
         }
     }
 
+    normalizeApiSettings(settings = {}) {
+        const enabled = Boolean(settings.enabled);
+        const port = Number(settings.port ?? DEFAULT_API_SETTINGS.port);
+        const maxPageSize = Number(settings.maxPageSize ?? DEFAULT_API_SETTINGS.maxPageSize);
+
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+            throw new Error('API端口必须是1到65535之间的整数');
+        }
+        if (!Number.isInteger(maxPageSize) || maxPageSize < 1 || maxPageSize > 10000) {
+            throw new Error('分页最大条数必须是1到10000之间的整数');
+        }
+
+        return {
+            enabled,
+            host: DEFAULT_API_SETTINGS.host,
+            port,
+            maxPageSize
+        };
+    }
+
+    async applyApiSettings(settings) {
+        await this.externalApiServer.updateSettings(settings);
+    }
+
+    async handleSaveApiSettings(settings) {
+        try {
+            const normalizedSettings = this.normalizeApiSettings(settings);
+            await this.applyApiSettings(normalizedSettings);
+            this.store.set(this.apiSettingsFileKey, normalizedSettings);
+            return successResponse(this.externalApiServer.getStatus(), 'API设置保存成功');
+        } catch (error) {
+            logger.error('Error saving API settings:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    handleGetApiSettings() {
+        try {
+            const settings = this.store.get(this.apiSettingsFileKey);
+            const normalizedSettings = this.normalizeApiSettings({
+                ...DEFAULT_API_SETTINGS,
+                ...(settings || {})
+            });
+            return successResponse(normalizedSettings, 'API设置加载成功');
+        } catch (error) {
+            logger.error('Error getting API settings:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    handleGetApiServerStatus() {
+        try {
+            return successResponse(this.externalApiServer.getStatus(), 'API服务状态获取成功');
+        } catch (error) {
+            logger.error('Error getting API server status:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
     handleOpenDeveloperOptions() {
         this.win.webContents.openDevTools();
     }
@@ -431,7 +513,7 @@ class SystemApp {
         return null;
     }
 
-    loadSettings() {
+    async loadSettings() {
         this.purgeStoredLogLevel();
 
         // 日志级别不再持久化，启动时固定关闭。设置页保存后仅当前运行期间生效。
@@ -469,6 +551,18 @@ class SystemApp {
         }
         this.updaterApp.updateSettings(updateSetting);
 
+        // 加载外部API设置并应用
+        try {
+            const apiSettingsFromStore = this.store.get(this.apiSettingsFileKey);
+            const apiSettings = this.normalizeApiSettings({
+                ...DEFAULT_API_SETTINGS,
+                ...(apiSettingsFromStore || {})
+            });
+            await this.applyApiSettings(apiSettings);
+        } catch (error) {
+            logger.error(`Error applying API settings: ${error.message}`);
+        }
+
         // 加载部署配置
         const deploymentConfig = this.store.get(this.deploymentConfigFileKey);
         if (deploymentConfig) {
@@ -485,6 +579,7 @@ class SystemApp {
         const isSnmpRunning = this.snmpApp.getSnmpRunning();
         const isNtpRunning = this.ntpApp.getNtpRunning();
         const isTftpRunning = this.tftpApp.getTftpRunning();
+        const isApiRunning = this.externalApiServer.getRunning();
 
         if (
             isBgpRunning ||
@@ -493,7 +588,8 @@ class SystemApp {
             isFtpRunning ||
             isSnmpRunning ||
             isNtpRunning ||
-            isTftpRunning
+            isTftpRunning ||
+            isApiRunning
         ) {
             const { response } = await dialog.showMessageBox(this.win, {
                 type: 'warning',
@@ -527,6 +623,9 @@ class SystemApp {
                 }
                 if (isTftpRunning) {
                     await this.tftpApp.handleStopTftp();
+                }
+                if (isApiRunning) {
+                    await this.externalApiServer.stop();
                 }
 
                 return true;

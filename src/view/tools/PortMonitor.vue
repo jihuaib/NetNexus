@@ -1,7 +1,7 @@
 <template>
-    <div class="mt-container">
+    <div class="mt-container port-monitor-page">
         <!-- 配置面板 -->
-        <a-card title="端口监听配置">
+        <a-card title="端口监听配置" class="port-config-card">
             <a-form :label-col="labelCol" :wrapper-col="wrapperCol">
                 <a-form-item label="刷新间隔">
                     <a-space>
@@ -29,7 +29,7 @@
         </a-card>
 
         <!-- 端口列表 -->
-        <a-card title="端口连接列表" class="mt-margin-top-10">
+        <a-card title="端口连接列表" class="port-list-card">
             <template #extra>
                 <a-space>
                     <a-input-search
@@ -45,7 +45,7 @@
             <a-table
                 :columns="columns"
                 :data-source="filteredPorts"
-                :scroll="{ y: 400 }"
+                :scroll="{ y: '100%' }"
                 :pagination="{
                     pageSize: 20,
                     showSizeChanger: false,
@@ -55,6 +55,7 @@
                 size="small"
                 row-key="key"
                 :loading="isLoading"
+                class="port-table"
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'protocol'">
@@ -340,8 +341,85 @@
 </script>
 
 <style scoped>
-    :deep(.ant-table-body) {
-        height: 380px !important;
+    .port-monitor-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: hidden;
+    }
+
+    .port-config-card {
+        flex: 0 0 auto;
+    }
+
+    .port-list-card {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .port-list-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .port-table,
+    .port-table :deep(.ant-spin-nested-loading),
+    .port-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .port-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .port-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .port-table :deep(.ant-table-container),
+    .port-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .port-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .port-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
         overflow-y: auto !important;
+    }
+
+    .port-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .port-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

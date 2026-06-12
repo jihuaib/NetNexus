@@ -10,6 +10,15 @@ function normalizeRouteCount(routeCnt) {
     return Math.floor(count);
 }
 
+function normalizeRouteStep(routeStep) {
+    const step = Number(routeStep);
+    if (!Number.isFinite(step) || step <= 0) {
+        return 1;
+    }
+
+    return Math.max(1, Math.floor(step));
+}
+
 /**
  * Iterate generated IP networks without materializing the full list.
  * @param {number} routeType - IP_TYPE.IPV4 or IP_TYPE.IPV6
@@ -17,22 +26,24 @@ function normalizeRouteCount(routeCnt) {
  * @param {number} routeMask - Network mask
  * @param {number} routeCnt - Number of routes to generate
  * @param {Function} callback - Called with ({ ip, mask }, index)
+ * @param {number} routeStep - Prefix step multiplier
  * @returns {number} Generated route count
  */
-function forEachGeneratedRouteIp(routeType, routeIp, routeMask, routeCnt, callback) {
+function forEachGeneratedRouteIp(routeType, routeIp, routeMask, routeCnt, callback, routeStep = 1) {
     const count = normalizeRouteCount(routeCnt);
     if (count === 0 || typeof callback !== 'function') {
         return 0;
     }
 
     let generatedCount = 0;
+    const stepMultiplier = normalizeRouteStep(routeStep);
 
     if (routeType === BgpConst.IP_TYPE.IPV4) {
         const baseAddress = ipaddr.parse(routeIp);
         const baseBytes = baseAddress.toByteArray();
         let baseInt = (baseBytes[0] << 24) | (baseBytes[1] << 16) | (baseBytes[2] << 8) | baseBytes[3];
 
-        const step = routeMask === 32 ? 1 : Math.pow(2, 32 - routeMask);
+        const step = (routeMask === 32 ? 1 : Math.pow(2, 32 - routeMask)) * stepMultiplier;
 
         for (let i = 0; i < count; i++) {
             const currentInt = baseInt + i * step;
@@ -56,9 +67,10 @@ function forEachGeneratedRouteIp(routeType, routeIp, routeMask, routeCnt, callba
         }
 
         const step = routeMask === 128 ? 1n : 1n << BigInt(128 - routeMask);
+        const effectiveStep = step * BigInt(stepMultiplier);
 
         for (let i = 0n; i < BigInt(count); i++) {
-            const currentBigInt = baseBigInt + i * step;
+            const currentBigInt = baseBigInt + i * effectiveStep;
             const bytes = [];
             for (let j = 15; j >= 0; j--) {
                 bytes[j] = Number((currentBigInt >> BigInt((15 - j) * 8)) & 0xffn);

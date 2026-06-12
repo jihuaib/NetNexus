@@ -1,7 +1,7 @@
 <template>
-    <div class="mt-container">
-        <a-card title="IPv4-UNC路由配置">
-            <a-form :model="ipv4Data" :label-col="labelCol" :wrapper-col="wrapperCol">
+    <div class="mt-container bgp-route-page">
+        <a-card title="IPv4-UNC路由配置" class="bgp-route-card">
+            <a-form :model="ipv4Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <a-row>
                     <a-col :span="8">
                         <a-form-item label="Prefix" name="prefix">
@@ -76,27 +76,25 @@
                         :pagination="pagination"
                         size="small"
                         :row-key="record => `${record.ip}-${record.mask}`"
-                        :scroll="{ y: 240 }"
+                        :scroll="{ y: '100%' }"
+                        class="bgp-route-table"
                         @change="handleTableChange"
                     >
                         <template #bodyCell="{ column, record }">
                             <template v-if="column.key === 'action'">
-                                <a-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
-                                    <template #icon><DeleteOutlined /></template>
-                                    删除
-                                </a-button>
+                                <a-space>
+                                    <a-button size="small" @click="showRouteDetail(record)">
+                                        <template #icon><FileSearchOutlined /></template>
+                                        详情
+                                    </a-button>
+                                    <a-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
+                                        <template #icon><DeleteOutlined /></template>
+                                        删除
+                                    </a-button>
+                                </a-space>
                             </template>
                             <template v-else-if="column.key === 'ip'">
                                 <div>{{ record.ip }}/{{ record.mask }}</div>
-                            </template>
-                            <template v-else-if="column.key === 'communities'">
-                                <div>
-                                    {{
-                                        Array.isArray(record.communities)
-                                            ? record.communities.join(', ')
-                                            : record.communities
-                                    }}
-                                </div>
                             </template>
                         </template>
                     </a-table>
@@ -115,6 +113,8 @@
             :address-family="BGP_ADDR_FAMILY.IPV4_UNC"
             @imported="refreshRoutes"
         />
+
+        <BgpRouteDetailDrawer v-model:open="routeDetailVisible" :loading="routeDetailLoading" :route="routeDetail" />
     </div>
 </template>
 
@@ -122,8 +122,9 @@
     import { onMounted, ref, computed, onActivated, nextTick } from 'vue';
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import RouteViewsImportModal from '../../components/RouteViewsImportModal.vue';
+    import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
     import { message, Modal } from 'ant-design-vue';
-    import { SettingOutlined, UnorderedListOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+    import { SettingOutlined, UnorderedListOutlined, DeleteOutlined, FileSearchOutlined } from '@ant-design/icons-vue';
     import { BGP_ADDR_FAMILY, DEFAULT_VALUES } from '../../const/bgpConst';
     import { FormValidator, createBgpIpv4RouteConfigValidationRules } from '../../utils/validationCommon';
 
@@ -177,6 +178,9 @@
     };
 
     const routeViewsImportVisible = ref(false);
+    const routeDetailVisible = ref(false);
+    const routeDetailLoading = ref(false);
+    const routeDetail = ref(null);
 
     const showRouteViewsImport = () => {
         routeViewsImportVisible.value = true;
@@ -190,48 +194,23 @@
             width: 140
         },
         {
-            title: 'origin',
-            dataIndex: 'origin',
-            key: 'origin',
-            width: 50
+            title: 'RT',
+            dataIndex: 'rt',
+            key: 'rt',
+            width: 150,
+            ellipsis: true
         },
         {
             title: 'AS 路径',
             dataIndex: 'asPath',
             key: 'asPath',
-            width: 150,
-            ellipsis: true
-        },
-        {
-            title: '下一跳',
-            dataIndex: 'nextHop',
-            key: 'nextHop',
-            width: 130
-        },
-        {
-            title: 'MED',
-            dataIndex: 'med',
-            key: 'med',
-            width: 80
-        },
-        {
-            title: 'communities',
-            dataIndex: 'communities',
-            key: 'communities',
-            width: 150,
-            ellipsis: true
-        },
-        {
-            title: 'localPref',
-            dataIndex: 'localPref',
-            key: 'localPref',
-            width: 100,
+            width: 180,
             ellipsis: true
         },
         {
             title: '操作',
             key: 'action',
-            width: 100,
+            width: 150,
             align: 'center'
         }
     ];
@@ -318,6 +297,30 @@
         }
     };
 
+    const showRouteDetail = async route => {
+        routeDetailVisible.value = true;
+        routeDetailLoading.value = true;
+        routeDetail.value = null;
+
+        try {
+            const result = await window.bgpApi.getRouteDetail(BGP_ADDR_FAMILY.IPV4_UNC, {
+                ip: route.ip,
+                mask: route.mask
+            });
+            if (result.status === 'success') {
+                routeDetail.value = result.data;
+            } else {
+                routeDetailVisible.value = false;
+                message.error(`路由详情查询失败: ${result.msg}`);
+            }
+        } catch (e) {
+            routeDetailVisible.value = false;
+            message.error(`路由详情查询失败: ${e.message}`);
+        } finally {
+            routeDetailLoading.value = false;
+        }
+    };
+
     const deleteSingleRoute = async route => {
         try {
             const config = {
@@ -375,13 +378,52 @@
 </script>
 
 <style scoped>
+    .bgp-route-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .bgp-route-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .bgp-route-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bgp-route-form {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bgp-route-form :deep(.ant-form-item) {
+        flex: 0 0 auto;
+    }
+
     .route-list-section {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
         margin-top: 24px;
         border-top: 1px solid #f0f0f0;
         padding-top: 16px;
+        overflow: hidden;
     }
 
     .route-list-header {
+        flex: 0 0 auto;
         margin-bottom: 16px;
         display: flex;
         align-items: center;
@@ -394,8 +436,56 @@
         margin-right: 8px;
     }
 
-    /* 固定表格体高度，防止分页栏跳动 */
-    :deep(.ant-table-body) {
-        min-height: 300px;
+    .bgp-route-table,
+    .bgp-route-table :deep(.ant-spin-nested-loading),
+    .bgp-route-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .bgp-route-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bgp-route-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bgp-route-table :deep(.ant-table-container),
+    .bgp-route-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bgp-route-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .bgp-route-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+    }
+
+    .bgp-route-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .bgp-route-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

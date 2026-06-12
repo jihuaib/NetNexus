@@ -1,6 +1,8 @@
 const { app } = require('electron');
 const path = require('path');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const WorkerWithPromise = require('../worker/workerWithPromise');
@@ -13,6 +15,7 @@ class ToolsApp {
         this.stringGeneratorConfigFileKey = 'string-generator';
         this.packetParserConfigFileKey = 'packet-parser';
         this.tcpAoMacStateKey = 'tcp-ao-mac';
+        this.httpApiTesterConfigFileKey = 'http-api-tester';
         this.registerHandlers(ipc);
         this.store = store;
 
@@ -40,6 +43,365 @@ class ToolsApp {
         ipc.handle('tools:calculateTcpAoMac', async (event, data) => this.handleCalculateTcpAoMac(event, data));
         ipc.handle('tools:saveTcpAoMacState', async (_event, state) => this.handleSaveTcpAoMacState(state));
         ipc.handle('tools:getTcpAoMacState', async () => this.handleGetTcpAoMacState());
+
+        // HTTP API 测试
+        ipc.handle('tools:sendHttpApiRequest', async (_event, requestConfig) =>
+            this.handleSendHttpApiRequest(requestConfig)
+        );
+        ipc.handle('tools:getHttpApiConnections', async () => this.handleGetHttpApiConnections());
+        ipc.handle('tools:saveHttpApiConnections', async (_event, connections) =>
+            this.handleSaveHttpApiConnections(connections)
+        );
+        ipc.handle('tools:resetHttpApiConnections', async () => this.handleResetHttpApiConnections());
+    }
+
+    cloneJson(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+
+    makeHttpApiConnectionId(prefix = 'http-api') {
+        if (typeof crypto.randomUUID === 'function') {
+            return `${prefix}-${crypto.randomUUID()}`;
+        }
+        return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    jsonBody(value) {
+        return JSON.stringify(value, null, 4);
+    }
+
+    createDefaultHttpApiConnections() {
+        const baseUrl = 'http://127.0.0.1:18080';
+        const client = {
+            localIp: '127.0.0.1',
+            localPort: 11019,
+            remoteIp: '127.0.0.1',
+            remotePort: 50000
+        };
+        const session = {
+            sessionType: 0,
+            sessionRd: '0:0',
+            sessionIp: '192.0.2.1',
+            sessionAs: 65001
+        };
+        const instance = {
+            instanceType: 3,
+            instanceRd: '0:0',
+            addrFamilyType: 1
+        };
+        const routeQuery = {
+            client,
+            session,
+            af: 1,
+            ribType: 2,
+            page: 1,
+            pageSize: 20,
+            routeState: 'all',
+            prefixFilter: ''
+        };
+        const instanceRouteQuery = {
+            client,
+            instance,
+            page: 1,
+            pageSize: 20,
+            routeState: 'all',
+            prefixFilter: ''
+        };
+        const routeKey = '请替换为路由列表接口返回的routeKey';
+        const jsonHeaders = [
+            { enabled: true, key: 'Accept', value: 'application/json' },
+            { enabled: true, key: 'Content-Type', value: 'application/json' }
+        ];
+        const getHeaders = [{ enabled: true, key: 'Accept', value: 'application/json' }];
+        const create = ({ id, name, method, path: apiPath, headers, body = '' }) => ({
+            id,
+            name,
+            method,
+            url: `${baseUrl}${apiPath}`,
+            headers,
+            body,
+            timeout: 15000
+        });
+
+        return [
+            create({
+                id: 'api-status',
+                name: 'API服务状态',
+                method: 'GET',
+                path: '/api/v1/status',
+                headers: getHeaders
+            }),
+            create({
+                id: 'bmp-status',
+                name: 'BMP状态',
+                method: 'GET',
+                path: '/api/v1/bmp/status',
+                headers: getHeaders
+            }),
+            create({
+                id: 'bmp-clients',
+                name: 'BMP客户端列表',
+                method: 'GET',
+                path: '/api/v1/bmp/clients',
+                headers: getHeaders
+            }),
+            create({
+                id: 'bmp-sessions',
+                name: 'BMP会话列表',
+                method: 'POST',
+                path: '/api/v1/bmp/sessions',
+                headers: jsonHeaders,
+                body: this.jsonBody({ client })
+            }),
+            create({
+                id: 'bmp-instances',
+                name: 'BMP实例列表',
+                method: 'POST',
+                path: '/api/v1/bmp/instances',
+                headers: jsonHeaders,
+                body: this.jsonBody({ client })
+            }),
+            create({
+                id: 'bmp-routes',
+                name: 'BMP路由列表',
+                method: 'POST',
+                path: '/api/v1/bmp/routes',
+                headers: jsonHeaders,
+                body: this.jsonBody(routeQuery)
+            }),
+            create({
+                id: 'bmp-route-detail',
+                name: 'BMP路由详情',
+                method: 'POST',
+                path: '/api/v1/bmp/routes/detail',
+                headers: jsonHeaders,
+                body: this.jsonBody({
+                    ...routeQuery,
+                    routeKey
+                })
+            }),
+            create({
+                id: 'bmp-instance-routes',
+                name: 'BMP实例路由列表',
+                method: 'POST',
+                path: '/api/v1/bmp/instances/routes',
+                headers: jsonHeaders,
+                body: this.jsonBody(instanceRouteQuery)
+            }),
+            create({
+                id: 'bmp-instance-route-detail',
+                name: 'BMP实例路由详情',
+                method: 'POST',
+                path: '/api/v1/bmp/instances/routes/detail',
+                headers: jsonHeaders,
+                body: this.jsonBody({
+                    client,
+                    instance,
+                    routeKey
+                })
+            }),
+            create({
+                id: 'bmp-statistics-session',
+                name: 'BMP会话统计',
+                method: 'POST',
+                path: '/api/v1/bmp/statistics/session',
+                headers: jsonHeaders,
+                body: this.jsonBody({ client })
+            }),
+            create({
+                id: 'bmp-statistics-instance',
+                name: 'BMP实例统计',
+                method: 'POST',
+                path: '/api/v1/bmp/statistics/instance',
+                headers: jsonHeaders,
+                body: this.jsonBody({ client })
+            })
+        ];
+    }
+
+    normalizeHeaderRows(headers) {
+        if (!Array.isArray(headers)) {
+            return [];
+        }
+
+        return headers
+            .slice(0, 100)
+            .map(header => ({
+                enabled: header.enabled !== false,
+                key: String(header.key || '').trim().slice(0, 256),
+                value: String(header.value || '').slice(0, 4096)
+            }))
+            .filter(header => header.key || header.value);
+    }
+
+    hasControlChars(value) {
+        const text = String(value || '');
+        for (let i = 0; i < text.length; i++) {
+            const code = text.charCodeAt(i);
+            if (code <= 31 || code === 127) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    normalizeHttpApiConnections(connections) {
+        if (!Array.isArray(connections)) {
+            throw new Error('API连接信息必须是数组');
+        }
+        if (connections.length > 100) {
+            throw new Error('API连接信息最多保存100条');
+        }
+
+        const methods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
+        return connections.map((connection, index) => {
+            const method = String(connection.method || 'GET').toUpperCase();
+            const body =
+                typeof connection.body === 'string'
+                    ? connection.body
+                    : connection.body === undefined || connection.body === null
+                      ? ''
+                      : this.jsonBody(connection.body);
+            const timeout = Number(connection.timeout);
+
+            return {
+                id: String(connection.id || this.makeHttpApiConnectionId()).slice(0, 128),
+                name: String(connection.name || `API ${index + 1}`).trim().slice(0, 80),
+                method: methods.has(method) ? method : 'GET',
+                url: String(connection.url || '').trim().slice(0, 2048),
+                headers: this.normalizeHeaderRows(connection.headers),
+                body: body.slice(0, 1024 * 1024),
+                timeout: Number.isInteger(timeout) && timeout >= 1000 && timeout <= 600000 ? timeout : 15000
+            };
+        });
+    }
+
+    buildRequestHeaders(headers) {
+        const requestHeaders = {};
+        for (const header of this.normalizeHeaderRows(headers)) {
+            if (!header.enabled || !header.key) {
+                continue;
+            }
+            if (this.hasControlChars(header.key) || this.hasControlChars(header.value)) {
+                throw new Error(`请求头包含非法控制字符: ${header.key}`);
+            }
+            requestHeaders[header.key] = header.value;
+        }
+        return requestHeaders;
+    }
+
+    async handleGetHttpApiConnections() {
+        try {
+            const savedConnections = this.store.get(this.httpApiTesterConfigFileKey);
+            const connections = Array.isArray(savedConnections)
+                ? this.normalizeHttpApiConnections(savedConnections)
+                : this.createDefaultHttpApiConnections();
+            return successResponse(this.cloneJson(connections), '获取HTTP API连接信息成功');
+        } catch (error) {
+            logger.error('获取HTTP API连接信息失败:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleSaveHttpApiConnections(connections) {
+        try {
+            const normalizedConnections = this.normalizeHttpApiConnections(connections);
+            this.store.set(this.httpApiTesterConfigFileKey, normalizedConnections);
+            return successResponse(this.cloneJson(normalizedConnections), '保存HTTP API连接信息成功');
+        } catch (error) {
+            logger.error('保存HTTP API连接信息失败:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleResetHttpApiConnections() {
+        try {
+            const defaults = this.createDefaultHttpApiConnections();
+            this.store.set(this.httpApiTesterConfigFileKey, defaults);
+            return successResponse(this.cloneJson(defaults), '重置HTTP API连接信息成功');
+        } catch (error) {
+            logger.error('重置HTTP API连接信息失败:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleSendHttpApiRequest(requestConfig) {
+        try {
+            const method = String(requestConfig.method || 'GET').toUpperCase();
+            const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
+            if (!allowedMethods.has(method)) {
+                throw new Error(`不支持的HTTP方法: ${method}`);
+            }
+
+            const targetUrl = new URL(String(requestConfig.url || '').trim());
+            if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+                throw new Error('仅支持HTTP和HTTPS协议');
+            }
+
+            const timeout = Number(requestConfig.timeout);
+            const timeoutMs = Number.isInteger(timeout) && timeout >= 1000 && timeout <= 600000 ? timeout : 15000;
+            const requestBody = method === 'GET' || method === 'HEAD' ? '' : String(requestConfig.body || '');
+            const headers = this.buildRequestHeaders(requestConfig.headers);
+            if (requestBody && !Object.keys(headers).some(key => key.toLowerCase() === 'content-length')) {
+                headers['Content-Length'] = Buffer.byteLength(requestBody);
+            }
+
+            const startedAt = Date.now();
+            const client = targetUrl.protocol === 'https:' ? https : http;
+            const requestOptions = {
+                protocol: targetUrl.protocol,
+                hostname: targetUrl.hostname,
+                port: targetUrl.port,
+                method,
+                path: `${targetUrl.pathname}${targetUrl.search}`,
+                headers
+            };
+
+            if (targetUrl.protocol === 'https:') {
+                requestOptions.rejectUnauthorized = requestConfig.rejectUnauthorized !== false;
+            }
+
+            const result = await new Promise((resolve, reject) => {
+                const req = client.request(requestOptions, res => {
+                    const chunks = [];
+                    let sizeBytes = 0;
+
+                    res.on('data', chunk => {
+                        chunks.push(chunk);
+                        sizeBytes += chunk.length;
+                    });
+
+                    res.on('end', () => {
+                        const responseBuffer = Buffer.concat(chunks);
+                        resolve({
+                            statusCode: res.statusCode,
+                            statusMessage: res.statusMessage,
+                            headers: res.headers,
+                            body: responseBuffer.toString('utf8'),
+                            durationMs: Date.now() - startedAt,
+                            sizeBytes,
+                            method,
+                            url: targetUrl.toString()
+                        });
+                    });
+                });
+
+                req.on('error', reject);
+                req.setTimeout(timeoutMs, () => {
+                    req.destroy(new Error(`请求超时（${timeoutMs}ms）`));
+                });
+
+                if (requestBody) {
+                    req.write(requestBody);
+                }
+                req.end();
+            });
+
+            return successResponse(result, 'HTTP API请求完成');
+        } catch (error) {
+            logger.error('HTTP API请求失败:', error.message);
+            return errorResponse(error.message);
+        }
     }
 
     async handleGetGenerateStringHistory() {

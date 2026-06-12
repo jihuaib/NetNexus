@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container">
+    <div class="mt-container tcpao-page">
         <a-card title="TCP-AO MAC 计算器" class="tcpao-card">
             <a-form :model="formState" layout="vertical" class="tcpao-form" @finish="handleCalculate">
                 <div class="tcpao-layout">
@@ -61,17 +61,23 @@
                             </div>
                         </div>
 
-                        <div class="panel-block panel-block-grow">
+                        <div class="panel-block panel-block-grow packet-panel">
                             <div class="panel-title">报文输入</div>
-                            <a-form-item label="IP 报文" name="ipPacket" class="compact-item">
-                                <a-tooltip :title="validationErrors.ipPacket" :open="!!validationErrors.ipPacket">
+                            <a-form-item
+                                label="IP 报文"
+                                name="ipPacket"
+                                class="compact-item packet-item"
+                                :validate-status="validationErrors.ipPacket ? 'error' : ''"
+                                :help="validationErrors.ipPacket || ''"
+                            >
+                                <div class="packet-textarea-wrap">
                                     <ScrollTextarea
                                         v-model:model-value="formState.ipPacket"
-                                        :height="184"
+                                        height="100%"
                                         placeholder="完整 IPv4 / IPv6 报文（hex），自动识别版本"
                                         :status="validationErrors.ipPacket ? 'error' : ''"
                                     />
-                                </a-tooltip>
+                                </div>
                             </a-form-item>
                         </div>
                     </div>
@@ -102,8 +108,11 @@
                                 <span>KDF 与消息构造</span>
                                 <a-tooltip v-if="isPlainAlgo && !skipKdf">
                                     <template #title>
-                                        非 H 算法固定使用 <code>hash(kdfInput ‖ key)</code> 派生 Traffic Key，MAC
-                                        固定使用 <code>hash(msg ‖ key)</code>。
+                                        非 H 算法固定使用
+                                        <code>hash(kdfInput ‖ key)</code>
+                                        派生 Traffic Key，MAC 固定使用
+                                        <code>hash(msg ‖ key)</code>
+                                        。
                                     </template>
                                     <InfoCircleOutlined class="mode-info-icon" />
                                 </a-tooltip>
@@ -316,8 +325,16 @@
 </script>
 
 <style scoped>
+    .tcpao-page {
+        min-height: 0;
+        overflow: hidden;
+    }
+
     .tcpao-card {
-        height: 100%;
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 70px);
+        overflow: hidden;
     }
 
     .tcpao-card :deep(.ant-card-head) {
@@ -329,7 +346,21 @@
     }
 
     .tcpao-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
         padding: 8px !important;
+    }
+
+    .tcpao-form {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
     }
 
     .tcpao-form :deep(.ant-form-item) {
@@ -337,9 +368,12 @@
     }
 
     .tcpao-layout {
+        flex: 1 1 0;
         display: grid;
         grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.9fr);
         gap: 12px;
+        min-height: 0;
+        overflow: hidden;
     }
 
     .tcpao-main,
@@ -348,6 +382,16 @@
         flex-direction: column;
         gap: 12px;
         min-width: 0;
+        min-height: 0;
+    }
+
+    .tcpao-main {
+        overflow: hidden;
+    }
+
+    .tcpao-side {
+        overflow: auto;
+        padding-right: 4px;
     }
 
     .panel-block {
@@ -358,7 +402,58 @@
     }
 
     .panel-block-grow {
-        flex: 1;
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .packet-panel {
+        overflow: hidden;
+    }
+
+    .packet-item {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .packet-item :deep(.ant-form-item-row),
+    .packet-item :deep(.ant-form-item-control),
+    .packet-item :deep(.ant-form-item-control-input),
+    .packet-item :deep(.ant-form-item-control-input-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .packet-item :deep(.ant-form-item-label) {
+        flex: 0 0 auto;
+    }
+
+    .packet-item :deep(.ant-form-item-control-input) {
+        align-items: stretch;
+    }
+
+    .packet-item :deep(.ant-form-item-explain) {
+        flex: 0 0 auto;
+    }
+
+    .packet-textarea-wrap {
+        flex: 1 1 0;
+        min-height: 0;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .packet-textarea-wrap :deep(textarea.ant-input) {
+        flex: 1 1 0;
+        min-height: 0;
+        width: 100%;
+        height: auto !important;
     }
 
     .panel-title {
@@ -463,6 +558,12 @@
     @media (max-width: 960px) {
         .tcpao-layout {
             grid-template-columns: 1fr;
+            overflow: auto;
+        }
+
+        .tcpao-main {
+            min-height: 520px;
+            overflow: visible;
         }
 
         .algo-grid {

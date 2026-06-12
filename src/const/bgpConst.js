@@ -39,6 +39,17 @@ export const BGP_ADDR_FAMILY = {
     LINK_STATE_VPN: 15
 };
 
+export const BGP_QP_ROUTE_GROWTH_MODE = {
+    IP: 'ip',
+    DQPN: 'dqpn',
+    IP_DQPN: 'ip_dqpn'
+};
+
+export const BGP_QP_BSID_MODE = {
+    FIXED: 'fixed',
+    CONTINUOUS: 'continuous'
+};
+
 // IP Type Values, 需要和后台定义保持一致, 后台会
 // 直接使用这个值处理
 export const IP_TYPE = {

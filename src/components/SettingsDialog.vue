@@ -3,7 +3,8 @@
         v-model:open="isOpen"
         title="设置"
         :footer="null"
-        class="modal-xlarge"
+        class="modal-xlarge settings-dialog-modal"
+        wrap-class-name="settings-dialog-wrap"
         :mask-closable="false"
         @cancel="onClose"
     >
@@ -22,6 +23,10 @@
                     <a-menu-item key="ftp">
                         <template #icon><DownloadOutlined /></template>
                         <span>FTP服务器</span>
+                    </a-menu-item>
+                    <a-menu-item key="api">
+                        <template #icon><ApiOutlined /></template>
+                        <span>外部API</span>
                     </a-menu-item>
                     <a-menu-item key="server-deployment">
                         <template #icon><CloudServerOutlined /></template>
@@ -51,13 +56,15 @@
         CodeOutlined,
         CloudDownloadOutlined,
         DownloadOutlined,
-        CloudServerOutlined
+        CloudServerOutlined,
+        ApiOutlined
     } from '@ant-design/icons-vue';
     import GeneralSettings from '../view/settings/GeneralSettings.vue';
     import ToolsSettings from '../view/settings/ToolsSettings.vue';
     import UpdateSettings from '../view/settings/UpdateSettings.vue';
     import FtpSettings from '../view/settings/FtpSettings.vue';
     import ServerDeployment from '../view/settings/ServerDeployment.vue';
+    import ApiSettings from '../view/settings/ApiSettings.vue';
 
     const props = defineProps({
         open: {
@@ -98,6 +105,8 @@
                 return ToolsSettings;
             case 'ftp':
                 return FtpSettings;
+            case 'api':
+                return ApiSettings;
             case 'server-deployment':
                 return ServerDeployment;
             case 'update':
@@ -124,20 +133,45 @@
 </script>
 
 <style scoped>
+    :global(.settings-dialog-wrap) {
+        overflow: hidden !important;
+    }
+
+    :global(.settings-dialog-modal) {
+        top: 8px !important;
+        max-height: calc(100vh - 16px) !important;
+        padding-bottom: 0 !important;
+    }
+
+    :global(.settings-dialog-modal .ant-modal-content) {
+        height: min(760px, calc(100vh - 32px)) !important;
+        max-height: calc(100vh - 32px) !important;
+    }
+
+    :global(.settings-dialog-modal .ant-modal-body) {
+        flex: 1 !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        overflow: hidden !important;
+    }
+
     .settings-layout {
         display: flex;
-        height: 450px;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
         overflow: hidden;
     }
 
     .settings-sidebar {
-        width: 140px;
+        flex: 0 0 140px;
+        min-height: 0;
         border-right: 1px solid #f0f0f0;
-        height: 100%;
+        overflow: auto;
     }
 
     .settings-menu {
-        height: 100%;
+        min-height: 100%;
         border-right: none;
         font-size: 13px;
     }
@@ -148,8 +182,41 @@
 
     .settings-content {
         flex: 1;
+        min-width: 0;
+        min-height: 0;
         padding-left: 16px;
-        overflow: auto;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
         font-size: 0.9rem;
+    }
+
+    .settings-content :deep(.general-settings),
+    .settings-content :deep(.tools-settings),
+    .settings-content :deep(.ftp-settings),
+    .settings-content :deep(.api-settings),
+    .settings-content :deep(.server-deployment-container),
+    .settings-content :deep(.update-settings) {
+        flex: 1 1 0;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .settings-content :deep(.settings-card) {
+        flex: 1 1 0;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .settings-content :deep(.settings-card > .ant-card-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        overflow: auto;
     }
 </style>

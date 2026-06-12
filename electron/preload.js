@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('commonApi', {
     getToolsSettings: () => ipcRenderer.invoke('common:getToolsSettings'),
     saveFtpSettings: settings => ipcRenderer.invoke('common:saveFtpSettings', settings),
     getFtpSettings: () => ipcRenderer.invoke('common:getFtpSettings'),
+    saveApiSettings: settings => ipcRenderer.invoke('common:saveApiSettings', settings),
+    getApiSettings: () => ipcRenderer.invoke('common:getApiSettings'),
+    getApiServerStatus: () => ipcRenderer.invoke('common:getApiServerStatus'),
     selectDirectory: () => ipcRenderer.invoke('common:selectDirectory'),
     saveUpdateSettings: settings => ipcRenderer.invoke('common:saveUpdateSettings', settings),
     getUpdateSettings: () => ipcRenderer.invoke('common:getUpdateSettings'),
@@ -52,7 +55,11 @@ contextBridge.exposeInMainWorld('toolsApi', {
     clearPacketParserHistory: () => ipcRenderer.invoke('tools:clearPacketParserHistory'),
     calculateTcpAoMac: data => ipcRenderer.invoke('tools:calculateTcpAoMac', data),
     saveTcpAoMacState: state => ipcRenderer.invoke('tools:saveTcpAoMacState', state),
-    getTcpAoMacState: () => ipcRenderer.invoke('tools:getTcpAoMacState')
+    getTcpAoMacState: () => ipcRenderer.invoke('tools:getTcpAoMacState'),
+    sendHttpApiRequest: requestConfig => ipcRenderer.invoke('tools:sendHttpApiRequest', requestConfig),
+    getHttpApiConnections: () => ipcRenderer.invoke('tools:getHttpApiConnections'),
+    saveHttpApiConnections: connections => ipcRenderer.invoke('tools:saveHttpApiConnections', connections),
+    resetHttpApiConnections: () => ipcRenderer.invoke('tools:resetHttpApiConnections')
 });
 
 // bgp模块
@@ -86,6 +93,7 @@ contextBridge.exposeInMainWorld('bgpApi', {
     deleteIpv6Routes: config => ipcRenderer.invoke('bgp:deleteIpv6Routes', config),
     deleteAllRoutesByFamily: addressFamily => ipcRenderer.invoke('bgp:deleteAllRoutesByFamily', addressFamily),
     getRoutes: (addressFamily, page, pageSize) => ipcRenderer.invoke('bgp:getRoutes', addressFamily, page, pageSize),
+    getRouteDetail: (addressFamily, route) => ipcRenderer.invoke('bgp:getRouteDetail', addressFamily, route),
 
     saveIpv4QpRouteConfig: config => ipcRenderer.invoke('bgp:saveIpv4QpRouteConfig', config),
     loadIpv4QpRouteConfig: () => ipcRenderer.invoke('bgp:loadIpv4QpRouteConfig'),

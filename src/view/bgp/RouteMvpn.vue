@@ -1,7 +1,7 @@
 <template>
-    <div class="mt-container">
-        <a-card title="IPv4-MVPN路由配置">
-            <a-form :model="ipv4MvpnData" :label-col="labelCol" :wrapper-col="wrapperCol">
+    <div class="mt-container bgp-route-page">
+        <a-card title="IPv4-MVPN路由配置" class="bgp-route-card">
+            <a-form :model="ipv4MvpnData" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <a-row>
                     <a-col :span="6">
                         <a-form-item label="RD" name="rd">
@@ -165,9 +165,7 @@
                         <a-button type="primary" :loading="routesGenerating" @click="generateRoutes">
                             生成MVPN路由
                         </a-button>
-                        <a-button type="primary" danger :disabled="!hasRoutes" @click="deleteRoutes">
-                            删除MVPN路由
-                        </a-button>
+                        <a-button type="primary" danger :disabled="!hasRoutes" @click="deleteRoutes">删除所有</a-button>
                     </a-space>
                 </a-form-item>
 
@@ -180,11 +178,7 @@
 
                     <!-- 按路由类型分组显示 -->
                     <a-tabs v-model:active-key="activeMvpnTab" type="card" class="mvpn-route-tabs">
-                        <a-tab-pane
-                            v-for="group in groupedMvpnRoutes"
-                            :key="group.type"
-                            :tab="group.typeName"
-                        >
+                        <a-tab-pane v-for="group in groupedMvpnRoutes" :key="group.type" :tab="group.typeName">
                             <a-table
                                 :data-source="group.routes"
                                 :columns="getRouteColumns(group.type)"
@@ -194,15 +188,27 @@
                                     record =>
                                         `${record.rd}-${record.routeType}-${record.sourceIp || ''}-${record.groupIp || ''}-${record.originatingRouterIp || ''}`
                                 "
-                                :scroll="{ y: 300 }"
+                                :scroll="{ y: '100%' }"
+                                class="bgp-route-table"
                                 @change="handleTableChange"
                             >
                                 <template #bodyCell="{ column, record }">
                                     <template v-if="column.key === 'action'">
-                                        <a-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
-                                            <template #icon><DeleteOutlined /></template>
-                                            删除
-                                        </a-button>
+                                        <a-space>
+                                            <a-button size="small" @click="showRouteDetail(record)">
+                                                <template #icon><FileSearchOutlined /></template>
+                                                详情
+                                            </a-button>
+                                            <a-button
+                                                type="primary"
+                                                danger
+                                                size="small"
+                                                @click="deleteSingleRoute(record)"
+                                            >
+                                                <template #icon><DeleteOutlined /></template>
+                                                删除
+                                            </a-button>
+                                        </a-space>
                                     </template>
                                     <template v-else-if="column.key === 'rd'">
                                         {{ record.rd }}
@@ -229,13 +235,16 @@
                 </div>
             </a-form>
         </a-card>
+
+        <BgpRouteDetailDrawer v-model:open="routeDetailVisible" :loading="routeDetailLoading" :route="routeDetail" />
     </div>
 </template>
 
 <script setup>
     import { onMounted, ref, computed, watch, onActivated, nextTick } from 'vue';
-    import { message } from 'ant-design-vue';
-    import { UnorderedListOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+    import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
+    import { message, Modal } from 'ant-design-vue';
+    import { UnorderedListOutlined, DeleteOutlined, FileSearchOutlined } from '@ant-design/icons-vue';
     import { BGP_ADDR_FAMILY, DEFAULT_VALUES, BGP_MVPN_ROUTE_TYPE } from '../../const/bgpConst';
     import { FormValidator, createBgpMvpnRouteConfigValidationRules } from '../../utils/validationCommon';
 
@@ -311,12 +320,16 @@
     const hasRoutes = computed(() => pagination.value.total > 0);
     const activeMvpnTab = ref(null);
     const routesGenerating = ref(false);
+    const routeDetailVisible = ref(false);
+    const routeDetailLoading = ref(false);
+    const routeDetail = ref(null);
 
     const getRouteColumns = type => {
         const commonColumns = [
             { title: 'RD', key: 'rd', width: 100 },
             { title: 'RT', key: 'rt', width: 100 },
-            { title: '操作', key: 'action', width: 80, align: 'center' }
+            { title: 'AS 路径', dataIndex: 'asPath', key: 'asPath', width: 150, ellipsis: true },
+            { title: '操作', key: 'action', width: 150, align: 'center' }
         ];
 
         let specificColumns = [];
@@ -491,52 +504,58 @@
 
     const deleteRoutes = async () => {
         try {
-            const hasErrors = validator.validate(ipv4MvpnData.value);
-            if (hasErrors) {
-                message.error('请检查MVPN路由配置信息是否正确');
-                return;
-            }
+            Modal.confirm({
+                title: '确认删除',
+                content: `确定要删除所有 ${pagination.value.total} 条MVPN路由吗？此操作不可恢复。`,
+                okText: '确定',
+                cancelText: '取消',
+                okType: 'danger',
+                onOk: async () => {
+                    try {
+                        const result = await window.bgpApi.deleteAllRoutesByFamily(BGP_ADDR_FAMILY.IPV4_MVPN);
 
-            let config;
-            if (ipv4MvpnData.value.routeType === BGP_MVPN_ROUTE_TYPE.INTRA_AS_I_PMSI_AD) {
-                config = {
-                    rd: ipv4MvpnData.value.rd,
-                    routeType: ipv4MvpnData.value.routeType,
-                    originatingRouterIp: ipv4MvpnData.value.originatingRouterIp,
-                    addressFamily: BGP_ADDR_FAMILY.IPV4_MVPN,
-                    rt: ipv4MvpnData.value.rt,
-                    count: ipv4MvpnData.value.count
-                };
-            } else if (ipv4MvpnData.value.routeType === BGP_MVPN_ROUTE_TYPE.INTER_AS_I_PMSI_AD) {
-                config = {
-                    rd: ipv4MvpnData.value.rd,
-                    routeType: ipv4MvpnData.value.routeType,
-                    sourceAs: ipv4MvpnData.value.sourceAs,
-                    addressFamily: BGP_ADDR_FAMILY.IPV4_MVPN,
-                    rt: ipv4MvpnData.value.rt,
-                    count: ipv4MvpnData.value.count
-                };
-            } else {
-                config = ipv4MvpnData.value;
-            }
-
-            const saveResult = await window.bgpApi.saveIpv4MvpnRouteConfig(config);
-            if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
-                return;
-            }
-
-            const result = await window.bgpApi.deleteIpv4MvpnRoutes(config);
-
-            if (result.status === 'success') {
-                message.success(`${result.msg}`);
-                pagination.value.current = 1;
-                await refreshRoutes();
-            } else {
-                message.error(`${result.msg}`);
-            }
+                        if (result.status === 'success') {
+                            message.success(`${result.msg}`);
+                            pagination.value.current = 1;
+                            await refreshRoutes();
+                        } else {
+                            message.error(`${result.msg}`);
+                        }
+                    } catch (e) {
+                        message.error(`MVPN路由删除失败: ${e.message}`);
+                    }
+                }
+            });
         } catch (e) {
             message.error(`MVPN路由删除失败: ${e.message}`);
+        }
+    };
+
+    const showRouteDetail = async route => {
+        routeDetailVisible.value = true;
+        routeDetailLoading.value = true;
+        routeDetail.value = null;
+
+        try {
+            const result = await window.bgpApi.getRouteDetail(BGP_ADDR_FAMILY.IPV4_MVPN, {
+                routeType: route.routeType,
+                rd: route.rd,
+                sourceAs: route.sourceAs,
+                sourceIp: route.sourceIp,
+                groupIp: route.groupIp,
+                originatingRouterIp: route.originatingRouterIp
+            });
+            if (result.status === 'success') {
+                routeDetail.value = result.data;
+            } else {
+                routeDetailVisible.value = false;
+                message.error(`路由详情查询失败: ${result.msg}`);
+            }
+        } catch (e) {
+            routeDetailVisible.value = false;
+            message.error(`路由详情查询失败: ${e.message}`);
+        } finally {
+            routeDetailLoading.value = false;
         }
     };
 
@@ -568,13 +587,52 @@
 </script>
 
 <style scoped>
+    .bgp-route-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .bgp-route-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .bgp-route-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bgp-route-form {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bgp-route-form :deep(.ant-form-item) {
+        flex: 0 0 auto;
+    }
+
     .route-list-section {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
         margin-top: 24px;
         border-top: 1px solid #f0f0f0;
         padding-top: 16px;
+        overflow: hidden;
     }
 
     .route-list-header {
+        flex: 0 0 auto;
         margin-bottom: 16px;
         display: flex;
         align-items: center;
@@ -587,8 +645,80 @@
         margin-right: 8px;
     }
 
-    /* 固定表格体高度，防止分页栏跳动 */
-    :deep(.ant-table-body) {
-        min-height: 300px;
+    .mvpn-route-tabs {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .mvpn-route-tabs :deep(.ant-tabs-nav) {
+        flex: 0 0 auto;
+        margin-bottom: 8px;
+    }
+
+    .mvpn-route-tabs :deep(.ant-tabs-content-holder),
+    .mvpn-route-tabs :deep(.ant-tabs-content),
+    .mvpn-route-tabs :deep(.ant-tabs-tabpane) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bgp-route-table,
+    .bgp-route-table :deep(.ant-spin-nested-loading),
+    .bgp-route-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .bgp-route-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bgp-route-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bgp-route-table :deep(.ant-table-container),
+    .bgp-route-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bgp-route-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .bgp-route-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+    }
+
+    .bgp-route-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .bgp-route-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

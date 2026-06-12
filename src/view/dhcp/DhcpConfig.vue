@@ -1,7 +1,7 @@
 <template>
-    <div class="mt-container">
+    <div class="mt-container adaptive-config-page">
         <!-- 服务器配置 -->
-        <a-row>
+        <a-row class="adaptive-config-row">
             <a-col :span="24">
                 <a-card title="DHCP服务器配置">
                     <a-form :model="dhcpConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
@@ -102,9 +102,9 @@
         </a-row>
 
         <!-- DHCPv6 配置 -->
-        <a-row class="mt-margin-top-10">
+        <a-row class="adaptive-config-fill-row">
             <a-col :span="24">
-                <a-card title="DHCPv6配置">
+                <a-card title="DHCPv6配置" class="adaptive-config-fill-card">
                     <a-form :model="dhcp6Config" :label-col="labelCol" :wrapper-col="wrapperCol">
                         <a-row>
                             <a-col :span="6">
@@ -360,8 +360,39 @@
 </script>
 
 <style scoped>
-    :deep(.ant-table-body) {
-        height: 260px !important;
-        overflow-y: auto !important;
+    .adaptive-config-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: hidden;
+    }
+
+    .adaptive-config-row {
+        flex: 0 0 auto;
+    }
+
+    .adaptive-config-fill-row {
+        flex: 1 1 0;
+        min-height: 0;
+    }
+
+    .adaptive-config-fill-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-config-fill-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .adaptive-config-fill-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
     }
 </style>

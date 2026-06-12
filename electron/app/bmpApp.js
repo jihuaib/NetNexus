@@ -76,6 +76,93 @@ class BmpApp {
         }
     }
 
+    async sendWorkerQuery(reqType, data, notRunningData = null) {
+        if (null === this.worker) {
+            return successResponse(notRunningData, 'BMP未启动');
+        }
+
+        const result = await this.worker.sendRequest(reqType, data);
+        return successResponse(result.data, result.msg);
+    }
+
+    async queryClientList() {
+        return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST, null, []);
+    }
+
+    async queryBgpSessions(client) {
+        return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_BGP_SESSIONS, client, []);
+    }
+
+    async queryBgpStatisticsReports(client) {
+        return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_BGP_STATISTICS_REPORTS, client, []);
+    }
+
+    async queryBgpInstanceStatisticsReports(client) {
+        return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_STATISTICS_REPORTS, client, []);
+    }
+
+    async queryBgpRoutes({ client, session, af, ribType, page, pageSize, routeState, prefixFilter }) {
+        return this.sendWorkerQuery(
+            BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTES,
+            {
+                client,
+                session,
+                af,
+                ribType,
+                page,
+                pageSize,
+                routeState,
+                prefixFilter
+            },
+            []
+        );
+    }
+
+    async queryBgpRouteDetail({ client, session, af, ribType, routeKey }) {
+        return this.sendWorkerQuery(
+            BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTE_DETAIL,
+            {
+                client,
+                session,
+                af,
+                ribType,
+                routeKey
+            },
+            null
+        );
+    }
+
+    async queryBgpInstances(client) {
+        return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCES, client, []);
+    }
+
+    async queryBgpInstanceRoutes({ client, instance, page, pageSize, routeState, prefixFilter }) {
+        return this.sendWorkerQuery(
+            BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_ROUTES,
+            {
+                client,
+                instance,
+                page,
+                pageSize,
+                routeState,
+                prefixFilter
+            },
+            []
+        );
+    }
+
+    async queryBgpInstanceRouteDetail({ client, instance, routeKey }) {
+        return this.sendWorkerQuery(
+            BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_ROUTE_DETAIL,
+            {
+                client,
+                instance,
+                routeKey
+            },
+            null
+        );
+    }
+
     async handleStartBmp(event, bmpConfigData) {
         const webContents = event.sender;
         try {
@@ -207,14 +294,10 @@ class BmpApp {
     }
 
     async handleGetClientList() {
-        if (null === this.worker) {
-            return successResponse([], 'BMP未启动');
-        }
-
         try {
-            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST, null);
+            const result = await this.queryClientList();
             logger.info(`获取客户端列表成功 result: ${JSON.stringify(result)}`);
-            return successResponse(result.data, '获取客户端列表成功');
+            return result;
         } catch (error) {
             logger.error('Error getting client list:', error.message);
             return errorResponse(error.message);
@@ -222,16 +305,12 @@ class BmpApp {
     }
 
     async handleGetBgpSessions(event, client) {
-        if (null === this.worker) {
-            return successResponse([], 'BMP未启动');
-        }
-
         logger.info(`获取BGP会话列表 client: ${JSON.stringify(client)}`);
 
         try {
-            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.GET_BGP_SESSIONS, client);
+            const result = await this.queryBgpSessions(client);
             logger.info(`获取BGP会话列表成功 result: ${JSON.stringify(result)}`);
-            return successResponse(result.data, '获取BGP会话列表成功');
+            return result;
         } catch (error) {
             logger.error('Error getting bgp sessions:', error.message);
             return errorResponse(error.message);
@@ -239,13 +318,8 @@ class BmpApp {
     }
 
     async handleGetBgpStatisticsReports(event, client) {
-        if (null === this.worker) {
-            return successResponse([], 'BMP未启动');
-        }
-
         try {
-            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.GET_BGP_STATISTICS_REPORTS, client);
-            return successResponse(result.data, '获取BGP统计报表成功');
+            return await this.queryBgpStatisticsReports(client);
         } catch (error) {
             logger.error('Error getting BGP statistics reports:', error.message);
             return errorResponse(error.message);
@@ -253,16 +327,8 @@ class BmpApp {
     }
 
     async handleGetBgpInstanceStatisticsReports(event, client) {
-        if (null === this.worker) {
-            return successResponse([], 'BMP未启动');
-        }
-
         try {
-            const result = await this.worker.sendRequest(
-                BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_STATISTICS_REPORTS,
-                client
-            );
-            return successResponse(result.data, '获取BGP实例统计报表成功');
+            return await this.queryBgpInstanceStatisticsReports(client);
         } catch (error) {
             logger.error('Error getting BGP instance statistics reports:', error.message);
             return errorResponse(error.message);
@@ -270,16 +336,12 @@ class BmpApp {
     }
 
     async handleGetBgpRoutes(event, client, session, af, ribType, page, pageSize, routeState, prefixFilter) {
-        if (null === this.worker) {
-            return successResponse([], 'BMP未启动');
-        }
-
         logger.info(
             `获取路由列表 client: ${JSON.stringify(client)} session: ${JSON.stringify(session)} af: ${JSON.stringify(af)} ribType: ${JSON.stringify(ribType)} page: ${JSON.stringify(page)} pageSize: ${JSON.stringify(pageSize)} prefixFilter: ${JSON.stringify(prefixFilter)}`
         );
 
         try {
-            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTES, {
+            const result = await this.queryBgpRoutes({
                 client,
                 session,
                 af,
@@ -290,7 +352,7 @@ class BmpApp {
                 prefixFilter
             });
             logger.info(`获取路由列表成功 result: ${JSON.stringify(result)}`);
-            return successResponse(result.data, '获取路由列表成功');
+            return result;
         } catch (error) {
             logger.error('Error getting routes:', error.message);
             return errorResponse(error.message);
@@ -298,19 +360,14 @@ class BmpApp {
     }
 
     async handleGetBgpRouteDetail(event, client, session, af, ribType, routeKey) {
-        if (null === this.worker) {
-            return successResponse(null, 'BMP未启动');
-        }
-
         try {
-            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTE_DETAIL, {
+            return await this.queryBgpRouteDetail({
                 client,
                 session,
                 af,
                 ribType,
                 routeKey
             });
-            return successResponse(result.data, '获取路由详情成功');
         } catch (error) {
             logger.error('Error getting route detail:', error.message);
             return errorResponse(error.message);
@@ -318,16 +375,12 @@ class BmpApp {
     }
 
     async handleGetBgpInstanceRoutes(event, client, instance, page, pageSize, routeState, prefixFilter) {
-        if (null === this.worker) {
-            return successResponse([], 'BMP未启动');
-        }
-
         logger.info(
             `获取BGP实例路由列表 client: ${JSON.stringify(client)} instance: ${JSON.stringify(instance)} page: ${JSON.stringify(page)} pageSize: ${JSON.stringify(pageSize)} prefixFilter: ${JSON.stringify(prefixFilter)}`
         );
 
         try {
-            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_ROUTES, {
+            const result = await this.queryBgpInstanceRoutes({
                 client,
                 instance,
                 page,
@@ -336,7 +389,7 @@ class BmpApp {
                 prefixFilter
             });
             logger.info(`获取BGP实例路由列表成功 result: ${JSON.stringify(result)}`);
-            return successResponse(result.data, '获取BGP实例路由列表成功');
+            return result;
         } catch (error) {
             logger.error('Error getting routes:', error.message);
             return errorResponse(error.message);
@@ -344,17 +397,12 @@ class BmpApp {
     }
 
     async handleGetBgpInstanceRouteDetail(event, client, instance, routeKey) {
-        if (null === this.worker) {
-            return successResponse(null, 'BMP未启动');
-        }
-
         try {
-            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_ROUTE_DETAIL, {
+            return await this.queryBgpInstanceRouteDetail({
                 client,
                 instance,
                 routeKey
             });
-            return successResponse(result.data, 'BGP实例获取路由详情成功');
         } catch (error) {
             logger.error('Error getting instance route detail:', error.message);
             return errorResponse(error.message);
@@ -398,16 +446,12 @@ class BmpApp {
     }
 
     async handleGetBgpInstances(event, client) {
-        if (null === this.worker) {
-            return successResponse([], 'BMP未启动');
-        }
-
         logger.info(`获取BGP实例列表 client: ${JSON.stringify(client)}`);
 
         try {
-            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCES, client);
+            const result = await this.queryBgpInstances(client);
             logger.info(`获取BGP实例列表成功 result: ${JSON.stringify(result)}`);
-            return successResponse(result.data, '获取BGP实例列表成功');
+            return result;
         } catch (error) {
             logger.error('Error getting BGP instances:', error.message);
             return errorResponse(error.message);

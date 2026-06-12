@@ -6,6 +6,7 @@ import PacketParser from '../view/tools/PacketParser.vue';
 import PortMonitor from '../view/tools/PortMonitor.vue';
 import NetworkInfo from '../view/tools/NetworkInfo.vue';
 import TcpAoMac from '../view/tools/TcpAoMac.vue';
+import HttpApiTester from '../view/tools/HttpApiTester.vue';
 import BgpMain from '../view/bgp/BgpMain.vue';
 import BgpConfig from '../view/bgp/BgpConfig.vue';
 import BgpPeerConfig from '../view/bgp/BgpPeerConfig.vue';
@@ -88,6 +89,12 @@ const routes = [
                         path: 'tcp-ao-mac',
                         name: 'TcpAoMac',
                         component: TcpAoMac,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'http-api-tester',
+                        name: 'HttpApiTester',
+                        component: HttpApiTester,
                         meta: { keepAlive: true }
                     }
                 ]

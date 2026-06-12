@@ -1,6 +1,6 @@
 <template>
-    <div class="mt-container">
-        <a-row>
+    <div class="mt-container adaptive-list-page">
+        <a-row class="adaptive-form-row">
             <a-col :span="24">
                 <a-card title="RPKI Router Key 配置 (协议 v1+)">
                     <a-form :model="rkConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="submitRk">
@@ -56,16 +56,22 @@
             </a-col>
         </a-row>
 
-        <a-row class="mt-margin-top-10">
+        <a-row class="adaptive-list-row">
             <a-col :span="24">
-                <a-card title="Router Key 列表">
+                <a-card title="Router Key 列表" class="adaptive-list-card">
                     <a-table
                         :columns="rkColumns"
                         :data-source="rkList"
                         :row-key="record => `${record.ski}-${record.asn}`"
-                        :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                        :scroll="{ y: 200 }"
+                        :pagination="{
+                            pageSize: 20,
+                            showSizeChanger: false,
+                            position: ['bottomCenter'],
+                            showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                        }"
+                        :scroll="{ y: '100%' }"
                         size="small"
+                        class="adaptive-table"
                     >
                         <template #bodyCell="{ column, record }">
                             <template v-if="column.key === 'action'">
@@ -175,8 +181,94 @@
 </script>
 
 <style scoped>
-    :deep(.ant-table-body) {
-        height: 200px !important;
+    .adaptive-list-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: hidden;
+    }
+
+    .adaptive-form-row {
+        flex: 0 0 auto;
+    }
+
+    .adaptive-list-row {
+        flex: 1 1 0;
+        min-height: 0;
+    }
+
+    .adaptive-list-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-list-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .adaptive-list-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table,
+    .adaptive-table :deep(.ant-spin-nested-loading),
+    .adaptive-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .adaptive-table :deep(.ant-table-container),
+    .adaptive-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .adaptive-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
         overflow-y: auto !important;
+    }
+
+    .adaptive-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .adaptive-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

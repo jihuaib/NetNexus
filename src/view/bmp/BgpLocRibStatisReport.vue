@@ -1,9 +1,9 @@
 <template>
-    <div class="mt-container">
-        <a-row>
+    <div class="mt-container bmp-full-page">
+        <a-row class="bmp-full-row">
             <a-col :span="24">
-                <a-card title="BGP LocRib统计">
-                    <div v-if="clientList.length > 0">
+                <a-card title="BGP LocRib统计" class="bmp-full-card">
+                    <div v-if="clientList.length > 0" class="bmp-tabs-shell">
                         <a-tabs
                             v-model:active-key="activeClientKey"
                             tab-position="left"
@@ -17,8 +17,8 @@
                                 <template #tab>
                                     <span class="client-tab-label">{{ formatClientTab(client) }}</span>
                                 </template>
-                                <div v-if="getClientReports(client).length > 0">
-                                    <a-tabs>
+                                <div v-if="getClientReports(client).length > 0" class="bmp-inner-tabs-shell">
+                                    <a-tabs class="bmp-inner-tabs">
                                         <a-tab-pane
                                             v-for="report in getClientReports(client)"
                                             :key="report.key"
@@ -28,9 +28,15 @@
                                                 <a-space>
                                                     <a-tag color="blue">Type {{ report.instance.instanceType }}</a-tag>
                                                     <a-tag>RD {{ report.instance.instanceRd }}</a-tag>
-                                                    <a-tag v-if="formatVrfTableName(report)">{{ formatVrfTableName(report) }}</a-tag>
+                                                    <a-tag v-if="formatVrfTableName(report)">
+                                                        {{ formatVrfTableName(report) }}
+                                                    </a-tag>
                                                     <a-tag>TLV {{ getReportTlvCount(report) }}</a-tag>
-                                                    <a-button type="link" size="small" @click="viewReportDetails(report)">
+                                                    <a-button
+                                                        type="link"
+                                                        size="small"
+                                                        @click="viewReportDetails(report)"
+                                                    >
                                                         详情
                                                     </a-button>
                                                 </a-space>
@@ -39,11 +45,18 @@
                                                 class="report-table"
                                                 :columns="columns"
                                                 :data-source="report.statistics"
-                                                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                                                :row-key="record => `${record.type}|${record.afi || ''}|${record.safi || ''}`"
+                                                :pagination="{
+                                                    pageSize: 20,
+                                                    showSizeChanger: false,
+                                                    position: ['bottomCenter'],
+                                                    showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                                }"
+                                                :row-key="
+                                                    record => `${record.type}|${record.afi || ''}|${record.safi || ''}`
+                                                "
                                                 size="small"
                                                 bordered
-                                                :scroll="{ y: 320 }"
+                                                :scroll="{ y: '100%' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'typeName'">
@@ -285,7 +298,9 @@
                 clientList.value = clientListResult.data;
 
                 if (clientList.value.length > 0) {
-                    const activeClientExists = clientList.value.some(client => getClientKey(client) === activeClientKey.value);
+                    const activeClientExists = clientList.value.some(
+                        client => getClientKey(client) === activeClientKey.value
+                    );
                     if (!activeClientKey.value || !activeClientExists) {
                         activeClientKey.value = getClientKey(clientList.value[0]);
                     }
@@ -333,13 +348,132 @@
 </script>
 
 <style scoped>
-    .report-header {
+    .bmp-full-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .bmp-full-row,
+    .bmp-full-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .bmp-full-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .bmp-full-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bmp-tabs-shell,
+    .bmp-inner-tabs-shell {
+        flex: 1 1 0;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .client-tabs,
+    .bmp-inner-tabs {
+        flex: 1 1 0;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        overflow: hidden;
+    }
+
+    .client-tabs :deep(.ant-tabs-content-holder),
+    .client-tabs :deep(.ant-tabs-content),
+    .client-tabs :deep(.ant-tabs-tabpane),
+    .bmp-inner-tabs :deep(.ant-tabs-content-holder),
+    .bmp-inner-tabs :deep(.ant-tabs-content),
+    .bmp-inner-tabs :deep(.ant-tabs-tabpane) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bmp-inner-tabs :deep(.ant-tabs-nav) {
+        flex: 0 0 auto;
         margin-bottom: 8px;
     }
 
+    .report-header {
+        flex: 0 0 auto;
+        margin-bottom: 8px;
+    }
+
+    .report-table,
+    .report-table :deep(.ant-spin-nested-loading),
+    .report-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+    }
+
+    .report-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .report-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .report-table :deep(.ant-table-container),
+    .report-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .report-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
     .report-table :deep(.ant-table-body) {
-        height: 320px !important;
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
         overflow-y: auto !important;
+    }
+
+    .report-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .report-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 
     .client-tab-label {

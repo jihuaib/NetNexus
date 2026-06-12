@@ -1,8 +1,8 @@
 <template>
-    <div class="mt-container">
+    <div class="mt-container bgp-config-page">
         <!-- BGP 配置 Card -->
         <a-form :model="bgpConfigData" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBgp">
-            <a-card title="BGP配置">
+            <a-card title="BGP配置" class="bgp-config-card">
                 <a-row>
                     <a-col :span="12">
                         <a-form-item label="Local AS" name="localAs">
@@ -63,8 +63,13 @@
             <a-table
                 :columns="instanceColumns"
                 :data-source="instanceInfoList"
-                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                :scroll="{ y: 240 }"
+                :pagination="{
+                    pageSize: 20,
+                    showSizeChanger: false,
+                    position: ['bottomCenter'],
+                    showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                }"
+                :scroll="{ y: '100%' }"
                 size="middle"
                 class="instance-table"
             >
@@ -232,8 +237,38 @@
 </script>
 
 <style scoped>
+    .bgp-config-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        overflow: hidden;
+    }
+
+    .bgp-config-page > .ant-form {
+        flex: 0 0 auto;
+    }
+
+    .bgp-config-card {
+        flex: 0 0 auto;
+    }
+
     .status-card {
-        margin-top: 16px;
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        margin-top: 0;
+    }
+
+    .status-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
     }
 
     .status-item {
@@ -256,8 +291,56 @@
         justify-content: center;
     }
 
+    .instance-table,
+    .instance-table :deep(.ant-spin-nested-loading),
+    .instance-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .instance-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .instance-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .instance-table :deep(.ant-table-container),
+    .instance-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .instance-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
     .instance-table :deep(.ant-table-body) {
-        height: 240px !important;
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
         overflow-y: auto !important;
+    }
+
+    .instance-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .instance-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

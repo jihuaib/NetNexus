@@ -1,6 +1,6 @@
 <template>
-    <div class="mt-container">
-        <a-card title="TFTP传输日志">
+    <div class="mt-container adaptive-table-page">
+        <a-card title="TFTP传输日志" class="adaptive-table-card">
             <template #extra>
                 <a-space>
                     <a-button :loading="loading" @click="loadTransferList">刷新</a-button>
@@ -18,9 +18,10 @@
                     position: ['bottomCenter'],
                     showTotal: total => '共 ' + total + ' 条，每页 20 条'
                 }"
-                :scroll="{ y: 520 }"
+                :scroll="{ x: 'max-content', y: '100%' }"
                 row-key="id"
                 size="small"
+                class="adaptive-table"
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'type'">
@@ -157,4 +158,80 @@
     });
 </script>
 
-<style scoped></style>
+<style scoped>
+    .adaptive-table-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .adaptive-table-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .adaptive-table-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table,
+    .adaptive-table :deep(.ant-spin-nested-loading),
+    .adaptive-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+    }
+
+    .adaptive-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .adaptive-table :deep(.ant-table-container),
+    .adaptive-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .adaptive-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+    }
+
+    .adaptive-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .adaptive-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+    }
+</style>

@@ -1,3 +1,4 @@
+const fs = require('fs');
 const { app } = require('electron');
 const path = require('path');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
@@ -8,6 +9,16 @@ const EventDispatcher = require('../utils/eventDispatcher');
 const { getAfiAndSafi } = require('../utils/bgpUtils');
 const { shell } = require('electron');
 const { importMrtFile } = require('../utils/routeViewsUtils');
+const { collectBgpGeneratedRoutes } = require('../utils/bgpRouteGenerator');
+const {
+    getBgpRouteDataFilePath,
+    iterateJsonlBgpRoutes,
+    countBgpRoutes,
+    upsertBgpRoutesToJsonl,
+    deleteBgpRoutesFromJsonl,
+    clearBgpRouteJsonl
+} = require('../utils/bgpRouteStorage');
+const { fileExists, ensureParentDir } = require('../utils/rpkiRoaImport');
 class BgpApp {
     constructor(ipc, store) {
         this.worker = null;
@@ -19,11 +30,13 @@ class BgpApp {
         this.ipv4MvpnRouteConfigFileKey = 'ipv4-mvpn-route-config';
         this.ipv4QpRouteConfigFileKey = 'ipv4-qp-route-config';
         this.ipv6QpRouteConfigFileKey = 'ipv6-qp-route-config';
+        this.bgpRouteMetaFileKey = 'bgp-routes-meta';
         this.isDev = !app.isPackaged;
         this.peerChangeHandler = null;
         this.store = store;
         this.eventDispatcher = null;
         this.logLevel = null;
+        this.startedAddressFamilies = new Set();
         // 注册IPC处理程序
         this.registerHandlers(ipc);
     }
@@ -69,6 +82,9 @@ class BgpApp {
         );
         ipc.handle('bgp:getRoutes', async (event, addressFamily, page, pageSize) =>
             this.handleGetRoutes(event, addressFamily, page, pageSize)
+        );
+        ipc.handle('bgp:getRouteDetail', async (event, addressFamily, route) =>
+            this.handleGetRouteDetail(event, addressFamily, route)
         );
 
         // qp route
@@ -224,6 +240,214 @@ class BgpApp {
         }
     }
 
+    getBgpRouteDataFilePath(addressFamily = null) {
+        return getBgpRouteDataFilePath(app.getPath('userData'), addressFamily);
+    }
+
+    async ensureBgpRouteFileStorage(addressFamily = null) {
+        const filePath = this.getBgpRouteDataFilePath(addressFamily);
+        await ensureParentDir(filePath);
+
+        if (!(await fileExists(filePath))) {
+            await fs.promises.writeFile(filePath, '', 'utf8');
+            await this.updateBgpRouteMeta(0);
+            return filePath;
+        }
+
+        const meta = this.store.get(this.bgpRouteMetaFileKey);
+        if (!addressFamily && (!meta || typeof meta.count !== 'number')) {
+            await this.updateBgpRouteMeta(await countBgpRoutes(filePath));
+        }
+
+        return filePath;
+    }
+
+    async updateBgpRouteMeta(count) {
+        this.store.set(this.bgpRouteMetaFileKey, {
+            storageVersion: 1,
+            count,
+            updatedAt: new Date().toISOString()
+        });
+    }
+
+    async getBgpRouteTotalCount(filePath) {
+        const meta = this.store.get(this.bgpRouteMetaFileKey);
+        if (meta && typeof meta.count === 'number') {
+            return meta.count;
+        }
+
+        const count = await countBgpRoutes(filePath);
+        await this.updateBgpRouteMeta(count);
+        return count;
+    }
+
+    getRouteConfigStoreKey(addressFamily) {
+        switch (addressFamily) {
+            case BgpConst.BGP_ADDR_FAMILY.IPV4_UNC:
+                return this.ipv4UNCRouteConfigFileKey;
+            case BgpConst.BGP_ADDR_FAMILY.IPV6_UNC:
+                return this.ipv6UNCRouteConfigFileKey;
+            case BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN:
+                return this.ipv4MvpnRouteConfigFileKey;
+            case BgpConst.BGP_ADDR_FAMILY.IPV4_QP:
+                return this.ipv4QpRouteConfigFileKey;
+            case BgpConst.BGP_ADDR_FAMILY.IPV6_QP:
+                return this.ipv6QpRouteConfigFileKey;
+            default:
+                return null;
+        }
+    }
+
+    getStartedAddressFamiliesFromConfig(config) {
+        return new Set((Array.isArray(config?.addressFamily) ? config.addressFamily : []).map(item => Number(item)));
+    }
+
+    isAddressFamilyStarted(addressFamily) {
+        return this.startedAddressFamilies.has(Number(addressFamily));
+    }
+
+    saveLastRouteConfig(config) {
+        const key = this.getRouteConfigStoreKey(config?.addressFamily);
+        if (key) {
+            this.store.set(key, config);
+        }
+    }
+
+    getInstanceAttrsForFamily(addressFamily) {
+        const key = this.getRouteConfigStoreKey(addressFamily);
+        const config = key ? this.store.get(key) || {} : {};
+        return {
+            customAttr: config.customAttr || '',
+            rt: config.rt || '',
+            bsid: config.bsid || ''
+        };
+    }
+
+    getRouteRuntimeError(addressFamily) {
+        if (!this.worker) {
+            return 'bgp协议没有运行';
+        }
+
+        if (addressFamily && !this.isAddressFamilyStarted(addressFamily)) {
+            return '地址族未启动，请先在BGP配置中使能该地址族';
+        }
+
+        return null;
+    }
+
+    async loadBgpRouteStorageToWorker(announce = false, addressFamilies = null) {
+        if (!this.worker) {
+            return { loaded: 0 };
+        }
+
+        const hasFamilyFilter = addressFamilies !== null && addressFamilies !== undefined;
+        const enabledFamilies =
+            addressFamilies instanceof Set
+                ? addressFamilies
+                : new Set((Array.isArray(addressFamilies) ? addressFamilies : []).map(item => Number(item)));
+        const batchSize = 5000;
+        const batches = new Map();
+        let loaded = 0;
+
+        const flush = async addressFamily => {
+            const routes = batches.get(addressFamily);
+            if (!routes || routes.length === 0) {
+                return;
+            }
+
+            batches.set(addressFamily, []);
+            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES, {
+                addressFamily,
+                routes,
+                announce,
+                instanceAttrs: this.getInstanceAttrsForFamily(addressFamily),
+                singleRouteSend: routes.some(route => route.asPath)
+            });
+            if (result.status !== 'success') {
+                logger.error(`worker BGP路由恢复失败: ${result.msg}`);
+            }
+        };
+
+        const routeFamilies = hasFamilyFilter
+            ? Array.from(enabledFamilies)
+            : [
+                  BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+                  BgpConst.BGP_ADDR_FAMILY.IPV6_UNC,
+                  BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN,
+                  BgpConst.BGP_ADDR_FAMILY.IPV4_QP,
+                  BgpConst.BGP_ADDR_FAMILY.IPV6_QP
+              ];
+
+        for (const addressFamily of routeFamilies) {
+            const filePath = await this.ensureBgpRouteFileStorage(addressFamily);
+            for await (const route of iterateJsonlBgpRoutes(filePath)) {
+                if (route.addressFamily !== addressFamily) {
+                    continue;
+                }
+
+                if (!batches.has(route.addressFamily)) {
+                    batches.set(route.addressFamily, []);
+                }
+
+                const routes = batches.get(route.addressFamily);
+                routes.push(route);
+                loaded += 1;
+
+                if (routes.length >= batchSize) {
+                    await flush(route.addressFamily);
+                }
+            }
+        }
+
+        for (const addressFamily of batches.keys()) {
+            await flush(addressFamily);
+        }
+
+        logger.info(`worker BGP路由批量加载完成: loaded=${loaded}, announce=${announce}`);
+        return { loaded };
+    }
+
+    async persistGeneratedRoutes(config, reqType, successMsg, options = {}) {
+        this.saveLastRouteConfig(config);
+        const runtimeError = this.getRouteRuntimeError(config?.addressFamily);
+        if (runtimeError) {
+            logger.error(`${successMsg}失败: ${runtimeError}`);
+            return errorResponse(runtimeError);
+        }
+
+        const routes = collectBgpGeneratedRoutes(config, options);
+        const workerResult = await this.worker.sendRequest(reqType, config);
+        const filePath = await this.ensureBgpRouteFileStorage(config.addressFamily);
+        const result = await upsertBgpRoutesToJsonl(filePath, routes);
+        await this.updateBgpRouteMeta(result.total);
+
+        return successResponse(
+            {
+                added: result.added,
+                updated: result.updated,
+                unchanged: result.unchanged,
+                total: result.total
+            },
+            workerResult.msg || successMsg
+        );
+    }
+
+    async deleteGeneratedRoutes(config, reqType, successMsg, options = {}) {
+        const runtimeError = this.getRouteRuntimeError(config?.addressFamily);
+        if (runtimeError) {
+            logger.error(`${successMsg}失败: ${runtimeError}`);
+            return errorResponse(runtimeError);
+        }
+
+        const routes = collectBgpGeneratedRoutes(config, options);
+        const workerResult = await this.worker.sendRequest(reqType, config);
+        const filePath = await this.ensureBgpRouteFileStorage(config.addressFamily);
+        const result = await deleteBgpRoutesFromJsonl(filePath, routes);
+        await this.updateBgpRouteMeta(result.total);
+
+        return successResponse({ deleted: result.deleted, total: result.total }, workerResult.msg || successMsg);
+    }
+
     async handleDeletePeer(event, peer) {
         try {
             if (null === this.worker) {
@@ -292,6 +516,7 @@ class BgpApp {
             }
 
             logger.info(`${JSON.stringify(bgpConfigData)}`);
+            const startedAddressFamilies = this.getStartedAddressFamiliesFromConfig(bgpConfigData);
 
             // 获取日志级别配置
             if (this.logLevel) {
@@ -318,15 +543,22 @@ class BgpApp {
             this.worker.addEventListener(BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE, this.peerChangeHandler);
 
             const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.START_BGP, bgpConfigData);
+            this.startedAddressFamilies = startedAddressFamilies;
+            await this.loadBgpRouteStorageToWorker(false, startedAddressFamilies);
 
             // 这里肯定是启动成功了，如果失败，会抛出异常
             logger.info(`bgp启动成功 result: ${JSON.stringify(result)}`);
             return successResponse(null, result.msg);
         } catch (error) {
-            this.worker.removeEventListener(BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE, this.peerChangeHandler);
-            await this.worker.terminate();
-            this.worker = null;
-            this.eventDispatcher.cleanup(); // 清理事件发送器
+            if (this.worker) {
+                this.worker.removeEventListener(BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE, this.peerChangeHandler);
+                await this.worker.terminate();
+                this.worker = null;
+            }
+            this.startedAddressFamilies.clear();
+            if (this.eventDispatcher) {
+                this.eventDispatcher.cleanup(); // 清理事件发送器
+            }
             this.eventDispatcher = null;
             logger.error('Error starting BGP:', error.message);
             return errorResponse(error.message);
@@ -350,6 +582,7 @@ class BgpApp {
             this.worker.removeEventListener(BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE, this.peerChangeHandler);
             await this.worker.terminate();
             this.worker = null;
+            this.startedAddressFamilies.clear();
             this.eventDispatcher.cleanup(); // 清理事件发送器
             this.eventDispatcher = null;
         }
@@ -384,16 +617,13 @@ class BgpApp {
     }
 
     async handleGenerateIpv4Routes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
-
-        logger.info(`${JSON.stringify(config)}`);
-
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_ROUTES, config);
-            return successResponse(null, result.msg);
+            logger.info(`${JSON.stringify(config)}`);
+            return await this.persistGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_ROUTES,
+                '路由生成成功'
+            );
         } catch (error) {
             logger.error('Error generating ipv4 routes:', error.message);
             return errorResponse(error.message);
@@ -401,16 +631,13 @@ class BgpApp {
     }
 
     async handleGenerateIpv6Routes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
-
-        logger.info(`${JSON.stringify(config)}`);
-
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.GENERATE_IPV6_ROUTES, config);
-            return successResponse(null, result.msg);
+            logger.info(`${JSON.stringify(config)}`);
+            return await this.persistGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.GENERATE_IPV6_ROUTES,
+                '路由生成成功'
+            );
         } catch (error) {
             logger.error('Error generating ipv6 routes:', error.message);
             return errorResponse(error.message);
@@ -418,16 +645,13 @@ class BgpApp {
     }
 
     async handleDeleteIpv4Routes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
-
-        logger.info(`${JSON.stringify(config)}`);
-
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.DELETE_IPV4_ROUTES, config);
-            return successResponse(null, result.msg);
+            logger.info(`${JSON.stringify(config)}`);
+            return await this.deleteGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.DELETE_IPV4_ROUTES,
+                '路由删除成功'
+            );
         } catch (error) {
             logger.error('Error deleting ipv4 routes:', error.message);
             return errorResponse(error.message);
@@ -435,16 +659,13 @@ class BgpApp {
     }
 
     async handleDeleteIpv6Routes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
-
-        logger.info(`${JSON.stringify(config)}`);
-
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.DELETE_IPV6_ROUTES, config);
-            return successResponse(null, result.msg);
+            logger.info(`${JSON.stringify(config)}`);
+            return await this.deleteGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.DELETE_IPV6_ROUTES,
+                '路由删除成功'
+            );
         } catch (error) {
             logger.error('Error deleting ipv6 routes:', error.message);
             return errorResponse(error.message);
@@ -452,13 +673,16 @@ class BgpApp {
     }
 
     async handleGetRoutes(event, addressFamily, page, pageSize) {
-        if (null === this.worker) {
-            return successResponse({}, 'bgp协议没有运行');
-        }
-
-        logger.info(`addressFamily: ${addressFamily}, page: ${page}, pageSize: ${pageSize}`);
-
         try {
+            if (null === this.worker) {
+                return successResponse({ list: [], total: 0 }, 'bgp协议没有运行');
+            }
+
+            if (!this.isAddressFamilyStarted(addressFamily)) {
+                return successResponse({ list: [], total: 0 }, '地址族未启动');
+            }
+
+            logger.info(`addressFamily: ${addressFamily}, page: ${page}, pageSize: ${pageSize}`);
             const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.GET_ROUTES, {
                 addressFamily,
                 page,
@@ -472,19 +696,47 @@ class BgpApp {
         }
     }
 
-    async handleDeleteAllRoutesByFamily(event, addressFamily) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
-
-        logger.info(`Deleting all routes for address family: ${addressFamily}`);
-
+    async handleGetRouteDetail(event, addressFamily, route) {
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.DELETE_ALL_ROUTES_BY_FAMILY, {
+            if (null === this.worker) {
+                return errorResponse('bgp协议没有运行');
+            }
+
+            if (!this.isAddressFamilyStarted(addressFamily)) {
+                return errorResponse('地址族未启动');
+            }
+
+            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.GET_ROUTE_DETAIL, {
+                addressFamily,
+                route
+            });
+            return successResponse(result.data, result.msg || '获取路由详情成功');
+        } catch (error) {
+            logger.error('Error getting route detail:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleDeleteAllRoutesByFamily(event, addressFamily) {
+        try {
+            const runtimeError = this.getRouteRuntimeError(addressFamily);
+            if (runtimeError) {
+                logger.error(`删除全部路由失败: ${runtimeError}`);
+                return errorResponse(runtimeError);
+            }
+
+            logger.info(`Deleting all routes for address family: ${addressFamily}`);
+            const workerResult = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.DELETE_ALL_ROUTES_BY_FAMILY, {
                 addressFamily
             });
-            return successResponse(null, result.msg);
+            const filePath = await this.ensureBgpRouteFileStorage(addressFamily);
+            const result = await clearBgpRouteJsonl(filePath);
+            await this.updateBgpRouteMeta(result.total);
+
+            return successResponse(
+                { deleted: workerResult.data?.deleted ?? result.deleted, total: result.total },
+                workerResult.msg || '成功删除所有路由'
+            );
         } catch (error) {
             logger.error('Error deleting all routes by family:', error.message);
             return errorResponse(error.message);
@@ -515,16 +767,13 @@ class BgpApp {
     }
 
     async handleGenerateIpv4MvpnRoutes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
-
-        logger.info(`${JSON.stringify(config)}`);
-
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_MVPN_ROUTES, config);
-            return successResponse(null, result.msg);
+            logger.info(`${JSON.stringify(config)}`);
+            return await this.persistGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_MVPN_ROUTES,
+                `MVPN路由生成成功`
+            );
         } catch (error) {
             logger.error('Error generating ipv4 mvpn routes:', error.message);
             return errorResponse(error.message);
@@ -532,16 +781,13 @@ class BgpApp {
     }
 
     async handleDeleteIpv4MvpnRoutes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
-
-        logger.info(`${JSON.stringify(config)}`);
-
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.DELETE_IPV4_MVPN_ROUTES, config);
-            return successResponse(null, result.msg);
+            logger.info(`${JSON.stringify(config)}`);
+            return await this.deleteGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.DELETE_IPV4_MVPN_ROUTES,
+                'MVPN路由删除成功'
+            );
         } catch (error) {
             logger.error('Error deleting ipv4 mvpn routes:', error.message);
             return errorResponse(error.message);
@@ -595,13 +841,12 @@ class BgpApp {
     }
 
     async handleGenerateIpv4QpRoutes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_QP_ROUTES, config);
-            return successResponse(null, result.msg);
+            return await this.persistGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_QP_ROUTES,
+                'QP路由生成成功'
+            );
         } catch (error) {
             logger.error('Error generating ipv4 qp routes:', error.message);
             return errorResponse(error.message);
@@ -609,13 +854,12 @@ class BgpApp {
     }
 
     async handleGenerateIpv6QpRoutes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.GENERATE_IPV6_QP_ROUTES, config);
-            return successResponse(null, result.msg);
+            return await this.persistGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.GENERATE_IPV6_QP_ROUTES,
+                'QP路由生成成功'
+            );
         } catch (error) {
             logger.error('Error generating ipv6 qp routes:', error.message);
             return errorResponse(error.message);
@@ -623,13 +867,13 @@ class BgpApp {
     }
 
     async handleDeleteIpv4QpRoutes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.DELETE_IPV4_QP_ROUTES, config);
-            return successResponse(null, result.msg);
+            return await this.deleteGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.DELETE_IPV4_QP_ROUTES,
+                'QP路由删除成功',
+                { requireBsid: false }
+            );
         } catch (error) {
             logger.error('Error deleting ipv4 qp routes:', error.message);
             return errorResponse(error.message);
@@ -637,13 +881,13 @@ class BgpApp {
     }
 
     async handleDeleteIpv6QpRoutes(event, config) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.DELETE_IPV6_QP_ROUTES, config);
-            return successResponse(null, result.msg);
+            return await this.deleteGeneratedRoutes(
+                config,
+                BgpConst.BGP_REQ_TYPES.DELETE_IPV6_QP_ROUTES,
+                'QP路由删除成功',
+                { requireBsid: false }
+            );
         } catch (error) {
             logger.error('Error deleting ipv6 qp routes:', error.message);
             return errorResponse(error.message);
@@ -668,14 +912,14 @@ class BgpApp {
     }
 
     async handleImportRouteViewsData(event, filePath, limit, addressFamily) {
-        if (null === this.worker) {
-            logger.error('bgp协议没有运行');
-            return errorResponse('bgp协议没有运行');
-        }
-
-        logger.info(`Importing MRT file: ${filePath}, limit: ${limit}, AF: ${addressFamily}`);
-
         try {
+            const runtimeError = this.getRouteRuntimeError(addressFamily);
+            if (runtimeError) {
+                logger.error(`RouteViews导入路由失败: ${runtimeError}`);
+                return errorResponse(runtimeError);
+            }
+
+            logger.info(`Importing MRT file: ${filePath}, limit: ${limit}, AF: ${addressFamily}`);
             const { afi } = getAfiAndSafi(addressFamily);
 
             // Re-using the progress reporting logic
@@ -686,12 +930,30 @@ class BgpApp {
             });
 
             if (result.status === 'success') {
+                const routes = result.data.map(route => ({
+                    ...route,
+                    addressFamily
+                }));
                 const workerResult = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES, {
                     addressFamily,
-                    routes: result.data
+                    routes,
+                    announce: true,
+                    singleRouteSend: true
                 });
+                const routeFilePath = await this.ensureBgpRouteFileStorage(addressFamily);
+                const writeResult = await upsertBgpRoutesToJsonl(routeFilePath, routes);
+                await this.updateBgpRouteMeta(writeResult.total);
 
-                return successResponse(null, workerResult.msg);
+                return successResponse(
+                    {
+                        imported: routes.length,
+                        added: writeResult.added,
+                        updated: writeResult.updated,
+                        unchanged: writeResult.unchanged,
+                        total: writeResult.total
+                    },
+                    workerResult.msg || '路由导入成功'
+                );
             } else {
                 return errorResponse(result.msg);
             }

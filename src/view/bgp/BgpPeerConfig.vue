@@ -1,7 +1,7 @@
 <template>
-    <div class="mt-container">
+    <div class="mt-container bgp-peer-page">
         <!-- 邻居配置 Card -->
-        <a-card title="邻居配置">
+        <a-card title="邻居配置" class="bgp-peer-config-card">
             <a-tabs v-model:active-key="activeConfigTabKey">
                 <a-tab-pane :key="IP_TYPE.IPV4" tab="IPv4邻居">
                     <a-form
@@ -207,11 +207,11 @@
         </a-card>
 
         <!-- 邻居信息 Card -->
-        <a-row class="mt-margin-top-10">
+        <a-row class="bgp-peer-info-row">
             <a-col :span="24">
-                <a-card title="邻居信息">
-                    <div>
-                        <a-tabs v-model:active-key="activePeerInfoTabKey">
+                <a-card title="邻居信息" class="bgp-peer-info-card">
+                    <div class="bgp-peer-info-content">
+                        <a-tabs v-model:active-key="activePeerInfoTabKey" class="bgp-peer-info-tabs">
                             <a-tab-pane :key="BGP_ADDR_FAMILY.IPV4_UNC" tab="IPv4-UNC邻居">
                                 <div class="bgp-peer-info-header">
                                     <UnorderedListOutlined />
@@ -227,9 +227,15 @@
                                         record =>
                                             `${record.vrfIndex || ''}-${record.peerIp || ''}-${record.addressFamily || ''}`
                                     "
-                                    :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                                    :scroll="{ y: 140 }"
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    :scroll="{ y: '100%' }"
                                     size="small"
+                                    class="bgp-peer-table"
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
@@ -256,9 +262,15 @@
                                         record =>
                                             `${record.vrfIndex || ''}-${record.peerIp || ''}-${record.addressFamily || ''}`
                                     "
-                                    :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                                    :scroll="{ y: 140 }"
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    :scroll="{ y: '100%' }"
                                     size="small"
+                                    class="bgp-peer-table"
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
@@ -285,9 +297,15 @@
                                         record =>
                                             `${record.vrfIndex || ''}-${record.peerIp || ''}-${record.addressFamily || ''}`
                                     "
-                                    :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                                    :scroll="{ y: 140 }"
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    :scroll="{ y: '100%' }"
                                     size="small"
+                                    class="bgp-peer-table"
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
@@ -314,9 +332,15 @@
                                         record =>
                                             `${record.vrfIndex || ''}-${record.peerIp || ''}-${record.addressFamily || ''}`
                                     "
-                                    :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                                    :scroll="{ y: 140 }"
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    :scroll="{ y: '100%' }"
                                     size="small"
+                                    class="bgp-peer-table"
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
@@ -343,9 +367,15 @@
                                         record =>
                                             `${record.vrfIndex || ''}-${record.peerIp || ''}-${record.addressFamily || ''}`
                                     "
-                                    :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                                    :scroll="{ y: 140 }"
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    :scroll="{ y: '100%' }"
                                     size="small"
+                                    class="bgp-peer-table"
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
@@ -372,9 +402,15 @@
                                         record =>
                                             `${record.vrfIndex || ''}-${record.peerIp || ''}-${record.addressFamily || ''}`
                                     "
-                                    :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                                    :scroll="{ y: 140 }"
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    :scroll="{ y: '100%' }"
                                     size="small"
+                                    class="bgp-peer-table"
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
@@ -848,12 +884,73 @@
 </script>
 
 <style scoped>
-    :deep(.ant-table-body) {
-        height: 200px !important;
-        overflow-y: auto !important;
+    .bgp-peer-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: hidden;
+    }
+
+    .bgp-peer-config-card {
+        flex: 0 0 auto;
+    }
+
+    .bgp-peer-info-row {
+        flex: 1 1 0;
+        min-height: 0;
+        margin-top: 0;
+    }
+
+    .bgp-peer-info-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .bgp-peer-info-card {
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bgp-peer-info-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bgp-peer-info-content,
+    .bgp-peer-info-tabs {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bgp-peer-info-tabs :deep(.ant-tabs-nav) {
+        flex: 0 0 auto;
+        margin-bottom: 8px;
+    }
+
+    .bgp-peer-info-tabs :deep(.ant-tabs-content-holder),
+    .bgp-peer-info-tabs :deep(.ant-tabs-content),
+    .bgp-peer-info-tabs :deep(.ant-tabs-tabpane) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
     }
 
     .bgp-peer-info-header {
+        flex: 0 0 auto;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -866,5 +963,58 @@
     .bgp-peer-info-header-text {
         margin-right: 8px;
         font-weight: 500;
+    }
+
+    .bgp-peer-table,
+    .bgp-peer-table :deep(.ant-spin-nested-loading),
+    .bgp-peer-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .bgp-peer-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bgp-peer-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bgp-peer-table :deep(.ant-table-container),
+    .bgp-peer-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bgp-peer-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .bgp-peer-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+    }
+
+    .bgp-peer-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .bgp-peer-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

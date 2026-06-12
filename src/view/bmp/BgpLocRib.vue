@@ -1,9 +1,9 @@
 <template>
-    <div class="mt-container">
-        <a-row>
+    <div class="mt-container bmp-full-page">
+        <a-row class="bmp-full-row">
             <a-col :span="24">
-                <a-card title="BGP Loc-RIB">
-                    <div v-if="clientList.length > 0">
+                <a-card title="BGP Loc-RIB" class="bmp-full-card">
+                    <div v-if="clientList.length > 0" class="bmp-tabs-shell">
                         <a-tabs
                             v-model:active-key="activeClientKey"
                             tab-position="left"
@@ -17,8 +17,8 @@
                                 <template #tab>
                                     <span class="client-tab-label">{{ formatClientTab(client) }}</span>
                                 </template>
-                                <div v-if="bgpInstances.length > 0">
-                                    <a-tabs v-model:active-key="activeInstanceKey">
+                                <div v-if="bgpInstances.length > 0" class="bmp-inner-tabs-shell">
+                                    <a-tabs v-model:active-key="activeInstanceKey" class="bmp-inner-tabs">
                                         <a-tab-pane
                                             v-for="instance in bgpInstances"
                                             :key="`${instance.instanceType}|${instance.instanceRd}|${instance.addrFamilyType}`"
@@ -41,7 +41,9 @@
                                                     </template>
                                                     <template v-else-if="column.key === 'instanceFlags'">
                                                         <a-tooltip :title="getBmpLocRibFlagsName(record.instanceFlags)">
-                                                            <span>{{ getBmpLocRibFlagsName(record.instanceFlags) }}</span>
+                                                            <span>
+                                                                {{ getBmpLocRibFlagsName(record.instanceFlags) }}
+                                                            </span>
                                                         </a-tooltip>
                                                     </template>
                                                     <template v-else-if="column.key === 'rawInstanceFlags'">
@@ -107,11 +109,15 @@
                                                             : ''
                                                 "
                                                 size="small"
-                                                :scroll="{ x: 1320, y: 320 }"
+                                                :scroll="{ x: 1320, y: '100%' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
-                                                        <a-button type="link" size="small" @click="viewRouteDetails(record)">
+                                                        <a-button
+                                                            type="link"
+                                                            size="small"
+                                                            @click="viewRouteDetails(record)"
+                                                        >
                                                             查询详情
                                                         </a-button>
                                                     </template>
@@ -650,12 +656,79 @@
 </script>
 
 <style scoped>
+    .bmp-full-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .bmp-full-row,
+    .bmp-full-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .bmp-full-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .bmp-full-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .bmp-tabs-shell,
+    .bmp-inner-tabs-shell {
+        flex: 1 1 0;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
     .client-tab-label {
         display: block;
         max-width: 112px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .client-tabs,
+    .bmp-inner-tabs {
+        flex: 1 1 0;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        overflow: hidden;
+    }
+
+    .client-tabs :deep(.ant-tabs-content-holder),
+    .client-tabs :deep(.ant-tabs-content),
+    .client-tabs :deep(.ant-tabs-tabpane),
+    .bmp-inner-tabs :deep(.ant-tabs-content-holder),
+    .bmp-inner-tabs :deep(.ant-tabs-content),
+    .bmp-inner-tabs :deep(.ant-tabs-tabpane) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .bmp-inner-tabs :deep(.ant-tabs-nav) {
+        flex: 0 0 auto;
+        margin-bottom: 8px;
     }
 
     .client-tabs :deep(.ant-tabs-tab) {
@@ -669,6 +742,7 @@
     }
 
     .route-toolbar {
+        flex: 0 0 auto;
         display: flex;
         align-items: center;
         gap: 12px;
@@ -715,7 +789,62 @@
         border-radius: 4px;
     }
 
+    .detail-table {
+        flex: 0 0 auto;
+        min-width: 0;
+    }
+
+    .route-table,
+    .route-table :deep(.ant-spin-nested-loading),
+    .route-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+    }
+
+    .route-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .route-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .route-table :deep(.ant-table-container),
+    .route-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .route-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
     .route-table :deep(.ant-table-body) {
-        height: 270px;
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+    }
+
+    .route-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .route-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

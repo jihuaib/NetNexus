@@ -1,6 +1,6 @@
 <template>
-    <div class="mt-container">
-        <a-row>
+    <div class="mt-container adaptive-list-page">
+        <a-row class="adaptive-form-row">
             <a-col :span="24">
                 <a-card title="BMP服务器配置">
                     <a-form :model="bmpConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBmp">
@@ -120,19 +120,25 @@
         </a-row>
 
         <!-- BMP客户端列表 -->
-        <a-row class="mt-margin-top-10">
+        <a-row class="adaptive-list-row">
             <a-col :span="24">
-                <a-card title="BMP客户端列表">
+                <a-card title="BMP客户端列表" class="adaptive-list-card">
                     <div>
                         <a-table
+                            class="adaptive-table"
                             :columns="clientColumns"
                             :data-source="clientList"
                             :row-key="
                                 record =>
                                     `${record.localIp || ''}-${record.localPort || ''}-${record.remoteIp || ''}-${record.remotePort || ''}`
                             "
-                            :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                            :scroll="{ y: 200 }"
+                            :pagination="{
+                                pageSize: 20,
+                                showSizeChanger: false,
+                                position: ['bottomCenter'],
+                                showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                            }"
+                            :scroll="{ y: '100%' }"
                             size="small"
                         >
                             <template #bodyCell="{ column, record }">
@@ -208,16 +214,12 @@
     };
 
     const normalizeBmpV4TlvDraft = draft => {
-        return Number(draft) === BMP_V4_TLV_DRAFT.DRAFT_19
-            ? BMP_V4_TLV_DRAFT.DRAFT_19
-            : BMP_V4_TLV_DRAFT.DRAFT_20;
+        return Number(draft) === BMP_V4_TLV_DRAFT.DRAFT_19 ? BMP_V4_TLV_DRAFT.DRAFT_19 : BMP_V4_TLV_DRAFT.DRAFT_20;
     };
 
     const normalizePathMarkingTlvType = (value, draft) => {
         const type = Number(value);
-        return Number.isInteger(type) && type >= 1 && type <= 0x3fff
-            ? type
-            : getDefaultPathMarkingTlvType(draft);
+        return Number.isInteger(type) && type >= 1 && type <= 0x3fff ? type : getDefaultPathMarkingTlvType(draft);
     };
 
     // Initiation messages list
@@ -327,10 +329,7 @@
         try {
             const payload = JSON.parse(JSON.stringify(bmpConfig.value));
             payload.bmpV4TlvDraft = normalizeBmpV4TlvDraft(payload.bmpV4TlvDraft);
-            payload.pathMarkingTlvType = normalizePathMarkingTlvType(
-                payload.pathMarkingTlvType,
-                payload.bmpV4TlvDraft
-            );
+            payload.pathMarkingTlvType = normalizePathMarkingTlvType(payload.pathMarkingTlvType, payload.bmpV4TlvDraft);
             const saveResult = await window.bmpApi.saveBmpConfig(payload);
             if (saveResult.status !== 'success') {
                 message.error(saveResult.msg || '配置文件保存失败');
@@ -475,13 +474,103 @@
         } else {
             console.error('配置文件加载失败', savedConfig.msg);
         }
-
     });
 </script>
 
 <style scoped>
-    :deep(.ant-table-body) {
-        height: 200px !important;
+    .adaptive-list-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: hidden;
+    }
+
+    .adaptive-form-row {
+        flex: 0 0 auto;
+    }
+
+    .adaptive-list-row {
+        flex: 1 1 0;
+        min-height: 0;
+    }
+
+    .adaptive-list-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-list-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .adaptive-list-card :deep(.ant-card-body),
+    .adaptive-list-card :deep(.ant-card-body > div) {
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table,
+    .adaptive-table :deep(.ant-spin-nested-loading),
+    .adaptive-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+    }
+
+    .adaptive-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .adaptive-table :deep(.ant-table-container),
+    .adaptive-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .adaptive-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
         overflow-y: auto !important;
+    }
+
+    .adaptive-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .adaptive-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 </style>

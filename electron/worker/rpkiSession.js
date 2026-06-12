@@ -19,6 +19,7 @@ class RpkiSession {
         this.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
         this.aspaFormat = RpkiConst.RPKI_ASPA_FORMAT.LATEST;
         this.sendQueue = Promise.resolve();
+        this.closing = false;
     }
 
     static makeKey(localIp, localPort, remoteIp, remotePort) {
@@ -60,6 +61,11 @@ class RpkiSession {
     }
 
     recvMsg(buffer) {
+        if (this.closing) {
+            logger.warn(`Ignoring message from ${this.remoteIp}:${this.remotePort}: session is closing`);
+            return;
+        }
+
         this.messageBuffer = Buffer.concat([this.messageBuffer, buffer]);
         this.processBufferedMessages();
     }
@@ -99,23 +105,36 @@ class RpkiSession {
         }
     }
 
-    // 协商协议版本：取客户端请求版本与服务端最高支持版本的较小者
+    getMaxSupportedVersion() {
+        const configuredVersion =
+            this.rpkiWorker?.rpkiConfigData?.maxProtocolVersion ?? this.rpkiWorker?.maxSupportedVersion;
+        const maxSupportedVersion = Number(configuredVersion);
+        const supportedVersions = Object.values(RpkiConst.RPKI_PROTOCOL_VERSION);
+
+        return supportedVersions.includes(maxSupportedVersion)
+            ? maxSupportedVersion
+            : RpkiConst.RPKI_MAX_SUPPORTED_VERSION;
+    }
+
+    // 协商协议版本：取客户端请求版本与服务端最高配置版本的较小者
     negotiateVersion(clientVersion) {
-        if (clientVersion > RpkiConst.RPKI_MAX_SUPPORTED_VERSION) {
-            this.protocolVersion = RpkiConst.RPKI_MAX_SUPPORTED_VERSION;
-        } else {
-            this.protocolVersion = clientVersion;
-        }
+        const maxSupportedVersion = this.getMaxSupportedVersion();
+        this.protocolVersion = clientVersion > maxSupportedVersion ? maxSupportedVersion : clientVersion;
         return this.protocolVersion;
     }
 
     handleResetQuery(header, _message) {
         // 版本协商
-        if (header.version > RpkiConst.RPKI_MAX_SUPPORTED_VERSION) {
+        const maxSupportedVersion = this.getMaxSupportedVersion();
+        if (header.version > maxSupportedVersion) {
             logger.error(
-                `Unsupported protocol version: ${header.version}, max supported: ${RpkiConst.RPKI_MAX_SUPPORTED_VERSION}`
+                `Unsupported protocol version: ${header.version}, max supported: ${maxSupportedVersion}`
             );
-            this.sendError(RpkiConst.RPKI_ERROR_CODE.UNSUPPORTED_PROTOCOL_VERSION);
+            this.sendError(
+                RpkiConst.RPKI_ERROR_CODE.UNSUPPORTED_PROTOCOL_VERSION,
+                maxSupportedVersion,
+                true
+            );
             return;
         }
         this.negotiateVersion(header.version);
@@ -648,18 +667,51 @@ class RpkiSession {
         this.sendMessage(buffer);
     }
 
-    // Error Report PDU: Header + ErrorCode(2 in reserved) + Length(4) + EncapPduLen(4) + EncapPdu + ErrTextLen(4) + ErrText
-    sendError(errorCode) {
+    buildErrorReportPdu(errorCode, protocolVersion = this.protocolVersion) {
         const buffer = Buffer.alloc(RpkiConst.RPKI_HEADER_LENGTH + 8);
 
-        buffer[0] = this.protocolVersion;
+        buffer[0] = protocolVersion;
         buffer[1] = RpkiConst.RPKI_MSG_TYPE.ERROR_REPORT;
         buffer.writeUInt16BE(errorCode, 2);
         buffer.writeUInt32BE(RpkiConst.RPKI_HEADER_LENGTH + 8, 4);
         buffer.writeUInt32BE(0, RpkiConst.RPKI_HEADER_LENGTH); // Encapsulated PDU length = 0
         buffer.writeUInt32BE(0, RpkiConst.RPKI_HEADER_LENGTH + 4); // Error text length = 0
 
-        this.sendMessage(buffer);
+        return buffer;
+    }
+
+    // Error Report PDU: Header + ErrorCode(2 in reserved) + Length(4) + EncapPduLen(4) + EncapPdu + ErrTextLen(4) + ErrText
+    sendError(errorCode, protocolVersion = this.protocolVersion, closeAfterSend = false) {
+        const buffer = this.buildErrorReportPdu(errorCode, protocolVersion);
+
+        if (!closeAfterSend) {
+            this.sendMessage(buffer);
+            return;
+        }
+
+        if (!this.socket || this.socket.destroyed) {
+            logger.error(`Cannot send error report: socket is closed or destroyed`);
+            return;
+        }
+
+        try {
+            this.closing = true;
+            if (typeof this.socket.end === 'function') {
+                this.socket.end(buffer, () => {
+                    if (this.socket && !this.socket.destroyed && typeof this.socket.destroy === 'function') {
+                        this.socket.destroy();
+                    }
+                });
+            } else {
+                this.socket.write(buffer);
+                if (typeof this.socket.destroy === 'function') {
+                    this.socket.destroy();
+                }
+            }
+            logger.debug(`Sent error report and closed ${this.remoteIp}:${this.remotePort}, length ${buffer.length}`);
+        } catch (err) {
+            logger.error(`Error sending error report: ${err.message}`);
+        }
     }
 
     async writeRoaListData(roas, flags) {

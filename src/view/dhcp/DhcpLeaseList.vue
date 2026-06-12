@@ -1,8 +1,8 @@
 <template>
-    <div class="mt-container">
-        <a-row>
+    <div class="mt-container adaptive-table-page">
+        <a-row class="adaptive-table-row">
             <a-col :span="24">
-                <a-card title="租约列表">
+                <a-card title="租约列表" class="adaptive-table-card">
                     <template #extra>
                         <a-button size="small" @click="loadLeaseList">刷新</a-button>
                     </template>
@@ -10,9 +10,15 @@
                         :columns="columns"
                         :data-source="leaseList"
                         :row-key="record => `${record.version}-${record.id}`"
-                        :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                        :scroll="{ y: 500 }"
+                        :pagination="{
+                            pageSize: 20,
+                            showSizeChanger: false,
+                            position: ['bottomCenter'],
+                            showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                        }"
+                        :scroll="{ y: '100%' }"
                         size="small"
+                        class="adaptive-table"
                     >
                         <template #bodyCell="{ column, record }">
                             <template v-if="column.key === 'version'">
@@ -136,4 +142,84 @@
     });
 </script>
 
-<style scoped></style>
+<style scoped>
+    .adaptive-table-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .adaptive-table-row,
+    .adaptive-table-row :deep(.ant-col) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-table-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .adaptive-table-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table,
+    .adaptive-table :deep(.ant-spin-nested-loading),
+    .adaptive-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .adaptive-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .adaptive-table :deep(.ant-table-container),
+    .adaptive-table :deep(.ant-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .adaptive-table :deep(.ant-table-header) {
+        flex: 0 0 auto;
+        overflow: hidden !important;
+    }
+
+    .adaptive-table :deep(.ant-table-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+    }
+
+    .adaptive-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .adaptive-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+    }
+</style>

@@ -1,98 +1,117 @@
 <template>
-    <div class="mt-container">
+    <div class="mt-container network-info-page">
         <!-- 面板头部 -->
-        <a-card title="网络信息">
-            <div style="display: flex; align-items: center">
-                <a-select
-                    v-model:value="selectedInterfaceName"
-                    placeholder="选择网络接口"
-                    style="min-width: 280px; margin-right: 12px"
-                    :options="interfaces.map(i => ({ label: i.displayName || i.name, value: i.name }))"
-                    :loading="isLoading"
-                />
-                <a-button :loading="isLoading" @click="loadNetworkInfo">
-                    <template #icon>
-                        <ReloadOutlined />
-                    </template>
-                    刷新
-                </a-button>
-            </div>
+        <a-card title="网络信息" class="network-info-card">
+            <div class="network-info-content">
+                <div class="network-toolbar">
+                    <a-select
+                        v-model:value="selectedInterfaceName"
+                        placeholder="选择网络接口"
+                        class="network-interface-select"
+                        :options="interfaces.map(i => ({ label: i.displayName || i.name, value: i.name }))"
+                        :loading="isLoading"
+                    />
+                    <a-button :loading="isLoading" @click="loadNetworkInfo">
+                        <template #icon>
+                            <ReloadOutlined />
+                        </template>
+                        刷新
+                    </a-button>
+                </div>
 
-            <a-table
-                :columns="columns"
-                :data-source="filteredInterfaces"
-                :pagination="{ pageSize: 20, showSizeChanger: false, position: ['bottomCenter'], showTotal: total => '共 ' + total + ' 条，每页 20 条' }"
-                :scroll="{ y: 150 }"
-                size="small"
-                row-key="name"
-                :loading="isLoading"
-                class="mt-margin-top-10"
-            >
-                <template #bodyCell="{ column, record }">
-                    <template v-if="column.key === 'status'">
-                        <a-tag v-if="record.isUp" color="success">UP</a-tag>
-                        <a-tag v-else color="default">DOWN</a-tag>
-                    </template>
-                    <template v-else-if="column.key === 'family'">
-                        <a-tag color="blue">{{ record.family }}</a-tag>
-                    </template>
-                    <template v-else-if="column.key === 'mac'">
-                        <a-tag color="green">{{ record.mac }}</a-tag>
-                    </template>
-                    <template v-else-if="column.key === 'addresses'">
-                        <div class="ip-address-list">
-                            <div v-for="(addr, idx) in record.addresses" :key="idx" class="ip-address-item">
-                                <div class="ip-info">
-                                    <a-tag :color="addr.family === 'IPv4' ? 'blue' : 'purple'" class="family-tag">
-                                        {{ addr.family }}
-                                    </a-tag>
-                                    <div class="address-details">
-                                        <span class="ip-text">{{ addr.address }}</span>
-                                        <span v-if="addr.family === 'IPv6' && addr.prefixLength" class="subnet-text">
-                                            /{{ addr.prefixLength }}
-                                        </span>
-                                        <span v-if="addr.family === 'IPv4' && addr.netmask" class="subnet-text">
-                                            ({{ addr.netmask }})
-                                        </span>
+                <div class="network-table-wrap">
+                    <a-table
+                        :columns="columns"
+                        :data-source="filteredInterfaces"
+                        :pagination="{
+                            pageSize: 20,
+                            showSizeChanger: false,
+                            position: ['bottomCenter'],
+                            showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                        }"
+                        size="small"
+                        row-key="name"
+                        :loading="isLoading"
+                        class="network-info-table"
+                    >
+                        <template #bodyCell="{ column, record }">
+                            <template v-if="column.key === 'status'">
+                                <a-tag v-if="record.isUp" color="success">UP</a-tag>
+                                <a-tag v-else color="default">DOWN</a-tag>
+                            </template>
+                            <template v-else-if="column.key === 'family'">
+                                <a-tag color="blue">{{ record.family }}</a-tag>
+                            </template>
+                            <template v-else-if="column.key === 'mac'">
+                                <a-tag color="green">{{ record.mac }}</a-tag>
+                            </template>
+                            <template v-else-if="column.key === 'addresses'">
+                                <div class="ip-address-list">
+                                    <div v-for="(addr, idx) in record.addresses" :key="idx" class="ip-address-item">
+                                        <div class="ip-info">
+                                            <a-tag
+                                                :color="addr.family === 'IPv4' ? 'blue' : 'purple'"
+                                                class="family-tag"
+                                            >
+                                                {{ addr.family }}
+                                            </a-tag>
+                                            <div class="address-details">
+                                                <span class="ip-text">{{ addr.address }}</span>
+                                                <span
+                                                    v-if="addr.family === 'IPv6' && addr.prefixLength"
+                                                    class="subnet-text"
+                                                >
+                                                    /{{ addr.prefixLength }}
+                                                </span>
+                                                <span v-if="addr.family === 'IPv4' && addr.netmask" class="subnet-text">
+                                                    ({{ addr.netmask }})
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <!-- Inline Actions -->
+                                        <div class="ip-actions">
+                                            <a-button
+                                                type="link"
+                                                size="small"
+                                                class="action-btn"
+                                                @click="prepareEdit(record.name, addr)"
+                                            >
+                                                <EditOutlined />
+                                            </a-button>
+
+                                            <!-- Delete (IPv6 only) -->
+                                            <a-popconfirm
+                                                v-if="addr.family === 'IPv6'"
+                                                title="确定要删除这个 IP 地址吗？"
+                                                ok-text="删除"
+                                                cancel-text="取消"
+                                                @confirm="handleDelete(record.name, addr.address, addr.family)"
+                                            >
+                                                <a-button type="link" danger size="small" class="action-btn">
+                                                    <DeleteOutlined />
+                                                </a-button>
+                                            </a-popconfirm>
+                                        </div>
+                                    </div>
+
+                                    <!-- Add Button (IPv6 only) -->
+                                    <div class="add-ip-btn-wrapper">
+                                        <a-button
+                                            type="link"
+                                            size="small"
+                                            class="action-btn"
+                                            @click="handleAddIPv6(record)"
+                                        >
+                                            <PlusOutlined />
+                                        </a-button>
                                     </div>
                                 </div>
-
-                                <!-- Inline Actions -->
-                                <div class="ip-actions">
-                                    <a-button
-                                        type="link"
-                                        size="small"
-                                        class="action-btn"
-                                        @click="prepareEdit(record.name, addr)"
-                                    >
-                                        <EditOutlined />
-                                    </a-button>
-
-                                    <!-- Delete (IPv6 only) -->
-                                    <a-popconfirm
-                                        v-if="addr.family === 'IPv6'"
-                                        title="确定要删除这个 IP 地址吗？"
-                                        ok-text="删除"
-                                        cancel-text="取消"
-                                        @confirm="handleDelete(record.name, addr.address, addr.family)"
-                                    >
-                                        <a-button type="link" danger size="small" class="action-btn">
-                                            <DeleteOutlined />
-                                        </a-button>
-                                    </a-popconfirm>
-                                </div>
-                            </div>
-
-                            <!-- Add Button (IPv6 only) -->
-                            <div class="add-ip-btn-wrapper">
-                                <a-button type="link" size="small" class="action-btn" @click="handleAddIPv6(record)">
-                                    <PlusOutlined />
-                                </a-button>
-                            </div>
-                        </div>
-                    </template>
-                </template>
-            </a-table>
+                            </template>
+                        </template>
+                    </a-table>
+                </div>
+            </div>
         </a-card>
 
         <!-- 添加 IPv6 弹窗 -->
@@ -421,9 +440,89 @@
 </script>
 
 <style scoped>
-    :deep(.ant-table-body) {
-        height: 150px !important;
-        overflow-y: auto !important;
+    .network-info-page {
+        height: calc(100vh - 70px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .network-info-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .network-info-card :deep(.ant-card-body) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .network-info-content {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .network-toolbar {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+        min-width: 0;
+    }
+
+    .network-interface-select {
+        min-width: 280px;
+    }
+
+    .network-table-wrap {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .network-info-table,
+    .network-info-table :deep(.ant-spin-nested-loading),
+    .network-info-table :deep(.ant-spin-container) {
+        flex: 1 1 0;
+        height: 100%;
+        min-height: 0;
+    }
+
+    .network-info-table :deep(.ant-spin-container) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .network-info-table :deep(.ant-table) {
+        flex: 1 1 0;
+        min-height: 0;
+        overflow: auto;
+    }
+
+    .network-info-table :deep(.ant-table-container),
+    .network-info-table :deep(.ant-table-content) {
+        min-height: 0;
+    }
+
+    .network-info-table :deep(.ant-pagination) {
+        flex: 0 0 auto;
+        margin: 10px 0 0;
+    }
+
+    .network-info-table :deep(.ant-table-thead > tr > th) {
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 
     .ip-address-list {

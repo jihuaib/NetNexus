@@ -122,6 +122,10 @@ class BgpPeer {
         };
     }
 
+    getQpNextHop(route) {
+        return `${route?.nextHop || this.instance.bsid || this.session.localIp}`;
+    }
+
     buildPathAttribute(type, flags, value) {
         const attr = [];
         attr.push(flags);
@@ -159,7 +163,7 @@ class BgpPeer {
 
         if (this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
             // QP Next Hop 始终优先使用 BSID，避免被扩展下一跳逻辑覆盖
-            const qpNextHop = route.nextHop || this.instance.bsid || this.session.localIp;
+            const qpNextHop = this.getQpNextHop(route);
             const nextHopBytes = ipToBytes(`${qpNextHop}`);
             attr.push(nextHopBytes.length);
             attr.push(...nextHopBytes);
@@ -228,7 +232,12 @@ class BgpPeer {
             msgLen += nlriBuf.length;
         } else if (this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
             // QP NLRI: [总长度][DQPN TLV][Prefix TLV]
+            const qpNextHop = this.getQpNextHop(route);
             while (routeIndex < routes.length) {
+                if (nlriBuf.length > 0 && this.getQpNextHop(route) !== qpNextHop) {
+                    break;
+                }
+
                 const qpNlri = this.buildQpNlri(route);
                 if (msgLen + nlriBuf.length + qpNlri.length > BgpConst.BGP_MAX_PKT_SIZE) {
                     if (nlriBuf.length > 0) {

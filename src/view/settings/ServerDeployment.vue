@@ -1,6 +1,6 @@
 <template>
     <div class="server-deployment-container">
-        <a-card title="Linux 服务器部署">
+        <a-card title="Linux 服务器部署" class="settings-card">
             <!-- 说明部分 -->
             <a-alert
                 type="info"

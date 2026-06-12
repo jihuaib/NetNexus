@@ -93,17 +93,26 @@ function makeMockSession(version = RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
         cacheSerial: 1
     };
     const session = new RpkiSession(messageHandler, rpkiWorker);
-    session.socket = {
+    const socket = {
         destroyed: false,
-        write: buf => sentBuffers.push(Buffer.from(buf))
+        ended: false,
+        write: buf => sentBuffers.push(Buffer.from(buf)),
+        end(buf) {
+            if (buf) sentBuffers.push(Buffer.from(buf));
+            this.ended = true;
+        },
+        destroy() {
+            this.destroyed = true;
+        }
     };
+    session.socket = socket;
     session.localIp = '127.0.0.1';
     session.localPort = 1280;
     session.remoteIp = '10.0.0.1';
     session.remotePort = 12345;
     session.protocolVersion = version;
     session.sessionId = 0xabcd;
-    return { session, sentBuffers, sentEvents, rpkiWorker };
+    return { session, sentBuffers, sentEvents, rpkiWorker, socket };
 }
 
 // ============ Tests ============
@@ -443,15 +452,52 @@ section('Version negotiation - handleResetQuery (RFC 8210 §7)');
 }
 {
     // v3 client (unsupported) → server rejects with Error Report code=4
-    const { session, sentBuffers } = makeMockSession();
+    const { session, sentBuffers, socket } = makeMockSession();
     session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
     session.handleResetQuery({ version: 3, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
     assertEq(sentBuffers.length, 1, 'Only Error Report sent for unsupported version');
+    assertEq(sentBuffers[0][0], RpkiConst.RPKI_PROTOCOL_VERSION.V2, 'Error Report version = server max v2');
     assertEq(sentBuffers[0][1], RpkiConst.RPKI_MSG_TYPE.ERROR_REPORT, 'PDU is Error Report');
     assertEq(
         sentBuffers[0].readUInt16BE(2),
         RpkiConst.RPKI_ERROR_CODE.UNSUPPORTED_PROTOCOL_VERSION,
         'Error code = 4 (UNSUPPORTED_PROTOCOL_VERSION)'
+    );
+    assert(socket.ended, 'Transport closed after unsupported version Error Report');
+    assert(session.closing, 'Session marked closing after unsupported version Error Report');
+}
+{
+    // Configured server max v1: v2 client must retry with v1 after Error Report.
+    const { session, sentBuffers, rpkiWorker, socket } = makeMockSession();
+    rpkiWorker.rpkiConfigData = { maxProtocolVersion: RpkiConst.RPKI_PROTOCOL_VERSION.V1 };
+    session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
+    session.handleResetQuery({ version: 2, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
+    assertEq(sentBuffers.length, 1, 'Configured max v1 rejects v2 with one Error Report');
+    assertEq(sentBuffers[0][0], RpkiConst.RPKI_PROTOCOL_VERSION.V1, 'Configured max v1 Error Report version = v1');
+    assertEq(
+        sentBuffers[0].readUInt16BE(2),
+        RpkiConst.RPKI_ERROR_CODE.UNSUPPORTED_PROTOCOL_VERSION,
+        'Configured max v1 Error code = 4'
+    );
+    assert(socket.ended, 'Configured max v1 closes transport after Error Report');
+    assert(session.closing, 'Configured max v1 session marked closing');
+}
+{
+    // Client retry with the advertised lower version succeeds and higher-version PDUs are suppressed.
+    const { session, sentBuffers, rpkiWorker } = makeMockSession();
+    rpkiWorker.rpkiConfigData = { maxProtocolVersion: RpkiConst.RPKI_PROTOCOL_VERSION.V1 };
+    rpkiWorker.rpkiRouterKeyMap.set(
+        'k',
+        new RpkiRouterKey('0123456789ABCDEF0123456789ABCDEF01234567', 100, 'AA')
+    );
+    rpkiWorker.rpkiAspaMap.set('a', new RpkiAspa(65000, [65001], 0));
+    session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
+    session.handleResetQuery({ version: 1, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
+    assertEq(session.protocolVersion, 1, 'Retry with configured max v1 negotiates to v1');
+    assert(sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ROUTER_KEY), 'Retry v1 sends Router Key');
+    assert(
+        !sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA),
+        'Retry v1 does not send ASPA'
     );
 }
 

@@ -81,6 +81,17 @@ const BGP_ADDR_FAMILY = {
     LINK_STATE_VPN: 15
 };
 
+const BGP_QP_ROUTE_GROWTH_MODE = {
+    IP: 'ip',
+    DQPN: 'dqpn',
+    IP_DQPN: 'ip_dqpn'
+};
+
+const BGP_QP_BSID_MODE = {
+    FIXED: 'fixed',
+    CONTINUOUS: 'continuous'
+};
+
 // 协议规定的afi
 const BGP_AFI_TYPE = {
     AFI_IPV4: 1,
@@ -287,6 +298,7 @@ const BGP_REQ_TYPES = {
     GENERATE_IPV6_QP_ROUTES: 18,
     DELETE_IPV4_QP_ROUTES: 19,
     DELETE_IPV6_QP_ROUTES: 20,
+    GET_ROUTE_DETAIL: 21,
     // Configuration
     SAVE_IPV4_MVPN_ROUTE_CONFIG: 30,
     LOAD_IPV4_MVPN_ROUTE_CONFIG: 31,
@@ -320,6 +332,8 @@ module.exports = {
     BGP_PACKET_TYPE,
     BGP_OPEN_CAP_CODE,
     BGP_ADDR_FAMILY,
+    BGP_QP_ROUTE_GROWTH_MODE,
+    BGP_QP_BSID_MODE,
     BGP_AFI_TYPE,
     BGP_SAFI_TYPE,
     BGP_ROLE_TYPE,

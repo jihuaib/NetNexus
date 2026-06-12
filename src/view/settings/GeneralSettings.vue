@@ -1,6 +1,6 @@
 <template>
     <div class="general-settings">
-        <a-card title="通用设置">
+        <a-card title="通用设置" class="settings-card">
             <a-form :model="settingsForm" layout="vertical">
                 <a-form-item label="日志级别" name="logLevel">
                     <a-select v-model:value="settingsForm.logLevel" style="width: 100%">

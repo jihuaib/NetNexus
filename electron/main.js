@@ -182,7 +182,7 @@ app.whenReady().then(async () => {
 
     updateSplashProgress(50, '正在加载设置...');
     // 加载设置
-    systemApp.loadSettings();
+    await systemApp.loadSettings();
 
     updateSplashProgress(80, '正在初始化服务...');
     // 等待主窗口内容加载完成
