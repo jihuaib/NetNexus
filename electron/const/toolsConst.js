@@ -33,6 +33,10 @@ const DEFAULT_LOG_SETTINGS = {
     logLevel: 'off'
 };
 
+const LOG_REQ_TYPES = {
+    SET_LOG_LEVEL: 'SET_LOG_LEVEL'
+};
+
 // 默认更新设置
 const DEFAULT_UPDATE_SETTINGS = {
     autoCheckOnStartup: true,
@@ -45,5 +49,6 @@ module.exports = {
     TRANSPORT_PROTOCOL,
     DEFAULT_TOOLS_SETTINGS,
     DEFAULT_LOG_SETTINGS,
+    LOG_REQ_TYPES,
     DEFAULT_UPDATE_SETTINGS
 };

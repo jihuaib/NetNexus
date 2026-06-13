@@ -13,6 +13,7 @@ class NtpApp {
         this.ntpConfigFileKey = 'ntp-config';
         this.worker = null;
         this.isDev = !app.isPackaged;
+        this.logLevel = null;
         this.eventDispatcher = null;
         this.ntpEventHandler = null;
 
@@ -61,6 +62,10 @@ class NtpApp {
             }
 
             logger.info(`启动NTP服务器: ${JSON.stringify(config)}`);
+
+            if (this.logLevel) {
+                config.logLevel = this.logLevel;
+            }
 
             const workerPath = this.isDev
                 ? path.join(__dirname, '../worker/ntpWorker.js')

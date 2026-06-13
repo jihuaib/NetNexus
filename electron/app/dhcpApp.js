@@ -15,6 +15,7 @@ class DhcpApp {
         this.worker = null;
         this.worker6 = null;
         this.isDev = !app.isPackaged;
+        this.logLevel = null;
         this.eventDispatcher = null;
         this.dhcpEvtHandler = null;
         this.dhcp6EvtHandler = null;
@@ -56,6 +57,10 @@ class DhcpApp {
 
             logger.info(`启动DHCP: ${JSON.stringify(config)}`);
 
+            if (this.logLevel) {
+                config.logLevel = this.logLevel;
+            }
+
             const workerPath = this.isDev
                 ? path.join(__dirname, '../worker/dhcpWorker.js')
                 : path.join(process.resourcesPath, 'app', 'electron/worker/dhcpWorker.js');
@@ -81,7 +86,13 @@ class DhcpApp {
 
             // 启动 DHCPv6（可选，失败不影响 DHCPv4）
             if (config.v6) {
-                await this._startDhcp6(webContents, config.v6);
+                const v6Config = {
+                    ...config.v6
+                };
+                if (this.logLevel) {
+                    v6Config.logLevel = this.logLevel;
+                }
+                await this._startDhcp6(webContents, v6Config);
             }
 
             return successResponse(null, result.msg);

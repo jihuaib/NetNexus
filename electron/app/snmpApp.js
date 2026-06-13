@@ -6,6 +6,7 @@ const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const WorkerWithPromise = require('../worker/workerWithPromise');
 const SnmpConst = require('../const/snmpConst');
+const { LOG_REQ_TYPES } = require('../const/toolsConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 class SnmpApp {
     constructor(ipcMain, store) {
@@ -1452,6 +1453,11 @@ class SnmpApp {
         const workerFactory = new WorkerWithPromise(workerPath);
         this.mibWorker = workerFactory.createLongRunningWorker();
         this.mibWorker.worker.unref();
+        if (this.logLevel) {
+            this.mibWorker.sendRequest(LOG_REQ_TYPES.SET_LOG_LEVEL, this.logLevel).catch(error => {
+                logger.warn(`同步日志级别到 MIB worker 失败: ${error.message}`);
+            });
+        }
         return this.mibWorker;
     }
 

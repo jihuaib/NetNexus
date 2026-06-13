@@ -46,6 +46,7 @@ export default defineConfig({
         include: iconOptimizeDeps
     },
     build: {
+        chunkSizeWarningLimit: 1000,
         rollupOptions: {
             output: {
                 manualChunks(id) {
@@ -56,30 +57,7 @@ export default defineConfig({
                         return 'vue-vendor';
                     }
                     if (id.includes('/node_modules/ant-design-vue')) {
-                        const antdPath = id.split('/node_modules/ant-design-vue/es/')[1] || '';
-                        if (/^(table|vc-table)\//.test(antdPath)) {
-                            return 'antd-table';
-                        }
-                        if (/^(form|input|input-number|select|vc-select|date-picker|vc-picker|checkbox|radio|switch)\//.test(antdPath)) {
-                            return 'antd-form';
-                        }
-                        if (
-                            /^(modal|drawer|dropdown|tooltip|popover|popconfirm|message|notification|vc-dialog|vc-drawer|vc-dropdown|vc-trigger|vc-tooltip|vc-notification|vc-align)\//.test(
-                                antdPath
-                            )
-                        ) {
-                            return 'antd-overlay';
-                        }
-                        if (/^(menu|tabs|card|row|col|grid|space|divider|layout)\//.test(antdPath)) {
-                            return 'antd-layout';
-                        }
-                        if (/^(tree|vc-tree)\//.test(antdPath)) {
-                            return 'antd-tree';
-                        }
-                        if (/^(list|descriptions|statistic|tag|badge|empty|alert|spin|typography)\//.test(antdPath)) {
-                            return 'antd-display';
-                        }
-                        return 'antd-core';
+                        return 'antd-vendor';
                     }
                     if (id.includes('/node_modules/@ant-design/icons-vue')) {
                         return 'antd-icons';

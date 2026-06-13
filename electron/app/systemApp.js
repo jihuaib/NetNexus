@@ -3,7 +3,7 @@ const { app, dialog, BrowserWindow } = require('electron');
 const Store = require('electron-store');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
-const { DEFAULT_LOG_SETTINGS, DEFAULT_TOOLS_SETTINGS, DEFAULT_UPDATE_SETTINGS } = require('../const/toolsConst');
+const { DEFAULT_LOG_SETTINGS, DEFAULT_TOOLS_SETTINGS, DEFAULT_UPDATE_SETTINGS, LOG_REQ_TYPES } = require('../const/toolsConst');
 const { DEFAULT_API_SETTINGS } = require('../const/apiConst');
 const fs = require('fs');
 const path = require('path');
@@ -487,12 +487,33 @@ class SystemApp {
     applyLogLevel(logLevel) {
         this.currentLogLevel = logLevel || DEFAULT_LOG_SETTINGS.logLevel;
         logger.setLevel(this.currentLogLevel);
-        this.bgpApp.logLevel = this.currentLogLevel;
-        this.bmpApp.logLevel = this.currentLogLevel;
-        this.rpkiApp.logLevel = this.currentLogLevel;
-        this.ftpApp.logLevel = this.currentLogLevel;
-        this.snmpApp.logLevel = this.currentLogLevel;
-        this.tftpApp.logLevel = this.currentLogLevel;
+        [
+            this.bgpApp,
+            this.bmpApp,
+            this.rpkiApp,
+            this.ftpApp,
+            this.snmpApp,
+            this.dhcpApp,
+            this.ntpApp,
+            this.tftpApp
+        ].forEach(appInstance => this.applyLogLevelToApp(appInstance));
+    }
+
+    applyLogLevelToApp(appInstance) {
+        if (!appInstance) {
+            return;
+        }
+
+        appInstance.logLevel = this.currentLogLevel;
+        [appInstance.worker, appInstance.worker6, appInstance.mibWorker].forEach(worker => {
+            if (!worker || typeof worker.sendRequest !== 'function') {
+                return;
+            }
+
+            worker.sendRequest(LOG_REQ_TYPES.SET_LOG_LEVEL, this.currentLogLevel).catch(error => {
+                logger.warn(`同步日志级别到 worker 失败: ${error.message}`);
+            });
+        });
     }
 
     purgeStoredLogLevel() {

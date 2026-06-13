@@ -86,6 +86,10 @@ class TftpWorker {
                 ...config
             };
             this.tftpConfig = mergedConfig;
+            if (this.tftpConfig.logLevel) {
+                logger.setLevel(this.tftpConfig.logLevel);
+                logger.info(`Worker log level set to: ${this.tftpConfig.logLevel}`);
+            }
             this.validateConfig(mergedConfig);
 
             this.transferHistory = [];

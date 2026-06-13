@@ -352,6 +352,10 @@ class DhcpWorker {
 
     startDhcp(messageId, config) {
         this.config = config;
+        if (this.config.logLevel) {
+            logger.setLevel(this.config.logLevel);
+            logger.info(`Worker log level set to: ${this.config.logLevel}`);
+        }
         const listenPort = Number.isInteger(Number(this.config.serverPort))
             ? Number(this.config.serverPort)
             : DhcpConst.DEFAULT_DHCP_CONFIG.serverPort;

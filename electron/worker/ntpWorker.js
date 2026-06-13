@@ -131,6 +131,10 @@ class NtpWorker {
                 ...config
             };
             this.ntpConfig = mergedConfig;
+            if (this.ntpConfig.logLevel) {
+                logger.setLevel(this.ntpConfig.logLevel);
+                logger.info(`Worker log level set to: ${this.ntpConfig.logLevel}`);
+            }
             this.validateConfig(mergedConfig);
             this.requestHistory = [];
             this.requestCounter = 0;

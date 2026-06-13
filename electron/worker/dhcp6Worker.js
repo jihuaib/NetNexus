@@ -364,6 +364,10 @@ class Dhcp6Worker {
 
     startDhcp6(messageId, config) {
         this.config = config;
+        if (this.config.logLevel) {
+            logger.setLevel(this.config.logLevel);
+            logger.info(`Worker log level set to: ${this.config.logLevel}`);
+        }
         const listenPort = Number.isInteger(Number(this.config.serverPort))
             ? Number(this.config.serverPort)
             : Dhcp6Const.DEFAULT_DHCP6_CONFIG.serverPort;

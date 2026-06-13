@@ -1,5 +1,6 @@
 const { parentPort } = require('worker_threads');
 const logger = require('../log/logger');
+const { LOG_REQ_TYPES } = require('../const/toolsConst');
 
 class WorkerMessageHandler {
     constructor() {
@@ -35,6 +36,12 @@ class WorkerMessageHandler {
 
             if (!op) {
                 this.sendErrorResponse(messageId, 'Invalid message format: missing operation');
+                return;
+            }
+
+            if (op === LOG_REQ_TYPES.SET_LOG_LEVEL) {
+                logger.setLevel(data);
+                this.sendSuccessResponse(messageId, null, '日志级别已更新');
                 return;
             }
 
