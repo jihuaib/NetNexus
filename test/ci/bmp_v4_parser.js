@@ -360,8 +360,17 @@ const routeMap = bgpSession.bgpRoutes
     .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
     .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
 assert.equal(routeMap.size, 1);
-assert.equal([...routeMap.values()][0].ip, '203.0.113.0');
-assert.equal([...routeMap.values()][0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
+const ipv4UnicastRoute = [...routeMap.values()][0];
+assert.equal(ipv4UnicastRoute.ip, '203.0.113.0');
+assert.equal(ipv4UnicastRoute.routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
+assert.equal(ipv4UnicastRoute.pathId, 0);
+assert.equal(ipv4UnicastRoute.rd, '0:0');
+assert.equal(ipv4UnicastRoute.getRouteKey(), '0|0:0|203.0.113.0|24');
+assert.equal(routeMap.has(ipv4UnicastRoute.getRouteKey()), true);
+assert.equal(ipv4UnicastRoute.getRouteListInfo().rd, '0:0');
+assert.equal(ipv4UnicastRoute.getRouteListInfo().pathId, 0);
+assert.equal(ipv4UnicastRoute.getRouteInfo().nlriDetail.rd, '0:0');
+assert.equal(ipv4UnicastRoute.getRouteInfo().nlriDetail.pathId, 0);
 assert.ok(events.some(event => event.type === BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE));
 
 const { session: pathMarkingGroupSession } = makeSession();
@@ -507,6 +516,8 @@ assert.ok(evpnRouteInfo.summary.includes('EXTENDED_COMMUNITIES: Encapsulation VX
 assert.ok(evpnRouteInfo.summary.includes('MP_REACH_NLRI'));
 assert.ok(evpnRouteInfo.summary.includes('L2VPN/EVPN'));
 assert.ok(evpnRouteInfo.summary.includes('evpn:mac-ip:65000:1:tag=100:mac=aa:bb:cc:dd:ee:ff:ip=192.0.2.10'));
+assert.equal(Object.prototype.hasOwnProperty.call(evpnRoute.getRouteInfo({ includeSummary: false }), 'summary'), false);
+assert.ok(evpnRoute.getRouteInfo({ includeSummary: true }).summary.includes('BGP UPDATE Message'));
 
 const { session: staleRefreshSession } = makeSession();
 staleRefreshSession.processMessage(

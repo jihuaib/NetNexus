@@ -134,10 +134,7 @@
                                                 :columns="bgpRouteColumns"
                                                 :data-source="bgpRouteList"
                                                 :pagination="bgpRoutePagination"
-                                                :row-key="
-                                                    record =>
-                                                        `${record.addrFamilyType}|${record.pathId}|${record.rd}|${record.ip}|${record.mask}`
-                                                "
+                                                :row-key="getRouteRowKey"
                                                 :row-class-name="
                                                     record =>
                                                         record.routeState === BMP_ROUTE_STATE.STALE
@@ -364,7 +361,7 @@
         const [sessionType, sessionRd, sessionIp, sessionAs] = activeBgpSessionKey.value.split('|');
         const client = { localIp, localPort, remoteIp, remotePort };
         const sessionInfo = { sessionType, sessionRd, sessionIp, sessionAs };
-        const routeKey = record.routeKey || `${record.pathId}|${record.rd}|${record.ip}|${record.mask}`;
+        const routeKey = getRouteKey(record);
 
         try {
             const res = await window.bmpApi.getBgpRouteDetail(
@@ -372,7 +369,8 @@
                 sessionInfo,
                 activeLocRibAf.value,
                 activeLocRibType.value,
-                routeKey
+                routeKey,
+                true
             );
             if (res.status === 'success' && res.data) {
                 currentDetails.value = res.data;
@@ -408,7 +406,7 @@
         const [sessionType, sessionRd, sessionIp, sessionAs] = activeBgpSessionKey.value.split('|');
         const client = { localIp, localPort, remoteIp, remotePort };
         const sessionInfo = { sessionType, sessionRd, sessionIp, sessionAs };
-        const routeKey = record.routeKey || `${record.pathId}|${record.rd}|${record.ip}|${record.mask}`;
+        const routeKey = getRouteKey(record);
 
         try {
             const res = await window.bmpApi.getBgpRouteDetail(
@@ -416,7 +414,8 @@
                 sessionInfo,
                 activeLocRibAf.value,
                 activeLocRibType.value,
-                routeKey
+                routeKey,
+                false
             );
             if (res.status === 'success' && res.data) {
                 currentDetails.value = res.data;
@@ -440,6 +439,22 @@
         if (reason === null || reason === undefined) return '-';
         return BMP_PEER_DOWN_REASON_NAME[reason] || reason;
     };
+
+    const normalizeRoutePathId = pathId => {
+        const numericPathId = Number(pathId);
+        return Number.isInteger(numericPathId) ? numericPathId : 0;
+    };
+
+    const normalizeRouteRd = rd => (rd === null || rd === undefined || rd === '' ? '0:0' : String(rd));
+
+    const getRouteKey = record => {
+        if (record.routeKey) {
+            return record.routeKey;
+        }
+        return `${normalizeRoutePathId(record.pathId)}|${normalizeRouteRd(record.rd)}|${record.ip}|${record.mask}`;
+    };
+
+    const getRouteRowKey = record => `${record.addrFamilyType}|${getRouteKey(record)}`;
 
     const getSessionTlvCount = record => {
         return (

@@ -110,6 +110,15 @@ const mockRouteDetail = {
     summary: 'BGP UPDATE summary'
 };
 
+function makeMockRouteDetail(includeSummary = false) {
+    if (includeSummary) {
+        return mockRouteDetail;
+    }
+
+    const { summary: _summary, ...detail } = mockRouteDetail;
+    return detail;
+}
+
 const mockStatisticsReport = {
     client: mockClient,
     session: mockSession,
@@ -180,7 +189,8 @@ function makeMockBmpApp() {
         },
         async queryBgpRouteDetail(payload) {
             assert.strictEqual(payload.routeKey, mockRoute.routeKey);
-            return successResponse(mockRouteDetail, 'mock route detail');
+            assert.strictEqual(payload.includeSummary, true);
+            return successResponse(makeMockRouteDetail(payload.includeSummary), 'mock route detail');
         },
         async queryBgpInstanceRoutes(payload) {
             assert.strictEqual(payload.instance.addrFamilyType, 3);
@@ -196,7 +206,8 @@ function makeMockBmpApp() {
         },
         async queryBgpInstanceRouteDetail(payload) {
             assert.strictEqual(payload.routeKey, mockRoute.routeKey);
-            return successResponse(mockRouteDetail, 'mock instance route detail');
+            assert.strictEqual(payload.includeSummary, false);
+            return successResponse(makeMockRouteDetail(payload.includeSummary), 'mock instance route detail');
         },
         async queryBgpStatisticsReports(client) {
             assert.strictEqual(client.localPort, mockClient.localPort);
@@ -355,9 +366,17 @@ async function main() {
             ['POST', '/api/v1/bmp/sessions', { client: mockClient }, response => assert.strictEqual(response.body.data[0].sessionAs, 65001)],
             ['POST', '/api/v1/bmp/instances', { client: mockClient }, response => assert.strictEqual(response.body.data[0].addrFamilyType, 3)],
             ['POST', '/api/v1/bmp/routes', routePayload, response => assert.strictEqual(response.body.data.total, 1)],
-            ['POST', '/api/v1/bmp/routes/detail', { ...routePayload, routeKey: mockRoute.routeKey }, response => assert.strictEqual(response.body.data.summary, 'BGP UPDATE summary')],
+            ['POST', '/api/v1/bmp/routes/detail', { ...routePayload, routeKey: mockRoute.routeKey, includeSummary: true }, response => assert.strictEqual(response.body.data.summary, 'BGP UPDATE summary')],
             ['POST', '/api/v1/bmp/instances/routes', instanceRoutePayload, response => assert.strictEqual(response.body.data.list[0].routeKey, mockRoute.routeKey)],
-            ['POST', '/api/v1/bmp/instances/routes/detail', { client: mockClient, instance: mockInstance, routeKey: mockRoute.routeKey }, response => assert.strictEqual(response.body.data.localPref, 100)],
+            [
+                'POST',
+                '/api/v1/bmp/instances/routes/detail',
+                { client: mockClient, instance: mockInstance, routeKey: mockRoute.routeKey },
+                response => {
+                    assert.strictEqual(response.body.data.localPref, 100);
+                    assert.strictEqual(Object.prototype.hasOwnProperty.call(response.body.data, 'summary'), false);
+                }
+            ],
             ['POST', '/api/v1/bmp/statistics/session', { client: mockClient }, response => assert.strictEqual(response.body.data[0].statistics[0].value, 1)],
             ['POST', '/api/v1/bmp/statistics/instance', { client: mockClient }, response => assert.strictEqual(response.body.data[0].instance.vrfTableNames[0], 'global')]
         ];

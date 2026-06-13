@@ -118,7 +118,7 @@ class BmpApp {
         );
     }
 
-    async queryBgpRouteDetail({ client, session, af, ribType, routeKey }) {
+    async queryBgpRouteDetail({ client, session, af, ribType, routeKey, includeSummary = false }) {
         return this.sendWorkerQuery(
             BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTE_DETAIL,
             {
@@ -126,7 +126,8 @@ class BmpApp {
                 session,
                 af,
                 ribType,
-                routeKey
+                routeKey,
+                includeSummary
             },
             null
         );
@@ -151,13 +152,14 @@ class BmpApp {
         );
     }
 
-    async queryBgpInstanceRouteDetail({ client, instance, routeKey }) {
+    async queryBgpInstanceRouteDetail({ client, instance, routeKey, includeSummary = false }) {
         return this.sendWorkerQuery(
             BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_ROUTE_DETAIL,
             {
                 client,
                 instance,
-                routeKey
+                routeKey,
+                includeSummary
             },
             null
         );
@@ -359,14 +361,15 @@ class BmpApp {
         }
     }
 
-    async handleGetBgpRouteDetail(event, client, session, af, ribType, routeKey) {
+    async handleGetBgpRouteDetail(event, client, session, af, ribType, routeKey, includeSummary = false) {
         try {
             return await this.queryBgpRouteDetail({
                 client,
                 session,
                 af,
                 ribType,
-                routeKey
+                routeKey,
+                includeSummary
             });
         } catch (error) {
             logger.error('Error getting route detail:', error.message);
@@ -396,12 +399,13 @@ class BmpApp {
         }
     }
 
-    async handleGetBgpInstanceRouteDetail(event, client, instance, routeKey) {
+    async handleGetBgpInstanceRouteDetail(event, client, instance, routeKey, includeSummary = false) {
         try {
             return await this.queryBgpInstanceRouteDetail({
                 client,
                 instance,
-                routeKey
+                routeKey,
+                includeSummary
             });
         } catch (error) {
             logger.error('Error getting instance route detail:', error.message);

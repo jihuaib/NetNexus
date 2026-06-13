@@ -98,10 +98,7 @@
                                                 :columns="bgpRouteColumns"
                                                 :data-source="bgpRouteList"
                                                 :pagination="bgpRoutePagination"
-                                                :row-key="
-                                                    record =>
-                                                        `${record.addrFamilyType}|${record.pathId}|${record.rd}|${record.ip}|${record.mask}`
-                                                "
+                                                :row-key="getRouteRowKey"
                                                 :row-class-name="
                                                     record =>
                                                         record.routeState === BMP_ROUTE_STATE.STALE
@@ -196,6 +193,22 @@
         if (flags === null || flags === undefined) return '-';
         return `0x${Number(flags).toString(16).padStart(2, '0')}`;
     };
+
+    const normalizeRoutePathId = pathId => {
+        const numericPathId = Number(pathId);
+        return Number.isInteger(numericPathId) ? numericPathId : 0;
+    };
+
+    const normalizeRouteRd = rd => (rd === null || rd === undefined || rd === '' ? '0:0' : String(rd));
+
+    const getRouteKey = record => {
+        if (record.routeKey) {
+            return record.routeKey;
+        }
+        return `${normalizeRoutePathId(record.pathId)}|${normalizeRouteRd(record.rd)}|${record.ip}|${record.mask}`;
+    };
+
+    const getRouteRowKey = record => `${record.addrFamilyType}|${getRouteKey(record)}`;
 
     const formatClientTab = client => {
         return client.remoteIp || '-';
@@ -572,10 +585,10 @@
             instanceRd: activeInstanceKey.value.split('|')[1],
             addrFamilyType: activeInstanceKey.value.split('|')[2]
         };
-        const routeKey = record.routeKey || `${record.pathId}|${record.rd}|${record.ip}|${record.mask}`;
+        const routeKey = getRouteKey(record);
 
         try {
-            const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey);
+            const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey, true);
             if (res.status === 'success' && res.data) {
                 currentDetails.value = res.data;
             } else {
@@ -607,10 +620,10 @@
             instanceRd: activeInstanceKey.value.split('|')[1],
             addrFamilyType: activeInstanceKey.value.split('|')[2]
         };
-        const routeKey = record.routeKey || `${record.pathId}|${record.rd}|${record.ip}|${record.mask}`;
+        const routeKey = getRouteKey(record);
 
         try {
-            const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey);
+            const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey, false);
             if (res.status === 'success' && res.data) {
                 currentDetails.value = res.data;
             } else {

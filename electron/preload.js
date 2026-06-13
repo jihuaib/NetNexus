@@ -134,13 +134,13 @@ contextBridge.exposeInMainWorld('bmpApi', {
     getBgpSessions: client => ipcRenderer.invoke('bmp:getBgpSessions', client),
     getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState, prefixFilter) =>
         ipcRenderer.invoke('bmp:getBgpRoutes', client, session, af, ribType, page, pageSize, routeState, prefixFilter),
-    getBgpRouteDetail: (client, session, af, ribType, routeKey) =>
-        ipcRenderer.invoke('bmp:getBgpRouteDetail', client, session, af, ribType, routeKey),
+    getBgpRouteDetail: (client, session, af, ribType, routeKey, includeSummary = false) =>
+        ipcRenderer.invoke('bmp:getBgpRouteDetail', client, session, af, ribType, routeKey, includeSummary),
     getBgpInstances: client => ipcRenderer.invoke('bmp:getBgpInstances', client),
     getBgpInstanceRoutes: (client, instance, page, pageSize, routeState, prefixFilter) =>
         ipcRenderer.invoke('bmp:getBgpInstanceRoutes', client, instance, page, pageSize, routeState, prefixFilter),
-    getBgpInstanceRouteDetail: (client, instance, routeKey) =>
-        ipcRenderer.invoke('bmp:getBgpInstanceRouteDetail', client, instance, routeKey),
+    getBgpInstanceRouteDetail: (client, instance, routeKey, includeSummary = false) =>
+        ipcRenderer.invoke('bmp:getBgpInstanceRouteDetail', client, instance, routeKey, includeSummary),
     purgeStaleBgpRoutes: (client, session, af, ribType) =>
         ipcRenderer.invoke('bmp:purgeStaleBgpRoutes', client, session, af, ribType),
     purgeStaleBgpInstanceRoutes: (client, instance) =>

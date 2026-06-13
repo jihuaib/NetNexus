@@ -663,8 +663,10 @@ class BmpSession {
     }
 
     setRouteNlri(route, nlri, afi, safi) {
-        route.pathId = nlri.pathId;
-        route.rd = nlri.rd;
+        const normalizedPathId = BmpBgpRoute.normalizePathId(nlri.pathId);
+        const normalizedRd = BmpBgpRoute.normalizeRd(nlri.rd);
+        route.pathId = normalizedPathId;
+        route.rd = normalizedRd;
         route.ip = nlri.displayPrefix || nlri.prefix;
         route.mask = nlri.length;
         route.afi = afi;
@@ -674,7 +676,11 @@ class BmpSession {
             : null;
         route.routeType = nlri.routeType || null;
         route.rawNlri = nlri.rawNlri || null;
-        route.nlriDetail = nlri;
+        route.nlriDetail = {
+            ...nlri,
+            pathId: normalizedPathId,
+            rd: normalizedRd
+        };
         route.parserValid = nlri.valid !== false;
         route.parseErrors = Array.isArray(nlri.errors) && nlri.errors.length > 0 ? nlri.errors.join('; ') : null;
         route.parseWarnings =

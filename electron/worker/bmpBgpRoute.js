@@ -2,14 +2,17 @@ const { getAddrFamilyType } = require('../utils/bgpUtils');
 const { getBgpPacketSummary } = require('../utils/bgpPacketParser');
 const BmpConst = require('../const/bmpConst');
 
+const DEFAULT_PATH_ID = 0;
+const DEFAULT_RD = '0:0';
+
 class BmpBgpRoute {
     constructor(BmpBgpSession, BmpBgpInstance) {
         this.BmpBgpSession = BmpBgpSession;
         this.BmpBgpInstance = BmpBgpInstance;
 
         // key
-        this.pathId = null;
-        this.rd = null;
+        this.pathId = DEFAULT_PATH_ID;
+        this.rd = DEFAULT_RD;
         this.ip = null;
         this.mask = null;
         this.afi = null;
@@ -51,13 +54,33 @@ class BmpBgpRoute {
         this.staleReason = null;
     }
 
+    static normalizePathId(pathId) {
+        if (pathId === null || pathId === undefined || pathId === '') {
+            return DEFAULT_PATH_ID;
+        }
+        const numericPathId = Number(pathId);
+        return Number.isInteger(numericPathId) ? numericPathId : DEFAULT_PATH_ID;
+    }
+
+    static normalizeRd(rd) {
+        if (rd === null || rd === undefined || rd === '') {
+            return DEFAULT_RD;
+        }
+        return String(rd);
+    }
+
     static makeKey(pathId, rd, ip, mask) {
-        return `${pathId}|${rd}|${ip}|${mask}`;
+        return `${BmpBgpRoute.normalizePathId(pathId)}|${BmpBgpRoute.normalizeRd(rd)}|${ip}|${mask}`;
     }
 
     static parseKey(key) {
         const [pathId, rd, ip, mask] = key.split('|');
-        return { pathId, rd, ip, mask };
+        return {
+            pathId: BmpBgpRoute.normalizePathId(pathId),
+            rd: BmpBgpRoute.normalizeRd(rd),
+            ip,
+            mask
+        };
     }
 
     static getKnownPathStatusMask() {
@@ -134,12 +157,12 @@ class BmpBgpRoute {
             safi: this.safi,
             ip: this.ip,
             mask: this.mask,
-            rd: this.rd,
+            rd: BmpBgpRoute.normalizeRd(this.rd),
             origin: this.origin,
             asPath: this.asPath,
             med: this.med,
             nextHop: this.nextHop,
-            pathId: this.pathId,
+            pathId: BmpBgpRoute.normalizePathId(this.pathId),
             labels: this.labels,
             parserValid: this.parserValid,
             parseErrors: this.parseErrors,
@@ -164,7 +187,7 @@ class BmpBgpRoute {
             safi: this.safi,
             ip: this.ip,
             mask: this.mask,
-            rd: this.rd,
+            rd: BmpBgpRoute.normalizeRd(this.rd),
             origin: this.origin,
             asPath: this.asPath,
             med: this.med,
@@ -172,7 +195,7 @@ class BmpBgpRoute {
             localPref: this.localPref,
             communities: this.communities,
             otc: this.otc,
-            pathId: this.pathId,
+            pathId: BmpBgpRoute.normalizePathId(this.pathId),
             labels: this.labels,
             routeType: this.routeType,
             rawNlri: this.rawNlri,

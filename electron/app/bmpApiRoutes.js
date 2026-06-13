@@ -87,6 +87,33 @@ function readInteger(parent, key, options = {}) {
     return number;
 }
 
+function readBoolean(parent, key, options = {}) {
+    const { required = false, defaultValue = false } = options;
+    const value = parent[key];
+    if (value === undefined || value === null || value === '') {
+        if (!required) {
+            return defaultValue;
+        }
+        throw new ParameterError(`${key}不能为空`);
+    }
+
+    if (typeof value === 'boolean') {
+        return value;
+    }
+
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true') {
+            return true;
+        }
+        if (normalized === 'false') {
+            return false;
+        }
+    }
+
+    throw new ParameterError(`${key}必须是布尔值`);
+}
+
 function normalizeClient(value) {
     if (!isPlainObject(value)) {
         throw new ParameterError('client必须是对象');
@@ -206,7 +233,8 @@ function normalizeRouteDetailQuery(body) {
         session: normalizeSession(readObject(body, 'session')),
         af,
         ribType,
-        routeKey: readString(body, 'routeKey', { maxLength: ROUTE_KEY_MAX_LENGTH })
+        routeKey: readString(body, 'routeKey', { maxLength: ROUTE_KEY_MAX_LENGTH }),
+        includeSummary: readBoolean(body, 'includeSummary')
     };
 }
 
@@ -214,7 +242,8 @@ function normalizeInstanceRouteDetailQuery(body) {
     return {
         client: normalizeClient(readObject(body, 'client')),
         instance: normalizeInstance(readObject(body, 'instance')),
-        routeKey: readString(body, 'routeKey', { maxLength: ROUTE_KEY_MAX_LENGTH })
+        routeKey: readString(body, 'routeKey', { maxLength: ROUTE_KEY_MAX_LENGTH }),
+        includeSummary: readBoolean(body, 'includeSummary')
     };
 }
 

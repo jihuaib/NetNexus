@@ -612,7 +612,7 @@ class BmpWorker {
     }
 
     getBgpInstanceRouteDetail(messageId, data) {
-        const { client, instance, routeKey, route } = data;
+        const { client, instance, routeKey, route, includeSummary = false } = data;
         const lookup = this.getBgpInstanceRouteMap(client, instance);
         if (this.sendRouteLookupError(messageId, lookup)) {
             return;
@@ -625,7 +625,11 @@ class BmpWorker {
             return;
         }
 
-        this.messageHandler.sendSuccessResponse(messageId, bgpRoute.getRouteInfo(), 'BGP实例获取路由详情成功');
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            bgpRoute.getRouteInfo({ includeSummary: includeSummary === true }),
+            'BGP实例获取路由详情成功'
+        );
     }
 
     getBgpRoutes(messageId, data) {
@@ -658,7 +662,7 @@ class BmpWorker {
     }
 
     getBgpRouteDetail(messageId, data) {
-        const { client, session, af, ribType, routeKey, route } = data;
+        const { client, session, af, ribType, routeKey, route, includeSummary = false } = data;
         const lookup = this.getBgpSessionRouteMap(client, session, af, ribType);
         if (this.sendRouteLookupError(messageId, lookup)) {
             return;
@@ -671,7 +675,11 @@ class BmpWorker {
             return;
         }
 
-        this.messageHandler.sendSuccessResponse(messageId, bgpRoute.getRouteInfo(), '获取路由详情成功');
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            bgpRoute.getRouteInfo({ includeSummary: includeSummary === true }),
+            '获取路由详情成功'
+        );
     }
 
     purgeStaleRouteMap(routeMap, onDelete) {
