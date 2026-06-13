@@ -121,7 +121,9 @@
 <script setup>
     import { ref, onMounted } from 'vue';
     import { message } from 'ant-design-vue';
-    import { CloudUploadOutlined, ApiOutlined, CheckCircleOutlined } from '@ant-design/icons-vue';
+    import CloudUploadOutlined from '@ant-design/icons-vue/es/icons/CloudUploadOutlined';
+    import ApiOutlined from '@ant-design/icons-vue/es/icons/ApiOutlined';
+    import CheckCircleOutlined from '@ant-design/icons-vue/es/icons/CheckCircleOutlined';
 
     defineOptions({
         name: 'ServerDeployment'

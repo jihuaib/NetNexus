@@ -31,6 +31,7 @@ const {
     readAspaJsonlPage,
     countJsonlAspas,
     writeAspasToJsonl,
+    removeAspaFromJsonl,
     parseAspaJsonFile
 } = require('../utils/rpkiAspaImport');
 const RpkiRoaQueryIndex = require('../utils/rpkiRoaQueryIndex');
@@ -832,48 +833,25 @@ class RpkiApp {
     }
 
     async handleDeleteAspa(event, aspa) {
-        let tempPath = null;
-        let stream = null;
         try {
             const filePath = await this.ensureAspaFileStorage();
-            tempPath = `${filePath}.${process.pid}.${Date.now()}.delete.tmp`;
-            stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
-            const key = RpkiAspa.makeKey(aspa.customerAsn);
-            let deletedAspa = null;
-            let total = 0;
+            const { deleted, deletedAspa, total } = await removeAspaFromJsonl(filePath, aspa.customerAsn);
+            await this.updateAspaMeta(total);
 
-            for await (const item of iterateJsonlAspas(filePath)) {
-                if (makeAspaStorageKey(item) === key) {
-                    if (!deletedAspa) {
-                        deletedAspa = item;
-                    }
-                    continue;
-                }
-                await writeLine(stream, JSON.stringify(item));
-                total += 1;
+            if (deleted === 0) {
+                return errorResponse('ASPA不存在');
             }
-
-            await closeWriteStream(stream);
-            stream = null;
 
             if (this.worker && deletedAspa) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, deletedAspa);
-                if (result.status !== 'success') {
-                    logger.error(`worker ASPA删除失败: ${result.msg}`);
+                try {
+                    await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, deletedAspa);
+                } catch (workerError) {
+                    logger.warn(`worker ASPA删除同步失败: ${workerError.message}`);
                 }
             }
 
-            await renameWithRetry(tempPath, filePath);
-            tempPath = null;
-            await this.updateAspaMeta(total);
-            return successResponse(null, 'ASPA删除成功');
+            return successResponse({ deleted }, 'ASPA删除成功');
         } catch (error) {
-            if (stream) {
-                stream.destroy();
-            }
-            if (tempPath) {
-                await fs.promises.unlink(tempPath).catch(() => {});
-            }
             logger.error('Error deleting ASPA:', error.message);
             return errorResponse(error.message);
         }

@@ -187,7 +187,8 @@
 <script setup>
     import { ref, reactive, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
-    import { DeleteOutlined, EyeOutlined } from '@ant-design/icons-vue';
+    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
+    import EyeOutlined from '@ant-design/icons-vue/es/icons/EyeOutlined';
     import { SNMP_TRAP_STATUS, SNMP_SUB_EVT_TYPES, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
     import dayjs from 'dayjs';
     import EventBus from '../../utils/eventBus';

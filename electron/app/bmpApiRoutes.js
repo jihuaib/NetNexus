@@ -37,6 +37,16 @@ function readObject(parent, key) {
     return value;
 }
 
+function hasControlCharacter(text) {
+    for (let i = 0; i < text.length; i += 1) {
+        const code = text.charCodeAt(i);
+        if (code <= 31 || code === 127) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function readString(parent, key, options = {}) {
     const { required = true, maxLength = 256, allowEmpty = false } = options;
     const value = parent[key];
@@ -54,7 +64,7 @@ function readString(parent, key, options = {}) {
     if (text.length > maxLength) {
         throw new ParameterError(`${key}长度不能超过${maxLength}`);
     }
-    if (/[\u0000-\u001f\u007f]/.test(text)) {
+    if (hasControlCharacter(text)) {
         throw new ParameterError(`${key}不能包含控制字符`);
     }
     return text;

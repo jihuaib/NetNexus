@@ -590,21 +590,19 @@
     import { computed, reactive, ref, nextTick, onActivated, onBeforeUnmount, onMounted } from 'vue';
     import { message } from 'ant-design-vue';
     import { DEFAULT_VALUES } from '../../const/snmpConst';
-    import {
-        ApiOutlined,
-        BellOutlined,
-        CopyOutlined,
-        DeleteOutlined,
-        EditOutlined,
-        FileSearchOutlined,
-        FolderOpenOutlined,
-        ImportOutlined,
-        InfoCircleOutlined,
-        ReloadOutlined,
-        SaveOutlined,
-        SearchOutlined,
-        StepForwardOutlined
-    } from '@ant-design/icons-vue';
+    import ApiOutlined from '@ant-design/icons-vue/es/icons/ApiOutlined';
+    import BellOutlined from '@ant-design/icons-vue/es/icons/BellOutlined';
+    import CopyOutlined from '@ant-design/icons-vue/es/icons/CopyOutlined';
+    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
+    import EditOutlined from '@ant-design/icons-vue/es/icons/EditOutlined';
+    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
+    import FolderOpenOutlined from '@ant-design/icons-vue/es/icons/FolderOpenOutlined';
+    import ImportOutlined from '@ant-design/icons-vue/es/icons/ImportOutlined';
+    import InfoCircleOutlined from '@ant-design/icons-vue/es/icons/InfoCircleOutlined';
+    import ReloadOutlined from '@ant-design/icons-vue/es/icons/ReloadOutlined';
+    import SaveOutlined from '@ant-design/icons-vue/es/icons/SaveOutlined';
+    import SearchOutlined from '@ant-design/icons-vue/es/icons/SearchOutlined';
+    import StepForwardOutlined from '@ant-design/icons-vue/es/icons/StepForwardOutlined';
 
     defineOptions({ name: 'SnmpMib' });
 

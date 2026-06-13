@@ -147,7 +147,7 @@
 <script setup>
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
-    import { FolderOutlined } from '@ant-design/icons-vue';
+    import FolderOutlined from '@ant-design/icons-vue/es/icons/FolderOutlined';
     import { DEFAULT_VALUES, TFTP_SUB_EVT_TYPES, TFTP_EVENT_PAGE_ID } from '../../const/tftpConst';
     import EventBus from '../../utils/eventBus';
 

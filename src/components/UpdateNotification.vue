@@ -41,13 +41,11 @@
 <script setup>
     import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
     import { message } from 'ant-design-vue';
-    import {
-        LoadingOutlined,
-        DownloadOutlined,
-        CloudDownloadOutlined,
-        CheckCircleOutlined,
-        ExclamationCircleOutlined
-    } from '@ant-design/icons-vue';
+    import LoadingOutlined from '@ant-design/icons-vue/es/icons/LoadingOutlined';
+    import DownloadOutlined from '@ant-design/icons-vue/es/icons/DownloadOutlined';
+    import CloudDownloadOutlined from '@ant-design/icons-vue/es/icons/CloudDownloadOutlined';
+    import CheckCircleOutlined from '@ant-design/icons-vue/es/icons/CheckCircleOutlined';
+    import ExclamationCircleOutlined from '@ant-design/icons-vue/es/icons/ExclamationCircleOutlined';
     import EventBus from '../utils/eventBus';
     import { TOOLS_EVENT_PAGE_ID } from '../const/toolsConst';
 

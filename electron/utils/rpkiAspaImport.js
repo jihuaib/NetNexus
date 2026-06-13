@@ -328,6 +328,39 @@ async function writeAspasToJsonl(filePath, aspas) {
     }
 }
 
+async function removeAspaFromJsonl(filePath, customerAsn) {
+    await ensureParentDir(filePath);
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.delete.tmp`;
+    const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
+    const targetKey = RpkiAspa.makeKey(customerAsn);
+    let deletedAspa = null;
+    let deleted = 0;
+    let total = 0;
+
+    try {
+        for await (const aspa of iterateJsonlAspas(filePath)) {
+            if (makeAspaStorageKey(aspa) === targetKey) {
+                if (!deletedAspa) {
+                    deletedAspa = aspa;
+                }
+                deleted += 1;
+                continue;
+            }
+
+            await writeLine(stream, JSON.stringify(aspa));
+            total += 1;
+        }
+
+        await closeWriteStream(stream);
+        await renameWithRetry(tempPath, filePath);
+        return { deleted, deletedAspa, total };
+    } catch (error) {
+        stream.destroy();
+        await fs.promises.unlink(tempPath).catch(() => {});
+        throw error;
+    }
+}
+
 async function parseAspaJsonFile(filePath, onAspa) {
     const stats = {
         objects: 0,
@@ -517,5 +550,6 @@ module.exports = {
     readAspaJsonlPage,
     countJsonlAspas,
     writeAspasToJsonl,
+    removeAspaFromJsonl,
     parseAspaJsonFile
 };

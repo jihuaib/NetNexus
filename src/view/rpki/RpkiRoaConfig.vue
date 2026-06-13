@@ -156,7 +156,7 @@
 <script setup>
     import { computed, ref, onMounted, watch } from 'vue';
     import { Modal, message } from 'ant-design-vue';
-    import { UploadOutlined } from '@ant-design/icons-vue';
+    import UploadOutlined from '@ant-design/icons-vue/es/icons/UploadOutlined';
     import RpkiRoaImportModal from '../../components/RpkiRoaImportModal.vue';
     import { FormValidator, createRpkiRoaConfigValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES } from '../../const/rpkiConst';

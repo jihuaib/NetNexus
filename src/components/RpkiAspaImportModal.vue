@@ -52,7 +52,7 @@
 <script setup>
     import { ref, watch } from 'vue';
     import { message } from 'ant-design-vue';
-    import { FileSearchOutlined } from '@ant-design/icons-vue';
+    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
 
     const props = defineProps({
         open: {

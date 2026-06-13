@@ -51,14 +51,12 @@
 
 <script setup>
     import { ref, computed, watch } from 'vue';
-    import {
-        SettingOutlined,
-        CodeOutlined,
-        CloudDownloadOutlined,
-        DownloadOutlined,
-        CloudServerOutlined,
-        ApiOutlined
-    } from '@ant-design/icons-vue';
+    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
+    import CodeOutlined from '@ant-design/icons-vue/es/icons/CodeOutlined';
+    import CloudDownloadOutlined from '@ant-design/icons-vue/es/icons/CloudDownloadOutlined';
+    import DownloadOutlined from '@ant-design/icons-vue/es/icons/DownloadOutlined';
+    import CloudServerOutlined from '@ant-design/icons-vue/es/icons/CloudServerOutlined';
+    import ApiOutlined from '@ant-design/icons-vue/es/icons/ApiOutlined';
     import GeneralSettings from '../view/settings/GeneralSettings.vue';
     import ToolsSettings from '../view/settings/ToolsSettings.vue';
     import UpdateSettings from '../view/settings/UpdateSettings.vue';

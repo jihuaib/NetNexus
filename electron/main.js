@@ -9,10 +9,11 @@ let mainWindow = null;
 let splashWindow = null;
 let systemApp = null;
 let tray = null;
+let splashProgress = 0;
 
 app.commandLine.appendSwitch('lang', 'zh-CN');
 
-function createSplashWindow() {
+async function createSplashWindow() {
     // 计算 splash 窗口在工作区域内的居中位置
     const { screen } = require('electron');
     const primaryDisplay = screen.getPrimaryDisplay();
@@ -35,12 +36,13 @@ function createSplashWindow() {
         hasShadow: false,
         webPreferences: {
             nodeIntegration: false,
-            contextIsolation: true
+            contextIsolation: true,
+            preload: path.join(__dirname, 'splashPreload.js')
         }
     });
 
-    splash.loadFile(path.join(__dirname, 'splash.html'));
     splashWindow = splash;
+    await splash.loadFile(path.join(__dirname, 'splash.html'));
     return splash;
 }
 
@@ -67,11 +69,19 @@ function createWindow() {
 
     logger.info(`Dev ${isDev} __dirname ${__dirname}`);
     const urlLocation = isDev ? 'http://127.0.0.1:3000' : `file://${path.join(__dirname, '../dist/index.html')}`;
-    win.loadURL(urlLocation);
+    win.startupRendererReadyPromise = waitForRendererReady(win);
+    win.startupRendererReadyPromise.catch(error => logger.error(`渲染进程就绪等待失败: ${error.message}`));
+    win.startupLoadPromise = win.loadURL(urlLocation);
+    win.startupLoadPromise.catch(error => logger.error(`主窗口加载失败: ${error.message}`));
 
     // 监听窗口关闭事件
     win.on('close', async event => {
         event.preventDefault();
+
+        if (!systemApp) {
+            win.destroy();
+            return;
+        }
 
         const closeOk = await systemApp.handleWindowClose();
         if (!closeOk) {
@@ -102,10 +112,56 @@ function createTray() {
     tray.setToolTip('NetNexus');
 }
 
+function waitForRendererReady(win) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const channel = 'app:renderer-ready';
+        const cleanup = () => {
+            ipcMain.removeListener(channel, onReady);
+            win.removeListener('closed', onClosed);
+            win.webContents.removeListener('render-process-gone', onRenderProcessGone);
+        };
+        const finish = () => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            cleanup();
+            resolve();
+        };
+        const fail = error => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            cleanup();
+            reject(error);
+        };
+        const onReady = event => {
+            if (event.sender === win.webContents) {
+                finish();
+            }
+        };
+        const onClosed = () => fail(new Error('主窗口已关闭'));
+        const onRenderProcessGone = (_event, details) => {
+            fail(new Error(`渲染进程退出: ${details.reason}`));
+        };
+
+        ipcMain.on(channel, onReady);
+        win.once('closed', onClosed);
+        win.webContents.once('render-process-gone', onRenderProcessGone);
+    });
+}
+
 // 更新启动进度
 function updateSplashProgress(progress, text) {
     if (splashWindow && !splashWindow.isDestroyed()) {
-        splashWindow.webContents.executeJavaScript(`window.updateProgress(${progress}, '${text}')`);
+        const normalizedProgress = Math.max(splashProgress, Math.min(100, Math.max(0, Number(progress) || 0)));
+        splashProgress = normalizedProgress;
+        splashWindow.webContents.send('startup-progress', {
+            progress: normalizedProgress,
+            text: text || ''
+        });
     }
 }
 
@@ -141,17 +197,16 @@ function finishStartup() {
     }
 }
 
-app.whenReady().then(async () => {
+async function startApplication() {
     // 创建启动窗口
-    createSplashWindow();
+    await createSplashWindow();
     updateSplashProgress(10, '正在初始化应用...');
 
-    // 延迟创建主窗口，让启动窗口先显示
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
     createTray();
+    updateSplashProgress(15, '正在初始化托盘...');
+
     createWindow();
-    updateSplashProgress(20, '正在加载主窗口...');
+    updateSplashProgress(25, '正在创建主窗口...');
 
     app.on('activate', () => {
         // macOS: 点击 dock 图标时，如果没有窗口则重新创建
@@ -170,30 +225,36 @@ app.whenReady().then(async () => {
 
     // 启动应用
     systemApp = new SystemApp(ipcMain, mainWindow, updateSplashProgress);
-    updateSplashProgress(30, '正在检查版本兼容性...');
+    updateSplashProgress(35, '正在初始化主进程服务...');
 
     // 兼容性检查
+    updateSplashProgress(40, '正在检查版本兼容性...');
     const checkVersionOk = systemApp.checkVersionCompatibility();
     if (!checkVersionOk) {
         if (splashWindow) splashWindow.close();
         app.quit();
         return;
     }
+    updateSplashProgress(45, '版本兼容性检查完成');
 
-    updateSplashProgress(50, '正在加载设置...');
     // 加载设置
     await systemApp.loadSettings();
 
-    updateSplashProgress(80, '正在初始化服务...');
-    // 等待主窗口内容加载完成
-    await new Promise(resolve => setTimeout(resolve, 500));
+    updateSplashProgress(82, '正在加载主窗口资源...');
+    await mainWindow.startupLoadPromise;
+
+    updateSplashProgress(92, '正在等待页面渲染...');
+    await mainWindow.startupRendererReadyPromise;
 
     updateSplashProgress(100, '启动完成');
-    // 延迟一下让用户看到100%
-    await new Promise(resolve => setTimeout(resolve, 300));
 
     // 完成启动
     finishStartup();
+}
+
+app.whenReady().then(startApplication).catch(error => {
+    logger.error(`应用启动失败: ${error.message}`);
+    updateSplashProgress(splashProgress, `启动失败: ${error.message}`);
 });
 
 app.on('before-quit', () => {

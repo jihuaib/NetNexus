@@ -192,7 +192,7 @@
 
 <script setup>
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
-    import { InfoCircleOutlined } from '@ant-design/icons-vue';
+    import InfoCircleOutlined from '@ant-design/icons-vue/es/icons/InfoCircleOutlined';
     import { ref, computed, onMounted } from 'vue';
     import { message } from 'ant-design-vue';
     import { FormValidator, createTcpAoMacValidationRules } from '../../utils/validationCommon';

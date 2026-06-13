@@ -207,6 +207,9 @@
 
             // 初始进度
             updateProgress(0, '正在初始化...');
+            window.startupProgress?.onUpdate?.(({ progress, text }) => {
+                updateProgress(progress, text);
+            });
         </script>
     </body>
 </html>

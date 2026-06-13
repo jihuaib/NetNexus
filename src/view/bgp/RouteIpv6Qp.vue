@@ -196,7 +196,10 @@
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
     import { message } from 'ant-design-vue';
-    import { SettingOutlined, UnorderedListOutlined, DeleteOutlined, FileSearchOutlined } from '@ant-design/icons-vue';
+    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
+    import UnorderedListOutlined from '@ant-design/icons-vue/es/icons/UnorderedListOutlined';
+    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
+    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
     import { BGP_ADDR_FAMILY, BGP_QP_ROUTE_GROWTH_MODE, BGP_QP_BSID_MODE } from '../../const/bgpConst';
     import { FormValidator, createBgpIpv6QpRouteConfigValidationRules } from '../../utils/validationCommon';
 

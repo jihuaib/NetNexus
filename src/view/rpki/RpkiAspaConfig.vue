@@ -90,7 +90,11 @@
                     >
                         <template #bodyCell="{ column, record }">
                             <template v-if="column.key === 'providerAsns'">
-                                {{ (record.providerAsns || []).join(', ') }}
+                                <a-tooltip :title="providerAsnsTooltip(record.providerAsns)">
+                                    <span class="provider-asns-preview">
+                                        {{ formatProviderAsns(record.providerAsns) }}
+                                    </span>
+                                </a-tooltip>
                             </template>
                             <template v-if="column.key === 'afiFlags'">
                                 {{ afiText(record.afiFlags) }}
@@ -111,7 +115,7 @@
 <script setup>
     import { computed, ref, onMounted } from 'vue';
     import { message, Modal } from 'ant-design-vue';
-    import { UploadOutlined } from '@ant-design/icons-vue';
+    import UploadOutlined from '@ant-design/icons-vue/es/icons/UploadOutlined';
     import RpkiAspaImportModal from '../../components/RpkiAspaImportModal.vue';
     import { FormValidator, createRpkiAspaValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES, RPKI_ASPA_AFI_FLAGS } from '../../const/rpkiConst';
@@ -144,11 +148,12 @@
     });
     const aspaListTitle = computed(() => `ASPA 列表（共 ${aspaStorageTotal.value || aspaPagination.value.total} 条）`);
     const aspaColumns = [
-        { title: 'Customer ASN', dataIndex: 'customerAsn', key: 'customerAsn', ellipsis: true },
+        { title: 'Customer ASN', dataIndex: 'customerAsn', key: 'customerAsn', width: 140, ellipsis: true },
         { title: 'Provider ASNs', key: 'providerAsns', ellipsis: true },
-        { title: 'AFI', key: 'afiFlags', ellipsis: true },
-        { title: '操作', key: 'action' }
+        { title: 'AFI', key: 'afiFlags', width: 110, ellipsis: true },
+        { title: '操作', key: 'action', width: 90, align: 'center' }
     ];
+    const PROVIDER_ASN_PREVIEW_LIMIT = 8;
 
     const validationErrors = ref({ customerAsn: '', providerAsnsRaw: '', afiFlags: '' });
     const validator = new FormValidator(validationErrors);
@@ -163,6 +168,26 @@
         if (flags === RPKI_ASPA_AFI_FLAGS.IPV4) return 'IPv4';
         if (flags === RPKI_ASPA_AFI_FLAGS.IPV6) return 'IPv6';
         return String(flags);
+    };
+
+    const getProviderAsnList = providerAsns => (Array.isArray(providerAsns) ? providerAsns : []);
+
+    const formatProviderAsns = providerAsns => {
+        const list = getProviderAsnList(providerAsns);
+        if (list.length === 0) {
+            return '无';
+        }
+
+        const preview = list.slice(0, PROVIDER_ASN_PREVIEW_LIMIT).join(', ');
+        return list.length > PROVIDER_ASN_PREVIEW_LIMIT ? `${preview} ... 共 ${list.length} 个` : preview;
+    };
+
+    const providerAsnsTooltip = providerAsns => {
+        const list = getProviderAsnList(providerAsns);
+        if (list.length <= PROVIDER_ASN_PREVIEW_LIMIT) {
+            return formatProviderAsns(list);
+        }
+        return `仅显示前 ${PROVIDER_ASN_PREVIEW_LIMIT} 个，共 ${list.length} 个 Provider ASN`;
     };
 
     const submitAspa = async () => {
@@ -345,6 +370,14 @@
     .rpki-form-actions :deep(.ant-form-item-control-input-content) {
         display: flex;
         justify-content: center;
+    }
+
+    .provider-asns-preview {
+        display: block;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .aspa-delete-all-button:disabled,

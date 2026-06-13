@@ -75,22 +75,20 @@
     import { ref, watch, h, onMounted, onUnmounted } from 'vue';
     import { useRouter, useRoute } from 'vue-router';
     import { useStore } from 'vuex';
-    import {
-        MenuFoldOutlined,
-        MenuUnfoldOutlined,
-        SettingOutlined,
-        ToolOutlined,
-        InfoCircleOutlined,
-        AppstoreOutlined,
-        ApiOutlined,
-        ClusterOutlined,
-        SafetyOutlined,
-        FolderOutlined,
-        CodeOutlined,
-        WifiOutlined,
-        ClockCircleOutlined,
-        SwapOutlined
-    } from '@ant-design/icons-vue';
+    import MenuFoldOutlined from '@ant-design/icons-vue/es/icons/MenuFoldOutlined';
+    import MenuUnfoldOutlined from '@ant-design/icons-vue/es/icons/MenuUnfoldOutlined';
+    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
+    import ToolOutlined from '@ant-design/icons-vue/es/icons/ToolOutlined';
+    import InfoCircleOutlined from '@ant-design/icons-vue/es/icons/InfoCircleOutlined';
+    import AppstoreOutlined from '@ant-design/icons-vue/es/icons/AppstoreOutlined';
+    import ApiOutlined from '@ant-design/icons-vue/es/icons/ApiOutlined';
+    import ClusterOutlined from '@ant-design/icons-vue/es/icons/ClusterOutlined';
+    import SafetyOutlined from '@ant-design/icons-vue/es/icons/SafetyOutlined';
+    import FolderOutlined from '@ant-design/icons-vue/es/icons/FolderOutlined';
+    import CodeOutlined from '@ant-design/icons-vue/es/icons/CodeOutlined';
+    import WifiOutlined from '@ant-design/icons-vue/es/icons/WifiOutlined';
+    import ClockCircleOutlined from '@ant-design/icons-vue/es/icons/ClockCircleOutlined';
+    import SwapOutlined from '@ant-design/icons-vue/es/icons/SwapOutlined';
     import SettingsDialog from '../components/SettingsDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
     import modalResizeHandler from '../utils/modalResizeHandler';

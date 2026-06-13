@@ -414,6 +414,12 @@ class SystemApp {
         await this.externalApiServer.updateSettings(settings);
     }
 
+    updateStartupProgress(progress, text) {
+        if (typeof this.progressCallback === 'function') {
+            this.progressCallback(progress, text);
+        }
+    }
+
     async handleSaveApiSettings(settings) {
         try {
             const normalizedSettings = this.normalizeApiSettings(settings);
@@ -514,12 +520,14 @@ class SystemApp {
     }
 
     async loadSettings() {
+        this.updateStartupProgress(50, '正在加载基础设置...');
         this.purgeStoredLogLevel();
 
         // 日志级别不再持久化，启动时固定关闭。设置页保存后仅当前运行期间生效。
         this.applyLogLevel(DEFAULT_LOG_SETTINGS.logLevel);
 
         // 加载工具设置
+        this.updateStartupProgress(56, '正在加载工具设置...');
         let maxMessageHistory = DEFAULT_TOOLS_SETTINGS.packetParser.maxMessageHistory;
         let maxStringHistory = DEFAULT_TOOLS_SETTINGS.stringGenerator.maxStringHistory;
         let maxFtpUser = DEFAULT_TOOLS_SETTINGS.ftpServer.maxFtpUser;
@@ -544,6 +552,7 @@ class SystemApp {
         this.ftpApp.setMaxFtpUser(maxFtpUser);
 
         // 加载更新设置并应用
+        this.updateStartupProgress(62, '正在加载更新设置...');
         let updateSetting = DEFAULT_UPDATE_SETTINGS;
         const updateSettingsFromStore = this.store.get(this.updateSettingsFileKey);
         if (updateSettingsFromStore) {
@@ -552,6 +561,7 @@ class SystemApp {
         this.updaterApp.updateSettings(updateSetting);
 
         // 加载外部API设置并应用
+        this.updateStartupProgress(68, '正在应用HTTP API设置...');
         try {
             const apiSettingsFromStore = this.store.get(this.apiSettingsFileKey);
             const apiSettings = this.normalizeApiSettings({
@@ -564,11 +574,13 @@ class SystemApp {
         }
 
         // 加载部署配置
+        this.updateStartupProgress(76, '正在加载部署配置...');
         const deploymentConfig = this.store.get(this.deploymentConfigFileKey);
         if (deploymentConfig) {
             this.bmpApp.setServerDeploymentConfig(deploymentConfig);
             this.rpkiApp.setServerDeploymentConfig(deploymentConfig);
         }
+        this.updateStartupProgress(80, '设置加载完成');
     }
 
     async handleWindowClose() {

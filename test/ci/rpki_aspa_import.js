@@ -10,7 +10,8 @@ const {
     readAspaJsonlPage,
     normalizeAspaObject,
     parseAspaJsonFile,
-    writeAspasToJsonl
+    writeAspasToJsonl,
+    removeAspaFromJsonl
 } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'rpkiAspaImport.js'));
 
 async function main() {
@@ -71,6 +72,29 @@ async function main() {
                 afiFlags: 2
             },
             'writeAspasToJsonl should keep the latest ASPA for repeated Customer ASN'
+        );
+
+        const largeJsonlPath = path.join(tempDir, 'large-rpki-aspa.jsonl');
+        const largeProviderAsns = Array.from({ length: 1024 }, (_, index) => 65000 + index);
+        await writeAspasToJsonl(largeJsonlPath, [
+            { customerAsn: 65200, providerAsns: largeProviderAsns, afiFlags: 3 },
+            { customerAsn: 65210, providerAsns: [65211], afiFlags: 1 }
+        ]);
+
+        const deleteResult = await removeAspaFromJsonl(largeJsonlPath, 65200);
+        const largeJsonlPage = await readAspaJsonlPage(largeJsonlPath, 1, 20);
+        assert.strictEqual(deleteResult.deleted, 1, 'removeAspaFromJsonl should delete one large ASPA record');
+        assert.strictEqual(
+            deleteResult.deletedAspa.providerAsns.length,
+            1024,
+            'removeAspaFromJsonl should return the deleted ASPA with all Provider ASNs'
+        );
+        assert.strictEqual(deleteResult.total, 1, 'removeAspaFromJsonl should report the remaining total');
+        assert.strictEqual(await countJsonlAspas(largeJsonlPath), 1, 'large ASPA delete should update JSONL storage');
+        assert.strictEqual(
+            largeJsonlPage[0].customerAsn,
+            '65210',
+            'large ASPA delete should keep unrelated records'
         );
 
         const wrappedJsonPath = path.join(tempDir, 'wrapped-aspas.json');

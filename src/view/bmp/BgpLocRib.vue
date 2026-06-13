@@ -113,13 +113,26 @@
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
-                                                        <a-button
-                                                            type="link"
-                                                            size="small"
-                                                            @click="viewRouteDetails(record)"
-                                                        >
-                                                            查询详情
-                                                        </a-button>
+                                                        <a-space size="small">
+                                                            <a-tooltip title="查询BGP原始报文">
+                                                                <a-button
+                                                                    type="text"
+                                                                    size="small"
+                                                                    @click="viewRouteDetails(record)"
+                                                                >
+                                                                    <template #icon><FileSearchOutlined /></template>
+                                                                </a-button>
+                                                            </a-tooltip>
+                                                            <a-tooltip title="查询路由detail">
+                                                                <a-button
+                                                                    type="text"
+                                                                    size="small"
+                                                                    @click="viewRouteDetailJson(record)"
+                                                                >
+                                                                    <template #icon><ProfileOutlined /></template>
+                                                                </a-button>
+                                                            </a-tooltip>
+                                                        </a-space>
                                                     </template>
                                                 </template>
                                             </a-table>
@@ -158,6 +171,8 @@
 <script setup>
     import { ref, onActivated, watch, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
+    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
+    import ProfileOutlined from '@ant-design/icons-vue/es/icons/ProfileOutlined';
     import {
         BMP_SESSION_TYPE_NAME,
         BMP_SESSION_STATE_NAME,
@@ -574,6 +589,41 @@
         }
     };
 
+    const viewRouteDetailJson = async record => {
+        detailsDrawerMode.value = 'json';
+        detailsDrawerTitle.value = `路由detail: ${record.ip || ''}`;
+        detailsDrawerVisible.value = true;
+        currentDetails.value = null;
+
+        if (!activeClientKey.value || !activeInstanceKey.value) {
+            currentDetails.value = record;
+            return;
+        }
+
+        const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
+        const client = { localIp, localPort, remoteIp, remotePort };
+        const instance = {
+            instanceType: activeInstanceKey.value.split('|')[0],
+            instanceRd: activeInstanceKey.value.split('|')[1],
+            addrFamilyType: activeInstanceKey.value.split('|')[2]
+        };
+        const routeKey = record.routeKey || `${record.pathId}|${record.rd}|${record.ip}|${record.mask}`;
+
+        try {
+            const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey);
+            if (res.status === 'success' && res.data) {
+                currentDetails.value = res.data;
+            } else {
+                currentDetails.value = record;
+                message.error('查询路由detail失败');
+            }
+        } catch (error) {
+            console.error(error);
+            currentDetails.value = record;
+            message.error('查询路由detail失败');
+        }
+    };
+
     // 监听activeClientKey变化，加载对应的peer列表 AND instances
     watch(activeClientKey, _newKey => {
         clearScheduledRouteRefresh();
@@ -610,11 +660,11 @@
 
     const bgpRoutePagination = ref({
         current: 1,
-        pageSize: 20,
+        pageSize: 25,
         total: 0,
         showSizeChanger: false,
         position: ['bottomCenter'],
-        showTotal: total => '共 ' + total + ' 条，每页 20 条',
+        showTotal: total => '共 ' + total + ' 条，每页 25 条',
         onChange: page => {
             bgpRoutePagination.value.current = page;
             loadInstanceRoutes();
@@ -639,7 +689,7 @@
             ellipsis: true,
             width: 180
         },
-        { title: '详情', key: 'routeAction', fixed: 'right', width: 100 }
+        { title: '详情', key: 'routeAction', fixed: 'right', width: 96, align: 'center' }
     ];
 
     watch(activeInstanceKey, newKey => {

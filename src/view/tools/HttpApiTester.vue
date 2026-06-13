@@ -217,17 +217,15 @@
 </template>
 
 <script setup>
-    import { computed, h, ref, onActivated, onMounted } from 'vue';
+    import { computed, h, ref, onMounted } from 'vue';
     import { Input, message, Modal } from 'ant-design-vue';
-    import {
-        CopyOutlined,
-        DeleteOutlined,
-        EditOutlined,
-        PlusOutlined,
-        ReloadOutlined,
-        SaveOutlined,
-        SendOutlined
-    } from '@ant-design/icons-vue';
+    import CopyOutlined from '@ant-design/icons-vue/es/icons/CopyOutlined';
+    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
+    import EditOutlined from '@ant-design/icons-vue/es/icons/EditOutlined';
+    import PlusOutlined from '@ant-design/icons-vue/es/icons/PlusOutlined';
+    import ReloadOutlined from '@ant-design/icons-vue/es/icons/ReloadOutlined';
+    import SaveOutlined from '@ant-design/icons-vue/es/icons/SaveOutlined';
+    import SendOutlined from '@ant-design/icons-vue/es/icons/SendOutlined';
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
 
     defineOptions({
@@ -532,10 +530,6 @@
         }
         return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
     }
-
-    onActivated(() => {
-        loadApiConnections();
-    });
 
     onMounted(() => {
         loadApiConnections();

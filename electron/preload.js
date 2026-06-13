@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('commonApi', {
     selectDirectory: () => ipcRenderer.invoke('common:selectDirectory'),
     saveUpdateSettings: settings => ipcRenderer.invoke('common:saveUpdateSettings', settings),
     getUpdateSettings: () => ipcRenderer.invoke('common:getUpdateSettings'),
+    notifyRendererReady: () => ipcRenderer.send('app:renderer-ready'),
 
     // 服务器部署
     deployServer: deployConfig => ipcRenderer.invoke('common:deployServer', deployConfig),

@@ -99,7 +99,7 @@
 <script setup>
     import { ref, computed, onActivated, onDeactivated } from 'vue';
     import { message, Modal } from 'ant-design-vue';
-    import { ReloadOutlined } from '@ant-design/icons-vue';
+    import ReloadOutlined from '@ant-design/icons-vue/es/icons/ReloadOutlined';
 
     defineOptions({
         name: 'PortMonitor'

@@ -192,7 +192,10 @@
 <script setup>
     import { ref, reactive, computed, onMounted, onActivated } from 'vue';
     import { message } from 'ant-design-vue';
-    import { ReloadOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons-vue';
+    import ReloadOutlined from '@ant-design/icons-vue/es/icons/ReloadOutlined';
+    import EditOutlined from '@ant-design/icons-vue/es/icons/EditOutlined';
+    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
+    import PlusOutlined from '@ant-design/icons-vue/es/icons/PlusOutlined';
     import { FormValidator, createNetworkInfoValidationRules } from '../../utils/validationCommon';
 
     defineOptions({

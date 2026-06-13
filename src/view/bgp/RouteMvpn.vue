@@ -244,7 +244,9 @@
     import { onMounted, ref, computed, watch, onActivated, nextTick } from 'vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
     import { message, Modal } from 'ant-design-vue';
-    import { UnorderedListOutlined, DeleteOutlined, FileSearchOutlined } from '@ant-design/icons-vue';
+    import UnorderedListOutlined from '@ant-design/icons-vue/es/icons/UnorderedListOutlined';
+    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
+    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
     import { BGP_ADDR_FAMILY, DEFAULT_VALUES, BGP_MVPN_ROUTE_TYPE } from '../../const/bgpConst';
     import { FormValidator, createBgpMvpnRouteConfigValidationRules } from '../../utils/validationCommon';
 

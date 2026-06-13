@@ -180,7 +180,7 @@
 <script setup>
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
-    import { FolderOutlined } from '@ant-design/icons-vue';
+    import FolderOutlined from '@ant-design/icons-vue/es/icons/FolderOutlined';
     import {
         FormValidator,
         createFtpConfigValidationRules,

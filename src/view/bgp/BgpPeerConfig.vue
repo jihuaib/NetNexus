@@ -454,7 +454,9 @@
         DEFAULT_VALUES,
         IP_TYPE
     } from '../../const/bgpConst';
-    import { UnorderedListOutlined, DeleteOutlined, SettingOutlined } from '@ant-design/icons-vue';
+    import UnorderedListOutlined from '@ant-design/icons-vue/es/icons/UnorderedListOutlined';
+    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
+    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
     import EventBus from '../../utils/eventBus';
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import {
