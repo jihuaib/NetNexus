@@ -20,17 +20,27 @@
 </template>
 
 <script setup>
-    import { ref, onActivated } from 'vue';
-    import { useRouter } from 'vue-router';
+    import { ref, onActivated, watch } from 'vue';
+    import { useRoute, useRouter } from 'vue-router';
 
     defineOptions({ name: 'DhcpMain' });
 
+    const route = useRoute();
     const router = useRouter();
     const activeTabKey = ref('dhcp-config');
     const currentTab = ref(null);
+    const defaultTabKey = 'dhcp-config';
+    const tabKeys = new Set(['dhcp-config', 'dhcp-lease']);
 
     const handleTabChange = key => {
         router.push(`/dhcp/${key}`);
+    };
+
+    const syncActiveTab = () => {
+        const childPath = route.path.split('/').filter(Boolean)[1];
+        if (tabKeys.has(childPath)) {
+            activeTabKey.value = childPath;
+        }
     };
 
     defineExpose({
@@ -41,9 +51,15 @@
         }
     });
 
+    watch(() => route.path, syncActiveTab, { immediate: true });
+
     onActivated(() => {
-        // 恢复当前tab对应的路由
-        router.push(`/dhcp/${activeTabKey.value}`);
+        if (route.path === '/dhcp' || route.path === '/dhcp/') {
+            activeTabKey.value = defaultTabKey;
+            router.replace(`/dhcp/${defaultTabKey}`);
+            return;
+        }
+        syncActiveTab();
     });
 </script>
 

@@ -18,17 +18,27 @@
 </template>
 
 <script setup>
-    import { ref, onActivated } from 'vue';
-    import { useRouter } from 'vue-router';
+    import { ref, onActivated, watch } from 'vue';
+    import { useRoute, useRouter } from 'vue-router';
 
     defineOptions({ name: 'TftpMain' });
 
+    const route = useRoute();
     const router = useRouter();
     const activeTabKey = ref('tftp-config');
     const currentTab = ref(null);
+    const defaultTabKey = 'tftp-config';
+    const tabKeys = new Set(['tftp-config', 'tftp-transfer-log']);
 
     const handleTabChange = key => {
         router.push(`/tftp/${key}`);
+    };
+
+    const syncActiveTab = () => {
+        const childPath = route.path.split('/').filter(Boolean)[1];
+        if (tabKeys.has(childPath)) {
+            activeTabKey.value = childPath;
+        }
     };
 
     defineExpose({
@@ -39,8 +49,15 @@
         }
     });
 
+    watch(() => route.path, syncActiveTab, { immediate: true });
+
     onActivated(() => {
-        router.push(`/tftp/${activeTabKey.value}`);
+        if (route.path === '/tftp' || route.path === '/tftp/') {
+            activeTabKey.value = defaultTabKey;
+            router.replace(`/tftp/${defaultTabKey}`);
+            return;
+        }
+        syncActiveTab();
     });
 </script>
 

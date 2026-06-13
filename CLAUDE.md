@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-NetNexus 是一个基于 Vue 3、Ant Design Vue 和 Electron 构建的专业网络和开发工具集。它提供网络协议模拟器（BGP、BMP、RPKI、SNMP、FTP）和开发者实用工具（报文解析器、字符串生成器、格式化工具、报文捕获）。
+NetNexus 是一个基于 Vue 3、Ant Design Vue 和 Electron 构建的本地网络和开发工具集。它提供 BGP、BMP、RPKI、SNMP、FTP、DHCP、NTP、TFTP 等协议工具，以及报文解析器、字符串生成器、端口监控、网络信息、HTTP API 测试、TCP-AO MAC 等开发辅助工具。
 本项目需要同时兼容 Windows 和 Linux。
 开发环境可能运行在 WSL，但代码必须能在原生 Windows 上正常运行。
 项目包含 Electron、Node.js 以及 native 模块。
@@ -54,6 +54,7 @@ npm start                     # 仅启动 Vite 开发服务器（端口 3000）
 npm run lint                  # 在 src 和 electron 目录运行 ESLint
 npm run lint:fix              # 自动修复 ESLint 问题
 npm run format                # 使用 Prettier 格式化代码
+npm run docs:screenshots      # 从本地页面重新生成 docs/images 截图
 ```
 
 ### 构建打包
@@ -101,14 +102,14 @@ npm run release:mac:universal # 构建并发布 macOS universal 版本
 - `ftpApp.js`: FTP 服务器管理
 - `snmpApp.js`: SNMP 管理器
 - `toolsApp.js`: 开发工具协调
-- `nativeApp.js`: 原生功能（报文抓包使用 `cap` 模块、XML 解析使用 `libxmljs2`），两者均为动态加载的 native 模块，加载时会去除 Windows UNC 路径前缀 `\\?\`
+- `nativeApp.js`: 原生功能（端口监听、进程终止、网络信息和网络地址管理）
 - `sshDeployer.js`: 通过 SSH 将 BMP MD5 代理部署到 Linux 服务器
 - `updater.js`: 自动更新功能
 
 **工作进程** (`electron/worker/`):
-- 每个协议都有专用的 worker 文件来处理会话、实例和路由
+- 多数协议都有专用的 worker 文件来处理会话、实例、路由或服务请求
 - Workers 在主线程侧使用 `workerWithPromise.js` 进行管理，在 worker 侧使用 `workerMessageHandler.js` 注册处理器
-- 长期运行模式（`createLongRunningWorker()`）：用于协议 worker（BGP、BMP、RPKI、FTP、SNMP），支持请求-响应和事件推送
+- 长期运行模式（`createLongRunningWorker()`）：用于协议 worker（BGP、BMP、RPKI、FTP、SNMP、DHCP、NTP、TFTP），支持请求-响应和事件推送
 - 一次性模式（`runWorkerWithPromise()`）：用于单次任务，执行完毕后自动终止
 - 示例：`bgpSession.js`、`bmpSession.js`、`rpkiSession.js`、`ftpSession.js`、`snmpSession.js`、`sshTunnel.js`、`stringGeneratorWorker.js`
 
@@ -120,7 +121,7 @@ npm run release:mac:universal # 构建并发布 macOS universal 版本
 
 **路由** (`src/router/index.js`):
 - 使用 Vue Router 4 和 hash 历史模式
-- 每个模块（tools、bgp、bmp、rpki、ftp、snmp）都有嵌套路由
+- 每个模块（tools、bgp、bmp、rpki、ftp、snmp、dhcp、ntp、tftp）都有嵌套路由
 - 所有路由都设置 `keepAlive: true` 以保持状态
 
 **状态管理** (`src/store/index.js`):
@@ -130,13 +131,16 @@ npm run release:mac:universal # 构建并发布 macOS universal 版本
 **视图结构** (`src/view/`):
 - 每个协议都有自己的目录，包含配置和数据视图
 - `Main.vue`: 根布局组件
-- `tools/`: 开发者工具（StringGenerator、PacketParser、Formatter、PacketCapture）
+- `tools/`: 开发者工具（StringGenerator、PacketParser、PortMonitor、NetworkInfo、HttpApiTester、TcpAoMac）
 - `bgp/`: BGP 模拟器视图（配置、对等体信息、IPv4/IPv6/MVPN 路由）
 - `bmp/`: BMP 监控器视图（配置、会话、loc-rib、统计）
-- `rpki/`: RPKI 验证器视图（配置、ROA 管理）
+- `rpki/`: RPKI RTR 视图（配置、ROA、Router Key、ASPA 管理）
 - `ftp/`: FTP 服务器视图（配置、客户端管理）
-- `snmp/`: SNMP 管理器视图（配置、trap 处理）
-- `settings/`: 应用设置（密钥链、更新、部署、FTP、工具、通用）
+- `snmp/`: SNMP 工具视图（配置、trap 处理、MIB 管理）
+- `dhcp/`: DHCP 服务器视图（配置、租约）
+- `ntp/`: NTP 服务器视图（配置、请求日志）
+- `tftp/`: TFTP 服务器视图（配置、传输日志）
+- `settings/`: 应用设置（通用、工具、FTP、HTTP API、服务器部署、更新）
 
 **组件** (`src/components/`):
 - `SettingsDialog.vue`: 全局设置对话框

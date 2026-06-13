@@ -18,17 +18,27 @@
 </template>
 
 <script setup>
-    import { ref, onActivated } from 'vue';
-    import { useRouter } from 'vue-router';
+    import { ref, onActivated, watch } from 'vue';
+    import { useRoute, useRouter } from 'vue-router';
 
     defineOptions({ name: 'NtpMain' });
 
+    const route = useRoute();
     const router = useRouter();
     const activeTabKey = ref('ntp-config');
     const currentTab = ref(null);
+    const defaultTabKey = 'ntp-config';
+    const tabKeys = new Set(['ntp-config', 'ntp-request-log']);
 
     const handleTabChange = key => {
         router.push(`/ntp/${key}`);
+    };
+
+    const syncActiveTab = () => {
+        const childPath = route.path.split('/').filter(Boolean)[1];
+        if (tabKeys.has(childPath)) {
+            activeTabKey.value = childPath;
+        }
     };
 
     defineExpose({
@@ -39,8 +49,15 @@
         }
     });
 
+    watch(() => route.path, syncActiveTab, { immediate: true });
+
     onActivated(() => {
-        router.push(`/ntp/${activeTabKey.value}`);
+        if (route.path === '/ntp' || route.path === '/ntp/') {
+            activeTabKey.value = defaultTabKey;
+            router.replace(`/ntp/${defaultTabKey}`);
+            return;
+        }
+        syncActiveTab();
     });
 </script>
 

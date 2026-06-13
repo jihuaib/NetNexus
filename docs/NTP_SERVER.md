@@ -14,6 +14,8 @@ NetNexus 内置了一个轻量级 NTP 服务器，支持通过 UDP 提供标准 
 
 ### NTP 配置
 
+![NTP 配置](images/ntp/ntp-config.png)
+
 - 配置监听端口
 - 配置 `Stratum`
 - 配置 `Reference ID`
@@ -21,6 +23,8 @@ NetNexus 内置了一个轻量级 NTP 服务器，支持通过 UDP 提供标准 
 - 启动或停止 NTP 服务
 
 ### 请求日志
+
+![NTP 请求日志](images/ntp/ntp-request-log.png)
 
 - 查看每次客户端请求的来源地址、端口、版本、模式
 - 查看客户端发起时间、服务器接收时间、服务器发送时间

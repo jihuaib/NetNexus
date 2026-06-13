@@ -25,17 +25,35 @@
 </template>
 
 <script setup>
-    import { ref, onActivated } from 'vue';
-    import { useRouter } from 'vue-router';
+    import { ref, onActivated, watch } from 'vue';
+    import { useRoute, useRouter } from 'vue-router';
 
     defineOptions({ name: 'BgpMain' });
 
+    const route = useRoute();
     const router = useRouter();
     const activeTabKey = ref('bgp-config');
     const currentTab = ref(null);
+    const defaultTabKey = 'bgp-config';
+    const tabKeys = new Set([
+        'bgp-config',
+        'bgp-peer-config',
+        'route-ipv4',
+        'route-ipv6',
+        'route-mvpn',
+        'route-ipv4-qp',
+        'route-ipv6-qp'
+    ]);
 
     const handleTabChange = key => {
         router.push(`/bgp/${key}`);
+    };
+
+    const syncActiveTab = () => {
+        const childPath = route.path.split('/').filter(Boolean)[1];
+        if (tabKeys.has(childPath)) {
+            activeTabKey.value = childPath;
+        }
     };
 
     defineExpose({
@@ -46,9 +64,15 @@
         }
     });
 
+    watch(() => route.path, syncActiveTab, { immediate: true });
+
     onActivated(() => {
-        activeTabKey.value = 'bgp-config';
-        router.push('/bgp/bgp-config');
+        if (route.path === '/bgp' || route.path === '/bgp/') {
+            activeTabKey.value = defaultTabKey;
+            router.replace(`/bgp/${defaultTabKey}`);
+            return;
+        }
+        syncActiveTab();
     });
 </script>
 

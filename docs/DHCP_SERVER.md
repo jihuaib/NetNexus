@@ -21,6 +21,8 @@ DHCP 配置页分为两部分：
 - `DHCP服务器配置`：DHCPv4 参数
 - `DHCPv6配置`：DHCPv6 参数
 
+![DHCP 配置](images/dhcp/dhcp-config.png)
+
 DHCPv4 支持以下字段：
 
 - `服务器IP`：用于 DHCP Option 54。留空时会自动探测本机第一个非回环 IPv4 地址；如果探测失败，回退为 `127.0.0.1`
@@ -48,6 +50,8 @@ DHCPv6 支持以下字段：
 ### 租约列表
 
 `租约列表` 页面会合并展示 DHCPv4 和 DHCPv6 租约，主要字段包括：
+
+![DHCP 租约列表](images/dhcp/dhcp-lease-list.png)
 
 - `版本`：IPv4 / IPv6
 - `标识(MAC/DUID)`：DHCPv4 显示 MAC，DHCPv6 显示 DUID

@@ -23,16 +23,25 @@
 </template>
 
 <script setup>
-    import { ref, onActivated } from 'vue';
-    import { useRouter } from 'vue-router';
+    import { ref, onActivated, watch } from 'vue';
+    import { useRoute, useRouter } from 'vue-router';
 
     defineOptions({ name: 'BmpMain' });
 
     const emit = defineEmits(['openSettings']);
 
+    const route = useRoute();
     const router = useRouter();
     const activeTabKey = ref('bmp-config');
     const currentTab = ref(null);
+    const defaultTabKey = 'bmp-config';
+    const tabKeys = new Set([
+        'bmp-config',
+        'bgp-session',
+        'bgp-loc-rib',
+        'bgp-session-statis-report',
+        'bgp-loc-rib-statis-report'
+    ]);
 
     const handleTabChange = key => {
         router.push(`/bmp/${key}`);
@@ -40,6 +49,13 @@
 
     const handleOpenSettings = category => {
         emit('openSettings', category);
+    };
+
+    const syncActiveTab = () => {
+        const childPath = route.path.split('/').filter(Boolean)[1];
+        if (tabKeys.has(childPath)) {
+            activeTabKey.value = childPath;
+        }
     };
 
     defineExpose({
@@ -50,9 +66,15 @@
         }
     });
 
+    watch(() => route.path, syncActiveTab, { immediate: true });
+
     onActivated(() => {
-        activeTabKey.value = 'bmp-config';
-        router.push('/bmp/bmp-config');
+        if (route.path === '/bmp' || route.path === '/bmp/') {
+            activeTabKey.value = defaultTabKey;
+            router.replace(`/bmp/${defaultTabKey}`);
+            return;
+        }
+        syncActiveTab();
     });
 </script>
 

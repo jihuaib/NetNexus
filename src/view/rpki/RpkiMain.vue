@@ -22,16 +22,19 @@
 </template>
 
 <script setup>
-    import { ref, onActivated } from 'vue';
-    import { useRouter } from 'vue-router';
+    import { ref, onActivated, watch } from 'vue';
+    import { useRoute, useRouter } from 'vue-router';
 
     defineOptions({ name: 'RpkiMain' });
 
     const emit = defineEmits(['openSettings']);
 
+    const route = useRoute();
     const router = useRouter();
     const activeTabKey = ref('rpki-config');
     const currentTab = ref(null);
+    const defaultTabKey = 'rpki-config';
+    const tabKeys = new Set(['rpki-config', 'rpki-roa-config', 'rpki-router-key-config', 'rpki-aspa-config']);
 
     defineExpose({
         clearValidationErrors: () => {
@@ -49,9 +52,22 @@
         router.push(`/rpki/${key}`);
     };
 
+    const syncActiveTab = () => {
+        const childPath = route.path.split('/').filter(Boolean)[1];
+        if (tabKeys.has(childPath)) {
+            activeTabKey.value = childPath;
+        }
+    };
+
+    watch(() => route.path, syncActiveTab, { immediate: true });
+
     onActivated(() => {
-        activeTabKey.value = 'rpki-config';
-        router.push('/rpki/rpki-config');
+        if (route.path === '/rpki' || route.path === '/rpki/') {
+            activeTabKey.value = defaultTabKey;
+            router.replace(`/rpki/${defaultTabKey}`);
+            return;
+        }
+        syncActiveTab();
     });
 </script>
 

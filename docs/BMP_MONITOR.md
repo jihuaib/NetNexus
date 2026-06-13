@@ -1,153 +1,105 @@
 # BMP 监控器
 
-BMP (BGP Monitoring Protocol) 监控器是一个专业的 BGP 路由监控工具，支持实时监控和分析 BGP 路由信息。
+BMP 监控器用于接收路由器或测试脚本发送的 BMP 数据，并在本地查看客户端、BGP session、Loc-RIB、路由明细和统计报告。
 
-## 功能特性
+## 已实现能力
 
-### 核心功能
-- 📡 **实时监控**: 实时接收和处理 BMP 消息
-- 🔍 **路由分析**: 深度分析 BGP 路由变化和传播
-- 📊 **数据可视化**: 图形化展示路由信息和统计数据
-- 🌐 **多客户端支持**: 同时监控多个 BMP 客户端
-- 📈 **统计报告**: 提供详细的路由统计和趋势分析
+- BMP v3 / v4 报文接收。
+- BMPv4 TLV draft-19 / draft-20 可配置。
+- Initiation、Termination、Peer Up、Peer Down、Route Monitoring、Statistics Report 处理。
+- 客户端连接列表。
+- BGP session 列表和 session RIB 路由列表。
+- Loc-RIB instance 列表和 Loc-RIB 路由列表。
+- 路由状态过滤：active、stale、all。
+- 前缀关键字过滤。
+- 路由详情查询。
+- BGP 原始报文解析摘要按需查询。
+- BMPv4 Path Marking TLV 展示。
+- 过期路由清理。
+- 只读 HTTP API 查询。
+- 本地 mock BMP 客户端脚本。
 
-### BMP 配置和客户端信息
-- BMP 服务器配置
-- 监听地址和端口设置
-- 客户端连接管理
-- 消息类型配置
-- 数据存储设置
+未实现的能力不在本文档中承诺，例如趋势图、告警规则、定时报表、文件导出、历史库查询。
+
+## 页面
+
+### BMP 配置和客户端
+
+配置 BMP 监听端口、BMPv4 TLV draft、Path Marking TLV 类型以及可选 MD5 认证参数。页面下方展示当前 BMP 客户端。
 
 ![BMP 配置和客户端信息](images/bmp/bmp-config-and-client-info.png)
 
-### 客户端和 BGP 监控对等体信息
-- 实时显示 BMP 客户端连接状态
-- BGP 监控对等体详细信息
-- 会话建立时间和统计信息
-- 对等体能力和配置信息
-- 连接质量监控
+注意：
+
+- `draft-20` 的 Route Monitoring `BGP Message TLV` 类型为 `7`。
+- `draft-19` 的 Route Monitoring `BGP Message TLV` 类型为 `4`。
+- 如果设备或 mock 脚本的 draft 与页面配置不一致，日志可能出现 `does not contain mandatory BGP Message TLV`。
+
+### BGP Session
+
+展示指定 BMP 客户端下的 BGP peer session，以及 session RIB 路由。
 
 ![BMP 客户端和 BGP 监控对等体信息](images/bmp/bmp-client-and-bgp-monitor-peer-info.png)
 
-### BGP 路由监控
-- 实时路由表更新监控
-- 路由变化历史记录
-- 路由属性详细分析
-- AS Path 变化追踪
-- 路由收敛时间分析
+路由列表包含 `pathId`、`rd`、前缀、掩码、下一跳、AS Path、路由状态等字段。IPv4/IPv6 单播没有携带 RD 时，页面和存储按 `0:0` 处理，避免路由 key 歧义。
+
+路由操作：
+
+- 查询路由详情。
+- 查询 BGP 原始报文解析摘要。
+- 清理 stale 路由。
+
+### Loc-RIB
+
+展示 BMP Local-RIB instance 和 Loc-RIB 路由。
 
 ![BMP 监控 BGP 路由](images/bmp/bmp-monitor-bgp-route.png)
 
-### 统计报告功能
-BMP 监控器提供强大的统计分析和报告功能,帮助用户深入了解 BGP 路由状态和变化趋势。
+Loc-RIB 使用 instance 维度查询，支持路由列表、路由详情和 stale 路由清理。
 
-#### BGP 会话统计报告
-- 实时 BGP 会话统计信息
-- 会话建立和断开历史
-- 消息收发统计
-- 会话状态变化趋势
-- 对等体连接质量分析
-- 可视化图表展示
+### 统计报告
 
-#### Loc-RIB 统计报告
-- 本地路由信息库统计
-- 路由数量统计和趋势
-- 路由变化频率分析
-- 不同地址族路由分布
-- 路由属性统计
-- 历史数据对比分析
+统计报告页展示 BMP Statistics Report 当前内存数据：
 
-## 使用指南
+- session statistics
+- Loc-RIB statistics
+- BMPv4 TLV 信息
+- per-AFI/SAFI 统计项
 
-### 基本配置步骤
+![BMP BGP 会话统计](images/bmp/bmp-session-statis-report.png)
 
-1. **启动 BMP 监控器**
-   - 在主界面选择 "BMP 监控器"
-   - 进入 BMP 配置界面
+![BMP Loc-RIB 统计](images/bmp/bmp-loc-rib-statis-report.png)
 
-2. **配置 BMP 服务器**
-   - 设置监听地址和端口
-   - 配置消息过滤规则
-   - 设置数据存储选项
+## 本地 mock 数据
 
-3. **连接 BMP 客户端**
-   - 启动 BMP 服务器
-   - 等待客户端连接
-   - 验证连接状态
+项目提供 mock BMP 客户端，便于不接真实路由器时查看页面布局和 API 返回：
 
-4. **监控 BGP 路由**
-   - 查看实时路由更新
-   - 分析路由变化趋势
-   - 导出监控数据
+```bash
+npm run mock:bmp
+```
 
-### 高级功能
+常用参数：
 
-#### 路由过滤和分析
-- 支持基于前缀、AS Path、Community 等的路由过滤
-- 提供路由聚合和统计分析
-- 支持历史数据查询和比较
+```bash
+node scripts/mockBmpClient.js --host 127.0.0.1 --port 11019 --routes 25 --interval 30 --once
+```
 
-#### 告警和通知
-- 路由异常变化告警
-- 对等体状态变化通知
-- 自定义告警规则设置
+使用步骤：
 
-#### 数据导出
-- 支持多种格式的数据导出
-- 定期报告生成
-- API 接口支持
+1. 在 BMP 配置页将 `v4 TLV格式` 设为 `draft-20`。
+2. 启动 BMP 服务。
+3. 运行 `npm run mock:bmp`。
+4. 查看 BGP Session、Loc-RIB 和统计报告页面。
 
-## 技术规范
+## 外部 API
 
-### 支持的 BMP 版本
-- BMP Version 3 (RFC 7854)
-- BMP Version 4 (Draft)
+BMP 查询接口由外部 HTTP API 提供。API 是只读的，不负责启动 BMP 服务。使用前需要在设置页启用 HTTP API，并在 BMP 页面启动 BMP。
 
-### 支持的消息类型
-- Route Monitoring
-- Statistics Report
-- Peer Down Notification
-- Peer Up Notification
-- Initiation Message
-- Termination Message
+详见 [外部 API 文档](API.md)。
 
-### 支持的 BGP 地址族
-- IPv4 Unicast
-- IPv6 Unicast
-- IPv4/IPv6 Multicast
-- VPNv4/VPNv6
-- L2VPN EVPN
+## 注意事项
 
-## 应用场景
-
-### 网络运维
-- BGP 路由监控
-- 网络故障诊断
-- 路由安全分析
-- 性能优化
-
-### 网络研究
-- 路由行为分析
-- 网络拓扑研究
-- 协议性能评估
-- 数据挖掘分析
-
-### 合规监管
-- 路由合规检查
-- 安全策略验证
-- 审计日志记录
-- 报告生成
-
-## 常见问题
-
-**Q: BMP 客户端无法连接怎么办？**
-A: 检查网络连通性、防火墙设置、BMP 服务器配置等，确保端口正确开放。
-
-**Q: 如何过滤特定的路由信息？**
-A: 在配置界面设置过滤规则，可以基于前缀、AS 号码、Community 等进行过滤。
-
-**Q: 监控数据如何导出？**
-A: 在数据展示界面点击导出按钮，选择导出格式和时间范围。
-
-**Q: 支持多少个并发客户端连接？**
-A: 理论上支持无限制的客户端连接，实际限制取决于系统资源。
+- BMP 数据当前保存在 worker 内存和本地运行状态中，不等同于长期历史数据库。
+- BMP 客户端断开后，对应连接会从客户端列表移除。
+- 打开 debug/info 日志时，高频 BMP Route Monitoring 会产生大量日志，可能影响 CPU 和磁盘 IO。
+- MD5 认证依赖服务器部署页面中的 TCP MD5 代理能力。

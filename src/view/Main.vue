@@ -207,15 +207,25 @@
         openKeys.value = keys;
     };
 
+    const syncCurrentMenuFromRoute = () => {
+        const path = route.path || '/tools';
+        const matchedItem = items.value.find(item => path === item.route || path.startsWith(`${item.route}/`));
+        if (matchedItem) {
+            current.value = [matchedItem.key];
+        }
+    };
+
     // 监听路由变化
     watch(
         () => route.path,
         () => {
+            syncCurrentMenuFromRoute();
             // 路由变化时清空验证错误
             if (currentComponent.value && typeof currentComponent.value.clearValidationErrors === 'function') {
                 currentComponent.value.clearValidationErrors();
             }
-        }
+        },
+        { immediate: true }
     );
 
     // 组件挂载时初始化缓存
@@ -224,6 +234,7 @@
         if (route.name && route.meta.keepAlive) {
             store.dispatch('addCachedView', route);
         }
+        syncCurrentMenuFromRoute();
 
         // 初始化时检查窗口宽度
         handleSidebarResize();

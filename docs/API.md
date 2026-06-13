@@ -1,6 +1,6 @@
 # 外部 API
 
-NetNexus 外部 API 是通用只读 HTTP 服务。当前已注册 BMP 查询接口，后续模块可以继续挂载到同一个 API 服务。
+NetNexus 外部 API 是本机只读 HTTP 服务。当前只注册 BMP 查询接口。
 
 外部 API 不负责启动 BMP。BMP 仍由 BMP 页面启动，API 只查询当前 worker 内存中的实时数据。
 
@@ -14,6 +14,22 @@ NetNexus 外部 API 是通用只读 HTTP 服务。当前已注册 BMP 查询接�
 | 监听地址 | `127.0.0.1` | 固定值 | 仅允许本机访问，不支持 `0.0.0.0` 等全局监听 |
 | 监听端口 | `18080` | 整数 `1..65535` | API HTTP 服务端口 |
 | 分页最大条数 | `1000` | 整数 `1..10000` | 限制路由分页接口的 `pageSize` 最大值 |
+
+## 本地 mock 数据
+
+如需在没有真实 BMP 对接的情况下验证页面布局或 API 返回，可以先在 BMP 页面启动服务，再运行：
+
+```bash
+npm run mock:bmp
+```
+
+常用参数：
+
+```bash
+node scripts/mockBmpClient.js --host 127.0.0.1 --port 11019 --routes 25 --interval 30 --once
+```
+
+mock 脚本发送 BMPv4 draft-20 TLV 格式。BMP 页面里的 `v4 TLV格式` 需要与之保持一致，否则 Route Monitoring 可能无法解析出 `BGP Message TLV`。
 
 ## 通用规则
 
@@ -140,7 +156,7 @@ NetNexus 外部 API 是通用只读 HTTP 服务。当前已注册 BMP 查询接�
 
 | 字段 | 类型 | 必填 | 范围/格式 | 说明 |
 | --- | --- | --- | --- | --- |
-| `instanceType` | integer | 是 | `0..255` | BMP instance peer type |
+| `instanceType` | integer | 是 | `0..255` | BMP instance peer type；Loc-RIB 常见为 `3` |
 | `instanceRd` | string | 是 | 1..128 字符，不能包含控制字符 | RD |
 | `addrFamilyType` | integer | 是 | 见地址族枚举 | Loc-RIB instance 地址族 |
 

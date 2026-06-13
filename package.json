@@ -71,6 +71,7 @@
         "prerelease:mac": "npm run build",
         "test": "node test/ci/run-tests.js",
         "mock:bmp": "node scripts/mockBmpClient.js",
+        "docs:screenshots": "electron scripts/captureDocsScreenshots.js",
         "lint": "eslint --ext .js,.vue src electron",
         "lint:fix": "eslint --fix --ext .js,.vue src electron",
         "postinstall": "electron-rebuild && npm run install-deps:arch && node scripts/patch-electron-builder.js",
