@@ -104,4 +104,7 @@ NetNexus/
 
 ## License
 
-MIT © 2026 huaibin ji
+NetNexus is licensed under the [MIT License](LICENSE).
+
+Production third-party dependency notices are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

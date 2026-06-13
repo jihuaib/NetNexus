@@ -85,8 +85,20 @@
             "dist/**/*",
             "electron/**/*",
             "package.json",
+            "LICENSE",
+            "THIRD_PARTY_NOTICES.md",
             "scripts/**/*",
             "bgpdata/**/*"
+        ],
+        "extraResources": [
+            {
+                "from": "LICENSE",
+                "to": "LICENSE"
+            },
+            {
+                "from": "THIRD_PARTY_NOTICES.md",
+                "to": "THIRD_PARTY_NOTICES.md"
+            }
         ],
         "electronLanguages": [
             "zh-CN"
@@ -120,6 +132,7 @@
         },
         "nsis": {
             "allowToChangeInstallationDirectory": true,
+            "license": "LICENSE",
             "oneClick": false,
             "perMachine": false,
             "differentialPackage": false
