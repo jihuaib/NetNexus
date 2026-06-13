@@ -450,7 +450,8 @@ function runScenario(scenario) {
 
     const sessionDetail = callWorker(worker, 'getBgpRouteDetail', {
         ...sessionQuery,
-        routeKey: samples[scenario.detailVariant].getRouteKey()
+        routeKey: samples[scenario.detailVariant].getRouteKey(),
+        includeSummary: true
     });
     const locRibDetail = callWorker(worker, 'getBgpInstanceRouteDetail', {
         ...instanceQuery,

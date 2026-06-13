@@ -449,7 +449,8 @@ function main() {
 
     const sessionDetail = callWorker(worker, 'getBgpRouteDetail', {
         ...sessionQuery,
-        routeKey: samples[11].getRouteKey()
+        routeKey: samples[11].getRouteKey(),
+        includeSummary: true
     });
     assert.equal(sessionDetail.routeType, 11);
     assert.equal(sessionDetail.nlriDetail.routeTypeName, 'Leaf A-D');

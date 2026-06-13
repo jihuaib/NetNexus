@@ -413,7 +413,8 @@ function main() {
 
     const sessionDetail = callWorker(worker, 'getBgpRouteDetail', {
         ...sessionQuery,
-        routeKey: samples['as4-rd-16-two-label'].getRouteKey()
+        routeKey: samples['as4-rd-16-two-label'].getRouteKey(),
+        includeSummary: true
     });
     assert.equal(sessionDetail.addrFamilyType, AF);
     assert.equal(sessionDetail.mask, 16);
