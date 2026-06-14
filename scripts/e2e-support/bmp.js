@@ -2,16 +2,19 @@ const bmpBrowserMockScript =
     "(function installBmpApiMocks() {\n    const unifiedCallbacks = [];\n\n    window.__bmpE2eEmit = (type, data) => {\n        unifiedCallbacks.forEach(callback => callback({ type, data }));\n    };\n\n    window.commonApi = {\n        onUnifiedEvent: callback => {\n            unifiedCallbacks.push(callback);\n            return () => {\n                const index = unifiedCallbacks.indexOf(callback);\n                if (index >= 0) {\n                    unifiedCallbacks.splice(index, 1);\n                }\n            };\n        },\n        notifyRendererReady: () => {},\n        getServerDeploymentStatus: async () => ({\n            status: 'success',\n            data: { success: true }\n        }),\n        openDeveloperOptions: () => {},\n        openSoftwareInfo: () => {}\n    };\n\n    window.bmpApi = {\n        saveBmpConfig: config => window.__bmpE2eCall('saveBmpConfig', config),\n        loadBmpConfig: () => window.__bmpE2eCall('loadBmpConfig'),\n        startBmp: config => window.__bmpE2eCall('startBmp', config),\n        stopBmp: () => window.__bmpE2eCall('stopBmp'),\n        getClientList: () => window.__bmpE2eCall('getClientList'),\n        getBgpSessions: client => window.__bmpE2eCall('getBgpSessions', client),\n        getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState, prefixFilter) =>\n            window.__bmpE2eCall('getBgpRoutes', {\n                client,\n                session,\n                af,\n                ribType,\n                page,\n                pageSize,\n                routeState,\n                prefixFilter\n            }),\n        getBgpRouteDetail: (client, session, af, ribType, routeKey, includeSummary = false) =>\n            window.__bmpE2eCall('getBgpRouteDetail', {\n                client,\n                session,\n                af,\n                ribType,\n                routeKey,\n                includeSummary\n            }),\n        getBgpInstances: client => window.__bmpE2eCall('getBgpInstances', client),\n        getBgpInstanceRoutes: (client, instance, page, pageSize, routeState, prefixFilter) =>\n            window.__bmpE2eCall('getBgpInstanceRoutes', {\n                client,\n                instance,\n                page,\n                pageSize,\n                routeState,\n                prefixFilter\n            }),\n        getBgpInstanceRouteDetail: (client, instance, routeKey, includeSummary = false) =>\n            window.__bmpE2eCall('getBgpInstanceRouteDetail', {\n                client,\n                instance,\n                routeKey,\n                includeSummary\n            }),\n        purgeStaleBgpRoutes: (client, session, af, ribType) =>\n            window.__bmpE2eCall('purgeStaleBgpRoutes', {\n                client,\n                session,\n                af,\n                ribType\n            }),\n        purgeStaleBgpInstanceRoutes: (client, instance) =>\n            window.__bmpE2eCall('purgeStaleBgpInstanceRoutes', {\n                client,\n                instance\n            }),\n        getBgpStatisticsReports: client => window.__bmpE2eCall('getBgpStatisticsReports', client),\n        getBgpInstanceStatisticsReports: client => window.__bmpE2eCall('getBgpInstanceStatisticsReports', client)\n    };\n})();\n";
 
 const BmpE2eController = (() => {
-    const fs = require('fs');
-    const Module = require('module');
     const net = require('net');
     const path = require('path');
     const { spawn } = require('child_process');
+    const { loadBmpWorkerClassFromFile } = require('../bmp-worker-loader');
+    const { findPackagedElectronRoot } = require('./packaged-app');
 
     const projectRoot = path.join(__dirname, '..', '..');
-    const BmpConst = require(path.join(projectRoot, 'electron', 'const', 'bmpConst'));
-    const BmpSession = require(path.join(projectRoot, 'electron', 'worker', 'bmp', 'bmpSession'));
-    const RouteUpdateAggregator = require(path.join(projectRoot, 'electron', 'utils', 'routeUpdateAggregator'));
+    const workspaceElectronRoot = path.join(projectRoot, 'electron');
+    const electronRoot =
+        process.env.E2E_TARGET === 'browser' ? workspaceElectronRoot : findPackagedElectronRoot();
+    const BmpConst = require(path.join(electronRoot, 'const', 'bmpConst'));
+    const BmpSession = require(path.join(electronRoot, 'worker', 'bmp', 'bmpSession'));
+    const RouteUpdateAggregator = require(path.join(electronRoot, 'utils', 'routeUpdateAggregator'));
 
     const BMP_EVENT_TYPE_TO_RENDERER_TYPE = {
         [BmpConst.BMP_EVT_TYPES.INITIATION]: 'bmp:initiation',
@@ -38,18 +41,8 @@ const BmpE2eController = (() => {
     }
 
     function loadBmpWorkerClass() {
-        const filePath = path.join(projectRoot, 'electron', 'worker', 'bmp', 'bmpWorker.js');
-        const source = fs.readFileSync(filePath, 'utf8');
-        const patched = source.replace(/new BmpWorker\(\);\s*\/\/ 启动监听\s*$/u, 'module.exports = BmpWorker;');
-        if (patched === source) {
-            throw new Error('failed to patch bmpWorker.js auto-start line for E2E loading');
-        }
-
-        const mod = new Module(filePath, module);
-        mod.filename = filePath;
-        mod.paths = Module._nodeModulePaths(path.dirname(filePath));
-        mod._compile(patched, filePath);
-        return mod.exports;
+        const filePath = path.join(electronRoot, 'worker', 'bmp', 'bmpWorker.js');
+        return loadBmpWorkerClassFromFile(filePath, module, 'E2E loading');
     }
 
     class CaptureMessageHandler {

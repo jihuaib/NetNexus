@@ -194,7 +194,49 @@ function findPackagedElectronExecutable() {
     return candidates[0];
 }
 
+function findPackagedAppRoot() {
+    if (process.env.E2E_APP_ROOT) {
+        const appRoot = path.resolve(projectRoot, process.env.E2E_APP_ROOT);
+        if (!dirExists(appRoot)) {
+            throw new Error(`E2E_APP_ROOT does not exist: ${appRoot}`);
+        }
+        return appRoot;
+    }
+
+    const executablePath = findPackagedElectronExecutable();
+    const candidates =
+        process.platform === 'darwin'
+            ? [path.resolve(path.dirname(executablePath), '..', 'Resources', 'app')]
+            : [path.join(path.dirname(executablePath), 'resources', 'app')];
+
+    for (const candidate of candidates) {
+        if (dirExists(candidate)) {
+            return candidate;
+        }
+    }
+
+    throw new Error(`Packaged app root not found for executable: ${executablePath}`);
+}
+
+function findPackagedElectronRoot() {
+    if (process.env.E2E_ELECTRON_ROOT) {
+        const electronRoot = path.resolve(projectRoot, process.env.E2E_ELECTRON_ROOT);
+        if (!dirExists(electronRoot)) {
+            throw new Error(`E2E_ELECTRON_ROOT does not exist: ${electronRoot}`);
+        }
+        return electronRoot;
+    }
+
+    const electronRoot = path.join(findPackagedAppRoot(), 'electron');
+    if (!dirExists(electronRoot)) {
+        throw new Error(`Packaged electron root not found: ${electronRoot}`);
+    }
+    return electronRoot;
+}
+
 module.exports = {
+    findPackagedAppRoot,
+    findPackagedElectronRoot,
     findPackagedElectronExecutable,
     projectRoot
 };

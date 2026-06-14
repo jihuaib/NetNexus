@@ -53,6 +53,28 @@ async function collectJsFiles(dir) {
     return files;
 }
 
+async function writeFileBreakingHardlink(filePath, contents) {
+    const stat = await fs.stat(filePath);
+
+    if (stat.nlink <= 1) {
+        await fs.writeFile(filePath, contents);
+        return;
+    }
+
+    const tempPath = path.join(
+        path.dirname(filePath),
+        `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
+    );
+
+    try {
+        await fs.writeFile(tempPath, contents, { mode: stat.mode });
+        await fs.rename(tempPath, filePath);
+    } catch (error) {
+        await fs.rm(tempPath, { force: true }).catch(() => {});
+        throw error;
+    }
+}
+
 async function minifyFile(filePath) {
     const source = await fs.readFile(filePath, 'utf8');
     const result = await transform(source, {
@@ -65,7 +87,7 @@ async function minifyFile(filePath) {
         legalComments: 'none'
     });
 
-    await fs.writeFile(filePath, result.code);
+    await writeFileBreakingHardlink(filePath, result.code);
 
     return {
         before: Buffer.byteLength(source),
