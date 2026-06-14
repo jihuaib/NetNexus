@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bgp-peer-page">
+    <div class="mt-container bgp-peer-page" data-testid="bgp-peer-page">
         <!-- 邻居配置 Card -->
         <a-card title="邻居配置" class="bgp-peer-config-card">
             <a-tabs v-model:active-key="activeConfigTabKey">
@@ -19,6 +19,7 @@
                                     >
                                         <a-input
                                             v-model:value="ipv4PeerConfigData.peerIp"
+                                            data-testid="bgp-ipv4-peer-ip-input"
                                             :status="ipv4PeerConfigvalidationErrors.peerIp ? 'error' : ''"
                                         />
                                     </a-tooltip>
@@ -32,6 +33,7 @@
                                     >
                                         <a-input
                                             v-model:value="ipv4PeerConfigData.peerAs"
+                                            data-testid="bgp-ipv4-peer-as-input"
                                             :status="ipv4PeerConfigvalidationErrors.peerAs ? 'error' : ''"
                                         />
                                     </a-tooltip>
@@ -45,6 +47,7 @@
                                     >
                                         <a-input
                                             v-model:value="ipv4PeerConfigData.holdTime"
+                                            data-testid="bgp-ipv4-peer-hold-time-input"
                                             :status="ipv4PeerConfigvalidationErrors.holdTime ? 'error' : ''"
                                         />
                                     </a-tooltip>
@@ -96,7 +99,13 @@
                             <a-col :span="24">
                                 <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
                                     <a-space size="middle">
-                                        <a-button type="primary" html-type="submit">配置IPv4邻居</a-button>
+                                        <a-button
+                                            data-testid="bgp-config-ipv4-peer-button"
+                                            type="primary"
+                                            html-type="submit"
+                                        >
+                                            配置IPv4邻居
+                                        </a-button>
                                     </a-space>
                                 </a-form-item>
                             </a-col>
@@ -221,6 +230,7 @@
                                     </a-tag>
                                 </div>
                                 <a-table
+                                    data-testid="bgp-ipv4-unc-peer-table"
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv4UncPeerList"
                                     :row-key="

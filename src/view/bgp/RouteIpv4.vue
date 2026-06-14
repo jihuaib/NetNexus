@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bgp-route-page">
+    <div class="mt-container bgp-route-page" data-testid="bgp-route-ipv4-page">
         <a-card title="IPv4-UNC路由配置" class="bgp-route-card">
             <a-form :model="ipv4Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <a-row>
@@ -8,6 +8,7 @@
                             <a-tooltip :title="validationErrors.prefix" :open="!!validationErrors.prefix">
                                 <a-input
                                     v-model:value="ipv4Data.prefix"
+                                    data-testid="bgp-ipv4-route-prefix-input"
                                     :status="validationErrors.prefix ? 'error' : ''"
                                 />
                             </a-tooltip>
@@ -16,7 +17,11 @@
                     <a-col :span="8">
                         <a-form-item label="Mask" name="mask">
                             <a-tooltip :title="validationErrors.mask" :open="!!validationErrors.mask">
-                                <a-input v-model:value="ipv4Data.mask" :status="validationErrors.mask ? 'error' : ''" />
+                                <a-input
+                                    v-model:value="ipv4Data.mask"
+                                    data-testid="bgp-ipv4-route-mask-input"
+                                    :status="validationErrors.mask ? 'error' : ''"
+                                />
                             </a-tooltip>
                         </a-form-item>
                     </a-col>
@@ -25,6 +30,7 @@
                             <a-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
                                 <a-input
                                     v-model:value="ipv4Data.count"
+                                    data-testid="bgp-ipv4-route-count-input"
                                     :status="validationErrors.count ? 'error' : ''"
                                 />
                             </a-tooltip>
@@ -47,7 +53,14 @@
                     </a-button>
                 </a-form-item>
                 <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                    <a-button type="primary" :loading="routesGenerating" @click="generateRoutes">生成IPv4路由</a-button>
+                    <a-button
+                        data-testid="bgp-generate-ipv4-routes-button"
+                        type="primary"
+                        :loading="routesGenerating"
+                        @click="generateRoutes"
+                    >
+                        生成IPv4路由
+                    </a-button>
                 </a-form-item>
 
                 <!-- 路由列表 -->
@@ -71,6 +84,7 @@
                         </a-button>
                     </div>
                     <a-table
+                        data-testid="bgp-ipv4-route-table"
                         :data-source="sentRoutes"
                         :columns="routeColumns"
                         :pagination="pagination"

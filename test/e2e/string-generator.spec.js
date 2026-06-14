@@ -1,14 +1,12 @@
-const path = require('path');
 const { test, expect } = require('@playwright/test');
-
-const apiMocksPath = path.join(__dirname, '..', '..', 'scripts', 'e2e-support', 'electron-api-mocks.js');
+const { getBrowserMockScript } = require('../../scripts/e2e-support');
 
 async function recordStep(title) {
     await test.step(title, async () => {});
 }
 
 test.beforeEach(async ({ page }) => {
-    await page.addInitScript({ path: apiMocksPath });
+    await page.addInitScript({ content: getBrowserMockScript('stringGenerator') });
 });
 
 test('generates strings from form input and sends the expected API payload', async ({ page }) => {

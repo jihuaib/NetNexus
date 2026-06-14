@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bgp-config-page">
+    <div class="mt-container bgp-config-page" data-testid="bgp-config-page">
         <!-- BGP 配置 Card -->
         <a-form :model="bgpConfigData" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBgp">
             <a-card title="BGP配置" class="bgp-config-card">
@@ -12,6 +12,7 @@
                             >
                                 <a-input
                                     v-model:value="bgpConfigData.localAs"
+                                    data-testid="bgp-local-as-input"
                                     :disabled="bgpRunning"
                                     :status="bgpConfigvalidationErrors.localAs ? 'error' : ''"
                                 />
@@ -26,6 +27,7 @@
                             >
                                 <a-input
                                     v-model:value="bgpConfigData.routerId"
+                                    data-testid="bgp-router-id-input"
                                     :disabled="bgpRunning"
                                     :status="bgpConfigvalidationErrors.routerId ? 'error' : ''"
                                 />
@@ -49,10 +51,24 @@
 
                 <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
                     <a-space size="middle">
-                        <a-button type="primary" html-type="submit" :loading="bgpLoading" :disabled="bgpRunning">
+                        <a-button
+                            data-testid="bgp-start-button"
+                            type="primary"
+                            html-type="submit"
+                            :loading="bgpLoading"
+                            :disabled="bgpRunning"
+                        >
                             启动BGP
                         </a-button>
-                        <a-button type="primary" danger :disabled="!bgpRunning" @click="stopBgp">停止BGP</a-button>
+                        <a-button
+                            data-testid="bgp-stop-button"
+                            type="primary"
+                            danger
+                            :disabled="!bgpRunning"
+                            @click="stopBgp"
+                        >
+                            停止BGP
+                        </a-button>
                     </a-space>
                 </a-form-item>
             </a-card>
@@ -61,6 +77,7 @@
         <!-- BGP 状态信息 Card -->
         <a-card title="BGP 状态信息" class="status-card">
             <a-table
+                data-testid="bgp-instance-table"
                 :columns="instanceColumns"
                 :data-source="instanceInfoList"
                 :pagination="{

@@ -22,264 +22,7 @@ const {
     getBgpAsPathTypeName,
     getBgpAddPathTypeName
 } = require('../utils/bgpUtils');
-
-const BGP_TUNNEL_TYPE_NAMES = {
-    0: 'Reserved',
-    1: 'L2TPv3 over IP',
-    2: 'GRE',
-    3: 'Transmit tunnel endpoint',
-    4: 'IPsec in Tunnel-mode',
-    5: 'IP in IP tunnel with IPsec Transport Mode',
-    6: 'MPLS-in-IP tunnel with IPsec Transport Mode',
-    7: 'IP in IP',
-    8: 'VXLAN',
-    9: 'NVGRE',
-    10: 'MPLS',
-    11: 'MPLS in GRE',
-    12: 'VXLAN GPE',
-    13: 'MPLS in UDP',
-    14: 'IPv6 Tunnel',
-    15: 'MPLS in UDP with DTLS',
-    16: 'SR Policy',
-    17: 'SR Tunnel',
-    19: 'Geneve'
-};
-
-const PMSI_TUNNEL_TYPE_NAMES = {
-    0: 'No tunnel information',
-    1: 'RSVP-TE P2MP LSP',
-    2: 'mLDP P2MP LSP',
-    3: 'PIM-SSM Tree',
-    4: 'PIM-SM Tree',
-    5: 'BIDIR-PIM Tree',
-    6: 'Ingress Replication',
-    7: 'mLDP MP2MP LSP',
-    8: 'BIER'
-};
-
-const BGP_PREFIX_SID_TLV_TYPE_NAMES = {
-    0: 'Reserved',
-    1: 'Label-Index',
-    2: 'Deprecated',
-    3: 'Originator SRGB',
-    4: 'SRv6-VPN SID (Deprecated)',
-    5: 'SRv6 L3 Service',
-    6: 'SRv6 L2 Service',
-    7: 'SRv6 Transport',
-    255: 'Reserved'
-};
-
-const SRV6_SERVICE_SUB_TLV_TYPE_NAMES = {
-    1: 'SRv6 SID Information'
-};
-
-const SRV6_SERVICE_DATA_SUB_SUB_TLV_TYPE_NAMES = {
-    1: 'SRv6 SID Structure'
-};
-
-const SRV6_ENDPOINT_BEHAVIOR_NAMES = {
-    0: 'Reserved',
-    1: 'End',
-    2: 'End with PSP',
-    3: 'End with USP',
-    4: 'End with PSP & USP',
-    5: 'End.X',
-    6: 'End.X with PSP',
-    7: 'End.X with USP',
-    8: 'End.X with PSP & USP',
-    9: 'End.T',
-    10: 'End.T with PSP',
-    11: 'End.T with USP',
-    12: 'End.T with PSP & USP',
-    13: 'End.B6.Insert',
-    14: 'End.B6.Encaps',
-    15: 'End.BM',
-    16: 'End.DX6',
-    17: 'End.DX4',
-    18: 'End.DT6',
-    19: 'End.DT4',
-    20: 'End.DT46',
-    21: 'End.DX2',
-    22: 'End.DX2V',
-    23: 'End.DT2U',
-    24: 'End.DT2M',
-    25: 'Reserved',
-    26: 'End.B6.Insert.Red',
-    27: 'End.B6.Encaps.Red',
-    28: 'End with USD',
-    29: 'End with PSP & USD',
-    30: 'End with USP & USD',
-    31: 'End with PSP, USP & USD',
-    32: 'End.X with USD',
-    33: 'End.X with PSP & USD',
-    34: 'End.X with USP & USD',
-    35: 'End.X with PSP, USP & USD',
-    36: 'End.T with USD',
-    37: 'End.T with PSP & USD',
-    38: 'End.T with USP & USD',
-    39: 'End.T with PSP, USP & USD',
-    40: 'End.MAP',
-    41: 'End.Limit',
-    42: 'End with NEXT-ONLY-CSID',
-    43: 'End with NEXT-CSID',
-    44: 'End with NEXT-CSID & PSP',
-    45: 'End with NEXT-CSID & USP',
-    46: 'End with NEXT-CSID, PSP & USP',
-    47: 'End with NEXT-CSID & USD',
-    48: 'End with NEXT-CSID, PSP & USD',
-    49: 'End with NEXT-CSID, USP & USD',
-    50: 'End with NEXT-CSID, PSP, USP & USD',
-    51: 'End.X with NEXT-ONLY-CSID',
-    52: 'End.X with NEXT-CSID',
-    53: 'End.X with NEXT-CSID & PSP',
-    54: 'End.X with NEXT-CSID & USP',
-    55: 'End.X with NEXT-CSID, PSP & USP',
-    56: 'End.X with NEXT-CSID & USD',
-    57: 'End.X with NEXT-CSID, PSP & USD',
-    58: 'End.X with NEXT-CSID, USP & USD',
-    59: 'End.X with NEXT-CSID, PSP, USP & USD',
-    60: 'uDX6 (End.DX6 with NEXT-CSID)',
-    61: 'uDX4 (End.DX4 with NEXT-CSID)',
-    62: 'uDT6 (End.DT6 with NEXT-CSID)',
-    63: 'uDT4 (End.DT4 with NEXT-CSID)',
-    64: 'uDT46 (End.DT46 with NEXT-CSID)',
-    65: 'uDX2 (End.DX2 with NEXT-CSID)',
-    66: 'uDX2V (End.DX2V with NEXT-CSID)',
-    67: 'uDT2U (End.DT2U with NEXT-CSID)',
-    68: 'uDT2M (End.DT2M with NEXT-CSID)',
-    69: 'End.M.GTP6.D',
-    70: 'End.M.GTP6.Di',
-    71: 'End.M.GTP6.E',
-    72: 'End.M.GTP4.E',
-    73: 'End.DTM',
-    74: 'End.M (Mirror SID)',
-    75: 'End.Replicate',
-    76: 'End.DTMC4',
-    77: 'End.DTMC6',
-    78: 'End.DTMC46',
-    79: 'End.BXC',
-    80: 'End.BXC with PSP',
-    81: 'End.BXC with USP',
-    82: 'End.BXC with USD',
-    83: 'End.BXC with PSP, USP & USD',
-    84: 'End.NSH - NSH Segment',
-    85: 'End.T with NEXT-CSID',
-    86: 'End.T with NEXT-CSID & PSP',
-    87: 'End.T with NEXT-CSID & USP',
-    88: 'End.T with NEXT-CSID, PSP & USP',
-    89: 'End.T with NEXT-CSID & USD',
-    90: 'End.T with NEXT-CSID, PSP & USD',
-    91: 'End.T with NEXT-CSID, USP & USD',
-    92: 'End.T with NEXT-CSID, PSP, USP & USD',
-    93: 'End.B6.Encaps with NEXT-CSID',
-    94: 'End.B6.Encaps.Red with NEXT-CSID',
-    95: 'End.BM with NEXT-CSID',
-    96: 'End.LBS with NEXT-CSID',
-    97: 'End.XLBS with NEXT-CSID',
-    98: 'End.B6.Encaps.Red with NEXT-CSID, PSP & USD',
-    99: 'End.B6.Insert.Red with NEXT-CSID, PSP & USD',
-    100: 'End.PSID',
-    101: 'End with REPLACE-CSID',
-    102: 'End with REPLACE-CSID & PSP',
-    103: 'End with REPLACE-CSID & USP',
-    104: 'End with REPLACE-CSID, PSP & USP',
-    105: 'End.X with REPLACE-CSID',
-    106: 'End.X with REPLACE-CSID & PSP',
-    107: 'End.X with REPLACE-CSID & USP',
-    108: 'End.X with REPLACE-CSID, PSP & USP',
-    109: 'End.T with REPLACE-CSID',
-    110: 'End.T with REPLACE-CSID & PSP',
-    111: 'End.T with REPLACE-CSID & USP',
-    112: 'End.T with REPLACE-CSID, PSP & USP',
-    114: 'End.B6.Encaps with REPLACE-CSID',
-    115: 'End.BM with REPLACE-CSID',
-    116: 'End.DX6 with REPLACE-CSID',
-    117: 'End.DX4 with REPLACE-CSID',
-    118: 'End.DT6 with REPLACE-CSID',
-    119: 'End.DT4 with REPLACE-CSID',
-    120: 'End.DT46 with REPLACE-CSID',
-    121: 'End.DX2 with REPLACE-CSID',
-    122: 'End.DX2V with REPLACE-CSID',
-    123: 'End.DT2U with REPLACE-CSID',
-    124: 'End.DT2M with REPLACE-CSID',
-    127: 'End.B6.Encaps.Red with REPLACE-CSID',
-    128: 'End with REPLACE-CSID & USD',
-    129: 'End with REPLACE-CSID, PSP & USD',
-    130: 'End with REPLACE-CSID, USP & USD',
-    131: 'End with REPLACE-CSID, PSP, USP & USD',
-    132: 'End.X with REPLACE-CSID & USD',
-    133: 'End.X with REPLACE-CSID, PSP & USD',
-    134: 'End.X with REPLACE-CSID, USP & USD',
-    135: 'End.X with REPLACE-CSID, PSP, USP & USD',
-    136: 'End.T with REPLACE-CSID & USD',
-    137: 'End.T with REPLACE-CSID, PSP & USD',
-    138: 'End.T with REPLACE-CSID, USP & USD',
-    139: 'End.T with REPLACE-CSID, PSP, USP & USD',
-    140: 'End.LBS with REPLACE-CSID',
-    141: 'End.XLBS with REPLACE-CSID',
-    142: 'End.DTM46',
-    143: 'End.DXM4',
-    144: 'End.DXM6',
-    145: 'End.DXM2',
-    150: 'End.XU',
-    151: 'End.XU with PSP',
-    152: 'End.XU with USP',
-    153: 'End.XU with USD',
-    154: 'End.XU with PSP, USP & USD',
-    155: 'End.XU with REPPLACE-CSID',
-    156: 'End.XU with REPPLACE-CSID & PSP',
-    157: 'End.XU with REPPLACE-CSID & PSP & USP & USD',
-    158: 'End.DX1',
-    159: 'End.DX1 with NEXT-CSID',
-    160: 'End.DX1 with REPLACE-CSID',
-    161: 'End.AN - SR-aware function',
-    162: 'End.AS - Static proxy',
-    163: 'End.AD - Dynamic proxy',
-    164: 'End.AM - Masquerading proxy',
-    165: 'End.AM - Masquerading proxy with NAT',
-    166: 'End.AM - Masquerading proxy with Caching',
-    167: 'End.AM - Masquerading proxy with NAT & Caching',
-    168: 'End.M.GTP6.E.Red',
-    169: 'End.AN.CI.S',
-    170: 'End.AN.CI.D.A',
-    171: 'End.AN.CI.D.T',
-    172: 'End.AN.CI.D.V',
-    173: 'End.AN.CI.D.D',
-    180: 'End.AS with REPLACE-CSID',
-    181: 'End.AS with NEXT-CSID',
-    182: 'End.AD with REPLACE-CSID',
-    183: 'End.AD with NEXT-CSID',
-    184: 'End.AM with REPLACE-CSID',
-    185: 'End.AM with NEXT-CSID',
-    186: 'End.AMN with REPLACE-CSID',
-    187: 'End.AMN with NEXT-CSID',
-    32767: 'The SID defined in [RFC8754]',
-    65535: 'Opaque'
-};
-
-function getBgpPrefixSidTlvTypeName(type) {
-    return BGP_PREFIX_SID_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
-}
-
-function getBgpTunnelTypeName(type) {
-    return BGP_TUNNEL_TYPE_NAMES[type] || `Unknown (${type})`;
-}
-
-function getPmsiTunnelTypeName(type) {
-    return PMSI_TUNNEL_TYPE_NAMES[type] || `Unknown (${type})`;
-}
-
-function getSrv6ServiceSubTlvTypeName(type) {
-    return SRV6_SERVICE_SUB_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
-}
-
-function getSrv6ServiceDataSubSubTlvTypeName(type) {
-    return SRV6_SERVICE_DATA_SUB_SUB_TLV_TYPE_NAMES[type] || `Unknown (${type})`;
-}
-
-function getSrv6EndpointBehaviorName(behavior) {
-    return SRV6_ENDPOINT_BEHAVIOR_NAMES[behavior] || `Unknown (${behavior})`;
-}
+const bgpAddressFamily = require('../utils/bgpAddressFamily');
 
 function readUint24BE(buffer, position) {
     return (buffer[position] << 16) | (buffer[position + 1] << 8) | buffer[position + 2];
@@ -306,10 +49,7 @@ function formatHex(buffer, start, end) {
 }
 
 function isSimpleIpNlri(afi, safi) {
-    return (
-        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
-        safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
-    );
+    return bgpAddressFamily.isSimpleIpNlri(afi, safi);
 }
 
 function formatIpPrefix(buffer, offset, prefixLength, afi) {
@@ -322,59 +62,7 @@ function formatIpPrefix(buffer, offset, prefixLength, afi) {
 }
 
 function formatNextHop(buffer, offset, nextHopLength, afi, safi) {
-    if (nextHopLength === 0) {
-        return '';
-    }
-
-    if (
-        (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
-        safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN
-    ) {
-        if (nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IP_HOST_BYTE_LEN) {
-            return ipv4BufferToString(
-                buffer.subarray(offset + BgpConst.BGP_RD_LEN, offset + BgpConst.BGP_RD_LEN + BgpConst.IP_HOST_BYTE_LEN),
-                BgpConst.IP_HOST_LEN
-            );
-        }
-        if (nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) {
-            return ipv6BufferToString(
-                buffer.subarray(offset + BgpConst.BGP_RD_LEN, offset + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
-                BgpConst.IPV6_HOST_LEN
-            );
-        }
-        if (nextHopLength === (BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) * 2) {
-            const globalNextHop = ipv6BufferToString(
-                buffer.subarray(offset + BgpConst.BGP_RD_LEN, offset + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
-                BgpConst.IPV6_HOST_LEN
-            );
-            const linkLocalOffset = offset + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN + BgpConst.BGP_RD_LEN;
-            const linkLocalNextHop = ipv6BufferToString(
-                buffer.subarray(linkLocalOffset, linkLocalOffset + BgpConst.IPV6_HOST_BYTE_LEN),
-                BgpConst.IPV6_HOST_LEN
-            );
-            return `${globalNextHop}, ${linkLocalNextHop}`;
-        }
-    }
-
-    if (nextHopLength === BgpConst.IP_HOST_BYTE_LEN) {
-        return ipv4BufferToString(buffer.subarray(offset, offset + BgpConst.IP_HOST_BYTE_LEN), BgpConst.IP_HOST_LEN);
-    }
-    if (nextHopLength === BgpConst.IPV6_HOST_BYTE_LEN) {
-        return ipv6BufferToString(buffer.subarray(offset, offset + BgpConst.IPV6_HOST_BYTE_LEN), BgpConst.IPV6_HOST_LEN);
-    }
-    if (nextHopLength === BgpConst.IPV6_HOST_BYTE_LEN * 2) {
-        const globalNextHop = ipv6BufferToString(
-            buffer.subarray(offset, offset + BgpConst.IPV6_HOST_BYTE_LEN),
-            BgpConst.IPV6_HOST_LEN
-        );
-        const linkLocalNextHop = ipv6BufferToString(
-            buffer.subarray(offset + BgpConst.IPV6_HOST_BYTE_LEN, offset + BgpConst.IPV6_HOST_BYTE_LEN * 2),
-            BgpConst.IPV6_HOST_LEN
-        );
-        return `${globalNextHop}, ${linkLocalNextHop}`;
-    }
-
-    return formatHex(buffer, offset, offset + nextHopLength);
+    return bgpAddressFamily.parseNextHop(buffer, offset, nextHopLength, afi, safi);
 }
 
 function addSimpleNlriNodes(parentNode, buffer, offset, endOffset, afi, nodeName = 'NLRI') {
@@ -408,6 +96,97 @@ function addSimpleNlriNodes(parentNode, buffer, offset, endOffset, afi, nodeName
         }
 
         routeNode.value = `${prefix}/${prefixLength}`;
+        routes.push(routeNode.value);
+        routeIndex += 1;
+    }
+
+    nlriNode.value = routes.join(', ');
+    return nlriNode;
+}
+
+function formatRouteSummary(route) {
+    if (!route) {
+        return '';
+    }
+
+    if (route.dqpn !== undefined) {
+        return `${route.prefix}/${route.length} DQPN=${route.dqpn}/${route.dqpnBits}`;
+    }
+
+    const length = route.nlriLength !== undefined ? route.nlriLength : route.length;
+    return route.prefix !== undefined ? `${route.prefix}/${length}` : route.rawNlri || '';
+}
+
+function addRouteFieldIfPresent(routeNode, name, value) {
+    if (value === undefined || value === null) {
+        return;
+    }
+    addLeafNode(routeNode, name, routeNode.offset, 0, value);
+}
+
+function addParsedNlriNodes(parentNode, buffer, offset, endOffset, afi, safi, nodeName, isWithdrawn = false) {
+    const nlriNode = createTreeNode(nodeName, offset, endOffset - offset, '', []);
+    parentNode.children.push(nlriNode);
+
+    let position = offset;
+    let routeIndex = 0;
+    const routes = [];
+    while (position < endOffset) {
+        const routeOffset = position;
+        let parsed;
+        try {
+            parsed = bgpAddressFamily.parseNlriEntry(buffer, position, afi, safi, isWithdrawn);
+        } catch (error) {
+            nlriNode.children.push(
+                createTreeNode(
+                    `Malformed Route ${routeIndex + 1}`,
+                    routeOffset,
+                    endOffset - routeOffset,
+                    `Error parsing NLRI: ${error.message}`,
+                    []
+                )
+            );
+            break;
+        }
+
+        if (!parsed || parsed.position <= position) {
+            nlriNode.children.push(
+                createTreeNode('Trailing Data', routeOffset, endOffset - routeOffset, formatHex(buffer, routeOffset, endOffset), [])
+            );
+            break;
+        }
+
+        position = Math.min(parsed.position, endOffset);
+        const route = parsed.route || {};
+        const routeNode = createTreeNode(
+            `Route ${routeIndex + 1}`,
+            routeOffset,
+            position - routeOffset,
+            formatRouteSummary(route),
+            []
+        );
+        nlriNode.children.push(routeNode);
+
+        addRouteFieldIfPresent(routeNode, 'Prefix', route.prefix);
+        addRouteFieldIfPresent(routeNode, 'Length', route.length);
+        addRouteFieldIfPresent(routeNode, 'RD', route.rd);
+        addRouteFieldIfPresent(routeNode, 'Route Type', route.routeType);
+        addRouteFieldIfPresent(routeNode, 'Route Type Name', route.routeTypeName);
+        addRouteFieldIfPresent(routeNode, 'DQPN', route.dqpn);
+        addRouteFieldIfPresent(routeNode, 'DQPN Bits', route.dqpnBits);
+        addRouteFieldIfPresent(routeNode, 'NLRI Length', route.nlriLength);
+        addRouteFieldIfPresent(routeNode, 'Raw NLRI', route.rawNlri);
+        if (Array.isArray(route.labels) && route.labels.length > 0) {
+            addRouteFieldIfPresent(
+                routeNode,
+                'Labels',
+                route.labels.map(label => label.display || `${label.label}${label.bottom ? '(BOS)' : ''}`).join(', ')
+            );
+        }
+        if (route.valid === false && Array.isArray(route.errors) && route.errors.length > 0) {
+            addRouteFieldIfPresent(routeNode, 'Errors', route.errors.join('; '));
+        }
+
         routes.push(routeNode.value);
         routeIndex += 1;
     }
@@ -475,7 +254,7 @@ function addSrv6ServiceDataSubSubTlvs(buffer, sidInfoNode, startOffset, endOffse
         const length = buffer.readUInt16BE(offset + 1);
         const valueOffset = offset + 3;
         const subSubNode = {
-            name: `Sub-Sub-TLV ${type} (${getSrv6ServiceDataSubSubTlvTypeName(type)})`,
+            name: `Sub-Sub-TLV ${type} (${bgpAddressFamily.getSrv6ServiceDataSubSubTlvTypeName(type)})`,
             offset,
             length: Math.min(3 + length, endOffset - offset),
             value: '',
@@ -484,7 +263,7 @@ function addSrv6ServiceDataSubSubTlvs(buffer, sidInfoNode, startOffset, endOffse
                     name: 'Type',
                     offset,
                     length: 1,
-                    value: `${type} (${getSrv6ServiceDataSubSubTlvTypeName(type)})`,
+                    value: `${type} (${bgpAddressFamily.getSrv6ServiceDataSubSubTlvTypeName(type)})`,
                     children: []
                 },
                 {
@@ -532,7 +311,7 @@ function addSrv6SidInformationNode(buffer, serviceNode, offset, length) {
     const behavior = buffer.readUInt16BE(offset + 18);
     const reserved2 = buffer[offset + 20];
     
-    sidInfoNode.value = `${sid} ${getSrv6EndpointBehaviorName(behavior)}`;
+    sidInfoNode.value = `${sid} ${bgpAddressFamily.getSrv6EndpointBehaviorName(behavior)}`;
     sidInfoNode.children.push(
         {
             name: 'Reserved',
@@ -559,7 +338,7 @@ function addSrv6SidInformationNode(buffer, serviceNode, offset, length) {
             name: 'Endpoint Behavior',
             offset: offset + 18,
             length: 2,
-            value: `${behavior} (${getSrv6EndpointBehaviorName(behavior)})`,
+            value: `${behavior} (${bgpAddressFamily.getSrv6EndpointBehaviorName(behavior)})`,
             children: []
         },
         {
@@ -605,7 +384,7 @@ function addSrv6ServiceTlvDetails(buffer, prefixSidNode, tlvNode, type, valueOff
         const subLength = buffer.readUInt16BE(offset + 1);
         const subValueOffset = offset + 3;
         const subNode = {
-            name: `Sub-TLV ${subType} (${getSrv6ServiceSubTlvTypeName(subType)})`,
+            name: `Sub-TLV ${subType} (${bgpAddressFamily.getSrv6ServiceSubTlvTypeName(subType)})`,
             offset,
             length: Math.min(3 + subLength, endOffset - offset),
             value: '',
@@ -623,7 +402,7 @@ function addSrv6ServiceTlvDetails(buffer, prefixSidNode, tlvNode, type, valueOff
             if (subLength >= 20) {
                 const sid = ipv6BufferToString(buffer.subarray(subValueOffset + 1, subValueOffset + 17), BgpConst.IPV6_HOST_LEN);
                 const behavior = buffer.readUInt16BE(subValueOffset + 18);
-                sidSummaries.push(`${sid} ${getSrv6EndpointBehaviorName(behavior)}`);
+                sidSummaries.push(`${sid} ${bgpAddressFamily.getSrv6EndpointBehaviorName(behavior)}`);
             }
         } else {
             subNode.value = buffer.subarray(subValueOffset, subValueOffset + subLength).toString('hex');
@@ -757,7 +536,7 @@ function addPrefixSidAttributeNode(buffer, attrNode, valueOffset, attrLength) {
         const valueOffsetForTlv = tlvOffset + 3;
         const tlvEnd = valueOffsetForTlv + length;
         const tlvNode = {
-            name: `TLV ${type} (${getBgpPrefixSidTlvTypeName(type)})`,
+            name: `TLV ${type} (${bgpAddressFamily.getBgpPrefixSidTlvTypeName(type)})`,
             offset: tlvOffset,
             length: Math.min(3 + length, attrEnd - tlvOffset),
             value: '',
@@ -766,7 +545,7 @@ function addPrefixSidAttributeNode(buffer, attrNode, valueOffset, attrLength) {
                     name: 'Type',
                     offset: tlvOffset,
                     length: 1,
-                    value: `${type} (${getBgpPrefixSidTlvTypeName(type)})`,
+                    value: `${type} (${bgpAddressFamily.getBgpPrefixSidTlvTypeName(type)})`,
                     children: []
                 },
                 {
@@ -1430,7 +1209,7 @@ function addPmsiTunnelNode(buffer, attrNode, valueOffset, attrValueEnd) {
     const tunnelType = buffer[valueOffset + 1];
     const rawLabel = readUint24BE(buffer, valueOffset + 2);
     const label = formatMplsLabel(rawLabel);
-    const tunnelTypeName = getPmsiTunnelTypeName(tunnelType);
+    const tunnelTypeName = bgpAddressFamily.getPmsiTunnelTypeName(tunnelType);
 
     addLeafNode(pmsiNode, 'Flags', valueOffset, 1, `0x${flags.toString(16).padStart(2, '0')}`);
     addLeafNode(pmsiNode, 'Tunnel Type', valueOffset + 1, 1, `${tunnelType} (${tunnelTypeName})`);
@@ -1464,7 +1243,7 @@ function addTunnelEncapsulationNode(buffer, attrNode, valueOffset, attrValueEnd)
         }
 
         const tunnelType = buffer.readUInt16BE(tlvOffset);
-        const tunnelTypeName = getBgpTunnelTypeName(tunnelType);
+        const tunnelTypeName = bgpAddressFamily.getBgpTunnelTypeName(tunnelType);
         const tlvLength = buffer.readUInt16BE(tlvOffset + 2);
         const valueStart = tlvOffset + 4;
         const valueEnd = Math.min(valueStart + tlvLength, attrValueEnd);
@@ -1972,12 +1751,14 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode, messageEndOffset)
                         if (isSimpleIpNlri(afi, safi)) {
                             addSimpleNlriNodes(mpReachNode, buffer, nlriOffset, attrValueEnd, afi, 'NLRI');
                         } else {
-                            addLeafNode(
+                            addParsedNlriNodes(
                                 mpReachNode,
-                                'NLRI Data',
+                                buffer,
                                 nlriOffset,
-                                attrValueEnd - nlriOffset,
-                                formatHex(buffer, nlriOffset, attrValueEnd)
+                                attrValueEnd,
+                                afi,
+                                safi,
+                                'NLRI Data'
                             );
                         }
                     }
@@ -2020,12 +1801,15 @@ function parseUpdateMessageTree(buffer, curOffset, parentNode, messageEndOffset)
                         if (isSimpleIpNlri(afi, safi)) {
                             addSimpleNlriNodes(mpUnreachNode, buffer, withdrawnOffset, attrValueEnd, afi, 'Withdrawn Routes');
                         } else {
-                            addLeafNode(
+                            addParsedNlriNodes(
                                 mpUnreachNode,
-                                'Withdrawn Routes Data',
+                                buffer,
                                 withdrawnOffset,
-                                attrValueEnd - withdrawnOffset,
-                                formatHex(buffer, withdrawnOffset, attrValueEnd)
+                                attrValueEnd,
+                                afi,
+                                safi,
+                                'Withdrawn Routes Data',
+                                true
                             );
                         }
                     }

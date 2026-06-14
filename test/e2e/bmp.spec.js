@@ -1,8 +1,6 @@
-const path = require('path');
 const { test, expect } = require('@playwright/test');
-const { BmpE2eController } = require('../../scripts/e2e-support/bmp-e2e-controller');
+const { BmpE2eController, getBrowserMockScript } = require('../../scripts/e2e-support');
 
-const apiMocksPath = path.join(__dirname, '..', '..', 'scripts', 'e2e-support', 'bmp-api-mocks.js');
 const EXPECTED_ROUTE_COUNT = 12;
 
 async function recordStep(title) {
@@ -33,7 +31,7 @@ test.describe('BMP pages', () => {
             page.evaluate(({ type, data }) => window.__bmpE2eEmit?.(type, data), event).catch(() => {});
         });
 
-        await page.addInitScript({ path: apiMocksPath });
+        await page.addInitScript({ content: getBrowserMockScript('bmp') });
     });
 
     test.afterEach(async () => {
