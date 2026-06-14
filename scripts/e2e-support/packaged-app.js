@@ -20,9 +20,39 @@ function dirExists(dirPath) {
     }
 }
 
-function getProductName() {
+function getPackageInfo() {
     const packageJson = require(path.join(projectRoot, 'package.json'));
-    return packageJson.build?.productName || packageJson.productName || packageJson.name;
+    return {
+        packageName: packageJson.name,
+        productName: packageJson.build?.productName || packageJson.productName || packageJson.name
+    };
+}
+
+function addNameVariants(names, name) {
+    if (!name) {
+        return;
+    }
+
+    const spaced = name.trim();
+    const noSpace = spaced.replace(/\s+/g, '');
+    const kebab = spaced
+        .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+        .replace(/[^A-Za-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+
+    for (const variant of [spaced, noSpace, spaced.toLowerCase(), noSpace.toLowerCase(), kebab, kebab.toLowerCase()]) {
+        if (variant) {
+            names.add(variant);
+        }
+    }
+}
+
+function getExecutableNames() {
+    const { packageName, productName } = getPackageInfo();
+    const names = new Set();
+    addNameVariants(names, productName);
+    addNameVariants(names, packageName);
+    return names;
 }
 
 function collectMatchingFiles(dir, predicate, depth = 6) {
@@ -47,7 +77,7 @@ function collectMatchingFiles(dir, predicate, depth = 6) {
     return matches;
 }
 
-function collectMacAppExecutables(productName) {
+function collectMacAppExecutables(executableNames) {
     const appDirs = [];
     const visit = (dir, depth = 4) => {
         if (depth < 0 || !dirExists(dir)) {
@@ -71,11 +101,38 @@ function collectMacAppExecutables(productName) {
     return appDirs
         .map(appDir => {
             const appName = path.basename(appDir, '.app');
-            const executableNames = Array.from(new Set([productName, appName]));
-            return executableNames.map(name => path.join(appDir, 'Contents', 'MacOS', name));
+            const names = new Set(executableNames);
+            addNameVariants(names, appName);
+            return Array.from(names).map(name => path.join(appDir, 'Contents', 'MacOS', name));
         })
         .flat()
         .filter(fileExists);
+}
+
+function isLikelyLinuxAppExecutable(filePath, fileName) {
+    const normalized = filePath.split(path.sep).join('/');
+    if (!normalized.includes('/linux-unpacked/') || fileName.includes('.') || fileName === 'chrome-sandbox') {
+        return false;
+    }
+
+    try {
+        return (fs.statSync(filePath).mode & 0o111) !== 0;
+    } catch {
+        return false;
+    }
+}
+
+function formatReleaseFiles() {
+    const files = collectMatchingFiles(releaseRoot, () => true, 4)
+        .map(filePath => path.relative(projectRoot, filePath))
+        .sort();
+
+    if (files.length === 0) {
+        return 'none';
+    }
+
+    const visibleFiles = files.slice(0, 30).join(', ');
+    return files.length > 30 ? `${visibleFiles}, ... ${files.length - 30} more` : visibleFiles;
 }
 
 function scoreCandidate(filePath) {
@@ -103,16 +160,21 @@ function findPackagedElectronExecutable() {
         return executablePath;
     }
 
-    const productName = getProductName();
+    const executableNames = getExecutableNames();
     let candidates = [];
 
     if (process.platform === 'darwin') {
-        candidates = collectMacAppExecutables(productName);
+        candidates = collectMacAppExecutables(executableNames);
     } else if (process.platform === 'win32') {
-        candidates = collectMatchingFiles(releaseRoot, (_filePath, fileName) => fileName === `${productName}.exe`);
+        candidates = collectMatchingFiles(releaseRoot, (_filePath, fileName) => {
+            const lowerName = fileName.toLowerCase();
+            return Array.from(executableNames).some(name => lowerName === `${name}.exe`.toLowerCase());
+        });
     } else {
-        const normalizedNames = new Set([productName, productName.toLowerCase(), productName.replace(/\s+/g, '-')]);
-        candidates = collectMatchingFiles(releaseRoot, (_filePath, fileName) => normalizedNames.has(fileName));
+        candidates = collectMatchingFiles(
+            releaseRoot,
+            (filePath, fileName) => executableNames.has(fileName) || isLikelyLinuxAppExecutable(filePath, fileName)
+        );
     }
 
     candidates.sort((a, b) => scoreCandidate(b) - scoreCandidate(a) || b.localeCompare(a));
@@ -121,8 +183,10 @@ function findPackagedElectronExecutable() {
         throw new Error(
             [
                 'Packaged Electron app not found under release/.',
-                'Run npm run test:e2e so the pretest:e2e hook builds it first,',
-                'or set E2E_APP_EXECUTABLE to the packaged app executable.'
+                'Playwright global setup should build it first unless E2E_SKIP_PACK=1 is set.',
+                `Expected executable names: ${Array.from(executableNames).join(', ')}.`,
+                `Release files: ${formatReleaseFiles()}.`,
+                'Set E2E_APP_EXECUTABLE to the packaged app executable to override detection.'
             ].join(' ')
         );
     }

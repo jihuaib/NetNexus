@@ -37,23 +37,52 @@ function getPackCommand() {
     };
 }
 
-if (process.env.E2E_TARGET === 'browser' || process.env.E2E_SKIP_PACK === '1') {
-    console.log('[prepare-e2e-release] skipped packaged app build');
-    process.exit(0);
+function runCommand(command, args, options = {}) {
+    console.log(`[prepare-e2e-release] ${command} ${args.join(' ')}`.trim());
+
+    const result = spawnSync(command, args, {
+        cwd: projectRoot,
+        env: process.env,
+        shell: options.shell || false,
+        stdio: 'inherit'
+    });
+
+    if (result.error) {
+        throw result.error;
+    }
+
+    if (result.status !== 0) {
+        throw new Error(`command failed with exit code ${result.status}: ${command} ${args.join(' ')}`.trim());
+    }
 }
 
-const { command, args, shell } = getPackCommand();
-console.log(`[prepare-e2e-release] building packaged app: ${command} ${args.join(' ')}`.trim());
+function prepareE2eRelease() {
+    if (process.env.E2E_TARGET === 'browser' || process.env.E2E_SKIP_PACK === '1') {
+        console.log('[prepare-e2e-release] skipped packaged app build');
+        return;
+    }
 
-const result = spawnSync(command, args, {
-    cwd: projectRoot,
-    env: process.env,
-    shell,
-    stdio: 'inherit'
-});
+    if (process.env.E2E_APP_EXECUTABLE) {
+        console.log('[prepare-e2e-release] skipped packaged app build because E2E_APP_EXECUTABLE is set');
+        return;
+    }
 
-if (result.error) {
-    throw result.error;
+    const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    if (process.platform === 'linux') {
+        runCommand(npmCommand, ['run', 'build']);
+    }
+
+    const { command, args, shell } = getPackCommand();
+    runCommand(command, args, { shell });
 }
 
-process.exit(result.status || 0);
+if (require.main === module) {
+    try {
+        prepareE2eRelease();
+    } catch (error) {
+        console.error(error.stack || error.message);
+        process.exit(1);
+    }
+}
+
+module.exports = prepareE2eRelease;

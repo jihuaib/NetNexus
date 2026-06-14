@@ -71,7 +71,6 @@
         "prerelease:mac": "npm run build",
         "test": "node test/ci/run-tests.js",
         "test:ci:minified": "node scripts/run-ci-tests-on-minified-electron.js",
-        "pretest:e2e": "node scripts/prepare-e2e-release.js",
         "test:e2e": "playwright test",
         "test:e2e:browser": "cross-env E2E_TARGET=browser E2E_SKIP_PACK=1 playwright test",
         "mock:bgp": "node scripts/mockBgpClient.js",

@@ -7,6 +7,7 @@ const baseURL = process.env.E2E_BASE_URL || `http://127.0.0.1:${port}`;
 
 module.exports = defineConfig({
     testDir: './test/e2e',
+    globalSetup: usePackagedElectron ? require.resolve('./scripts/prepare-e2e-release.js') : undefined,
     timeout: usePackagedElectron ? 60000 : 30000,
     expect: {
         timeout: 5000
