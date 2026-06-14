@@ -67,7 +67,7 @@ NetNexus/
 ├── docs/                 # 功能文档和截图
 ├── electron/             # Electron 主进程、协议 worker、工具函数
 │   ├── app/              # IPC 应用控制器
-│   ├── worker/           # BGP/BMP/RPKI/FTP/SNMP/DHCP/NTP/TFTP worker
+│   ├── worker/           # 按协议模块划分的 worker、会话模型和公共 worker 基础设施
 │   ├── const/            # 主进程常量
 │   ├── utils/            # 协议和存储工具
 │   └── main.js           # Electron 入口

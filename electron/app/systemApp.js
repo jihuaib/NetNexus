@@ -17,6 +17,7 @@ const SnmpApp = require('./snmpApp');
 const DhcpApp = require('./dhcpApp');
 const NtpApp = require('./ntpApp');
 const TftpApp = require('./tftpApp');
+const SyslogApp = require('./syslogApp');
 const AppUpdater = require('./updater');
 const NativeApp = require('./nativeApp');
 const FtpConst = require('../const/ftpConst');
@@ -61,6 +62,7 @@ class SystemApp {
         this.dhcpApp = new DhcpApp(ipc, this.programStore);
         this.ntpApp = new NtpApp(ipc, this.programStore);
         this.tftpApp = new TftpApp(ipc, this.programStore);
+        this.syslogApp = new SyslogApp(ipc, this.programStore);
         this.updaterApp = new AppUpdater(ipc, win);
         this.nativeApp = new NativeApp(ipc);
         this.toolsApp = new ToolsApp(ipc, this.programStore);
@@ -495,7 +497,8 @@ class SystemApp {
             this.snmpApp,
             this.dhcpApp,
             this.ntpApp,
-            this.tftpApp
+            this.tftpApp,
+            this.syslogApp
         ].forEach(appInstance => this.applyLogLevelToApp(appInstance));
     }
 
@@ -612,6 +615,7 @@ class SystemApp {
         const isSnmpRunning = this.snmpApp.getSnmpRunning();
         const isNtpRunning = this.ntpApp.getNtpRunning();
         const isTftpRunning = this.tftpApp.getTftpRunning();
+        const isSyslogRunning = this.syslogApp.getSyslogRunning();
         const isApiRunning = this.externalApiServer.getRunning();
 
         if (
@@ -622,6 +626,7 @@ class SystemApp {
             isSnmpRunning ||
             isNtpRunning ||
             isTftpRunning ||
+            isSyslogRunning ||
             isApiRunning
         ) {
             const { response } = await dialog.showMessageBox(this.win, {
@@ -656,6 +661,9 @@ class SystemApp {
                 }
                 if (isTftpRunning) {
                     await this.tftpApp.handleStopTftp();
+                }
+                if (isSyslogRunning) {
+                    await this.syslogApp.handleStopSyslog();
                 }
                 if (isApiRunning) {
                     await this.externalApiServer.stop();

@@ -1,7 +1,6 @@
-const { app } = require('electron');
-const path = require('path');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
-const WorkerWithPromise = require('../worker/workerWithPromise');
+const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
+const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const logger = require('../log/logger');
 const BmpConst = require('../const/bmpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
@@ -11,7 +10,6 @@ class BmpApp {
         this.ipcMain = ipcMain;
         this.store = store;
         this.bmpConfigFileKey = 'bmp-config';
-        this.isDev = !app.isPackaged;
         this.worker = null;
         this.eventDispatcher = null;
 
@@ -180,9 +178,7 @@ class BmpApp {
                 bmpConfigData.logLevel = this.logLevel;
             }
 
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/bmpWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/bmpWorker.js');
+            const workerPath = resolveWorkerPath('bmp/bmpWorker.js');
 
             const workerFactory = new WorkerWithPromise(workerPath);
             this.worker = workerFactory.createLongRunningWorker();

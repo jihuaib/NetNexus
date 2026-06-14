@@ -4,7 +4,7 @@ const path = require('path');
 process.env.NODE_ENV = 'test';
 
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
-const BgpSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgpSession.js'));
+const BgpSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpSession.js'));
 
 function makeSocket(localAddress = '192.0.2.10') {
     return {

@@ -89,6 +89,7 @@
     import WifiOutlined from '@ant-design/icons-vue/es/icons/WifiOutlined';
     import ClockCircleOutlined from '@ant-design/icons-vue/es/icons/ClockCircleOutlined';
     import SwapOutlined from '@ant-design/icons-vue/es/icons/SwapOutlined';
+    import FileTextOutlined from '@ant-design/icons-vue/es/icons/FileTextOutlined';
     import SettingsDialog from '../components/SettingsDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
     import modalResizeHandler from '../utils/modalResizeHandler';
@@ -165,6 +166,13 @@
             label: 'TFTP服务器',
             title: 'TFTP服务器',
             route: '/tftp'
+        },
+        {
+            key: 'Syslog服务器',
+            icon: h(FileTextOutlined),
+            label: 'Syslog服务器',
+            title: 'Syslog服务器',
+            route: '/syslog'
         }
     ]);
 

@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bmp-full-page">
+    <div class="mt-container bmp-full-page" data-testid="bmp-loc-rib-page">
         <a-row class="bmp-full-row">
             <a-col :span="24">
                 <a-card title="BGP Loc-RIB" class="bmp-full-card">
@@ -26,6 +26,7 @@
                                         >
                                             <a-table
                                                 class="detail-table"
+                                                data-testid="bmp-loc-rib-instance-table"
                                                 :columns="bgpInstanceColumns"
                                                 :data-source="[instance]"
                                                 :pagination="false"
@@ -95,6 +96,7 @@
                                             </div>
                                             <a-table
                                                 class="route-table"
+                                                data-testid="bmp-loc-rib-route-table"
                                                 :columns="bgpRouteColumns"
                                                 :data-source="bgpRouteList"
                                                 :pagination="bgpRoutePagination"

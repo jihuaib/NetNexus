@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container adaptive-list-page">
+    <div class="mt-container adaptive-list-page" data-testid="bmp-config-page">
         <a-row class="adaptive-form-row">
             <a-col :span="24">
                 <a-card title="BMP服务器配置">
@@ -10,6 +10,7 @@
                                     <a-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
                                         <a-input
                                             v-model:value="bmpConfig.port"
+                                            data-testid="bmp-port-input"
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
                                     </a-tooltip>
@@ -104,12 +105,19 @@
                                 <a-button
                                     type="primary"
                                     html-type="submit"
+                                    data-testid="bmp-start-button"
                                     :loading="serverLoading"
                                     :disabled="serverRunning"
                                 >
                                     启动服务器
                                 </a-button>
-                                <a-button type="primary" danger :disabled="!serverRunning" @click="stopBmp">
+                                <a-button
+                                    type="primary"
+                                    danger
+                                    data-testid="bmp-stop-button"
+                                    :disabled="!serverRunning"
+                                    @click="stopBmp"
+                                >
                                     停止服务器
                                 </a-button>
                             </a-space>
@@ -126,6 +134,7 @@
                     <div>
                         <a-table
                             class="adaptive-table"
+                            data-testid="bmp-client-table"
                             :columns="clientColumns"
                             :data-source="clientList"
                             :row-key="
@@ -154,7 +163,13 @@
                                     {{ getClientTlvCount(record) }}
                                 </template>
                                 <template v-else-if="column.key === 'action'">
-                                    <a-button type="link" @click="viewClientDetails(record)">详情</a-button>
+                                    <a-button
+                                        type="link"
+                                        data-testid="bmp-client-detail-button"
+                                        @click="viewClientDetails(record)"
+                                    >
+                                        详情
+                                    </a-button>
                                 </template>
                             </template>
                         </a-table>

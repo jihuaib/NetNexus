@@ -1,6 +1,6 @@
 <template>
-    <div class="mt-container string-generator-page">
-        <a-card title="字符串生成配置" class="string-generator-card">
+    <div class="mt-container string-generator-page" data-testid="string-generator-page">
+        <a-card title="字符串生成配置" class="string-generator-card" data-testid="string-generator-card">
             <a-form
                 :model="formState"
                 :label-col="labelCol"
@@ -13,6 +13,7 @@
                     <a-tooltip :title="validationErrors.template" :open="!!validationErrors.template">
                         <ScrollTextarea
                             v-model:model-value="formState.template"
+                            data-testid="string-template-input"
                             :height="120"
                             :status="validationErrors.template ? 'error' : ''"
                         />
@@ -26,6 +27,7 @@
                             <a-tooltip :title="validationErrors.placeholder" :open="!!validationErrors.placeholder">
                                 <a-input
                                     v-model:value="formState.placeholder"
+                                    data-testid="string-placeholder-input"
                                     :status="validationErrors.placeholder ? 'error' : ''"
                                 />
                             </a-tooltip>
@@ -36,6 +38,7 @@
                             <a-tooltip :title="validationErrors.start" :open="!!validationErrors.start">
                                 <a-input
                                     v-model:value="formState.start"
+                                    data-testid="string-start-input"
                                     :status="validationErrors.start ? 'error' : ''"
                                 />
                             </a-tooltip>
@@ -44,7 +47,11 @@
                     <a-col :span="8">
                         <a-form-item label="结束" name="end">
                             <a-tooltip :title="validationErrors.end" :open="!!validationErrors.end">
-                                <a-input v-model:value="formState.end" :status="validationErrors.end ? 'error' : ''" />
+                                <a-input
+                                    v-model:value="formState.end"
+                                    data-testid="string-end-input"
+                                    :status="validationErrors.end ? 'error' : ''"
+                                />
                             </a-tooltip>
                         </a-form-item>
                     </a-col>
@@ -53,15 +60,23 @@
                 <!-- 操作按钮 -->
                 <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
                     <a-space>
-                        <a-button type="primary" html-type="submit">立即生成</a-button>
-                        <a-button type="default" @click="showGenerateHistory">生成历史</a-button>
+                        <a-button type="primary" html-type="submit" data-testid="string-generate-button">
+                            立即生成
+                        </a-button>
+                        <a-button type="default" data-testid="string-history-button" @click="showGenerateHistory">
+                            生成历史
+                        </a-button>
                     </a-space>
                 </a-form-item>
 
                 <!-- 结果显示 -->
                 <a-form-item label="生成结果" class="generator-result-item">
                     <div class="generator-result-textarea-wrap">
-                        <ScrollTextarea v-model:model-value="result" height="100%" />
+                        <ScrollTextarea
+                            v-model:model-value="result"
+                            data-testid="string-result-textarea"
+                            height="100%"
+                        />
                     </div>
                 </a-form-item>
             </a-form>
@@ -76,10 +91,11 @@
         class="modal-xlarge"
         @cancel="closeHistoryModal"
     >
-        <div>
+        <div data-testid="string-history-modal">
             <a-table
                 :columns="historyColumns"
                 :data-source="generateHistory"
+                data-testid="string-history-table"
                 :pagination="{
                     pageSize: 20,
                     showSizeChanger: false,
@@ -91,7 +107,9 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'action'">
-                        <a-button type="link" @click="loadHistoryItem(record)">使用</a-button>
+                        <a-button type="link" data-testid="string-history-use-button" @click="loadHistoryItem(record)">
+                            使用
+                        </a-button>
                     </template>
                     <template v-else-if="column.key === 'template'">
                         <div>{{ truncateString(record.template, 40) }}</div>
@@ -100,8 +118,17 @@
             </a-table>
         </div>
         <template #footer>
-            <a-button type="primary" @click="closeHistoryModal">关闭</a-button>
-            <a-button v-if="generateHistory.length > 0" danger @click="clearHistory">清空历史</a-button>
+            <a-button type="primary" data-testid="string-history-close-button" @click="closeHistoryModal">
+                关闭
+            </a-button>
+            <a-button
+                v-if="generateHistory.length > 0"
+                danger
+                data-testid="string-history-clear-button"
+                @click="clearHistory"
+            >
+                清空历史
+            </a-button>
         </template>
     </a-modal>
 </template>

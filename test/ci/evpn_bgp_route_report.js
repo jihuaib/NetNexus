@@ -5,10 +5,10 @@ const path = require('path');
 
 const BgpConst = require('../../electron/const/bgpConst');
 const BmpConst = require('../../electron/const/bmpConst');
-const BmpSession = require('../../electron/worker/bmpSession');
-const BmpBgpInstance = require('../../electron/worker/bmpBgpInstance');
-const BmpBgpRoute = require('../../electron/worker/bmpBgpRoute');
-const BmpBgpSession = require('../../electron/worker/bmpBgpSession');
+const BmpSession = require('../../electron/worker/bmp/bmpSession');
+const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
+const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
+const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
 
 const AFI = BgpConst.BGP_AFI_TYPE.AFI_L2VPN;
@@ -182,7 +182,7 @@ function parseEvpnRoute(routeType, index) {
 }
 
 function loadBmpWorkerClass() {
-    const filePath = path.join(__dirname, '..', '..', 'electron', 'worker', 'bmpWorker.js');
+    const filePath = path.join(__dirname, '..', '..', 'electron', 'worker', 'bmp', 'bmpWorker.js');
     const source = fs.readFileSync(filePath, 'utf8');
     const patched = source.replace(/new BmpWorker\(\);\s*\/\/ 启动监听\s*$/u, 'module.exports = BmpWorker;');
     assert.notEqual(patched, source, 'failed to patch bmpWorker.js auto-start line for CI loading');

@@ -4,7 +4,8 @@ const snmp = require('net-snmp');
 const { app, BrowserWindow, dialog } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
-const WorkerWithPromise = require('../worker/workerWithPromise');
+const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
+const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const SnmpConst = require('../const/snmpConst');
 const { LOG_REQ_TYPES } = require('../const/toolsConst');
 const EventDispatcher = require('../utils/eventDispatcher');
@@ -16,7 +17,6 @@ class SnmpApp {
         this.snmpMibFilesKey = 'snmp-mib-files';
         this.worker = null;
         this.mibWorker = null;
-        this.isDev = !app.isPackaged;
 
         this.snmpTrapEventHandler = null;
         this.eventDispatcher = null;
@@ -130,9 +130,7 @@ class SnmpApp {
             runtimeConfig.mibFiles = this.getStoredMibFilePaths();
             runtimeConfig.mibCacheFilePath = this.getMibCacheFilePath();
 
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/snmpWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/snmpWorker.js');
+            const workerPath = resolveWorkerPath('snmp/snmpWorker.js');
 
             const workerFactory = new WorkerWithPromise(workerPath);
             this.worker = workerFactory.createLongRunningWorker();
@@ -1447,9 +1445,7 @@ class SnmpApp {
             return this.mibWorker;
         }
 
-        const workerPath = this.isDev
-            ? path.join(__dirname, '../worker/mibWorker.js')
-            : path.join(process.resourcesPath, 'app', 'electron/worker/mibWorker.js');
+        const workerPath = resolveWorkerPath('snmp/mibWorker.js');
         const workerFactory = new WorkerWithPromise(workerPath);
         this.mibWorker = workerFactory.createLongRunningWorker();
         this.mibWorker.worker.unref();

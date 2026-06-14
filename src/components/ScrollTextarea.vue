@@ -1,6 +1,7 @@
 <template>
     <a-textarea
         ref="textareaRef"
+        v-bind="$attrs"
         :value="modelValue"
         :placeholder="placeholder"
         :style="textareaStyle"
@@ -11,6 +12,10 @@
 
 <script setup>
     import { computed, ref, watch } from 'vue';
+
+    defineOptions({
+        inheritAttrs: false
+    });
 
     // 定义 props
     const props = defineProps({

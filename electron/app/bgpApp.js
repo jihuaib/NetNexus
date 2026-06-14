@@ -2,7 +2,8 @@ const fs = require('fs');
 const { app } = require('electron');
 const path = require('path');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
-const WorkerWithPromise = require('../worker/workerWithPromise');
+const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
+const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const logger = require('../log/logger');
 const BgpConst = require('../const/bgpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
@@ -31,7 +32,6 @@ class BgpApp {
         this.ipv4QpRouteConfigFileKey = 'ipv4-qp-route-config';
         this.ipv6QpRouteConfigFileKey = 'ipv6-qp-route-config';
         this.bgpRouteMetaFileKey = 'bgp-routes-meta';
-        this.isDev = !app.isPackaged;
         this.peerChangeHandler = null;
         this.store = store;
         this.eventDispatcher = null;
@@ -523,9 +523,7 @@ class BgpApp {
                 bgpConfigData.logLevel = this.logLevel;
             }
 
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/bgpWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/bgpWorker.js');
+            const workerPath = resolveWorkerPath('bgp/bgpWorker.js');
 
             const workerFactory = new WorkerWithPromise(workerPath);
             this.worker = workerFactory.createLongRunningWorker();
@@ -965,7 +963,6 @@ class BgpApp {
 
     async handleGetDefaultMrtFiles() {
         const fs = require('fs').promises;
-        const path = require('path');
 
         try {
             const bgpDataDir = path.join(__dirname, '../../bgpdata');

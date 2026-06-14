@@ -1,8 +1,7 @@
-const path = require('path');
-const { app } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
-const WorkerWithPromise = require('../worker/workerWithPromise');
+const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
+const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const NtpConst = require('../const/ntpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 
@@ -12,7 +11,6 @@ class NtpApp {
         this.store = store;
         this.ntpConfigFileKey = 'ntp-config';
         this.worker = null;
-        this.isDev = !app.isPackaged;
         this.logLevel = null;
         this.eventDispatcher = null;
         this.ntpEventHandler = null;
@@ -67,9 +65,7 @@ class NtpApp {
                 config.logLevel = this.logLevel;
             }
 
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/ntpWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/ntpWorker.js');
+            const workerPath = resolveWorkerPath('services/ntpWorker.js');
 
             const workerFactory = new WorkerWithPromise(workerPath);
             this.worker = workerFactory.createLongRunningWorker();

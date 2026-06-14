@@ -43,6 +43,9 @@ const NtpRequestLog = () => import('../view/ntp/NtpRequestLog.vue');
 const TftpMain = () => import('../view/tftp/TftpMain.vue');
 const TftpConfig = () => import('../view/tftp/TftpConfig.vue');
 const TftpTransferLog = () => import('../view/tftp/TftpTransferLog.vue');
+const SyslogMain = () => import('../view/syslog/SyslogMain.vue');
+const SyslogConfig = () => import('../view/syslog/SyslogConfig.vue');
+const SyslogMessageLog = () => import('../view/syslog/SyslogMessageLog.vue');
 
 const routes = [
     {
@@ -348,6 +351,30 @@ const routes = [
                         path: 'tftp-transfer-log',
                         name: 'TftpTransferLog',
                         component: TftpTransferLog,
+                        meta: { keepAlive: true }
+                    }
+                ]
+            },
+            {
+                path: '/syslog',
+                name: 'SyslogMain',
+                component: SyslogMain,
+                meta: { keepAlive: true },
+                children: [
+                    {
+                        path: '/',
+                        redirect: '/syslog/syslog-config'
+                    },
+                    {
+                        path: 'syslog-config',
+                        name: 'SyslogConfig',
+                        component: SyslogConfig,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'syslog-message-log',
+                        name: 'SyslogMessageLog',
+                        component: SyslogMessageLog,
                         meta: { keepAlive: true }
                     }
                 ]

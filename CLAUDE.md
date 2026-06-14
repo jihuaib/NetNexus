@@ -107,11 +107,11 @@ npm run release:mac:universal # 构建并发布 macOS universal 版本
 - `updater.js`: 自动更新功能
 
 **工作进程** (`electron/worker/`):
-- 多数协议都有专用的 worker 文件来处理会话、实例、路由或服务请求
-- Workers 在主线程侧使用 `workerWithPromise.js` 进行管理，在 worker 侧使用 `workerMessageHandler.js` 注册处理器
-- 长期运行模式（`createLongRunningWorker()`）：用于协议 worker（BGP、BMP、RPKI、FTP、SNMP、DHCP、NTP、TFTP），支持请求-响应和事件推送
+- 按协议/功能域组织：`bgp/`、`bmp/`、`rpki/`、`dhcp/`、`transfer/`、`snmp/`、`services/`、`tools/`
+- Workers 在主线程侧使用 `core/workerWithPromise.js` 进行管理，在 worker 侧使用 `core/workerMessageHandler.js` 注册处理器
+- 长期运行模式（`createLongRunningWorker()`）：用于协议 worker（BGP、BMP、RPKI、FTP、SNMP、DHCP、NTP、TFTP、Syslog），支持请求-响应和事件推送
 - 一次性模式（`runWorkerWithPromise()`）：用于单次任务，执行完毕后自动终止
-- 示例：`bgpSession.js`、`bmpSession.js`、`rpkiSession.js`、`ftpSession.js`、`snmpSession.js`、`sshTunnel.js`、`stringGeneratorWorker.js`
+- 示例：`bgp/bgpSession.js`、`bmp/bmpSession.js`、`rpki/rpkiSession.js`、`transfer/ftpSession.js`、`shared/sshTunnel.js`、`tools/stringGeneratorWorker.js`
 
 **报文解析器** (`electron/pktParser/`):
 - 协议特定的解析器：`bgpPacketParser.js`、`tcpPacketParser.js`、`udpPacketParser.js`、`ipPacketParser.js`、`ethernetPacketParser.js`、`arpPacketParser.js`

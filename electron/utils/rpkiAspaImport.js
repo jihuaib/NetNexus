@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const RpkiAspa = require('../worker/rpkiAspa');
+const RpkiAspa = require('../worker/rpki/rpkiAspa');
 const RpkiConst = require('../const/rpkiConst');
 const { ensureParentDir, writeLine, closeWriteStream, renameWithRetry } = require('./rpkiRoaImport');
 

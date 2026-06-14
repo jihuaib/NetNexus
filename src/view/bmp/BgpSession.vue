@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bmp-full-page">
+    <div class="mt-container bmp-full-page" data-testid="bmp-session-page">
         <a-row class="bmp-full-row">
             <a-col :span="24">
                 <a-card title="BGP会话" class="bmp-full-card">
@@ -26,6 +26,7 @@
                                         >
                                             <a-table
                                                 class="detail-table"
+                                                data-testid="bmp-session-table"
                                                 :columns="bgpSessionColumns"
                                                 :data-source="[session]"
                                                 :pagination="false"
@@ -131,6 +132,7 @@
                                             </div>
                                             <a-table
                                                 class="route-table"
+                                                data-testid="bmp-session-route-table"
                                                 :columns="bgpRouteColumns"
                                                 :data-source="bgpRouteList"
                                                 :pagination="bgpRoutePagination"

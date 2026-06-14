@@ -1,7 +1,7 @@
 /**
  * TFTP 功能验证脚本 (跨平台，纯 Node.js)
  *
- * 直接复用 electron/worker/tftpSession.js 的传输状态机搭建一个 TFTP 服务端，
+ * 直接复用 electron/worker/transfer/tftpSession.js 的传输状态机搭建一个 TFTP 服务端，
  * 并实现一个最小化的 TFTP 客户端，对以下场景做端到端验证：
  *   1. WRQ 上传 (octet, 默认 512 块) -> 校验落盘文件
  *   2. RRQ 下载 -> 校验下载内容
@@ -23,7 +23,7 @@ const crypto = require('crypto');
 
 process.env.NODE_ENV = 'test';
 
-const TftpSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'tftpSession.js'));
+const TftpSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'transfer', 'tftpSession.js'));
 const TftpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'tftpConst.js'));
 
 const OP = TftpConst.TFTP_OPCODES;

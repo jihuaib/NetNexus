@@ -70,6 +70,7 @@
         "prerelease": "npm run build",
         "prerelease:mac": "npm run build",
         "test": "node test/ci/run-tests.js",
+        "test:e2e": "playwright test",
         "mock:bmp": "node scripts/mockBmpClient.js",
         "docs:screenshots": "electron scripts/captureDocsScreenshots.js",
         "lint": "eslint --ext .js,.vue src electron",
@@ -87,7 +88,9 @@
             "package.json",
             "LICENSE",
             "THIRD_PARTY_NOTICES.md",
-            "scripts/**/*",
+            "scripts/tcp-md5-helper.c",
+            "scripts/tcp-md5-proxy.sh",
+            "scripts/tcp-md5-diagnose.sh",
             "bgpdata/**/*"
         ],
         "extraResources": [
@@ -189,6 +192,7 @@
     "devDependencies": {
         "@babel/eslint-parser": "^7.23.10",
         "@babel/preset-env": "^7.27.1",
+        "@playwright/test": "1.44.1",
         "@vitejs/plugin-vue": "^4.2.3",
         "ant-design-vue": "^4.2.6",
         "concurrently": "^7.6.0",

@@ -1,8 +1,7 @@
-const path = require('path');
-const { app } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
-const WorkerWithPromise = require('../worker/workerWithPromise');
+const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
+const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const DhcpConst = require('../const/dhcpConst');
 const Dhcp6Const = require('../const/dhcp6Const');
 const EventDispatcher = require('../utils/eventDispatcher');
@@ -14,7 +13,6 @@ class DhcpApp {
         this.dhcpConfigFileKey = 'dhcp-config';
         this.worker = null;
         this.worker6 = null;
-        this.isDev = !app.isPackaged;
         this.logLevel = null;
         this.eventDispatcher = null;
         this.dhcpEvtHandler = null;
@@ -61,9 +59,7 @@ class DhcpApp {
                 config.logLevel = this.logLevel;
             }
 
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/dhcpWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/dhcpWorker.js');
+            const workerPath = resolveWorkerPath('dhcp/dhcpWorker.js');
 
             const workerFactory = new WorkerWithPromise(workerPath);
             this.worker = workerFactory.createLongRunningWorker();
@@ -113,9 +109,7 @@ class DhcpApp {
 
     async _startDhcp6(webContents, v6Config) {
         try {
-            const worker6Path = this.isDev
-                ? path.join(__dirname, '../worker/dhcp6Worker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/dhcp6Worker.js');
+            const worker6Path = resolveWorkerPath('dhcp/dhcp6Worker.js');
 
             const worker6Factory = new WorkerWithPromise(worker6Path);
             this.worker6 = worker6Factory.createLongRunningWorker();

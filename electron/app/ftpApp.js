@@ -1,9 +1,8 @@
-const path = require('path');
-const { app } = require('electron');
 const { DEFAULT_TOOLS_SETTINGS } = require('../const/toolsConst');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
-const WorkerWithPromise = require('../worker/workerWithPromise');
+const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
+const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const FtpConst = require('../const/ftpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 class FtpApp {
@@ -13,7 +12,6 @@ class FtpApp {
         this.ftpConfigFileKey = 'ftp-config';
         this.ftpUserListFileKey = 'ftp-user-list';
         this.worker = null;
-        this.isDev = !app.isPackaged;
         this.maxFtpUser = DEFAULT_TOOLS_SETTINGS.ftpServer.maxFtpUser;
         // 注册IPC处理程序
         this.registerIpcHandlers();
@@ -128,9 +126,7 @@ class FtpApp {
                 config.logLevel = this.logLevel;
             }
 
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/ftpWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/ftpWorker.js');
+            const workerPath = resolveWorkerPath('transfer/ftpWorker.js');
 
             const workerFactory = new WorkerWithPromise(workerPath);
             this.worker = workerFactory.createLongRunningWorker();

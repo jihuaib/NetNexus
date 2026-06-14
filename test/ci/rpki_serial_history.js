@@ -7,14 +7,12 @@ const WorkerMessageHandler = require(path.join(
     __dirname,
     '..',
     '..',
-    'electron',
-    'worker',
-    'workerMessageHandler.js'
+    'electron', 'worker', 'core', 'workerMessageHandler.js'
 ));
 
 WorkerMessageHandler.prototype.init = function initForUnitTest() {};
 
-const RpkiWorker = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpkiWorker.js'));
+const RpkiWorker = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpki', 'rpkiWorker.js'));
 const RpkiConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'rpkiConst.js'));
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
 

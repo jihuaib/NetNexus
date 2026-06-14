@@ -1,12 +1,12 @@
 const fs = require('fs');
 const { app, BrowserWindow, dialog } = require('electron');
-const path = require('path');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
-const WorkerWithPromise = require('../worker/workerWithPromise');
+const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
+const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const { getNetworkAddress } = require('../utils/ipUtils');
 const RpkiConst = require('../const/rpkiConst');
-const RpkiAspa = require('../worker/rpkiAspa');
+const RpkiAspa = require('../worker/rpki/rpkiAspa');
 const EventDispatcher = require('../utils/eventDispatcher');
 const {
     getRoaDataFilePath,
@@ -46,7 +46,6 @@ class RpkiApp {
         this.rpkiRouterKeyFileKey = 'rpki-router-key';
         this.rpkiAspaFileKey = 'rpki-aspa';
         this.rpkiAspaMetaFileKey = 'rpki-aspa-meta';
-        this.isDev = !app.isPackaged;
         this.worker = null;
         this.eventDispatcher = null; // 添加事件发送器
 
@@ -130,9 +129,7 @@ class RpkiApp {
                 rpkiConfigData.logLevel = this.logLevel;
             }
 
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/rpkiWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/rpkiWorker.js');
+            const workerPath = resolveWorkerPath('rpki/rpkiWorker.js');
 
             const workerFactory = new WorkerWithPromise(workerPath);
             this.worker = workerFactory.createLongRunningWorker();

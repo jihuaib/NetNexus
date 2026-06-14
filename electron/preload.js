@@ -257,6 +257,17 @@ contextBridge.exposeInMainWorld('tftpApi', {
     clearTransferHistory: () => ipcRenderer.invoke('tftp:clearTransferHistory')
 });
 
+// syslog模块
+contextBridge.exposeInMainWorld('syslogApi', {
+    saveSyslogConfig: config => ipcRenderer.invoke('syslog:saveSyslogConfig', config),
+    getSyslogConfig: () => ipcRenderer.invoke('syslog:getSyslogConfig'),
+    startSyslog: config => ipcRenderer.invoke('syslog:startSyslog', config),
+    stopSyslog: () => ipcRenderer.invoke('syslog:stopSyslog'),
+    getMessageList: query => ipcRenderer.invoke('syslog:getMessageList', query),
+    getMessageDetail: id => ipcRenderer.invoke('syslog:getMessageDetail', id),
+    clearMessageHistory: () => ipcRenderer.invoke('syslog:clearMessageHistory')
+});
+
 // 依赖本地工具模块
 contextBridge.exposeInMainWorld('nativeApi', {
     // 网络信息工具模块

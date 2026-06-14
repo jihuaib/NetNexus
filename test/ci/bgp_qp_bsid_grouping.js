@@ -3,9 +3,9 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const BgpPeer = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgpPeer.js'));
-const BgpInstance = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgpInstance.js'));
-const BgpRoute = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgpRoute.js'));
+const BgpPeer = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpPeer.js'));
+const BgpInstance = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpInstance.js'));
+const BgpRoute = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpRoute.js'));
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
 const { parseBgpPacket } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpPacketParser.js'));
 

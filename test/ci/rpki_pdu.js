@@ -2,7 +2,7 @@
  * RPKI PDU 编码 / 协议测试
  * 对照：RFC 6810 (v0)、RFC 8210 (v1)、draft-ietf-sidrops-8210bis (v2)
  *
- * 使用方法：node test/rpki_pdu_test.js
+ * 使用方法：node test/ci/rpki_pdu.js
  *
  * 注意：本测试不需要启动 Electron。它通过 mock socket 收集 RpkiSession
  * 发出的字节，然后对照 RFC 的 wire format 逐字段校验。
@@ -13,10 +13,10 @@ const path = require('path');
 // 静默 logger（避免写文件副作用）
 process.env.NODE_ENV = 'test';
 
-const RpkiSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpkiSession.js'));
-const RpkiRoa = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpkiRoa.js'));
-const RpkiRouterKey = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpkiRouterKey.js'));
-const RpkiAspa = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpkiAspa.js'));
+const RpkiSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpki', 'rpkiSession.js'));
+const RpkiRoa = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpki', 'rpkiRoa.js'));
+const RpkiRouterKey = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpki', 'rpkiRouterKey.js'));
+const RpkiAspa = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'rpki', 'rpkiAspa.js'));
 const RpkiConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'rpkiConst.js'));
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
 
@@ -237,11 +237,7 @@ section('Router Key PDU (type 9, v1+, RFC 8210 §5.10)');
     assertEq(sentBuffers[0][1], 9, 'Router Key PDU type = 9');
     assertEq(sentBuffers[0][2], RpkiConst.RPKI_FLAGS.UPDATE, 'Router Key flag = UPDATE');
     assertEq(sentBuffers[0][3], 0, 'Router Key zero byte');
-    assertEq(
-        sentBuffers[0].slice(8, 28).toString('hex').toUpperCase(),
-        ski.toUpperCase(),
-        'Router Key SKI body'
-    );
+    assertEq(sentBuffers[0].slice(8, 28).toString('hex').toUpperCase(), ski.toUpperCase(), 'Router Key SKI body');
     assertEq(sentBuffers[0].readUInt32BE(28), 65001, 'Router Key ASN');
     assertEq(sentBuffers[0].slice(32).toString('hex').toUpperCase(), 'AABBCCDD', 'Router Key SPKI');
 }
@@ -427,10 +423,7 @@ section('Version negotiation - handleResetQuery (RFC 8210 §7)');
 {
     // v1 client → server accepts, sends Router Keys
     const { session, sentBuffers, rpkiWorker } = makeMockSession();
-    rpkiWorker.rpkiRouterKeyMap.set(
-        'k',
-        new RpkiRouterKey('0123456789ABCDEF0123456789ABCDEF01234567', 100, 'AA')
-    );
+    rpkiWorker.rpkiRouterKeyMap.set('k', new RpkiRouterKey('0123456789ABCDEF0123456789ABCDEF01234567', 100, 'AA'));
     session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
     session.handleResetQuery({ version: 1, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
     assertEq(session.protocolVersion, 1, 'Negotiated to v1');
@@ -486,19 +479,16 @@ section('Version negotiation - handleResetQuery (RFC 8210 §7)');
     // Client retry with the advertised lower version succeeds and higher-version PDUs are suppressed.
     const { session, sentBuffers, rpkiWorker } = makeMockSession();
     rpkiWorker.rpkiConfigData = { maxProtocolVersion: RpkiConst.RPKI_PROTOCOL_VERSION.V1 };
-    rpkiWorker.rpkiRouterKeyMap.set(
-        'k',
-        new RpkiRouterKey('0123456789ABCDEF0123456789ABCDEF01234567', 100, 'AA')
-    );
+    rpkiWorker.rpkiRouterKeyMap.set('k', new RpkiRouterKey('0123456789ABCDEF0123456789ABCDEF01234567', 100, 'AA'));
     rpkiWorker.rpkiAspaMap.set('a', new RpkiAspa(65000, [65001], 0));
     session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
     session.handleResetQuery({ version: 1, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
     assertEq(session.protocolVersion, 1, 'Retry with configured max v1 negotiates to v1');
-    assert(sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ROUTER_KEY), 'Retry v1 sends Router Key');
     assert(
-        !sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA),
-        'Retry v1 does not send ASPA'
+        sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ROUTER_KEY),
+        'Retry v1 sends Router Key'
     );
+    assert(!sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA), 'Retry v1 does not send ASPA');
 }
 
 section('Buffered message reassembly');
@@ -570,16 +560,32 @@ section('Serial Query response semantics');
     scheduleAsyncCheck(
         'Stale Serial Query with history async response',
         session.sendQueue.then(() => {
-            assertEq(sentBuffers.length, 4, 'Stale Serial Query with history sends Cache Response + deltas + End of Data');
+            assertEq(
+                sentBuffers.length,
+                4,
+                'Stale Serial Query with history sends Cache Response + deltas + End of Data'
+            );
             assertEq(
                 sentBuffers[0][1],
                 RpkiConst.RPKI_MSG_TYPE.CACHE_RESPONSE,
                 'Delta Serial Query first PDU = Cache Response'
             );
-            assertEq(sentBuffers[1][1], RpkiConst.RPKI_MSG_TYPE.IPV4_PREFIX, 'Delta Serial Query includes ROA announce');
+            assertEq(
+                sentBuffers[1][1],
+                RpkiConst.RPKI_MSG_TYPE.IPV4_PREFIX,
+                'Delta Serial Query includes ROA announce'
+            );
             assertEq(sentBuffers[2][1], RpkiConst.RPKI_MSG_TYPE.ASPA, 'Delta Serial Query includes ASPA announce');
-            assertEq(sentBuffers[2].readUInt32BE(16), 65001, 'Delta Serial Query preserves ASPA duplicate Provider ASN');
-            assertEq(sentBuffers[3][1], RpkiConst.RPKI_MSG_TYPE.END_OF_DATA, 'Delta Serial Query final PDU = End of Data');
+            assertEq(
+                sentBuffers[2].readUInt32BE(16),
+                65001,
+                'Delta Serial Query preserves ASPA duplicate Provider ASN'
+            );
+            assertEq(
+                sentBuffers[3][1],
+                RpkiConst.RPKI_MSG_TYPE.END_OF_DATA,
+                'Delta Serial Query final PDU = End of Data'
+            );
             assertEq(sentBuffers[3].readUInt32BE(8), 9, 'Delta Serial Query End of Data serial');
         })
     );
@@ -596,7 +602,11 @@ section('Serial Query response semantics');
     buf.writeUInt32BE(8, 8);
     session.handleSerialQuery({ version: 2, type: 1, reserved: 0xabcd, length: 12 }, buf);
     assertEq(sentBuffers.length, 1, 'Stale Serial Query without history sends Cache Reset');
-    assertEq(sentBuffers[0][1], RpkiConst.RPKI_MSG_TYPE.CACHE_RESET, 'Stale Serial Query without history PDU = Cache Reset');
+    assertEq(
+        sentBuffers[0][1],
+        RpkiConst.RPKI_MSG_TYPE.CACHE_RESET,
+        'Stale Serial Query without history PDU = Cache Reset'
+    );
 }
 {
     const { session, sentBuffers, rpkiWorker } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);

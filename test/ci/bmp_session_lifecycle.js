@@ -4,10 +4,10 @@ const Module = require('module');
 const path = require('path');
 
 const BmpConst = require('../../electron/const/bmpConst');
-const BmpSession = require('../../electron/worker/bmpSession');
+const BmpSession = require('../../electron/worker/bmp/bmpSession');
 
 function loadBmpWorkerClass() {
-    const filePath = path.join(__dirname, '..', '..', 'electron', 'worker', 'bmpWorker.js');
+    const filePath = path.join(__dirname, '..', '..', 'electron', 'worker', 'bmp', 'bmpWorker.js');
     const source = fs.readFileSync(filePath, 'utf8');
     const patched = source.replace(/new BmpWorker\(\);\s*\/\/ 启动监听\s*$/u, 'module.exports = BmpWorker;');
     assert.notStrictEqual(patched, source, 'failed to patch bmpWorker.js auto-start line for CI loading');

@@ -26,3 +26,8 @@ dist-ssr
 # build
 build
 .env
+
+# e2e test artifacts
+playwright-report
+test-results
+blob-report

@@ -1,17 +1,15 @@
-const { app } = require('electron');
-const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
-const WorkerWithPromise = require('../worker/workerWithPromise');
+const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
+const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const { DEFAULT_TOOLS_SETTINGS } = require('../const/toolsConst');
 const { createHashCompat, createHmacCompat } = require('../utils/hashUtils');
 
 class ToolsApp {
     constructor(ipc, store) {
-        this.isDev = !app.isPackaged;
         this.stringGeneratorConfigFileKey = 'string-generator';
         this.packetParserConfigFileKey = 'packet-parser';
         this.tcpAoMacStateKey = 'tcp-ao-mac';
@@ -421,12 +419,10 @@ class ToolsApp {
         logger.info(`${JSON.stringify(templateData)}`);
 
         try {
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/StringGeneratorWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/StringGeneratorWorker.js');
+            const workerPath = resolveWorkerPath('tools/stringGeneratorWorker.js');
 
             const workerFactory = new WorkerWithPromise(workerPath);
-            const result = await workerFactory.runWorkerWithPromise(path.join(workerPath), templateData);
+            const result = await workerFactory.runWorkerWithPromise(workerPath, templateData);
 
             this.saveGenerateStringToHistory(templateData);
 
@@ -503,15 +499,13 @@ class ToolsApp {
         logger.info(`解析报文: ${JSON.stringify(packetData)}`);
 
         try {
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/packetParserWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/packetParserWorker.js');
+            const workerPath = resolveWorkerPath('tools/packetParserWorker.js');
 
             // 保存到历史记录
             this.saveToHistory(packetData);
 
             const workerFactory = new WorkerWithPromise(workerPath);
-            const result = await workerFactory.runWorkerWithPromise(path.join(workerPath), packetData);
+            const result = await workerFactory.runWorkerWithPromise(workerPath, packetData);
 
             logger.info('报文解析结果:', result);
             return successResponse(result, '报文解析成功');
@@ -525,12 +519,10 @@ class ToolsApp {
         logger.info(`解析报文: ${JSON.stringify(packetData)}`);
 
         try {
-            const workerPath = this.isDev
-                ? path.join(__dirname, '../worker/packetParserWorker.js')
-                : path.join(process.resourcesPath, 'app', 'electron/worker/packetParserWorker.js');
+            const workerPath = resolveWorkerPath('tools/packetParserWorker.js');
 
             const workerFactory = new WorkerWithPromise(workerPath);
-            const result = await workerFactory.runWorkerWithPromise(path.join(workerPath), packetData);
+            const result = await workerFactory.runWorkerWithPromise(workerPath, packetData);
 
             logger.info('报文解析结果:', result);
             return successResponse(result, '报文解析成功');
