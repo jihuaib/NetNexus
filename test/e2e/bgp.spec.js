@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { BgpE2eController, getBrowserMockScript } = require('../../scripts/e2e-support');
 
 const EXPECTED_ROUTE_COUNT = 3;

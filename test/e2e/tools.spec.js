@@ -1,4 +1,4 @@
-const { test } = require('@playwright/test');
+const { test } = require('../../scripts/e2e-support/electron-test');
 const { setupFeaturePagesE2e, verifyPage } = require('../../scripts/e2e-support');
 
 const pageCases = [

@@ -1,23 +1,9 @@
 const assert = require('assert');
-const fs = require('fs');
-const Module = require('module');
 const path = require('path');
+const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
-
-function loadBmpWorkerClass() {
-    const filePath = path.join(__dirname, '..', '..', 'electron', 'worker', 'bmp', 'bmpWorker.js');
-    const source = fs.readFileSync(filePath, 'utf8');
-    const patched = source.replace(/new BmpWorker\(\);\s*\/\/ 启动监听\s*$/u, 'module.exports = BmpWorker;');
-    assert.notStrictEqual(patched, source, 'failed to patch bmpWorker.js auto-start line for CI loading');
-
-    const mod = new Module(filePath, module);
-    mod.filename = filePath;
-    mod.paths = Module._nodeModulePaths(path.dirname(filePath));
-    mod._compile(patched, filePath);
-    return mod.exports;
-}
 
 function makeSocket(localAddress, localPort) {
     return {
@@ -34,7 +20,7 @@ function makeSocket(localAddress, localPort) {
 }
 
 function makeWorker() {
-    const BmpWorker = loadBmpWorkerClass();
+    const BmpWorker = loadBmpWorkerClass(__dirname, module);
     const worker = Object.create(BmpWorker.prototype);
     const events = [];
 

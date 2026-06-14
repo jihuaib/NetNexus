@@ -5,6 +5,7 @@ const logger = require('./log/logger');
 const { getIconPath, getTrayIconPath } = require('./utils/iconUtils');
 
 const isDev = !app.isPackaged;
+const isPackagedE2e = app.isPackaged && process.env.NETNEXUS_E2E === '1';
 let mainWindow = null;
 let splashWindow = null;
 let systemApp = null;
@@ -12,6 +13,10 @@ let tray = null;
 let splashProgress = 0;
 
 app.commandLine.appendSwitch('lang', 'zh-CN');
+
+if (isPackagedE2e) {
+    app.setPath('userData', path.join(app.getPath('temp'), 'netnexus-e2e', String(process.pid)));
+}
 
 async function createSplashWindow() {
     // 计算 splash 窗口在工作区域内的居中位置
@@ -47,6 +52,15 @@ async function createSplashWindow() {
 }
 
 function createWindow() {
+    const webPreferences = {
+        nodeIntegration: false, // 禁用 nodeIntegration 提高安全性
+        contextIsolation: true // 启用 contextIsolation 更好地隔离上下文
+    };
+
+    if (!isPackagedE2e) {
+        webPreferences.preload = path.join(__dirname, 'preload.js');
+    }
+
     const win = new BrowserWindow({
         width: 1000,
         height: 800,
@@ -58,24 +72,26 @@ function createWindow() {
         autoHideMenuBar: true,
         frame: true,
         backgroundColor: '#ffffff',
-        show: false, // 关键：先隐藏窗口
+        show: isPackagedE2e,
         icon: getIconPath(),
-        webPreferences: {
-            nodeIntegration: false, // 禁用 nodeIntegration 提高安全性
-            contextIsolation: true, // 启用 contextIsolation 更好地隔离上下文
-            preload: path.join(__dirname, 'preload.js')
-        }
+        webPreferences
     });
 
-    logger.info(`Dev ${isDev} __dirname ${__dirname}`);
+    logger.info(`Dev ${isDev} E2E ${isPackagedE2e} __dirname ${__dirname}`);
     const urlLocation = isDev ? 'http://127.0.0.1:3000' : `file://${path.join(__dirname, '../dist/index.html')}`;
-    win.startupRendererReadyPromise = waitForRendererReady(win);
-    win.startupRendererReadyPromise.catch(error => logger.error(`渲染进程就绪等待失败: ${error.message}`));
+    win.startupRendererReadyPromise = isPackagedE2e ? Promise.resolve() : waitForRendererReady(win);
+    if (!isPackagedE2e) {
+        win.startupRendererReadyPromise.catch(error => logger.error(`渲染进程就绪等待失败: ${error.message}`));
+    }
     win.startupLoadPromise = win.loadURL(urlLocation);
     win.startupLoadPromise.catch(error => logger.error(`主窗口加载失败: ${error.message}`));
 
     // 监听窗口关闭事件
     win.on('close', async event => {
+        if (isPackagedE2e) {
+            return;
+        }
+
         event.preventDefault();
 
         if (!systemApp) {
@@ -198,6 +214,12 @@ function finishStartup() {
 }
 
 async function startApplication() {
+    if (isPackagedE2e) {
+        createWindow();
+        await mainWindow.startupLoadPromise;
+        return;
+    }
+
     // 创建启动窗口
     await createSplashWindow();
     updateSplashProgress(10, '正在初始化应用...');

@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { getBrowserMockScript } = require('../../scripts/e2e-support');
 
 async function recordStep(title) {

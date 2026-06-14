@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { formatEvents, recordStep, setupFeaturePagesE2e } = require('../../scripts/e2e-support');
 
 test.describe('FTP page', () => {

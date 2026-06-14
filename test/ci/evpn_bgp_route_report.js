@@ -1,7 +1,6 @@
 const assert = require('assert');
-const fs = require('fs');
-const Module = require('module');
 const path = require('path');
+const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
 const BgpConst = require('../../electron/const/bgpConst');
 const BmpConst = require('../../electron/const/bmpConst');
@@ -181,19 +180,6 @@ function parseEvpnRoute(routeType, index) {
     return { parsedPacket, nlri: mpReach.nlri[0] };
 }
 
-function loadBmpWorkerClass() {
-    const filePath = path.join(__dirname, '..', '..', 'electron', 'worker', 'bmp', 'bmpWorker.js');
-    const source = fs.readFileSync(filePath, 'utf8');
-    const patched = source.replace(/new BmpWorker\(\);\s*\/\/ 启动监听\s*$/u, 'module.exports = BmpWorker;');
-    assert.notEqual(patched, source, 'failed to patch bmpWorker.js auto-start line for CI loading');
-
-    const mod = new Module(filePath, module);
-    mod.filename = filePath;
-    mod.paths = Module._nodeModulePaths(path.dirname(filePath));
-    mod._compile(patched, filePath);
-    return mod.exports;
-}
-
 class CaptureMessageHandler {
     constructor() {
         this.responses = [];
@@ -211,7 +197,7 @@ class CaptureMessageHandler {
 }
 
 function makeWorker() {
-    const BmpWorker = loadBmpWorkerClass();
+    const BmpWorker = loadBmpWorkerClass(__dirname, module);
     const worker = Object.create(BmpWorker.prototype);
     worker.bmpSessionMap = new Map();
     worker.messageHandler = new CaptureMessageHandler();
