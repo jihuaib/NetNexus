@@ -57,7 +57,7 @@ const mockInstance = {
 const mockEvpnPrefix = 'evpn:mac-ip:0:0:tag=100:mac=00:11:22:33:44:55:ip=192.0.2.10';
 
 const mockRoute = {
-    routeKey: `null|0:0|${mockEvpnPrefix}|33`,
+    routeKey: `0|0:0|${mockEvpnPrefix}|33`,
     addrFamilyType: 3,
     afi: 25,
     safi: 70,
@@ -68,7 +68,7 @@ const mockRoute = {
     asPath: '65001 65002',
     med: 0,
     nextHop: '192.0.2.254',
-    pathId: null,
+    pathId: 0,
     labels: null,
     parserValid: true,
     parseErrors: null,

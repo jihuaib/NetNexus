@@ -19,6 +19,10 @@ class ExternalApiServer {
             : [];
     }
 
+    clearRoutes() {
+        this.routes = [];
+    }
+
     getRunning() {
         return this.server !== null;
     }

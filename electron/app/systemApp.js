@@ -4,7 +4,7 @@ const Store = require('electron-store');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const { DEFAULT_LOG_SETTINGS, DEFAULT_TOOLS_SETTINGS, DEFAULT_UPDATE_SETTINGS, LOG_REQ_TYPES } = require('../const/toolsConst');
-const { DEFAULT_API_SETTINGS } = require('../const/apiConst');
+const { API_ACCESS_MODE, DEFAULT_API_SETTINGS } = require('../const/apiConst');
 const fs = require('fs');
 const path = require('path');
 const { getIconPath } = require('../utils/iconUtils');
@@ -23,6 +23,7 @@ const NativeApp = require('./nativeApp');
 const FtpConst = require('../const/ftpConst');
 const ExternalApiServer = require('./externalApiServer');
 const createBmpApiRoutes = require('./bmpApiRoutes');
+const CliAccessServer = require('./cli');
 /**
  * 用于系统菜单处理
  */
@@ -67,6 +68,17 @@ class SystemApp {
         this.nativeApp = new NativeApp(ipc);
         this.toolsApp = new ToolsApp(ipc, this.programStore);
         this.externalApiServer = new ExternalApiServer();
+        this.cliAccessServer = new CliAccessServer({
+            bmpApp: this.bmpApp,
+            externalApiServer: this.externalApiServer
+        });
+        this.externalApiRoutesLoaded = false;
+    }
+
+    loadExternalApiRoutes() {
+        if (this.externalApiRoutesLoaded) {
+            return;
+        }
         this.externalApiServer.setRoutes([
             {
                 method: 'GET',
@@ -82,6 +94,12 @@ class SystemApp {
             },
             ...createBmpApiRoutes(this.bmpApp)
         ]);
+        this.externalApiRoutesLoaded = true;
+    }
+
+    unloadExternalApiRoutes() {
+        this.externalApiServer.clearRoutes();
+        this.externalApiRoutesLoaded = false;
     }
 
     // 添加版本兼容性检查方法
@@ -393,9 +411,11 @@ class SystemApp {
     }
 
     normalizeApiSettings(settings = {}) {
-        const enabled = Boolean(settings.enabled);
+        const mode = this.normalizeApiAccessMode(settings);
         const port = Number(settings.port ?? DEFAULT_API_SETTINGS.port);
         const maxPageSize = Number(settings.maxPageSize ?? DEFAULT_API_SETTINGS.maxPageSize);
+        const cliPort = DEFAULT_API_SETTINGS.cliPort;
+        const cliMaxSessions = Number(settings.cliMaxSessions ?? DEFAULT_API_SETTINGS.cliMaxSessions);
 
         if (!Number.isInteger(port) || port < 1 || port > 65535) {
             throw new Error('API端口必须是1到65535之间的整数');
@@ -403,17 +423,70 @@ class SystemApp {
         if (!Number.isInteger(maxPageSize) || maxPageSize < 1 || maxPageSize > 10000) {
             throw new Error('分页最大条数必须是1到10000之间的整数');
         }
+        if (!Number.isInteger(cliPort) || cliPort < 1 || cliPort > 65535) {
+            throw new Error('CLI端口必须是1到65535之间的整数');
+        }
+        if (!Number.isInteger(cliMaxSessions) || cliMaxSessions < 1 || cliMaxSessions > 100) {
+            throw new Error('CLI最大会话数必须是1到100之间的整数');
+        }
 
         return {
-            enabled,
+            enabled: mode !== API_ACCESS_MODE.NONE,
+            mode,
             host: DEFAULT_API_SETTINGS.host,
             port,
-            maxPageSize
+            maxPageSize,
+            cliHost: DEFAULT_API_SETTINGS.cliHost,
+            cliPort,
+            cliMaxSessions
         };
     }
 
+    normalizeApiAccessMode(settings = {}) {
+        const mode = String(settings.mode || '').trim();
+        if ([API_ACCESS_MODE.NONE, API_ACCESS_MODE.HTTP, API_ACCESS_MODE.CLI].includes(mode)) {
+            return mode;
+        }
+        return settings.enabled ? API_ACCESS_MODE.HTTP : API_ACCESS_MODE.NONE;
+    }
+
     async applyApiSettings(settings) {
-        await this.externalApiServer.updateSettings(settings);
+        if (settings.mode === API_ACCESS_MODE.HTTP) {
+            await this.cliAccessServer.updateSettings({
+                enabled: false,
+                host: settings.cliHost,
+                port: settings.cliPort,
+                maxSessions: settings.cliMaxSessions
+            });
+            this.loadExternalApiRoutes();
+            try {
+                await this.externalApiServer.updateSettings({
+                    enabled: true,
+                    host: settings.host,
+                    port: settings.port,
+                    maxPageSize: settings.maxPageSize
+                });
+            } catch (error) {
+                this.unloadExternalApiRoutes();
+                throw error;
+            }
+            return;
+        }
+
+        await this.externalApiServer.updateSettings({
+            enabled: false,
+            host: settings.host,
+            port: settings.port,
+            maxPageSize: settings.maxPageSize
+        });
+        this.unloadExternalApiRoutes();
+
+        await this.cliAccessServer.updateSettings({
+            enabled: settings.mode === API_ACCESS_MODE.CLI,
+            host: settings.cliHost,
+            port: settings.cliPort,
+            maxSessions: settings.cliMaxSessions
+        });
     }
 
     updateStartupProgress(progress, text) {
@@ -427,7 +500,7 @@ class SystemApp {
             const normalizedSettings = this.normalizeApiSettings(settings);
             await this.applyApiSettings(normalizedSettings);
             this.store.set(this.apiSettingsFileKey, normalizedSettings);
-            return successResponse(this.externalApiServer.getStatus(), 'API设置保存成功');
+            return successResponse(this.getAccessServiceStatus(), '接入设置保存成功');
         } catch (error) {
             logger.error('Error saving API settings:', error.message);
             return errorResponse(error.message);
@@ -450,11 +523,25 @@ class SystemApp {
 
     handleGetApiServerStatus() {
         try {
-            return successResponse(this.externalApiServer.getStatus(), 'API服务状态获取成功');
+            return successResponse(this.getAccessServiceStatus(), '接入服务状态获取成功');
         } catch (error) {
             logger.error('Error getting API server status:', error.message);
             return errorResponse(error.message);
         }
+    }
+
+    getAccessServiceStatus() {
+        const http = this.externalApiServer.getStatus();
+        const cli = this.cliAccessServer.getStatus();
+        return {
+            running: http.running || cli.running,
+            mode: http.running ? API_ACCESS_MODE.HTTP : cli.running ? API_ACCESS_MODE.CLI : API_ACCESS_MODE.NONE,
+            http,
+            cli,
+            host: http.host,
+            port: http.port,
+            enabled: http.running || cli.running
+        };
     }
 
     handleOpenDeveloperOptions() {
@@ -584,17 +671,30 @@ class SystemApp {
         }
         this.updaterApp.updateSettings(updateSetting);
 
-        // 加载外部API设置并应用
-        this.updateStartupProgress(68, '正在应用HTTP API设置...');
+        // 加载外部接入设置并按保存的接入方式自动启动。mode=none 时保持关闭。
+        this.updateStartupProgress(68, '正在加载外部接入设置...');
         try {
-            const apiSettingsFromStore = this.store.get(this.apiSettingsFileKey);
             const apiSettings = this.normalizeApiSettings({
                 ...DEFAULT_API_SETTINGS,
-                ...(apiSettingsFromStore || {})
+                ...(this.store.get(this.apiSettingsFileKey) || {})
             });
-            await this.applyApiSettings(apiSettings);
+            if (apiSettings.mode === API_ACCESS_MODE.NONE) {
+                await this.applyApiSettings(apiSettings);
+                this.updateStartupProgress(72, '外部接入未启用');
+            } else {
+                this.updateStartupProgress(
+                    70,
+                    apiSettings.mode === API_ACCESS_MODE.HTTP ? '正在启动 HTTP API...' : '正在启动 Telnet CLI...'
+                );
+                await this.applyApiSettings(apiSettings);
+                this.updateStartupProgress(
+                    74,
+                    apiSettings.mode === API_ACCESS_MODE.HTTP ? 'HTTP API 已启动' : 'Telnet CLI 已启动'
+                );
+            }
         } catch (error) {
-            logger.error(`Error applying API settings: ${error.message}`);
+            logger.error('启动外部接入服务失败:', error.message);
+            this.updateStartupProgress(74, `外部接入启动失败: ${error.message}`);
         }
 
         // 加载部署配置
@@ -617,6 +717,7 @@ class SystemApp {
         const isTftpRunning = this.tftpApp.getTftpRunning();
         const isSyslogRunning = this.syslogApp.getSyslogRunning();
         const isApiRunning = this.externalApiServer.getRunning();
+        const isCliRunning = this.cliAccessServer.getRunning();
 
         if (
             isBgpRunning ||
@@ -627,7 +728,8 @@ class SystemApp {
             isNtpRunning ||
             isTftpRunning ||
             isSyslogRunning ||
-            isApiRunning
+            isApiRunning ||
+            isCliRunning
         ) {
             const { response } = await dialog.showMessageBox(this.win, {
                 type: 'warning',
@@ -667,6 +769,10 @@ class SystemApp {
                 }
                 if (isApiRunning) {
                     await this.externalApiServer.stop();
+                    this.unloadExternalApiRoutes();
+                }
+                if (isCliRunning) {
+                    await this.cliAccessServer.stop();
                 }
 
                 return true;
@@ -674,6 +780,9 @@ class SystemApp {
             return false;
         }
 
+        if (isCliRunning) {
+            await this.cliAccessServer.stop();
+        }
         return true;
     }
 

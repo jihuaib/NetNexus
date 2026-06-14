@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cli>
+    <views>
+        <view name="user">
+            <prompt>&lt;NetNexus&gt;</prompt>
+        </view>
+        <view name="config">
+            <prompt>&lt;NetNexus(config)&gt;</prompt>
+        </view>
+    </views>
+
+    <commands>
+        <command id="show-cli-command-info" handler="showCliCommandInfo" views="global">
+            <syntax>show cli command-info</syntax>
+            <description>Display registered CLI commands</description>
+        </command>
+        <command id="show-cli-history" handler="showCliHistory" views="global">
+            <syntax>show cli history</syntax>
+            <description>Display command history</description>
+        </command>
+        <command id="show-cli-client" handler="showCliClient" views="global">
+            <syntax>show cli client</syntax>
+            <description>Display connected CLI clients</description>
+        </command>
+        <command id="config" handler="enterConfig" views="user" to-view="config">
+            <syntax>config</syntax>
+            <description>Enter configuration mode</description>
+        </command>
+        <command id="end" handler="end" views="global" to-view="user" clear-context="true">
+            <syntax>end</syntax>
+            <description>Return to user view</description>
+        </command>
+        <command id="exit" handler="exit" views="global">
+            <syntax>exit</syntax>
+            <description>Exit current mode or close current session</description>
+        </command>
+
+        <command id="terminal-length-disable" handler="terminalLengthDisable" views="global">
+            <syntax>terminal length 0</syntax>
+            <description>Disable paging for current session</description>
+        </command>
+        <command id="terminal-length-default" handler="terminalLengthDefault" views="global">
+            <syntax>no terminal length 0</syntax>
+            <description>Restore default paging for current session</description>
+        </command>
+        <command id="show-api-status" handler="showApiStatus" views="global">
+            <syntax>show api status</syntax>
+            <description>Display HTTP API and telnet CLI service status</description>
+        </command>
+        <command id="show-bmp-status" handler="showBmpStatus" views="global">
+            <syntax>show bmp status</syntax>
+            <description>Display BMP worker status</description>
+        </command>
+        <command id="show-bmp-client" handler="showBmpClients" views="global">
+            <syntax>show bmp client</syntax>
+            <description>Display BMP clients</description>
+        </command>
+        <command id="show-bmp-client-filter" handler="showBmpClients" views="global">
+            <syntax>show bmp client client-id &lt;clientId:uint(1-65535)&gt;</syntax>
+            <description>Display BMP client summary by client-id</description>
+        </command>
+        <command id="show-bmp-client-verbose" handler="showBmpClients" views="global">
+            <syntax>show bmp client client-id &lt;clientId:uint(1-65535)&gt; verbose</syntax>
+            <description>Display BMP client verbose information by client-id</description>
+        </command>
+        <command id="show-bmp-session" handler="showBmpSessions" views="global">
+            <syntax>show bmp session client-id &lt;clientId:uint(1-65535)&gt;</syntax>
+            <description>Display BGP sessions for a BMP client-id</description>
+        </command>
+        <command id="show-bmp-session-filter" handler="showBmpSessions" views="global">
+            <syntax>show bmp session client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt;</syntax>
+            <description>Display BGP session summary by session-id</description>
+        </command>
+        <command id="show-bmp-session-verbose" handler="showBmpSessions" views="global">
+            <syntax>show bmp session client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt; verbose</syntax>
+            <description>Display BGP session verbose information by session-id</description>
+        </command>
+        <command id="show-bmp-instance" handler="showBmpInstances" views="global">
+            <syntax>show bmp instance client-id &lt;clientId:uint(1-65535)&gt;</syntax>
+            <description>Display Loc-RIB instances for a BMP client-id</description>
+        </command>
+        <command id="show-bmp-instance-filter" handler="showBmpInstances" views="global">
+            <syntax>show bmp instance client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt;</syntax>
+            <description>Display Loc-RIB instance summary by instance-id</description>
+        </command>
+        <command id="show-bmp-instance-verbose" handler="showBmpInstances" views="global">
+            <syntax>show bmp instance client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt; verbose</syntax>
+            <description>Display Loc-RIB instance verbose information by instance-id</description>
+        </command>
+        <command id="show-bmp-route-session" handler="showBmpRoutes" views="global">
+            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt; af &lt;af:enum(ipv4-unc,ipv6-unc,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)&gt; rib &lt;ribType:enum(pre-adj-rib-in,adj-rib-in,as-path,adj-rib-out,post-adj-rib-out)&gt; [state &lt;routeState:enum(active,stale,all)&gt;] [prefix &lt;prefixFilter:string(1-128)&gt;]</syntax>
+            <description>Display BMP session routes</description>
+        </command>
+        <command id="show-bmp-route-session-key" handler="showBmpRoutes" views="global">
+            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt; af &lt;af:enum(ipv4-unc,ipv6-unc,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)&gt; rib &lt;ribType:enum(pre-adj-rib-in,adj-rib-in,as-path,adj-rib-out,post-adj-rib-out)&gt; route-key &lt;routeKey:string(1-2048)&gt;</syntax>
+            <description>Display BMP session route summary by route key</description>
+        </command>
+        <command id="show-bmp-route-session-key-verbose" handler="showBmpRoutes" views="global">
+            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt; af &lt;af:enum(ipv4-unc,ipv6-unc,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)&gt; rib &lt;ribType:enum(pre-adj-rib-in,adj-rib-in,as-path,adj-rib-out,post-adj-rib-out)&gt; route-key &lt;routeKey:string(1-2048)&gt; verbose</syntax>
+            <description>Display BMP session route verbose information by route key</description>
+        </command>
+        <command id="show-bmp-route-instance" handler="showBmpInstanceRoutes" views="global">
+            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt; [state &lt;routeState:enum(active,stale,all)&gt;] [prefix &lt;prefixFilter:string(1-128)&gt;]</syntax>
+            <description>Display BMP Loc-RIB instance routes</description>
+        </command>
+        <command id="show-bmp-route-instance-key" handler="showBmpInstanceRoutes" views="global">
+            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt; route-key &lt;routeKey:string(1-2048)&gt;</syntax>
+            <description>Display BMP Loc-RIB route summary by route key</description>
+        </command>
+        <command id="show-bmp-route-instance-key-verbose" handler="showBmpInstanceRoutes" views="global">
+            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt; route-key &lt;routeKey:string(1-2048)&gt; verbose</syntax>
+            <description>Display BMP Loc-RIB route verbose information by route key</description>
+        </command>
+        <command id="show-bmp-statistic-session" handler="showBmpSessionStatistics" views="global">
+            <syntax>show bmp statistic session client-id &lt;clientId:uint(1-65535)&gt;</syntax>
+            <description>Display BMP session statistics reports</description>
+        </command>
+        <command id="show-bmp-statistic-session-filter" handler="showBmpSessionStatistics" views="global">
+            <syntax>show bmp statistic session client-id &lt;clientId:uint(1-65535)&gt; report-id &lt;reportId:uint(1-65535)&gt;</syntax>
+            <description>Display BMP session statistics report summary by report-id</description>
+        </command>
+        <command id="show-bmp-statistic-session-verbose" handler="showBmpSessionStatistics" views="global">
+            <syntax>show bmp statistic session client-id &lt;clientId:uint(1-65535)&gt; report-id &lt;reportId:uint(1-65535)&gt; verbose</syntax>
+            <description>Display BMP session statistics report verbose information by report-id</description>
+        </command>
+        <command id="show-bmp-statistic-instance" handler="showBmpInstanceStatistics" views="global">
+            <syntax>show bmp statistic instance client-id &lt;clientId:uint(1-65535)&gt;</syntax>
+            <description>Display BMP Loc-RIB statistics reports</description>
+        </command>
+        <command id="show-bmp-statistic-instance-filter" handler="showBmpInstanceStatistics" views="global">
+            <syntax>show bmp statistic instance client-id &lt;clientId:uint(1-65535)&gt; report-id &lt;reportId:uint(1-65535)&gt;</syntax>
+            <description>Display BMP Loc-RIB statistics report summary by report-id</description>
+        </command>
+        <command id="show-bmp-statistic-instance-verbose" handler="showBmpInstanceStatistics" views="global">
+            <syntax>show bmp statistic instance client-id &lt;clientId:uint(1-65535)&gt; report-id &lt;reportId:uint(1-65535)&gt; verbose</syntax>
+            <description>Display BMP Loc-RIB statistics report verbose information by report-id</description>
+        </command>
+    </commands>
+</cli>
