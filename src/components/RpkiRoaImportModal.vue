@@ -10,9 +10,7 @@
     >
         <div class="roa-import-container">
             <a-alert message="导入设置" type="info" show-icon style="margin-bottom: 16px">
-                <template #description>
-                    选择本地 ROA JSON 文件，并设置本次最多新增导入的 ROA 条数。
-                </template>
+                <template #description>选择本地 ROA JSON 文件，并设置本次最多新增导入的 ROA 条数。</template>
             </a-alert>
 
             <div class="file-selector">

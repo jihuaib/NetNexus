@@ -113,15 +113,6 @@
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
                                                         <a-space size="small">
-                                                            <a-tooltip title="查询BGP原始报文">
-                                                                <a-button
-                                                                    type="text"
-                                                                    size="small"
-                                                                    @click="viewRouteDetails(record)"
-                                                                >
-                                                                    <template #icon><FileSearchOutlined /></template>
-                                                                </a-button>
-                                                            </a-tooltip>
                                                             <a-tooltip title="查询路由detail">
                                                                 <a-button
                                                                     type="text"
@@ -157,11 +148,7 @@
             @close="closeDetailsDrawer"
         >
             <template v-if="currentDetails">
-                <template v-if="detailsDrawerMode === 'route'">
-                    <pre v-if="currentDetails.summary" class="route-summary-pre">{{ currentDetails.summary }}</pre>
-                    <a-empty v-else description="暂无解析结果" />
-                </template>
-                <pre v-else>{{ JSON.stringify(currentDetails, null, 2) }}</pre>
+                <pre>{{ JSON.stringify(currentDetails, null, 2) }}</pre>
             </template>
         </a-drawer>
     </div>
@@ -170,7 +157,6 @@
 <script setup>
     import { ref, onActivated, watch, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
-    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
     import ProfileOutlined from '@ant-design/icons-vue/es/icons/ProfileOutlined';
     import {
         BMP_SESSION_TYPE_NAME,
@@ -322,13 +308,11 @@
     // Details drawer
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
-    const detailsDrawerMode = ref('json');
     const currentDetails = ref(null);
 
     // Close details drawer
     const closeDetailsDrawer = () => {
         detailsDrawerVisible.value = false;
-        detailsDrawerMode.value = 'json';
         currentDetails.value = null;
     };
 
@@ -563,49 +547,12 @@
     };
 
     const viewInstanceDetails = record => {
-        detailsDrawerMode.value = 'json';
         currentDetails.value = record;
         detailsDrawerTitle.value = `Instance 详情: ${record.instanceRd}`;
         detailsDrawerVisible.value = true;
     };
 
-    const viewRouteDetails = async record => {
-        detailsDrawerMode.value = 'route';
-        detailsDrawerTitle.value = `路由详情: ${record.ip || ''}`;
-        detailsDrawerVisible.value = true;
-        currentDetails.value = null;
-
-        if (!activeClientKey.value || !activeInstanceKey.value) {
-            currentDetails.value = record;
-            return;
-        }
-
-        const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
-        const client = { localIp, localPort, remoteIp, remotePort };
-        const instance = {
-            instanceType: activeInstanceKey.value.split('|')[0],
-            instanceRd: activeInstanceKey.value.split('|')[1],
-            addrFamilyType: activeInstanceKey.value.split('|')[2]
-        };
-        const routeKey = getRouteKey(record);
-
-        try {
-            const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey, true);
-            if (res.status === 'success' && res.data) {
-                currentDetails.value = res.data;
-            } else {
-                currentDetails.value = record;
-                message.error('查询路由详情失败');
-            }
-        } catch (error) {
-            console.error(error);
-            currentDetails.value = record;
-            message.error('查询路由详情失败');
-        }
-    };
-
     const viewRouteDetailJson = async record => {
-        detailsDrawerMode.value = 'json';
         detailsDrawerTitle.value = `路由detail: ${record.ip || ''}`;
         detailsDrawerVisible.value = true;
         currentDetails.value = null;
@@ -625,7 +572,7 @@
         const routeKey = getRouteKey(record);
 
         try {
-            const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey, false);
+            const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey);
             if (res.status === 'success' && res.data) {
                 currentDetails.value = res.data;
             } else {
@@ -843,15 +790,6 @@
     :deep(.route-stale-row) {
         color: #8c6d1f;
         background-color: #fffbe6;
-    }
-
-    .route-summary-pre {
-        padding: 8px;
-        margin-bottom: 8px;
-        white-space: pre-wrap;
-        background-color: #f6f8fa;
-        border: 1px solid #e5e7eb;
-        border-radius: 4px;
     }
 
     .detail-table {

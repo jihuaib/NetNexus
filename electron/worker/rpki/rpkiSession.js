@@ -20,6 +20,7 @@ class RpkiSession {
         this.aspaFormat = RpkiConst.RPKI_ASPA_FORMAT.LATEST;
         this.sendQueue = Promise.resolve();
         this.closing = false;
+        this.closed = false;
     }
 
     static makeKey(localIp, localPort, remoteIp, remotePort) {
@@ -94,15 +95,103 @@ class RpkiSession {
         }
     }
 
-    closeSession() {
+    closeSession(options = {}) {
+        const { destroySocket = true, graceful = false } = options;
+        if (this.closed) {
+            if (destroySocket) {
+                return this.closeSocket({ graceful });
+            }
+            return Promise.resolve();
+        }
+
+        this.closed = true;
+        this.closing = true;
+        this.messageBuffer = Buffer.alloc(0);
+        if (typeof this.rpkiWorker?.removeRpkiSession === 'function') {
+            this.rpkiWorker.removeRpkiSession(this);
+        }
         this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
             opType: 'delete',
             data: this.getClientInfo()
         });
-        if (this.socket) {
-            this.socket.destroy();
-            this.socket = null;
+
+        if (destroySocket) {
+            return this.closeSocket({ graceful });
         }
+        return Promise.resolve();
+    }
+
+    closeSocket(options = {}) {
+        const { graceful = false } = options;
+        if (graceful) {
+            return this.endSocket();
+        }
+        this.destroySocket();
+        return Promise.resolve();
+    }
+
+    endSocket() {
+        const socket = this.socket;
+        this.socket = null;
+        if (!socket || socket.destroyed) {
+            return Promise.resolve();
+        }
+
+        if (typeof socket.end !== 'function') {
+            if (typeof socket.destroy === 'function') {
+                socket.destroy();
+            }
+            return Promise.resolve();
+        }
+
+        if (typeof socket.once !== 'function') {
+            socket.end();
+            return Promise.resolve();
+        }
+
+        return new Promise(resolve => {
+            let fallbackTimer = null;
+            let resolved = false;
+            const finish = () => {
+                if (resolved) {
+                    return;
+                }
+                resolved = true;
+                if (fallbackTimer) {
+                    clearTimeout(fallbackTimer);
+                    fallbackTimer = null;
+                }
+                resolve();
+            };
+
+            socket.once('close', finish);
+            socket.once('error', finish);
+
+            try {
+                socket.end();
+            } catch (_error) {
+                if (!socket.destroyed && typeof socket.destroy === 'function') {
+                    socket.destroy();
+                }
+                finish();
+            }
+
+            fallbackTimer = setTimeout(() => {
+                if (!socket.destroyed && typeof socket.destroy === 'function') {
+                    socket.destroy();
+                }
+            }, 1000);
+            if (typeof fallbackTimer.unref === 'function') {
+                fallbackTimer.unref();
+            }
+        });
+    }
+
+    destroySocket() {
+        if (this.socket && typeof this.socket.destroy === 'function') {
+            this.socket.destroy();
+        }
+        this.socket = null;
     }
 
     getMaxSupportedVersion() {
@@ -127,14 +216,8 @@ class RpkiSession {
         // 版本协商
         const maxSupportedVersion = this.getMaxSupportedVersion();
         if (header.version > maxSupportedVersion) {
-            logger.error(
-                `Unsupported protocol version: ${header.version}, max supported: ${maxSupportedVersion}`
-            );
-            this.sendError(
-                RpkiConst.RPKI_ERROR_CODE.UNSUPPORTED_PROTOCOL_VERSION,
-                maxSupportedVersion,
-                true
-            );
+            logger.error(`Unsupported protocol version: ${header.version}, max supported: ${maxSupportedVersion}`);
+            this.sendError(RpkiConst.RPKI_ERROR_CODE.UNSUPPORTED_PROTOCOL_VERSION, maxSupportedVersion, true);
             return;
         }
         this.negotiateVersion(header.version);
@@ -174,9 +257,7 @@ class RpkiSession {
     handleSerialQuery(header, message) {
         // 版本一致性检查
         if (header.version !== this.protocolVersion) {
-            logger.error(
-                `Serial Query version mismatch: got ${header.version}, expected ${this.protocolVersion}`
-            );
+            logger.error(`Serial Query version mismatch: got ${header.version}, expected ${this.protocolVersion}`);
             this.sendError(RpkiConst.RPKI_ERROR_CODE.UNEXPECTED_PROTOCOL_VERSION);
             return;
         }
@@ -229,11 +310,9 @@ class RpkiSession {
     }
 
     enqueueSend(task) {
-        this.sendQueue = this.sendQueue
-            .then(task)
-            .catch(error => {
-                logger.error(`RPKI send queue error: ${error.message}`);
-            });
+        this.sendQueue = this.sendQueue.then(task).catch(error => {
+            logger.error(`RPKI send queue error: ${error.message}`);
+        });
         return this.sendQueue;
     }
 
@@ -691,26 +770,31 @@ class RpkiSession {
 
         if (!this.socket || this.socket.destroyed) {
             logger.error(`Cannot send error report: socket is closed or destroyed`);
+            this.closeSession();
             return;
         }
 
         try {
             this.closing = true;
             if (typeof this.socket.end === 'function') {
+                const socket = this.socket;
                 this.socket.end(buffer, () => {
-                    if (this.socket && !this.socket.destroyed && typeof this.socket.destroy === 'function') {
-                        this.socket.destroy();
+                    if (!socket.destroyed && typeof socket.destroy === 'function') {
+                        socket.destroy();
+                    }
+                    if (this.socket === socket) {
+                        this.socket = null;
                     }
                 });
+                this.closeSession({ destroySocket: false });
             } else {
                 this.socket.write(buffer);
-                if (typeof this.socket.destroy === 'function') {
-                    this.socket.destroy();
-                }
+                this.closeSession();
             }
             logger.debug(`Sent error report and closed ${this.remoteIp}:${this.remotePort}, length ${buffer.length}`);
         } catch (err) {
             logger.error(`Error sending error report: ${err.message}`);
+            this.closeSession();
         }
     }
 

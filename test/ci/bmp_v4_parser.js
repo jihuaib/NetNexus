@@ -27,11 +27,7 @@ function bgpPacket(type, body) {
     ]);
 }
 
-function addPathCapability(
-    mode,
-    afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4,
-    safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
-) {
+function addPathCapability(mode, afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
     return Buffer.concat([Buffer.from([BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH, 4]), u16(afi), Buffer.from([safi, mode])]);
 }
 
@@ -152,11 +148,19 @@ function bgpUpdateAddPath(prefix = '203.0.113.0', pathId = 7) {
 
 function bgpWithdrawAddPath(prefix = '203.0.113.0', pathId = 7) {
     const withdrawnRoutes = Buffer.concat([u32(pathId), Buffer.from([24]), ip(prefix).subarray(0, 3)]);
-    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(withdrawnRoutes.length), withdrawnRoutes, u16(0)]));
+    return bgpPacket(
+        BgpConst.BGP_PACKET_TYPE.UPDATE,
+        Buffer.concat([u16(withdrawnRoutes.length), withdrawnRoutes, u16(0)])
+    );
 }
 
 function bmpMessage(version, type, payload) {
-    return Buffer.concat([Buffer.from([version]), u32(BmpConst.BMP_HEADER_LENGTH + payload.length), Buffer.from([type]), payload]);
+    return Buffer.concat([
+        Buffer.from([version]),
+        u32(BmpConst.BMP_HEADER_LENGTH + payload.length),
+        Buffer.from([type]),
+        payload
+    ]);
 }
 
 function peerHeader(flags = 0, peerType = BmpConst.BMP_PEER_TYPE.GLOBAL) {
@@ -250,23 +254,24 @@ function makeSession(config = {}) {
     session.localPort = 1790;
     session.remoteIp = '127.0.0.2';
     session.remotePort = 50000;
-    bmpWorker.bmpSessionMap.set(BmpSession.makeKey(session.localIp, session.localPort, session.remoteIp, session.remotePort), session);
+    bmpWorker.bmpSessionMap.set(
+        BmpSession.makeKey(session.localIp, session.localPort, session.remoteIp, session.remotePort),
+        session
+    );
 
     return { session, events };
 }
 
 function bytesFromDump(dump) {
     return Buffer.from(
-        dump
-            .split(/\n/)
-            .flatMap(line =>
-                line
-                    .replace(/^\s*[0-9a-f]+\s+/i, '')
-                    .trim()
-                    .split(/\s+/)
-                    .filter(Boolean)
-                    .map(value => parseInt(value, 16))
-            )
+        dump.split(/\n/).flatMap(line =>
+            line
+                .replace(/^\s*[0-9a-f]+\s+/i, '')
+                .trim()
+                .split(/\s+/)
+                .filter(Boolean)
+                .map(value => parseInt(value, 16))
+        )
     );
 }
 
@@ -340,15 +345,14 @@ function addBgpSessionRoute(session, afi, safi, prefix, mask, ribType = BmpConst
 }
 
 const { session, events } = makeSession();
-session.processMessage(bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload()));
+session.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
 session.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
         BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
-        Buffer.concat([
-            peerHeader(),
-            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate())
-        ])
+        Buffer.concat([peerHeader(), indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate())])
     )
 );
 
@@ -415,6 +419,9 @@ pathMarkingGroupRoutes.forEach(route => {
     assert.equal(route.pathStatusTlvs[0].rawIndex, 0x800b);
     assert.equal(route.pathStatusTlvs[0].group, true);
 });
+assert.ok(pathMarkingGroupRoutes[0].attrId, 'routes with parsed attributes should have attrId');
+assert.equal(pathMarkingGroupRoutes[0].attrId, pathMarkingGroupRoutes[1].attrId);
+assert.equal(pathMarkingGroupRoutes[0].getRouteInfo().attrRefCount, 2);
 
 const { session: pathMarkingIndexSession } = makeSession();
 pathMarkingIndexSession.processMessage(
@@ -510,14 +517,10 @@ assert.equal(evpnRoute.nlriDetail.encapsulationType, 'vni');
 assert.equal(evpnRoute.nlriDetail.labels[0].raw24, 10000);
 assert.equal(evpnRoute.nlriDetail.labels[0].mplsLabel, 625);
 const evpnRouteInfo = evpnRoute.getRouteInfo();
-assert.ok(evpnRouteInfo.summary.includes('BGP UPDATE Message'));
-assert.ok(evpnRouteInfo.summary.includes('Path Attributes:'));
-assert.ok(evpnRouteInfo.summary.includes('EXTENDED_COMMUNITIES: Encapsulation VXLAN (8)'));
-assert.ok(evpnRouteInfo.summary.includes('MP_REACH_NLRI'));
-assert.ok(evpnRouteInfo.summary.includes('L2VPN/EVPN'));
-assert.ok(evpnRouteInfo.summary.includes('evpn:mac-ip:65000:1:tag=100:mac=aa:bb:cc:dd:ee:ff:ip=192.0.2.10'));
-assert.equal(Object.prototype.hasOwnProperty.call(evpnRoute.getRouteInfo({ includeSummary: false }), 'summary'), false);
-assert.ok(evpnRoute.getRouteInfo({ includeSummary: true }).summary.includes('BGP UPDATE Message'));
+assert.equal(Object.prototype.hasOwnProperty.call(evpnRouteInfo, 'summary'), false);
+assert.equal(evpnRouteInfo.afi, BgpConst.BGP_AFI_TYPE.AFI_L2VPN);
+assert.equal(evpnRouteInfo.safi, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN);
+assert.equal(evpnRouteInfo.nlriDetail.prefix, 'evpn:mac-ip:65000:1:tag=100:mac=aa:bb:cc:dd:ee:ff:ip=192.0.2.10');
 
 const { session: staleRefreshSession } = makeSession();
 staleRefreshSession.processMessage(
@@ -861,8 +864,14 @@ const addPathRouteMap = addPathBgpSession.bgpRoutes
     .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
 assert.equal(addPathRouteMap.size, 1);
 assert.equal([...addPathRouteMap.values()][0].pathId, 77);
-assert.equal(addPathBgpSession.addPathReceiveMap.get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`), true);
-assert.equal(addPathBgpSession.addPathSendMap.get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`), false);
+assert.equal(
+    addPathBgpSession.addPathReceiveMap.get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`),
+    true
+);
+assert.equal(
+    addPathBgpSession.addPathSendMap.get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`),
+    false
+);
 addPathSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -874,7 +883,9 @@ addPathSession.processMessage(
     )
 );
 assert.equal(addPathRouteMap.size, 0);
-addPathSession.processMessage(bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload()));
+addPathSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
 addPathSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -889,7 +900,10 @@ const addPathDisabledRouteMap = addPathBgpSession.bgpRoutes
     .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
     .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
 assert.equal([...addPathDisabledRouteMap.values()][0].pathId, 0);
-assert.equal(addPathBgpSession.addPathMap.has(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`), false);
+assert.equal(
+    addPathBgpSession.addPathMap.has(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`),
+    false
+);
 
 const { session: statelessAddPathSession } = makeSession();
 statelessAddPathSession.processMessage(
@@ -927,7 +941,10 @@ const statelessRouteMap = statelessBgpSession.bgpRoutes
 const statelessRoutes = [...statelessRouteMap.values()];
 assert.ok(statelessRoutes.some(route => route.ip === '203.0.115.0' && route.pathId === 88));
 assert.ok(statelessRoutes.some(route => route.ip === '203.0.116.0' && route.pathId === 0));
-assert.equal(statelessBgpSession.addPathMap.has(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`), false);
+assert.equal(
+    statelessBgpSession.addPathMap.has(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`),
+    false
+);
 
 const { session: statsTypeSession, events: statsTypeEvents } = makeSession();
 statsTypeSession.processMessage(
@@ -955,10 +972,7 @@ statsTypeSession.processMessage(
 );
 const statsTypeEvent = statsTypeEvents.find(event => event.type === BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT);
 assert.equal(statsTypeEvent.payload.data.statistics[0].typeName, 'Post-Policy Adj-RIB-Out 中的路由数');
-assert.equal(
-    statsTypeEvent.payload.data.statistics[1].typeName,
-    '每 AFI/SAFI Post-Policy Adj-RIB-Out 中的路由数'
-);
+assert.equal(statsTypeEvent.payload.data.statistics[1].typeName, '每 AFI/SAFI Post-Policy Adj-RIB-Out 中的路由数');
 assert.equal(statsTypeEvent.payload.data.statistics[1].afi, BgpConst.BGP_AFI_TYPE.AFI_IPV4);
 assert.equal(statsTypeEvent.payload.data.statistics[1].safi, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
 
@@ -1020,13 +1034,7 @@ draft19StatsSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
         BmpConst.BMP_MSG_TYPE.STATISTICS_REPORT,
-        Buffer.concat([
-            peerHeader(),
-            u32(1),
-            u16(BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN),
-            u16(4),
-            u32(456)
-        ])
+        Buffer.concat([peerHeader(), u32(1), u16(BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN), u16(4), u32(456)])
     )
 );
 const draft19StatsEvent = draft19StatsEvents.find(event => event.type === BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT);

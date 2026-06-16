@@ -2,12 +2,7 @@ const BgpConst = require('../../const/bgpConst');
 const BmpConst = require('../../const/bmpConst');
 const { DEFAULT_API_SETTINGS } = require('../../const/apiConst');
 const { CliCommandError } = require('./errors');
-const {
-    formatDate,
-    formatJson,
-    formatPrefix,
-    formatTable
-} = require('./formatters');
+const { formatDate, formatJson, formatPrefix, formatTable } = require('./formatters');
 
 const BGP_ADDR_FAMILY_VALUES = new Set(Object.values(BgpConst.BGP_ADDR_FAMILY));
 const BMP_RIB_TYPE_VALUES = new Set(Object.values(BmpConst.BMP_BGP_RIB_TYPE));
@@ -17,6 +12,62 @@ const BMP_ROUTE_STATE_KEYWORDS = buildKeywordMap(BmpConst.BMP_ROUTE_STATE_FILTER
 const BGP_ADDR_FAMILY_LABELS = invertKeywordMap(BGP_ADDR_FAMILY_KEYWORDS);
 const BMP_RIB_TYPE_LABELS = invertKeywordMap(BMP_RIB_TYPE_KEYWORDS);
 const BMP_ROUTE_PAGE_SIZE = 25;
+const CLI_GROUPS = {
+    'show-cli-command-info': { handler: 'showCliCommandInfo' },
+    'show-cli-history': { handler: 'showCliHistory' },
+    'show-cli-client': { handler: 'showCliClient' },
+    config: { handler: 'enterConfig', toView: 'config' },
+    end: { handler: 'end', toView: 'user', clearContext: true },
+    exit: { handler: 'exit' },
+    'terminal-length-disable': { handler: 'terminalLengthDisable' },
+    'terminal-length-default': { handler: 'terminalLengthDefault' },
+    'show-api-status': { handler: 'showApiStatus' },
+    'show-bmp-status': { handler: 'showBmpStatus' },
+    'show-bmp-client': {
+        handler: 'showBmpClients',
+        params: { 1: 'clientId', 2: 'verbose' }
+    },
+    'show-bmp-session': {
+        handler: 'showBmpSessions',
+        params: { 1: 'clientId', 2: 'sessionId', 3: 'verbose' }
+    },
+    'show-bmp-instance': {
+        handler: 'showBmpInstances',
+        params: { 1: 'clientId', 2: 'instanceId', 3: 'verbose' }
+    },
+    'show-bmp-route-session': {
+        handler: 'showBmpRoutes',
+        params: {
+            1: 'clientId',
+            2: 'sessionId',
+            3: 'af',
+            4: 'ribType',
+            5: 'routeState',
+            6: 'prefixFilter',
+            7: 'routeKey',
+            8: 'verbose'
+        }
+    },
+    'show-bmp-route-instance': {
+        handler: 'showBmpInstanceRoutes',
+        params: {
+            1: 'clientId',
+            2: 'instanceId',
+            3: 'routeState',
+            4: 'prefixFilter',
+            5: 'routeKey',
+            6: 'verbose'
+        }
+    },
+    'show-bmp-statistic-session': {
+        handler: 'showBmpSessionStatistics',
+        params: { 1: 'clientId', 2: 'reportId', 3: 'verbose' }
+    },
+    'show-bmp-statistic-instance': {
+        handler: 'showBmpInstanceStatistics',
+        params: { 1: 'clientId', 2: 'reportId', 3: 'verbose' }
+    }
+};
 
 class CliHandlers {
     constructor(server) {
@@ -48,10 +99,20 @@ class CliHandlers {
     }
 
     async dispatch(session, match) {
-        const handler = this.handlers.get(match.command.handler);
-        if (!handler) {
-            throw new CliCommandError(`No handler registered: ${match.command.handler}`);
+        const group = CLI_GROUPS[match.command.groupId];
+        if (!group) {
+            throw new CliCommandError(`No command group registered: ${match.command.groupId}`);
         }
+
+        const handler = this.handlers.get(group.handler);
+        if (!handler) {
+            throw new CliCommandError(`No handler registered: ${group.handler}`);
+        }
+
+        match.command.toView = group.toView || null;
+        match.command.clearContext = Boolean(group.clearContext);
+        match.command.context = group.context || [];
+        match.args = mapCfgArgs(match.cfgArgs, group.params);
         await handler(session, match.args, match);
     }
 
@@ -59,8 +120,7 @@ class CliHandlers {
         session.write(
             formatTable(this.server.tree.collectCommandRows(), [
                 { key: 'view', title: 'View' },
-                { key: 'id', title: 'Id' },
-                { key: 'handler', title: 'Handler' },
+                { key: 'group', title: 'Group' },
                 { key: 'command', title: 'Command' }
             ])
         );
@@ -143,7 +203,9 @@ class CliHandlers {
     }
 
     showBmpStatus(session) {
-        session.writeLine(`BMP running: ${this.server.bmpApp && this.server.bmpApp.getBmpRunning() ? 'true' : 'false'}`);
+        session.writeLine(
+            `BMP running: ${this.server.bmpApp && this.server.bmpApp.getBmpRunning() ? 'true' : 'false'}`
+        );
     }
 
     async showBmpClients(session, args, match) {
@@ -189,12 +251,13 @@ class CliHandlers {
                     session: bmpSession,
                     af,
                     ribType,
-                    routeKey,
-                    includeSummary: isVerboseCommand(match)
+                    routeKey
                 })
             );
             const normalizedRoute = normalizeRouteForCli(route);
-            session.write(isVerboseCommand(match) ? formatJson(normalizedRoute) : this.formatSingleRoute(normalizedRoute));
+            session.write(
+                isVerboseCommand(match) ? formatJson(normalizedRoute) : this.formatSingleRoute(normalizedRoute)
+            );
             return;
         }
 
@@ -220,12 +283,13 @@ class CliHandlers {
                 this.server.bmpApp.queryBgpInstanceRouteDetail({
                     client,
                     instance,
-                    routeKey,
-                    includeSummary: isVerboseCommand(match)
+                    routeKey
                 })
             );
             const normalizedRoute = normalizeRouteForCli(route);
-            session.write(isVerboseCommand(match) ? formatJson(normalizedRoute) : this.formatSingleRoute(normalizedRoute));
+            session.write(
+                isVerboseCommand(match) ? formatJson(normalizedRoute) : this.formatSingleRoute(normalizedRoute)
+            );
             return;
         }
 
@@ -331,7 +395,9 @@ class CliHandlers {
         const instances = await this.queryInstanceRows(session, client);
         const instance = instances.find(item => String(item.__cliId) === String(instanceId));
         if (!instance) {
-            throw new CliCommandError(`instance-id ${instanceId}不存在，请先执行 show bmp instance client-id ${clientId}`);
+            throw new CliCommandError(
+                `instance-id ${instanceId}不存在，请先执行 show bmp instance client-id ${clientId}`
+            );
         }
         return { client, instance };
     }
@@ -341,7 +407,9 @@ class CliHandlers {
         const reports = await this.querySessionStatisticsRows(session, client);
         const report = reports.find(item => String(item.__cliId) === String(reportId));
         if (!report) {
-            throw new CliCommandError(`report-id ${reportId}不存在，请先执行 show bmp statistic session client-id ${clientId}`);
+            throw new CliCommandError(
+                `report-id ${reportId}不存在，请先执行 show bmp statistic session client-id ${clientId}`
+            );
         }
         return report;
     }
@@ -351,7 +419,9 @@ class CliHandlers {
         const reports = await this.queryInstanceStatisticsRows(session, client);
         const report = reports.find(item => String(item.__cliId) === String(reportId));
         if (!report) {
-            throw new CliCommandError(`report-id ${reportId}不存在，请先执行 show bmp statistic instance client-id ${clientId}`);
+            throw new CliCommandError(
+                `report-id ${reportId}不存在，请先执行 show bmp statistic instance client-id ${clientId}`
+            );
         }
         return report;
     }
@@ -384,7 +454,11 @@ class CliHandlers {
         return formatTable(instances, [
             { key: '__cliId', title: 'ID' },
             { key: 'instanceRd', title: 'RD' },
-            { key: 'addrFamilyType', title: 'AF', formatter: row => formatKeyword(row.addrFamilyType, BGP_ADDR_FAMILY_LABELS) },
+            {
+                key: 'addrFamilyType',
+                title: 'AF',
+                formatter: row => formatKeyword(row.addrFamilyType, BGP_ADDR_FAMILY_LABELS)
+            },
             { key: 'instanceIp', title: 'PeerIP' },
             { key: 'instanceAs', title: 'PeerAS' },
             { key: 'instanceState', title: 'State' },
@@ -395,8 +469,16 @@ class CliHandlers {
     formatSessionStatisticsList(reports) {
         return formatTable(reports, [
             { key: '__cliId', title: 'ID' },
-            { key: 'peer', title: 'Peer', formatter: row => `${row.session?.sessionIp || '-'} AS ${row.session?.sessionAs || '-'}` },
-            { key: 'statistics', title: 'Stats', formatter: row => (Array.isArray(row.statistics) ? row.statistics.length : 0) },
+            {
+                key: 'peer',
+                title: 'Peer',
+                formatter: row => `${row.session?.sessionIp || '-'} AS ${row.session?.sessionAs || '-'}`
+            },
+            {
+                key: 'statistics',
+                title: 'Stats',
+                formatter: row => (Array.isArray(row.statistics) ? row.statistics.length : 0)
+            },
             { key: 'tlvs', title: 'TLVs', formatter: row => (Array.isArray(row.tlvs) ? row.tlvs.length : 0) },
             { key: 'updatedAt', title: 'UpdatedAt' }
         ]);
@@ -405,8 +487,16 @@ class CliHandlers {
     formatInstanceStatisticsList(reports) {
         return formatTable(reports, [
             { key: '__cliId', title: 'ID' },
-            { key: 'instance', title: 'Instance', formatter: row => `${row.instance?.instanceType ?? '-'} ${row.instance?.instanceRd || '-'}` },
-            { key: 'statistics', title: 'Stats', formatter: row => (Array.isArray(row.statistics) ? row.statistics.length : 0) },
+            {
+                key: 'instance',
+                title: 'Instance',
+                formatter: row => `${row.instance?.instanceType ?? '-'} ${row.instance?.instanceRd || '-'}`
+            },
+            {
+                key: 'statistics',
+                title: 'Stats',
+                formatter: row => (Array.isArray(row.statistics) ? row.statistics.length : 0)
+            },
             { key: 'tlvs', title: 'TLVs', formatter: row => (Array.isArray(row.tlvs) ? row.tlvs.length : 0) },
             { key: 'updatedAt', title: 'UpdatedAt' }
         ]);
@@ -467,7 +557,11 @@ class CliHandlers {
         output += '\r\n';
         output += formatTable(list, [
             { key: 'routeState', title: 'State' },
-            { key: 'addrFamilyType', title: 'AF', formatter: row => formatKeyword(row.addrFamilyType, BGP_ADDR_FAMILY_LABELS) },
+            {
+                key: 'addrFamilyType',
+                title: 'AF',
+                formatter: row => formatKeyword(row.addrFamilyType, BGP_ADDR_FAMILY_LABELS)
+            },
             { key: 'prefix', title: 'Prefix', formatter: row => formatPrefix(row) },
             { key: 'rd', title: 'RD' },
             { key: 'nextHop', title: 'NextHop' },
@@ -492,7 +586,17 @@ class CliHandlers {
 }
 
 function isVerboseCommand(match) {
-    return String(match?.command?.id || '').endsWith('-verbose');
+    return match?.args?.verbose === true;
+}
+
+function mapCfgArgs(cfgArgs = {}, params = {}) {
+    const args = {};
+    Object.entries(params).forEach(([cfgId, name]) => {
+        if (cfgArgs[cfgId] !== undefined) {
+            args[name] = cfgArgs[cfgId];
+        }
+    });
+    return args;
 }
 
 function parseRouteKeyArg(routeKey) {
@@ -601,12 +705,7 @@ function getInstanceStatisticsKey(report) {
 }
 
 function buildKeywordMap(source) {
-    return new Map(
-        Object.entries(source).map(([key, value]) => [
-            key.toLowerCase().replace(/_/gu, '-'),
-            value
-        ])
-    );
+    return new Map(Object.entries(source).map(([key, value]) => [key.toLowerCase().replace(/_/gu, '-'), value]));
 }
 
 function invertKeywordMap(keywordMap) {
@@ -618,7 +717,9 @@ function invertKeywordMap(keywordMap) {
 }
 
 function normalizeKeyword(value) {
-    return String(value ?? '').trim().toLowerCase();
+    return String(value ?? '')
+        .trim()
+        .toLowerCase();
 }
 
 function parseKeywordValue(value, keywordMap, name) {

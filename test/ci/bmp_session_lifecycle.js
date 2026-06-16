@@ -64,7 +64,11 @@ assert.strictEqual(replacement.sysName, null, 'fresh BMP session should not inhe
 assert.strictEqual(replacement.messageBuffer.length, 0, 'fresh BMP session should not inherit buffered bytes');
 
 const reconnectTerminationEvents = events.filter(event => event.type === BmpConst.BMP_EVT_TYPES.TERMINATION);
-assert.strictEqual(reconnectTerminationEvents.length, 1, 'same-key reconnect should emit one termination for the old BMP session');
+assert.strictEqual(
+    reconnectTerminationEvents.length,
+    1,
+    'same-key reconnect should emit one termination for the old BMP session'
+);
 assert.strictEqual(reconnectTerminationEvents[0].payload.data.sysName, 'old-router');
 
 const replacementKey = BmpSession.makeKey(

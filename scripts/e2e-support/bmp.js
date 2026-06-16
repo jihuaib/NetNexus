@@ -1,5 +1,89 @@
-const bmpBrowserMockScript =
-    "(function installBmpApiMocks() {\n    const unifiedCallbacks = [];\n\n    window.__bmpE2eEmit = (type, data) => {\n        unifiedCallbacks.forEach(callback => callback({ type, data }));\n    };\n\n    window.commonApi = {\n        onUnifiedEvent: callback => {\n            unifiedCallbacks.push(callback);\n            return () => {\n                const index = unifiedCallbacks.indexOf(callback);\n                if (index >= 0) {\n                    unifiedCallbacks.splice(index, 1);\n                }\n            };\n        },\n        notifyRendererReady: () => {},\n        getServerDeploymentStatus: async () => ({\n            status: 'success',\n            data: { success: true }\n        }),\n        openDeveloperOptions: () => {},\n        openSoftwareInfo: () => {}\n    };\n\n    window.bmpApi = {\n        saveBmpConfig: config => window.__bmpE2eCall('saveBmpConfig', config),\n        loadBmpConfig: () => window.__bmpE2eCall('loadBmpConfig'),\n        startBmp: config => window.__bmpE2eCall('startBmp', config),\n        stopBmp: () => window.__bmpE2eCall('stopBmp'),\n        getClientList: () => window.__bmpE2eCall('getClientList'),\n        getBgpSessions: client => window.__bmpE2eCall('getBgpSessions', client),\n        getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState, prefixFilter) =>\n            window.__bmpE2eCall('getBgpRoutes', {\n                client,\n                session,\n                af,\n                ribType,\n                page,\n                pageSize,\n                routeState,\n                prefixFilter\n            }),\n        getBgpRouteDetail: (client, session, af, ribType, routeKey, includeSummary = false) =>\n            window.__bmpE2eCall('getBgpRouteDetail', {\n                client,\n                session,\n                af,\n                ribType,\n                routeKey,\n                includeSummary\n            }),\n        getBgpInstances: client => window.__bmpE2eCall('getBgpInstances', client),\n        getBgpInstanceRoutes: (client, instance, page, pageSize, routeState, prefixFilter) =>\n            window.__bmpE2eCall('getBgpInstanceRoutes', {\n                client,\n                instance,\n                page,\n                pageSize,\n                routeState,\n                prefixFilter\n            }),\n        getBgpInstanceRouteDetail: (client, instance, routeKey, includeSummary = false) =>\n            window.__bmpE2eCall('getBgpInstanceRouteDetail', {\n                client,\n                instance,\n                routeKey,\n                includeSummary\n            }),\n        purgeStaleBgpRoutes: (client, session, af, ribType) =>\n            window.__bmpE2eCall('purgeStaleBgpRoutes', {\n                client,\n                session,\n                af,\n                ribType\n            }),\n        purgeStaleBgpInstanceRoutes: (client, instance) =>\n            window.__bmpE2eCall('purgeStaleBgpInstanceRoutes', {\n                client,\n                instance\n            }),\n        getBgpStatisticsReports: client => window.__bmpE2eCall('getBgpStatisticsReports', client),\n        getBgpInstanceStatisticsReports: client => window.__bmpE2eCall('getBgpInstanceStatisticsReports', client)\n    };\n})();\n";
+const bmpBrowserMockScript = `
+(function installBmpApiMocks() {
+    const unifiedCallbacks = [];
+
+    window.__bmpE2eEmit = (type, data) => {
+        unifiedCallbacks.forEach(callback => callback({ type, data }));
+    };
+
+    window.commonApi = {
+        onUnifiedEvent: callback => {
+            unifiedCallbacks.push(callback);
+            return () => {
+                const index = unifiedCallbacks.indexOf(callback);
+                if (index >= 0) {
+                    unifiedCallbacks.splice(index, 1);
+                }
+            };
+        },
+        notifyRendererReady: () => {},
+        getServerDeploymentStatus: async () => ({
+            status: 'success',
+            data: { success: true }
+        }),
+        openDeveloperOptions: () => {},
+        openSoftwareInfo: () => {}
+    };
+
+    window.bmpApi = {
+        saveBmpConfig: config => window.__bmpE2eCall('saveBmpConfig', config),
+        loadBmpConfig: () => window.__bmpE2eCall('loadBmpConfig'),
+        startBmp: config => window.__bmpE2eCall('startBmp', config),
+        stopBmp: () => window.__bmpE2eCall('stopBmp'),
+        getClientList: () => window.__bmpE2eCall('getClientList'),
+        getBgpSessions: client => window.__bmpE2eCall('getBgpSessions', client),
+        getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState, prefixFilter) =>
+            window.__bmpE2eCall('getBgpRoutes', {
+                client,
+                session,
+                af,
+                ribType,
+                page,
+                pageSize,
+                routeState,
+                prefixFilter
+            }),
+        getBgpRouteDetail: (client, session, af, ribType, routeKey) =>
+            window.__bmpE2eCall('getBgpRouteDetail', {
+                client,
+                session,
+                af,
+                ribType,
+                routeKey
+            }),
+        getBgpInstances: client => window.__bmpE2eCall('getBgpInstances', client),
+        getBgpInstanceRoutes: (client, instance, page, pageSize, routeState, prefixFilter) =>
+            window.__bmpE2eCall('getBgpInstanceRoutes', {
+                client,
+                instance,
+                page,
+                pageSize,
+                routeState,
+                prefixFilter
+            }),
+        getBgpInstanceRouteDetail: (client, instance, routeKey) =>
+            window.__bmpE2eCall('getBgpInstanceRouteDetail', {
+                client,
+                instance,
+                routeKey
+            }),
+        purgeStaleBgpRoutes: (client, session, af, ribType) =>
+            window.__bmpE2eCall('purgeStaleBgpRoutes', {
+                client,
+                session,
+                af,
+                ribType
+            }),
+        purgeStaleBgpInstanceRoutes: (client, instance) =>
+            window.__bmpE2eCall('purgeStaleBgpInstanceRoutes', {
+                client,
+                instance
+            }),
+        getBgpStatisticsReports: client => window.__bmpE2eCall('getBgpStatisticsReports', client),
+        getBgpInstanceStatisticsReports: client => window.__bmpE2eCall('getBgpInstanceStatisticsReports', client)
+    };
+})();
+`;
 
 const BmpE2eController = (() => {
     const net = require('net');
@@ -10,8 +94,7 @@ const BmpE2eController = (() => {
 
     const projectRoot = path.join(__dirname, '..', '..');
     const workspaceElectronRoot = path.join(projectRoot, 'electron');
-    const electronRoot =
-        process.env.E2E_TARGET === 'browser' ? workspaceElectronRoot : findPackagedElectronRoot();
+    const electronRoot = process.env.E2E_TARGET === 'browser' ? workspaceElectronRoot : findPackagedElectronRoot();
     const BmpConst = require(path.join(electronRoot, 'const', 'bmpConst'));
     const BmpSession = require(path.join(electronRoot, 'worker', 'bmp', 'bmpSession'));
     const RouteUpdateAggregator = require(path.join(electronRoot, 'utils', 'routeUpdateAggregator'));
@@ -81,6 +164,8 @@ const BmpE2eController = (() => {
             this.savedConfig = null;
             this.server = null;
             this.mockClient = null;
+            this.mockClientExitPromise = null;
+            this.lastMockClientExit = null;
             this.mockClientOutput = '';
             this.timeline = [];
             this.lastRouteQuerySnapshot = null;
@@ -239,8 +324,7 @@ const BmpE2eController = (() => {
                         af: data.af,
                         ribType: data.ribType,
                         routeKey: data.routeKey,
-                        route: this.summarizeRoute(data.route),
-                        includeSummary: data.includeSummary === true
+                        route: this.summarizeRoute(data.route)
                     };
                 case 'getBgpInstanceRoutes':
                     return {
@@ -256,8 +340,7 @@ const BmpE2eController = (() => {
                         client: this.summarizeClient(data.client),
                         instance: this.summarizeInstance(data.instance),
                         routeKey: data.routeKey,
-                        route: this.summarizeRoute(data.route),
-                        includeSummary: data.includeSummary === true
+                        route: this.summarizeRoute(data.route)
                     };
                 case 'getBgpSessions':
                 case 'getBgpInstances':
@@ -305,8 +388,7 @@ const BmpE2eController = (() => {
                     status: response.status,
                     msg: response.msg || '',
                     route: this.summarizeRoute(data),
-                    communities: data?.communities,
-                    summary: data?.summary
+                    communities: data?.communities
                 };
             }
             return {
@@ -465,7 +547,6 @@ const BmpE2eController = (() => {
 
         async stopBmp() {
             this.record('stopping BMP server');
-            await this.stopMockClient();
             this.worker.clearRouteUpdateAggregation?.();
 
             for (const session of this.worker.bmpSessionMap.values()) {
@@ -508,6 +589,8 @@ const BmpE2eController = (() => {
 
             await this.stopMockClient();
             this.mockClientOutput = '';
+            this.lastMockClientExit = null;
+            this.mockClientExitPromise = null;
             this.record('starting mockBmpClient script', {
                 routes,
                 interval,
@@ -533,6 +616,23 @@ const BmpE2eController = (() => {
                     stdio: ['ignore', 'pipe', 'pipe']
                 }
             );
+
+            this.mockClientExitPromise = new Promise(resolve => {
+                const child = this.mockClient;
+                child.once('exit', (code, signal) => {
+                    const exitInfo = {
+                        code,
+                        signal,
+                        output: this.mockClientOutput
+                    };
+                    this.lastMockClientExit = exitInfo;
+                    if (this.mockClient === child) {
+                        this.mockClient = null;
+                    }
+                    this.record('mockBmpClient exited', { code, signal });
+                    resolve(exitInfo);
+                });
+            });
 
             await new Promise((resolve, reject) => {
                 const timeout = setTimeout(() => {
@@ -684,8 +784,55 @@ const BmpE2eController = (() => {
             this.record('mockBmpClient stopped');
         }
 
+        async disconnectMockClient({ timeout = 5000 } = {}) {
+            if (!this.mockClient) {
+                throw new Error('BMP mock client has not been started');
+            }
+
+            const child = this.mockClient;
+            if (child.exitCode === null && child.signalCode === null) {
+                child.kill('SIGINT');
+            }
+
+            const exitInfo = await this.waitForMockClientExit({ timeout });
+            await this.waitForNoClients({ timeout });
+            return exitInfo;
+        }
+
+        async waitForMockClientExit({ timeout = 5000 } = {}) {
+            if (this.lastMockClientExit) {
+                return this.lastMockClientExit;
+            }
+
+            if (!this.mockClientExitPromise) {
+                throw new Error('BMP mock client has not been started');
+            }
+
+            return Promise.race([
+                this.mockClientExitPromise,
+                new Promise((_, reject) => {
+                    setTimeout(() => {
+                        reject(new Error(`Timed out waiting for BMP mock client exit:\n${this.mockClientOutput}`));
+                    }, timeout);
+                })
+            ]);
+        }
+
+        async waitForNoClients({ timeout = 5000 } = {}) {
+            const deadline = Date.now() + timeout;
+            while (Date.now() < deadline) {
+                const result = this.invokeWorker('getClientList', null);
+                if (result.status === 'success' && result.data.length === 0) {
+                    return true;
+                }
+                await delay(50);
+            }
+            throw new Error('Timed out waiting for BMP client list to become empty');
+        }
+
         async cleanup() {
             await this.stopBmp();
+            await this.stopMockClient();
         }
     }
 

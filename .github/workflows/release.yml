@@ -1,164 +1,164 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag, for example v4.0.9"
-        required: true
-        type: string
+    push:
+        tags:
+            - 'v*'
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: 'Release tag, for example v4.0.9'
+                required: true
+                type: string
 
 permissions:
-  contents: write
+    contents: write
 
 env:
-  CSC_IDENTITY_AUTO_DISCOVERY: "false"
-  NODE_VERSION: "16.20.2"
+    CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    NODE_VERSION: '16.20.2'
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+    lint:
+        name: Lint
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
 
-      - name: Verify Node.js version
-        run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+            - name: Verify Node.js version
+              run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
 
-      - name: Install dependencies
-        run: npm ci
+            - name: Install dependencies
+              run: npm ci
 
-      - name: Run lint
-        run: npm run lint
+            - name: Run lint
+              run: npm run lint
 
-      - name: Run tests
-        run: npm test
+            - name: Run tests
+              run: npm test
 
-  build-windows:
-    name: Build Windows
-    needs: lint
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+    build-windows:
+        name: Build Windows
+        needs: lint
+        runs-on: windows-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
 
-      - name: Verify Node.js version
-        run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+            - name: Verify Node.js version
+              run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
 
-      - name: Install dependencies
-        run: npm ci
+            - name: Install dependencies
+              run: npm ci
 
-      - name: Build Windows installer
-        run: npm run dist -- --publish never
+            - name: Build Windows installer
+              run: npm run dist -- --publish never
 
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows
-          path: |
-            release/*.exe
-            release/latest.yml
-            release/*.blockmap
-          if-no-files-found: error
-          retention-days: 7
+            - name: Upload Windows artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows
+                  path: |
+                      release/*.exe
+                      release/latest.yml
+                      release/*.blockmap
+                  if-no-files-found: error
+                  retention-days: 7
 
-  build-macos:
-    name: Build macOS
-    needs: lint
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+    build-macos:
+        name: Build macOS
+        needs: lint
+        runs-on: macos-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
 
-      - name: Verify Node.js version
-        run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+            - name: Verify Node.js version
+              run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
 
-      - name: Install dependencies
-        run: npm ci
+            - name: Install dependencies
+              run: npm ci
 
-      - name: Build macOS packages
-        run: npm run dist:mac:all -- --publish never
+            - name: Build macOS packages
+              run: npm run dist:mac:all -- --publish never
 
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/latest-mac.yml
-            release/*.blockmap
-          if-no-files-found: error
-          retention-days: 7
+            - name: Upload macOS artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: macos
+                  path: |
+                      release/*.dmg
+                      release/*.zip
+                      release/latest-mac.yml
+                      release/*.blockmap
+                  if-no-files-found: error
+                  retention-days: 7
 
-  publish:
-    name: Publish GitHub Release
-    needs:
-      - build-windows
-      - build-macos
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+    publish:
+        name: Publish GitHub Release
+        needs:
+            - build-windows
+            - build-macos
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        env:
+            GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+            RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-assets
-          merge-multiple: true
+            - name: Download artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  path: release-assets
+                  merge-multiple: true
 
-      - name: List release assets
-        run: ls -lah release-assets
+            - name: List release assets
+              run: ls -lah release-assets
 
-      - name: Verify release token
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "RELEASE_TOKEN secret is not configured"
-            exit 1
-          fi
+            - name: Verify release token
+              run: |
+                  if [ -z "$GH_TOKEN" ]; then
+                    echo "RELEASE_TOKEN secret is not configured"
+                    exit 1
+                  fi
 
-      - name: Create or update release
-        run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release-assets/* --clobber
-          else
-            gh release create "$RELEASE_TAG" release-assets/* \
-              --title "NetNexus $RELEASE_TAG" \
-              --notes "自动发布 $RELEASE_TAG" \
-              --target "$GITHUB_SHA"
-          fi
+            - name: Create or update release
+              run: |
+                  if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+                    gh release upload "$RELEASE_TAG" release-assets/* --clobber
+                  else
+                    gh release create "$RELEASE_TAG" release-assets/* \
+                      --title "NetNexus $RELEASE_TAG" \
+                      --notes "自动发布 $RELEASE_TAG" \
+                      --target "$GITHUB_SHA"
+                  fi

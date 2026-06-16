@@ -61,10 +61,7 @@ async function writeFileBreakingHardlink(filePath, contents) {
         return;
     }
 
-    const tempPath = path.join(
-        path.dirname(filePath),
-        `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
-    );
+    const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
 
     try {
         await fs.writeFile(tempPath, contents, { mode: stat.mode });
@@ -109,9 +106,7 @@ async function minifyElectronRoot(electronRoot) {
     const savedBytes = beforeBytes - afterBytes;
     const savedPercent = beforeBytes > 0 ? ((savedBytes / beforeBytes) * 100).toFixed(1) : '0.0';
 
-    console.log(
-        `[minify-electron-js] minified ${files.length} files, saved ${savedBytes} bytes (${savedPercent}%)`
-    );
+    console.log(`[minify-electron-js] minified ${files.length} files, saved ${savedBytes} bytes (${savedPercent}%)`);
 }
 
 async function minifyElectronJs(context) {

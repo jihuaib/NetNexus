@@ -27,7 +27,7 @@ function prepareWorkspace() {
 
     linkDirectory(path.join(projectRoot, 'node_modules'), path.join(tempRoot, 'node_modules'));
 
-    const optionalLinks = ['scripts', 'bgpdata'];
+    const optionalLinks = ['scripts'];
     for (const dirName of optionalLinks) {
         const source = path.join(projectRoot, dirName);
         if (fs.existsSync(source)) {

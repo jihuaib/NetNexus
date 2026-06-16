@@ -22,6 +22,10 @@ function getArgValue(name, defaultValue) {
     return Number.isFinite(value) && value > 0 ? value : defaultValue;
 }
 
+function hasArg(name) {
+    return process.argv.includes(`--${name}`);
+}
+
 function formatMs(ms) {
     return `${ms.toFixed(2)} ms`;
 }
@@ -38,6 +42,9 @@ function formatBytes(bytes) {
 }
 
 function getMemoryUsage() {
+    if (typeof global.gc === 'function') {
+        global.gc();
+    }
     const usage = process.memoryUsage();
     return {
         rss: usage.rss,
@@ -72,24 +79,30 @@ function ipFromIndex(index) {
     return `10.${second}.${third}.${fourth}`;
 }
 
-function makeRoute(session, index) {
+function makeRoute(session, index, options = {}) {
+    const samePrefix = options.samePrefix === true;
+    const sameAttr = options.sameAttr === true;
     const route = new BmpBgpRoute(session, null);
-    route.pathId = 0;
+    route.pathId = samePrefix ? index : 0;
     route.rd = '0:0';
-    route.ip = ipFromIndex(index);
-    route.mask = 32;
+    route.ip = samePrefix ? '10.0.0.0' : ipFromIndex(index);
+    route.mask = samePrefix ? 24 : 32;
     route.afi = AFI;
     route.safi = SAFI;
-    route.origin = 'IGP';
-    route.asPath = '65000 65001';
-    route.nextHop = '192.0.2.1';
-    route.med = index % 100;
-    route.localPref = 100;
+    route.assignRouteAttr({
+        origin: 'IGP',
+        asPath: '65000 65001',
+        nextHop: '192.0.2.1',
+        med: sameAttr ? 0 : index % 100,
+        localPref: 100,
+        communities: sameAttr ? '65000:1 65000:2' : null,
+        otc: sameAttr ? 65000 : null
+    });
     route.routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
     return route;
 }
 
-function buildSession(routeCount) {
+function buildSession(routeCount, options = {}) {
     const session = new BmpBgpSession(null);
     session.sessionType = 0;
     session.sessionRd = '0:0';
@@ -101,7 +114,7 @@ function buildSession(routeCount) {
 
     const routeMap = session.bgpRoutes.get(`${AFI}|${SAFI}`).get(RIB_TYPE);
     for (let i = 0; i < routeCount; i += 1) {
-        const route = makeRoute(session, i);
+        const route = makeRoute(session, i, options);
         const routeKey = route.getRouteKey();
         routeMap.set(routeKey, route);
         session.recordRouteAdd(AFI, SAFI, RIB_TYPE, route);
@@ -109,6 +122,10 @@ function buildSession(routeCount) {
     }
 
     return { session, routeMap };
+}
+
+function getExpectedPageLength(total, page, pageSize) {
+    return Math.max(0, Math.min(pageSize, total - (page - 1) * pageSize));
 }
 
 function getPagedRouteResult(routeMap, options) {
@@ -166,18 +183,28 @@ function main() {
     const routeCount = getArgValue('routes', DEFAULT_ROUTE_COUNT);
     const page = getArgValue('page', DEFAULT_PAGE);
     const pageSize = getArgValue('pageSize', DEFAULT_PAGE_SIZE);
-    const exactPrefix = ipFromIndex(Math.floor(routeCount / 2));
+    const samePrefix = hasArg('samePrefix');
+    const sameAttr = hasArg('sameAttr');
+    const exactPrefix = samePrefix ? '10.0.0.0/24' : ipFromIndex(Math.floor(routeCount / 2));
     const missingPrefix = '203.0.113.255';
-    const scanText = '.255';
+    const scanText = samePrefix ? '10.0.0' : '.255';
+    const exactExpectedTotal = samePrefix ? routeCount : 1;
+    const exactExpectedList = getExpectedPageLength(exactExpectedTotal, page, pageSize);
+    const detailPathId = samePrefix ? Math.floor(routeCount / 2) : 0;
+    const detailIp = samePrefix ? '10.0.0.0' : exactPrefix;
+    const detailMask = samePrefix ? 24 : 32;
 
-    console.log(`BMP route scale benchmark: routes=${routeCount}, page=${page}, pageSize=${pageSize}`);
+    console.log(
+        `BMP route scale benchmark: routes=${routeCount}, page=${page}, pageSize=${pageSize}, samePrefix=${samePrefix}, sameAttr=${sameAttr}`
+    );
     printMemory('before');
 
     const { result: built } = timeStep('build route map + prefix index + route summary', () =>
-        buildSession(routeCount)
+        buildSession(routeCount, { samePrefix, sameAttr })
     );
     const { session, routeMap } = built;
     printMemory('after build');
+    console.log(`route attr entries: ${session.attrStore.attrMap.size}`);
 
     timeStep('route update aggregation enqueue x routes', () => {
         const aggregator = new RouteUpdateAggregator();
@@ -222,7 +249,7 @@ function main() {
             prefixFilter: exactPrefix,
             getIndexedRouteKeys: prefixKey => session.getRouteKeysByPrefix(AFI, SAFI, RIB_TYPE, prefixKey)
         });
-        if (result.total !== 1 || result.list.length !== 1) {
+        if (result.total !== exactExpectedTotal || result.list.length !== exactExpectedList) {
             throw new Error(`unexpected exact query result: total=${result.total}, list=${result.list.length}`);
         }
     });
@@ -254,11 +281,14 @@ function main() {
     });
 
     timeStep('route detail lookup by route key', () => {
-        const routeKey = BmpBgpRoute.makeKey(0, '0:0', exactPrefix, 32);
+        const routeKey = BmpBgpRoute.makeKey(detailPathId, '0:0', detailIp, detailMask);
         const route = routeMap.get(routeKey);
-        const detail = route ? route.getRouteInfo({ includeSummary: false }) : null;
+        const detail = route ? route.getRouteInfo() : null;
         if (!detail || detail.routeKey !== routeKey) {
             throw new Error(`unexpected detail lookup: ${routeKey}`);
+        }
+        if (sameAttr && detail.attrRefCount !== routeCount) {
+            throw new Error(`unexpected attr ref count: ${detail.attrRefCount}`);
         }
     });
 

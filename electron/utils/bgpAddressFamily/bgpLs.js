@@ -1,4 +1,3 @@
-
 const BgpConst = require('../../const/bgpConst');
 const { ipv4BufferToString, ipv6BufferToString, rdBufferToString } = require('../ipUtils');
 const { formatIpAddressList } = require('./common');

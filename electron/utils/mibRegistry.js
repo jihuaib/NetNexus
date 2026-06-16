@@ -121,7 +121,11 @@ class MibRegistry {
             ...pending.map(filePath => ({
                 filePath,
                 fileName: path.basename(filePath),
-                msg: this.getWaitingDependencyMessage(metadata.get(filePath), loadedModuleNames, lastErrors.get(filePath))
+                msg: this.getWaitingDependencyMessage(
+                    metadata.get(filePath),
+                    loadedModuleNames,
+                    lastErrors.get(filePath)
+                )
             }))
         ];
 
@@ -589,10 +593,9 @@ class MibRegistry {
         const objectName = definition.ObjectName || definition.NAME || oid;
         const moduleName = definition.ModuleName || '';
         const accessCapabilities = this.getAccessCapabilities(definition);
-        const parentOid =
-            Object.prototype.hasOwnProperty.call(options, 'parentOid') ?
-                options.parentOid :
-                this.findNearestParentOid(oid, this.oidIndex);
+        const parentOid = Object.prototype.hasOwnProperty.call(options, 'parentOid')
+            ? options.parentOid
+            : this.findNearestParentOid(oid, this.oidIndex);
         const childOids = this.oidChildIndex.get(oid) || [];
         const queryMetadata = this.getNodeQueryMetadata(
             oid,
@@ -878,7 +881,9 @@ class MibRegistry {
     shouldTranslateValue(rawType, value) {
         const typeName = this.getObjectTypeName(rawType);
         const looksLikeOid = typeof value === 'string' && /^\d+(?:\.\d+)*$/.test(value);
-        return looksLikeOid && (typeName === 'OID' || typeName === 'ObjectIdentifier' || typeName === 'OBJECT IDENTIFIER');
+        return (
+            looksLikeOid && (typeName === 'OID' || typeName === 'ObjectIdentifier' || typeName === 'OBJECT IDENTIFIER')
+        );
     }
 
     formatValue(value) {

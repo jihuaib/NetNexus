@@ -106,18 +106,8 @@ const mockRouteDetail = {
     staleEpoch: null,
     lastSeenAt: '2026-06-12T00:00:00.000Z',
     staleAt: null,
-    staleReason: null,
-    summary: 'BGP UPDATE summary'
+    staleReason: null
 };
-
-function makeMockRouteDetail(includeSummary = false) {
-    if (includeSummary) {
-        return mockRouteDetail;
-    }
-
-    const { summary: _summary, ...detail } = mockRouteDetail;
-    return detail;
-}
 
 const mockStatisticsReport = {
     client: mockClient,
@@ -189,8 +179,7 @@ function makeMockBmpApp() {
         },
         async queryBgpRouteDetail(payload) {
             assert.strictEqual(payload.routeKey, mockRoute.routeKey);
-            assert.strictEqual(payload.includeSummary, true);
-            return successResponse(makeMockRouteDetail(payload.includeSummary), 'mock route detail');
+            return successResponse(mockRouteDetail, 'mock route detail');
         },
         async queryBgpInstanceRoutes(payload) {
             assert.strictEqual(payload.instance.addrFamilyType, 3);
@@ -206,8 +195,7 @@ function makeMockBmpApp() {
         },
         async queryBgpInstanceRouteDetail(payload) {
             assert.strictEqual(payload.routeKey, mockRoute.routeKey);
-            assert.strictEqual(payload.includeSummary, false);
-            return successResponse(makeMockRouteDetail(payload.includeSummary), 'mock instance route detail');
+            return successResponse(mockRouteDetail, 'mock instance route detail');
         },
         async queryBgpStatisticsReports(client) {
             assert.strictEqual(client.localPort, mockClient.localPort);
@@ -249,7 +237,9 @@ function requestJson(port, method, path, options = {}) {
                 method,
                 path,
                 headers: {
-                    ...(requestBody ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(requestBody) } : {}),
+                    ...(requestBody
+                        ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(requestBody) }
+                        : {}),
                     ...headers
                 }
             },
@@ -362,12 +352,40 @@ async function main() {
                 }
             ],
             ['GET', '/api/v1/bmp/status', undefined, response => assert.strictEqual(response.body.data.running, true)],
-            ['GET', '/api/v1/bmp/clients', undefined, response => assert.strictEqual(response.body.data[0].sysName, 'ci-router')],
-            ['POST', '/api/v1/bmp/sessions', { client: mockClient }, response => assert.strictEqual(response.body.data[0].sessionAs, 65001)],
-            ['POST', '/api/v1/bmp/instances', { client: mockClient }, response => assert.strictEqual(response.body.data[0].addrFamilyType, 3)],
+            [
+                'GET',
+                '/api/v1/bmp/clients',
+                undefined,
+                response => assert.strictEqual(response.body.data[0].sysName, 'ci-router')
+            ],
+            [
+                'POST',
+                '/api/v1/bmp/sessions',
+                { client: mockClient },
+                response => assert.strictEqual(response.body.data[0].sessionAs, 65001)
+            ],
+            [
+                'POST',
+                '/api/v1/bmp/instances',
+                { client: mockClient },
+                response => assert.strictEqual(response.body.data[0].addrFamilyType, 3)
+            ],
             ['POST', '/api/v1/bmp/routes', routePayload, response => assert.strictEqual(response.body.data.total, 1)],
-            ['POST', '/api/v1/bmp/routes/detail', { ...routePayload, routeKey: mockRoute.routeKey, includeSummary: true }, response => assert.strictEqual(response.body.data.summary, 'BGP UPDATE summary')],
-            ['POST', '/api/v1/bmp/instances/routes', instanceRoutePayload, response => assert.strictEqual(response.body.data.list[0].routeKey, mockRoute.routeKey)],
+            [
+                'POST',
+                '/api/v1/bmp/routes/detail',
+                { ...routePayload, routeKey: mockRoute.routeKey },
+                response => {
+                    assert.strictEqual(response.body.data.nlriDetail.routeTypeName, 'MAC/IP Advertisement');
+                    assert.strictEqual(Object.prototype.hasOwnProperty.call(response.body.data, 'summary'), false);
+                }
+            ],
+            [
+                'POST',
+                '/api/v1/bmp/instances/routes',
+                instanceRoutePayload,
+                response => assert.strictEqual(response.body.data.list[0].routeKey, mockRoute.routeKey)
+            ],
             [
                 'POST',
                 '/api/v1/bmp/instances/routes/detail',
@@ -377,8 +395,18 @@ async function main() {
                     assert.strictEqual(Object.prototype.hasOwnProperty.call(response.body.data, 'summary'), false);
                 }
             ],
-            ['POST', '/api/v1/bmp/statistics/session', { client: mockClient }, response => assert.strictEqual(response.body.data[0].statistics[0].value, 1)],
-            ['POST', '/api/v1/bmp/statistics/instance', { client: mockClient }, response => assert.strictEqual(response.body.data[0].instance.vrfTableNames[0], 'global')]
+            [
+                'POST',
+                '/api/v1/bmp/statistics/session',
+                { client: mockClient },
+                response => assert.strictEqual(response.body.data[0].statistics[0].value, 1)
+            ],
+            [
+                'POST',
+                '/api/v1/bmp/statistics/instance',
+                { client: mockClient },
+                response => assert.strictEqual(response.body.data[0].instance.vrfTableNames[0], 'global')
+            ]
         ];
 
         for (const [method, path, body, extraAssert] of endpointChecks) {
@@ -393,12 +421,7 @@ async function main() {
             'ROUTE_NOT_FOUND',
             'unknown route'
         );
-        assertError(
-            await checkedRequest(port, 'GET', '/api/v1/bmp/routes'),
-            405,
-            'METHOD_NOT_ALLOWED',
-            'wrong method'
-        );
+        assertError(await checkedRequest(port, 'GET', '/api/v1/bmp/routes'), 405, 'METHOD_NOT_ALLOWED', 'wrong method');
         assertError(
             await checkedRequest(port, 'POST', '/api/v1/bmp/sessions', { rawBody: '{"client":' }),
             400,

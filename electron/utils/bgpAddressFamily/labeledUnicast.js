@@ -1,4 +1,3 @@
-
 const BgpConst = require('../../const/bgpConst');
 const { ipv4BufferToString, ipv6BufferToString } = require('../ipUtils');
 const { parseMplsLabelStack, formatIpAddressList } = require('./common');
@@ -22,12 +21,11 @@ function parseLabeledUnicastNlri(buffer, position, afi) {
         errors.push(`Labeled Unicast NLRI length is too short: ${nlriBitLength}`);
     }
 
-    const { labels, labelBits, position: prefixPosition } = parseMplsLabelStack(
-        buffer,
-        position,
-        nlriBitLength,
-        Math.min(nlriEnd, buffer.length)
-    );
+    const {
+        labels,
+        labelBits,
+        position: prefixPosition
+    } = parseMplsLabelStack(buffer, position, nlriBitLength, Math.min(nlriEnd, buffer.length));
     position = prefixPosition;
     if (labels.length === 0) {
         errors.push('Labeled Unicast NLRI has no MPLS label');
@@ -36,8 +34,7 @@ function parseLabeledUnicastNlri(buffer, position, afi) {
     }
 
     const prefixLength = Math.max(nlriBitLength - labelBits, 0);
-    const maxPrefixLength =
-        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
+    const maxPrefixLength = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
     if (prefixLength > maxPrefixLength) {
         errors.push(`Labeled Unicast prefix length ${prefixLength} exceeds AFI maximum ${maxPrefixLength}`);
     }
@@ -92,8 +89,7 @@ function parseLabeledUnicastWithdrawalNlri(buffer, position, afi) {
     }
 
     const prefixLength = Math.max(nlriBitLength - 24, 0);
-    const maxPrefixLength =
-        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
+    const maxPrefixLength = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
     if (prefixLength > maxPrefixLength) {
         errors.push(`Labeled Unicast withdrawal prefix length ${prefixLength} exceeds AFI maximum ${maxPrefixLength}`);
     }

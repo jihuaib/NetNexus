@@ -128,7 +128,10 @@ class SnmpWorker {
                 logger.warn(`部分MIB编译失败: ${JSON.stringify(mibSummary.failedFiles)}`);
             }
 
-            this.receiver = snmp.createReceiver(this.buildReceiverOptions(config), this.handleReceiverCallback.bind(this));
+            this.receiver = snmp.createReceiver(
+                this.buildReceiverOptions(config),
+                this.handleReceiverCallback.bind(this)
+            );
             this.configureAuthorizer(this.receiver.getAuthorizer(), config);
             await this.waitForReceiverSockets();
 

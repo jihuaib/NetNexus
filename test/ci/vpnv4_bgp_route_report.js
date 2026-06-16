@@ -118,7 +118,13 @@ function vpnv4Nlri(variant, variantIndex, routeIndex) {
 function vpnv4Update(variant, variantIndex, routeIndex) {
     const { rd, nlri } = vpnv4Nlri(variant, variantIndex, routeIndex);
     const nextHop = Buffer.concat([rd, ipBytes('192.0.2.254')]);
-    const mpReachValue = Buffer.concat([u16(AFI), Buffer.from([SAFI, nextHop.length]), nextHop, Buffer.from([0]), nlri]);
+    const mpReachValue = Buffer.concat([
+        u16(AFI),
+        Buffer.from([SAFI, nextHop.length]),
+        nextHop,
+        Buffer.from([0]),
+        nlri
+    ]);
     const attrs = Buffer.concat([
         pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
         pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, mpReachValue, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL)
@@ -129,7 +135,9 @@ function vpnv4Update(variant, variantIndex, routeIndex) {
 function parseVpnv4Route(variant, variantIndex, routeIndex) {
     const parsedPacket = parseBgpPacket(vpnv4Update(variant, variantIndex, routeIndex));
     assert.equal(parsedPacket.valid, true, parsedPacket.error || `VPNv4 variant ${variant.name} should parse`);
-    const mpReach = parsedPacket.pathAttributes.find(attr => attr.typeCode === BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI).mpReach;
+    const mpReach = parsedPacket.pathAttributes.find(
+        attr => attr.typeCode === BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI
+    ).mpReach;
     assert.equal(mpReach.afi, AFI);
     assert.equal(mpReach.safi, SAFI);
     assert.equal(mpReach.nextHop, '192.0.2.254');
@@ -184,7 +192,10 @@ function makeClient() {
 }
 
 function makeBmpSession(client) {
-    const bmpSession = new BmpSession({ sendEvent() {} }, { bmpConfigData: { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 } });
+    const bmpSession = new BmpSession(
+        { sendEvent() {} },
+        { bmpConfigData: { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 } }
+    );
     bmpSession.localIp = client.localIp;
     bmpSession.localPort = client.localPort;
     bmpSession.remoteIp = client.remoteIp;
@@ -300,8 +311,14 @@ function assertVariantsPresent(routes) {
     });
 
     assert.deepEqual([...rdKinds].sort(), ['as2', 'as4', 'ip']);
-    assert.deepEqual([...prefixLengths].sort((a, b) => a - b), [16, 24, 25, 30, 32]);
-    assert.deepEqual([...labelCounts].sort((a, b) => a - b), [1, 2]);
+    assert.deepEqual(
+        [...prefixLengths].sort((a, b) => a - b),
+        [16, 24, 25, 30, 32]
+    );
+    assert.deepEqual(
+        [...labelCounts].sort((a, b) => a - b),
+        [1, 2]
+    );
 }
 
 function main() {
@@ -319,7 +336,10 @@ function main() {
         BmpBgpInstance.makeKey(locRibInstance.instanceType, locRibInstance.instanceRd, AFI, SAFI),
         locRibInstance
     );
-    worker.bmpSessionMap.set(BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort), bmpSession);
+    worker.bmpSessionMap.set(
+        BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort),
+        bmpSession
+    );
 
     const { sessionRouteMap, samples } = populateVpnv4Routes(bgpSession, locRibInstance);
     assert.equal(sessionRouteMap.size, ROUTE_COUNT);
@@ -351,9 +371,24 @@ function main() {
     };
     const lastPage = Math.ceil(ROUTE_COUNT / PAGE_SIZE);
 
-    assertPage(callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }), ROUTE_COUNT, 1, PAGE_SIZE);
-    assertPage(callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }), ROUTE_COUNT, 2, PAGE_SIZE);
-    assertPage(callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: lastPage, pageSize: PAGE_SIZE }), ROUTE_COUNT, lastPage, PAGE_SIZE);
+    assertPage(
+        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }),
+        ROUTE_COUNT,
+        1,
+        PAGE_SIZE
+    );
+    assertPage(
+        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }),
+        ROUTE_COUNT,
+        2,
+        PAGE_SIZE
+    );
+    assertPage(
+        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: lastPage, pageSize: PAGE_SIZE }),
+        ROUTE_COUNT,
+        lastPage,
+        PAGE_SIZE
+    );
     assertPage(
         callWorker(worker, 'getBgpInstanceRoutes', { ...instanceQuery, page: 1, pageSize: PAGE_SIZE }),
         ROUTE_COUNT,
@@ -399,15 +434,13 @@ function main() {
 
     const sessionDetail = callWorker(worker, 'getBgpRouteDetail', {
         ...sessionQuery,
-        routeKey: samples['as4-rd-16-two-label'].getRouteKey(),
-        includeSummary: true
+        routeKey: samples['as4-rd-16-two-label'].getRouteKey()
     });
     assert.equal(sessionDetail.addrFamilyType, AF);
     assert.equal(sessionDetail.mask, 16);
     assert.equal(sessionDetail.nlriDetail.labels.length, 2);
     assert.equal(sessionDetail.labels.includes('(BOS)'), true);
-    assert.ok(sessionDetail.summary.includes('BGP UPDATE Message'));
-    assert.ok(sessionDetail.summary.includes('IPv4/VPN'));
+    assert.equal(Object.prototype.hasOwnProperty.call(sessionDetail, 'summary'), false);
 
     const locRibDetail = callWorker(worker, 'getBgpInstanceRouteDetail', {
         ...instanceQuery,

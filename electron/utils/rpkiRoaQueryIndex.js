@@ -1,14 +1,6 @@
 const fs = require('fs');
-const {
-    makeRoaStorageKey,
-    normalizeRoaObject,
-    fileExists
-} = require('./rpkiRoaImport');
-const {
-    normalizeRoutePrefixPart,
-    buildRoutePrefixQuery,
-    routeMatchesPrefixQuery
-} = require('./routePrefixUtils');
+const { makeRoaStorageKey, normalizeRoaObject, fileExists } = require('./rpkiRoaImport');
+const { normalizeRoutePrefixPart, buildRoutePrefixQuery, routeMatchesPrefixQuery } = require('./routePrefixUtils');
 
 const INDEX_BUILD_YIELD_EVERY = 5000;
 
@@ -318,8 +310,7 @@ class RpkiRoaQueryIndex {
 
     hasResidualScan(filters, prefixQuery) {
         return Boolean(
-            filters.prefixText &&
-                (prefixQuery.mode !== 'index' || (prefixQuery.key || '').startsWith('cidr:'))
+            filters.prefixText && (prefixQuery.mode !== 'index' || (prefixQuery.key || '').startsWith('cidr:'))
         );
     }
 

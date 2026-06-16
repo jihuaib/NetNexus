@@ -10,7 +10,19 @@ const DEFAULT_OPTIONS = {
     localAs: 100,
     routerId: '192.0.2.2',
     holdTime: 90,
-    once: false
+    once: false,
+    addressFamilies: ['ipv4-unc']
+};
+
+const ADDRESS_FAMILY_CAPS = {
+    'ipv4-unc': {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    },
+    'ipv4-qp': {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_QP
+    }
 };
 
 function getArgValue(name, defaultValue) {
@@ -28,6 +40,36 @@ function getArgValue(name, defaultValue) {
 
 function hasArg(name) {
     return process.argv.includes(`--${name}`);
+}
+
+function getArgValues(name) {
+    const prefix = `--${name}`;
+    const values = [];
+    for (let index = 0; index < process.argv.length; index++) {
+        const item = process.argv[index];
+        if (item === prefix && process.argv[index + 1]) {
+            values.push(process.argv[index + 1]);
+            index += 1;
+        } else if (item.startsWith(`${prefix}=`)) {
+            values.push(item.slice(prefix.length + 1));
+        }
+    }
+    return values;
+}
+
+function parseAddressFamilies(values) {
+    const families = values
+        .flatMap(value => `${value}`.split(','))
+        .map(value => value.trim().toLowerCase())
+        .filter(Boolean);
+    const selected = families.length > 0 ? families : DEFAULT_OPTIONS.addressFamilies;
+
+    return selected.map(family => {
+        if (!ADDRESS_FAMILY_CAPS[family]) {
+            throw new Error(`Unsupported address family: ${family}`);
+        }
+        return family;
+    });
 }
 
 function u16(value) {
@@ -59,12 +101,16 @@ function optionalParam(value) {
     return Buffer.concat([Buffer.from([BgpConst.BGP_OPEN_OPT_TYPE.OPT_TYPE, value.length]), value]);
 }
 
-function buildOpen({ localAs, routerId, holdTime }) {
-    const capabilities = Buffer.concat([
-        capability(
+function buildOpen({ localAs, routerId, holdTime, addressFamilies }) {
+    const mpCapabilities = addressFamilies.map(family => {
+        const { afi, safi } = ADDRESS_FAMILY_CAPS[family];
+        return capability(
             BgpConst.BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS,
-            Buffer.concat([u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4), Buffer.from([0, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST])])
-        ),
+            Buffer.concat([u16(afi), Buffer.from([0, safi])])
+        );
+    });
+    const capabilities = Buffer.concat([
+        ...mpCapabilities,
         capability(BgpConst.BGP_OPEN_CAP_CODE.ROUTE_REFRESH),
         capability(BgpConst.BGP_OPEN_CAP_CODE.FOUR_OCTET_AS, u32(localAs))
     ]);
@@ -89,6 +135,29 @@ function emit(event, data = {}) {
     process.stdout.write(`${JSON.stringify({ event, ...data })}\n`);
 }
 
+function summarizeUpdatePacket(parsed) {
+    const pathAttributes = Array.isArray(parsed.pathAttributes) ? parsed.pathAttributes : [];
+    const mpReachAttr = pathAttributes.find(attr => attr.mpReach);
+    const mpReach = mpReachAttr?.mpReach || null;
+
+    return {
+        valid: parsed.valid,
+        error: parsed.error || '',
+        nlriCount: Array.isArray(parsed.nlri) ? parsed.nlri.length : 0,
+        withdrawnCount: Array.isArray(parsed.withdrawnRoutes) ? parsed.withdrawnRoutes.length : 0,
+        pathAttrTypes: pathAttributes.map(attr => attr.typeCode),
+        pathAttrCount: pathAttributes.length,
+        mpReach: mpReach
+            ? {
+                  afi: mpReach.afi,
+                  safi: mpReach.safi,
+                  nextHop: mpReach.nextHop,
+                  nlriCount: Array.isArray(mpReach.nlri) ? mpReach.nlri.length : 0
+              }
+            : null
+    };
+}
+
 function parseOptions() {
     return {
         host: getArgValue('host', DEFAULT_OPTIONS.host),
@@ -96,7 +165,8 @@ function parseOptions() {
         localAs: Number(getArgValue('local-as', DEFAULT_OPTIONS.localAs)),
         routerId: getArgValue('router-id', DEFAULT_OPTIONS.routerId),
         holdTime: Number(getArgValue('hold-time', DEFAULT_OPTIONS.holdTime)),
-        once: hasArg('once')
+        once: hasArg('once'),
+        addressFamilies: parseAddressFamilies(getArgValues('address-family'))
     };
 }
 
@@ -163,7 +233,8 @@ async function main() {
                 emit('received-update', {
                     updateCount,
                     length,
-                    summary
+                    summary,
+                    ...summarizeUpdatePacket(parsed)
                 });
                 if (options.once) {
                     socket.end();

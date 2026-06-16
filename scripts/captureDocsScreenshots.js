@@ -272,10 +272,7 @@ async function stopMockBmpClient(child) {
     }
 
     child.kill('SIGINT');
-    await Promise.race([
-        new Promise(resolve => child.once('exit', resolve)),
-        wait(1000)
-    ]);
+    await Promise.race([new Promise(resolve => child.once('exit', resolve)), wait(1000)]);
 
     if (child.exitCode === null) {
         child.kill('SIGTERM');

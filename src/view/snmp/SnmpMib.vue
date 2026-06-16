@@ -12,7 +12,11 @@
                             <template #icon><FolderOpenOutlined /></template>
                             导入目录
                         </a-button>
-                        <a-button :disabled="mibFiles.length === 0" :loading="mibCompileLoading" @click="compileStoredMibs">
+                        <a-button
+                            :disabled="mibFiles.length === 0"
+                            :loading="mibCompileLoading"
+                            @click="compileStoredMibs"
+                        >
                             <template #icon><ReloadOutlined /></template>
                             重新编译
                         </a-button>
@@ -68,7 +72,9 @@
                                 @right-click="handleTreeRightClick"
                                 @select="handleTreeSelect"
                             >
-                                <template #title="{ title, oid, moduleName, macro, canGet, canSet, notifyOnly, nodeRole }">
+                                <template
+                                    #title="{ title, oid, moduleName, macro, canGet, canSet, notifyOnly, nodeRole }"
+                                >
                                     <span class="mib-node-title" :data-tree-oid="oid">
                                         <span class="mib-node-name">{{ title }}</span>
                                         <span class="mib-node-oid">{{ oid }}</span>
@@ -123,7 +129,10 @@
                                     <a-descriptions-item label="访问">
                                         {{ selectedOidNode.maxAccess || '-' }}
                                     </a-descriptions-item>
-                                    <a-descriptions-item v-if="selectedOidNode.canGet || selectedOidNode.canSet" label="查询OID">
+                                    <a-descriptions-item
+                                        v-if="selectedOidNode.canGet || selectedOidNode.canSet"
+                                        label="查询OID"
+                                    >
                                         <a-typography-text copyable>
                                             {{ selectedOidNode.queryOid || selectedOidNode.oid }}
                                         </a-typography-text>
@@ -389,7 +398,11 @@
                     <a-col :span="12">
                         <a-form-item label="类型">
                             <a-select v-model:value="setForm.type">
-                                <a-select-option v-for="option in setTypeOptions" :key="option.value" :value="option.value">
+                                <a-select-option
+                                    v-for="option in setTypeOptions"
+                                    :key="option.value"
+                                    :value="option.value"
+                                >
                                     {{ option.label }}
                                 </a-select-option>
                             </a-select>
@@ -503,7 +516,12 @@
                         </a-col>
                         <a-col :xs="12" :md="6">
                             <a-form-item label="上限">
-                                <a-input-number v-model:value="walkForm.limit" :min="1" :max="1000" style="width: 100%" />
+                                <a-input-number
+                                    v-model:value="walkForm.limit"
+                                    :min="1"
+                                    :max="1000"
+                                    style="width: 100%"
+                                />
                             </a-form-item>
                         </a-col>
                         <a-col :xs="12" :md="6">
@@ -1047,7 +1065,9 @@
         if (!normalizedBaseOid || !normalizedOid || normalizedOid === normalizedBaseOid) {
             return '';
         }
-        return normalizedOid.startsWith(`${normalizedBaseOid}.`) ? normalizedOid.slice(normalizedBaseOid.length + 1) : '';
+        return normalizedOid.startsWith(`${normalizedBaseOid}.`)
+            ? normalizedOid.slice(normalizedBaseOid.length + 1)
+            : '';
     };
 
     const appendInstanceSuffix = (text, suffix) => {
@@ -1071,7 +1091,8 @@
     const getVarbindObjectName = varbind =>
         appendInstanceSuffix(varbind?.oidName || varbind?.oidObject || varbind?.oid, varbind?.oidInstance);
 
-    const getVarbindObjectPath = varbind => appendInstanceSuffix(varbind?.oidPath || varbind?.oid, varbind?.oidInstance);
+    const getVarbindObjectPath = varbind =>
+        appendInstanceSuffix(varbind?.oidPath || varbind?.oid, varbind?.oidInstance);
 
     const getInstanceObjectName = record => {
         const node = instanceTargetForm.value === 'set' ? setTargetNode.value : getTargetNode.value;

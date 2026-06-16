@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container adaptive-list-page">
+    <div class="mt-container adaptive-list-page" data-testid="rpki-config-page">
         <a-row class="adaptive-form-row">
             <a-col :span="24">
                 <a-card title="RPKI服务器配置">
@@ -10,6 +10,7 @@
                                     <a-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
                                         <a-input
                                             v-model:value="rpkiConfig.port"
+                                            data-testid="rpki-port-input"
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
                                     </a-tooltip>
@@ -106,6 +107,7 @@
                         <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
                             <a-space>
                                 <a-button
+                                    data-testid="rpki-start-button"
                                     type="primary"
                                     html-type="submit"
                                     :loading="serverLoading"
@@ -113,7 +115,13 @@
                                 >
                                     启动服务器
                                 </a-button>
-                                <a-button type="primary" danger :disabled="!serverRunning" @click="stopRpki">
+                                <a-button
+                                    data-testid="rpki-stop-button"
+                                    type="primary"
+                                    danger
+                                    :disabled="!serverRunning"
+                                    @click="stopRpki"
+                                >
                                     停止服务器
                                 </a-button>
                             </a-space>
@@ -129,6 +137,7 @@
                 <a-card title="RPKI客户端列表" class="adaptive-list-card">
                     <div>
                         <a-table
+                            data-testid="rpki-client-table"
                             :columns="clientColumns"
                             :data-source="clientList"
                             :row-key="

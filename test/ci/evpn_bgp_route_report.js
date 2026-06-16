@@ -61,18 +61,7 @@ function rdFromIndex(index) {
 }
 
 function esiFromIndex(index) {
-    return Buffer.from([
-        0,
-        1,
-        2,
-        3,
-        4,
-        5,
-        (index >> 16) & 0xff,
-        (index >> 8) & 0xff,
-        index & 0xff,
-        index % 251
-    ]);
+    return Buffer.from([0, 1, 2, 3, 4, 5, (index >> 16) & 0xff, (index >> 8) & 0xff, index & 0xff, index % 251]);
 }
 
 function macFromIndex(index) {
@@ -96,7 +85,11 @@ function labelEntry(value) {
 }
 
 function multicastSourceGroupOrigin(index) {
-    return Buffer.concat([evpnIpField(unicastIp(index)), evpnIpField(multicastGroup(index)), evpnIpField(unicastIp(index + 1))]);
+    return Buffer.concat([
+        evpnIpField(unicastIp(index)),
+        evpnIpField(multicastGroup(index)),
+        evpnIpField(unicastIp(index + 1))
+    ]);
 }
 
 function evpnRouteBody(routeType, index) {
@@ -154,7 +147,13 @@ function evpnRouteBody(routeType, index) {
 
 function evpnUpdate(routeType, index) {
     const nlri = evpnNlri(routeType, evpnRouteBody(routeType, index));
-    const mpReachValue = Buffer.concat([u16(AFI), Buffer.from([SAFI, 4]), ipBytes('192.0.2.1'), Buffer.from([0]), nlri]);
+    const mpReachValue = Buffer.concat([
+        u16(AFI),
+        Buffer.from([SAFI, 4]),
+        ipBytes('192.0.2.1'),
+        Buffer.from([0]),
+        nlri
+    ]);
     const vxlanEncapsulationCommunity = Buffer.concat([Buffer.from([0x03, 0x0c, 0, 0, 0, 0]), u16(8)]);
     const attrs = Buffer.concat([
         pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
@@ -171,7 +170,9 @@ function evpnUpdate(routeType, index) {
 function parseEvpnRoute(routeType, index) {
     const parsedPacket = parseBgpPacket(evpnUpdate(routeType, index));
     assert.equal(parsedPacket.valid, true, parsedPacket.error || `EVPN route type ${routeType} should parse`);
-    const mpReach = parsedPacket.pathAttributes.find(attr => attr.typeCode === BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI).mpReach;
+    const mpReach = parsedPacket.pathAttributes.find(
+        attr => attr.typeCode === BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI
+    ).mpReach;
     assert.equal(mpReach.afi, AFI);
     assert.equal(mpReach.safi, SAFI);
     assert.equal(mpReach.nlri.length, 1);
@@ -223,7 +224,10 @@ function makeClient() {
 }
 
 function makeBmpSession(client) {
-    const bmpSession = new BmpSession({ sendEvent() {} }, { bmpConfigData: { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 } });
+    const bmpSession = new BmpSession(
+        { sendEvent() {} },
+        { bmpConfigData: { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 } }
+    );
     bmpSession.localIp = client.localIp;
     bmpSession.localPort = client.localPort;
     bmpSession.remoteIp = client.remoteIp;
@@ -313,7 +317,10 @@ function populateEvpnRoutes(bgpSession, locRibInstance) {
         }
     });
 
-    assert.deepEqual([...seenTypes].sort((a, b) => a - b), EVPN_ROUTE_TYPES);
+    assert.deepEqual(
+        [...seenTypes].sort((a, b) => a - b),
+        EVPN_ROUTE_TYPES
+    );
     return { sessionRouteMap, samples };
 }
 
@@ -328,7 +335,10 @@ function assertPage(result, total, page, pageSize) {
 
 function assertRouteTypesPresent(routes) {
     const routeTypes = new Set(routes.map(route => route.nlriDetail.routeType));
-    assert.deepEqual([...routeTypes].sort((a, b) => a - b), EVPN_ROUTE_TYPES);
+    assert.deepEqual(
+        [...routeTypes].sort((a, b) => a - b),
+        EVPN_ROUTE_TYPES
+    );
 }
 
 function main() {
@@ -346,7 +356,10 @@ function main() {
         BmpBgpInstance.makeKey(locRibInstance.instanceType, locRibInstance.instanceRd, AFI, SAFI),
         locRibInstance
     );
-    worker.bmpSessionMap.set(BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort), bmpSession);
+    worker.bmpSessionMap.set(
+        BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort),
+        bmpSession
+    );
 
     const { sessionRouteMap, samples } = populateEvpnRoutes(bgpSession, locRibInstance);
     assert.equal(sessionRouteMap.size, ROUTE_COUNT);
@@ -377,10 +390,24 @@ function main() {
         routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
     };
 
-    assertPage(callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }), ROUTE_COUNT, 1, PAGE_SIZE);
-    assertPage(callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }), ROUTE_COUNT, 2, PAGE_SIZE);
     assertPage(
-        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: Math.ceil(ROUTE_COUNT / PAGE_SIZE), pageSize: PAGE_SIZE }),
+        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }),
+        ROUTE_COUNT,
+        1,
+        PAGE_SIZE
+    );
+    assertPage(
+        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }),
+        ROUTE_COUNT,
+        2,
+        PAGE_SIZE
+    );
+    assertPage(
+        callWorker(worker, 'getBgpRoutes', {
+            ...sessionQuery,
+            page: Math.ceil(ROUTE_COUNT / PAGE_SIZE),
+            pageSize: PAGE_SIZE
+        }),
         ROUTE_COUNT,
         Math.ceil(ROUTE_COUNT / PAGE_SIZE),
         PAGE_SIZE
@@ -435,13 +462,11 @@ function main() {
 
     const sessionDetail = callWorker(worker, 'getBgpRouteDetail', {
         ...sessionQuery,
-        routeKey: samples[11].getRouteKey(),
-        includeSummary: true
+        routeKey: samples[11].getRouteKey()
     });
     assert.equal(sessionDetail.routeType, 11);
     assert.equal(sessionDetail.nlriDetail.routeTypeName, 'Leaf A-D');
-    assert.ok(sessionDetail.summary.includes('BGP UPDATE Message'));
-    assert.ok(sessionDetail.summary.includes('L2VPN/EVPN'));
+    assert.equal(Object.prototype.hasOwnProperty.call(sessionDetail, 'summary'), false);
 
     const locRibDetail = callWorker(worker, 'getBgpInstanceRouteDetail', {
         ...instanceQuery,

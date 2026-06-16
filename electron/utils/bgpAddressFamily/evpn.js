@@ -1,4 +1,3 @@
-
 const BgpConst = require('../../const/bgpConst');
 const { ipv4BufferToString, ipv6BufferToString, rdBufferToString } = require('../ipUtils');
 const { formatIpAddressList } = require('./common');
@@ -626,7 +625,8 @@ function parseEvpnMacIpAdvertisementRoute(routeType, routeLength, routeValue) {
 
     const ipLength = position < routeValue.length ? routeValue[position] : 0;
     position += 1;
-    const ipBytes = ipLength === 0 ? 0 : ipLength === BgpConst.IP_HOST_LEN ? 4 : ipLength === BgpConst.IPV6_HOST_LEN ? 16 : null;
+    const ipBytes =
+        ipLength === 0 ? 0 : ipLength === BgpConst.IP_HOST_LEN ? 4 : ipLength === BgpConst.IPV6_HOST_LEN ? 16 : null;
     if (ipBytes !== null) {
         const expectedLength = 8 + 10 + 4 + 1 + 6 + 1 + ipBytes + 3;
         if (routeLength !== expectedLength && routeLength !== expectedLength + 3) {

@@ -12,12 +12,7 @@
 
                 <template v-if="settingsForm.mode === API_ACCESS_MODE.HTTP">
                     <a-form-item label="HTTP监听端口" name="port">
-                        <a-input-number
-                            v-model:value="settingsForm.port"
-                            :min="1"
-                            :max="65535"
-                            style="width: 100%"
-                        />
+                        <a-input-number v-model:value="settingsForm.port" :min="1" :max="65535" style="width: 100%" />
                     </a-form-item>
 
                     <a-form-item label="分页最大条数" name="maxPageSize">

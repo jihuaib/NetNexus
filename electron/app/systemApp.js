@@ -3,7 +3,12 @@ const { app, dialog, BrowserWindow } = require('electron');
 const Store = require('electron-store');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
-const { DEFAULT_LOG_SETTINGS, DEFAULT_TOOLS_SETTINGS, DEFAULT_UPDATE_SETTINGS, LOG_REQ_TYPES } = require('../const/toolsConst');
+const {
+    DEFAULT_LOG_SETTINGS,
+    DEFAULT_TOOLS_SETTINGS,
+    DEFAULT_UPDATE_SETTINGS,
+    LOG_REQ_TYPES
+} = require('../const/toolsConst');
 const { API_ACCESS_MODE, DEFAULT_API_SETTINGS } = require('../const/apiConst');
 const fs = require('fs');
 const path = require('path');

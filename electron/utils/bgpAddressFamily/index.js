@@ -1,10 +1,5 @@
-
 const BgpConst = require('../../const/bgpConst');
-const {
-    isSimpleIpNlri,
-    formatIpAddressList,
-    parseFallbackNlri
-} = require('./common');
+const { isSimpleIpNlri, formatIpAddressList, parseFallbackNlri } = require('./common');
 const { parseIpPrefixNlri, parseIpNextHop } = require('./ip');
 const {
     parseLabeledUnicastNlri,

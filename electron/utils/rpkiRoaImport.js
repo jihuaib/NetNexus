@@ -58,15 +58,7 @@ function normalizeInteger(value) {
 }
 
 function getPrefixParts(item) {
-    const prefix = pickField(item, [
-        'prefix',
-        'ipPrefix',
-        'ip_prefix',
-        'IP Prefix',
-        'route',
-        'network',
-        'cidr'
-    ]);
+    const prefix = pickField(item, ['prefix', 'ipPrefix', 'ip_prefix', 'IP Prefix', 'route', 'network', 'cidr']);
 
     if (typeof prefix === 'string' && prefix.includes('/')) {
         const slashIndex = prefix.lastIndexOf('/');

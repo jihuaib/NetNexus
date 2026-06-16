@@ -318,8 +318,7 @@ class BgpApp {
         const config = key ? this.store.get(key) || {} : {};
         return {
             customAttr: config.customAttr || '',
-            rt: config.rt || '',
-            bsid: config.bsid || ''
+            rt: config.rt || ''
         };
     }
 
@@ -360,8 +359,7 @@ class BgpApp {
                 addressFamily,
                 routes,
                 announce,
-                instanceAttrs: this.getInstanceAttrsForFamily(addressFamily),
-                singleRouteSend: routes.some(route => route.asPath)
+                instanceAttrs: this.getInstanceAttrsForFamily(addressFamily)
             });
             if (result.status !== 'success') {
                 logger.error(`worker BGP路由恢复失败: ${result.msg}`);
@@ -645,11 +643,7 @@ class BgpApp {
     async handleDeleteIpv4Routes(event, config) {
         try {
             logger.info(`${JSON.stringify(config)}`);
-            return await this.deleteGeneratedRoutes(
-                config,
-                BgpConst.BGP_REQ_TYPES.DELETE_IPV4_ROUTES,
-                '路由删除成功'
-            );
+            return await this.deleteGeneratedRoutes(config, BgpConst.BGP_REQ_TYPES.DELETE_IPV4_ROUTES, '路由删除成功');
         } catch (error) {
             logger.error('Error deleting ipv4 routes:', error.message);
             return errorResponse(error.message);
@@ -659,11 +653,7 @@ class BgpApp {
     async handleDeleteIpv6Routes(event, config) {
         try {
             logger.info(`${JSON.stringify(config)}`);
-            return await this.deleteGeneratedRoutes(
-                config,
-                BgpConst.BGP_REQ_TYPES.DELETE_IPV6_ROUTES,
-                '路由删除成功'
-            );
+            return await this.deleteGeneratedRoutes(config, BgpConst.BGP_REQ_TYPES.DELETE_IPV6_ROUTES, '路由删除成功');
         } catch (error) {
             logger.error('Error deleting ipv6 routes:', error.message);
             return errorResponse(error.message);
@@ -935,8 +925,7 @@ class BgpApp {
                 const workerResult = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES, {
                     addressFamily,
                     routes,
-                    announce: true,
-                    singleRouteSend: true
+                    announce: true
                 });
                 const routeFilePath = await this.ensureBgpRouteFileStorage(addressFamily);
                 const writeResult = await upsertBgpRoutesToJsonl(routeFilePath, routes);
@@ -965,39 +954,29 @@ class BgpApp {
         const fs = require('fs').promises;
 
         try {
-            const bgpDataDir = path.join(__dirname, '../../bgpdata');
+            const defaultMrtFile = path.join(__dirname, '../../scripts/test-data/test_routes_100.mrt');
 
-            logger.info(`Scanning default MRT files in: ${bgpDataDir}`);
+            logger.info(`Loading default MRT file: ${defaultMrtFile}`);
 
-            // Check if directory exists
             try {
-                await fs.access(bgpDataDir);
+                await fs.access(defaultMrtFile);
             } catch (err) {
-                logger.warn(`bgpdata directory not found: ${bgpDataDir}`);
+                logger.warn(`Default MRT file not found: ${defaultMrtFile}`);
                 return successResponse([]);
             }
 
-            // Read directory contents
-            const files = await fs.readdir(bgpDataDir);
-            const fileList = [];
+            const stats = await fs.stat(defaultMrtFile);
+            const fileList = stats.isFile()
+                ? [
+                      {
+                          name: path.basename(defaultMrtFile),
+                          size: stats.size,
+                          path: defaultMrtFile
+                      }
+                  ]
+                : [];
 
-            for (const file of files) {
-                const filePath = path.join(bgpDataDir, file);
-                try {
-                    const stats = await fs.stat(filePath);
-                    if (stats.isFile()) {
-                        fileList.push({
-                            name: file,
-                            size: stats.size,
-                            path: filePath
-                        });
-                    }
-                } catch (err) {
-                    logger.warn(`Error reading file stats for ${file}:`, err.message);
-                }
-            }
-
-            logger.info(`Found ${fileList.length} default MRT files`);
+            logger.info(`Found ${fileList.length} default MRT file`);
             return successResponse(fileList);
         } catch (error) {
             logger.error('Error getting default MRT files:', error.message);

@@ -3,12 +3,9 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const WorkerMessageHandler = require(path.join(
-    __dirname,
-    '..',
-    '..',
-    'electron', 'worker', 'core', 'workerMessageHandler.js'
-));
+const WorkerMessageHandler = require(
+    path.join(__dirname, '..', '..', 'electron', 'worker', 'core', 'workerMessageHandler.js')
+);
 
 WorkerMessageHandler.prototype.init = function initForUnitTest() {};
 
@@ -16,14 +13,9 @@ const BgpWorker = require(path.join(__dirname, '..', '..', 'electron', 'worker',
 const BgpInstance = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpInstance.js'));
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
 const { getAfiAndSafi } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpUtils.js'));
-const { collectBgpGeneratedRoutes } = require(path.join(
-    __dirname,
-    '..',
-    '..',
-    'electron',
-    'utils',
-    'bgpRouteGenerator.js'
-));
+const { collectBgpGeneratedRoutes } = require(
+    path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpRouteGenerator.js')
+);
 
 function makeWorkerWithInstance(addressFamily) {
     const worker = new BgpWorker();
@@ -45,7 +37,7 @@ function makeWorkerWithInstance(addressFamily) {
 }
 
 function routeInfoList(instance) {
-    return Array.from(instance.routeMap.values()).map(route => route.getRouteInfo());
+    return Array.from(instance.routeMap.values()).map(route => route.getRouteInfo(instance.getRouteAttr(route)));
 }
 
 function assertGenerate(config, expectedRoutes) {
@@ -64,6 +56,15 @@ function assertGenerate(config, expectedRoutes) {
         })),
         expectedRoutes
     );
+    for (const route of instance.routeMap.values()) {
+        for (const field of ['nextHop', 'origin', 'asPath', 'med', 'localPref', 'communities', 'customAttr', 'rt']) {
+            assert.strictEqual(
+                Object.prototype.hasOwnProperty.call(route, field),
+                false,
+                `BgpRoute should not store path attribute field ${field}`
+            );
+        }
+    }
 
     return { worker, instance, responses, errors };
 }
@@ -81,7 +82,16 @@ function assertCollect(config, expectedRoutes) {
     );
 }
 
-function assertRouteDetail(worker, responses, errors, addressFamily, route, expectedDetail) {
+function assertRouteDetail(
+    worker,
+    responses,
+    errors,
+    addressFamily,
+    route,
+    expectedDetail,
+    expectedAttrId,
+    expectedAttrRefCount
+) {
     worker.getRouteDetail('detail', { addressFamily, route });
 
     assert.deepStrictEqual(errors, [], 'QP route detail should not report errors');
@@ -94,6 +104,18 @@ function assertRouteDetail(worker, responses, errors, addressFamily, route, expe
             nextHop: responses[1].data.nextHop
         },
         expectedDetail
+    );
+    assert.strictEqual(
+        Object.prototype.hasOwnProperty.call(responses[1].data, 'bsid'),
+        false,
+        'QP route detail should not expose global bsid'
+    );
+    assert.strictEqual(typeof responses[1].data.attrId, 'string', 'QP route detail should expose attrId');
+    assert.strictEqual(responses[1].data.attrId, expectedAttrId, 'QP route detail attrId should match route attrId');
+    assert.strictEqual(
+        responses[1].data.attrRefCount,
+        expectedAttrRefCount,
+        'QP route detail attrRefCount should match the shared route attribute count'
     );
 }
 
@@ -119,8 +141,19 @@ function assertRouteDetail(worker, responses, errors, addressFamily, route, expe
         { dqpn: 7, ip: '10.0.0.5', mask: 32, nextHop: '2001:db8::7' }
     ];
 
-    assertGenerate(config, expectedRoutes);
+    const { worker, instance, responses, errors } = assertGenerate(config, expectedRoutes);
     assertCollect(config, expectedRoutes);
+    const detailRouteKey = `${expectedRoutes[1].dqpn}|${expectedRoutes[1].ip}|${expectedRoutes[1].mask}`;
+    assertRouteDetail(
+        worker,
+        responses,
+        errors,
+        config.addressFamily,
+        expectedRoutes[1],
+        expectedRoutes[1],
+        instance.routeMap.get(detailRouteKey).attrId,
+        expectedRoutes.length
+    );
 }
 
 {
@@ -170,7 +203,17 @@ function assertRouteDetail(worker, responses, errors, addressFamily, route, expe
 
     const { worker, instance, responses, errors } = assertGenerate(config, expectedRoutes);
     assertCollect(config, expectedRoutes);
-    assertRouteDetail(worker, responses, errors, config.addressFamily, expectedRoutes[1], expectedRoutes[1]);
+    const detailRouteKey = `${expectedRoutes[1].dqpn}|${expectedRoutes[1].ip}|${expectedRoutes[1].mask}`;
+    assertRouteDetail(
+        worker,
+        responses,
+        errors,
+        config.addressFamily,
+        expectedRoutes[1],
+        expectedRoutes[1],
+        instance.routeMap.get(detailRouteKey).attrId,
+        1
+    );
 
     const deleteConfig = {
         ...config,

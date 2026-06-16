@@ -1,4 +1,3 @@
-
 const BgpConst = require('../../const/bgpConst');
 const { ipv4BufferToString, ipv6BufferToString } = require('../ipUtils');
 const { readBigEndianValue, getBit, setBit, parseFlowSpecLength, formatIpAddressList } = require('./common');

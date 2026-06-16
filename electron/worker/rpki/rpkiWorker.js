@@ -37,15 +37,9 @@ class RpkiWorker {
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ROA, this.addRoa.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ROA_BATCH, this.addRoaBatch.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA, this.deleteRoa.bind(this));
-        this.messageHandler.registerHandler(
-            RpkiConst.RPKI_REQ_TYPES.DELETE_ROA_BATCH,
-            this.deleteRoaBatch.bind(this)
-        );
+        this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA_BATCH, this.deleteRoaBatch.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.GET_CLIENT_LIST, this.getClientList.bind(this));
-        this.messageHandler.registerHandler(
-            RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY,
-            this.addRouterKey.bind(this)
-        );
+        this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY, this.addRouterKey.bind(this));
         this.messageHandler.registerHandler(
             RpkiConst.RPKI_REQ_TYPES.DELETE_ROUTER_KEY,
             this.deleteRouterKey.bind(this)
@@ -53,7 +47,10 @@ class RpkiWorker {
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, this.addAspa.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA_BATCH, this.addAspaBatch.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, this.deleteAspa.bind(this));
-        this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA_BATCH, this.deleteAspaBatch.bind(this));
+        this.messageHandler.registerHandler(
+            RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA_BATCH,
+            this.deleteAspaBatch.bind(this)
+        );
     }
 
     createRpkiSession(socket, clientAddress, clientPort) {
@@ -80,6 +77,22 @@ class RpkiWorker {
         });
 
         return rpkiSession;
+    }
+
+    removeRpkiSession(rpkiSession) {
+        if (!rpkiSession) {
+            return;
+        }
+
+        const sessionKey = RpkiSession.makeKey(
+            rpkiSession.localIp,
+            rpkiSession.localPort,
+            rpkiSession.remoteIp,
+            rpkiSession.remotePort
+        );
+        if (this.rpkiSessionMap.get(sessionKey) === rpkiSession) {
+            this.rpkiSessionMap.delete(sessionKey);
+        }
     }
 
     async startTcpServer(messageId) {
@@ -113,13 +126,11 @@ class RpkiWorker {
                     );
                     const rpkiSession = this.rpkiSessionMap.get(sessionKey);
                     if (!rpkiSession) {
-                        logger.error(`ipv6 Client ${clientAddress}:${clientPort} not found in rpkiSessionMap`);
-                        socket.destroy();
+                        logger.debug(`ipv4 Client ${clientAddress}:${clientPort} already removed on end`);
                         return;
-                    } else {
-                        rpkiSession.closeSession();
-                        this.rpkiSessionMap.delete(sessionKey);
                     }
+                    rpkiSession.closeSession();
+                    this.rpkiSessionMap.delete(sessionKey);
                     logger.info(`ipv4 Client ${clientAddress}:${clientPort} end`);
                 });
 
@@ -132,13 +143,11 @@ class RpkiWorker {
                     );
                     const rpkiSession = this.rpkiSessionMap.get(sessionKey);
                     if (!rpkiSession) {
-                        logger.error(`ipv6 Client ${clientAddress}:${clientPort} not found in rpkiSessionMap`);
-                        socket.destroy();
+                        logger.debug(`ipv4 Client ${clientAddress}:${clientPort} already removed on close`);
                         return;
-                    } else {
-                        rpkiSession.closeSession();
-                        this.rpkiSessionMap.delete(sessionKey);
                     }
+                    rpkiSession.closeSession();
+                    this.rpkiSessionMap.delete(sessionKey);
                     logger.info(`ipv4 Client ${clientAddress}:${clientPort} close`);
                 });
 
@@ -151,13 +160,11 @@ class RpkiWorker {
                     );
                     const rpkiSession = this.rpkiSessionMap.get(sessionKey);
                     if (!rpkiSession) {
-                        logger.error(`ipv6 Client ${clientAddress}:${clientPort} not found in rpkiSessionMap`);
-                        socket.destroy();
+                        logger.debug(`ipv4 Client ${clientAddress}:${clientPort} already removed on error`);
                         return;
-                    } else {
-                        rpkiSession.closeSession();
-                        this.rpkiSessionMap.delete(sessionKey);
                     }
+                    rpkiSession.closeSession();
+                    this.rpkiSessionMap.delete(sessionKey);
                     logger.error(`ipv4 TCP Error from ${clientAddress}:${clientPort}: ${err.message}`);
                 });
 
@@ -194,13 +201,11 @@ class RpkiWorker {
                     );
                     const rpkiSession = this.rpkiSessionMap.get(sessionKey);
                     if (!rpkiSession) {
-                        logger.error(`ipv6 Client ${clientAddress}:${clientPort} not found in rpkiSessionMap`);
-                        socket.destroy();
+                        logger.debug(`ipv6 Client ${clientAddress}:${clientPort} already removed on end`);
                         return;
-                    } else {
-                        rpkiSession.closeSession();
-                        this.rpkiSessionMap.delete(sessionKey);
                     }
+                    rpkiSession.closeSession();
+                    this.rpkiSessionMap.delete(sessionKey);
                     logger.info(`ipv6 Client ${clientAddress}:${clientPort} end`);
                 });
 
@@ -213,13 +218,11 @@ class RpkiWorker {
                     );
                     const rpkiSession = this.rpkiSessionMap.get(sessionKey);
                     if (!rpkiSession) {
-                        logger.error(`ipv6 Client ${clientAddress}:${clientPort} not found in rpkiSessionMap`);
-                        socket.destroy();
+                        logger.debug(`ipv6 Client ${clientAddress}:${clientPort} already removed on close`);
                         return;
-                    } else {
-                        rpkiSession.closeSession();
-                        this.rpkiSessionMap.delete(sessionKey);
                     }
+                    rpkiSession.closeSession();
+                    this.rpkiSessionMap.delete(sessionKey);
                     logger.info(`ipv6 Client ${clientAddress}:${clientPort} close`);
                 });
 
@@ -232,13 +235,11 @@ class RpkiWorker {
                     );
                     const rpkiSession = this.rpkiSessionMap.get(sessionKey);
                     if (!rpkiSession) {
-                        logger.error(`ipv6 Client ${clientAddress}:${clientPort} not found in rpkiSessionMap`);
-                        socket.destroy();
+                        logger.debug(`ipv6 Client ${clientAddress}:${clientPort} already removed on error`);
                         return;
-                    } else {
-                        rpkiSession.closeSession();
-                        this.rpkiSessionMap.delete(sessionKey);
                     }
+                    rpkiSession.closeSession();
+                    this.rpkiSessionMap.delete(sessionKey);
                     logger.error(`ipv6 TCP Error from ${clientAddress}:${clientPort}: ${err.message}`);
                 });
 
@@ -395,9 +396,11 @@ class RpkiWorker {
         this.rpkiConfigData = null;
 
         // 清空会话
+        const closeSessionPromises = [];
         this.rpkiSessionMap.forEach((session, _) => {
-            session.closeSession();
+            closeSessionPromises.push(session.closeSession({ graceful: true }));
         });
+        await Promise.all(closeSessionPromises);
         this.rpkiSessionMap.clear();
         this.rpkiRoaMap.clear();
         this.rpkiRouterKeyMap.clear();

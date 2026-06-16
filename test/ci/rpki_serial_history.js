@@ -3,12 +3,9 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const WorkerMessageHandler = require(path.join(
-    __dirname,
-    '..',
-    '..',
-    'electron', 'worker', 'core', 'workerMessageHandler.js'
-));
+const WorkerMessageHandler = require(
+    path.join(__dirname, '..', '..', 'electron', 'worker', 'core', 'workerMessageHandler.js')
+);
 
 WorkerMessageHandler.prototype.init = function initForUnitTest() {};
 
@@ -203,8 +200,15 @@ deltas = worker.getDeltaOperationsSince(worker.cacheSerial - 1);
 assert.strictEqual(deltas.length, 1, 'recent retained history should still be replayable');
 assert.strictEqual(deltas[0].action, 'three');
 
-worker.stopRpki('stop');
-assert.strictEqual(worker.serialHistory.length, 0, 'stopRpki should clear serial history');
-assert.strictEqual(worker.serialHistoryOperationCount, 0, 'stopRpki should reset history operation count');
+worker
+    .stopRpki('stop')
+    .then(() => {
+        assert.strictEqual(worker.serialHistory.length, 0, 'stopRpki should clear serial history');
+        assert.strictEqual(worker.serialHistoryOperationCount, 0, 'stopRpki should reset history operation count');
 
-console.log('RPKI serial history tests passed');
+        console.log('RPKI serial history tests passed');
+    })
+    .catch(error => {
+        console.error(error);
+        process.exit(1);
+    });

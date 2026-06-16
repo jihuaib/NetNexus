@@ -56,6 +56,8 @@ const BgpE2eController = (() => {
     const BgpConst = require(path.join(projectRoot, 'electron', 'const', 'bgpConst'));
     const BgpWorker = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpWorker'));
     const BgpSession = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpSession'));
+    const BgpInstance = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpInstance'));
+    const BgpRoute = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpRoute'));
 
     const BGP_EVENT_TYPE_TO_RENDERER_TYPE = {
         [BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE]: 'bgp:peerChange'
@@ -116,6 +118,10 @@ const BgpE2eController = (() => {
         return new Promise(resolve => {
             setTimeout(resolve, ms);
         });
+    }
+
+    function ipv4FromNumber(value) {
+        return `${(value >>> 24) & 0xff}.${(value >>> 16) & 0xff}.${(value >>> 8) & 0xff}.${value & 0xff}`;
     }
 
     class CaptureMessageHandler {
@@ -183,6 +189,7 @@ const BgpE2eController = (() => {
             this.mockClientLineBuffer = '';
             this.mockClientEvents = [];
             this.mockClientExit = null;
+            this.mockClientExitPromise = null;
             this.savedBgpConfig = null;
             this.savedIpv4PeerConfig = null;
             this.savedIpv6PeerConfig = null;
@@ -622,7 +629,6 @@ const BgpE2eController = (() => {
         }
 
         async stopBgp() {
-            await this.stopMockClient();
             if (!this.worker.bgpConfigData && !this.server) {
                 return successResponse(null, 'BGP未启动');
             }
@@ -666,7 +672,12 @@ const BgpE2eController = (() => {
             }
         }
 
-        async startMockClient({ localAs = 100, routerId = '192.0.2.2', holdTime = 90 } = {}) {
+        async startMockClient({
+            localAs = 100,
+            routerId = '192.0.2.2',
+            holdTime = 90,
+            addressFamilies = ['ipv4-unc']
+        } = {}) {
             if (!this.bgpPort) {
                 throw new Error('BGP server port has not been allocated');
             }
@@ -676,6 +687,7 @@ const BgpE2eController = (() => {
             this.mockClientLineBuffer = '';
             this.mockClientEvents = [];
             this.mockClientExit = null;
+            this.mockClientExitPromise = null;
 
             const scriptPath = path.join(projectRoot, 'scripts', 'mockBgpClient.js');
             this.record('starting mockBgpClient script', {
@@ -700,7 +712,9 @@ const BgpE2eController = (() => {
                     '--router-id',
                     routerId,
                     '--hold-time',
-                    String(holdTime)
+                    String(holdTime),
+                    '--address-family',
+                    addressFamilies.join(',')
                 ],
                 {
                     cwd: projectRoot,
@@ -714,9 +728,22 @@ const BgpE2eController = (() => {
                 this.mockClientExit = { error: error.message };
                 this.record('mockBgpClient error', { error: error.message });
             });
-            this.mockClient.once('exit', (code, signal) => {
-                this.mockClientExit = { code, signal };
-                this.record('mockBgpClient exited', { code, signal });
+            this.mockClientExitPromise = new Promise(resolve => {
+                const child = this.mockClient;
+                child.once('exit', (code, signal) => {
+                    const exitInfo = {
+                        code,
+                        signal,
+                        output: this.mockClientOutput,
+                        events: [...this.mockClientEvents]
+                    };
+                    this.mockClientExit = exitInfo;
+                    if (this.mockClient === child) {
+                        this.mockClient = null;
+                    }
+                    this.record('mockBgpClient exited', { code, signal });
+                    resolve(exitInfo);
+                });
             });
 
             await this.waitForClientEvent('connected', () => true, 10000);
@@ -760,11 +787,11 @@ const BgpE2eController = (() => {
             throw new Error(`Timed out waiting for mockBgpClient event ${eventName}:\n${this.mockClientOutput}`);
         }
 
-        async waitForPeerState(peerIp, state, timeout = 10000) {
+        async waitForPeerState(peerIp, state, timeout = 10000, addressFamily = BgpConst.BGP_ADDR_FAMILY.IPV4_UNC) {
             const deadline = Date.now() + timeout;
             while (Date.now() < deadline) {
                 const response = await this.invokeWorker('getPeerInfo', null);
-                const peers = response.data?.[BgpConst.BGP_ADDR_FAMILY.IPV4_UNC] || [];
+                const peers = response.data?.[addressFamily] || [];
                 const peer = peers.find(item => item.peerIp === peerIp && item.peerState === state);
                 if (peer) {
                     return peer;
@@ -773,6 +800,37 @@ const BgpE2eController = (() => {
             }
 
             throw new Error(`Timed out waiting for peer ${peerIp} to reach ${state}`);
+        }
+
+        seedInterleavedIpv4QpRoutes({
+            count = 5000,
+            baseIp = (10 << 24) + (90 << 16) + 1,
+            mask = 32,
+            dqpn = 7,
+            nextHopA = '2001:db8::a',
+            nextHopB = '2001:db8::b'
+        } = {}) {
+            const instance = this.worker.bgpInstanceMap.get(
+                BgpInstance.makeKey(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_QP)
+            );
+            if (!instance) {
+                throw new Error('IPv4 QP BGP instance does not exist');
+            }
+
+            for (let index = 0; index < count; index++) {
+                const route = new BgpRoute(instance);
+                route.ip = ipv4FromNumber(baseIp + index);
+                route.mask = mask;
+                route.dqpn = dqpn;
+                const key = BgpRoute.makeQpKey(route.dqpn, route.ip, route.mask);
+                instance.setRoute(key, route, { nextHop: index % 2 === 0 ? nextHopA : nextHopB });
+            }
+
+            return {
+                routeCount: instance.routeMap.size,
+                attrCount: instance.attrStore.attrMap.size,
+                attrGroupCount: instance.attrRouteIndex.size
+            };
         }
 
         async waitForRoutes(addressFamily, expectedRoutes, timeout = 10000) {
@@ -794,6 +852,22 @@ const BgpE2eController = (() => {
 
         getClientUpdates() {
             return this.mockClientEvents.filter(event => event.event === 'received-update');
+        }
+
+        async waitForClientUpdates(predicate, timeout = 10000) {
+            const deadline = Date.now() + timeout;
+            while (Date.now() < deadline) {
+                const updates = this.getClientUpdates();
+                if (predicate(updates)) {
+                    return updates;
+                }
+                if (this.mockClientExit && this.mockClientExit.code !== null) {
+                    throw new Error(`mockBgpClient exited before expected UPDATE packets:\n${this.mockClientOutput}`);
+                }
+                await delay(50);
+            }
+
+            throw new Error(`Timed out waiting for expected UPDATE packets:\n${this.mockClientOutput}`);
         }
 
         async stopMockClient() {
@@ -819,8 +893,28 @@ const BgpE2eController = (() => {
             this.record('mockBgpClient stopped');
         }
 
+        async waitForMockClientExit({ timeout = 5000 } = {}) {
+            if (this.mockClientExit) {
+                return this.mockClientExit;
+            }
+
+            if (!this.mockClientExitPromise) {
+                throw new Error('BGP mock client has not been started');
+            }
+
+            return Promise.race([
+                this.mockClientExitPromise,
+                new Promise((_, reject) => {
+                    setTimeout(() => {
+                        reject(new Error(`Timed out waiting for BGP mock client exit:\n${this.mockClientOutput}`));
+                    }, timeout);
+                })
+            ]);
+        }
+
         async cleanup() {
             await this.stopBgp();
+            await this.stopMockClient();
         }
     }
 

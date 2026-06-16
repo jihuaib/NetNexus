@@ -30,23 +30,15 @@ function normalizeQpRouteGrowthMode(mode) {
 }
 
 function normalizeQpBsidMode(mode) {
-    return Object.values(BgpConst.BGP_QP_BSID_MODE).includes(mode)
-        ? mode
-        : BgpConst.BGP_QP_BSID_MODE.FIXED;
+    return Object.values(BgpConst.BGP_QP_BSID_MODE).includes(mode) ? mode : BgpConst.BGP_QP_BSID_MODE.FIXED;
 }
 
 function routeGrowthIncludesIp(mode) {
-    return (
-        mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP ||
-        mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN
-    );
+    return mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP || mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
 }
 
 function routeGrowthIncludesDqpn(mode) {
-    return (
-        mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.DQPN ||
-        mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN
-    );
+    return mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.DQPN || mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
 }
 
 function ipToBigInt(ip, ipType) {

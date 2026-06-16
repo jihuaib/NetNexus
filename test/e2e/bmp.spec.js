@@ -183,5 +183,77 @@ test.describe('BMP pages', () => {
 
             await recordStep('Output: Loc-RIB statistics visible, routeCount=12');
         });
+
+        await test.step('Stop BMP server from UI and verify the mock client is disconnected', async () => {
+            await recordStep('Input: click BMP stop button while mock client keeps its TCP connection open');
+
+            await page.goto('/#/bmp/bmp-config');
+            await expect(page.getByTestId('bmp-stop-button')).toBeEnabled();
+            await page.getByTestId('bmp-stop-button').click();
+
+            const exitInfo = await controller.waitForMockClientExit({ timeout: 5000 });
+            expect(exitInfo.code).toBe(0);
+            expect(exitInfo.signal).toBeNull();
+            expect(exitInfo.output).toContain('BMP mock connection closed');
+
+            await expect(page.getByTestId('bmp-stop-button')).toBeDisabled();
+            await expect(page.getByTestId('bmp-client-table')).not.toContainText('mock-bmp-router');
+
+            await recordStep(`Output: stopButtonDisabled=true, mockClientExitCode=${exitInfo.code}, socketClosed=true`);
+        });
+    });
+
+    test('removes BMP client and BGP session from the UI when the client disconnects', async ({ page }) => {
+        const bmpPort = await BmpE2eController.getFreePort();
+
+        await test.step('Start BMP server and connect mock client', async () => {
+            await recordStep(`Input: route=/#/bmp/bmp-config, port=${bmpPort}, routes=${EXPECTED_ROUTE_COUNT}`);
+
+            await page.goto('/#/bmp/bmp-config');
+            await expect(page.getByTestId('bmp-config-page')).toBeVisible();
+            await page.getByTestId('bmp-port-input').fill(String(bmpPort));
+            await page.getByTestId('bmp-start-button').click();
+            await expect(page.getByTestId('bmp-stop-button')).toBeEnabled();
+
+            await controller.startMockClient({ routes: EXPECTED_ROUTE_COUNT, interval: 0 });
+            await controller.waitForMockData({ routes: EXPECTED_ROUTE_COUNT });
+
+            await expect(page.getByTestId('bmp-client-table')).toContainText('mock-bmp-router', {
+                timeout: 10000
+            });
+
+            await recordStep('Output: BMP mock client visible in config page');
+        });
+
+        await test.step('Verify BGP session is visible before client disconnect', async () => {
+            await recordStep('Input: route=/#/bmp/bgp-session, expectedSession=192.0.2.2');
+
+            await page.goto('/#/bmp/bgp-session');
+            await expect(page.getByTestId('bmp-session-page')).toBeVisible();
+            await expect(page.getByTestId('bmp-session-page')).toContainText('192.0.2.2', { timeout: 10000 });
+            await expect(page.getByTestId('bmp-session-page')).toContainText('10.10.0.0', { timeout: 10000 });
+
+            await recordStep('Output: BGP session and route are visible before disconnect');
+        });
+
+        await test.step('Disconnect mock BMP client and verify UI removes the session', async () => {
+            await recordStep('Input: mock BMP client sends TCP FIN while BMP server keeps running');
+
+            const exitInfo = await controller.disconnectMockClient({ timeout: 5000 });
+            expect(exitInfo.code).toBe(0);
+            expect(exitInfo.signal).toBeNull();
+
+            await expect(page.getByTestId('bmp-session-page')).not.toContainText('192.0.2.2', {
+                timeout: 10000
+            });
+            await expect(page.getByTestId('bmp-session-page')).not.toContainText('10.10.0.0');
+
+            await page.goto('/#/bmp/bmp-config');
+            await expect(page.getByTestId('bmp-client-table')).not.toContainText('mock-bmp-router', {
+                timeout: 10000
+            });
+
+            await recordStep('Output: BMP client table and BGP session page no longer show the disconnected client');
+        });
     });
 });

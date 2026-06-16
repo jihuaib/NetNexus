@@ -186,7 +186,7 @@
 
                     <div class="snmp-config-actions">
                         <a-space>
-                            <a-button :loading="saveLoading" @click="saveConfig()"> 保存配置 </a-button>
+                            <a-button :loading="saveLoading" @click="saveConfig()">保存配置</a-button>
                             <a-button
                                 type="primary"
                                 :loading="serverLoading"

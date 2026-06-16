@@ -151,8 +151,12 @@
                         label="Trap类型"
                     >
                         <div class="trap-type-inline">
-                            <span v-if="hasTrapField(selectedTrap.genericType)">通用: {{ selectedTrap.genericType }}</span>
-                            <span v-if="hasTrapField(selectedTrap.specificType)">特定: {{ selectedTrap.specificType }}</span>
+                            <span v-if="hasTrapField(selectedTrap.genericType)">
+                                通用: {{ selectedTrap.genericType }}
+                            </span>
+                            <span v-if="hasTrapField(selectedTrap.specificType)">
+                                特定: {{ selectedTrap.specificType }}
+                            </span>
                         </div>
                     </a-descriptions-item>
                 </a-descriptions>

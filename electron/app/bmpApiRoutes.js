@@ -71,7 +71,12 @@ function readString(parent, key, options = {}) {
 }
 
 function readInteger(parent, key, options = {}) {
-    const { required = true, min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER, defaultValue = null } = options;
+    const {
+        required = true,
+        min = Number.MIN_SAFE_INTEGER,
+        max = Number.MAX_SAFE_INTEGER,
+        defaultValue = null
+    } = options;
     const value = parent[key];
     if (value === undefined || value === null || value === '') {
         if (!required) {
@@ -85,33 +90,6 @@ function readInteger(parent, key, options = {}) {
         throw new ParameterError(`${key}必须是${min}到${max}之间的整数`);
     }
     return number;
-}
-
-function readBoolean(parent, key, options = {}) {
-    const { required = false, defaultValue = false } = options;
-    const value = parent[key];
-    if (value === undefined || value === null || value === '') {
-        if (!required) {
-            return defaultValue;
-        }
-        throw new ParameterError(`${key}不能为空`);
-    }
-
-    if (typeof value === 'boolean') {
-        return value;
-    }
-
-    if (typeof value === 'string') {
-        const normalized = value.trim().toLowerCase();
-        if (normalized === 'true') {
-            return true;
-        }
-        if (normalized === 'false') {
-            return false;
-        }
-    }
-
-    throw new ParameterError(`${key}必须是布尔值`);
 }
 
 function normalizeClient(value) {
@@ -186,11 +164,12 @@ function normalizePageFilter(body, settings) {
         max: maxPageSize,
         defaultValue: Math.min(20, maxPageSize)
     });
-    const routeState = readString(body, 'routeState', {
-        required: false,
-        maxLength: 16,
-        allowEmpty: true
-    }) || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE;
+    const routeState =
+        readString(body, 'routeState', {
+            required: false,
+            maxLength: 16,
+            allowEmpty: true
+        }) || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE;
     if (!BMP_ROUTE_STATE_VALUES.has(routeState)) {
         throw new ParameterError('routeState不支持');
     }
@@ -233,8 +212,7 @@ function normalizeRouteDetailQuery(body) {
         session: normalizeSession(readObject(body, 'session')),
         af,
         ribType,
-        routeKey: readString(body, 'routeKey', { maxLength: ROUTE_KEY_MAX_LENGTH }),
-        includeSummary: readBoolean(body, 'includeSummary')
+        routeKey: readString(body, 'routeKey', { maxLength: ROUTE_KEY_MAX_LENGTH })
     };
 }
 
@@ -242,8 +220,7 @@ function normalizeInstanceRouteDetailQuery(body) {
     return {
         client: normalizeClient(readObject(body, 'client')),
         instance: normalizeInstance(readObject(body, 'instance')),
-        routeKey: readString(body, 'routeKey', { maxLength: ROUTE_KEY_MAX_LENGTH }),
-        includeSummary: readBoolean(body, 'includeSummary')
+        routeKey: readString(body, 'routeKey', { maxLength: ROUTE_KEY_MAX_LENGTH })
     };
 }
 

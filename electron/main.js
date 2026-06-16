@@ -274,10 +274,12 @@ async function startApplication() {
     finishStartup();
 }
 
-app.whenReady().then(startApplication).catch(error => {
-    logger.error(`应用启动失败: ${error.message}`);
-    updateSplashProgress(splashProgress, `启动失败: ${error.message}`);
-});
+app.whenReady()
+    .then(startApplication)
+    .catch(error => {
+        logger.error(`应用启动失败: ${error.message}`);
+        updateSplashProgress(splashProgress, `启动失败: ${error.message}`);
+    });
 
 app.on('before-quit', () => {
     if (tray) {

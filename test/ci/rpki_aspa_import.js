@@ -62,8 +62,16 @@ async function main() {
         ]);
 
         const jsonlPage = await readAspaJsonlPage(jsonlPath, 1, 20);
-        assert.strictEqual(await countJsonlAspas(jsonlPath), 2, 'writeAspasToJsonl should keep one ASPA per Customer ASN');
-        assert.strictEqual(jsonlPage[0].customerAsn, '65010', 'writeAspasToJsonl should remove overwritten old position');
+        assert.strictEqual(
+            await countJsonlAspas(jsonlPath),
+            2,
+            'writeAspasToJsonl should keep one ASPA per Customer ASN'
+        );
+        assert.strictEqual(
+            jsonlPage[0].customerAsn,
+            '65010',
+            'writeAspasToJsonl should remove overwritten old position'
+        );
         assert.deepStrictEqual(
             jsonlPage[1],
             {
@@ -91,11 +99,7 @@ async function main() {
         );
         assert.strictEqual(deleteResult.total, 1, 'removeAspaFromJsonl should report the remaining total');
         assert.strictEqual(await countJsonlAspas(largeJsonlPath), 1, 'large ASPA delete should update JSONL storage');
-        assert.strictEqual(
-            largeJsonlPage[0].customerAsn,
-            '65210',
-            'large ASPA delete should keep unrelated records'
-        );
+        assert.strictEqual(largeJsonlPage[0].customerAsn, '65210', 'large ASPA delete should keep unrelated records');
 
         const wrappedJsonPath = path.join(tempDir, 'wrapped-aspas.json');
         await fs.promises.writeFile(

@@ -738,7 +738,9 @@ class SnmpApp {
         try {
             const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
             const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
-            const baseOid = String(request.oid || '').trim().replace(/\.$/, '');
+            const baseOid = String(request.oid || '')
+                .trim()
+                .replace(/\.$/, '');
             const version = this.getConfiguredSessionVersion(storedConfig);
             const community = storedConfig.community || 'public';
             const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
@@ -801,7 +803,9 @@ class SnmpApp {
         try {
             const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
             const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
-            const baseOid = String(request.oid || '').trim().replace(/\.$/, '');
+            const baseOid = String(request.oid || '')
+                .trim()
+                .replace(/\.$/, '');
             const version = this.getConfiguredSessionVersion(storedConfig);
             const community = storedConfig.community || 'public';
             const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
@@ -938,7 +942,12 @@ class SnmpApp {
         let stoppedBy = 'endOfSubtree';
 
         while (rows.length < limit) {
-            const groups = await this.sendGetBulkOids(session, [currentOid], 0, Math.min(maxRepetitions, limit - rows.length));
+            const groups = await this.sendGetBulkOids(
+                session,
+                [currentOid],
+                0,
+                Math.min(maxRepetitions, limit - rows.length)
+            );
             const varbinds = Array.isArray(groups[0]) ? groups[0] : groups;
             if (!Array.isArray(varbinds) || varbinds.length === 0) {
                 stoppedBy = 'emptyResponse';
@@ -1029,8 +1038,12 @@ class SnmpApp {
     }
 
     compareOids(left, right) {
-        const leftParts = String(left || '').split('.').map(Number);
-        const rightParts = String(right || '').split('.').map(Number);
+        const leftParts = String(left || '')
+            .split('.')
+            .map(Number);
+        const rightParts = String(right || '')
+            .split('.')
+            .map(Number);
         const length = Math.max(leftParts.length, rightParts.length);
 
         for (let index = 0; index < length; index++) {

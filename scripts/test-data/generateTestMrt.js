@@ -188,7 +188,7 @@ function generateTestRoutes() {
 
 // 主函数
 function main() {
-    const outputDir = path.join(__dirname, '..', '..', 'bgpdata');
+    const outputDir = __dirname;
 
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });

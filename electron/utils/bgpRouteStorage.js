@@ -1,13 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const BgpConst = require('../const/bgpConst');
-const {
-    fileExists,
-    ensureParentDir,
-    writeLine,
-    closeWriteStream,
-    renameWithRetry
-} = require('./rpkiRoaImport');
+const { fileExists, ensureParentDir, writeLine, closeWriteStream, renameWithRetry } = require('./rpkiRoaImport');
 
 function getBgpRouteDataFilePath(userDataPath, addressFamily = null) {
     const normalizedAddressFamily = addressFamily === null ? null : normalizeAddressFamily(addressFamily);
@@ -58,10 +52,7 @@ function normalizeBgpRouteObject(item) {
         dqpn: pickDefinedRouteField(item, 'dqpn')
     };
 
-    if (
-        addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC ||
-        addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC
-    ) {
+    if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC) {
         return route.ip && route.mask !== null ? route : null;
     }
 
@@ -69,10 +60,7 @@ function normalizeBgpRouteObject(item) {
         return route.routeType && route.rd ? route : null;
     }
 
-    if (
-        addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP ||
-        addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_QP
-    ) {
+    if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_QP) {
         return route.ip && route.mask !== null && route.dqpn !== null ? route : null;
     }
 

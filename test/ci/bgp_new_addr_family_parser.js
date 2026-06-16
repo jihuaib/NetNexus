@@ -18,7 +18,11 @@ function u24(value) {
 
 function pathAttr(typeCode, value, flags = BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL) {
     if (value.length > 255) {
-        return Buffer.concat([Buffer.from([flags | BgpConst.BGP_PATH_ATTR_FLAGS.EXTENDED_LENGTH, typeCode]), u16(value.length), value]);
+        return Buffer.concat([
+            Buffer.from([flags | BgpConst.BGP_PATH_ATTR_FLAGS.EXTENDED_LENGTH, typeCode]),
+            u16(value.length),
+            value
+        ]);
     }
     return Buffer.concat([Buffer.from([flags, typeCode, value.length]), value]);
 }
@@ -113,7 +117,11 @@ function srv6ServicePrefixSidAttr(serviceTlvType, sidHex, endpointBehavior) {
         Buffer.from([0]), // Reserved (1 byte)
         sidStructureSubSubTlv
     ]);
-    const sidInformationSubTlv = Buffer.concat([Buffer.from([1]), u16(sidInformationValue.length), sidInformationValue]);
+    const sidInformationSubTlv = Buffer.concat([
+        Buffer.from([1]),
+        u16(sidInformationValue.length),
+        sidInformationValue
+    ]);
     const serviceTlvValue = Buffer.concat([Buffer.from([0]), sidInformationSubTlv]);
     const serviceTlv = Buffer.concat([Buffer.from([serviceTlvType]), u16(serviceTlvValue.length), serviceTlvValue]);
     return pathAttr(
@@ -323,7 +331,6 @@ assert.equal(srv6VpnSidInfo.endpointBehavior, 19);
 assert.equal(srv6VpnSidInfo.endpointBehaviorName, 'End.DT4');
 assert.equal(srv6VpnPrefixSidAttrParsed.prefixSid.formatted, 'SRv6 VPN 2001:db8::1 End.DT4');
 assert.ok(getBgpPacketSummary(srv6VpnPrefixSidPacket).includes('PREFIX_SID: SRv6 VPN 2001:db8::1 End.DT4'));
-
 
 const ipv6LabeledUnicast = firstReachRoute(
     parseUpdateWithMpReach(
@@ -573,13 +580,7 @@ const evpnIpPrefixPacket = parseUpdateWithMpReach(
     Buffer.alloc(0),
     evpnNlri(
         5,
-        Buffer.concat([
-            rd65000,
-            esi,
-            u32(100),
-            Buffer.from([24, 203, 0, 113, 0, 192, 0, 2, 1]),
-            labelEntry(300)
-        ])
+        Buffer.concat([rd65000, esi, u32(100), Buffer.from([24, 203, 0, 113, 0, 192, 0, 2, 1]), labelEntry(300)])
     )
 );
 const evpnIpPrefix = firstReachRoute(evpnIpPrefixPacket);
@@ -591,9 +592,7 @@ assert.equal(evpnIpPrefix.gatewayIp, '192.0.2.1');
 assert.equal(evpnIpPrefix.labels[0].label, 300);
 assert.ok(evpnIpPrefix.prefix.includes('evpn:ip-prefix:65000:1:tag=100:203.0.113.0/24'));
 assert.ok(
-    getBgpPacketSummary(evpnIpPrefixPacket).includes(
-        'evpn:ip-prefix:65000:1:tag=100:203.0.113.0/24:gw=192.0.2.1/34'
-    )
+    getBgpPacketSummary(evpnIpPrefixPacket).includes('evpn:ip-prefix:65000:1:tag=100:203.0.113.0/24:gw=192.0.2.1/34')
 );
 
 const evpnSelectiveMulticast = firstReachRoute(

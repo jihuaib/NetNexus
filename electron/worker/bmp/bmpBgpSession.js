@@ -2,6 +2,7 @@ const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const { toSerializableTlvs } = require('../../utils/bmpUtils');
 const { getRoutePrefixIndexKeys } = require('../../utils/routePrefixUtils');
 const BmpConst = require('../../const/bmpConst');
+const { BmpRouteAttrStore, DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
 
 class BmpBgpSession {
     constructor(bmpSession) {
@@ -38,6 +39,7 @@ class BmpBgpSession {
         this.addPathMap = new Map();
 
         this.bgpRoutes = new Map();
+        this.attrStore = new BmpRouteAttrStore();
         this.routePrefixIndexes = new Map();
         this.routeSummaries = new Map();
         this.ribEpochMap = new Map();
@@ -232,6 +234,47 @@ class BmpBgpSession {
         return routeKeys instanceof Set ? routeKeys : [routeKeys];
     }
 
+    assignRouteAttr(route, attr) {
+        if (!route) {
+            return null;
+        }
+
+        const nextAttrId = this.attrStore.intern(attr);
+        const prevAttrId = route.attrId;
+
+        if (prevAttrId === nextAttrId) {
+            this.attrStore.release(nextAttrId);
+            route._inlineAttr = null;
+            return nextAttrId;
+        }
+
+        if (prevAttrId) {
+            this.attrStore.release(prevAttrId);
+        }
+
+        route.attrId = nextAttrId;
+        route._inlineAttr = null;
+        return nextAttrId;
+    }
+
+    releaseRouteAttr(route) {
+        if (!route?.attrId) {
+            return;
+        }
+
+        this.attrStore.release(route.attrId);
+        route.attrId = null;
+        route._inlineAttr = null;
+    }
+
+    getRouteAttr(route) {
+        return this.attrStore.get(route?.attrId) || route?.getInlineRouteAttr?.() || { ...DEFAULT_BMP_ROUTE_ATTR };
+    }
+
+    getRouteAttrEntry(route) {
+        return this.attrStore.getEntry(route?.attrId);
+    }
+
     getRibEpoch(afi, safi, ribType) {
         const key = BmpBgpSession.makeRibEpochKey(afi, safi, ribType);
         if (!this.ribEpochMap.has(key)) {
@@ -250,11 +293,12 @@ class BmpBgpSession {
     markRoutesStale(afi, safi, ribTypes, reason) {
         const afKey = `${afi}|${safi}`;
         const ribTypeRouteMap = this.bgpRoutes.get(afKey);
-        const targetRibTypes = Array.isArray(ribTypes) && ribTypes.length > 0
-            ? ribTypes
-            : ribTypeRouteMap
-              ? Array.from(ribTypeRouteMap.keys())
-              : [];
+        const targetRibTypes =
+            Array.isArray(ribTypes) && ribTypes.length > 0
+                ? ribTypes
+                : ribTypeRouteMap
+                  ? Array.from(ribTypeRouteMap.keys())
+                  : [];
 
         return targetRibTypes.map(ribType => {
             const staleEpoch = this.advanceRibEpoch(afi, safi, ribType);
@@ -331,6 +375,7 @@ class BmpBgpSession {
 
     closeSession() {
         this.bgpRoutes.clear();
+        this.attrStore.clear();
         this.routePrefixIndexes.clear();
         this.routeSummaries.clear();
         this.recvAddPathMap.clear();

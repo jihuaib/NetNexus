@@ -1,14 +1,9 @@
 const assert = require('assert');
 const path = require('path');
 
-const { parseSyslogMessage, parseSyslogBuffer } = require(path.join(
-    __dirname,
-    '..',
-    '..',
-    'electron',
-    'utils',
-    'syslogParser.js'
-));
+const { parseSyslogMessage, parseSyslogBuffer } = require(
+    path.join(__dirname, '..', '..', 'electron', 'utils', 'syslogParser.js')
+);
 
 const rfc3164 = parseSyslogMessage('<34>Oct 11 22:14:15 mymachine su[123]: failed password for root');
 assert.equal(rfc3164.format, 'RFC3164');

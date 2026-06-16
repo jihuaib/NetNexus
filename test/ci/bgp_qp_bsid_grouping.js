@@ -21,8 +21,7 @@ function makeQpRoute(instance, dqpn, ip, mask, nextHop) {
     route.dqpn = dqpn;
     route.ip = ip;
     route.mask = mask;
-    route.nextHop = nextHop;
-    return route;
+    return { route, attr: { nextHop } };
 }
 
 function getMpReach(packet) {
@@ -56,7 +55,7 @@ const routes = [
 ];
 
 for (const route of routes) {
-    instance.routeMap.set(BgpRoute.makeQpKey(route.dqpn, route.ip, route.mask), route);
+    instance.setRoute(BgpRoute.makeQpKey(route.route.dqpn, route.route.ip, route.route.mask), route.route, route.attr);
 }
 
 peer.sendRoute();
@@ -76,5 +75,37 @@ const secondReach = getMpReach(parseBgpPacket(sentBuffers[1]));
 assert.strictEqual(secondReach.nextHop, '2001:db8::2', 'second UPDATE next hop should be second BSID');
 assert.strictEqual(secondReach.nlri.length, 1, 'second UPDATE should contain the second-BSID NLRI');
 assert.strictEqual(secondReach.nlri[0].dqpn, 3, 'second UPDATE should carry DQPN 3');
+
+sentBuffers.length = 0;
+instance.clearRoutes();
+
+const interleavedRoutes = [
+    makeQpRoute(instance, 11, '10.0.1.1', 32, '2001:db8::a'),
+    makeQpRoute(instance, 12, '10.0.1.2', 32, '2001:db8::b'),
+    makeQpRoute(instance, 13, '10.0.1.3', 32, '2001:db8::a')
+];
+
+for (const route of interleavedRoutes) {
+    instance.setRoute(BgpRoute.makeQpKey(route.route.dqpn, route.route.ip, route.route.mask), route.route, route.attr);
+}
+
+peer.sendRoute();
+
+assert.strictEqual(sentBuffers.length, 2, 'interleaved same-BSID QP routes must be grouped into two UPDATEs');
+
+const interleavedFirstReach = getMpReach(parseBgpPacket(sentBuffers[0]));
+assert.strictEqual(interleavedFirstReach.nextHop, '2001:db8::a');
+assert.deepStrictEqual(
+    interleavedFirstReach.nlri.map(route => route.dqpn),
+    [11, 13],
+    'same-BSID routes should be packed together even when routeMap order is interleaved'
+);
+
+const interleavedSecondReach = getMpReach(parseBgpPacket(sentBuffers[1]));
+assert.strictEqual(interleavedSecondReach.nextHop, '2001:db8::b');
+assert.deepStrictEqual(
+    interleavedSecondReach.nlri.map(route => route.dqpn),
+    [12]
+);
 
 console.log('BGP QP BSID grouping tests passed');

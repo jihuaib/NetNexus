@@ -1,4 +1,18 @@
 const BgpPeer = require('./bgpPeer');
+const { BgpPathAttrStore } = require('./bgpPathAttrStore');
+
+const ROUTE_ATTR_FIELDS = ['nextHop', 'origin', 'asPath', 'med', 'localPref', 'communities', 'customAttr', 'rt'];
+const ROUTE_NLRI_FIELDS = [
+    'ip',
+    'mask',
+    'routeType',
+    'rd',
+    'originatingRouterIp',
+    'sourceIp',
+    'groupIp',
+    'sourceAs',
+    'dqpn'
+];
 
 class BgpInstance {
     constructor(vrfIndex, afi, safi) {
@@ -8,13 +22,12 @@ class BgpInstance {
 
         this.peerMap = new Map();
         this.routeMap = new Map();
+        this.attrStore = new BgpPathAttrStore();
+        this.attrRouteIndex = new Map();
         // 自定义属性,
         this.customAttr = '';
         // 扩展团体属性
         this.rt = '';
-        this.singleRouteSend = false;
-        // QP路由下一跳 BSID
-        this.bsid = '';
     }
 
     static makeKey(vrfIndex, afi, safi) {
@@ -29,6 +42,164 @@ class BgpInstance {
     addPeer(bgpSession) {
         const bgpPeer = new BgpPeer(bgpSession, this);
         this.peerMap.set(bgpSession.peerIp, bgpPeer);
+    }
+
+    copyRouteNlriFields(route, source = {}) {
+        for (const field of ROUTE_NLRI_FIELDS) {
+            if (Object.prototype.hasOwnProperty.call(source, field)) {
+                route[field] = source[field];
+            }
+        }
+    }
+
+    extractRouteAttr(source = {}) {
+        const attr = {};
+        for (const field of ROUTE_ATTR_FIELDS) {
+            if (Object.prototype.hasOwnProperty.call(source, field)) {
+                attr[field] = source[field];
+            }
+        }
+
+        if (source.formatted !== undefined) {
+            attr.customAttr = source.formatted;
+        }
+
+        return attr;
+    }
+
+    makeRouteAttr(route, overrides = {}) {
+        const currentAttr = route?.attrId ? this.attrStore.get(route.attrId) || {} : {};
+        return {
+            nextHop: overrides.nextHop !== undefined ? overrides.nextHop : currentAttr.nextHop,
+            origin: overrides.origin !== undefined ? overrides.origin : currentAttr.origin,
+            asPath: overrides.asPath !== undefined ? overrides.asPath : currentAttr.asPath,
+            med: overrides.med !== undefined ? overrides.med : currentAttr.med,
+            localPref: overrides.localPref !== undefined ? overrides.localPref : currentAttr.localPref,
+            communities: overrides.communities !== undefined ? overrides.communities : currentAttr.communities,
+            customAttr:
+                overrides.customAttr !== undefined
+                    ? overrides.customAttr
+                    : currentAttr.customAttr !== undefined && currentAttr.customAttr !== null
+                      ? currentAttr.customAttr
+                      : this.customAttr,
+            rt:
+                overrides.rt !== undefined
+                    ? overrides.rt
+                    : currentAttr.rt !== undefined && currentAttr.rt !== null
+                      ? currentAttr.rt
+                      : this.rt
+        };
+    }
+
+    setRoute(routeKey, route, attr = null) {
+        const existingRoute = this.routeMap.get(routeKey);
+        if (existingRoute) {
+            this.removeRouteFromAttrIndex(routeKey, existingRoute);
+        }
+
+        this.routeMap.set(routeKey, route);
+        this.assignRouteAttr(routeKey, this.makeRouteAttr(route, attr || {}));
+    }
+
+    deleteRoute(routeKey) {
+        const route = this.routeMap.get(routeKey);
+        if (!route) {
+            return null;
+        }
+
+        this.removeRouteFromAttrIndex(routeKey, route);
+        this.routeMap.delete(routeKey);
+        return route;
+    }
+
+    clearRoutes() {
+        this.routeMap.clear();
+        this.attrRouteIndex.clear();
+        this.attrStore.clear();
+    }
+
+    assignRouteAttr(routeKey, attr) {
+        const route = this.routeMap.get(routeKey);
+        if (!route) {
+            return null;
+        }
+
+        const nextAttrId = this.attrStore.intern(attr);
+        const prevAttrId = route.attrId;
+
+        if (prevAttrId === nextAttrId) {
+            this.attrStore.release(nextAttrId);
+            return nextAttrId;
+        }
+
+        if (prevAttrId) {
+            this.removeRouteFromAttrIndex(routeKey, route);
+        }
+
+        route.attrId = nextAttrId;
+        if (!this.attrRouteIndex.has(nextAttrId)) {
+            this.attrRouteIndex.set(nextAttrId, new Set());
+        }
+        this.attrRouteIndex.get(nextAttrId).add(routeKey);
+
+        return nextAttrId;
+    }
+
+    removeRouteFromAttrIndex(routeKey, route) {
+        const attrId = route.attrId;
+        if (!attrId) {
+            return;
+        }
+
+        const routeKeys = this.attrRouteIndex.get(attrId);
+        if (routeKeys) {
+            routeKeys.delete(routeKey);
+            if (routeKeys.size === 0) {
+                this.attrRouteIndex.delete(attrId);
+            }
+        }
+
+        this.attrStore.release(attrId);
+        route.attrId = null;
+    }
+
+    refreshRouteAttrs(filter = null, overrides = {}) {
+        this.routeMap.forEach((route, routeKey) => {
+            if (typeof filter === 'function' && !filter(route, routeKey)) {
+                return;
+            }
+            this.assignRouteAttr(routeKey, this.makeRouteAttr(route, overrides));
+        });
+    }
+
+    getRouteAttr(route) {
+        return this.attrStore.get(route.attrId) || this.makeRouteAttr(route);
+    }
+
+    getRouteAttrEntry(route) {
+        return this.attrStore.getEntry(route.attrId);
+    }
+
+    getRoutesByAttrGroups() {
+        const groups = [];
+        this.attrRouteIndex.forEach((routeKeys, attrId) => {
+            const routes = [];
+            routeKeys.forEach(routeKey => {
+                const route = this.routeMap.get(routeKey);
+                if (route) {
+                    routes.push(route);
+                }
+            });
+
+            if (routes.length > 0) {
+                groups.push({
+                    attrId,
+                    attr: this.attrStore.get(attrId),
+                    routes
+                });
+            }
+        });
+        return groups;
     }
 
     changePeerState(peerIp, sessionState) {

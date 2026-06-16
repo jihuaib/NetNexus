@@ -3,7 +3,10 @@ function formatDate(value) {
     if (Number.isNaN(date.getTime())) {
         return '-';
     }
-    return date.toISOString().replace('T', ' ').replace(/\.\d+Z$/u, '');
+    return date
+        .toISOString()
+        .replace('T', ' ')
+        .replace(/\.\d+Z$/u, '');
 }
 
 function formatArray(value) {

@@ -1,14 +1,28 @@
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
-const { getBgpPacketSummary } = require('../../utils/bgpPacketParser');
 const BmpConst = require('../../const/bmpConst');
+const { DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
 
 const DEFAULT_PATH_ID = 0;
 const DEFAULT_RD = '0:0';
+const EMPTY_ARRAY = Object.freeze([]);
+const DEFAULT_PATH_STATUS_INFO = Object.freeze({
+    pathStatus: null,
+    pathStatusNames: EMPTY_ARRAY,
+    pathStatusText: null,
+    pathStatusUnknownBits: 0,
+    pathStatusReason: null,
+    pathStatusReasonName: null,
+    pathStatusReasonText: null,
+    pathStatusReasons: EMPTY_ARRAY,
+    pathStatusTlvs: EMPTY_ARRAY
+});
 
 class BmpBgpRoute {
     constructor(BmpBgpSession, BmpBgpInstance) {
         this.BmpBgpSession = BmpBgpSession;
         this.BmpBgpInstance = BmpBgpInstance;
+        this.attrId = null;
+        this._inlineAttr = null;
 
         // key
         this.pathId = DEFAULT_PATH_ID;
@@ -18,33 +32,13 @@ class BmpBgpRoute {
         this.afi = null;
         this.safi = null;
 
-        // attributes
-        this.origin = null;
-        this.asPath = null;
-        this.med = 0;
-        this.localPref = 0;
-        this.communities = null;
-        this.otc = null;
-        this.nextHop = null;
+        // NLRI and per-route state
         this.labels = null;
         this.routeType = null;
-        this.rawNlri = null;
         this.nlriDetail = null;
         this.parserValid = true;
         this.parseErrors = null;
         this.parseWarnings = null;
-        this.pathStatus = null;
-        this.pathStatusNames = [];
-        this.pathStatusText = null;
-        this.pathStatusUnknownBits = 0;
-        this.pathStatusReason = null;
-        this.pathStatusReasonName = null;
-        this.pathStatusReasonText = null;
-        this.pathStatusReasons = [];
-        this.pathStatusTlvs = [];
-
-        // bgp packet
-        this.bgpPacket = [];
 
         this.routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
         this.ribEpoch = 0;
@@ -52,6 +46,124 @@ class BmpBgpRoute {
         this.lastSeenAt = null;
         this.staleAt = null;
         this.staleReason = null;
+    }
+
+    getRouteAttrOwner() {
+        return this.BmpBgpSession || this.BmpBgpInstance || null;
+    }
+
+    getInlineRouteAttr() {
+        return this._inlineAttr ? { ...DEFAULT_BMP_ROUTE_ATTR, ...this._inlineAttr } : null;
+    }
+
+    getRouteAttr() {
+        const owner = this.getRouteAttrOwner();
+        return owner?.getRouteAttr?.(this) || this.getInlineRouteAttr() || { ...DEFAULT_BMP_ROUTE_ATTR };
+    }
+
+    getRouteAttrEntry() {
+        const owner = this.getRouteAttrOwner();
+        return owner?.getRouteAttrEntry?.(this) || null;
+    }
+
+    makeRouteAttr(overrides = {}) {
+        return {
+            ...DEFAULT_BMP_ROUTE_ATTR,
+            ...this.getRouteAttr(),
+            ...overrides
+        };
+    }
+
+    assignRouteAttr(attr) {
+        const owner = this.getRouteAttrOwner();
+        if (owner?.assignRouteAttr) {
+            return owner.assignRouteAttr(this, this.makeRouteAttr(attr));
+        }
+
+        this._inlineAttr = this.makeRouteAttr(attr);
+        return null;
+    }
+
+    releaseRouteAttr() {
+        const owner = this.getRouteAttrOwner();
+        if (owner?.releaseRouteAttr) {
+            owner.releaseRouteAttr(this);
+        }
+        this.attrId = null;
+        this._inlineAttr = null;
+    }
+
+    getRouteAttrValue(field) {
+        const attr = this.getRouteAttr();
+        return attr[field] === undefined ? DEFAULT_BMP_ROUTE_ATTR[field] : attr[field];
+    }
+
+    setRouteAttrValue(field, value) {
+        this.assignRouteAttr({ [field]: value });
+    }
+
+    get origin() {
+        return this.getRouteAttrValue('origin');
+    }
+
+    set origin(value) {
+        this.setRouteAttrValue('origin', value);
+    }
+
+    get asPath() {
+        return this.getRouteAttrValue('asPath');
+    }
+
+    set asPath(value) {
+        this.setRouteAttrValue('asPath', value);
+    }
+
+    get med() {
+        return this.getRouteAttrValue('med');
+    }
+
+    set med(value) {
+        this.setRouteAttrValue('med', value);
+    }
+
+    get localPref() {
+        return this.getRouteAttrValue('localPref');
+    }
+
+    set localPref(value) {
+        this.setRouteAttrValue('localPref', value);
+    }
+
+    get communities() {
+        return this.getRouteAttrValue('communities');
+    }
+
+    set communities(value) {
+        this.setRouteAttrValue('communities', value);
+    }
+
+    get otc() {
+        return this.getRouteAttrValue('otc');
+    }
+
+    set otc(value) {
+        this.setRouteAttrValue('otc', value);
+    }
+
+    get nextHop() {
+        return this.getRouteAttrValue('nextHop');
+    }
+
+    set nextHop(value) {
+        this.setRouteAttrValue('nextHop', value);
+    }
+
+    get prefixSid() {
+        return this.getRouteAttrValue('prefixSid');
+    }
+
+    set prefixSid(value) {
+        this.setRouteAttrValue('prefixSid', value);
     }
 
     static normalizePathId(pathId) {
@@ -142,14 +254,39 @@ class BmpBgpRoute {
         return null;
     }
 
-    getPacketSummary() {
-        if (this.bgpPacket && !Array.isArray(this.bgpPacket)) {
-            return getBgpPacketSummary(this.bgpPacket);
-        }
-        return null;
+    getPathStatusInfo() {
+        return {
+            pathStatus: this.pathStatus === undefined ? DEFAULT_PATH_STATUS_INFO.pathStatus : this.pathStatus,
+            pathStatusNames:
+                this.pathStatusNames === undefined ? DEFAULT_PATH_STATUS_INFO.pathStatusNames : this.pathStatusNames,
+            pathStatusText:
+                this.pathStatusText === undefined ? DEFAULT_PATH_STATUS_INFO.pathStatusText : this.pathStatusText,
+            pathStatusUnknownBits:
+                this.pathStatusUnknownBits === undefined
+                    ? DEFAULT_PATH_STATUS_INFO.pathStatusUnknownBits
+                    : this.pathStatusUnknownBits,
+            pathStatusReason:
+                this.pathStatusReason === undefined ? DEFAULT_PATH_STATUS_INFO.pathStatusReason : this.pathStatusReason,
+            pathStatusReasonName:
+                this.pathStatusReasonName === undefined
+                    ? DEFAULT_PATH_STATUS_INFO.pathStatusReasonName
+                    : this.pathStatusReasonName,
+            pathStatusReasonText:
+                this.pathStatusReasonText === undefined
+                    ? DEFAULT_PATH_STATUS_INFO.pathStatusReasonText
+                    : this.pathStatusReasonText,
+            pathStatusReasons:
+                this.pathStatusReasons === undefined
+                    ? DEFAULT_PATH_STATUS_INFO.pathStatusReasons
+                    : this.pathStatusReasons,
+            pathStatusTlvs:
+                this.pathStatusTlvs === undefined ? DEFAULT_PATH_STATUS_INFO.pathStatusTlvs : this.pathStatusTlvs
+        };
     }
 
     getRouteListInfo() {
+        const routeAttr = this.getRouteAttr();
+        const pathStatusInfo = this.getPathStatusInfo();
         return {
             routeKey: this.getRouteKey(),
             addrFamilyType: this.getAddrFamilyType(),
@@ -158,28 +295,30 @@ class BmpBgpRoute {
             ip: this.ip,
             mask: this.mask,
             rd: BmpBgpRoute.normalizeRd(this.rd),
-            origin: this.origin,
-            asPath: this.asPath,
-            med: this.med,
-            nextHop: this.nextHop,
+            origin: routeAttr.origin,
+            asPath: routeAttr.asPath,
+            med: routeAttr.med,
+            nextHop: routeAttr.nextHop,
             pathId: BmpBgpRoute.normalizePathId(this.pathId),
             labels: this.labels,
             parserValid: this.parserValid,
             parseErrors: this.parseErrors,
             parseWarnings: this.parseWarnings,
-            pathStatus: this.pathStatus,
-            pathStatusNames: this.pathStatusNames,
-            pathStatusText: this.pathStatusText,
-            pathStatusUnknownBits: this.pathStatusUnknownBits,
-            pathStatusReason: this.pathStatusReason,
-            pathStatusReasonName: this.pathStatusReasonName,
-            pathStatusReasonText: this.pathStatusReasonText,
+            pathStatus: pathStatusInfo.pathStatus,
+            pathStatusNames: pathStatusInfo.pathStatusNames,
+            pathStatusText: pathStatusInfo.pathStatusText,
+            pathStatusUnknownBits: pathStatusInfo.pathStatusUnknownBits,
+            pathStatusReason: pathStatusInfo.pathStatusReason,
+            pathStatusReasonName: pathStatusInfo.pathStatusReasonName,
+            pathStatusReasonText: pathStatusInfo.pathStatusReasonText,
             routeState: this.routeState
         };
     }
 
-    getRouteInfo(options = {}) {
-        const { includeSummary = true } = options;
+    getRouteInfo() {
+        const routeAttr = this.getRouteAttr();
+        const attrEntry = this.getRouteAttrEntry();
+        const pathStatusInfo = this.getPathStatusInfo();
         const routeInfo = {
             routeKey: this.getRouteKey(),
             addrFamilyType: this.getAddrFamilyType(),
@@ -188,30 +327,33 @@ class BmpBgpRoute {
             ip: this.ip,
             mask: this.mask,
             rd: BmpBgpRoute.normalizeRd(this.rd),
-            origin: this.origin,
-            asPath: this.asPath,
-            med: this.med,
-            nextHop: this.nextHop,
-            localPref: this.localPref,
-            communities: this.communities,
-            otc: this.otc,
+            origin: routeAttr.origin,
+            asPath: routeAttr.asPath,
+            med: routeAttr.med,
+            nextHop: routeAttr.nextHop,
+            localPref: routeAttr.localPref,
+            communities: routeAttr.communities,
+            otc: routeAttr.otc,
+            prefixSid: routeAttr.prefixSid,
+            attrId: this.attrId || '',
+            attrRefCount: attrEntry?.refCount || 0,
             pathId: BmpBgpRoute.normalizePathId(this.pathId),
             labels: this.labels,
             routeType: this.routeType,
-            rawNlri: this.rawNlri,
+            rawNlri: this.nlriDetail?.rawNlri || null,
             nlriDetail: this.nlriDetail,
             parserValid: this.parserValid,
             parseErrors: this.parseErrors,
             parseWarnings: this.parseWarnings,
-            pathStatus: this.pathStatus,
-            pathStatusNames: this.pathStatusNames,
-            pathStatusText: this.pathStatusText,
-            pathStatusUnknownBits: this.pathStatusUnknownBits,
-            pathStatusReason: this.pathStatusReason,
-            pathStatusReasonName: this.pathStatusReasonName,
-            pathStatusReasonText: this.pathStatusReasonText,
-            pathStatusReasons: this.pathStatusReasons,
-            pathStatusTlvs: this.pathStatusTlvs,
+            pathStatus: pathStatusInfo.pathStatus,
+            pathStatusNames: pathStatusInfo.pathStatusNames,
+            pathStatusText: pathStatusInfo.pathStatusText,
+            pathStatusUnknownBits: pathStatusInfo.pathStatusUnknownBits,
+            pathStatusReason: pathStatusInfo.pathStatusReason,
+            pathStatusReasonName: pathStatusInfo.pathStatusReasonName,
+            pathStatusReasonText: pathStatusInfo.pathStatusReasonText,
+            pathStatusReasons: pathStatusInfo.pathStatusReasons,
+            pathStatusTlvs: pathStatusInfo.pathStatusTlvs,
             routeState: this.routeState,
             ribEpoch: this.ribEpoch,
             staleEpoch: this.staleEpoch,
@@ -219,9 +361,6 @@ class BmpBgpRoute {
             staleAt: this.staleAt,
             staleReason: this.staleReason
         };
-        if (includeSummary) {
-            routeInfo.summary = this.getPacketSummary();
-        }
         return routeInfo;
     }
 
@@ -242,15 +381,15 @@ class BmpBgpRoute {
     }
 
     clearPathStatus() {
-        this.pathStatus = null;
-        this.pathStatusNames = [];
-        this.pathStatusText = null;
-        this.pathStatusUnknownBits = 0;
-        this.pathStatusReason = null;
-        this.pathStatusReasonName = null;
-        this.pathStatusReasonText = null;
-        this.pathStatusReasons = [];
-        this.pathStatusTlvs = [];
+        delete this.pathStatus;
+        delete this.pathStatusNames;
+        delete this.pathStatusText;
+        delete this.pathStatusUnknownBits;
+        delete this.pathStatusReason;
+        delete this.pathStatusReasonName;
+        delete this.pathStatusReasonText;
+        delete this.pathStatusReasons;
+        delete this.pathStatusTlvs;
     }
 
     setPathStatusMarkings(markings) {
@@ -266,15 +405,11 @@ class BmpBgpRoute {
                 const statusNames = BmpBgpRoute.getPathStatusNames(pathStatus);
                 const statusUnknownBits = BmpBgpRoute.getPathStatusUnknownBits(pathStatus);
                 const reasonCode =
-                    marking.reasonCode === null || marking.reasonCode === undefined
-                        ? null
-                        : Number(marking.reasonCode);
+                    marking.reasonCode === null || marking.reasonCode === undefined ? null : Number(marking.reasonCode);
                 const reasonName =
                     reasonCode === null ? null : BmpConst.BMP_PATH_STATUS_REASON_NAME?.[reasonCode] || null;
                 const reasonText =
-                    reasonCode === null
-                        ? null
-                        : reasonName || `Unknown(0x${reasonCode.toString(16).padStart(4, '0')})`;
+                    reasonCode === null ? null : reasonName || `Unknown(0x${reasonCode.toString(16).padStart(4, '0')})`;
 
                 return {
                     type: marking.type,
@@ -323,23 +458,15 @@ class BmpBgpRoute {
     }
 
     clearAttributes() {
-        this.origin = null;
-        this.asPath = null;
-        this.med = 0;
-        this.nextHop = null;
-        this.localPref = 0;
-        this.communities = null;
-        this.otc = null;
+        this.releaseRouteAttr();
         this.labels = null;
         this.routeType = null;
-        this.rawNlri = null;
+        delete this.rawNlri;
         this.nlriDetail = null;
         this.parserValid = true;
         this.parseErrors = null;
         this.parseWarnings = null;
         this.clearPathStatus();
-
-        this.bgpPacket = [];
     }
 }
 

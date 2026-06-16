@@ -50,8 +50,8 @@
                         </a-row>
 
                         <div style="margin-top: 8px; color: rgba(0, 0, 0, 0.45)">
-                            默认端口为 514（绑定该端口通常需要管理员/root 权限）。TCP 同时支持 RFC 6587
-                            octet-counting 和换行分帧。
+                            默认端口为 514（绑定该端口通常需要管理员/root 权限）。TCP 同时支持 RFC 6587 octet-counting
+                            和换行分帧。
                         </div>
 
                         <div style="margin-top: 12px; display: flex; justify-content: center">
@@ -85,7 +85,9 @@
                         </a-descriptions-item>
                         <a-descriptions-item label="监听端口">{{ formData.port }}</a-descriptions-item>
                         <a-descriptions-item label="传输协议">{{ protocolText }}</a-descriptions-item>
-                        <a-descriptions-item label="最大消息长度">{{ formData.maxMessageLength }} 字节</a-descriptions-item>
+                        <a-descriptions-item label="最大消息长度">
+                            {{ formData.maxMessageLength }} 字节
+                        </a-descriptions-item>
                         <a-descriptions-item label="已记录消息">{{ messageCount }}</a-descriptions-item>
                         <a-descriptions-item label="累计接收消息">{{ totalReceived }}</a-descriptions-item>
                         <a-descriptions-item label="最近接收时间">{{ lastMessageAt }}</a-descriptions-item>

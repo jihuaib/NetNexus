@@ -5,12 +5,9 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const {
-    parseRoaJsonFile,
-    readJsonlPage,
-    renameWithRetry,
-    writeRoasToJsonl
-} = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'rpkiRoaImport.js'));
+const { parseRoaJsonFile, readJsonlPage, renameWithRetry, writeRoasToJsonl } = require(
+    path.join(__dirname, '..', '..', 'electron', 'utils', 'rpkiRoaImport.js')
+);
 
 function makeRoa(index) {
     return {
@@ -41,8 +38,14 @@ async function main() {
         const replacedPage = await readJsonlPage(jsonlPath, 1, 20);
         assert.strictEqual(replacedPage.length, 1, 'JSONL should be replaceable immediately after page read');
 
-        await writeRoasToJsonl(jsonlPath, Array.from({ length: 5 }, (_, index) => makeRoa(index)));
-        await writeRoasToJsonl(jsonlPath, Array.from({ length: 6 }, (_, index) => makeRoa(index)));
+        await writeRoasToJsonl(
+            jsonlPath,
+            Array.from({ length: 5 }, (_, index) => makeRoa(index))
+        );
+        await writeRoasToJsonl(
+            jsonlPath,
+            Array.from({ length: 6 }, (_, index) => makeRoa(index))
+        );
         const overwrittenPage = await readJsonlPage(jsonlPath, 1, 20);
         assert.strictEqual(overwrittenPage.length, 6, 'JSONL should be overwritable repeatedly');
 

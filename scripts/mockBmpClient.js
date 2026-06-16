@@ -121,11 +121,7 @@ function ipv4Update(
         pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
         asPathAttr(asns),
         pathAttr(BgpConst.BGP_PATH_ATTR.NEXT_HOP, ip(nextHop)),
-        pathAttr(
-            BgpConst.BGP_PATH_ATTR.LOCAL_PREF,
-            u32(100),
-            BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
-        )
+        pathAttr(BgpConst.BGP_PATH_ATTR.LOCAL_PREF, u32(100), BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE)
     ]);
     const nlris = Buffer.concat(
         prefixes.map((prefix, index) => ipv4Nlri(prefix, addPath ? pathIdStart + index : null))
@@ -574,10 +570,28 @@ async function run() {
     }
 
     console.log('mock data sent; keeping BMP TCP connection open, press Ctrl+C to stop');
-    process.on('SIGINT', () => {
+    let stopping = false;
+    const stopGracefully = () => {
+        if (stopping) {
+            return;
+        }
+        stopping = true;
+        if (socket.destroyed) {
+            process.exit(0);
+            return;
+        }
         socket.end();
-        process.exit(0);
+        setTimeout(() => process.exit(0), 1000).unref();
+    };
+
+    socket.once('close', () => {
+        if (stopping) {
+            process.exit(0);
+        }
     });
+
+    process.on('SIGINT', stopGracefully);
+    process.on('SIGTERM', stopGracefully);
 }
 
 if (require.main === module) {

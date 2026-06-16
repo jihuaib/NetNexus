@@ -122,7 +122,11 @@ class SyslogWorker {
         if (!config.enableUdp && !config.enableTcp) {
             throw new Error('请至少启用 UDP 或 TCP 一种传输协议');
         }
-        if (!Number.isInteger(config.maxMessageLength) || config.maxMessageLength < 128 || config.maxMessageLength > 65535) {
+        if (
+            !Number.isInteger(config.maxMessageLength) ||
+            config.maxMessageLength < 128 ||
+            config.maxMessageLength > 65535
+        ) {
             throw new Error('单条消息最大长度范围应为 128-65535 字节');
         }
     }
@@ -317,7 +321,9 @@ class SyslogWorker {
         socket.on('data', chunk => this.handleTcpData(socket, chunk, ipVersion));
         socket.on('timeout', () => socket.end());
         socket.on('error', error => {
-            logger.warn(`Syslog TCP客户端错误 ${socket.syslogClientAddress}:${socket.syslogClientPort}: ${error.message}`);
+            logger.warn(
+                `Syslog TCP客户端错误 ${socket.syslogClientAddress}:${socket.syslogClientPort}: ${error.message}`
+            );
         });
         socket.on('close', () => {
             const pending = socket.syslogBuffer;
@@ -366,13 +372,16 @@ class SyslogWorker {
 
             if (counted) {
                 if (counted.length > this.syslogConfig.maxMessageLength) {
-                    this.recordErrorMessage(buffer.slice(0, Math.min(buffer.length, this.syslogConfig.maxMessageLength)), {
-                        transport: SyslogConst.SYSLOG_TRANSPORT.TCP,
-                        ipVersion,
-                        clientAddress: socket.syslogClientAddress,
-                        clientPort: socket.syslogClientPort,
-                        note: 'TCP octet-counting长度超过单条消息限制，连接已关闭'
-                    });
+                    this.recordErrorMessage(
+                        buffer.slice(0, Math.min(buffer.length, this.syslogConfig.maxMessageLength)),
+                        {
+                            transport: SyslogConst.SYSLOG_TRANSPORT.TCP,
+                            ipVersion,
+                            clientAddress: socket.syslogClientAddress,
+                            clientPort: socket.syslogClientPort,
+                            note: 'TCP octet-counting长度超过单条消息限制，连接已关闭'
+                        }
+                    );
                     socket.syslogBuffer = Buffer.alloc(0);
                     socket.destroy();
                     return;
@@ -430,7 +439,9 @@ class SyslogWorker {
     }
 
     recordMessage(inputBuffer, context) {
-        const sourceBuffer = Buffer.isBuffer(inputBuffer) ? inputBuffer : Buffer.from(String(inputBuffer || ''), 'utf8');
+        const sourceBuffer = Buffer.isBuffer(inputBuffer)
+            ? inputBuffer
+            : Buffer.from(String(inputBuffer || ''), 'utf8');
         const maxLength = this.syslogConfig.maxMessageLength;
         const truncated = Boolean(context.truncated) || sourceBuffer.length > maxLength;
         const buffer = truncated ? sourceBuffer.slice(0, maxLength) : sourceBuffer;
@@ -536,7 +547,9 @@ class SyslogWorker {
     }
 
     buildSummary(message) {
-        const normalized = String(message || '').replace(/\s+/g, ' ').trim();
+        const normalized = String(message || '')
+            .replace(/\s+/g, ' ')
+            .trim();
         if (normalized.length <= 160) {
             return normalized;
         }

@@ -1,4 +1,3 @@
-
 const BgpConst = require('../../const/bgpConst');
 const { ipv4BufferToString, ipv6BufferToString, rdBufferToString } = require('../ipUtils');
 const { parseMplsLabelStack } = require('./common');
@@ -17,17 +16,24 @@ function parseVpnNextHop(buffer, position, nextHopLength) {
 
     if (nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) {
         return ipv6BufferToString(
-            buffer.subarray(position + BgpConst.BGP_RD_LEN, position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
+            buffer.subarray(
+                position + BgpConst.BGP_RD_LEN,
+                position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN
+            ),
             BgpConst.IPV6_HOST_LEN
         );
     }
 
     if (nextHopLength === (BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) * 2) {
         const globalNextHop = ipv6BufferToString(
-            buffer.subarray(position + BgpConst.BGP_RD_LEN, position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN),
+            buffer.subarray(
+                position + BgpConst.BGP_RD_LEN,
+                position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN
+            ),
             BgpConst.IPV6_HOST_LEN
         );
-        const linkLocalNextHopPosition = position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN + BgpConst.BGP_RD_LEN;
+        const linkLocalNextHopPosition =
+            position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN + BgpConst.BGP_RD_LEN;
         const linkLocalNextHop = ipv6BufferToString(
             buffer.subarray(linkLocalNextHopPosition, linkLocalNextHopPosition + BgpConst.IPV6_HOST_BYTE_LEN),
             BgpConst.IPV6_HOST_LEN
@@ -53,12 +59,11 @@ function parseRouteDistinguisherNlri(buffer, position, afi) {
         errors.push(`VPN NLRI length is too short: ${nlriBitLength}`);
     }
 
-    const { labels, labelBits, position: rdPosition } = parseMplsLabelStack(
-        buffer,
-        position,
-        nlriBitLength,
-        boundedNlriEnd
-    );
+    const {
+        labels,
+        labelBits,
+        position: rdPosition
+    } = parseMplsLabelStack(buffer, position, nlriBitLength, boundedNlriEnd);
     position = rdPosition;
     if (labels.length === 0) {
         errors.push('VPN NLRI has no MPLS label');
@@ -75,8 +80,7 @@ function parseRouteDistinguisherNlri(buffer, position, afi) {
     position = Math.min(position + BgpConst.BGP_RD_LEN, boundedNlriEnd);
 
     const prefixLength = Math.max(nlriBitLength - labelBits - (BgpConst.BGP_RD_LEN << 3), 0);
-    const maxPrefixLength =
-        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
+    const maxPrefixLength = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
     if (prefixLength > maxPrefixLength) {
         errors.push(`VPN prefix length ${prefixLength} exceeds AFI maximum ${maxPrefixLength}`);
     }

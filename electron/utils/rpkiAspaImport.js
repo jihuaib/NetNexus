@@ -102,7 +102,10 @@ function normalizeAfiToken(value) {
         return null;
     }
 
-    const normalized = value.trim().toLowerCase().replace(/[\s_]+/g, '');
+    const normalized = value
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_]+/g, '');
     if (!normalized) {
         return null;
     }
@@ -114,9 +117,7 @@ function normalizeAfiToken(value) {
         return RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV6;
     }
     if (
-        ['3', 'both', 'all', 'ipv4+ipv6', 'ipv6+ipv4', 'ipv4,ipv6', 'ipv6,ipv4', 'ipv4/ipv6'].includes(
-            normalized
-        ) ||
+        ['3', 'both', 'all', 'ipv4+ipv6', 'ipv6+ipv4', 'ipv4,ipv6', 'ipv6,ipv4', 'ipv4/ipv6'].includes(normalized) ||
         ((normalized.includes('ipv4') || normalized.includes('v4')) &&
             (normalized.includes('ipv6') || normalized.includes('v6')))
     ) {

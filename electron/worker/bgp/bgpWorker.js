@@ -39,23 +39,15 @@ function normalizeQpRouteGrowthMode(mode) {
 }
 
 function normalizeQpBsidMode(mode) {
-    return Object.values(BgpConst.BGP_QP_BSID_MODE).includes(mode)
-        ? mode
-        : BgpConst.BGP_QP_BSID_MODE.FIXED;
+    return Object.values(BgpConst.BGP_QP_BSID_MODE).includes(mode) ? mode : BgpConst.BGP_QP_BSID_MODE.FIXED;
 }
 
 function routeGrowthIncludesIp(mode) {
-    return (
-        mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP ||
-        mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN
-    );
+    return mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP || mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
 }
 
 function routeGrowthIncludesDqpn(mode) {
-    return (
-        mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.DQPN ||
-        mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN
-    );
+    return mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.DQPN || mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
 }
 
 function ipToBigInt(ip, ipType) {
@@ -94,10 +86,7 @@ function bigIntToIpv6(value) {
 }
 
 function makeRouteLookupKey(addressFamily, route) {
-    if (
-        addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP ||
-        addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_QP
-    ) {
+    if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_QP) {
         return BgpRoute.makeQpKey(route?.dqpn, route?.ip, route?.mask);
     }
 
@@ -274,10 +263,7 @@ class BgpWorker {
             this.deleteAllRoutesByFamily.bind(this)
         );
         this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.GET_ROUTES, this.getRoutes.bind(this));
-        this.messageHandler.registerHandler(
-            BgpConst.BGP_REQ_TYPES.GET_ROUTE_DETAIL,
-            this.getRouteDetail.bind(this)
-        );
+        this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.GET_ROUTE_DETAIL, this.getRouteDetail.bind(this));
 
         // MVPN
         this.messageHandler.registerHandler(
@@ -679,8 +665,7 @@ class BgpWorker {
             instanceInfoList.push({
                 addressFamily,
                 routeCount: instance.routeMap ? instance.routeMap.size : 0,
-                peerCount: instance.peerMap ? instance.peerMap.size : 0,
-                singleRouteSend: !!instance.singleRouteSend
+                peerCount: instance.peerMap ? instance.peerMap.size : 0
             });
         });
         this.messageHandler.sendSuccessResponse(messageId, instanceInfoList, '实例信息查询成功');
@@ -745,7 +730,7 @@ class BgpWorker {
 
         // 清空routeMap
         this.bgpInstanceMap.forEach((instance, _) => {
-            instance.routeMap.clear();
+            instance.clearRoutes();
         });
 
         // 关闭session socket
@@ -784,13 +769,26 @@ class BgpWorker {
         // 生成路由IP
         const ipType = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
         let hasRouteChanged = false;
+        const nextCustomAttr = config.customAttr || '';
+        const nextRt = config.rt || '';
+        const hasAttrChanged = instance.customAttr !== nextCustomAttr || instance.rt !== nextRt;
+        if (instance.customAttr !== nextCustomAttr) {
+            instance.customAttr = nextCustomAttr;
+        }
+        if (instance.rt !== nextRt) {
+            instance.rt = nextRt;
+        }
         const generatedCount = forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, route => {
             const key = BgpRoute.makeKey(route.ip, route.mask);
             if (!instance.routeMap.has(key)) {
                 const bgpRoute = new BgpRoute(instance);
                 bgpRoute.ip = route.ip;
                 bgpRoute.mask = route.mask;
-                instance.routeMap.set(key, bgpRoute);
+                instance.setRoute(
+                    key,
+                    bgpRoute,
+                    instance.makeRouteAttr(bgpRoute, { customAttr: instance.customAttr, rt: instance.rt })
+                );
                 hasRouteChanged = true;
             }
         });
@@ -799,13 +797,8 @@ class BgpWorker {
             return;
         }
 
-        if (instance.customAttr !== config.customAttr) {
-            instance.customAttr = config.customAttr;
-            hasRouteChanged = true;
-        }
-
-        if (instance.rt !== config.rt) {
-            instance.rt = config.rt;
+        if (hasAttrChanged) {
+            instance.refreshRouteAttrs(null, { customAttr: instance.customAttr, rt: instance.rt });
             hasRouteChanged = true;
         }
 
@@ -832,8 +825,7 @@ class BgpWorker {
         const generatedCount = forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, route => {
             const key = BgpRoute.makeKey(route.ip, route.mask);
             if (instance.routeMap.has(key)) {
-                const bgpRoute = instance.routeMap.get(key);
-                instance.routeMap.delete(key);
+                const bgpRoute = instance.deleteRoute(key);
                 withdrawnRoutes.push(bgpRoute);
             }
         });
@@ -844,10 +836,6 @@ class BgpWorker {
 
         if (withdrawnRoutes.length > 0) {
             instance.withdrawRoute(withdrawnRoutes);
-        }
-
-        if (instance.routeMap.size === 0) {
-            instance.singleRouteSend = false;
         }
 
         this.messageHandler.sendSuccessResponse(messageId, null, '路由删除成功');
@@ -871,14 +859,12 @@ class BgpWorker {
         const count = withdrawnRoutes.length;
 
         // Clear all routes
-        instance.routeMap.clear();
+        instance.clearRoutes();
 
         // Send withdraw message if there were routes
         if (withdrawnRoutes.length > 0) {
             instance.withdrawRoute(withdrawnRoutes);
         }
-
-        instance.singleRouteSend = false;
 
         logger.info(`Deleted all ${count} routes for address family ${addressFamily}`);
         this.messageHandler.sendSuccessResponse(messageId, { deleted: count }, `成功删除所有 ${count} 条路由`);
@@ -894,9 +880,10 @@ class BgpWorker {
                 return;
             }
 
-            // 更新实例的 BSID。连续模式下每条路由仍会写入自己的 nextHop，这里仅作为 fallback。
-            if (config.bsid !== undefined) {
-                instance.bsid = config.bsid;
+            const nextCustomAttr = config.customAttr || '';
+            const hasAttrChanged = instance.customAttr !== nextCustomAttr;
+            if (hasAttrChanged) {
+                instance.customAttr = nextCustomAttr;
             }
 
             // 生成路由：IPv4 QP 使用 IPv4 前缀格式，IPv6 QP 使用 IPv6 前缀格式
@@ -912,13 +899,17 @@ class BgpWorker {
                     bgpRoute.ip = route.ip;
                     bgpRoute.mask = route.mask;
                     bgpRoute.dqpn = route.dqpn;
-                    bgpRoute.nextHop = route.bsid;
-                    instance.routeMap.set(key, bgpRoute);
+                    instance.setRoute(
+                        key,
+                        bgpRoute,
+                        instance.makeRouteAttr(bgpRoute, { nextHop: route.bsid, customAttr: instance.customAttr })
+                    );
                     hasRouteChanged = true;
                 } else {
                     const bgpRoute = instance.routeMap.get(key);
-                    if (bgpRoute.nextHop !== route.bsid) {
-                        bgpRoute.nextHop = route.bsid;
+                    const routeAttr = instance.getRouteAttr(bgpRoute);
+                    if (routeAttr.nextHop !== route.bsid) {
+                        instance.assignRouteAttr(key, instance.makeRouteAttr(bgpRoute, { nextHop: route.bsid }));
                         hasRouteChanged = true;
                     }
                 }
@@ -928,8 +919,8 @@ class BgpWorker {
                 return;
             }
 
-            if (instance.customAttr !== config.customAttr) {
-                instance.customAttr = config.customAttr;
+            if (hasAttrChanged) {
+                instance.refreshRouteAttrs(null, { customAttr: instance.customAttr });
                 hasRouteChanged = true;
             }
 
@@ -965,8 +956,7 @@ class BgpWorker {
                 route => {
                     const key = BgpRoute.makeQpKey(route.dqpn, route.ip, route.mask);
                     if (instance.routeMap.has(key)) {
-                        const bgpRoute = instance.routeMap.get(key);
-                        instance.routeMap.delete(key);
+                        const bgpRoute = instance.deleteRoute(key);
                         withdrawnRoutes.push(bgpRoute);
                     }
                 },
@@ -979,10 +969,6 @@ class BgpWorker {
 
             if (withdrawnRoutes.length > 0) {
                 instance.withdrawRoute(withdrawnRoutes);
-            }
-
-            if (instance.routeMap.size === 0) {
-                instance.singleRouteSend = false;
             }
 
             this.messageHandler.sendSuccessResponse(messageId, null, 'QP路由删除成功');
@@ -1088,7 +1074,7 @@ class BgpWorker {
         let index = 0;
         for (const route of instance.routeMap.values()) {
             if (index >= startIndex) {
-                list.push(route.getRouteInfo());
+                list.push(route.getRouteInfo(instance.getRouteAttr(route)));
                 if (list.length >= currentPageSize) {
                     break;
                 }
@@ -1117,10 +1103,12 @@ class BgpWorker {
             return;
         }
 
-        const routeInfo = bgpRoute.getRouteInfo();
+        const routeInfo = bgpRoute.getRouteInfo(instance.getRouteAttr(bgpRoute));
+        const attrEntry = instance.getRouteAttrEntry(bgpRoute);
+        routeInfo.attrId = bgpRoute.attrId || '';
+        routeInfo.attrRefCount = attrEntry?.refCount || 0;
         routeInfo.rt = routeInfo.rt || instance.rt || '';
         routeInfo.customAttr = routeInfo.customAttr || instance.customAttr || '';
-        routeInfo.bsid = instance.bsid || '';
 
         this.messageHandler.sendSuccessResponse(messageId, routeInfo, '路由详情查询成功');
     }
@@ -1145,13 +1133,7 @@ class BgpWorker {
     forEachMvpnGeneratedIp(config, callback) {
         const baseIp = this.getMvpnBaseIp(config);
         if (baseIp) {
-            return forEachGeneratedRouteIp(
-                BgpConst.IP_TYPE.IPV4,
-                baseIp,
-                BgpConst.IP_HOST_LEN,
-                config.count,
-                callback
-            );
+            return forEachGeneratedRouteIp(BgpConst.IP_TYPE.IPV4, baseIp, BgpConst.IP_HOST_LEN, config.count, callback);
         }
 
         // Types without IP increment (for example Type 2) keep the existing single-entry behavior.
@@ -1169,6 +1151,11 @@ class BgpWorker {
         }
 
         let hasRouteChanged = false;
+        const nextRt = config.rt || '';
+        const hasAttrChanged = instance.rt !== nextRt;
+        if (hasAttrChanged) {
+            instance.rt = nextRt;
+        }
 
         const generatedCount = this.forEachMvpnGeneratedIp(config, ipObj => {
             const currentIp = ipObj.ip;
@@ -1224,7 +1211,7 @@ class BgpWorker {
                         break;
                 }
 
-                instance.routeMap.set(routeKey, bgpRoute);
+                instance.setRoute(routeKey, bgpRoute, instance.makeRouteAttr(bgpRoute, { rt: instance.rt }));
                 hasRouteChanged = true;
             }
         });
@@ -1233,8 +1220,8 @@ class BgpWorker {
             return;
         }
 
-        if (instance.rt !== config.rt) {
-            instance.rt = config.rt;
+        if (hasAttrChanged) {
+            instance.refreshRouteAttrs(null, { rt: instance.rt });
             hasRouteChanged = true;
         }
         if (hasRouteChanged) {
@@ -1271,8 +1258,7 @@ class BgpWorker {
             const routeKey = `${config.routeType}|${config.rd}|${config.sourceAs || ''}|${config.sourceIp || ''}|${currentGroupIp || ''}|${currentOrigRouterIp || ''}`;
 
             if (instance.routeMap.has(routeKey)) {
-                const bgpRoute = instance.routeMap.get(routeKey);
-                instance.routeMap.delete(routeKey);
+                const bgpRoute = instance.deleteRoute(routeKey);
                 withdrawnRoutes.push(bgpRoute);
             }
         });
@@ -1289,7 +1275,7 @@ class BgpWorker {
     }
 
     importRoutes(messageId, config) {
-        const { addressFamily, routes, announce = true, instanceAttrs = {}, singleRouteSend = false } = config;
+        const { addressFamily, routes, announce = true, instanceAttrs = {} } = config;
         const routeList = Array.isArray(routes) ? routes : [];
         const { afi, safi } = getAfiAndSafi(addressFamily);
         const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
@@ -1299,21 +1285,28 @@ class BgpWorker {
             return;
         }
 
+        const hasInstanceAttrChanged =
+            (instanceAttrs.customAttr !== undefined && instance.customAttr !== (instanceAttrs.customAttr || '')) ||
+            (instanceAttrs.rt !== undefined && instance.rt !== (instanceAttrs.rt || ''));
+
         if (instanceAttrs.customAttr !== undefined) {
             instance.customAttr = instanceAttrs.customAttr || '';
         }
         if (instanceAttrs.rt !== undefined) {
             instance.rt = instanceAttrs.rt || '';
         }
-        if (instanceAttrs.bsid !== undefined) {
-            instance.bsid = instanceAttrs.bsid || '';
+        if (hasInstanceAttrChanged) {
+            const attrOverrides = {};
+            if (instanceAttrs.customAttr !== undefined) {
+                attrOverrides.customAttr = instance.customAttr;
+            }
+            if (instanceAttrs.rt !== undefined) {
+                attrOverrides.rt = instance.rt;
+            }
+            instance.refreshRouteAttrs(null, attrOverrides);
         }
 
-        if (routeList.length !== 0 && (singleRouteSend || routeList.some(route => route.asPath))) {
-            instance.singleRouteSend = true;
-        }
-
-        let hasRouteChanged = false;
+        let hasRouteChanged = hasInstanceAttrChanged;
         routeList.forEach(route => {
             let key;
             if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN) {
@@ -1329,19 +1322,13 @@ class BgpWorker {
 
             if (!instance.routeMap.has(key)) {
                 const bgpRoute = new BgpRoute(instance);
-                Object.assign(bgpRoute, route);
-                if (route.formatted !== undefined) {
-                    bgpRoute.customAttr = route.formatted; // Map formatted to customAttr for MRT imports.
-                }
-
-                instance.routeMap.set(key, bgpRoute);
+                instance.copyRouteNlriFields(bgpRoute, route);
+                instance.setRoute(key, bgpRoute, instance.makeRouteAttr(bgpRoute, instance.extractRouteAttr(route)));
                 hasRouteChanged = true;
             } else {
                 const bgpRoute = instance.routeMap.get(key);
-                Object.assign(bgpRoute, route);
-                if (route.formatted !== undefined) {
-                    bgpRoute.customAttr = route.formatted;
-                }
+                instance.copyRouteNlriFields(bgpRoute, route);
+                instance.assignRouteAttr(key, instance.makeRouteAttr(bgpRoute, instance.extractRouteAttr(route)));
                 hasRouteChanged = true;
             }
         });

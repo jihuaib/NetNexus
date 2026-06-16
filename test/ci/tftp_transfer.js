@@ -32,7 +32,13 @@ const HOST = '127.0.0.1';
 // ============ 报文工具 ============
 
 function buildRequest(opcode, filename, mode, options) {
-    const segs = [Buffer.from([0x00, opcode]), Buffer.from(filename, 'ascii'), Buffer.from([0]), Buffer.from(mode, 'ascii'), Buffer.from([0])];
+    const segs = [
+        Buffer.from([0x00, opcode]),
+        Buffer.from(filename, 'ascii'),
+        Buffer.from([0]),
+        Buffer.from(mode, 'ascii'),
+        Buffer.from([0])
+    ];
     for (const [k, v] of Object.entries(options || {})) {
         segs.push(Buffer.from(k, 'ascii'), Buffer.from([0]), Buffer.from(String(v), 'ascii'), Buffer.from([0]));
     }
@@ -129,7 +135,7 @@ function tftpUpload(port, family, host, filename, content, options = {}) {
         let finalSent = false;
         let done = false;
 
-        const finish = (err) => {
+        const finish = err => {
             if (done) return;
             done = true;
             clearTimeout(timer);

@@ -1,28 +1,10 @@
+const BgpConst = require('../../const/bgpConst');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
+
 class BgpRoute {
     constructor(bgpInstance) {
         this.bgpInstance = bgpInstance;
-        this.ip = null;
-        this.mask = null;
-        this.asPath = null;
-        this.med = 0;
-        this.localPref = 100;
-        this.communities = [];
-        this.nextHop = null;
-        this.origin = null;
-        this.customAttr = null;
-        this.rt = null;
-
-        // MVPN
-        this.routeType = null;
-        this.rd = null;
-        this.originatingRouterIp = null;
-        this.sourceIp = null;
-        this.groupIp = null;
-        this.sourceAs = null;
-
-        // QP
-        this.dqpn = null;
+        this.attrId = null;
     }
 
     static makeKey(ip, mask) {
@@ -38,28 +20,41 @@ class BgpRoute {
         return { ip, mask };
     }
 
-    getRouteInfo() {
+    getRouteInfo(routeAttr = {}) {
         const addressFamily = getAddrFamilyType(this.bgpInstance.afi, this.bgpInstance.safi);
-        return {
-            ip: this.ip,
-            mask: this.mask,
-            asPath: this.asPath,
-            med: this.med,
-            localPref: this.localPref,
-            communities: this.communities,
-            nextHop: this.nextHop,
-            origin: this.origin,
-            customAttr: this.customAttr,
-            rt: this.rt,
-            routeType: this.routeType,
-            rd: this.rd,
-            originatingRouterIp: this.originatingRouterIp,
-            sourceIp: this.sourceIp,
-            groupIp: this.groupIp,
-            sourceAs: this.sourceAs,
-            dqpn: this.dqpn,
+        const routeInfo = {
+            asPath: routeAttr.asPath || '',
+            med: routeAttr.med ?? 0,
+            localPref: routeAttr.localPref ?? 100,
+            communities: routeAttr.communities || [],
+            nextHop: routeAttr.nextHop || '',
+            origin: routeAttr.origin ?? null,
+            customAttr: routeAttr.customAttr || '',
+            rt: routeAttr.rt || '',
             addressFamily: addressFamily
         };
+
+        if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
+            routeInfo.ip = this.ip;
+            routeInfo.mask = this.mask;
+        }
+
+        if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
+            routeInfo.routeType = this.routeType;
+            routeInfo.rd = this.rd;
+            routeInfo.originatingRouterIp = this.originatingRouterIp;
+            routeInfo.sourceIp = this.sourceIp;
+            routeInfo.groupIp = this.groupIp;
+            routeInfo.sourceAs = this.sourceAs;
+        }
+
+        if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
+            routeInfo.ip = this.ip;
+            routeInfo.mask = this.mask;
+            routeInfo.dqpn = this.dqpn;
+        }
+
+        return routeInfo;
     }
 }
 

@@ -22,14 +22,21 @@ function bgpPacket(type, body = Buffer.alloc(0)) {
 
 function pathAttr(typeCode, value, flags = BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL) {
     if (value.length > 255) {
-        return Buffer.concat([Buffer.from([flags | BgpConst.BGP_PATH_ATTR_FLAGS.EXTENDED_LENGTH, typeCode]), u16(value.length), value]);
+        return Buffer.concat([
+            Buffer.from([flags | BgpConst.BGP_PATH_ATTR_FLAGS.EXTENDED_LENGTH, typeCode]),
+            u16(value.length),
+            value
+        ]);
     }
     return Buffer.concat([Buffer.from([flags, typeCode, value.length]), value]);
 }
 
 function updatePacket(attrs = [], nlri = Buffer.alloc(0)) {
     const attrBuffer = Buffer.concat(attrs);
-    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrBuffer.length), attrBuffer, nlri]));
+    return bgpPacket(
+        BgpConst.BGP_PACKET_TYPE.UPDATE,
+        Buffer.concat([u16(0), u16(attrBuffer.length), attrBuffer, nlri])
+    );
 }
 
 function capability(code, value = Buffer.alloc(0)) {
@@ -38,7 +45,10 @@ function capability(code, value = Buffer.alloc(0)) {
 
 function openPacket(capabilities) {
     const capabilityBuffer = Buffer.concat(capabilities);
-    const optionalParams = Buffer.concat([Buffer.from([BgpConst.BGP_OPEN_OPT_TYPE.OPT_TYPE, capabilityBuffer.length]), capabilityBuffer]);
+    const optionalParams = Buffer.concat([
+        Buffer.from([BgpConst.BGP_OPEN_OPT_TYPE.OPT_TYPE, capabilityBuffer.length]),
+        capabilityBuffer
+    ]);
     return bgpPacket(
         BgpConst.BGP_PACKET_TYPE.OPEN,
         Buffer.concat([
@@ -101,8 +111,16 @@ const wrappedUpdate = Buffer.concat([Buffer.from([0xaa, 0xbb, 0xcc, 0xdd]), empt
 const wrappedTree = parseAtOffset(wrappedUpdate, 4);
 const wrappedBgpNode = findNode(wrappedTree, node => node.name === 'BGP Packet');
 assert.ok(wrappedBgpNode, 'BGP tree node should be present');
-assert.equal(wrappedBgpNode.length, emptyUpdate.length, 'BGP tree length should use BGP message length, not outer buffer length');
-assert.equal(findNode(wrappedBgpNode, node => node.name === 'NLRI'), null, 'Trailing outer bytes must not become BGP NLRI');
+assert.equal(
+    wrappedBgpNode.length,
+    emptyUpdate.length,
+    'BGP tree length should use BGP message length, not outer buffer length'
+);
+assert.equal(
+    findNode(wrappedBgpNode, node => node.name === 'NLRI'),
+    null,
+    'Trailing outer bytes must not become BGP NLRI'
+);
 
 registry.registerParser('bgp', BgpConst.BGP_DEFAULT_PORT, parseBgpPacket, true);
 try {
@@ -123,7 +141,11 @@ try {
     const tcpBgpNode = findNode(tcpTree, node => node.name === 'BGP Packet');
     assert.ok(tcpBgpNode, 'TCP parser should recurse into BGP tree parser by port');
     assert.equal(tcpBgpNode.length, emptyUpdate.length);
-    assert.equal(findNode(tcpBgpNode, node => node.name === 'NLRI'), null, 'Trailing TCP bytes must not become BGP NLRI');
+    assert.equal(
+        findNode(tcpBgpNode, node => node.name === 'NLRI'),
+        null,
+        'Trailing TCP bytes must not become BGP NLRI'
+    );
 } finally {
     registry.unregisterParser('bgp', BgpConst.BGP_DEFAULT_PORT);
 }
@@ -137,19 +159,35 @@ const udpTree = {
 };
 const udpResult = registry.parse('udp', 17, udpTree, udpDatagram(Buffer.from([0x12, 0x34, 0x00, 0x00])));
 assert.equal(udpResult.valid, true, udpResult.error);
-assert.ok(findNode(udpTree, node => node.name === 'UDP Header'), 'UDP parser should parse transport header');
+assert.ok(
+    findNode(udpTree, node => node.name === 'UDP Header'),
+    'UDP parser should parse transport header'
+);
 
 const extNextHopCap = capability(
     BgpConst.BGP_OPEN_CAP_CODE.EXTENDED_NEXT_HOP_ENCODING,
-    Buffer.concat([u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4), u16(BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST), u16(BgpConst.IP_TYPE.IPV6)])
+    Buffer.concat([
+        u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+        u16(BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST),
+        u16(BgpConst.IP_TYPE.IPV6)
+    ])
 );
 const addPathCap = capability(
     BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH,
-    Buffer.concat([u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4), Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST, BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE])])
+    Buffer.concat([
+        u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+        Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST, BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE])
+    ])
 );
 const openTree = parseAtOffset(openPacket([extNextHopCap, addPathCap]));
-assert.ok(findNode(openTree, node => node.name === 'Next Hop Tuple 1'), 'Extended Next Hop capability should expand in tree');
-assert.ok(findNode(openTree, node => node.name === 'ADD-PATH Tuple 1'), 'ADD-PATH capability should expand in tree');
+assert.ok(
+    findNode(openTree, node => node.name === 'Next Hop Tuple 1'),
+    'Extended Next Hop capability should expand in tree'
+);
+assert.ok(
+    findNode(openTree, node => node.name === 'ADD-PATH Tuple 1'),
+    'ADD-PATH capability should expand in tree'
+);
 
 const extCommunityAttr = pathAttr(
     BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES,
@@ -172,9 +210,21 @@ const otcAttr = pathAttr(
     BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
 );
 const attrTree = parseAtOffset(updatePacket([extCommunityAttr, pmsiAttr, tunnelEncapAttr, otcAttr]));
-assert.ok(findNode(attrTree, node => node.name === 'Extended Communities'), 'EXTENDED_COMMUNITIES should expand in tree');
-assert.ok(findNode(attrTree, node => node.name === 'PMSI Tunnel'), 'PMSI_TUNNEL should expand in tree');
-assert.ok(findNode(attrTree, node => node.name === 'Tunnel Encapsulation'), 'TUNNEL_ENCAPSULATION should expand in tree');
-assert.ok(findNode(attrTree, node => node.name === 'Only-To-Customer AS'), 'OTC should expand in tree');
+assert.ok(
+    findNode(attrTree, node => node.name === 'Extended Communities'),
+    'EXTENDED_COMMUNITIES should expand in tree'
+);
+assert.ok(
+    findNode(attrTree, node => node.name === 'PMSI Tunnel'),
+    'PMSI_TUNNEL should expand in tree'
+);
+assert.ok(
+    findNode(attrTree, node => node.name === 'Tunnel Encapsulation'),
+    'TUNNEL_ENCAPSULATION should expand in tree'
+);
+assert.ok(
+    findNode(attrTree, node => node.name === 'Only-To-Customer AS'),
+    'OTC should expand in tree'
+);
 
 console.log('BGP packet tree parser tests passed');

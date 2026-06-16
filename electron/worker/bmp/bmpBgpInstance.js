@@ -2,6 +2,7 @@ const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const { toSerializableTlvs } = require('../../utils/bmpUtils');
 const { getRoutePrefixIndexKeys } = require('../../utils/routePrefixUtils');
 const BmpConst = require('../../const/bmpConst');
+const { BmpRouteAttrStore, DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
 
 class BmpBgpInstance {
     constructor(bmpSession) {
@@ -38,6 +39,7 @@ class BmpBgpInstance {
         this.isAddPath = false;
 
         this.bgpRoutes = new Map();
+        this.attrStore = new BmpRouteAttrStore();
         this.routePrefixIndex = new Map();
         this.routeSummary = { active: 0, stale: 0, total: 0 };
         this.ribEpoch = 0;
@@ -172,6 +174,47 @@ class BmpBgpInstance {
         return routeKeys instanceof Set ? routeKeys : [routeKeys];
     }
 
+    assignRouteAttr(route, attr) {
+        if (!route) {
+            return null;
+        }
+
+        const nextAttrId = this.attrStore.intern(attr);
+        const prevAttrId = route.attrId;
+
+        if (prevAttrId === nextAttrId) {
+            this.attrStore.release(nextAttrId);
+            route._inlineAttr = null;
+            return nextAttrId;
+        }
+
+        if (prevAttrId) {
+            this.attrStore.release(prevAttrId);
+        }
+
+        route.attrId = nextAttrId;
+        route._inlineAttr = null;
+        return nextAttrId;
+    }
+
+    releaseRouteAttr(route) {
+        if (!route?.attrId) {
+            return;
+        }
+
+        this.attrStore.release(route.attrId);
+        route.attrId = null;
+        route._inlineAttr = null;
+    }
+
+    getRouteAttr(route) {
+        return this.attrStore.get(route?.attrId) || route?.getInlineRouteAttr?.() || { ...DEFAULT_BMP_ROUTE_ATTR };
+    }
+
+    getRouteAttrEntry(route) {
+        return this.attrStore.getEntry(route?.attrId);
+    }
+
     getRibEpoch() {
         return this.ribEpoch || 0;
     }
@@ -236,6 +279,7 @@ class BmpBgpInstance {
 
     closeInstance() {
         this.bgpRoutes.clear();
+        this.attrStore.clear();
         this.routePrefixIndex.clear();
         this.routeSummary = { active: 0, stale: 0, total: 0 };
         this.recvAddPathMap.clear();

@@ -1,102 +1,102 @@
 name: Test
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
-      - master
+    pull_request:
+    push:
+        branches:
+            - main
+            - master
 
 jobs:
-  test:
-    name: Lint, Test, Build
-    runs-on: ubuntu-22.04
-    env:
-      NODE_VERSION: "16.20.2"
+    test:
+        name: Lint, Test, Build
+        runs-on: ubuntu-22.04
+        env:
+            NODE_VERSION: '16.20.2'
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
 
-      - name: Verify Node.js version
-        run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+            - name: Verify Node.js version
+              run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
 
-      - name: Install dependencies
-        run: npm ci
+            - name: Install dependencies
+              run: npm ci
 
-      - name: Run lint
-        run: npm run lint
+            - name: Run lint
+              run: npm run lint
 
-      - name: Run tests
-        run: npm test
+            - name: Run tests
+              run: npm test
 
-      - name: Run minified CI tests
-        run: npm run test:ci:minified
+            - name: Run minified CI tests
+              run: npm run test:ci:minified
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+            - name: Install Playwright browsers
+              run: npx playwright install --with-deps chromium
 
-      - name: Run UI tests
-        run: xvfb-run --auto-servernum npm run test:e2e
+            - name: Run UI tests
+              run: xvfb-run --auto-servernum npm run test:e2e
 
-      - name: Upload Playwright report
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-linux
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 7
+            - name: Upload Playwright report
+              if: ${{ always() }}
+              uses: actions/upload-artifact@v4
+              with:
+                  name: playwright-report-linux
+                  path: |
+                      playwright-report/
+                      test-results/
+                  if-no-files-found: ignore
+                  retention-days: 7
 
-      - name: Build
-        run: npm run build
+            - name: Build
+              run: npm run build
 
-  e2e-windows:
-    name: Windows Tests and Packaged E2E
-    runs-on: windows-latest
-    env:
-      NODE_VERSION: "16.20.2"
+    e2e-windows:
+        name: Windows Tests and Packaged E2E
+        runs-on: windows-latest
+        env:
+            NODE_VERSION: '16.20.2'
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
 
-      - name: Verify Node.js version
-        run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+            - name: Verify Node.js version
+              run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
 
-      - name: Install dependencies
-        run: npm ci
+            - name: Install dependencies
+              run: npm ci
 
-      - name: Run Windows tests
-        run: npm test
+            - name: Run Windows tests
+              run: npm test
 
-      - name: Run Windows minified CI tests
-        run: npm run test:ci:minified
+            - name: Run Windows minified CI tests
+              run: npm run test:ci:minified
 
-      - name: Run Windows packaged UI tests
-        run: npm run test:e2e
+            - name: Run Windows packaged UI tests
+              run: npm run test:e2e
 
-      - name: Upload Playwright report
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-windows
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 7
+            - name: Upload Playwright report
+              if: ${{ always() }}
+              uses: actions/upload-artifact@v4
+              with:
+                  name: playwright-report-windows
+                  path: |
+                      playwright-report/
+                      test-results/
+                  if-no-files-found: ignore
+                  retention-days: 7

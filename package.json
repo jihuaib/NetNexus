@@ -96,7 +96,7 @@
             "scripts/tcp-md5-helper.c",
             "scripts/tcp-md5-proxy.sh",
             "scripts/tcp-md5-diagnose.sh",
-            "bgpdata/**/*"
+            "scripts/test-data/test_routes_100.mrt"
         ],
         "extraResources": [
             {

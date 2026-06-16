@@ -226,7 +226,9 @@ class ToolsApp {
             .slice(0, 100)
             .map(header => ({
                 enabled: header.enabled !== false,
-                key: String(header.key || '').trim().slice(0, 256),
+                key: String(header.key || '')
+                    .trim()
+                    .slice(0, 256),
                 value: String(header.value || '').slice(0, 4096)
             }))
             .filter(header => header.key || header.value);
@@ -264,9 +266,13 @@ class ToolsApp {
 
             return {
                 id: String(connection.id || this.makeHttpApiConnectionId()).slice(0, 128),
-                name: String(connection.name || `API ${index + 1}`).trim().slice(0, 80),
+                name: String(connection.name || `API ${index + 1}`)
+                    .trim()
+                    .slice(0, 80),
                 method: methods.has(method) ? method : 'GET',
-                url: String(connection.url || '').trim().slice(0, 2048),
+                url: String(connection.url || '')
+                    .trim()
+                    .slice(0, 2048),
                 headers: this.normalizeHeaderRows(connection.headers),
                 body: body.slice(0, 1024 * 1024),
                 timeout: Number.isInteger(timeout) && timeout >= 1000 && timeout <= 600000 ? timeout : 15000

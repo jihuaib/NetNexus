@@ -53,6 +53,11 @@ const mockRoute = {
     med: 0,
     nextHop: '192.0.2.254',
     localPref: 100,
+    nlriDetail: {
+        prefix: '203.0.113.0/24',
+        pathId: 0,
+        rawNlri: '18cb0071'
+    },
     routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
     extraRoute: 'route verbose field'
 };
@@ -83,7 +88,7 @@ const mockInstanceReport = {
 };
 
 const commandCases = [
-    { id: 'show-cli-command-info', input: 'show cli command-info', includes: ['show-bmp-route-session-key-verbose'] },
+    { id: 'show-cli-command-info', input: 'show cli command-info', includes: ['show-bmp-route-session', 'verbose'] },
     { id: 'show-cli-history', input: 'show cli history', includes: ['seed command'] },
     { id: 'show-cli-client', input: 'show cli client', includes: ['127.0.0.1:3788'] },
     { id: 'config', input: 'config', view: 'config' },
@@ -146,6 +151,18 @@ const commandCases = [
     },
     {
         id: 'show-bmp-route-session',
+        input: 'show bmp route client-id 1 session-id 1 af ipv4-unc rib adj-rib-in state all',
+        includes: ['RouteKey', mockRoute.routeKey, 'ipv4-unc'],
+        excludes: ['extraRoute', 'null|0:0']
+    },
+    {
+        id: 'show-bmp-route-session',
+        input: 'show bmp route client-id 1 session-id 1 af ipv4-unc rib adj-rib-in prefix 203.0.113.0/24',
+        includes: ['RouteKey', mockRoute.routeKey, 'ipv4-unc'],
+        excludes: ['extraRoute', 'null|0:0']
+    },
+    {
+        id: 'show-bmp-route-session',
         input: 'show bmp route client-id 1 session-id 1 af ipv4-unc rib adj-rib-in state all prefix 203.0.113.0/24',
         includes: ['RouteKey', mockRoute.routeKey, 'ipv4-unc'],
         excludes: ['extraRoute', 'null|0:0']
@@ -159,12 +176,24 @@ const commandCases = [
     {
         id: 'show-bmp-route-session-key-verbose',
         input: `show bmp route client-id 1 session-id 1 af ipv4-unc rib adj-rib-in route-key ${mockRoute.routeKey} verbose`,
-        includes: ['extraRoute', 'route verbose field', 'localPref', 'summary', mockRoute.routeKey],
+        includes: ['extraRoute', 'route verbose field', 'localPref', 'nlriDetail', mockRoute.routeKey],
         excludes: ['null|0:0']
     },
     {
         id: 'show-bmp-route-instance',
         input: 'show bmp route client-id 1 instance-id 1',
+        includes: ['RouteKey', mockRoute.routeKey, 'ipv4-unc'],
+        excludes: ['extraRoute', 'null|0:0']
+    },
+    {
+        id: 'show-bmp-route-instance',
+        input: 'show bmp route client-id 1 instance-id 1 state all',
+        includes: ['RouteKey', mockRoute.routeKey, 'ipv4-unc'],
+        excludes: ['extraRoute', 'null|0:0']
+    },
+    {
+        id: 'show-bmp-route-instance',
+        input: 'show bmp route client-id 1 instance-id 1 prefix 203.0.113.0/24',
         includes: ['RouteKey', mockRoute.routeKey, 'ipv4-unc'],
         excludes: ['extraRoute', 'null|0:0']
     },
@@ -183,7 +212,7 @@ const commandCases = [
     {
         id: 'show-bmp-route-instance-key-verbose',
         input: `show bmp route client-id 1 instance-id 1 route-key ${mockRoute.routeKey} verbose`,
-        includes: ['extraRoute', 'route verbose field', 'localPref', 'summary', mockRoute.routeKey],
+        includes: ['extraRoute', 'route verbose field', 'localPref', 'nlriDetail', mockRoute.routeKey],
         excludes: ['null|0:0']
     },
     {
@@ -363,11 +392,7 @@ function queryRouteList(query, sourceRoutes = [mockRoute]) {
 
 function queryRouteDetail(query) {
     assert.strictEqual(query.routeKey, mockRoute.routeKey);
-    const route = { ...mockRoute };
-    if (query.includeSummary === true) {
-        route.summary = 'BGP UPDATE summary';
-    }
-    return route;
+    return { ...mockRoute };
 }
 
 function createIdStore() {
@@ -448,8 +473,22 @@ function createServer(options = {}) {
     return server;
 }
 
-function getCommandIds(server) {
-    return new Set(server.tree.collectCommandRows().map(row => row.id));
+function getCommandSyntaxKeys(server) {
+    return new Set(server.tree.collectCommandRows().map(row => row.syntaxKey));
+}
+
+function expectedGroupId(id) {
+    if (!id) {
+        return null;
+    }
+    if (id.startsWith('show-bmp-route-session')) return 'show-bmp-route-session';
+    if (id.startsWith('show-bmp-route-instance')) return 'show-bmp-route-instance';
+    if (id.startsWith('show-bmp-statistic-session')) return 'show-bmp-statistic-session';
+    if (id.startsWith('show-bmp-statistic-instance')) return 'show-bmp-statistic-instance';
+    if (id.startsWith('show-bmp-client')) return 'show-bmp-client';
+    if (id.startsWith('show-bmp-session')) return 'show-bmp-session';
+    if (id.startsWith('show-bmp-instance')) return 'show-bmp-instance';
+    return id;
 }
 
 function assertText(output, values, label) {
@@ -478,16 +517,21 @@ async function waitForPagerIdle(session) {
     assert.strictEqual(session.busy, false, 'pager session is still busy');
 }
 
-async function runCommandCase(server, session, item, coveredIds) {
+async function runCommandCase(server, session, item, coveredSyntaxKeys) {
     console.log(`\n[cli] input: ${item.input}`);
     session.clearOutput();
 
     const words = item.input.split(/\s+/u);
     const match = server.tree.match(session.view, words);
-    const actualId = match && match.command ? match.command.id : null;
-    assert.strictEqual(actualId, item.id, `${item.input} matched ${actualId}, expected ${item.id}`);
-    if (actualId) {
-        coveredIds.add(actualId);
+    const actualGroupId = match && match.command ? match.command.groupId : null;
+    const expectedGroup = expectedGroupId(item.id);
+    assert.strictEqual(
+        actualGroupId,
+        expectedGroup,
+        `${item.input} matched group ${actualGroupId}, expected ${expectedGroup}`
+    );
+    if (match && match.command) {
+        coveredSyntaxKeys.add(match.command.syntax);
     }
 
     await server.executeLine(session, item.input);
@@ -533,16 +577,21 @@ async function runMorePagerCase() {
     let output = session.readOutput();
     console.log(`[cli] output:\n${output || '(no output)'}`);
 
-    assertText(output, [
-        'Page: 1, PageSize: 25, Total: 30, Displayed: 25',
-        routes[0].routeKey,
-        routes[24].routeKey,
-        '--More-- 25/30'
-    ], command);
+    assertText(
+        output,
+        ['Page: 1, PageSize: 25, Total: 30, Displayed: 25', routes[0].routeKey, routes[24].routeKey, '--More-- 25/30'],
+        command
+    );
     assertNotText(output, [routes[25].routeKey], command);
     assert.ok(session.pager, `${command} did not create pager`);
-    assert.deepStrictEqual(routeQueries.map(query => query.page), [1]);
-    assert.deepStrictEqual(routeQueries.map(query => query.pageSize), [25]);
+    assert.deepStrictEqual(
+        routeQueries.map(query => query.page),
+        [1]
+    );
+    assert.deepStrictEqual(
+        routeQueries.map(query => query.pageSize),
+        [25]
+    );
 
     session.clearOutput();
     console.log('\n[cli] input: <Space>');
@@ -551,15 +600,21 @@ async function runMorePagerCase() {
     output = session.readOutput();
     console.log(`[cli] output:\n${output || '(no output)'}`);
 
-    assertText(output, [
-        'Page: 2, PageSize: 25, Total: 30, Displayed: 30',
-        routes[25].routeKey,
-        routes[29].routeKey
-    ], '<Space>');
+    assertText(
+        output,
+        ['Page: 2, PageSize: 25, Total: 30, Displayed: 30', routes[25].routeKey, routes[29].routeKey],
+        '<Space>'
+    );
     assertNotText(output, ['--More--'], '<Space>');
     assert.strictEqual(session.pager, null, '<Space> should finish pager');
-    assert.deepStrictEqual(routeQueries.map(query => query.page), [1, 2]);
-    assert.deepStrictEqual(routeQueries.map(query => query.pageSize), [25, 25]);
+    assert.deepStrictEqual(
+        routeQueries.map(query => query.page),
+        [1, 2]
+    );
+    assert.deepStrictEqual(
+        routeQueries.map(query => query.pageSize),
+        [25, 25]
+    );
 }
 
 async function runTerminalLengthZeroPagerCase() {
@@ -576,16 +631,26 @@ async function runTerminalLengthZeroPagerCase() {
     const output = session.readOutput();
     console.log(`[cli] output:\n${output || '(no output)'}`);
 
-    assertText(output, [
-        'Page: 1, PageSize: 25, Total: 30, Displayed: 25',
-        'Page: 2, PageSize: 25, Total: 30, Displayed: 30',
-        routes[0].routeKey,
-        routes[29].routeKey
-    ], 'terminal length 0');
+    assertText(
+        output,
+        [
+            'Page: 1, PageSize: 25, Total: 30, Displayed: 25',
+            'Page: 2, PageSize: 25, Total: 30, Displayed: 30',
+            routes[0].routeKey,
+            routes[29].routeKey
+        ],
+        'terminal length 0'
+    );
     assertNotText(output, ['--More--'], 'terminal length 0');
     assert.strictEqual(session.pager, null, 'terminal length 0 should not create pager');
-    assert.deepStrictEqual(routeQueries.map(query => query.page), [1, 2]);
-    assert.deepStrictEqual(routeQueries.map(query => query.pageSize), [25, 25]);
+    assert.deepStrictEqual(
+        routeQueries.map(query => query.page),
+        [1, 2]
+    );
+    assert.deepStrictEqual(
+        routeQueries.map(query => query.pageSize),
+        [25, 25]
+    );
 }
 
 async function main() {
@@ -593,8 +658,8 @@ async function main() {
     const session = createSession();
     server.sessions.set(session.lineId, session);
 
-    const registeredIds = getCommandIds(server);
-    const coveredIds = new Set();
+    const registeredSyntaxKeys = getCommandSyntaxKeys(server);
+    const coveredSyntaxKeys = new Set();
 
     helpCases.forEach(item => runHelpCase(server, session, item));
     completionCases.forEach(item => runCompletionCase(server, session, item));
@@ -602,15 +667,15 @@ async function main() {
     await runTerminalLengthZeroPagerCase();
 
     for (const item of commandCases) {
-        await runCommandCase(server, session, item, coveredIds);
+        await runCommandCase(server, session, item, coveredSyntaxKeys);
     }
 
-    const missingIds = Array.from(registeredIds)
-        .filter(id => !coveredIds.has(id))
+    const missingSyntaxKeys = Array.from(registeredSyntaxKeys)
+        .filter(syntaxKey => !coveredSyntaxKeys.has(syntaxKey))
         .sort();
-    assert.deepStrictEqual(missingIds, [], `Missing CLI command coverage: ${missingIds.join(', ')}`);
+    assert.deepStrictEqual(missingSyntaxKeys, [], `Missing CLI command coverage: ${missingSyntaxKeys.join(', ')}`);
 
-    console.log(`\nCLI command test passed. Covered ${coveredIds.size} command ids.`);
+    console.log(`\nCLI command test passed. Covered ${coveredSyntaxKeys.size} command syntaxes.`);
 }
 
 main().catch(error => {

@@ -1,9 +1,6 @@
 const fs = require('fs');
 const { parseXmlDocument } = require('./xmlUtils');
-
-function parseBool(value) {
-    return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
-}
+const ParamType = require('./paramTypes');
 
 class XmlCommandLoader {
     constructor(tree) {
@@ -28,38 +25,112 @@ class XmlCommandLoader {
     }
 
     loadCommands(root) {
-        const commands = root.child('commands');
-        if (!commands) {
-            return;
+        const commandGroups = root.child('command_groups');
+        if (!commandGroups) {
+            throw new Error('CLI command XML must contain command_groups');
         }
+        this.loadCommandGroups(commandGroups);
+    }
 
-        commands.childrenByName('command').forEach(commandNode => {
-            const command = {
-                id: commandNode.attr('id'),
-                handler: commandNode.attr('handler'),
-                views: commandNode.attr('views', 'global').split(',').map(item => item.trim()).filter(Boolean),
-                syntax: commandNode.childText('syntax'),
-                description: commandNode.childText('description'),
-                toView: commandNode.attr('to-view') || null,
-                clearContext: parseBool(commandNode.attr('clear-context')),
-                context: this.parseContext(commandNode.child('context'))
-            };
-
-            if (command.id && command.handler && command.syntax) {
-                this.tree.registerCommand(command);
+    loadCommandGroups(commandGroups) {
+        commandGroups.childrenByName('group').forEach(groupNode => {
+            const groupId = groupNode.attr('group-id');
+            if (!groupId) {
+                throw new Error('CLI command group requires group-id');
             }
+
+            const elements = this.parseElements(groupNode.child('elements'));
+            const commands = groupNode.child('commands');
+            if (!commands) {
+                return;
+            }
+
+            commands.childrenByName('command').forEach(commandNode => {
+                const sequence = this.parseExpression(commandNode.childText('expression'), elements);
+                const command = {
+                    groupId,
+                    views: this.parseViews(commandNode),
+                    syntax: sequence.map(token => token.name).join(' '),
+                    sequences: [sequence],
+                    description: commandNode.childText('description'),
+                    toView: null,
+                    clearContext: false,
+                    context: []
+                };
+
+                if (sequence.length > 0) {
+                    this.tree.registerCommand(command);
+                }
+            });
         });
     }
 
-    parseContext(contextNode) {
-        if (!contextNode) {
-            return [];
+    parseElements(elementsNode) {
+        const elements = new Map();
+        if (!elementsNode) {
+            return elements;
         }
-        return contextNode.childrenByName('entry').map(entry => ({
-            name: entry.attr('name'),
-            fromArg: entry.attr('from-arg') || null,
-            value: entry.attr('value') || null
-        }));
+
+        elementsNode.childrenByName('element').forEach(elementNode => {
+            const id = elementNode.attr('id');
+            if (!id) {
+                return;
+            }
+
+            elements.set(id, this.parseElement(elementNode));
+        });
+        return elements;
+    }
+
+    parseElement(elementNode) {
+        const name = elementNode.childText('name');
+        const description = elementNode.childText('description');
+        const elementType = elementNode.attr('type', 'keyword');
+        const cfgId = elementNode.attr('cfg-id') || null;
+
+        if (elementType === 'parameter') {
+            if (!cfgId) {
+                throw new Error(`Parameter element ${elementNode.attr('id')} requires cfg-id`);
+            }
+            const typeStr = elementNode.childText('type', 'string(0-255)');
+            return {
+                type: 'argument',
+                name,
+                description,
+                argName: `cfg${cfgId}`,
+                cfgId,
+                paramType: new ParamType(typeStr)
+            };
+        }
+
+        return {
+            type: 'command',
+            name,
+            description,
+            cfgId
+        };
+    }
+
+    parseExpression(expression, elements) {
+        return String(expression || '')
+            .trim()
+            .split(/\s+/u)
+            .filter(Boolean)
+            .map(id => {
+                const element = elements.get(id);
+                if (!element) {
+                    throw new Error(`Command expression references unknown element id: ${id}`);
+                }
+                return { ...element };
+            });
+    }
+
+    parseViews(commandNode) {
+        const views = commandNode.attr('views') || commandNode.childText('views', 'global');
+        return views
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean);
     }
 }
 

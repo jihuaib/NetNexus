@@ -41,14 +41,7 @@ try {
 }
 
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
-const { countBgpRoutes } = require(path.join(
-    __dirname,
-    '..',
-    '..',
-    'electron',
-    'utils',
-    'bgpRouteStorage.js'
-));
+const { countBgpRoutes } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpRouteStorage.js'));
 
 function makeStore() {
     const data = new Map();

@@ -1,11 +1,12 @@
 const ParamType = require('./paramTypes');
 
 class CommandTreeNode {
-    constructor({ name = '', description = '', type = 'command', argName = null, paramType = null }) {
+    constructor({ name = '', description = '', type = 'command', argName = null, cfgId = null, paramType = null }) {
         this.name = name;
         this.description = description;
         this.type = type;
         this.argName = argName;
+        this.cfgId = cfgId;
         this.paramType = paramType;
         this.children = [];
         this.command = null;
@@ -46,7 +47,7 @@ class CliCommandTree {
             ? [this.globalRoot]
             : command.views.map(view => this.getView(view)?.root).filter(Boolean);
 
-        const sequences = expandSyntax(command.syntax);
+        const sequences = command.sequences || expandSyntax(command.syntax);
         roots.forEach(root => {
             sequences.forEach(sequence => this.registerSequence(root, sequence, command));
         });
@@ -121,6 +122,7 @@ function matchRoot(root, words) {
 
     let current = root;
     const args = {};
+    const cfgArgs = {};
     const path = [];
 
     for (const word of words) {
@@ -129,6 +131,9 @@ function matchRoot(root, words) {
             return null;
         }
         path.push(child);
+        if (child.cfgId) {
+            cfgArgs[child.cfgId] = child.type === 'argument' ? word : true;
+        }
         if (child.type === 'argument') {
             args[child.argName] = word;
         }
@@ -139,6 +144,7 @@ function matchRoot(root, words) {
         node: current,
         command: current.command,
         args,
+        cfgArgs,
         path
     };
 }
@@ -230,14 +236,17 @@ function expandAst(ast) {
     if (ast.type === 'optional') {
         return [[], ...expandAst(ast.child)];
     }
-    return ast.children.reduce((prefixes, child) => {
-        const expanded = expandAst(child);
-        const next = [];
-        prefixes.forEach(prefix => {
-            expanded.forEach(suffix => next.push([...prefix, ...suffix]));
-        });
-        return next;
-    }, [[]]);
+    return ast.children.reduce(
+        (prefixes, child) => {
+            const expanded = expandAst(child);
+            const next = [];
+            prefixes.forEach(prefix => {
+                expanded.forEach(suffix => next.push([...prefix, ...suffix]));
+            });
+            return next;
+        },
+        [[]]
+    );
 }
 
 function displayNode(node) {
@@ -248,14 +257,15 @@ function displayNode(node) {
 }
 
 function collectRows(root, view, rows, prefix = []) {
-    const nextPrefix = root.name && !root.name.endsWith('-root') && root.name !== 'global-root'
-        ? [...prefix, displayNode(root)]
-        : prefix;
+    const nextPrefix =
+        root.name && !root.name.endsWith('-root') && root.name !== 'global-root'
+            ? [...prefix, displayNode(root)]
+            : prefix;
     if (root.command) {
         rows.push({
             view,
-            id: root.command.id,
-            handler: root.command.handler,
+            group: root.command.groupId,
+            syntaxKey: root.command.syntax,
             command: nextPrefix.join(' ')
         });
     }

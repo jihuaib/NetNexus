@@ -171,7 +171,10 @@ function nodeDescriptor(routeIndex, remote = false) {
 }
 
 function ipReachability(prefixLength, prefixBytesValue) {
-    return tlv(265, Buffer.concat([Buffer.from([prefixLength]), prefixBytesValue.subarray(0, Math.ceil(prefixLength / 8))]));
+    return tlv(
+        265,
+        Buffer.concat([Buffer.from([prefixLength]), prefixBytesValue.subarray(0, Math.ceil(prefixLength / 8))])
+    );
 }
 
 function buildBgpLsNlri(variant, routeIndex, vpn = false) {
@@ -245,7 +248,10 @@ function makeClient() {
 }
 
 function makeBmpSession(client) {
-    const bmpSession = new BmpSession({ sendEvent() {} }, { bmpConfigData: { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 } });
+    const bmpSession = new BmpSession(
+        { sendEvent() {} },
+        { bmpConfigData: { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 } }
+    );
     bmpSession.localIp = client.localIp;
     bmpSession.localPort = client.localPort;
     bmpSession.remoteIp = client.remoteIp;
@@ -335,7 +341,14 @@ function populateScenarioRoutes(scenario, bgpSession, locRibInstance) {
     scenario.variants.forEach(variant => {
         for (let i = 0; i < scenario.routesPerVariant; i += 1) {
             const { parsedPacket, nlri } = parseScenarioRoute(scenario, variant, i);
-            const sessionRoute = addRouteToBgpSession(routeWriter, scenario, bgpSession, sessionRouteMap, parsedPacket, nlri);
+            const sessionRoute = addRouteToBgpSession(
+                routeWriter,
+                scenario,
+                bgpSession,
+                sessionRouteMap,
+                parsedPacket,
+                nlri
+            );
             addRouteToLocRib(routeWriter, scenario, locRibInstance, parsedPacket, nlri);
             if (!samples[variant.name]) {
                 samples[variant.name] = sessionRoute;
@@ -371,7 +384,10 @@ function runScenario(scenario) {
         BmpBgpInstance.makeKey(locRibInstance.instanceType, locRibInstance.instanceRd, scenario.afi, scenario.safi),
         locRibInstance
     );
-    worker.bmpSessionMap.set(BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort), bmpSession);
+    worker.bmpSessionMap.set(
+        BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort),
+        bmpSession
+    );
 
     const { sessionRouteMap, samples } = populateScenarioRoutes(scenario, bgpSession, locRibInstance);
     assert.equal(sessionRouteMap.size, total);
@@ -403,10 +419,30 @@ function runScenario(scenario) {
     };
     const lastPage = Math.ceil(total / PAGE_SIZE);
 
-    assertPage(callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }), total, 1, PAGE_SIZE);
-    assertPage(callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }), total, 2, PAGE_SIZE);
-    assertPage(callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: lastPage, pageSize: PAGE_SIZE }), total, lastPage, PAGE_SIZE);
-    assertPage(callWorker(worker, 'getBgpInstanceRoutes', { ...instanceQuery, page: 1, pageSize: PAGE_SIZE }), total, 1, PAGE_SIZE);
+    assertPage(
+        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }),
+        total,
+        1,
+        PAGE_SIZE
+    );
+    assertPage(
+        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }),
+        total,
+        2,
+        PAGE_SIZE
+    );
+    assertPage(
+        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: lastPage, pageSize: PAGE_SIZE }),
+        total,
+        lastPage,
+        PAGE_SIZE
+    );
+    assertPage(
+        callWorker(worker, 'getBgpInstanceRoutes', { ...instanceQuery, page: 1, pageSize: PAGE_SIZE }),
+        total,
+        1,
+        PAGE_SIZE
+    );
     assertPage(
         callWorker(worker, 'getBgpInstanceRoutes', { ...instanceQuery, page: lastPage, pageSize: PAGE_SIZE }),
         total,
@@ -436,8 +472,7 @@ function runScenario(scenario) {
 
     const sessionDetail = callWorker(worker, 'getBgpRouteDetail', {
         ...sessionQuery,
-        routeKey: samples[scenario.detailVariant].getRouteKey(),
-        includeSummary: true
+        routeKey: samples[scenario.detailVariant].getRouteKey()
     });
     const locRibDetail = callWorker(worker, 'getBgpInstanceRouteDetail', {
         ...instanceQuery,
@@ -456,7 +491,12 @@ const ipv4FlowSpecScenario = {
     routesPerVariant: 40,
     variants: [{ name: 'ipv4-dst-fragment' }, { name: 'ipv4-src-proto' }, { name: 'ipv4-port-length' }],
     buildUpdate: (variant, routeIndex) =>
-        mpReachUpdate(BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC, Buffer.alloc(0), buildIpv4FlowSpecNlri(variant, routeIndex)),
+        mpReachUpdate(
+            BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC,
+            Buffer.alloc(0),
+            buildIpv4FlowSpecNlri(variant, routeIndex)
+        ),
     validateNlri: (variant, nlri) => {
         assert.ok(nlri.components.length >= 2);
         if (variant.name === 'ipv4-dst-fragment') {
@@ -477,7 +517,7 @@ const ipv4FlowSpecScenario = {
     assertDetail: (sessionDetail, locRibDetail) => {
         assert.equal(sessionDetail.addrFamilyType, BgpConst.BGP_ADDR_FAMILY.IPV4_FLOWSPEC);
         assert.ok(sessionDetail.nlriDetail.components.some(component => component.name === 'src'));
-        assert.ok(sessionDetail.summary.includes('IPv4/FlowSpec'));
+        assert.equal(Object.prototype.hasOwnProperty.call(sessionDetail, 'summary'), false);
         assert.equal(locRibDetail.addrFamilyType, BgpConst.BGP_ADDR_FAMILY.IPV4_FLOWSPEC);
         assert.ok(locRibDetail.ip.includes('fragment any'));
     }
@@ -491,7 +531,12 @@ const ipv6FlowSpecScenario = {
     routesPerVariant: 36,
     variants: [{ name: 'ipv6-dst-src-proto' }, { name: 'ipv6-dst-flow-label' }],
     buildUpdate: (variant, routeIndex) =>
-        mpReachUpdate(BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC, Buffer.alloc(0), buildIpv6FlowSpecNlri(variant, routeIndex)),
+        mpReachUpdate(
+            BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+            BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC,
+            Buffer.alloc(0),
+            buildIpv6FlowSpecNlri(variant, routeIndex)
+        ),
     validateNlri: (variant, nlri) => {
         assert.ok(nlri.components.length >= 2);
         if (variant.name === 'ipv6-dst-flow-label') {
@@ -512,7 +557,7 @@ const ipv6FlowSpecScenario = {
     assertDetail: (sessionDetail, locRibDetail) => {
         assert.equal(sessionDetail.addrFamilyType, BgpConst.BGP_ADDR_FAMILY.IPV6_FLOWSPEC);
         assert.ok(sessionDetail.nlriDetail.components.some(component => component.name === 'src'));
-        assert.ok(sessionDetail.summary.includes('IPv6/FlowSpec'));
+        assert.equal(Object.prototype.hasOwnProperty.call(sessionDetail, 'summary'), false);
         assert.equal(locRibDetail.addrFamilyType, BgpConst.BGP_ADDR_FAMILY.IPV6_FLOWSPEC);
         assert.ok(locRibDetail.ip.includes('flow-label ='));
     }
@@ -532,7 +577,12 @@ function makeBgpLsScenario(name, safi, af, namespace, vpn = false) {
             { name: `${namespace}-ipv6-prefix`, type: 4 }
         ],
         buildUpdate: (variant, routeIndex) =>
-            mpReachUpdate(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, safi, Buffer.alloc(0), buildBgpLsNlri(variant, routeIndex, vpn)),
+            mpReachUpdate(
+                BgpConst.BGP_AFI_TYPE.AFI_BGP_LS,
+                safi,
+                Buffer.alloc(0),
+                buildBgpLsNlri(variant, routeIndex, vpn)
+            ),
         validateNlri: (variant, nlri) => {
             assert.equal(nlri.routeType, variant.type);
             assert.equal(nlri.vpn === true, vpn);
@@ -542,7 +592,10 @@ function makeBgpLsScenario(name, safi, af, namespace, vpn = false) {
         },
         assertRoutes: routes => {
             const routeTypes = new Set(routes.map(route => route.routeType));
-            assert.deepEqual([...routeTypes].sort((a, b) => a - b), [1, 2, 3, 4]);
+            assert.deepEqual(
+                [...routeTypes].sort((a, b) => a - b),
+                [1, 2, 3, 4]
+            );
             assert.ok(routes.every(route => route.getAddrFamilyType() === af));
             assert.ok(routes.some(route => route.ip.includes(':Link:')));
             assert.ok(routes.some(route => route.ip.includes(':IPv6 Prefix:')));
@@ -557,7 +610,7 @@ function makeBgpLsScenario(name, safi, af, namespace, vpn = false) {
             assert.equal(sessionDetail.addrFamilyType, af);
             assert.equal(sessionDetail.routeType, 3);
             assert.ok(sessionDetail.ip.includes(`${namespace}:IPv4 Prefix:`));
-            assert.ok(sessionDetail.summary.includes(safi === BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS ? 'BGP-LS/BGP-LS' : 'BGP-LS/BGP-LS-VPN'));
+            assert.equal(Object.prototype.hasOwnProperty.call(sessionDetail, 'summary'), false);
             assert.equal(locRibDetail.addrFamilyType, af);
             assert.equal(locRibDetail.routeType, 4);
             assert.ok(locRibDetail.ip.includes(`${namespace}:IPv6 Prefix:`));

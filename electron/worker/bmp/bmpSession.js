@@ -169,10 +169,7 @@ class BmpSession {
             return false;
         }
 
-        return !(
-            tlv.type === this.getRouteMonitoringTlvTypes().VRF_TABLE_NAME &&
-            this.isTextTlvValue(tlv.value)
-        );
+        return !(tlv.type === this.getRouteMonitoringTlvTypes().VRF_TABLE_NAME && this.isTextTlvValue(tlv.value));
     }
 
     isTextTlvValue(value) {
@@ -192,10 +189,7 @@ class BmpSession {
             return tlv.type === this.getRouteMonitoringTlvTypes().VRF_TABLE_NAME && this.isTextTlvValue(tlv.value);
         }
 
-        return (
-            tlv.type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME &&
-            this.isTextTlvValue(tlv.value)
-        );
+        return tlv.type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME && this.isTextTlvValue(tlv.value);
     }
 
     decodeStatelessParsingTlvs(tlvs) {
@@ -298,12 +292,9 @@ class BmpSession {
         const pathStatusNames = BmpBgpRoute.getPathStatusNames(pathStatus);
         const pathStatusUnknownBits = BmpBgpRoute.getPathStatusUnknownBits(pathStatus);
         const reasonCode = tlv.value.length >= 6 ? tlv.value.readUInt16BE(4) : null;
-        const reasonName =
-            reasonCode === null ? null : BmpConst.BMP_PATH_STATUS_REASON_NAME?.[reasonCode] || null;
+        const reasonName = reasonCode === null ? null : BmpConst.BMP_PATH_STATUS_REASON_NAME?.[reasonCode] || null;
         const reasonText =
-            reasonCode === null
-                ? null
-                : reasonName || `Unknown(0x${reasonCode.toString(16).padStart(4, '0')})`;
+            reasonCode === null ? null : reasonName || `Unknown(0x${reasonCode.toString(16).padStart(4, '0')})`;
 
         tlv.name = 'Path Marking';
         tlv.decoded = {
@@ -343,7 +334,12 @@ class BmpSession {
         }
 
         routeTlvs.forEach(tlv => {
-            if (!this.isRouteMonitoringGroupTlv(tlv) || !tlv.group || tlv.rawIndex === null || tlv.rawIndex === undefined) {
+            if (
+                !this.isRouteMonitoringGroupTlv(tlv) ||
+                !tlv.group ||
+                tlv.rawIndex === null ||
+                tlv.rawIndex === undefined
+            ) {
                 return;
             }
 
@@ -547,8 +543,9 @@ class BmpSession {
             }
 
             bgpMessageTlv.name = 'BGP Message';
-            const effectivePeerFlags =
-                this.isBmpV4TlvDraft20() ? getEffectivePeerFlags(peerFlags, routeTlvs) : peerFlags;
+            const effectivePeerFlags = this.isBmpV4TlvDraft20()
+                ? getEffectivePeerFlags(peerFlags, routeTlvs)
+                : peerFlags;
             const bgpContext = this.createBgpParsingContext(
                 routeTlvs,
                 context,
@@ -610,7 +607,10 @@ class BmpSession {
             }
         }
 
-        if (version === BmpConst.BMP_VERSION.V4 || reason === BmpConst.BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_WITH_TLV) {
+        if (
+            version === BmpConst.BMP_VERSION.V4 ||
+            reason === BmpConst.BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_WITH_TLV
+        ) {
             const tlvResult = parseBmpTlvs(message, position);
             this.logTlvWarnings('Peer Down TLV', tlvResult.warnings);
             result.tlvs = tlvResult.tlvs;
@@ -621,44 +621,50 @@ class BmpSession {
 
     // 辅助方法：设置路由属性
     setRouteAttributes(route, bgpUpdate) {
-        route.bgpPacket = bgpUpdate;
+        const routeAttr = {};
 
         for (const attr of bgpUpdate.pathAttributes || []) {
             switch (attr.typeCode) {
                 case BgpConst.BGP_PATH_ATTR.ORIGIN:
-                    route.origin = attr.origin;
+                    routeAttr.origin = attr.origin;
                     break;
                 case BgpConst.BGP_PATH_ATTR.AS_PATH:
-                    route.asPath = '';
+                    routeAttr.asPath = '';
                     attr.segments.forEach(seg => {
                         if (seg.typeName === 'AS_SEQUENCE') {
-                            route.asPath += seg.asNumbers.join(' ');
+                            routeAttr.asPath += seg.asNumbers.join(' ');
                         } else {
-                            route.asPath += `{${seg.asNumbers.join(' ')}}`;
+                            routeAttr.asPath += `{${seg.asNumbers.join(' ')}}`;
                         }
                     });
                     break;
                 case BgpConst.BGP_PATH_ATTR.NEXT_HOP:
-                    route.nextHop = attr.nextHop;
+                    routeAttr.nextHop = attr.nextHop;
                     break;
                 case BgpConst.BGP_PATH_ATTR.LOCAL_PREF:
-                    route.localPref = attr.localPref;
+                    routeAttr.localPref = attr.localPref;
                     break;
                 case BgpConst.BGP_PATH_ATTR.COMMUNITY:
-                    route.communities = attr.communities.map(c => c.formatted).join(' ');
+                    routeAttr.communities = attr.communities.map(c => c.formatted).join(' ');
                     break;
                 case BgpConst.BGP_PATH_ATTR.MED:
-                    route.med = attr.med;
+                    routeAttr.med = attr.med;
                     break;
                 case BgpConst.BGP_PATH_ATTR.PATH_OTC:
-                    route.otc = attr.otc;
+                    routeAttr.otc = attr.otc;
                     break;
                 case BgpConst.BGP_PATH_ATTR.PREFIX_SID:
-                    route.prefixSid = attr.prefixSid?.formatted || null;
+                    routeAttr.prefixSid = attr.prefixSid?.formatted || null;
                     break;
                 case BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI:
-                    route.nextHop = attr.mpReach.nextHop;
+                    routeAttr.nextHop = attr.mpReach.nextHop;
             }
+        }
+
+        if (typeof route.assignRouteAttr === 'function') {
+            route.assignRouteAttr(routeAttr);
+        } else {
+            Object.assign(route, routeAttr);
         }
     }
 
@@ -675,7 +681,6 @@ class BmpSession {
             ? nlri.labels.map(label => label.display || `${label.label}${label.bottom ? '(BOS)' : ''}`).join(',')
             : null;
         route.routeType = nlri.routeType || null;
-        route.rawNlri = nlri.rawNlri || null;
         route.nlriDetail = {
             ...nlri,
             pathId: normalizedPathId,
@@ -693,9 +698,7 @@ class BmpSession {
         const asPath = (sessionFlags & BmpConst.BMP_SESSION_FLAGS.AS_PATH) !== 0;
 
         if (adjRibOut) {
-            return [
-                postPolicy ? BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT : BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT
-            ];
+            return [postPolicy ? BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT : BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT];
         }
 
         if (asPath) {
@@ -798,6 +801,7 @@ class BmpSession {
                                 ribType,
                                 route
                             );
+                            bgpSession.releaseRouteAttr(route);
                             routeMap.delete(routeKey);
                             isNotify = true;
                         }
@@ -856,6 +860,7 @@ class BmpSession {
                                 route
                             );
                             bgpSession.recordRouteDelete(mpUnreachNlri.afi, mpUnreachNlri.safi, ribType, route);
+                            bgpSession.releaseRouteAttr(route);
                             routeMap.delete(routeKey);
                             isNotify = true;
                         }
@@ -1087,6 +1092,7 @@ class BmpSession {
                     if (route) {
                         bgpInstance.removeRouteFromPrefixIndex(routeKey, route);
                         bgpInstance.recordRouteDelete(route);
+                        bgpInstance.releaseRouteAttr(route);
                         bgpInstance.bgpRoutes.delete(routeKey);
                         isNotify = true;
                     }
@@ -1129,6 +1135,7 @@ class BmpSession {
                         isNotify = true;
                         bgpInstance.removeRouteFromPrefixIndex(routeKey, route);
                         bgpInstance.recordRouteDelete(route);
+                        bgpInstance.releaseRouteAttr(route);
                         bgpInstance.bgpRoutes.delete(routeKey);
                     }
                 }
@@ -2303,7 +2310,10 @@ class BmpSession {
                 tlvs: toSerializableTlvs(tlvs),
                 updatedAt: new Date().toISOString()
             };
-            this.bgpInstanceStatisticsReportMap.set(BmpSession.makeStatisticsReportKey(instanceType, instanceRd), report);
+            this.bgpInstanceStatisticsReportMap.set(
+                BmpSession.makeStatisticsReportKey(instanceType, instanceRd),
+                report
+            );
 
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, { data: report });
         } catch (err) {
@@ -2414,6 +2424,9 @@ class BmpSession {
 
         this.bgpSessionMap.forEach((peer, _) => {
             peer.closeSession();
+        });
+        this.bgpInstanceMap.forEach((instance, _) => {
+            instance.closeInstance();
         });
 
         this.bgpSessionMap.clear();

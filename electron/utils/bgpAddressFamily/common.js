@@ -1,4 +1,3 @@
-
 const BgpConst = require('../../const/bgpConst');
 const { ipv4BufferToString, ipv6BufferToString } = require('../ipUtils');
 
@@ -62,10 +61,7 @@ function formatIpAddressList(buffer, position, byteLength) {
     }
 
     if (byteLength === BgpConst.IPV6_HOST_BYTE_LEN * 2) {
-        const globalNextHop = ipv6BufferToString(
-            buffer.subarray(position, position + 16),
-            BgpConst.IPV6_HOST_LEN
-        );
+        const globalNextHop = ipv6BufferToString(buffer.subarray(position, position + 16), BgpConst.IPV6_HOST_LEN);
         const linkLocalNextHop = ipv6BufferToString(
             buffer.subarray(position + 16, position + 32),
             BgpConst.IPV6_HOST_LEN

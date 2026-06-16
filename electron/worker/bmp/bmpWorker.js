@@ -612,7 +612,7 @@ class BmpWorker {
     }
 
     getBgpInstanceRouteDetail(messageId, data) {
-        const { client, instance, routeKey, route, includeSummary = false } = data;
+        const { client, instance, routeKey, route } = data;
         const lookup = this.getBgpInstanceRouteMap(client, instance);
         if (this.sendRouteLookupError(messageId, lookup)) {
             return;
@@ -625,11 +625,7 @@ class BmpWorker {
             return;
         }
 
-        this.messageHandler.sendSuccessResponse(
-            messageId,
-            bgpRoute.getRouteInfo({ includeSummary: includeSummary === true }),
-            'BGP实例获取路由详情成功'
-        );
+        this.messageHandler.sendSuccessResponse(messageId, bgpRoute.getRouteInfo(), 'BGP实例获取路由详情成功');
     }
 
     getBgpRoutes(messageId, data) {
@@ -662,7 +658,7 @@ class BmpWorker {
     }
 
     getBgpRouteDetail(messageId, data) {
-        const { client, session, af, ribType, routeKey, route, includeSummary = false } = data;
+        const { client, session, af, ribType, routeKey, route } = data;
         const lookup = this.getBgpSessionRouteMap(client, session, af, ribType);
         if (this.sendRouteLookupError(messageId, lookup)) {
             return;
@@ -675,11 +671,7 @@ class BmpWorker {
             return;
         }
 
-        this.messageHandler.sendSuccessResponse(
-            messageId,
-            bgpRoute.getRouteInfo({ includeSummary: includeSummary === true }),
-            '获取路由详情成功'
-        );
+        this.messageHandler.sendSuccessResponse(messageId, bgpRoute.getRouteInfo(), '获取路由详情成功');
     }
 
     purgeStaleRouteMap(routeMap, onDelete) {
@@ -718,6 +710,7 @@ class BmpWorker {
         const deleted = this.purgeStaleRouteMap(bgpInstance.bgpRoutes, (route, key) => {
             bgpInstance.removeRouteFromPrefixIndex(key, route);
             bgpInstance.recordRouteDelete(route);
+            bgpInstance.releaseRouteAttr(route);
         });
         this.messageHandler.sendSuccessResponse(messageId, { deleted }, 'BGP实例过期路由清理成功');
     }
@@ -756,6 +749,7 @@ class BmpWorker {
         const deleted = this.purgeStaleRouteMap(routeMap, (route, key) => {
             bgpSession.removeRouteFromPrefixIndex(afi, safi, ribType, key, route);
             bgpSession.recordRouteDelete(afi, safi, ribType, route);
+            bgpSession.releaseRouteAttr(route);
         });
         this.messageHandler.sendSuccessResponse(messageId, { deleted }, '过期路由清理成功');
     }

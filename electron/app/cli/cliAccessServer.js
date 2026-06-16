@@ -702,7 +702,6 @@ class CliAccessServer {
             { key: 'busy', title: 'Busy' }
         ]);
     }
-
 }
 
 function nodeMatchesPrefix(node, prefix) {

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<cli>
+<configuration>
     <views>
         <view name="user">
             <prompt>&lt;NetNexus&gt;</prompt>
@@ -9,131 +9,753 @@
         </view>
     </views>
 
-    <commands>
-        <command id="show-cli-command-info" handler="showCliCommandInfo" views="global">
-            <syntax>show cli command-info</syntax>
-            <description>Display registered CLI commands</description>
-        </command>
-        <command id="show-cli-history" handler="showCliHistory" views="global">
-            <syntax>show cli history</syntax>
-            <description>Display command history</description>
-        </command>
-        <command id="show-cli-client" handler="showCliClient" views="global">
-            <syntax>show cli client</syntax>
-            <description>Display connected CLI clients</description>
-        </command>
-        <command id="config" handler="enterConfig" views="user" to-view="config">
-            <syntax>config</syntax>
-            <description>Enter configuration mode</description>
-        </command>
-        <command id="end" handler="end" views="global" to-view="user" clear-context="true">
-            <syntax>end</syntax>
-            <description>Return to user view</description>
-        </command>
-        <command id="exit" handler="exit" views="global">
-            <syntax>exit</syntax>
-            <description>Exit current mode or close current session</description>
-        </command>
+    <!-- Command group definitions -->
+    <command_groups>
+        <!-- show cli command-info -->
+        <group group-id="show-cli-command-info">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>cli</name>
+                    <description>CLI information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>command-info</name>
+                    <description>Command info</description>
+                </element>
+            </elements>
 
-        <command id="terminal-length-disable" handler="terminalLengthDisable" views="global">
-            <syntax>terminal length 0</syntax>
-            <description>Disable paging for current session</description>
-        </command>
-        <command id="terminal-length-default" handler="terminalLengthDefault" views="global">
-            <syntax>no terminal length 0</syntax>
-            <description>Restore default paging for current session</description>
-        </command>
-        <command id="show-api-status" handler="showApiStatus" views="global">
-            <syntax>show api status</syntax>
-            <description>Display HTTP API and telnet CLI service status</description>
-        </command>
-        <command id="show-bmp-status" handler="showBmpStatus" views="global">
-            <syntax>show bmp status</syntax>
-            <description>Display BMP worker status</description>
-        </command>
-        <command id="show-bmp-client" handler="showBmpClients" views="global">
-            <syntax>show bmp client</syntax>
-            <description>Display BMP clients</description>
-        </command>
-        <command id="show-bmp-client-filter" handler="showBmpClients" views="global">
-            <syntax>show bmp client client-id &lt;clientId:uint(1-65535)&gt;</syntax>
-            <description>Display BMP client summary by client-id</description>
-        </command>
-        <command id="show-bmp-client-verbose" handler="showBmpClients" views="global">
-            <syntax>show bmp client client-id &lt;clientId:uint(1-65535)&gt; verbose</syntax>
-            <description>Display BMP client verbose information by client-id</description>
-        </command>
-        <command id="show-bmp-session" handler="showBmpSessions" views="global">
-            <syntax>show bmp session client-id &lt;clientId:uint(1-65535)&gt;</syntax>
-            <description>Display BGP sessions for a BMP client-id</description>
-        </command>
-        <command id="show-bmp-session-filter" handler="showBmpSessions" views="global">
-            <syntax>show bmp session client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt;</syntax>
-            <description>Display BGP session summary by session-id</description>
-        </command>
-        <command id="show-bmp-session-verbose" handler="showBmpSessions" views="global">
-            <syntax>show bmp session client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt; verbose</syntax>
-            <description>Display BGP session verbose information by session-id</description>
-        </command>
-        <command id="show-bmp-instance" handler="showBmpInstances" views="global">
-            <syntax>show bmp instance client-id &lt;clientId:uint(1-65535)&gt;</syntax>
-            <description>Display Loc-RIB instances for a BMP client-id</description>
-        </command>
-        <command id="show-bmp-instance-filter" handler="showBmpInstances" views="global">
-            <syntax>show bmp instance client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt;</syntax>
-            <description>Display Loc-RIB instance summary by instance-id</description>
-        </command>
-        <command id="show-bmp-instance-verbose" handler="showBmpInstances" views="global">
-            <syntax>show bmp instance client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt; verbose</syntax>
-            <description>Display Loc-RIB instance verbose information by instance-id</description>
-        </command>
-        <command id="show-bmp-route-session" handler="showBmpRoutes" views="global">
-            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt; af &lt;af:enum(ipv4-unc,ipv6-unc,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)&gt; rib &lt;ribType:enum(pre-adj-rib-in,adj-rib-in,as-path,adj-rib-out,post-adj-rib-out)&gt; [state &lt;routeState:enum(active,stale,all)&gt;] [prefix &lt;prefixFilter:string(1-128)&gt;]</syntax>
-            <description>Display BMP session routes</description>
-        </command>
-        <command id="show-bmp-route-session-key" handler="showBmpRoutes" views="global">
-            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt; af &lt;af:enum(ipv4-unc,ipv6-unc,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)&gt; rib &lt;ribType:enum(pre-adj-rib-in,adj-rib-in,as-path,adj-rib-out,post-adj-rib-out)&gt; route-key &lt;routeKey:string(1-2048)&gt;</syntax>
-            <description>Display BMP session route summary by route key</description>
-        </command>
-        <command id="show-bmp-route-session-key-verbose" handler="showBmpRoutes" views="global">
-            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; session-id &lt;sessionId:uint(1-65535)&gt; af &lt;af:enum(ipv4-unc,ipv6-unc,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)&gt; rib &lt;ribType:enum(pre-adj-rib-in,adj-rib-in,as-path,adj-rib-out,post-adj-rib-out)&gt; route-key &lt;routeKey:string(1-2048)&gt; verbose</syntax>
-            <description>Display BMP session route verbose information by route key</description>
-        </command>
-        <command id="show-bmp-route-instance" handler="showBmpInstanceRoutes" views="global">
-            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt; [state &lt;routeState:enum(active,stale,all)&gt;] [prefix &lt;prefixFilter:string(1-128)&gt;]</syntax>
-            <description>Display BMP Loc-RIB instance routes</description>
-        </command>
-        <command id="show-bmp-route-instance-key" handler="showBmpInstanceRoutes" views="global">
-            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt; route-key &lt;routeKey:string(1-2048)&gt;</syntax>
-            <description>Display BMP Loc-RIB route summary by route key</description>
-        </command>
-        <command id="show-bmp-route-instance-key-verbose" handler="showBmpInstanceRoutes" views="global">
-            <syntax>show bmp route client-id &lt;clientId:uint(1-65535)&gt; instance-id &lt;instanceId:uint(1-65535)&gt; route-key &lt;routeKey:string(1-2048)&gt; verbose</syntax>
-            <description>Display BMP Loc-RIB route verbose information by route key</description>
-        </command>
-        <command id="show-bmp-statistic-session" handler="showBmpSessionStatistics" views="global">
-            <syntax>show bmp statistic session client-id &lt;clientId:uint(1-65535)&gt;</syntax>
-            <description>Display BMP session statistics reports</description>
-        </command>
-        <command id="show-bmp-statistic-session-filter" handler="showBmpSessionStatistics" views="global">
-            <syntax>show bmp statistic session client-id &lt;clientId:uint(1-65535)&gt; report-id &lt;reportId:uint(1-65535)&gt;</syntax>
-            <description>Display BMP session statistics report summary by report-id</description>
-        </command>
-        <command id="show-bmp-statistic-session-verbose" handler="showBmpSessionStatistics" views="global">
-            <syntax>show bmp statistic session client-id &lt;clientId:uint(1-65535)&gt; report-id &lt;reportId:uint(1-65535)&gt; verbose</syntax>
-            <description>Display BMP session statistics report verbose information by report-id</description>
-        </command>
-        <command id="show-bmp-statistic-instance" handler="showBmpInstanceStatistics" views="global">
-            <syntax>show bmp statistic instance client-id &lt;clientId:uint(1-65535)&gt;</syntax>
-            <description>Display BMP Loc-RIB statistics reports</description>
-        </command>
-        <command id="show-bmp-statistic-instance-filter" handler="showBmpInstanceStatistics" views="global">
-            <syntax>show bmp statistic instance client-id &lt;clientId:uint(1-65535)&gt; report-id &lt;reportId:uint(1-65535)&gt;</syntax>
-            <description>Display BMP Loc-RIB statistics report summary by report-id</description>
-        </command>
-        <command id="show-bmp-statistic-instance-verbose" handler="showBmpInstanceStatistics" views="global">
-            <syntax>show bmp statistic instance client-id &lt;clientId:uint(1-65535)&gt; report-id &lt;reportId:uint(1-65535)&gt; verbose</syntax>
-            <description>Display BMP Loc-RIB statistics report verbose information by report-id</description>
-        </command>
-    </commands>
-</cli>
+            <commands>
+                <command>
+                    <expression>1 2 3</expression>
+                    <views>global</views>
+                    <description>Display registered CLI commands</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show cli history -->
+        <group group-id="show-cli-history">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>cli</name>
+                    <description>CLI information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>history</name>
+                    <description>Command history</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3</expression>
+                    <views>global</views>
+                    <description>Display command history</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show cli client -->
+        <group group-id="show-cli-client">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>cli</name>
+                    <description>CLI information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>client</name>
+                    <description>Connected CLI clients</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3</expression>
+                    <views>global</views>
+                    <description>Display connected CLI clients</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- config -->
+        <group group-id="config">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>config</name>
+                    <description>Enter configuration mode</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1</expression>
+                    <views>user</views>
+                    <description>Enter configuration mode</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- end -->
+        <group group-id="end">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>end</name>
+                    <description>Return to user view</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1</expression>
+                    <views>global</views>
+                    <description>Return to user view</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- exit -->
+        <group group-id="exit">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>exit</name>
+                    <description>Exit current mode or close current session</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1</expression>
+                    <views>global</views>
+                    <description>Exit current mode or close current session</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- terminal length 0 -->
+        <group group-id="terminal-length-disable">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>terminal</name>
+                    <description>Session terminal settings</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>length</name>
+                    <description>Terminal paging length</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>0</name>
+                    <description>Disable paging</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3</expression>
+                    <views>global</views>
+                    <description>Disable paging for current session</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- no terminal length 0 -->
+        <group group-id="terminal-length-default">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>no</name>
+                    <description>Restore default setting</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>terminal</name>
+                    <description>Session terminal settings</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>length</name>
+                    <description>Terminal paging length</description>
+                </element>
+                <element id="4" type="keyword">
+                    <name>0</name>
+                    <description>Default paging length</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3 4</expression>
+                    <views>global</views>
+                    <description>Restore default paging for current session</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show api status -->
+        <group group-id="show-api-status">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>api</name>
+                    <description>API service information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>status</name>
+                    <description>Service status</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3</expression>
+                    <views>global</views>
+                    <description>Display HTTP API and telnet CLI service status</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show bmp status -->
+        <group group-id="show-bmp-status">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>bmp</name>
+                    <description>BMP information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>status</name>
+                    <description>BMP worker status</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3</expression>
+                    <views>global</views>
+                    <description>Display BMP worker status</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show bmp client [client-id <clientId>] [verbose] -->
+        <group group-id="show-bmp-client">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>bmp</name>
+                    <description>BMP information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>client</name>
+                    <description>BMP clients</description>
+                </element>
+                <element id="4" type="keyword">
+                    <name>client-id</name>
+                    <description>BMP client ID</description>
+                </element>
+                <element id="5" cfg-id="1" type="parameter">
+                    <name>&lt;clientId&gt;</name>
+                    <description>BMP client ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="6" cfg-id="2" type="keyword">
+                    <name>verbose</name>
+                    <description>Display verbose information</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3</expression>
+                    <views>global</views>
+                    <description>Display BMP clients</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5</expression>
+                    <views>global</views>
+                    <description>Display BMP client summary by client-id</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6</expression>
+                    <views>global</views>
+                    <description>Display BMP client verbose information by client-id</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show bmp session client-id <clientId> [session-id <sessionId>] [verbose] -->
+        <group group-id="show-bmp-session">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>bmp</name>
+                    <description>BMP information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>session</name>
+                    <description>BGP sessions</description>
+                </element>
+                <element id="4" type="keyword">
+                    <name>client-id</name>
+                    <description>BMP client ID</description>
+                </element>
+                <element id="5" cfg-id="1" type="parameter">
+                    <name>&lt;clientId&gt;</name>
+                    <description>BMP client ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="6" type="keyword">
+                    <name>session-id</name>
+                    <description>BGP session ID</description>
+                </element>
+                <element id="7" cfg-id="2" type="parameter">
+                    <name>&lt;sessionId&gt;</name>
+                    <description>BGP session ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="8" cfg-id="3" type="keyword">
+                    <name>verbose</name>
+                    <description>Display verbose information</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3 4 5</expression>
+                    <views>global</views>
+                    <description>Display BGP sessions for a BMP client-id</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7</expression>
+                    <views>global</views>
+                    <description>Display BGP session summary by session-id</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8</expression>
+                    <views>global</views>
+                    <description>Display BGP session verbose information by session-id</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show bmp instance client-id <clientId> [instance-id <instanceId>] [verbose] -->
+        <group group-id="show-bmp-instance">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>bmp</name>
+                    <description>BMP information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>instance</name>
+                    <description>Loc-RIB instances</description>
+                </element>
+                <element id="4" type="keyword">
+                    <name>client-id</name>
+                    <description>BMP client ID</description>
+                </element>
+                <element id="5" cfg-id="1" type="parameter">
+                    <name>&lt;clientId&gt;</name>
+                    <description>BMP client ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="6" type="keyword">
+                    <name>instance-id</name>
+                    <description>Loc-RIB instance ID</description>
+                </element>
+                <element id="7" cfg-id="2" type="parameter">
+                    <name>&lt;instanceId&gt;</name>
+                    <description>Loc-RIB instance ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="8" cfg-id="3" type="keyword">
+                    <name>verbose</name>
+                    <description>Display verbose information</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3 4 5</expression>
+                    <views>global</views>
+                    <description>Display Loc-RIB instances for a BMP client-id</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7</expression>
+                    <views>global</views>
+                    <description>Display Loc-RIB instance summary by instance-id</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8</expression>
+                    <views>global</views>
+                    <description>Display Loc-RIB instance verbose information by instance-id</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show bmp route client-id <clientId> session-id <sessionId> ... -->
+        <group group-id="show-bmp-route-session">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>bmp</name>
+                    <description>BMP information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>route</name>
+                    <description>BMP routes</description>
+                </element>
+                <element id="4" type="keyword">
+                    <name>client-id</name>
+                    <description>BMP client ID</description>
+                </element>
+                <element id="5" cfg-id="1" type="parameter">
+                    <name>&lt;clientId&gt;</name>
+                    <description>BMP client ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="6" type="keyword">
+                    <name>session-id</name>
+                    <description>BGP session ID</description>
+                </element>
+                <element id="7" cfg-id="2" type="parameter">
+                    <name>&lt;sessionId&gt;</name>
+                    <description>BGP session ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="8" type="keyword">
+                    <name>af</name>
+                    <description>Address family</description>
+                </element>
+                <element id="9" cfg-id="3" type="parameter">
+                    <name>&lt;af&gt;</name>
+                    <description>Address family</description>
+                    <type>enum(ipv4-unc,ipv6-unc,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)</type>
+                </element>
+                <element id="10" type="keyword">
+                    <name>rib</name>
+                    <description>RIB type</description>
+                </element>
+                <element id="11" cfg-id="4" type="parameter">
+                    <name>&lt;ribType&gt;</name>
+                    <description>RIB type</description>
+                    <type>enum(pre-adj-rib-in,adj-rib-in,as-path,adj-rib-out,post-adj-rib-out)</type>
+                </element>
+                <element id="12" type="keyword">
+                    <name>state</name>
+                    <description>Route state filter</description>
+                </element>
+                <element id="13" cfg-id="5" type="parameter">
+                    <name>&lt;routeState&gt;</name>
+                    <description>Route state</description>
+                    <type>enum(active,stale,all)</type>
+                </element>
+                <element id="14" type="keyword">
+                    <name>prefix</name>
+                    <description>Prefix filter</description>
+                </element>
+                <element id="15" cfg-id="6" type="parameter">
+                    <name>&lt;prefixFilter&gt;</name>
+                    <description>Prefix filter</description>
+                    <type>string(1-128)</type>
+                </element>
+                <element id="16" type="keyword">
+                    <name>route-key</name>
+                    <description>Route key</description>
+                </element>
+                <element id="17" cfg-id="7" type="parameter">
+                    <name>&lt;routeKey&gt;</name>
+                    <description>Route key</description>
+                    <type>string(1-2048)</type>
+                </element>
+                <element id="18" cfg-id="8" type="keyword">
+                    <name>verbose</name>
+                    <description>Display verbose information</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 10 11</expression>
+                    <views>global</views>
+                    <description>Display BMP session routes</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 10 11 12 13</expression>
+                    <views>global</views>
+                    <description>Display BMP session routes</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 10 11 14 15</expression>
+                    <views>global</views>
+                    <description>Display BMP session routes</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 10 11 12 13 14 15</expression>
+                    <views>global</views>
+                    <description>Display BMP session routes</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 10 11 16 17</expression>
+                    <views>global</views>
+                    <description>Display BMP session route summary by route key</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 10 11 16 17 18</expression>
+                    <views>global</views>
+                    <description>Display BMP session route verbose information by route key</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show bmp route client-id <clientId> instance-id <instanceId> ... -->
+        <group group-id="show-bmp-route-instance">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>bmp</name>
+                    <description>BMP information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>route</name>
+                    <description>BMP routes</description>
+                </element>
+                <element id="4" type="keyword">
+                    <name>client-id</name>
+                    <description>BMP client ID</description>
+                </element>
+                <element id="5" cfg-id="1" type="parameter">
+                    <name>&lt;clientId&gt;</name>
+                    <description>BMP client ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="6" type="keyword">
+                    <name>instance-id</name>
+                    <description>Loc-RIB instance ID</description>
+                </element>
+                <element id="7" cfg-id="2" type="parameter">
+                    <name>&lt;instanceId&gt;</name>
+                    <description>Loc-RIB instance ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="8" type="keyword">
+                    <name>state</name>
+                    <description>Route state filter</description>
+                </element>
+                <element id="9" cfg-id="3" type="parameter">
+                    <name>&lt;routeState&gt;</name>
+                    <description>Route state</description>
+                    <type>enum(active,stale,all)</type>
+                </element>
+                <element id="10" type="keyword">
+                    <name>prefix</name>
+                    <description>Prefix filter</description>
+                </element>
+                <element id="11" cfg-id="4" type="parameter">
+                    <name>&lt;prefixFilter&gt;</name>
+                    <description>Prefix filter</description>
+                    <type>string(1-128)</type>
+                </element>
+                <element id="12" type="keyword">
+                    <name>route-key</name>
+                    <description>Route key</description>
+                </element>
+                <element id="13" cfg-id="5" type="parameter">
+                    <name>&lt;routeKey&gt;</name>
+                    <description>Route key</description>
+                    <type>string(1-2048)</type>
+                </element>
+                <element id="14" cfg-id="6" type="keyword">
+                    <name>verbose</name>
+                    <description>Display verbose information</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3 4 5 6 7</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB instance routes</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB instance routes</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 10 11</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB instance routes</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 10 11</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB instance routes</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 12 13</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB route summary by route key</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 12 13 14</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB route verbose information by route key</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show bmp statistic session client-id <clientId> [report-id <reportId>] [verbose] -->
+        <group group-id="show-bmp-statistic-session">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>bmp</name>
+                    <description>BMP information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>statistic</name>
+                    <description>BMP statistics</description>
+                </element>
+                <element id="4" type="keyword">
+                    <name>session</name>
+                    <description>BGP session statistics</description>
+                </element>
+                <element id="5" type="keyword">
+                    <name>client-id</name>
+                    <description>BMP client ID</description>
+                </element>
+                <element id="6" cfg-id="1" type="parameter">
+                    <name>&lt;clientId&gt;</name>
+                    <description>BMP client ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="7" type="keyword">
+                    <name>report-id</name>
+                    <description>Statistics report ID</description>
+                </element>
+                <element id="8" cfg-id="2" type="parameter">
+                    <name>&lt;reportId&gt;</name>
+                    <description>Statistics report ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="9" cfg-id="3" type="keyword">
+                    <name>verbose</name>
+                    <description>Display verbose information</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3 4 5 6</expression>
+                    <views>global</views>
+                    <description>Display BMP session statistics reports</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8</expression>
+                    <views>global</views>
+                    <description>Display BMP session statistics report summary by report-id</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9</expression>
+                    <views>global</views>
+                    <description>Display BMP session statistics report verbose information by report-id</description>
+                </command>
+            </commands>
+        </group>
+
+        <!-- show bmp statistic instance client-id <clientId> [report-id <reportId>] [verbose] -->
+        <group group-id="show-bmp-statistic-instance">
+            <elements>
+                <element id="1" type="keyword">
+                    <name>show</name>
+                    <description>Display system information</description>
+                </element>
+                <element id="2" type="keyword">
+                    <name>bmp</name>
+                    <description>BMP information</description>
+                </element>
+                <element id="3" type="keyword">
+                    <name>statistic</name>
+                    <description>BMP statistics</description>
+                </element>
+                <element id="4" type="keyword">
+                    <name>instance</name>
+                    <description>Loc-RIB statistics</description>
+                </element>
+                <element id="5" type="keyword">
+                    <name>client-id</name>
+                    <description>BMP client ID</description>
+                </element>
+                <element id="6" cfg-id="1" type="parameter">
+                    <name>&lt;clientId&gt;</name>
+                    <description>BMP client ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="7" type="keyword">
+                    <name>report-id</name>
+                    <description>Statistics report ID</description>
+                </element>
+                <element id="8" cfg-id="2" type="parameter">
+                    <name>&lt;reportId&gt;</name>
+                    <description>Statistics report ID</description>
+                    <type>uint(1-65535)</type>
+                </element>
+                <element id="9" cfg-id="3" type="keyword">
+                    <name>verbose</name>
+                    <description>Display verbose information</description>
+                </element>
+            </elements>
+
+            <commands>
+                <command>
+                    <expression>1 2 3 4 5 6</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB statistics reports</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB statistics report summary by report-id</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB statistics report verbose information by report-id</description>
+                </command>
+            </commands>
+        </group>
+    </command_groups>
+</configuration>

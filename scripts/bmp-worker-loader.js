@@ -3,10 +3,7 @@ const Module = require('module');
 const path = require('path');
 
 function patchBmpWorkerSource(source) {
-    const sourcePatched = source.replace(
-        /new BmpWorker\(\);\s*(?:\/\/ 启动监听)?\s*$/u,
-        'module.exports = BmpWorker;'
-    );
+    const sourcePatched = source.replace(/new BmpWorker\(\);\s*(?:\/\/ 启动监听)?\s*$/u, 'module.exports = BmpWorker;');
     if (sourcePatched !== source) {
         return sourcePatched;
     }

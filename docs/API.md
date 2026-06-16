@@ -539,9 +539,8 @@ curl http://127.0.0.1:18080/api/v1/bmp/clients
 | `af` | integer | 是 | 地址族枚举 `1..15` | 查询地址族 |
 | `ribType` | integer | 是 | RIB 类型枚举 `1..5` | 查询 RIB |
 | `routeKey` | string | 是 | 1..2048 字符，不能包含控制字符 | 路由列表返回的完整 `routeKey`；opaque 字符串，精确匹配 |
-| `includeSummary` | boolean | 否 | `true` 或 `false` | 是否返回 BGP 原始报文解析摘要 `summary`，默认 `false` |
 
-返回 `data`：Route Detail 对象；路由不存在时返回错误。默认不包含 `summary` 字段；需要查询 BGP 原始报文解析摘要时传 `includeSummary: true`。
+返回 `data`：Route Detail 对象；路由不存在时返回错误。路由 NLRI 解析结果在 `nlriDetail` 字段中。
 
 ### POST `/api/v1/bmp/instances/routes`
 
@@ -609,9 +608,8 @@ curl http://127.0.0.1:18080/api/v1/bmp/clients
 | `instance.instanceRd` | string | 是 | 1..128 字符，不能包含控制字符 | RD |
 | `instance.addrFamilyType` | integer | 是 | 地址族枚举 `1..15` | Loc-RIB instance 地址族 |
 | `routeKey` | string | 是 | 1..2048 字符，不能包含控制字符 | 路由列表返回的完整 `routeKey`；opaque 字符串，精确匹配 |
-| `includeSummary` | boolean | 否 | `true` 或 `false` | 是否返回 BGP 原始报文解析摘要 `summary`，默认 `false` |
 
-返回 `data`：Route Detail 对象；路由不存在时返回错误。默认不包含 `summary` 字段；需要查询 BGP 原始报文解析摘要时传 `includeSummary: true`。
+返回 `data`：Route Detail 对象；路由不存在时返回错误。路由 NLRI 解析结果在 `nlriDetail` 字段中。
 
 ### POST `/api/v1/bmp/statistics/session`
 

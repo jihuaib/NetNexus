@@ -94,11 +94,6 @@
                     <template v-if="column.key === 'addressFamily'">
                         <a-tag color="blue">{{ getAddressFamilyLabel(record.addressFamily) }}</a-tag>
                     </template>
-                    <template v-else-if="column.key === 'singleRouteSend'">
-                        <a-tag :color="record.singleRouteSend ? 'orange' : 'cyan'">
-                            {{ record.singleRouteSend ? '开启' : '关闭' }}
-                        </a-tag>
-                    </template>
                     <template v-else-if="column.key === 'routeCount'">
                         <a-badge
                             :count="record.routeCount"
@@ -165,8 +160,7 @@
     const instanceColumns = [
         { title: '地址族', dataIndex: 'addressFamily', key: 'addressFamily' },
         { title: 'PEER数量', dataIndex: 'peerCount', key: 'peerCount', align: 'center' },
-        { title: '路由数量', dataIndex: 'routeCount', key: 'routeCount', align: 'center' },
-        { title: '单条发送', dataIndex: 'singleRouteSend', key: 'singleRouteSend', align: 'center' }
+        { title: '路由数量', dataIndex: 'routeCount', key: 'routeCount', align: 'center' }
     ];
 
     const fetchInstanceInfo = async () => {
