@@ -613,7 +613,7 @@ const BmpE2eController = (() => {
                 ],
                 {
                     cwd: projectRoot,
-                    stdio: ['ignore', 'pipe', 'pipe']
+                    stdio: ['pipe', 'pipe', 'pipe']
                 }
             );
 
@@ -779,7 +779,12 @@ const BmpE2eController = (() => {
                     clearTimeout(timeout);
                     resolve();
                 });
-                child.kill('SIGTERM');
+                if (child.stdin && !child.stdin.destroyed) {
+                    child.stdin.write('disconnect\n');
+                    child.stdin.end();
+                } else {
+                    child.kill('SIGTERM');
+                }
             });
             this.record('mockBmpClient stopped');
         }
@@ -791,7 +796,12 @@ const BmpE2eController = (() => {
 
             const child = this.mockClient;
             if (child.exitCode === null && child.signalCode === null) {
-                child.kill('SIGINT');
+                if (child.stdin && !child.stdin.destroyed) {
+                    child.stdin.write('disconnect\n');
+                    child.stdin.end();
+                } else {
+                    child.kill('SIGINT');
+                }
             }
 
             const exitInfo = await this.waitForMockClientExit({ timeout });

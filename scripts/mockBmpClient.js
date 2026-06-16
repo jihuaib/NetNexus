@@ -585,10 +585,17 @@ async function run() {
     };
 
     socket.once('close', () => {
-        if (stopping) {
-            process.exit(0);
-        }
+        process.exit(0);
     });
+
+    if (process.stdin && process.stdin.readable) {
+        process.stdin.setEncoding('utf8');
+        process.stdin.on('data', chunk => {
+            if (/\b(disconnect|quit|exit)\b/u.test(chunk)) {
+                stopGracefully();
+            }
+        });
+    }
 
     process.on('SIGINT', stopGracefully);
     process.on('SIGTERM', stopGracefully);
