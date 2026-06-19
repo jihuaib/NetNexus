@@ -161,79 +161,77 @@
                 </a-row>
 
                 <a-form-item :wrapper-col="{ offset: 8, span: 16 }">
-                    <a-space size="middle">
-                        <a-button type="primary" :loading="routesGenerating" @click="generateRoutes">
-                            生成MVPN路由
-                        </a-button>
-                        <a-button type="primary" danger :disabled="!hasRoutes" @click="deleteRoutes">删除所有</a-button>
-                    </a-space>
+                    <a-button type="primary" :loading="routesGenerating" @click="generateRoutes">生成MVPN路由</a-button>
                 </a-form-item>
-
-                <!-- MVPN路由列表 - 按路由类型分类显示 -->
-                <div class="route-list-section">
-                    <div class="route-list-header">
-                        <UnorderedListOutlined />
-                        <span class="header-text">已生成MVPN路由列表</span>
-                    </div>
-
-                    <!-- 按路由类型分组显示 -->
-                    <a-tabs v-model:active-key="activeMvpnTab" type="card" class="mvpn-route-tabs">
-                        <a-tab-pane v-for="group in groupedMvpnRoutes" :key="group.type" :tab="group.typeName">
-                            <a-table
-                                :data-source="group.routes"
-                                :columns="getRouteColumns(group.type)"
-                                :pagination="pagination"
-                                size="small"
-                                :row-key="
-                                    record =>
-                                        `${record.rd}-${record.routeType}-${record.sourceIp || ''}-${record.groupIp || ''}-${record.originatingRouterIp || ''}`
-                                "
-                                :scroll="{ y: '100%' }"
-                                class="bgp-route-table"
-                                @change="handleTableChange"
-                            >
-                                <template #bodyCell="{ column, record }">
-                                    <template v-if="column.key === 'action'">
-                                        <a-space>
-                                            <a-button size="small" @click="showRouteDetail(record)">
-                                                <template #icon><FileSearchOutlined /></template>
-                                                详情
-                                            </a-button>
-                                            <a-button
-                                                type="primary"
-                                                danger
-                                                size="small"
-                                                @click="deleteSingleRoute(record)"
-                                            >
-                                                <template #icon><DeleteOutlined /></template>
-                                                删除
-                                            </a-button>
-                                        </a-space>
-                                    </template>
-                                    <template v-else-if="column.key === 'rd'">
-                                        {{ record.rd }}
-                                    </template>
-                                    <template v-else-if="column.key === 'rt'">
-                                        {{ record.rt }}
-                                    </template>
-                                    <template v-else-if="column.key === 'source'">
-                                        {{ record.sourceIp }}
-                                    </template>
-                                    <template v-else-if="column.key === 'group'">
-                                        {{ record.groupIp }}
-                                    </template>
-                                    <template v-else-if="column.key === 'sourceAs'">
-                                        {{ record.sourceAs }}
-                                    </template>
-                                    <template v-else-if="column.key === 'originatingRouter'">
-                                        {{ record.originatingRouterIp }}
-                                    </template>
-                                </template>
-                            </a-table>
-                        </a-tab-pane>
-                    </a-tabs>
-                </div>
             </a-form>
+        </a-card>
+
+        <a-card title="已生成MVPN路由列表" class="bgp-route-list-card">
+            <template #extra>
+                <a-button
+                    class="route-delete-all-button"
+                    :disabled="!hasRoutes || deleteAllLoading"
+                    :loading="deleteAllLoading"
+                    danger
+                    size="small"
+                    @click="deleteRoutes"
+                >
+                    <template #icon><DeleteOutlined /></template>
+                    删除所有
+                </a-button>
+            </template>
+
+            <!-- 按路由类型分组显示 -->
+            <a-tabs v-model:active-key="activeMvpnTab" type="card" class="mvpn-route-tabs">
+                <a-tab-pane v-for="group in groupedMvpnRoutes" :key="group.type" :tab="group.typeName">
+                    <a-table
+                        :data-source="group.routes"
+                        :columns="getRouteColumns(group.type)"
+                        :pagination="pagination"
+                        size="small"
+                        :row-key="
+                            record =>
+                                `${record.rd}-${record.routeType}-${record.sourceIp || ''}-${record.groupIp || ''}-${record.originatingRouterIp || ''}`
+                        "
+                        :scroll="{ y: '100%' }"
+                        class="bgp-route-table"
+                        @change="handleTableChange"
+                    >
+                        <template #bodyCell="{ column, record }">
+                            <template v-if="column.key === 'action'">
+                                <a-space>
+                                    <a-button size="small" @click="showRouteDetail(record)">
+                                        <template #icon><FileSearchOutlined /></template>
+                                        详情
+                                    </a-button>
+                                    <a-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
+                                        <template #icon><DeleteOutlined /></template>
+                                        删除
+                                    </a-button>
+                                </a-space>
+                            </template>
+                            <template v-else-if="column.key === 'rd'">
+                                {{ record.rd }}
+                            </template>
+                            <template v-else-if="column.key === 'rt'">
+                                {{ record.rt }}
+                            </template>
+                            <template v-else-if="column.key === 'source'">
+                                {{ record.sourceIp }}
+                            </template>
+                            <template v-else-if="column.key === 'group'">
+                                {{ record.groupIp }}
+                            </template>
+                            <template v-else-if="column.key === 'sourceAs'">
+                                {{ record.sourceAs }}
+                            </template>
+                            <template v-else-if="column.key === 'originatingRouter'">
+                                {{ record.originatingRouterIp }}
+                            </template>
+                        </template>
+                    </a-table>
+                </a-tab-pane>
+            </a-tabs>
         </a-card>
 
         <BgpRouteDetailDrawer v-model:open="routeDetailVisible" :loading="routeDetailLoading" :route="routeDetail" />
@@ -244,7 +242,6 @@
     import { onMounted, ref, computed, watch, onActivated, nextTick } from 'vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
     import { message, Modal } from 'ant-design-vue';
-    import UnorderedListOutlined from '@ant-design/icons-vue/es/icons/UnorderedListOutlined';
     import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
     import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
     import { BGP_ADDR_FAMILY, DEFAULT_VALUES, BGP_MVPN_ROUTE_TYPE } from '../../const/bgpConst';
@@ -322,6 +319,7 @@
     const hasRoutes = computed(() => pagination.value.total > 0);
     const activeMvpnTab = ref(null);
     const routesGenerating = ref(false);
+    const deleteAllLoading = ref(false);
     const routeDetailVisible = ref(false);
     const routeDetailLoading = ref(false);
     const routeDetail = ref(null);
@@ -513,6 +511,11 @@
                 cancelText: '取消',
                 okType: 'danger',
                 onOk: async () => {
+                    if (deleteAllLoading.value) {
+                        return;
+                    }
+
+                    deleteAllLoading.value = true;
                     try {
                         const result = await window.bgpApi.deleteAllRoutesByFamily(BGP_ADDR_FAMILY.IPV4_MVPN);
 
@@ -525,6 +528,8 @@
                         }
                     } catch (e) {
                         message.error(`MVPN路由删除失败: ${e.message}`);
+                    } finally {
+                        deleteAllLoading.value = false;
                     }
                 }
             });
@@ -593,58 +598,69 @@
         height: calc(100vh - 70px);
         min-height: 0;
         overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
     }
 
     .bgp-route-card {
+        flex: 0 0 auto;
         display: flex;
         flex-direction: column;
-        height: 100%;
-        overflow: hidden;
-    }
-
-    .bgp-route-card :deep(.ant-card-body) {
-        flex: 1;
         min-height: 0;
         overflow: hidden;
-        display: flex;
-        flex-direction: column;
     }
 
-    .bgp-route-form {
+    .bgp-route-list-card {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
         overflow: hidden;
+    }
+
+    .bgp-route-card :deep(.ant-card-head),
+    .bgp-route-list-card :deep(.ant-card-head) {
+        min-height: 36px !important;
+    }
+
+    .bgp-route-card :deep(.ant-card-head-title),
+    .bgp-route-list-card :deep(.ant-card-head-title) {
+        padding: 8px 0 !important;
+    }
+
+    .bgp-route-list-card :deep(.ant-card-extra) {
+        padding: 6px 0 !important;
+    }
+
+    .bgp-route-card :deep(.ant-card-body) {
+        flex: 0 0 auto;
+        min-height: 0;
+        overflow: visible;
+        display: flex;
+        flex-direction: column;
+        padding: 8px 10px !important;
+    }
+
+    .bgp-route-list-card :deep(.ant-card-body) {
+        flex: 1 1 0;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        padding: 8px 10px !important;
+    }
+
+    .bgp-route-form {
+        flex: 0 0 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: visible;
     }
 
     .bgp-route-form :deep(.ant-form-item) {
         flex: 0 0 auto;
-    }
-
-    .route-list-section {
-        flex: 1 1 0;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        margin-top: 24px;
-        border-top: 1px solid #f0f0f0;
-        padding-top: 16px;
-        overflow: hidden;
-    }
-
-    .route-list-header {
-        flex: 0 0 auto;
-        margin-bottom: 16px;
-        display: flex;
-        align-items: center;
-        font-weight: 500;
-        color: rgba(0, 0, 0, 0.85);
-    }
-
-    .header-text {
-        margin-left: 8px;
-        margin-right: 8px;
     }
 
     .mvpn-route-tabs {
@@ -722,5 +738,22 @@
         position: sticky;
         top: 0;
         z-index: 1;
+    }
+
+    .route-delete-all-button:disabled,
+    .route-delete-all-button.ant-btn-disabled {
+        color: #8c8c8c !important;
+        background: #f0f0f0 !important;
+        border-color: #bfbfbf !important;
+        opacity: 1 !important;
+    }
+
+    .route-delete-all-button:disabled:hover,
+    .route-delete-all-button.ant-btn-disabled:hover,
+    .route-delete-all-button:disabled:focus,
+    .route-delete-all-button.ant-btn-disabled:focus {
+        color: #8c8c8c !important;
+        background: #f0f0f0 !important;
+        border-color: #bfbfbf !important;
     }
 </style>

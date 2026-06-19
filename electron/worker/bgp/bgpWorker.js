@@ -1,6 +1,5 @@
 const net = require('net');
 const util = require('util');
-const ipaddr = require('ipaddr.js');
 const BgpConst = require('../../const/bgpConst');
 const { forEachGeneratedRouteIp } = require('../../utils/ipUtils');
 const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgpUtils');
@@ -10,80 +9,13 @@ const BgpSession = require('./bgpSession');
 const BgpInstance = require('./bgpInstance');
 const CommonUtils = require('../../utils/commonUtils');
 const BgpRoute = require('./bgpRoute');
-
-const MAX_QP_DQPN = 0xffffff;
-const MAX_IPV6_INT = (1n << 128n) - 1n;
-const MAX_IPV4_INT = (1n << 32n) - 1n;
-
-function normalizePositiveInteger(value, fallback = 0) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) {
-        return fallback;
-    }
-
-    return Math.floor(number);
-}
-
-function normalizeOptionalPositiveInteger(value, fallback = 1) {
-    if (value === undefined || value === null || value === '') {
-        return fallback;
-    }
-
-    return Number(value);
-}
-
-function normalizeQpRouteGrowthMode(mode) {
-    return Object.values(BgpConst.BGP_QP_ROUTE_GROWTH_MODE).includes(mode)
-        ? mode
-        : BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
-}
-
-function normalizeQpBsidMode(mode) {
-    return Object.values(BgpConst.BGP_QP_BSID_MODE).includes(mode) ? mode : BgpConst.BGP_QP_BSID_MODE.FIXED;
-}
-
-function routeGrowthIncludesIp(mode) {
-    return mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP || mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
-}
-
-function routeGrowthIncludesDqpn(mode) {
-    return mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.DQPN || mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
-}
-
-function ipToBigInt(ip, ipType) {
-    const address = ipaddr.parse(ip);
-    const expectedKind = ipType === BgpConst.IP_TYPE.IPV4 ? 'ipv4' : 'ipv6';
-    if (address.kind() !== expectedKind) {
-        throw new Error(ipType === BgpConst.IP_TYPE.IPV4 ? '请输入有效的IPv4地址' : '请输入有效的IPv6地址');
-    }
-
-    return address.toByteArray().reduce((result, byte) => (result << 8n) + BigInt(byte), 0n);
-}
-
-function getIpRouteStep(ipType, mask, ipStep) {
-    const maxMask = ipType === BgpConst.IP_TYPE.IPV4 ? 32 : 128;
-    const routeStep = mask === maxMask ? 1n : 1n << BigInt(maxMask - mask);
-    return routeStep * BigInt(ipStep);
-}
-
-function ipv6ToBigInt(ip) {
-    const address = ipaddr.parse(ip);
-    if (address.kind() !== 'ipv6') {
-        throw new Error('BSID必须是IPv6地址');
-    }
-
-    return address.toByteArray().reduce((result, byte) => (result << 8n) + BigInt(byte), 0n);
-}
-
-function bigIntToIpv6(value) {
-    const bytes = [];
-    for (let i = 15; i >= 0; i--) {
-        bytes[i] = Number(value & 0xffn);
-        value >>= 8n;
-    }
-
-    return ipaddr.fromByteArray(bytes).toString();
-}
+const {
+    buildLabelGenerationContext,
+    getGeneratedLabel,
+    buildSrv6SidGenerationContext,
+    getGeneratedSrv6Sid,
+    forEachQpGeneratedRoute
+} = require('../../utils/bgpRouteGenerator');
 
 function makeRouteLookupKey(addressFamily, route) {
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_QP) {
@@ -104,125 +36,49 @@ function makeRouteLookupKey(addressFamily, route) {
     return BgpRoute.makeKey(route?.ip, route?.mask);
 }
 
-function getQpBaseRoute(ipType, prefix, mask) {
-    let baseRoute = null;
-    forEachGeneratedRouteIp(ipType, prefix, mask, 1, route => {
-        baseRoute = route;
-    });
-    if (!baseRoute) {
-        throw new Error('QP路由前缀配置无效');
-    }
-    return baseRoute;
+function areRouteAttrsEqual(left = {}, right = {}) {
+    return JSON.stringify(left || {}) === JSON.stringify(right || {});
 }
 
-function buildQpGenerationContext(config, ipType, options = {}) {
-    const requireBsid = options.requireBsid !== false;
-    const routeGrowthMode = normalizeQpRouteGrowthMode(config.routeGrowthMode);
-    const bsidMode = normalizeQpBsidMode(config.bsidMode);
-    const growIp = routeGrowthIncludesIp(routeGrowthMode);
-    const growDqpn = routeGrowthIncludesDqpn(routeGrowthMode);
-
-    const count = normalizePositiveInteger(config.count, 0);
-    if (count <= 0) {
-        return { count: 0 };
-    }
-
-    const ipStep = normalizeOptionalPositiveInteger(config.ipStep, 1);
-    if (growIp) {
-        if (!Number.isInteger(ipStep) || ipStep <= 0) {
-            throw new Error('IP步长必须为正整数');
-        }
-        const startIp = ipToBigInt(config.prefix, ipType);
-        const mask = normalizePositiveInteger(config.mask, NaN);
-        const maxMask = ipType === BgpConst.IP_TYPE.IPV4 ? 32 : 128;
-        if (!Number.isInteger(mask) || mask < 1 || mask > maxMask) {
-            throw new Error(ipType === BgpConst.IP_TYPE.IPV4 ? '请输入有效的IPv4掩码' : '请输入有效的IPv6掩码');
-        }
-        const lastIp = startIp + BigInt(count - 1) * getIpRouteStep(ipType, mask, ipStep);
-        const maxIp = ipType === BgpConst.IP_TYPE.IPV4 ? MAX_IPV4_INT : MAX_IPV6_INT;
-        if (lastIp > maxIp) {
-            throw new Error('IP连续生成超出地址范围');
-        }
-    }
-
-    const startDqpn = normalizePositiveInteger(config.startDqpn, 0);
-    const dqpnStep = normalizePositiveInteger(config.dqpnStep, 1);
-    if (!Number.isInteger(startDqpn) || startDqpn < 0 || startDqpn > MAX_QP_DQPN) {
-        throw new Error('DQPN范围为 0 ~ 16777215（24bit）');
-    }
-    if (growDqpn) {
-        if (!Number.isInteger(dqpnStep) || dqpnStep <= 0) {
-            throw new Error('DQPN步长必须为正整数');
-        }
-        const lastDqpn = startDqpn + (count - 1) * dqpnStep;
-        if (lastDqpn > MAX_QP_DQPN) {
-            throw new Error('DQPN连续生成超出 24bit 范围');
-        }
-    }
-
-    const baseRoute = growIp ? null : getQpBaseRoute(ipType, config.prefix, config.mask);
-    const bsidBase = `${config.bsid || ''}`.trim();
-    if (requireBsid && !bsidBase) {
-        throw new Error('请输入BSID');
-    }
-    const resolveBsid = requireBsid || Boolean(bsidBase);
-    let bsidBaseInt = null;
-    let bsidStep = 0n;
-    if (resolveBsid && bsidMode === BgpConst.BGP_QP_BSID_MODE.CONTINUOUS) {
-        bsidBaseInt = ipv6ToBigInt(bsidBase);
-        bsidStep = BigInt(normalizePositiveInteger(config.bsidStep, 1));
-        if (bsidStep <= 0n) {
-            throw new Error('BSID步长必须为正整数');
-        }
-        if (bsidBaseInt + BigInt(count - 1) * bsidStep > MAX_IPV6_INT) {
-            throw new Error('BSID连续生成超出IPv6地址范围');
-        }
-    } else if (resolveBsid) {
-        ipv6ToBigInt(bsidBase);
-    }
-
+function getPeerAddressFamilyOptions(config, addressFamily, allowSrv6PrefixSid = false) {
+    const familyConfig = config?.addressFamilyConfig?.[String(addressFamily)] || config?.addressFamilyConfig?.[addressFamily] || {};
+    const normalizedFamily = Number(addressFamily);
     return {
-        count,
-        routeGrowthMode,
-        bsidMode,
-        growIp,
-        growDqpn,
-        ipStep,
-        startDqpn,
-        dqpnStep,
-        baseRoute,
-        bsidBase,
-        bsidBaseInt,
-        bsidStep,
-        resolveBsid
+        sendSrv6PrefixSid:
+            allowSrv6PrefixSid &&
+            (normalizedFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC ||
+                normalizedFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC) &&
+            familyConfig.sendSrv6PrefixSid === true
     };
 }
 
-function forEachQpGeneratedRoute(config, ipType, callback, options = {}) {
-    const context = buildQpGenerationContext(config, ipType, options);
-    if (context.count === 0 || typeof callback !== 'function') {
-        return 0;
+function getDefaultSrv6EndpointBehavior(addressFamily) {
+    return Number(addressFamily) === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC
+        ? BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT4
+        : BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6;
+}
+
+function getAddressFamilyFlag(addressFamily) {
+    switch (Number(addressFamily)) {
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_UNC:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_UNC;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_UNC:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_UNC;
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_MVPN;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_MVPN:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_MVPN;
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_QP:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_QP;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_QP:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_QP;
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_LABEL_UNICAST;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_LABEL_UNICAST;
+        default:
+            return 0;
     }
-
-    const emit = (route, index) => {
-        const dqpn = context.growDqpn ? context.startDqpn + index * context.dqpnStep : context.startDqpn;
-        const bsid =
-            context.resolveBsid && context.bsidMode === BgpConst.BGP_QP_BSID_MODE.CONTINUOUS
-                ? bigIntToIpv6(context.bsidBaseInt + BigInt(index) * context.bsidStep)
-                : context.bsidBase;
-
-        callback({ ip: route.ip, mask: route.mask, dqpn, bsid }, index);
-    };
-
-    if (context.growIp) {
-        return forEachGeneratedRouteIp(ipType, config.prefix, config.mask, context.count, emit, context.ipStep);
-    }
-
-    for (let index = 0; index < context.count; index++) {
-        emit(context.baseRoute, index);
-    }
-
-    return context.count;
 }
 
 class BgpWorker {
@@ -468,6 +324,14 @@ class BgpWorker {
                 );
                 // 设置本地地址族标志
                 ipv4PeerConfigData.addressFamily.forEach(family => {
+                    const familyFlag = getAddressFamilyFlag(family);
+                    if (familyFlag) {
+                        bgpSession.localAddrFamilyFlags = CommonUtils.BIT_SET(
+                            bgpSession.localAddrFamilyFlags,
+                            familyFlag
+                        );
+                        return;
+                    }
                     if (family === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC) {
                         bgpSession.localAddrFamilyFlags = CommonUtils.BIT_SET(
                             bgpSession.localAddrFamilyFlags,
@@ -529,6 +393,7 @@ class BgpWorker {
         ipv4PeerConfigData.addressFamily.forEach(family => {
             const { afi, safi } = getAfiAndSafi(family);
             const bgpInstance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
+            bgpSession.setAddressFamilyOptions(family, getPeerAddressFamilyOptions(ipv4PeerConfigData, family, false));
             bgpInstance.addPeer(bgpSession);
         });
 
@@ -588,6 +453,14 @@ class BgpWorker {
                 );
                 // 设置本地地址族标志
                 ipv6PeerConfigData.addressFamilyIpv6.forEach(family => {
+                    const familyFlag = getAddressFamilyFlag(family);
+                    if (familyFlag) {
+                        bgpSession.localAddrFamilyFlags = CommonUtils.BIT_SET(
+                            bgpSession.localAddrFamilyFlags,
+                            familyFlag
+                        );
+                        return;
+                    }
                     if (family === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC) {
                         bgpSession.localAddrFamilyFlags = CommonUtils.BIT_SET(
                             bgpSession.localAddrFamilyFlags,
@@ -649,6 +522,7 @@ class BgpWorker {
         ipv6PeerConfigData.addressFamilyIpv6.forEach(family => {
             const { afi, safi } = getAfiAndSafi(family);
             const bgpInstance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
+            bgpSession.setAddressFamilyOptions(family, getPeerAddressFamilyOptions(ipv6PeerConfigData, family, true));
             bgpInstance.addPeer(bgpSession);
         });
 
@@ -674,6 +548,7 @@ class BgpWorker {
     getPeerInfo(messageId) {
         const ipv4PeerInfoList = [];
         const ipv6PeerInfoList = [];
+        const ipv4LabelPeerInfoList = [];
         const ipv4MvpnPeerInfoList = [];
         const ipv6MvpnPeerInfoList = [];
         const ipv4QpPeerInfoList = [];
@@ -686,6 +561,8 @@ class BgpWorker {
                         ipv4PeerInfoList.push(peerInfo);
                     } else if (peerInfo.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC) {
                         ipv6PeerInfoList.push(peerInfo);
+                    } else if (peerInfo.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
+                        ipv4LabelPeerInfoList.push(peerInfo);
                     } else if (peerInfo.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN) {
                         ipv4MvpnPeerInfoList.push(peerInfo);
                     } else if (peerInfo.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_MVPN) {
@@ -704,6 +581,7 @@ class BgpWorker {
         const peerInfoList = {
             [BgpConst.BGP_ADDR_FAMILY.IPV4_UNC]: [...ipv4PeerInfoList],
             [BgpConst.BGP_ADDR_FAMILY.IPV6_UNC]: [...ipv6PeerInfoList],
+            [BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST]: [...ipv4LabelPeerInfoList],
             [BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN]: [...ipv4MvpnPeerInfoList],
             [BgpConst.BGP_ADDR_FAMILY.IPV6_MVPN]: [...ipv6MvpnPeerInfoList],
             [BgpConst.BGP_ADDR_FAMILY.IPV4_QP]: [...ipv4QpPeerInfoList],
@@ -768,6 +646,17 @@ class BgpWorker {
 
         // 生成路由IP
         const ipType = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
+        const addressFamily = Number(config.addressFamily);
+        const isLabelUnicast = addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
+        const isSrv6CapableUnicast =
+            addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC ||
+            addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC;
+        const labelContext = isLabelUnicast ? buildLabelGenerationContext(config) : null;
+        const srv6Context = isSrv6CapableUnicast
+            ? buildSrv6SidGenerationContext(config, {
+                  defaultEndpointBehavior: getDefaultSrv6EndpointBehavior(addressFamily)
+              })
+            : null;
         let hasRouteChanged = false;
         const nextCustomAttr = config.customAttr || '';
         const nextRt = config.rt || '';
@@ -778,18 +667,42 @@ class BgpWorker {
         if (instance.rt !== nextRt) {
             instance.rt = nextRt;
         }
-        const generatedCount = forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, route => {
+        const generatedCount = forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, (route, index) => {
             const key = BgpRoute.makeKey(route.ip, route.mask);
+            const label = labelContext ? getGeneratedLabel(labelContext, index) : null;
+            const attrOverrides = {
+                customAttr: instance.customAttr,
+                rt: instance.rt
+            };
+            if (srv6Context) {
+                attrOverrides.srv6Sid = srv6Context.enabled ? getGeneratedSrv6Sid(srv6Context, index) : '';
+                attrOverrides.srv6EndpointBehavior = srv6Context.enabled ? srv6Context.endpointBehavior : null;
+            }
+
             if (!instance.routeMap.has(key)) {
                 const bgpRoute = new BgpRoute(instance);
                 bgpRoute.ip = route.ip;
                 bgpRoute.mask = route.mask;
+                if (labelContext) {
+                    bgpRoute.label = label;
+                }
                 instance.setRoute(
                     key,
                     bgpRoute,
-                    instance.makeRouteAttr(bgpRoute, { customAttr: instance.customAttr, rt: instance.rt })
+                    instance.makeRouteAttr(bgpRoute, attrOverrides)
                 );
                 hasRouteChanged = true;
+            } else {
+                const bgpRoute = instance.routeMap.get(key);
+                if (labelContext && bgpRoute.label !== label) {
+                    bgpRoute.label = label;
+                    hasRouteChanged = true;
+                }
+                const nextAttr = instance.makeRouteAttr(bgpRoute, attrOverrides);
+                if (!areRouteAttrsEqual(instance.getRouteAttr(bgpRoute), nextAttr)) {
+                    instance.assignRouteAttr(key, nextAttr);
+                    hasRouteChanged = true;
+                }
             }
         });
         if (generatedCount === 0) {
@@ -1007,6 +920,10 @@ class BgpWorker {
 
         // 删除peer
         instance.peerMap.delete(peerRecord.peerIp);
+        const addressFamilyFlag = getAddressFamilyFlag(peerRecord.addressFamily);
+        if (addressFamilyFlag) {
+            session.localAddrFamilyFlags = CommonUtils.BIT_RESET(session.localAddrFamilyFlags, addressFamilyFlag);
+        }
         if (peerRecord.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC) {
             session.localAddrFamilyFlags = CommonUtils.BIT_RESET(
                 session.localAddrFamilyFlags,

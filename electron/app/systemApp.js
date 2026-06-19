@@ -21,6 +21,7 @@ const FtpApp = require('./ftpApp');
 const SnmpApp = require('./snmpApp');
 const DhcpApp = require('./dhcpApp');
 const NtpApp = require('./ntpApp');
+const RadiusApp = require('./radiusApp');
 const TftpApp = require('./tftpApp');
 const SyslogApp = require('./syslogApp');
 const AppUpdater = require('./updater');
@@ -67,6 +68,7 @@ class SystemApp {
         this.snmpApp = new SnmpApp(ipc, this.programStore);
         this.dhcpApp = new DhcpApp(ipc, this.programStore);
         this.ntpApp = new NtpApp(ipc, this.programStore);
+        this.radiusApp = new RadiusApp(ipc, this.programStore);
         this.tftpApp = new TftpApp(ipc, this.programStore);
         this.syslogApp = new SyslogApp(ipc, this.programStore);
         this.updaterApp = new AppUpdater(ipc, win);
@@ -589,6 +591,7 @@ class SystemApp {
             this.snmpApp,
             this.dhcpApp,
             this.ntpApp,
+            this.radiusApp,
             this.tftpApp,
             this.syslogApp
         ].forEach(appInstance => this.applyLogLevelToApp(appInstance));
@@ -719,6 +722,7 @@ class SystemApp {
         const isFtpRunning = this.ftpApp.getFtpRunning();
         const isSnmpRunning = this.snmpApp.getSnmpRunning();
         const isNtpRunning = this.ntpApp.getNtpRunning();
+        const isRadiusRunning = this.radiusApp.getRadiusRunning();
         const isTftpRunning = this.tftpApp.getTftpRunning();
         const isSyslogRunning = this.syslogApp.getSyslogRunning();
         const isApiRunning = this.externalApiServer.getRunning();
@@ -731,6 +735,7 @@ class SystemApp {
             isFtpRunning ||
             isSnmpRunning ||
             isNtpRunning ||
+            isRadiusRunning ||
             isTftpRunning ||
             isSyslogRunning ||
             isApiRunning ||
@@ -765,6 +770,9 @@ class SystemApp {
                 }
                 if (isNtpRunning) {
                     await this.ntpApp.handleStopNtp();
+                }
+                if (isRadiusRunning) {
+                    await this.radiusApp.handleStopRadius();
                 }
                 if (isTftpRunning) {
                     await this.tftpApp.handleStopTftp();

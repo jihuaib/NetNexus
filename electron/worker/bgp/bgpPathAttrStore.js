@@ -28,12 +28,14 @@ function canonicalizeAttr(attr = {}) {
         localPref: normalizeNumber(attr.localPref, 100),
         communities: normalizeCommunities(attr.communities),
         customAttr: normalizeString(attr.customAttr),
-        rt: normalizeString(attr.rt)
+        rt: normalizeString(attr.rt),
+        srv6Sid: normalizeString(attr.srv6Sid),
+        srv6EndpointBehavior: normalizeNumber(attr.srv6EndpointBehavior, null)
     };
 }
 
-function hashCanonicalAttr(canonicalAttr) {
-    return crypto.createHash('sha256').update(JSON.stringify(canonicalAttr)).digest('hex');
+function hashCanonicalAttr(canonicalJson) {
+    return crypto.createHash('sha256').update(canonicalJson).digest('hex');
 }
 
 class BgpPathAttrStore {
@@ -45,7 +47,7 @@ class BgpPathAttrStore {
     intern(attr) {
         const canonical = canonicalizeAttr(attr);
         const canonicalJson = JSON.stringify(canonical);
-        const hash = hashCanonicalAttr(canonical);
+        const hash = hashCanonicalAttr(canonicalJson);
 
         const hashIds = this.hashIndex.get(hash);
         if (hashIds) {

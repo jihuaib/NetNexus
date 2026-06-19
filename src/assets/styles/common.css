@@ -110,21 +110,47 @@
 }
 
 .mt-main-container .fixed-tabs {
-    height: 48px;
-    /* 你实际 Tab 高度 */
+    height: 40px;
     flex-shrink: 0;
     background-color: #fff;
     z-index: 10;
     margin-left: 8px;
 }
 
+.mt-main-container .fixed-tabs .ant-tabs {
+    height: 100%;
+}
+
+.mt-main-container .fixed-tabs .ant-tabs-nav {
+    height: 40px;
+    margin: 0 !important;
+}
+
+.mt-main-container .fixed-tabs .ant-tabs-nav-wrap {
+    align-items: center;
+}
+
+.mt-main-container .fixed-tabs .ant-tabs-tab {
+    padding: 8px 0 !important;
+    font-size: 14px;
+}
+
+.mt-main-container .fixed-tabs .ant-tabs-tab + .ant-tabs-tab {
+    margin-left: 16px !important;
+}
+
+.mt-main-container .fixed-tabs .ant-tabs-ink-bar {
+    height: 2px;
+}
+
 .mt-main-container .content-container {
     flex: 1;
     overflow-y: auto;
+    min-height: 0;
 }
 
 .mt-container {
-    margin-top: 10px;
+    margin-top: 6px;
     margin-left: 8px;
     width: 99%;
 }

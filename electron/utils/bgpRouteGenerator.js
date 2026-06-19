@@ -5,6 +5,7 @@ const { forEachGeneratedRouteIp } = require('./ipUtils');
 const MAX_QP_DQPN = 0xffffff;
 const MAX_IPV6_INT = (1n << 128n) - 1n;
 const MAX_IPV4_INT = (1n << 32n) - 1n;
+const DEFAULT_MPLS_LABEL = 16;
 
 function normalizePositiveInteger(value, fallback = 0) {
     const number = Number(value);
@@ -33,6 +34,19 @@ function normalizeQpBsidMode(mode) {
     return Object.values(BgpConst.BGP_QP_BSID_MODE).includes(mode) ? mode : BgpConst.BGP_QP_BSID_MODE.FIXED;
 }
 
+function normalizeLabelMode(mode) {
+    return Object.values(BgpConst.BGP_LABEL_MODE).includes(mode) ? mode : BgpConst.BGP_LABEL_MODE.FIXED;
+}
+
+function normalizeSrv6SidMode(mode) {
+    return Object.values(BgpConst.BGP_SRV6_SID_MODE).includes(mode) ? mode : BgpConst.BGP_SRV6_SID_MODE.FIXED;
+}
+
+function normalizeSrv6EndpointBehavior(behavior, fallback = BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6) {
+    const value = Number(behavior);
+    return Object.values(BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR).includes(value) ? value : fallback;
+}
+
 function routeGrowthIncludesIp(mode) {
     return mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP || mode === BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
 }
@@ -57,10 +71,10 @@ function getIpRouteStep(ipType, mask, ipStep) {
     return routeStep * BigInt(ipStep);
 }
 
-function ipv6ToBigInt(ip) {
+function ipv6ToBigInt(ip, fieldName = 'BSID') {
     const address = ipaddr.parse(ip);
     if (address.kind() !== 'ipv6') {
-        throw new Error('BSID必须是IPv6地址');
+        throw new Error(`${fieldName}必须是IPv6地址`);
     }
 
     return address.toByteArray().reduce((result, byte) => (result << 8n) + BigInt(byte), 0n);
@@ -74,6 +88,101 @@ function bigIntToIpv6(value) {
     }
 
     return ipaddr.fromByteArray(bytes).toString();
+}
+
+function buildLabelGenerationContext(config) {
+    const count = normalizePositiveInteger(config.count, 0);
+    const labelMode = normalizeLabelMode(config.labelMode);
+    const labelStart = normalizePositiveInteger(config.labelStart, DEFAULT_MPLS_LABEL);
+
+    if (labelStart < 0 || labelStart > BgpConst.BGP_MPLS_LABEL_MAX) {
+        throw new Error(`标签范围为 0 ~ ${BgpConst.BGP_MPLS_LABEL_MAX}`);
+    }
+
+    let labelStep = 0;
+    if (labelMode === BgpConst.BGP_LABEL_MODE.INCREMENT) {
+        labelStep = normalizeOptionalPositiveInteger(config.labelStep, 1);
+        if (!Number.isInteger(labelStep) || labelStep <= 0) {
+            throw new Error('标签步长必须为正整数');
+        }
+
+        const lastLabel = labelStart + Math.max(count - 1, 0) * labelStep;
+        if (lastLabel > BgpConst.BGP_MPLS_LABEL_MAX) {
+            throw new Error('标签递增超出20bit范围');
+        }
+    }
+
+    return {
+        count,
+        labelMode,
+        labelStart,
+        labelStep
+    };
+}
+
+function getGeneratedLabel(context, index) {
+    if (context.labelMode === BgpConst.BGP_LABEL_MODE.INCREMENT) {
+        return context.labelStart + index * context.labelStep;
+    }
+
+    return context.labelStart;
+}
+
+function isSrv6Enabled(config) {
+    return config.srv6Enabled === true || config.srv6Enabled === 'true';
+}
+
+function buildSrv6SidGenerationContext(config, options = {}) {
+    const defaultEndpointBehavior =
+        options.defaultEndpointBehavior ?? BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6;
+
+    if (!isSrv6Enabled(config)) {
+        return {
+            enabled: false,
+            endpointBehavior: normalizeSrv6EndpointBehavior(config.srv6EndpointBehavior, defaultEndpointBehavior)
+        };
+    }
+
+    const count = normalizePositiveInteger(config.count, 0);
+    const sidMode = normalizeSrv6SidMode(config.srv6SidMode);
+    const sidBase = `${config.srv6Sid || ''}`.trim();
+    if (!sidBase) {
+        throw new Error('请输入SRv6 SID');
+    }
+
+    let sidBaseInt = ipv6ToBigInt(sidBase, 'SRv6 SID');
+    let sidStep = 0n;
+    if (sidMode === BgpConst.BGP_SRV6_SID_MODE.INCREMENT) {
+        sidStep = BigInt(normalizePositiveInteger(config.srv6SidStep, 1));
+        if (sidStep <= 0n) {
+            throw new Error('SRv6 SID步长必须为正整数');
+        }
+        if (sidBaseInt + BigInt(Math.max(count - 1, 0)) * sidStep > MAX_IPV6_INT) {
+            throw new Error('SRv6 SID递增超出IPv6地址范围');
+        }
+    }
+
+    return {
+        enabled: true,
+        count,
+        sidMode,
+        sidBase,
+        sidBaseInt,
+        sidStep,
+        endpointBehavior: normalizeSrv6EndpointBehavior(config.srv6EndpointBehavior, defaultEndpointBehavior)
+    };
+}
+
+function getGeneratedSrv6Sid(context, index) {
+    if (!context?.enabled) {
+        return null;
+    }
+
+    if (context.sidMode === BgpConst.BGP_SRV6_SID_MODE.INCREMENT) {
+        return bigIntToIpv6(context.sidBaseInt + BigInt(index) * context.sidStep);
+    }
+
+    return context.sidBase;
 }
 
 function getQpBaseRoute(ipType, prefix, mask) {
@@ -292,11 +401,33 @@ function collectBgpGeneratedRoutes(config, options = {}) {
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC) {
         const ipType =
             addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
-        forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, route => {
+        const srv6Context =
+            addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC ? buildSrv6SidGenerationContext(config) : null;
+        forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, (route, index) => {
+            const routeInfo = {
+                addressFamily,
+                ip: route.ip,
+                mask: route.mask,
+                customAttr: config.customAttr || null,
+                rt: config.rt || null
+            };
+            if (srv6Context?.enabled) {
+                routeInfo.srv6Sid = getGeneratedSrv6Sid(srv6Context, index);
+                routeInfo.srv6EndpointBehavior = srv6Context.endpointBehavior;
+            }
+            routes.push(routeInfo);
+        });
+        return routes;
+    }
+
+    if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
+        const labelContext = buildLabelGenerationContext(config);
+        forEachGeneratedRouteIp(BgpConst.IP_TYPE.IPV4, config.prefix, config.mask, config.count, (route, index) => {
             routes.push({
                 addressFamily,
                 ip: route.ip,
                 mask: route.mask,
+                label: getGeneratedLabel(labelContext, index),
                 customAttr: config.customAttr || null,
                 rt: config.rt || null
             });
@@ -336,5 +467,9 @@ function collectBgpGeneratedRoutes(config, options = {}) {
 module.exports = {
     collectBgpGeneratedRoutes,
     forEachMvpnGeneratedRoute,
-    forEachQpGeneratedRoute
+    forEachQpGeneratedRoute,
+    buildLabelGenerationContext,
+    getGeneratedLabel,
+    buildSrv6SidGenerationContext,
+    getGeneratedSrv6Sid
 };

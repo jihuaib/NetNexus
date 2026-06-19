@@ -1,4 +1,15 @@
-import { IP_TYPE, BGP_MVPN_ROUTE_TYPE, BGP_QP_ROUTE_GROWTH_MODE, BGP_QP_BSID_MODE } from '../const/bgpConst';
+import {
+    IP_TYPE,
+    BGP_MVPN_ROUTE_TYPE,
+    BGP_QP_ROUTE_GROWTH_MODE,
+    BGP_QP_BSID_MODE,
+    BGP_LABEL_MODE,
+    BGP_MPLS_LABEL_MAX,
+    BGP_SRV6_SID_MODE,
+    BGP_SRV6_ENDPOINT_BEHAVIOR,
+    BGP_ADDR_FAMILY
+} from '../const/bgpConst';
+import ipaddr from 'ipaddr.js';
 
 // 通用验证工具和常量
 
@@ -52,6 +63,28 @@ export const isASN = value => {
 
 export const isNumber = value => {
     return REGEX.number.test(value);
+};
+
+export const isValidMplsLabel = value => {
+    if (!REGEX.number.test(`${value}`)) {
+        return false;
+    }
+    const num = Number(value);
+    return Number.isInteger(num) && num >= 0 && num <= BGP_MPLS_LABEL_MAX;
+};
+
+const IPV6_MAX_BIGINT = (1n << 128n) - 1n;
+
+const ipv6ToBigIntOrNull = value => {
+    try {
+        const address = ipaddr.parse(`${value}`);
+        if (address.kind() !== 'ipv6') {
+            return null;
+        }
+        return address.toByteArray().reduce((result, byte) => (result << 8n) + BigInt(byte), 0n);
+    } catch (_) {
+        return null;
+    }
 };
 
 export const isValidRd = value => {
@@ -606,6 +639,105 @@ export const createBgpIpv4RouteConfigValidationRules = () => {
                 validator: value => isValidRtList(value),
                 message: 'RT格式错误(支持空格分隔多个值)'
             }
+        ],
+        labelMode: [
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) return true;
+                    return Object.values(BGP_LABEL_MODE).includes(value);
+                },
+                message: '请选择标签模式'
+            }
+        ],
+        labelStart: [
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) return true;
+                    return isValidMplsLabel(value);
+                },
+                message: `标签范围为 0 ~ ${BGP_MPLS_LABEL_MAX}`
+            }
+        ],
+        labelStep: [
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) return true;
+                    if (formData.labelMode !== BGP_LABEL_MODE.INCREMENT) return true;
+                    return REGEX.number.test(`${value}`) && Number(value) > 0;
+                },
+                message: '标签步长必须为正整数'
+            },
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) return true;
+                    if (formData.labelMode !== BGP_LABEL_MODE.INCREMENT) return true;
+                    const start = Number(formData.labelStart);
+                    const step = Number(value);
+                    const count = Number(formData.count);
+                    if (![start, step, count].every(Number.isFinite) || count <= 0) return true;
+                    return start + (Math.floor(count) - 1) * step <= BGP_MPLS_LABEL_MAX;
+                },
+                message: '标签递增超出20bit范围'
+            }
+        ],
+        srv6SidMode: [
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_UNC || !formData.srv6Enabled) {
+                        return true;
+                    }
+                    return Object.values(BGP_SRV6_SID_MODE).includes(value);
+                },
+                message: '请选择SRv6 SID模式'
+            }
+        ],
+        srv6Sid: [
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_UNC || !formData.srv6Enabled) {
+                        return true;
+                    }
+                    return ipv6ToBigIntOrNull(value) !== null;
+                },
+                message: '请输入有效的SRv6 SID IPv6地址'
+            }
+        ],
+        srv6SidStep: [
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_UNC || !formData.srv6Enabled) {
+                        return true;
+                    }
+                    if (formData.srv6SidMode !== BGP_SRV6_SID_MODE.INCREMENT) return true;
+                    return REGEX.number.test(`${value}`) && BigInt(value) > 0n;
+                },
+                message: 'SRv6 SID步长必须为正整数'
+            },
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_UNC || !formData.srv6Enabled) {
+                        return true;
+                    }
+                    if (formData.srv6SidMode !== BGP_SRV6_SID_MODE.INCREMENT) return true;
+                    const sidBase = ipv6ToBigIntOrNull(formData.srv6Sid);
+                    if (sidBase === null || !REGEX.number.test(`${value}`)) return true;
+                    const count = Number(formData.count);
+                    if (!Number.isFinite(count) || count <= 0) return true;
+                    return sidBase + BigInt(Math.floor(count) - 1) * BigInt(value) <= IPV6_MAX_BIGINT;
+                },
+                message: 'SRv6 SID递增超出IPv6地址范围'
+            }
+        ],
+        srv6EndpointBehavior: [
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_UNC || !formData.srv6Enabled) {
+                        return true;
+                    }
+                    return Object.values(BGP_SRV6_ENDPOINT_BEHAVIOR).includes(Number(value));
+                },
+                message: '请选择SRv6 Endpoint Behavior'
+            }
         ]
     };
 };
@@ -642,6 +774,55 @@ export const createBgpIpv6RouteConfigValidationRules = () => {
             {
                 validator: value => isValidRtList(value),
                 message: 'RT格式错误(支持空格分隔多个值)'
+            }
+        ],
+        srv6SidMode: [
+            {
+                validator: (value, formData) => {
+                    if (!formData.srv6Enabled) return true;
+                    return Object.values(BGP_SRV6_SID_MODE).includes(value);
+                },
+                message: '请选择SRv6 SID模式'
+            }
+        ],
+        srv6Sid: [
+            {
+                validator: (value, formData) => {
+                    if (!formData.srv6Enabled) return true;
+                    return ipv6ToBigIntOrNull(value) !== null;
+                },
+                message: '请输入有效的SRv6 SID IPv6地址'
+            }
+        ],
+        srv6SidStep: [
+            {
+                validator: (value, formData) => {
+                    if (!formData.srv6Enabled) return true;
+                    if (formData.srv6SidMode !== BGP_SRV6_SID_MODE.INCREMENT) return true;
+                    return REGEX.number.test(`${value}`) && BigInt(value) > 0n;
+                },
+                message: 'SRv6 SID步长必须为正整数'
+            },
+            {
+                validator: (value, formData) => {
+                    if (!formData.srv6Enabled) return true;
+                    if (formData.srv6SidMode !== BGP_SRV6_SID_MODE.INCREMENT) return true;
+                    const sidBase = ipv6ToBigIntOrNull(formData.srv6Sid);
+                    if (sidBase === null || !REGEX.number.test(`${value}`)) return true;
+                    const count = Number(formData.count);
+                    if (!Number.isFinite(count) || count <= 0) return true;
+                    return sidBase + BigInt(Math.floor(count) - 1) * BigInt(value) <= IPV6_MAX_BIGINT;
+                },
+                message: 'SRv6 SID递增超出IPv6地址范围'
+            }
+        ],
+        srv6EndpointBehavior: [
+            {
+                validator: (value, formData) => {
+                    if (!formData.srv6Enabled) return true;
+                    return Object.values(BGP_SRV6_ENDPOINT_BEHAVIOR).includes(Number(value));
+                },
+                message: '请选择SRv6 Endpoint Behavior'
             }
         ]
     };

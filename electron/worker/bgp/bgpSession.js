@@ -6,6 +6,29 @@ const logger = require('../../log/logger');
 const CommonUtils = require('../../utils/commonUtils');
 const BgpInstance = require('./bgpInstance');
 
+function getAddressFamilyFlag(addressFamily) {
+    switch (Number(addressFamily)) {
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_UNC:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_UNC;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_UNC:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_UNC;
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_MVPN;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_MVPN:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_MVPN;
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_QP:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_QP;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_QP:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_QP;
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_LABEL_UNICAST;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_LABEL_UNICAST;
+        default:
+            return 0;
+    }
+}
+
 class BgpSession {
     constructor(vrfIndex, peerIp, instanceMap, messageHandler) {
         this.socket = null;
@@ -31,6 +54,7 @@ class BgpSession {
         this.openCapCustom = '';
         // Peer Type
         this.peerType = BgpConst.BGP_PEER_TYPE.PEER_TYPE_INVALID;
+        this.addressFamilyOptions = new Map();
 
         this.sessState = BgpConst.BGP_PEER_STATE.IDLE;
         this.holdTime = 0;
@@ -79,6 +103,17 @@ class BgpSession {
         this.localCapFlags = 0;
         this.localAddrFamilyFlags = 0;
         this.localRole = BgpConst.BGP_ROLE_TYPE.ROLE_INVALID;
+        this.addressFamilyOptions.clear();
+    }
+
+    setAddressFamilyOptions(addressFamily, options = {}) {
+        this.addressFamilyOptions.set(Number(addressFamily), {
+            sendSrv6PrefixSid: options.sendSrv6PrefixSid === true
+        });
+    }
+
+    getAddressFamilyOptions(addressFamily) {
+        return this.addressFamilyOptions.get(Number(addressFamily)) || {};
     }
 
     resetSession() {
@@ -220,6 +255,10 @@ class BgpSession {
                             this.peerCapFlags,
                             BgpConst.BGP_CAP_FLAGS.MULTIPROTOCOL_EXTENSIONS
                         );
+                        const addrFamilyFlag = getAddressFamilyFlag(addrFamilyType);
+                        if (addrFamilyFlag) {
+                            this.peerAddrFamilyFlags = CommonUtils.BIT_SET(this.peerAddrFamilyFlags, addrFamilyFlag);
+                        }
                         // 根据地址族类型设置对应的能力标志
                         if (addrFamilyType === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC) {
                             this.peerAddrFamilyFlags = CommonUtils.BIT_SET(
@@ -315,6 +354,20 @@ class BgpSession {
                     }
                 }
 
+                // 同样检查IPv4 Label地址族
+                if (
+                    !CommonUtils.BIT_TEST(
+                        this.peerAddrFamilyFlags,
+                        BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_LABEL_UNICAST
+                    )
+                ) {
+                    const { afi, safi } = getAfiAndSafi(BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST);
+                    const instance = this.instanceMap.get(BgpInstance.makeKey(0, afi, safi));
+                    if (instance) {
+                        this.changePeerState(instance, BgpConst.BGP_PEER_STATE.NO_NEG);
+                    }
+                }
+
                 // 同样检查IPv6 MVPN地址族
                 if (
                     !CommonUtils.BIT_TEST(
@@ -389,7 +442,10 @@ class BgpSession {
                 logger.info(`${this.peerIp} recv route-refresh message ${getBgpPacketSummary(parsedPacket)}`);
                 const instance = this.instanceMap.get(BgpInstance.makeKey(0, parsedPacket.afi, parsedPacket.safi));
                 if (instance) {
-                    instance.sendRoute();
+                    const peer = instance.peerMap.get(this.peerIp);
+                    if (peer) {
+                        peer.sendRoute();
+                    }
                 }
             } else if (header.type === BgpConst.BGP_PACKET_TYPE.UPDATE) {
                 logger.info(`${this.peerIp} recv update message ${getBgpPacketSummary(parsedPacket)}`);
@@ -434,6 +490,25 @@ class BgpSession {
                         [
                             ...writeUInt16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
                             ...writeUInt16(BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+                        ]
+                    )
+                );
+            }
+            if (
+                CommonUtils.BIT_TEST(
+                    this.localAddrFamilyFlags,
+                    BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_LABEL_UNICAST
+                )
+            ) {
+                optParams.push(
+                    ...this.buildBgpCapability(
+                        BgpConst.BGP_OPEN_OPT_TYPE.OPT_TYPE,
+                        0x06,
+                        BgpConst.BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS,
+                        0x04,
+                        [
+                            ...writeUInt16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+                            ...writeUInt16(BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST)
                         ]
                     )
                 );
@@ -548,6 +623,14 @@ class BgpSession {
 
             if (CommonUtils.BIT_TEST(this.localAddrFamilyFlags, BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_UNC)) {
                 extNextHopFamilies.push(BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+            }
+            if (
+                CommonUtils.BIT_TEST(
+                    this.localAddrFamilyFlags,
+                    BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_LABEL_UNICAST
+                )
+            ) {
+                extNextHopFamilies.push(BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST);
             }
             if (
                 CommonUtils.BIT_TEST(this.localAddrFamilyFlags, BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_MVPN)

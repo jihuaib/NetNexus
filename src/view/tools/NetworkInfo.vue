@@ -3,114 +3,198 @@
         <!-- 面板头部 -->
         <a-card title="网络信息" class="network-info-card">
             <div class="network-info-content">
-                <div class="network-toolbar">
-                    <a-select
-                        v-model:value="selectedInterfaceName"
-                        placeholder="选择网络接口"
-                        class="network-interface-select"
-                        :options="interfaces.map(i => ({ label: i.displayName || i.name, value: i.name }))"
-                        :loading="isLoading"
-                    />
-                    <a-button :loading="isLoading" @click="loadNetworkInfo">
-                        <template #icon>
-                            <ReloadOutlined />
-                        </template>
-                        刷新
-                    </a-button>
-                </div>
+                <a-tabs v-model:active-key="activePanelKey" size="small" class="network-tabs">
+                    <a-tab-pane key="interfaces" tab="接口信息">
+                        <div class="network-pane">
+                            <div class="network-toolbar">
+                                <a-select
+                                    v-model:value="selectedInterfaceName"
+                                    placeholder="选择网络接口"
+                                    class="network-interface-select"
+                                    :options="interfaceOptions"
+                                    :loading="isLoading"
+                                />
+                                <a-button :loading="isLoading" @click="loadNetworkInfo">
+                                    <template #icon>
+                                        <ReloadOutlined />
+                                    </template>
+                                    刷新
+                                </a-button>
+                            </div>
 
-                <div class="network-table-wrap">
-                    <a-table
-                        :columns="columns"
-                        :data-source="filteredInterfaces"
-                        :pagination="{
-                            pageSize: 20,
-                            showSizeChanger: false,
-                            position: ['bottomCenter'],
-                            showTotal: total => '共 ' + total + ' 条，每页 20 条'
-                        }"
-                        size="small"
-                        row-key="name"
-                        :loading="isLoading"
-                        class="network-info-table"
-                    >
-                        <template #bodyCell="{ column, record }">
-                            <template v-if="column.key === 'status'">
-                                <a-tag v-if="record.isUp" color="success">UP</a-tag>
-                                <a-tag v-else color="default">DOWN</a-tag>
-                            </template>
-                            <template v-else-if="column.key === 'family'">
-                                <a-tag color="blue">{{ record.family }}</a-tag>
-                            </template>
-                            <template v-else-if="column.key === 'mac'">
-                                <a-tag color="green">{{ record.mac }}</a-tag>
-                            </template>
-                            <template v-else-if="column.key === 'addresses'">
-                                <div class="ip-address-list">
-                                    <div v-for="(addr, idx) in record.addresses" :key="idx" class="ip-address-item">
-                                        <div class="ip-info">
-                                            <a-tag
-                                                :color="addr.family === 'IPv4' ? 'blue' : 'purple'"
-                                                class="family-tag"
-                                            >
-                                                {{ addr.family }}
-                                            </a-tag>
-                                            <div class="address-details">
-                                                <span class="ip-text">{{ addr.address }}</span>
-                                                <span
-                                                    v-if="addr.family === 'IPv6' && addr.prefixLength"
-                                                    class="subnet-text"
+                            <div class="network-table-wrap">
+                                <a-table
+                                    :columns="columns"
+                                    :data-source="filteredInterfaces"
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    size="small"
+                                    row-key="name"
+                                    :loading="isLoading"
+                                    class="network-info-table"
+                                >
+                                    <template #bodyCell="{ column, record }">
+                                        <template v-if="column.key === 'status'">
+                                            <a-tag v-if="record.isUp" color="success">UP</a-tag>
+                                            <a-tag v-else color="default">DOWN</a-tag>
+                                        </template>
+                                        <template v-else-if="column.key === 'family'">
+                                            <a-tag color="blue">{{ record.family }}</a-tag>
+                                        </template>
+                                        <template v-else-if="column.key === 'mac'">
+                                            <a-tag color="green">{{ record.mac }}</a-tag>
+                                        </template>
+                                        <template v-else-if="column.key === 'addresses'">
+                                            <div class="ip-address-list">
+                                                <div
+                                                    v-for="(addr, idx) in record.addresses"
+                                                    :key="idx"
+                                                    class="ip-address-item"
                                                 >
-                                                    /{{ addr.prefixLength }}
-                                                </span>
-                                                <span v-if="addr.family === 'IPv4' && addr.netmask" class="subnet-text">
-                                                    ({{ addr.netmask }})
-                                                </span>
+                                                    <div class="ip-info">
+                                                        <a-tag
+                                                            :color="addr.family === 'IPv4' ? 'blue' : 'purple'"
+                                                            class="family-tag"
+                                                        >
+                                                            {{ addr.family }}
+                                                        </a-tag>
+                                                        <div class="address-details">
+                                                            <span class="ip-text">{{ addr.address }}</span>
+                                                            <span
+                                                                v-if="addr.family === 'IPv6' && addr.prefixLength"
+                                                                class="subnet-text"
+                                                            >
+                                                                /{{ addr.prefixLength }}
+                                                            </span>
+                                                            <span
+                                                                v-if="addr.family === 'IPv4' && addr.netmask"
+                                                                class="subnet-text"
+                                                            >
+                                                                ({{ addr.netmask }})
+                                                            </span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="ip-actions">
+                                                        <a-button
+                                                            type="link"
+                                                            size="small"
+                                                            class="action-btn"
+                                                            @click="prepareEdit(record.name, addr)"
+                                                        >
+                                                            <EditOutlined />
+                                                        </a-button>
+
+                                                        <a-popconfirm
+                                                            v-if="addr.family === 'IPv6'"
+                                                            title="确定要删除这个 IP 地址吗？"
+                                                            ok-text="删除"
+                                                            cancel-text="取消"
+                                                            @confirm="handleDelete(record.name, addr.address, addr.family)"
+                                                        >
+                                                            <a-button type="link" danger size="small" class="action-btn">
+                                                                <DeleteOutlined />
+                                                            </a-button>
+                                                        </a-popconfirm>
+                                                    </div>
+                                                </div>
+
+                                                <div class="add-ip-btn-wrapper">
+                                                    <a-button
+                                                        type="link"
+                                                        size="small"
+                                                        class="action-btn"
+                                                        @click="handleAddIPv6(record)"
+                                                    >
+                                                        <PlusOutlined />
+                                                    </a-button>
+                                                </div>
                                             </div>
-                                        </div>
+                                        </template>
+                                    </template>
+                                </a-table>
+                            </div>
+                        </div>
+                    </a-tab-pane>
 
-                                        <!-- Inline Actions -->
-                                        <div class="ip-actions">
-                                            <a-button
-                                                type="link"
-                                                size="small"
-                                                class="action-btn"
-                                                @click="prepareEdit(record.name, addr)"
-                                            >
-                                                <EditOutlined />
-                                            </a-button>
+                    <a-tab-pane key="routes" tab="路由信息">
+                        <div class="network-pane">
+                            <div class="network-toolbar">
+                                <a-segmented
+                                    v-model:value="routeFamilyFilter"
+                                    :options="[
+                                        { label: '全部', value: 'all' },
+                                        { label: 'IPv4', value: 'IPv4' },
+                                        { label: 'IPv6', value: 'IPv6' }
+                                    ]"
+                                />
+                                <a-button type="primary" @click="openAddRouteModal">
+                                    <template #icon>
+                                        <PlusOutlined />
+                                    </template>
+                                    添加路由
+                                </a-button>
+                                <a-button :loading="isRouteLoading" @click="loadRouteInfo">
+                                    <template #icon>
+                                        <ReloadOutlined />
+                                    </template>
+                                    刷新
+                                </a-button>
+                            </div>
 
-                                            <!-- Delete (IPv6 only) -->
+                            <div class="network-table-wrap">
+                                <a-table
+                                    :columns="routeColumns"
+                                    :data-source="filteredRoutes"
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    size="small"
+                                    row-key="id"
+                                    :loading="isRouteLoading"
+                                    class="network-info-table"
+                                >
+                                    <template #bodyCell="{ column, record }">
+                                        <template v-if="column.key === 'family'">
+                                            <a-tag :color="record.family === 'IPv4' ? 'blue' : 'purple'">
+                                                {{ record.family }}
+                                            </a-tag>
+                                        </template>
+                                        <template v-else-if="column.key === 'gateway'">
+                                            {{ routeValue(record.gateway) }}
+                                        </template>
+                                        <template v-else-if="column.key === 'metric'">
+                                            {{ routeValue(record.metric) }}
+                                        </template>
+                                        <template v-else-if="column.key === 'protocol'">
+                                            {{ routeValue(record.protocol) }}
+                                        </template>
+                                        <template v-else-if="column.key === 'flags'">
+                                            {{ routeValue(record.flags || record.state) }}
+                                        </template>
+                                        <template v-else-if="column.key === 'action'">
                                             <a-popconfirm
-                                                v-if="addr.family === 'IPv6'"
-                                                title="确定要删除这个 IP 地址吗？"
+                                                title="确定要删除这条路由吗？"
                                                 ok-text="删除"
                                                 cancel-text="取消"
-                                                @confirm="handleDelete(record.name, addr.address, addr.family)"
+                                                @confirm="handleDeleteRoute(record)"
                                             >
-                                                <a-button type="link" danger size="small" class="action-btn">
-                                                    <DeleteOutlined />
-                                                </a-button>
+                                                <a-button type="link" danger size="small">删除</a-button>
                                             </a-popconfirm>
-                                        </div>
-                                    </div>
-
-                                    <!-- Add Button (IPv6 only) -->
-                                    <div class="add-ip-btn-wrapper">
-                                        <a-button
-                                            type="link"
-                                            size="small"
-                                            class="action-btn"
-                                            @click="handleAddIPv6(record)"
-                                        >
-                                            <PlusOutlined />
-                                        </a-button>
-                                    </div>
-                                </div>
-                            </template>
-                        </template>
-                    </a-table>
-                </div>
+                                        </template>
+                                    </template>
+                                </a-table>
+                            </div>
+                        </div>
+                    </a-tab-pane>
+                </a-tabs>
             </div>
         </a-card>
 
@@ -186,17 +270,82 @@
                 </a-form-item>
             </a-form>
         </a-modal>
+
+        <a-modal
+            v-model:open="isAddRouteModalVisible"
+            title="添加本地路由"
+            :confirm-loading="isRouteAdding"
+            @ok="handleAddRouteOk"
+        >
+            <a-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
+                <a-form-item label="地址族" required>
+                    <a-radio-group v-model:value="routeForm.family">
+                        <a-radio-button value="ipv4">IPv4</a-radio-button>
+                        <a-radio-button value="ipv6">IPv6</a-radio-button>
+                    </a-radio-group>
+                </a-form-item>
+                <a-form-item label="目标地址" required>
+                    <a-tooltip :title="routeValidationErrors.destination" :open="!!routeValidationErrors.destination">
+                        <a-input
+                            v-model:value="routeForm.destination"
+                            :placeholder="routeForm.family === 'ipv6' ? '例如: 2001:db8::' : '例如: 192.0.2.0'"
+                            :status="routeValidationErrors.destination ? 'error' : ''"
+                        />
+                    </a-tooltip>
+                </a-form-item>
+                <a-form-item label="前缀长度" required>
+                    <a-tooltip :title="routeValidationErrors.prefixLength" :open="!!routeValidationErrors.prefixLength">
+                        <a-input
+                            v-model:value="routeForm.prefixLength"
+                            :placeholder="routeForm.family === 'ipv6' ? '例如: 64' : '例如: 24'"
+                            :status="routeValidationErrors.prefixLength ? 'error' : ''"
+                        />
+                    </a-tooltip>
+                </a-form-item>
+                <a-form-item label="下一跳" required>
+                    <a-tooltip :title="routeValidationErrors.gateway" :open="!!routeValidationErrors.gateway">
+                        <a-input
+                            v-model:value="routeForm.gateway"
+                            :placeholder="routeForm.family === 'ipv6' ? '例如: fe80::1' : '例如: 192.0.2.1'"
+                            :status="routeValidationErrors.gateway ? 'error' : ''"
+                        />
+                    </a-tooltip>
+                </a-form-item>
+                <a-form-item label="接口">
+                    <a-select
+                        v-model:value="routeForm.interfaceName"
+                        allow-clear
+                        placeholder="可选"
+                        :options="interfaceOptions"
+                    />
+                </a-form-item>
+                <a-form-item label="Metric">
+                    <a-tooltip :title="routeValidationErrors.metric" :open="!!routeValidationErrors.metric">
+                        <a-input
+                            v-model:value="routeForm.metric"
+                            placeholder="可选"
+                            :status="routeValidationErrors.metric ? 'error' : ''"
+                        />
+                    </a-tooltip>
+                </a-form-item>
+            </a-form>
+        </a-modal>
     </div>
 </template>
 
 <script setup>
-    import { ref, reactive, computed, onMounted, onActivated } from 'vue';
+    import { ref, reactive, computed, onMounted, onActivated, watch } from 'vue';
     import { message } from 'ant-design-vue';
     import ReloadOutlined from '@ant-design/icons-vue/es/icons/ReloadOutlined';
     import EditOutlined from '@ant-design/icons-vue/es/icons/EditOutlined';
     import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
     import PlusOutlined from '@ant-design/icons-vue/es/icons/PlusOutlined';
-    import { FormValidator, createNetworkInfoValidationRules } from '../../utils/validationCommon';
+    import {
+        FormValidator,
+        createNetworkInfoValidationRules,
+        isValidIpv4,
+        isValidIpv6
+    } from '../../utils/validationCommon';
 
     defineOptions({
         name: 'NetworkInfo'
@@ -205,10 +354,28 @@
     const isLoading = ref(false);
     const interfaces = ref([]);
     const selectedInterfaceName = ref('');
+    const activePanelKey = ref('interfaces');
+    const routes = ref([]);
+    const routeFamilyFilter = ref('all');
+    const isRouteLoading = ref(false);
+    const isAddRouteModalVisible = ref(false);
+    const isRouteAdding = ref(false);
 
     const filteredInterfaces = computed(() => {
         if (!selectedInterfaceName.value) return [];
         return interfaces.value.filter(i => i.name === selectedInterfaceName.value);
+    });
+
+    const interfaceOptions = computed(() =>
+        interfaces.value.map(item => ({
+            label: item.displayName && item.displayName !== item.name ? `${item.displayName} (${item.name})` : item.name,
+            value: item.name
+        }))
+    );
+
+    const filteredRoutes = computed(() => {
+        if (routeFamilyFilter.value === 'all') return routes.value;
+        return routes.value.filter(route => route.family === routeFamilyFilter.value);
     });
 
     // Edit Modal State
@@ -250,6 +417,22 @@
     const addValidator = new FormValidator(addValidationErrors);
     addValidator.addRules(createNetworkInfoValidationRules());
 
+    const routeForm = reactive({
+        family: 'ipv4',
+        destination: '',
+        prefixLength: '24',
+        gateway: '',
+        interfaceName: '',
+        metric: ''
+    });
+
+    const routeValidationErrors = ref({
+        destination: '',
+        prefixLength: '',
+        gateway: '',
+        metric: ''
+    });
+
     const columns = [
         {
             title: '接口名称',
@@ -277,13 +460,84 @@
         }
     ];
 
+    const routeColumns = [
+        {
+            title: '地址族',
+            dataIndex: 'family',
+            key: 'family',
+            width: 90,
+            align: 'center'
+        },
+        {
+            title: '目标网段',
+            dataIndex: 'destinationPrefix',
+            key: 'destinationPrefix',
+            width: 220,
+            ellipsis: true
+        },
+        {
+            title: '网关/下一跳',
+            dataIndex: 'gateway',
+            key: 'gateway',
+            width: 220,
+            ellipsis: true
+        },
+        {
+            title: '接口',
+            dataIndex: 'interfaceName',
+            key: 'interfaceName',
+            width: 160,
+            ellipsis: true
+        },
+        {
+            title: 'Metric',
+            dataIndex: 'metric',
+            key: 'metric',
+            width: 90,
+            align: 'center'
+        },
+        {
+            title: '协议',
+            dataIndex: 'protocol',
+            key: 'protocol',
+            width: 110,
+            ellipsis: true
+        },
+        {
+            title: 'Flags/状态',
+            dataIndex: 'flags',
+            key: 'flags',
+            width: 130,
+            ellipsis: true
+        },
+        {
+            title: '操作',
+            key: 'action',
+            width: 90,
+            fixed: 'right'
+        }
+    ];
+
     onMounted(() => {
         loadNetworkInfo();
+        loadRouteInfo();
     });
 
     onActivated(() => {
         loadNetworkInfo();
+        loadRouteInfo();
     });
+
+    watch(
+        () => routeForm.family,
+        family => {
+            routeForm.destination = '';
+            routeForm.prefixLength = family === 'ipv6' ? '64' : '24';
+            routeForm.gateway = '';
+            routeForm.metric = '';
+            clearRouteValidationErrors();
+        }
+    );
 
     // Simulate closing popovers (click outside usually handles it, but for buttons inside)
     function closeEditModal() {
@@ -319,6 +573,177 @@
             message.error(`获取网络信息出错: ${err.message}`);
         } finally {
             isLoading.value = false;
+        }
+    }
+
+    function routeValue(value) {
+        return value === null || value === undefined || value === '' ? '-' : value;
+    }
+
+    function clearRouteValidationErrors() {
+        routeValidationErrors.value = {
+            destination: '',
+            prefixLength: '',
+            gateway: '',
+            metric: ''
+        };
+    }
+
+    function setRouteFieldError(field, errorMessage) {
+        routeValidationErrors.value[field] = errorMessage;
+        return true;
+    }
+
+    function normalizeRouteFamily(family) {
+        return String(family || '').toLowerCase() === 'ipv6' ? 'ipv6' : 'ipv4';
+    }
+
+    function isValidRouteIp(value, family) {
+        if (family === 'ipv6') {
+            const withoutScope = String(value || '').split('%')[0];
+            return isValidIpv6(value) || isValidIpv6(withoutScope);
+        }
+        return isValidIpv4(value);
+    }
+
+    function validateRouteForm() {
+        clearRouteValidationErrors();
+
+        const family = normalizeRouteFamily(routeForm.family);
+        const destination = String(routeForm.destination || '').trim();
+        const prefixLength = String(routeForm.prefixLength || '').trim();
+        const gateway = String(routeForm.gateway || '').trim();
+        const metric = String(routeForm.metric || '').trim();
+        const maxPrefixLength = family === 'ipv6' ? 128 : 32;
+        const familyLabel = family === 'ipv6' ? 'IPv6' : 'IPv4';
+
+        if (!destination) {
+            return setRouteFieldError('destination', '请输入目标地址');
+        }
+        if (!isValidRouteIp(destination, family)) {
+            return setRouteFieldError('destination', `请输入有效的 ${familyLabel} 目标地址`);
+        }
+        if (!/^\d+$/u.test(prefixLength)) {
+            return setRouteFieldError('prefixLength', '前缀长度必须是整数');
+        }
+        const prefixNumber = Number(prefixLength);
+        if (prefixNumber < 0 || prefixNumber > maxPrefixLength) {
+            return setRouteFieldError('prefixLength', `前缀长度范围是 0-${maxPrefixLength}`);
+        }
+        if (!gateway) {
+            return setRouteFieldError('gateway', '请输入下一跳网关');
+        }
+        if (!isValidRouteIp(gateway, family)) {
+            return setRouteFieldError('gateway', `请输入有效的 ${familyLabel} 下一跳`);
+        }
+        if (metric && (!/^\d+$/u.test(metric) || Number(metric) > 999999)) {
+            return setRouteFieldError('metric', 'Metric 必须是 0-999999 的整数');
+        }
+
+        routeForm.family = family;
+        routeForm.destination = destination;
+        routeForm.prefixLength = String(prefixNumber);
+        routeForm.gateway = gateway;
+        routeForm.metric = metric;
+        return false;
+    }
+
+    function openAddRouteModal() {
+        routeForm.family = 'ipv4';
+        routeForm.destination = '';
+        routeForm.prefixLength = '24';
+        routeForm.gateway = '';
+        routeForm.interfaceName = '';
+        routeForm.metric = '';
+        clearRouteValidationErrors();
+        isAddRouteModalVisible.value = true;
+    }
+
+    async function loadRouteInfo() {
+        if (!window.nativeApi?.getRoutes) {
+            message.error('本地路由API不可用');
+            return;
+        }
+
+        isRouteLoading.value = true;
+        try {
+            const response = await window.nativeApi.getRoutes();
+            if (response.status === 'success') {
+                routes.value = (response.data || []).map((route, index) => ({
+                    ...route,
+                    id: route.id || `route-${index}`
+                }));
+            } else {
+                message.error(`获取本地路由失败: ${response.msg}`);
+            }
+        } catch (err) {
+            message.error(`获取本地路由出错: ${err.message}`);
+        } finally {
+            isRouteLoading.value = false;
+        }
+    }
+
+    async function handleAddRouteOk() {
+        if (validateRouteForm()) {
+            return;
+        }
+        if (!window.nativeApi?.manageRoute) {
+            message.error('本地路由管理API不可用');
+            return;
+        }
+
+        isRouteAdding.value = true;
+        try {
+            const response = await window.nativeApi.manageRoute({
+                action: 'add',
+                family: routeForm.family,
+                destinationPrefix: `${routeForm.destination}/${routeForm.prefixLength}`,
+                gateway: routeForm.gateway,
+                interfaceName: routeForm.interfaceName,
+                metric: routeForm.metric
+            });
+
+            if (response.status === 'success') {
+                message.success('添加路由成功');
+                isAddRouteModalVisible.value = false;
+                await loadRouteInfo();
+            } else {
+                message.error(`添加路由失败: ${response.msg}`);
+            }
+        } catch (err) {
+            message.error(`添加路由出错: ${err.message}`);
+        } finally {
+            isRouteAdding.value = false;
+        }
+    }
+
+    async function handleDeleteRoute(record) {
+        if (!window.nativeApi?.manageRoute) {
+            message.error('本地路由管理API不可用');
+            return;
+        }
+        if (!record?.destinationPrefix) {
+            message.error('路由目标网段为空，无法删除');
+            return;
+        }
+
+        try {
+            const response = await window.nativeApi.manageRoute({
+                action: 'delete',
+                family: normalizeRouteFamily(record.family),
+                destinationPrefix: record.destinationPrefix,
+                gateway: String(record.gateway || '').startsWith('link#') ? '' : record.gateway || '',
+                interfaceName: record.interfaceName || ''
+            });
+
+            if (response.status === 'success') {
+                message.success('删除路由成功');
+                await loadRouteInfo();
+            } else {
+                message.error(`删除路由失败: ${response.msg}`);
+            }
+        } catch (err) {
+            message.error(`删除路由出错: ${err.message}`);
         }
     }
 
@@ -437,7 +862,9 @@
     // 暴露给父组件的方法
     defineExpose({
         clearValidationErrors: () => {
-            // 端口监听页面没有表单验证，这里为了保持一致性
+            editValidator.clearErrors();
+            addValidator.clearErrors();
+            clearRouteValidationErrors();
         }
     });
 </script>
@@ -472,10 +899,34 @@
         overflow: hidden;
     }
 
+    .network-tabs,
+    .network-tabs :deep(.ant-tabs-content-holder),
+    .network-tabs :deep(.ant-tabs-content),
+    .network-tabs :deep(.ant-tabs-tabpane) {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .network-tabs :deep(.ant-tabs-nav) {
+        flex: 0 0 auto;
+        margin: 0 0 8px;
+    }
+
+    .network-pane {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
     .network-toolbar {
         flex: 0 0 auto;
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 12px;
         margin-bottom: 10px;
         min-width: 0;
@@ -510,6 +961,10 @@
         flex: 1 1 0;
         min-height: 0;
         overflow: auto;
+    }
+
+    .network-info-table :deep(.ant-table-cell) {
+        white-space: nowrap;
     }
 
     .network-info-table :deep(.ant-table-container),

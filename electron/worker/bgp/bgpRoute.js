@@ -37,6 +37,16 @@ class BgpRoute {
         if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
             routeInfo.ip = this.ip;
             routeInfo.mask = this.mask;
+            if (routeAttr.srv6Sid) {
+                routeInfo.srv6Sid = routeAttr.srv6Sid;
+                routeInfo.srv6EndpointBehavior = routeAttr.srv6EndpointBehavior ?? null;
+            }
+        }
+
+        if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+            routeInfo.ip = this.ip;
+            routeInfo.mask = this.mask;
+            routeInfo.label = this.label;
         }
 
         if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {

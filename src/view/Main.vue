@@ -88,6 +88,7 @@
     import CodeOutlined from '@ant-design/icons-vue/es/icons/CodeOutlined';
     import WifiOutlined from '@ant-design/icons-vue/es/icons/WifiOutlined';
     import ClockCircleOutlined from '@ant-design/icons-vue/es/icons/ClockCircleOutlined';
+    import KeyOutlined from '@ant-design/icons-vue/es/icons/KeyOutlined';
     import SwapOutlined from '@ant-design/icons-vue/es/icons/SwapOutlined';
     import FileTextOutlined from '@ant-design/icons-vue/es/icons/FileTextOutlined';
     import SettingsDialog from '../components/SettingsDialog.vue';
@@ -159,6 +160,13 @@
             label: 'NTP服务器',
             title: 'NTP服务器',
             route: '/ntp'
+        },
+        {
+            key: 'RADIUS服务器',
+            icon: h(KeyOutlined),
+            label: 'RADIUS服务器',
+            title: 'RADIUS服务器',
+            route: '/radius'
         },
         {
             key: 'TFTP服务器',

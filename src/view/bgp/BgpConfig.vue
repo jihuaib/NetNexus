@@ -123,6 +123,7 @@
 
     const bgpAddressFamilyOptions = [
         { label: 'Ipv4-UNC', value: BGP_ADDR_FAMILY.IPV4_UNC, disabled: true },
+        { label: 'IPv4 Label', value: BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST },
         { label: 'Ipv6-UNC', value: BGP_ADDR_FAMILY.IPV6_UNC },
         { label: 'IPv4-MVPN', value: BGP_ADDR_FAMILY.IPV4_MVPN },
         { label: 'IPv6-MVPN', value: BGP_ADDR_FAMILY.IPV6_MVPN },

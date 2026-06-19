@@ -60,7 +60,13 @@ contextBridge.exposeInMainWorld('toolsApi', {
     sendHttpApiRequest: requestConfig => ipcRenderer.invoke('tools:sendHttpApiRequest', requestConfig),
     getHttpApiConnections: () => ipcRenderer.invoke('tools:getHttpApiConnections'),
     saveHttpApiConnections: connections => ipcRenderer.invoke('tools:saveHttpApiConnections', connections),
-    resetHttpApiConnections: () => ipcRenderer.invoke('tools:resetHttpApiConnections')
+    resetHttpApiConnections: () => ipcRenderer.invoke('tools:resetHttpApiConnections'),
+    tcpConnect: options => ipcRenderer.invoke('tools:tcpConnect', options),
+    tcpSend: payload => ipcRenderer.invoke('tools:tcpSend', payload),
+    tcpClose: payload => ipcRenderer.invoke('tools:tcpClose', payload),
+    udpOpen: options => ipcRenderer.invoke('tools:udpOpen', options),
+    udpSend: payload => ipcRenderer.invoke('tools:udpSend', payload),
+    udpClose: payload => ipcRenderer.invoke('tools:udpClose', payload)
 });
 
 // bgp模块
@@ -247,6 +253,17 @@ contextBridge.exposeInMainWorld('ntpApi', {
     clearRequestHistory: () => ipcRenderer.invoke('ntp:clearRequestHistory')
 });
 
+// radius模块
+contextBridge.exposeInMainWorld('radiusApi', {
+    saveRadiusConfig: config => ipcRenderer.invoke('radius:saveRadiusConfig', config),
+    getRadiusConfig: () => ipcRenderer.invoke('radius:getRadiusConfig'),
+    startRadius: config => ipcRenderer.invoke('radius:startRadius', config),
+    stopRadius: () => ipcRenderer.invoke('radius:stopRadius'),
+    getRequestList: () => ipcRenderer.invoke('radius:getRequestList'),
+    clearRequestHistory: () => ipcRenderer.invoke('radius:clearRequestHistory'),
+    getSessionList: () => ipcRenderer.invoke('radius:getSessionList')
+});
+
 // tftp模块
 contextBridge.exposeInMainWorld('tftpApi', {
     saveTftpConfig: config => ipcRenderer.invoke('tftp:saveTftpConfig', config),
@@ -273,6 +290,8 @@ contextBridge.exposeInMainWorld('nativeApi', {
     // 网络信息工具模块
     getNetworkInfo: () => ipcRenderer.invoke('native:getNetworkInfo'),
     manageNetwork: config => ipcRenderer.invoke('native:manageNetwork', config),
+    getRoutes: () => ipcRenderer.invoke('native:getRoutes'),
+    manageRoute: config => ipcRenderer.invoke('native:manageRoute', config),
 
     // 端口监听工具模块
     getListeningPorts: () => ipcRenderer.invoke('native:getListeningPorts'),

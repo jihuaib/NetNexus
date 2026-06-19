@@ -43,6 +43,9 @@ function normalizeBgpRouteObject(item) {
         origin: pickDefinedRouteField(item, 'origin'),
         customAttr: pickDefinedRouteField(item, 'customAttr'),
         rt: pickDefinedRouteField(item, 'rt'),
+        label: pickDefinedRouteField(item, 'label'),
+        srv6Sid: pickDefinedRouteField(item, 'srv6Sid'),
+        srv6EndpointBehavior: pickDefinedRouteField(item, 'srv6EndpointBehavior'),
         routeType: pickDefinedRouteField(item, 'routeType'),
         rd: pickDefinedRouteField(item, 'rd'),
         originatingRouterIp: pickDefinedRouteField(item, 'originatingRouterIp'),
@@ -58,6 +61,10 @@ function normalizeBgpRouteObject(item) {
 
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN) {
         return route.routeType && route.rd ? route : null;
+    }
+
+    if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
+        return route.ip && route.mask !== null && route.label !== null ? route : null;
     }
 
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_QP) {

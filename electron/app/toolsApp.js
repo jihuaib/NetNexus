@@ -7,6 +7,9 @@ const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
 const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const { DEFAULT_TOOLS_SETTINGS } = require('../const/toolsConst');
 const { createHashCompat, createHmacCompat } = require('../utils/hashUtils');
+const EventDispatcher = require('../utils/eventDispatcher');
+const { TcpClientManager } = require('../utils/tcpClientManager');
+const { UdpClientManager } = require('../utils/udpClientManager');
 
 class ToolsApp {
     constructor(ipc, store) {
@@ -14,6 +17,19 @@ class ToolsApp {
         this.packetParserConfigFileKey = 'packet-parser';
         this.tcpAoMacStateKey = 'tcp-ao-mac';
         this.httpApiTesterConfigFileKey = 'http-api-tester';
+
+        // TCP 工具：连接管理器与事件推送
+        this.tcpEventDispatcher = new EventDispatcher();
+        this.tcpClientManager = new TcpClientManager((eventType, data) => {
+            this.tcpEventDispatcher.emit(eventType, data);
+        });
+
+        // UDP 工具：收发管理器与事件推送
+        this.udpEventDispatcher = new EventDispatcher();
+        this.udpClientManager = new UdpClientManager((eventType, data) => {
+            this.udpEventDispatcher.emit(eventType, data);
+        });
+
         this.registerHandlers(ipc);
         this.store = store;
 
@@ -51,6 +67,78 @@ class ToolsApp {
             this.handleSaveHttpApiConnections(connections)
         );
         ipc.handle('tools:resetHttpApiConnections', async () => this.handleResetHttpApiConnections());
+
+        // TCP 报文工具
+        ipc.handle('tools:tcpConnect', async (event, options) => this.handleTcpConnect(event, options));
+        ipc.handle('tools:tcpSend', async (_event, payload) => this.handleTcpSend(payload));
+        ipc.handle('tools:tcpClose', async (_event, payload) => this.handleTcpClose(payload));
+
+        // UDP 报文工具
+        ipc.handle('tools:udpOpen', async (event, options) => this.handleUdpOpen(event, options));
+        ipc.handle('tools:udpSend', async (_event, payload) => this.handleUdpSend(payload));
+        ipc.handle('tools:udpClose', async (_event, payload) => this.handleUdpClose(payload));
+    }
+
+    handleTcpConnect(event, options) {
+        try {
+            this.tcpEventDispatcher.setWebContents(event.sender);
+            const result = this.tcpClientManager.connect(options || {});
+            return successResponse(result, 'TCP连接已发起');
+        } catch (error) {
+            logger.error('TCP连接失败:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    handleTcpSend(payload = {}) {
+        try {
+            const result = this.tcpClientManager.send(payload.id, payload);
+            return successResponse(result, 'TCP报文已发送');
+        } catch (error) {
+            logger.error('TCP报文发送失败:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    handleTcpClose(payload = {}) {
+        try {
+            const result = this.tcpClientManager.close(payload.id);
+            return successResponse(result, 'TCP连接已关闭');
+        } catch (error) {
+            logger.error('TCP连接关闭失败:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    handleUdpOpen(event, options) {
+        try {
+            this.udpEventDispatcher.setWebContents(event.sender);
+            const result = this.udpClientManager.open(options || {});
+            return successResponse(result, 'UDP socket已打开');
+        } catch (error) {
+            logger.error('UDP打开失败:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleUdpSend(payload = {}) {
+        try {
+            const result = await this.udpClientManager.send(payload.id, payload);
+            return successResponse(result, 'UDP报文已发送');
+        } catch (error) {
+            logger.error('UDP报文发送失败:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    handleUdpClose(payload = {}) {
+        try {
+            const result = this.udpClientManager.close(payload.id);
+            return successResponse(result, 'UDP socket已关闭');
+        } catch (error) {
+            logger.error('UDP socket关闭失败:', error.message);
+            return errorResponse(error.message);
+        }
     }
 
     cloneJson(value) {

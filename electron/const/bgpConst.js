@@ -92,6 +92,26 @@ const BGP_QP_BSID_MODE = {
     CONTINUOUS: 'continuous'
 };
 
+const BGP_LABEL_MODE = {
+    FIXED: 'fixed',
+    INCREMENT: 'increment'
+};
+
+const BGP_MPLS_LABEL_MAX = 0xfffff;
+
+const BGP_SRV6_SID_MODE = {
+    FIXED: 'fixed',
+    INCREMENT: 'increment'
+};
+
+const BGP_SRV6_ENDPOINT_BEHAVIOR = {
+    END_DX6: 0x0010,
+    END_DX4: 0x0011,
+    END_DT6: 0x0012,
+    END_DT4: 0x0013,
+    END_DT46: 0x0014
+};
+
 // 协议规定的afi
 const BGP_AFI_TYPE = {
     AFI_IPV4: 1,
@@ -146,7 +166,9 @@ const BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS = {
     IPV4_MVPN: 0x00000004, // 1 << 2
     IPV6_MVPN: 0x00000008, // 1 << 3
     IPV4_QP: 0x00000010, // 1 << 4
-    IPV6_QP: 0x00000020 // 1 << 5
+    IPV6_QP: 0x00000020, // 1 << 5
+    IPV4_LABEL_UNICAST: 0x00000040, // 1 << 6
+    IPV6_LABEL_UNICAST: 0x00000080 // 1 << 7
 };
 
 // BGP Path Attribute Types
@@ -334,6 +356,10 @@ module.exports = {
     BGP_ADDR_FAMILY,
     BGP_QP_ROUTE_GROWTH_MODE,
     BGP_QP_BSID_MODE,
+    BGP_LABEL_MODE,
+    BGP_MPLS_LABEL_MAX,
+    BGP_SRV6_SID_MODE,
+    BGP_SRV6_ENDPOINT_BEHAVIOR,
     BGP_AFI_TYPE,
     BGP_SAFI_TYPE,
     BGP_ROLE_TYPE,

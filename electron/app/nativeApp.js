@@ -3,6 +3,7 @@ const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const os = require('os');
 const iconv = require('iconv-lite');
+const ipaddr = require('ipaddr.js');
 class NativeApp {
     constructor(ipc) {
         this.isDev = !app.isPackaged;
@@ -17,6 +18,8 @@ class NativeApp {
         // 网络信息工具
         ipc.handle('native:getNetworkInfo', async () => this.handleGetNetworkInfo());
         ipc.handle('native:manageNetwork', async (event, config) => this.handleManageNetwork(event, config));
+        ipc.handle('native:getRoutes', async () => this.handleGetRoutes());
+        ipc.handle('native:manageRoute', async (event, config) => this.handleManageRoute(event, config));
     }
 
     // 端口监听工具
@@ -598,6 +601,318 @@ class NativeApp {
             }
             return errorResponse(`网络配置失败: ${err.message}`);
         }
+    }
+
+    async handleGetRoutes() {
+        try {
+            const platform = os.platform();
+            let routes = [];
+
+            if (platform === 'win32') {
+                routes = await this.getWindowsRoutes();
+            } else if (platform === 'darwin') {
+                routes = await this.getDarwinRoutes();
+            } else {
+                return errorResponse(`不支持的操作系统: ${platform}`);
+            }
+
+            logger.info(`获取到 ${routes.length} 条本地路由`);
+            return successResponse(routes, '获取本地路由成功');
+        } catch (err) {
+            logger.error('获取本地路由失败:', err.message);
+            return errorResponse(`获取本地路由失败: ${err.message}`);
+        }
+    }
+
+    async getWindowsRoutes() {
+        const { execFile } = require('child_process');
+        const { promisify } = require('util');
+        const execFileAsync = promisify(execFile);
+        const script = [
+            'Get-NetRoute',
+            '| Select-Object DestinationPrefix,NextHop,InterfaceAlias,InterfaceIndex,RouteMetric,Protocol,State,AddressFamily',
+            '| ConvertTo-Json -Depth 3'
+        ].join(' ');
+        const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
+            maxBuffer: 10 * 1024 * 1024
+        });
+        const trimmed = stdout.trim();
+        if (!trimmed) {
+            return [];
+        }
+
+        const parsed = JSON.parse(trimmed);
+        const rows = Array.isArray(parsed) ? parsed : [parsed];
+        return rows.map((route, index) => {
+            const family = this.normalizeWindowsAddressFamily(route.AddressFamily, route.DestinationPrefix);
+            return {
+                id: `win-${family}-${index}-${route.DestinationPrefix}-${route.NextHop}-${route.InterfaceIndex}`,
+                family,
+                destinationPrefix: route.DestinationPrefix || '',
+                rawDestination: route.DestinationPrefix || '',
+                gateway: route.NextHop || '',
+                interfaceName: route.InterfaceAlias || '',
+                interfaceIndex: route.InterfaceIndex ?? '',
+                metric: route.RouteMetric ?? '',
+                protocol: route.Protocol || '',
+                state: route.State || '',
+                flags: ''
+            };
+        });
+    }
+
+    normalizeWindowsAddressFamily(addressFamily, destinationPrefix) {
+        const value = String(addressFamily || '').toLowerCase();
+        if (value.includes('ipv6') || String(destinationPrefix || '').includes(':')) {
+            return 'IPv6';
+        }
+        return 'IPv4';
+    }
+
+    async getDarwinRoutes() {
+        const { execFile } = require('child_process');
+        const { promisify } = require('util');
+        const execFileAsync = promisify(execFile);
+        const routeFamilies = [
+            { family: 'IPv4', args: ['-rn', '-f', 'inet'] },
+            { family: 'IPv6', args: ['-rn', '-f', 'inet6'] }
+        ];
+        const routes = [];
+
+        for (const routeFamily of routeFamilies) {
+            const { stdout } = await execFileAsync('/usr/sbin/netstat', routeFamily.args, {
+                maxBuffer: 10 * 1024 * 1024
+            });
+            routes.push(...this.parseDarwinRouteOutput(stdout, routeFamily.family));
+        }
+
+        return routes;
+    }
+
+    parseDarwinRouteOutput(output, family) {
+        const routes = [];
+        const lines = String(output || '').split('\n');
+        let inTable = false;
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+                continue;
+            }
+            if (trimmed.startsWith('Destination')) {
+                inTable = true;
+                continue;
+            }
+            if (!inTable || trimmed.startsWith('Routing tables') || trimmed.startsWith('Internet')) {
+                continue;
+            }
+
+            const parts = trimmed.split(/\s+/);
+            if (parts.length < 3) {
+                continue;
+            }
+
+            const rawDestination = parts[0];
+            const gateway = parts[1];
+            const flags = parts[2] || '';
+            const interfaceName = parts[3] || '';
+            const destinationPrefix = this.normalizeDarwinDestination(rawDestination, family);
+            routes.push({
+                id: `darwin-${family}-${routes.length}-${rawDestination}-${gateway}-${interfaceName}`,
+                family,
+                destinationPrefix,
+                rawDestination,
+                gateway,
+                interfaceName,
+                interfaceIndex: '',
+                metric: '',
+                protocol: 'kernel',
+                state: '',
+                flags
+            });
+        }
+
+        return routes;
+    }
+
+    normalizeDarwinDestination(destination, family) {
+        if (destination === 'default') {
+            return family === 'IPv6' ? '::/0' : '0.0.0.0/0';
+        }
+        if (family === 'IPv4') {
+            const [address, prefixLength] = String(destination).split('/');
+            const octets = address.split('.');
+            if (octets.length <= 4 && octets.every(octet => /^\d+$/u.test(octet))) {
+                const paddedAddress = [...octets, ...Array(4 - octets.length).fill('0')].join('.');
+                const normalizedPrefix = prefixLength ?? String(octets.length * 8);
+                return `${paddedAddress}/${normalizedPrefix}`;
+            }
+        }
+        if (family === 'IPv6') {
+            const normalizedDestination = String(destination).replace(/%[^/]+/u, '');
+            if (normalizedDestination.includes('/')) {
+                return normalizedDestination;
+            }
+            if (normalizedDestination.includes(':')) {
+                return `${normalizedDestination}/128`;
+            }
+        }
+        return destination;
+    }
+
+    async handleManageRoute(_event, config = {}) {
+        try {
+            const action = String(config.action || '').toLowerCase();
+            if (!['add', 'delete'].includes(action)) {
+                return errorResponse('不支持的路由操作类型');
+            }
+
+            const normalized = this.normalizeRouteConfig(config, action === 'add');
+            if (normalized.error) {
+                return errorResponse(normalized.error);
+            }
+
+            const platform = os.platform();
+            if (platform === 'win32') {
+                await this.manageWindowsRoute(action, normalized.route);
+            } else if (platform === 'darwin') {
+                await this.manageDarwinRoute(action, normalized.route);
+            } else {
+                return errorResponse(`不支持的操作系统: ${platform}`);
+            }
+
+            return successResponse(null, action === 'add' ? '添加路由成功' : '删除路由成功');
+        } catch (err) {
+            logger.error('管理本地路由失败:', err.message);
+            if (
+                err.message.includes('Run as administrator') ||
+                err.message.includes('elevation') ||
+                err.message.includes('请求的操作需要提升') ||
+                err.message.includes('Operation not permitted') ||
+                err.message.includes('not permitted')
+            ) {
+                return errorResponse('权限不足，请以管理员/root 权限运行程序。');
+            }
+            return errorResponse(`管理本地路由失败: ${err.message}`);
+        }
+    }
+
+    normalizeRouteConfig(config, requireGateway) {
+        const family = String(config.family || '').toLowerCase() === 'ipv6' ? 'ipv6' : 'ipv4';
+        const destinationPrefix = String(config.destinationPrefix || '').trim();
+        const gateway = String(config.gateway || '').trim();
+        const interfaceName = String(config.interfaceName || '').trim();
+        const metricText = String(config.metric ?? '').trim();
+
+        if (!destinationPrefix) {
+            return { error: '请指定目标网段' };
+        }
+
+        let parsedCidr;
+        try {
+            parsedCidr = ipaddr.parseCIDR(destinationPrefix);
+        } catch (_) {
+            return { error: '目标网段必须是 CIDR 格式，例如 192.0.2.0/24 或 2001:db8::/64' };
+        }
+
+        const destinationFamily = parsedCidr[0].kind() === 'ipv6' ? 'ipv6' : 'ipv4';
+        if (destinationFamily !== family) {
+            return { error: '目标网段地址族与路由类型不一致' };
+        }
+
+        if (requireGateway && !gateway) {
+            return { error: '添加路由需要指定下一跳网关' };
+        }
+        if (gateway) {
+            try {
+                const gatewayFamily = ipaddr.parse(gateway.split('%')[0]).kind() === 'ipv6' ? 'ipv6' : 'ipv4';
+                if (gatewayFamily !== family) {
+                    return { error: '网关地址族与路由类型不一致' };
+                }
+            } catch (_) {
+                return { error: '网关地址格式无效' };
+            }
+        }
+
+        if (metricText && (!/^\d+$/u.test(metricText) || Number(metricText) < 0 || Number(metricText) > 999999)) {
+            return { error: 'Metric 必须是 0-999999 的整数' };
+        }
+        if (/[\r\n]/u.test(interfaceName)) {
+            return { error: '接口名称不能包含换行符' };
+        }
+
+        return {
+            route: {
+                family,
+                destinationPrefix,
+                gateway,
+                interfaceName,
+                metric: metricText
+            }
+        };
+    }
+
+    psString(value) {
+        return `'${String(value).replace(/'/g, "''")}'`;
+    }
+
+    async manageWindowsRoute(action, route) {
+        const { execFile } = require('child_process');
+        const { promisify } = require('util');
+        const execFileAsync = promisify(execFile);
+        const params = [`DestinationPrefix=${this.psString(route.destinationPrefix)}`];
+        if (route.gateway) {
+            params.push(`NextHop=${this.psString(route.gateway)}`);
+        }
+        if (route.interfaceName) {
+            params.push(`InterfaceAlias=${this.psString(route.interfaceName)}`);
+        }
+        if (route.metric) {
+            params.push(`RouteMetric=${Number(route.metric)}`);
+        }
+
+        const script =
+            action === 'add'
+                ? `$params=@{${params.join(';')}}; New-NetRoute @params`
+                : `$params=@{${params.join(';')};Confirm=$false}; Remove-NetRoute @params`;
+
+        await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
+            maxBuffer: 10 * 1024 * 1024
+        });
+    }
+
+    async manageDarwinRoute(action, route) {
+        const { execFile } = require('child_process');
+        const { promisify } = require('util');
+        const execFileAsync = promisify(execFile);
+        const familyFlag = route.family === 'ipv6' ? '-inet6' : '-inet';
+        const destination = this.toDarwinRouteDestination(route.destinationPrefix);
+        const args = ['-n', action, familyFlag];
+
+        if (route.interfaceName) {
+            args.push('-ifscope', route.interfaceName);
+        }
+
+        args.push(destination);
+        if (action === 'add') {
+            args.push(route.gateway);
+            if (route.metric) {
+                args.push('-hopcount', route.metric);
+            }
+        } else if (route.gateway) {
+            args.push(route.gateway);
+        }
+
+        await execFileAsync('/sbin/route', args, {
+            maxBuffer: 10 * 1024 * 1024
+        });
+    }
+
+    toDarwinRouteDestination(destinationPrefix) {
+        if (destinationPrefix === '0.0.0.0/0' || destinationPrefix === '::/0') {
+            return 'default';
+        }
+        return destinationPrefix;
     }
 }
 

@@ -50,6 +50,26 @@ export const BGP_QP_BSID_MODE = {
     CONTINUOUS: 'continuous'
 };
 
+export const BGP_LABEL_MODE = {
+    FIXED: 'fixed',
+    INCREMENT: 'increment'
+};
+
+export const BGP_MPLS_LABEL_MAX = 0xfffff;
+
+export const BGP_SRV6_SID_MODE = {
+    FIXED: 'fixed',
+    INCREMENT: 'increment'
+};
+
+export const BGP_SRV6_ENDPOINT_BEHAVIOR = {
+    END_DX6: 0x0010,
+    END_DX4: 0x0011,
+    END_DT6: 0x0012,
+    END_DT4: 0x0013,
+    END_DT46: 0x0014
+};
+
 // IP Type Values, 需要和后台定义保持一致, 后台会
 // 直接使用这个值处理
 export const IP_TYPE = {
@@ -119,9 +139,22 @@ export const DEFAULT_VALUES = {
     IPV4_PREFIX: '1.1.1.1',
     IPV4_MASK: '32',
     IPV4_COUNT: '10',
+    IPV4_LABEL_MODE: BGP_LABEL_MODE.FIXED,
+    IPV4_LABEL_START: '16',
+    IPV4_LABEL_STEP: '1',
+    IPV4_SRV6_ENABLED: false,
+    IPV4_SRV6_SID_MODE: BGP_SRV6_SID_MODE.FIXED,
+    IPV4_SRV6_SID: '2001:db8:1::1',
+    IPV4_SRV6_SID_STEP: '1',
+    IPV4_SRV6_ENDPOINT_BEHAVIOR: BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT4,
     IPV6_PREFIX: '2001:db8::',
     IPV6_MASK: '64',
     IPV6_COUNT: '10',
+    IPV6_SRV6_ENABLED: false,
+    IPV6_SRV6_SID_MODE: BGP_SRV6_SID_MODE.FIXED,
+    IPV6_SRV6_SID: '2001:db8:1::1',
+    IPV6_SRV6_SID_STEP: '1',
+    IPV6_SRV6_ENDPOINT_BEHAVIOR: BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6,
     PEER_IPV6: '192::11',
     PEER_IPV6_AS: '100',
     HOLD_TIME_IPV6: '180',

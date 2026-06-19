@@ -94,7 +94,6 @@
                                 </a-form-item>
                             </a-col>
                         </a-row>
-
                         <a-row>
                             <a-col :span="24">
                                 <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
@@ -200,6 +199,32 @@
                                 </a-form-item>
                             </a-col>
                         </a-row>
+                        <a-row v-if="ipv6PeerHasIpv4Unc || ipv6PeerHasIpv6Unc">
+                            <a-col v-if="ipv6PeerHasIpv4Unc" :span="12">
+                                <a-form-item label="IPv4-UNC" name="ipv6Ipv4UncConfig">
+                                    <a-checkbox
+                                        v-model:checked="
+                                            ipv6PeerConfigData.addressFamilyConfig[BGP_ADDR_FAMILY.IPV4_UNC]
+                                                .sendSrv6PrefixSid
+                                        "
+                                    >
+                                        SRv6 SID
+                                    </a-checkbox>
+                                </a-form-item>
+                            </a-col>
+                            <a-col v-if="ipv6PeerHasIpv6Unc" :span="12">
+                                <a-form-item label="IPv6-UNC" name="ipv6Ipv6UncConfig">
+                                    <a-checkbox
+                                        v-model:checked="
+                                            ipv6PeerConfigData.addressFamilyConfig[BGP_ADDR_FAMILY.IPV6_UNC]
+                                                .sendSrv6PrefixSid
+                                        "
+                                    >
+                                        SRv6 SID
+                                    </a-checkbox>
+                                </a-form-item>
+                            </a-col>
+                        </a-row>
 
                         <a-row>
                             <a-col :span="24">
@@ -233,6 +258,42 @@
                                     data-testid="bgp-ipv4-unc-peer-table"
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv4UncPeerList"
+                                    :row-key="
+                                        record =>
+                                            `${record.vrfIndex || ''}-${record.peerIp || ''}-${record.addressFamily || ''}`
+                                    "
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    :scroll="{ y: '100%' }"
+                                    size="small"
+                                    class="bgp-peer-table"
+                                >
+                                    <template #bodyCell="{ column, record }">
+                                        <template v-if="column.key === 'action'">
+                                            <a-button type="primary" danger size="small" @click="deletePeer(record)">
+                                                <template #icon><DeleteOutlined /></template>
+                                                删除
+                                            </a-button>
+                                        </template>
+                                    </template>
+                                </a-table>
+                            </a-tab-pane>
+                            <a-tab-pane :key="BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST" tab="IPv4 Label邻居">
+                                <div class="bgp-peer-info-header">
+                                    <UnorderedListOutlined />
+                                    <span class="bgp-peer-info-header-text">IPv4 Label邻居列表</span>
+                                    <a-tag v-if="ipv4LabelPeerList.length > 0" color="blue">
+                                        {{ ipv4LabelPeerList.length }}
+                                    </a-tag>
+                                </div>
+                                <a-table
+                                    data-testid="bgp-ipv4-label-peer-table"
+                                    :columns="PeerInfoColumns"
+                                    :data-source="ipv4LabelPeerList"
                                     :row-key="
                                         record =>
                                             `${record.vrfIndex || ''}-${record.peerIp || ''}-${record.addressFamily || ''}`
@@ -453,7 +514,7 @@
 </template>
 
 <script setup>
-    import { onActivated, ref, onDeactivated, watch, onMounted } from 'vue';
+    import { computed, onActivated, ref, onDeactivated, watch, onMounted } from 'vue';
     import { message } from 'ant-design-vue';
     import {
         BGP_ADDR_FAMILY,
@@ -482,6 +543,25 @@
     const labelCol = { style: { width: '100px' } };
     const wrapperCol = { span: 40 };
 
+    const SRV6_PREFIX_SID_ADDRESS_FAMILIES = [BGP_ADDR_FAMILY.IPV4_UNC, BGP_ADDR_FAMILY.IPV6_UNC];
+
+    const createDefaultAddressFamilyConfig = () =>
+        SRV6_PREFIX_SID_ADDRESS_FAMILIES.reduce((config, addressFamily) => {
+            config[addressFamily] = {
+                sendSrv6PrefixSid: false
+            };
+            return config;
+        }, {});
+
+    const normalizeAddressFamilyConfig = config => {
+        const normalized = createDefaultAddressFamilyConfig();
+        SRV6_PREFIX_SID_ADDRESS_FAMILIES.forEach(addressFamily => {
+            const familyConfig = config?.[addressFamily] || config?.[String(addressFamily)] || {};
+            normalized[addressFamily].sendSrv6PrefixSid = familyConfig.sendSrv6PrefixSid === true;
+        });
+        return normalized;
+    };
+
     // Configuration options
     const ipv4OpenCapOptions = [
         { label: 'Addr Family', value: BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS, disabled: true },
@@ -508,6 +588,7 @@
 
     const addressFamilyOptions = [
         { label: 'Ipv4-UNC', value: BGP_ADDR_FAMILY.IPV4_UNC, disabled: true },
+        { label: 'IPv4 Label', value: BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST },
         { label: 'Ipv6-UNC', value: BGP_ADDR_FAMILY.IPV6_UNC },
         { label: 'IPv4-MVPN', value: BGP_ADDR_FAMILY.IPV4_MVPN },
         { label: 'IPv6-MVPN', value: BGP_ADDR_FAMILY.IPV6_MVPN },
@@ -517,6 +598,7 @@
 
     const addressFamilyOptionsIpv6 = [
         { label: 'Ipv4-UNC', value: BGP_ADDR_FAMILY.IPV4_UNC },
+        { label: 'IPv4 Label', value: BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST },
         { label: 'Ipv6-UNC', value: BGP_ADDR_FAMILY.IPV6_UNC, disabled: true },
         { label: 'IPv4-MVPN', value: BGP_ADDR_FAMILY.IPV4_MVPN },
         { label: 'IPv6-MVPN', value: BGP_ADDR_FAMILY.IPV6_MVPN },
@@ -532,6 +614,7 @@
         holdTime: DEFAULT_VALUES.HOLD_TIME,
         openCap: DEFAULT_VALUES.DEFAULT_OPEN_CAP,
         addressFamily: DEFAULT_VALUES.DEFAULT_ADDRESS_FAMILY,
+        addressFamilyConfig: createDefaultAddressFamilyConfig(),
         role: '',
         openCapCustom: ''
     });
@@ -542,9 +625,17 @@
         holdTimeIpv6: DEFAULT_VALUES.HOLD_TIME_IPV6,
         openCapIpv6: DEFAULT_VALUES.DEFAULT_OPEN_CAP_IPV6,
         addressFamilyIpv6: DEFAULT_VALUES.DEFAULT_ADDRESS_FAMILY_IPV6,
+        addressFamilyConfig: createDefaultAddressFamilyConfig(),
         roleIpv6: '',
         openCapCustomIpv6: ''
     });
+
+    const ipv6PeerHasIpv4Unc = computed(() =>
+        ipv6PeerConfigData.value.addressFamilyIpv6.includes(BGP_ADDR_FAMILY.IPV4_UNC)
+    );
+    const ipv6PeerHasIpv6Unc = computed(() =>
+        ipv6PeerConfigData.value.addressFamilyIpv6.includes(BGP_ADDR_FAMILY.IPV6_UNC)
+    );
 
     // Validation
     const ipv4PeerConfigvalidationErrors = ref({
@@ -599,6 +690,30 @@
         { deep: true }
     );
 
+    const clearUnselectedSrv6AddressFamilyConfig = (selectedFamilies, addressFamilyConfig) => {
+        SRV6_PREFIX_SID_ADDRESS_FAMILIES.forEach(addressFamily => {
+            if (!selectedFamilies.includes(addressFamily)) {
+                addressFamilyConfig[addressFamily].sendSrv6PrefixSid = false;
+            }
+        });
+    };
+
+    watch(
+        () => ipv4PeerConfigData.value.addressFamily,
+        newValue => {
+            clearUnselectedSrv6AddressFamilyConfig(newValue, ipv4PeerConfigData.value.addressFamilyConfig);
+        },
+        { deep: true }
+    );
+
+    watch(
+        () => ipv6PeerConfigData.value.addressFamilyIpv6,
+        newValue => {
+            clearUnselectedSrv6AddressFamilyConfig(newValue, ipv6PeerConfigData.value.addressFamilyConfig);
+        },
+        { deep: true }
+    );
+
     watch(
         () => ipv6PeerConfigData.value.openCapIpv6,
         newValue => {
@@ -623,6 +738,7 @@
 
         try {
             const payload = JSON.parse(JSON.stringify(ipv4PeerConfigData.value));
+            payload.addressFamilyConfig = createDefaultAddressFamilyConfig();
             const saveResult = await window.bgpApi.saveIpv4PeerConfig(payload);
             if (saveResult.status !== 'success') {
                 message.error(saveResult.msg || '配置文件保存失败');
@@ -671,6 +787,7 @@
     // Peer info display
     const ipv4UncPeerList = ref([]);
     const ipv6UncPeerList = ref([]);
+    const ipv4LabelPeerList = ref([]);
     const ipv4MvpnPeerList = ref([]);
     const ipv6MvpnPeerList = ref([]);
     const ipv4QpPeerList = ref([]);
@@ -723,6 +840,17 @@
             ellipsis: true
         },
         {
+            title: 'SRv6 SID',
+            dataIndex: 'sendSrv6PrefixSid',
+            ellipsis: true,
+            customRender: ({ text, record }) => {
+                if (!SRV6_PREFIX_SID_ADDRESS_FAMILIES.includes(record.addressFamily)) {
+                    return '-';
+                }
+                return text ? '发送' : '不发送';
+            }
+        },
+        {
             title: '操作',
             key: 'action'
         }
@@ -749,6 +877,15 @@
                 );
                 if (index !== -1) {
                     ipv6UncPeerList.value[index] = { ...ipv6UncPeerList.value[index], ...data };
+                }
+            } else if (data.addressFamily === BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
+                const index = ipv4LabelPeerList.value.findIndex(
+                    peer =>
+                        `${peer.vrfIndex || ''}-${peer.peerIp || ''}-${peer.addressFamily || ''}` ===
+                        `${data.vrfIndex || ''}-${data.peerIp || ''}-${data.addressFamily || ''}`
+                );
+                if (index !== -1) {
+                    ipv4LabelPeerList.value[index] = { ...ipv4LabelPeerList.value[index], ...data };
                 }
             } else if (data.addressFamily === BGP_ADDR_FAMILY.IPV4_MVPN) {
                 const index = ipv4MvpnPeerList.value.findIndex(
@@ -805,6 +942,11 @@
                 ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV6_UNC]]
                 : [];
 
+            // 处理 IPv4 Label 邻居信息
+            ipv4LabelPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST])
+                ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST]]
+                : [];
+
             // 处理 IPv4-MVPN 邻居信息
             ipv4MvpnPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV4_MVPN])
                 ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV4_MVPN]]
@@ -828,6 +970,7 @@
             console.error(peerInfo.msg || 'Peer信息查询失败');
             ipv4UncPeerList.value = [];
             ipv6UncPeerList.value = [];
+            ipv4LabelPeerList.value = [];
             ipv4MvpnPeerList.value = [];
             ipv6MvpnPeerList.value = [];
             ipv4QpPeerList.value = [];
@@ -862,6 +1005,9 @@
                 : [];
             ipv4PeerConfigData.value.role = savedIpv4PeerConfig.data.role || '';
             ipv4PeerConfigData.value.openCapCustom = savedIpv4PeerConfig.data.openCapCustom || '';
+            ipv4PeerConfigData.value.addressFamilyConfig = normalizeAddressFamilyConfig(
+                savedIpv4PeerConfig.data.addressFamilyConfig
+            );
         }
 
         // Load IPv6 Peer config
@@ -878,6 +1024,9 @@
                 : [];
             ipv6PeerConfigData.value.roleIpv6 = savedIpv6PeerConfig.data.roleIpv6 || '';
             ipv6PeerConfigData.value.openCapCustomIpv6 = savedIpv6PeerConfig.data.openCapCustomIpv6 || '';
+            ipv6PeerConfigData.value.addressFamilyConfig = normalizeAddressFamilyConfig(
+                savedIpv6PeerConfig.data.addressFamilyConfig
+            );
         }
     };
 

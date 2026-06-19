@@ -43,6 +43,39 @@ const DEFAULT_UPDATE_SETTINGS = {
     autoDownload: false
 };
 
+// TCP 工具：连接状态
+const TCP_TOOL_STATE = {
+    CONNECTING: 'connecting',
+    CONNECTED: 'connected',
+    CLOSED: 'closed',
+    ERROR: 'error'
+};
+
+// TCP 工具：事件类型（主进程 -> 渲染进程）
+const TCP_TOOL_EVT_TYPES = {
+    STATE_CHANGE: 'tools:tcpStateChange',
+    DATA: 'tools:tcpData'
+};
+
+// TCP 工具：默认值
+const TCP_TOOL_DEFAULT = {
+    CONNECT_TIMEOUT: 10000
+};
+
+// UDP 工具：socket 状态
+const UDP_TOOL_STATE = {
+    OPENING: 'opening',
+    LISTENING: 'listening',
+    CLOSED: 'closed',
+    ERROR: 'error'
+};
+
+// UDP 工具：事件类型（主进程 -> 渲染进程）
+const UDP_TOOL_EVT_TYPES = {
+    STATE_CHANGE: 'tools:udpStateChange',
+    DATA: 'tools:udpData'
+};
+
 module.exports = {
     PROTOCOL_TYPE,
     START_LAYER,
@@ -50,5 +83,10 @@ module.exports = {
     DEFAULT_TOOLS_SETTINGS,
     DEFAULT_LOG_SETTINGS,
     LOG_REQ_TYPES,
-    DEFAULT_UPDATE_SETTINGS
+    DEFAULT_UPDATE_SETTINGS,
+    TCP_TOOL_STATE,
+    TCP_TOOL_EVT_TYPES,
+    TCP_TOOL_DEFAULT,
+    UDP_TOOL_STATE,
+    UDP_TOOL_EVT_TYPES
 };

@@ -131,54 +131,52 @@
                         生成IPv6-QP路由
                     </a-button>
                 </div>
-
-                <!-- 路由列表 -->
-                <div class="route-list-section">
-                    <div class="route-list-header">
-                        <UnorderedListOutlined />
-                        <span class="header-text">已生成IPv6-QP路由列表</span>
-                        <a-button
-                            :disabled="!hasRoutes"
-                            type="primary"
-                            danger
-                            size="small"
-                            style="margin-left: auto"
-                            @click="deleteAllRoutes"
-                        >
-                            <template #icon><DeleteOutlined /></template>
-                            删除所有
-                        </a-button>
-                    </div>
-                    <a-table
-                        :data-source="sentRoutes"
-                        :columns="routeColumns"
-                        :pagination="pagination"
-                        size="small"
-                        :row-key="record => `${record.dqpn}-${record.ip}-${record.mask}`"
-                        :scroll="{ x: 'max-content', y: '100%' }"
-                        class="bgp-route-table"
-                        @change="handleTableChange"
-                    >
-                        <template #bodyCell="{ column, record }">
-                            <template v-if="column.key === 'action'">
-                                <a-space>
-                                    <a-button size="small" @click="showRouteDetail(record)">
-                                        <template #icon><FileSearchOutlined /></template>
-                                        详情
-                                    </a-button>
-                                    <a-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
-                                        <template #icon><DeleteOutlined /></template>
-                                        删除
-                                    </a-button>
-                                </a-space>
-                            </template>
-                            <template v-else-if="column.key === 'ip'">
-                                <div>{{ record.ip }}/{{ record.mask }}</div>
-                            </template>
-                        </template>
-                    </a-table>
-                </div>
             </a-form>
+        </a-card>
+
+        <a-card title="已生成IPv6-QP路由列表" class="qp-route-list-card">
+            <template #extra>
+                <a-button
+                    class="route-delete-all-button"
+                    :disabled="!hasRoutes || deleteAllLoading"
+                    :loading="deleteAllLoading"
+                    danger
+                    size="small"
+                    @click="deleteAllRoutes"
+                >
+                    <template #icon><DeleteOutlined /></template>
+                    删除所有
+                </a-button>
+            </template>
+
+            <a-table
+                :data-source="sentRoutes"
+                :columns="routeColumns"
+                :pagination="pagination"
+                size="small"
+                :row-key="record => `${record.dqpn}-${record.ip}-${record.mask}`"
+                :scroll="{ x: 'max-content', y: '100%' }"
+                class="bgp-route-table"
+                @change="handleTableChange"
+            >
+                <template #bodyCell="{ column, record }">
+                    <template v-if="column.key === 'action'">
+                        <a-space>
+                            <a-button size="small" @click="showRouteDetail(record)">
+                                <template #icon><FileSearchOutlined /></template>
+                                详情
+                            </a-button>
+                            <a-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
+                                <template #icon><DeleteOutlined /></template>
+                                删除
+                            </a-button>
+                        </a-space>
+                    </template>
+                    <template v-else-if="column.key === 'ip'">
+                        <div>{{ record.ip }}/{{ record.mask }}</div>
+                    </template>
+                </template>
+            </a-table>
         </a-card>
 
         <CustomPktDrawer
@@ -197,7 +195,6 @@
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
     import { message } from 'ant-design-vue';
     import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
-    import UnorderedListOutlined from '@ant-design/icons-vue/es/icons/UnorderedListOutlined';
     import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
     import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
     import { BGP_ADDR_FAMILY, BGP_QP_ROUTE_GROWTH_MODE, BGP_QP_BSID_MODE } from '../../const/bgpConst';
@@ -250,6 +247,7 @@
     const sentRoutes = ref([]);
     const hasRoutes = computed(() => pagination.value.total > 0);
     const routesGenerating = ref(false);
+    const deleteAllLoading = ref(false);
     const routeGrowthIncludesIp = computed(
         () =>
             ipv6QpData.value.routeGrowthMode === BGP_QP_ROUTE_GROWTH_MODE.IP ||
@@ -387,6 +385,11 @@
     };
 
     const deleteAllRoutes = async () => {
+        if (deleteAllLoading.value) {
+            return;
+        }
+
+        deleteAllLoading.value = true;
         try {
             const result = await window.bgpApi.deleteAllRoutesByFamily(BGP_ADDR_FAMILY.IPV6_QP);
             if (result.status === 'success') {
@@ -398,6 +401,8 @@
             }
         } catch (e) {
             message.error(`IPv6-QP路由删除失败: ${e.message}`);
+        } finally {
+            deleteAllLoading.value = false;
         }
     };
 
@@ -458,25 +463,52 @@
         height: calc(100vh - 70px);
         min-height: 0;
         overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
     }
 
     .qp-card {
+        flex: 0 0 auto;
         display: flex;
         flex-direction: column;
-        height: 100%;
+        min-height: 0;
         overflow: hidden;
     }
 
-    .qp-card :deep(.ant-card-head) {
+    .qp-route-list-card {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .qp-card :deep(.ant-card-head),
+    .qp-route-list-card :deep(.ant-card-head) {
         min-height: 36px !important;
     }
 
-    .qp-card :deep(.ant-card-head-title) {
+    .qp-card :deep(.ant-card-head-title),
+    .qp-route-list-card :deep(.ant-card-head-title) {
         padding: 8px 0 !important;
     }
 
+    .qp-route-list-card :deep(.ant-card-extra) {
+        padding: 6px 0 !important;
+    }
+
     .qp-card :deep(.ant-card-body) {
-        flex: 1;
+        flex: 0 0 auto;
+        min-height: 0;
+        overflow: visible;
+        display: flex;
+        flex-direction: column;
+        padding: 8px 10px !important;
+    }
+
+    .qp-route-list-card :deep(.ant-card-body) {
+        flex: 1 1 0;
         min-height: 0;
         overflow: hidden;
         display: flex;
@@ -485,11 +517,11 @@
     }
 
     .qp-config-form {
-        flex: 1 1 0;
+        flex: 0 0 auto;
         min-height: 0;
         display: flex;
         flex-direction: column;
-        overflow: hidden;
+        overflow: visible;
     }
 
     .config-section {
@@ -527,31 +559,6 @@
     .generate-route-button {
         grid-column: 2;
         justify-self: center;
-    }
-
-    .route-list-section {
-        flex: 1 1 0;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        margin-top: 4px;
-        border-top: 1px solid #f0f0f0;
-        padding-top: 8px;
-        overflow: hidden;
-    }
-
-    .route-list-header {
-        flex: 0 0 auto;
-        margin-bottom: 8px;
-        display: flex;
-        align-items: center;
-        font-weight: 500;
-        color: rgba(0, 0, 0, 0.85);
-    }
-
-    .header-text {
-        margin-left: 8px;
-        margin-right: 8px;
     }
 
     .bgp-route-table,
@@ -631,6 +638,23 @@
         display: flex;
         flex-wrap: wrap;
         gap: 4px 12px;
+    }
+
+    .route-delete-all-button:disabled,
+    .route-delete-all-button.ant-btn-disabled {
+        color: #8c8c8c !important;
+        background: #f0f0f0 !important;
+        border-color: #bfbfbf !important;
+        opacity: 1 !important;
+    }
+
+    .route-delete-all-button:disabled:hover,
+    .route-delete-all-button.ant-btn-disabled:hover,
+    .route-delete-all-button:disabled:focus,
+    .route-delete-all-button.ant-btn-disabled:focus {
+        color: #8c8c8c !important;
+        background: #f0f0f0 !important;
+        border-color: #bfbfbf !important;
     }
 
     @media (max-width: 768px) {

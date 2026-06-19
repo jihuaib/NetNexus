@@ -9,6 +9,8 @@
                 <a-tab-pane key="network-info" tab="网络信息" />
                 <a-tab-pane key="tcp-ao-mac" tab="TCP-AO MAC" />
                 <a-tab-pane key="http-api-tester" tab="HTTP API测试" />
+                <a-tab-pane key="tcp-tool" tab="TCP工具" />
+                <a-tab-pane key="udp-tool" tab="UDP工具" />
             </a-tabs>
         </div>
 
@@ -41,7 +43,9 @@
         'port-monitor',
         'network-info',
         'tcp-ao-mac',
-        'http-api-tester'
+        'http-api-tester',
+        'tcp-tool',
+        'udp-tool'
     ]);
 
     const handleTabChange = key => {

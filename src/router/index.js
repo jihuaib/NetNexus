@@ -9,6 +9,8 @@ const PortMonitor = () => import('../view/tools/PortMonitor.vue');
 const NetworkInfo = () => import('../view/tools/NetworkInfo.vue');
 const TcpAoMac = () => import('../view/tools/TcpAoMac.vue');
 const HttpApiTester = () => import('../view/tools/HttpApiTester.vue');
+const TcpTool = () => import('../view/tools/TcpTool.vue');
+const UdpTool = () => import('../view/tools/UdpTool.vue');
 const BgpMain = () => import('../view/bgp/BgpMain.vue');
 const BgpConfig = () => import('../view/bgp/BgpConfig.vue');
 const BgpPeerConfig = () => import('../view/bgp/BgpPeerConfig.vue');
@@ -40,6 +42,10 @@ const DhcpLeaseList = () => import('../view/dhcp/DhcpLeaseList.vue');
 const NtpMain = () => import('../view/ntp/NtpMain.vue');
 const NtpConfig = () => import('../view/ntp/NtpConfig.vue');
 const NtpRequestLog = () => import('../view/ntp/NtpRequestLog.vue');
+const RadiusMain = () => import('../view/radius/RadiusMain.vue');
+const RadiusConfig = () => import('../view/radius/RadiusConfig.vue');
+const RadiusRequestLog = () => import('../view/radius/RadiusRequestLog.vue');
+const RadiusSession = () => import('../view/radius/RadiusSession.vue');
 const TftpMain = () => import('../view/tftp/TftpMain.vue');
 const TftpConfig = () => import('../view/tftp/TftpConfig.vue');
 const TftpTransferLog = () => import('../view/tftp/TftpTransferLog.vue');
@@ -99,6 +105,18 @@ const routes = [
                         path: 'http-api-tester',
                         name: 'HttpApiTester',
                         component: HttpApiTester,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'tcp-tool',
+                        name: 'TcpTool',
+                        component: TcpTool,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'udp-tool',
+                        name: 'UdpTool',
+                        component: UdpTool,
                         meta: { keepAlive: true }
                     }
                 ]
@@ -327,6 +345,36 @@ const routes = [
                         path: 'ntp-request-log',
                         name: 'NtpRequestLog',
                         component: NtpRequestLog,
+                        meta: { keepAlive: true }
+                    }
+                ]
+            },
+            {
+                path: '/radius',
+                name: 'RadiusMain',
+                component: RadiusMain,
+                meta: { keepAlive: true },
+                children: [
+                    {
+                        path: '/',
+                        redirect: '/radius/radius-config'
+                    },
+                    {
+                        path: 'radius-config',
+                        name: 'RadiusConfig',
+                        component: RadiusConfig,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'radius-request-log',
+                        name: 'RadiusRequestLog',
+                        component: RadiusRequestLog,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'radius-session',
+                        name: 'RadiusSession',
+                        component: RadiusSession,
                         meta: { keepAlive: true }
                     }
                 ]

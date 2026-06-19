@@ -27,6 +27,7 @@ class BgpApp {
         this.ipv4PeerConfigFileKey = 'ipv4-peer-config';
         this.ipv6PeerConfigFileKey = 'ipv6-peer-config';
         this.ipv4UNCRouteConfigFileKey = 'ipv4-unc-route-config';
+        this.ipv4LabelRouteConfigFileKey = 'ipv4-label-route-config';
         this.ipv6UNCRouteConfigFileKey = 'ipv6-unc-route-config';
         this.ipv4MvpnRouteConfigFileKey = 'ipv4-mvpn-route-config';
         this.ipv4QpRouteConfigFileKey = 'ipv4-qp-route-config';
@@ -287,6 +288,8 @@ class BgpApp {
                 return this.ipv4UNCRouteConfigFileKey;
             case BgpConst.BGP_ADDR_FAMILY.IPV6_UNC:
                 return this.ipv6UNCRouteConfigFileKey;
+            case BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST:
+                return this.ipv4LabelRouteConfigFileKey;
             case BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN:
                 return this.ipv4MvpnRouteConfigFileKey;
             case BgpConst.BGP_ADDR_FAMILY.IPV4_QP:
@@ -371,6 +374,7 @@ class BgpApp {
             : [
                   BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
                   BgpConst.BGP_ADDR_FAMILY.IPV6_UNC,
+                  BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST,
                   BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN,
                   BgpConst.BGP_ADDR_FAMILY.IPV4_QP,
                   BgpConst.BGP_ADDR_FAMILY.IPV6_QP

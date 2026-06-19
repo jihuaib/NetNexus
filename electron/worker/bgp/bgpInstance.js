@@ -1,7 +1,19 @@
 const BgpPeer = require('./bgpPeer');
 const { BgpPathAttrStore } = require('./bgpPathAttrStore');
+const { getAddrFamilyType } = require('../../utils/bgpUtils');
 
-const ROUTE_ATTR_FIELDS = ['nextHop', 'origin', 'asPath', 'med', 'localPref', 'communities', 'customAttr', 'rt'];
+const ROUTE_ATTR_FIELDS = [
+    'nextHop',
+    'origin',
+    'asPath',
+    'med',
+    'localPref',
+    'communities',
+    'customAttr',
+    'rt',
+    'srv6Sid',
+    'srv6EndpointBehavior'
+];
 const ROUTE_NLRI_FIELDS = [
     'ip',
     'mask',
@@ -11,7 +23,8 @@ const ROUTE_NLRI_FIELDS = [
     'sourceIp',
     'groupIp',
     'sourceAs',
-    'dqpn'
+    'dqpn',
+    'label'
 ];
 
 class BgpInstance {
@@ -40,7 +53,8 @@ class BgpInstance {
     }
 
     addPeer(bgpSession) {
-        const bgpPeer = new BgpPeer(bgpSession, this);
+        const addressFamily = getAddrFamilyType(this.afi, this.safi);
+        const bgpPeer = new BgpPeer(bgpSession, this, bgpSession.getAddressFamilyOptions(addressFamily));
         this.peerMap.set(bgpSession.peerIp, bgpPeer);
     }
 
@@ -87,7 +101,12 @@ class BgpInstance {
                     ? overrides.rt
                     : currentAttr.rt !== undefined && currentAttr.rt !== null
                       ? currentAttr.rt
-                      : this.rt
+                      : this.rt,
+            srv6Sid: overrides.srv6Sid !== undefined ? overrides.srv6Sid : currentAttr.srv6Sid,
+            srv6EndpointBehavior:
+                overrides.srv6EndpointBehavior !== undefined
+                    ? overrides.srv6EndpointBehavior
+                    : currentAttr.srv6EndpointBehavior
         };
     }
 

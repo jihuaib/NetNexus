@@ -42,8 +42,8 @@ function canonicalizeBmpRouteAttr(attr = {}) {
     };
 }
 
-function hashCanonicalAttr(canonicalAttr) {
-    return crypto.createHash('sha256').update(JSON.stringify(canonicalAttr)).digest('hex');
+function hashCanonicalAttr(canonicalJson) {
+    return crypto.createHash('sha256').update(canonicalJson).digest('hex');
 }
 
 class BmpRouteAttrStore {
@@ -56,7 +56,7 @@ class BmpRouteAttrStore {
     intern(attr) {
         const canonical = canonicalizeBmpRouteAttr(attr);
         const canonicalJson = JSON.stringify(canonical);
-        const hash = hashCanonicalAttr(canonical);
+        const hash = hashCanonicalAttr(canonicalJson);
 
         const hashIds = this.hashIndex.get(hash);
         if (hashIds) {
