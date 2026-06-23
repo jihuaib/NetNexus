@@ -7,6 +7,7 @@ const BgpPeer = require(path.join(__dirname, '..', '..', 'electron', 'worker', '
 const BgpInstance = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpInstance.js'));
 const BgpRoute = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpRoute.js'));
 const BgpSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpSession.js'));
+const BgpWorker = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpWorker.js'));
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
 const { parseBgpPacket } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpPacketParser.js'));
 
@@ -77,6 +78,15 @@ function addIpv4UnicastRoute(instance, ip) {
     instance.setRoute(BgpRoute.makeKey(route.ip, route.mask), route);
 }
 
+function addIpv4UnicastPathRoute(instance, ip, pathId, attr = {}) {
+    const route = new BgpRoute(instance);
+    route.ip = ip;
+    route.mask = 32;
+    route.rd = '0:0';
+    route.pathId = pathId;
+    instance.setRoute(BgpRoute.makeUnicastKey(route.pathId, route.rd, route.ip, route.mask), route, attr);
+}
+
 function addQpRoute(instance, ip, nextHop) {
     const route = new BgpRoute(instance);
     route.ip = ip;
@@ -98,6 +108,15 @@ function addIpv6Route(instance, ip, attr = {}) {
     route.ip = ip;
     route.mask = 128;
     instance.setRoute(BgpRoute.makeKey(route.ip, route.mask), route, attr);
+}
+
+function addIpv6PathRoute(instance, ip, pathId, attr = {}) {
+    const route = new BgpRoute(instance);
+    route.ip = ip;
+    route.mask = 128;
+    route.rd = '0:0';
+    route.pathId = pathId;
+    instance.setRoute(BgpRoute.makeUnicastKey(route.pathId, route.rd, route.ip, route.mask), route, attr);
 }
 
 function getMpReach(packet) {
@@ -140,6 +159,19 @@ function assertPathAttrTypes(packet, expectedTypes) {
     );
 }
 
+const ADD_PATH_PARSE_CONTEXT = {
+    getAddPathReceiveInfo: () => ({ enabled: true }),
+    isAddPathReceiveEnabled: () => true
+};
+
+const IPV4_ONLY_ADD_PATH_PARSE_CONTEXT = {
+    getAddPathReceiveInfo: (afi, safi) => ({
+        enabled: afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    }),
+    isAddPathReceiveEnabled: (afi, safi) =>
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+};
+
 function assertFullPacketLengths(buffers, counts, fullCount, fullLength) {
     counts.forEach((count, index) => {
         if (count === fullCount) {
@@ -181,6 +213,94 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
 }
 
 {
+    const session = new BgpSession(0, '192.0.2.1', new Map(), { sendEvent: () => {} });
+    session.localAs = 65000;
+    session.holdTime = 90;
+    session.routerId = '192.0.2.254';
+    session.localCapFlags = BgpConst.BGP_CAP_FLAGS.MULTIPROTOCOL_EXTENSIONS | BgpConst.BGP_CAP_FLAGS.ADD_PATH;
+    session.localAddrFamilyFlags =
+        BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_UNC | BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_UNC;
+    session.setLocalAddPath(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE
+    );
+    session.setLocalAddPath(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE
+    );
+
+    const packet = parseBgpPacket(session.buildOpenMsg());
+    const addPathCap = packet.capabilities.find(cap => cap.code === BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH);
+    assert.ok(addPathCap, 'OPEN should advertise ADD-PATH only when locally enabled');
+    assert.deepStrictEqual(
+        addPathCap.addPaths,
+        [
+            {
+                afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                sendReceive: BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE
+            },
+            {
+                afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+                safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                sendReceive: BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE
+            }
+        ],
+        'OPEN ADD-PATH capability should carry IPv4 and IPv6 unicast tuples'
+    );
+}
+
+{
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const session = new BgpSession(0, '192.0.2.1', new Map(), { sendEvent: () => {} });
+    const peer = new BgpPeer(session, instance);
+    const afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
+    const safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST;
+
+    assert.deepStrictEqual(
+        {
+            send: peer.getPeerInfo().addPathSendEnabled,
+            receive: peer.getPeerInfo().addPathReceiveEnabled
+        },
+        { send: false, receive: false },
+        'peer info should report ADD-PATH as not negotiated by default'
+    );
+
+    session.setLocalAddPath(afi, safi, BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE);
+    session.setPeerAddPath(afi, safi, BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE);
+    assert.deepStrictEqual(
+        {
+            send: peer.getPeerInfo().addPathSendEnabled,
+            receive: peer.getPeerInfo().addPathReceiveEnabled
+        },
+        { send: true, receive: true },
+        'peer info should report bidirectional ADD-PATH negotiation'
+    );
+
+    session.setPeerAddPath(afi, safi, BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY);
+    assert.deepStrictEqual(
+        {
+            send: peer.getPeerInfo().addPathSendEnabled,
+            receive: peer.getPeerInfo().addPathReceiveEnabled
+        },
+        { send: true, receive: false },
+        'peer info should report ADD-PATH send-only negotiation'
+    );
+
+    session.setPeerAddPath(afi, safi, BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY);
+    assert.deepStrictEqual(
+        {
+            send: peer.getPeerInfo().addPathSendEnabled,
+            receive: peer.getPeerInfo().addPathReceiveEnabled
+        },
+        { send: false, receive: true },
+        'peer info should report ADD-PATH receive-only negotiation'
+    );
+}
+
+{
     const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
     const instanceMap = new Map([
         [BgpInstance.makeKey(0, BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST), instance]
@@ -195,6 +315,64 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
 
     assert.strictEqual(requesterSendCount, 1, 'Route-Refresh should resend routes to the requesting peer');
     assert.strictEqual(otherSendCount, 0, 'Route-Refresh must not resend routes to other peers in the same AFI/SAFI');
+}
+
+{
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    instance.rt = '65000:100';
+    instance.customAttr = 'origin incomplete';
+    const worker = Object.create(BgpWorker.prototype);
+    worker.bgpInstanceMap = new Map([
+        [BgpInstance.makeKey(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST), instance]
+    ]);
+    const responses = [];
+    const errors = [];
+    worker.messageHandler = {
+        sendSuccessResponse: (messageId, data, msg) => responses.push({ messageId, data, msg }),
+        sendErrorResponse: (messageId, msg) => errors.push({ messageId, msg })
+    };
+
+    worker.importRoutes('import-route-without-page-rt', {
+        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+        announce: false,
+        routes: [
+            {
+                ip: '203.0.113.200',
+                mask: 32,
+                asPath: '65001'
+            }
+        ]
+    });
+
+    assert.deepStrictEqual(errors, [], 'importing ordinary route should not report errors');
+    assert.strictEqual(responses.length, 1, 'importing ordinary route should report success');
+    const importedRoute = instance.routeMap.get(BgpRoute.makeUnicastKey(0, '0:0', '203.0.113.200', 32));
+    assert.ok(importedRoute, 'imported unicast route should use default RD and path-id');
+    const importedRouteAttr = instance.getRouteAttr(importedRoute);
+    assert.strictEqual(importedRouteAttr.asPath, '65001', 'imported route should keep MRT AS_PATH');
+    assert.strictEqual(importedRouteAttr.rt, '', 'imported route attributes must not inherit page-level RT');
+    assert.strictEqual(
+        importedRouteAttr.customAttr,
+        '',
+        'imported route attributes must not inherit page-level custom attributes'
+    );
+
+    worker.getRouteDetail('import-route-detail-without-page-rt', {
+        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+        route: {
+            ip: '203.0.113.200',
+            mask: 32,
+            rd: '0:0',
+            pathId: 0
+        }
+    });
+    assert.strictEqual(responses.length, 2, 'route detail query should report success');
+    assert.strictEqual(responses[1].data.rt, '', 'imported route detail must not inherit page-level RT');
+    assert.strictEqual(
+        responses[1].data.customAttr,
+        '',
+        'imported route detail must not inherit page-level custom attributes'
+    );
 }
 
 {
@@ -456,6 +634,161 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
         ['2001:db8:400::1', '2001:db8:400::2'],
         'peer with SRv6 disabled should receive both IPv6 routes in one UPDATE'
     );
+}
+
+{
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const sentBuffers = [];
+    const peer = createPeer(instance, sentBuffers);
+
+    addIpv4UnicastPathRoute(instance, '198.51.100.10', 11);
+    addIpv4UnicastPathRoute(instance, '198.51.100.10', 12);
+
+    peer.sendRoute();
+    assertPacketLengths(sentBuffers);
+    assert.strictEqual(sentBuffers.length, 1, 'non ADD-PATH IPv4 peer should receive one ordinary path');
+    const packet = parseBgpPacket(sentBuffers[0]);
+    assert.deepStrictEqual(
+        packet.nlri.map(route => ({ prefix: route.prefix, length: route.length, pathId: route.pathId })),
+        [{ prefix: '198.51.100.10', length: 32, pathId: 0 }],
+        'non ADD-PATH IPv4 UPDATE must not encode path identifiers'
+    );
+}
+
+{
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const sentBuffers = [];
+    const peer = createPeer(
+        instance,
+        sentBuffers,
+        {},
+        {
+            isAddPathSendEnabled: (afi, safi) =>
+                afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        }
+    );
+
+    addIpv4UnicastPathRoute(instance, '198.51.100.20', 21);
+    addIpv4UnicastPathRoute(instance, '198.51.100.20', 22);
+
+    peer.sendRoute();
+    assertPacketLengths(sentBuffers);
+    assert.strictEqual(sentBuffers.length, 1, 'ADD-PATH IPv4 peer should receive both paths in one UPDATE');
+    const packet = parseBgpPacket(sentBuffers[0], ADD_PATH_PARSE_CONTEXT);
+    assert.deepStrictEqual(
+        packet.nlri.map(route => ({ prefix: route.prefix, length: route.length, pathId: route.pathId })),
+        [
+            { prefix: '198.51.100.20', length: 32, pathId: 21 },
+            { prefix: '198.51.100.20', length: 32, pathId: 22 }
+        ],
+        'ADD-PATH IPv4 UPDATE should keep path-id associated with each prefix'
+    );
+}
+
+{
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const sentBuffers = [];
+    const peer = createPeer(
+        instance,
+        sentBuffers,
+        {},
+        {
+            isAddPathSendEnabled: (afi, safi) =>
+                afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        }
+    );
+
+    addIpv6PathRoute(instance, '2001:db8:700::1', 31);
+    addIpv6PathRoute(instance, '2001:db8:700::1', 32);
+
+    peer.sendRoute();
+    assertPacketLengths(sentBuffers);
+    assert.strictEqual(sentBuffers.length, 1, 'ADD-PATH IPv6 peer should receive both paths in one MP_REACH');
+    const reach = getMpReach(parseBgpPacket(sentBuffers[0], ADD_PATH_PARSE_CONTEXT));
+    assert.deepStrictEqual(
+        reach.nlri.map(route => ({ prefix: route.prefix, length: route.length, pathId: route.pathId })),
+        [
+            { prefix: '2001:db8:700::1', length: 128, pathId: 31 },
+            { prefix: '2001:db8:700::1', length: 128, pathId: 32 }
+        ],
+        'ADD-PATH IPv6 MP_REACH should keep path-id associated with each prefix'
+    );
+}
+
+{
+    const prefixCount = 1000;
+    const pathCount = 10;
+    const ipv4BaseIp = (198 << 24) + (51 << 16) + (110 << 8) + 1;
+    const addPathSendEnabled = (afi, safi) =>
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST;
+    const ipv4Instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const ipv6Instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const ipv4Buffers = [];
+    const ipv6Buffers = [];
+    const sessionOverrides = {
+        isAddPathSendEnabled: addPathSendEnabled
+    };
+    const ipv4Peer = createPeer(ipv4Instance, ipv4Buffers, {}, sessionOverrides);
+    const ipv6Peer = createPeer(ipv6Instance, ipv6Buffers, {}, sessionOverrides);
+
+    for (let prefixIndex = 0; prefixIndex < prefixCount; prefixIndex++) {
+        const ipv4Prefix = ipv4FromNumber(ipv4BaseIp + prefixIndex);
+        const ipv6Prefix = `2001:db8:710::${(prefixIndex + 1).toString(16)}`;
+        for (let pathId = 0; pathId < pathCount; pathId++) {
+            addIpv4UnicastPathRoute(ipv4Instance, ipv4Prefix, pathId);
+            addIpv6PathRoute(ipv6Instance, ipv6Prefix, pathId);
+        }
+    }
+
+    assert.strictEqual(
+        ipv4Instance.routeMap.size,
+        prefixCount * pathCount,
+        'IPv4 ADD-PATH test should generate all prefix/path-id routes'
+    );
+    assert.strictEqual(
+        ipv6Instance.routeMap.size,
+        prefixCount * pathCount,
+        'IPv6 non-ADD-PATH test should still have generated path-id routes locally'
+    );
+
+    ipv4Peer.sendRoute();
+    ipv6Peer.sendRoute();
+    assertPacketLengths(ipv4Buffers);
+    assertPacketLengths(ipv6Buffers);
+    assert.ok(ipv4Buffers.length > 1, 'IPv4 ADD-PATH peer should split many IPv4 UPDATEs');
+    assert.ok(ipv6Buffers.length > 1, 'IPv6 non-ADD-PATH peer should split many IPv6 UPDATEs');
+
+    const ipv4Nlri = ipv4Buffers.flatMap(buffer => parseBgpPacket(buffer, IPV4_ONLY_ADD_PATH_PARSE_CONTEXT).nlri);
+    assert.strictEqual(
+        ipv4Nlri.length,
+        prefixCount * pathCount,
+        'IPv4 ADD-PATH enablement should send every generated prefix/path-id route'
+    );
+    ipv4Nlri.forEach((route, index) => {
+        const prefixIndex = Math.floor(index / pathCount);
+        const expectedPathId = index % pathCount;
+        assert.deepStrictEqual(
+            { prefix: route.prefix, length: route.length, pathId: route.pathId },
+            { prefix: ipv4FromNumber(ipv4BaseIp + prefixIndex), length: 32, pathId: expectedPathId },
+            'IPv4 ADD-PATH enablement should encode path identifiers without affecting order'
+        );
+    });
+
+    const ipv6Nlri = ipv6Buffers.flatMap(
+        buffer => getMpReach(parseBgpPacket(buffer, IPV4_ONLY_ADD_PATH_PARSE_CONTEXT)).nlri
+    );
+    assert.strictEqual(
+        ipv6Nlri.length,
+        prefixCount,
+        'IPv6 routes generated with path IDs should send one ordinary NLRI per prefix when IPv6 ADD-PATH is disabled'
+    );
+    ipv6Nlri.forEach((route, index) => {
+        assert.deepStrictEqual(
+            { prefix: route.prefix, length: route.length, pathId: route.pathId },
+            { prefix: `2001:db8:710::${(index + 1).toString(16)}`, length: 128, pathId: 0 },
+            'IPv6 non-ADD-PATH send should not encode path identifiers'
+        );
+    });
 }
 
 {

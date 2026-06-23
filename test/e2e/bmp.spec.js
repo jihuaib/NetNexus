@@ -188,9 +188,7 @@ test.describe('BMP pages', () => {
             await expect(page.getByText('192.0.2.2 | AS 65000')).toBeVisible({ timeout: 10000 });
             await expect(page.getByText(String(EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT)).first()).toBeVisible();
 
-            await recordStep(
-                `Output: session statistics visible, routeCount=${EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT}`
-            );
+            await recordStep(`Output: session statistics visible, routeCount=${EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT}`);
         });
 
         await test.step('Verify BGP Loc-RIB statistics page', async () => {

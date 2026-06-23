@@ -64,7 +64,7 @@
         <!-- 收包窗口 -->
         <a-card title="收包窗口" class="udp-recv-card" size="small">
             <div ref="logContainer" class="udp-log-list">
-                <div v-if="logs.length === 0" class="udp-log-empty">暂无数据</div>
+                <a-empty v-if="logs.length === 0" description="暂无收包数据" class="udp-log-empty" />
                 <div v-for="(log, index) in logs" :key="index" class="udp-log-item" :class="`udp-log-${log.type}`">
                     <span class="udp-log-time">{{ log.time }}</span>
                     <span class="udp-log-tag">{{ log.tag }}</span>
@@ -115,20 +115,19 @@
 
     const stateName = computed(() => (conn.value ? UDP_TOOL_STATE_NAME[conn.value.state] : '未打开'));
 
-    // 结合项目主色调 #1890ff，用实心标签清晰区分「有效（就绪）」与「禁用（未打开/已关闭）」
     const stateColor = computed(() => {
         if (!conn.value) {
-            return '#8c8c8c'; // 未打开（禁用态）
+            return 'red';
         }
         switch (conn.value.state) {
             case UDP_TOOL_STATE.LISTENING:
-                return '#1890ff'; // 就绪（有效态）- 主色
+                return 'green';
             case UDP_TOOL_STATE.OPENING:
-                return '#faad14'; // 打开中
+                return 'blue';
             case UDP_TOOL_STATE.ERROR:
-                return '#ff4d4f'; // 错误
+                return 'red';
             default:
-                return '#8c8c8c'; // 已关闭（禁用态）
+                return 'red';
         }
     });
 
@@ -301,6 +300,13 @@
         flex: 0 0 auto;
     }
 
+    .udp-config-card :deep(.ant-tag) {
+        min-width: 64px;
+        margin-inline-end: 0;
+        text-align: center;
+        font-weight: 500;
+    }
+
     /* 主按钮（打开/发送）对齐项目主色调 #1890ff，有效态醒目、禁用态保留默认灰 */
     .udp-tool-page :deep(.ant-btn-primary:not(:disabled)) {
         background-color: #1890ff;
@@ -396,9 +402,23 @@
     }
 
     .udp-log-empty {
-        color: #777;
-        text-align: center;
-        padding-top: 12px;
+        height: 100%;
+        min-height: 110px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family:
+            -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+        color: rgba(255, 255, 255, 0.55);
+    }
+
+    .udp-log-empty :deep(.ant-empty-normal) {
+        margin: 0;
+    }
+
+    .udp-log-empty :deep(.ant-empty-description) {
+        color: rgba(255, 255, 255, 0.55);
+        font-size: 12px;
     }
 
     .udp-log-item {

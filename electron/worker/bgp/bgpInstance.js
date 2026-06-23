@@ -24,7 +24,8 @@ const ROUTE_NLRI_FIELDS = [
     'groupIp',
     'sourceAs',
     'dqpn',
-    'label'
+    'label',
+    'pathId'
 ];
 
 class BgpInstance {

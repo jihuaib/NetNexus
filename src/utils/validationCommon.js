@@ -74,6 +74,7 @@ export const isValidMplsLabel = value => {
 };
 
 const IPV6_MAX_BIGINT = (1n << 128n) - 1n;
+const ADD_PATH_GENERATION_COUNT_MAX = 255;
 
 const ipv6ToBigIntOrNull = value => {
     try {
@@ -634,6 +635,18 @@ export const createBgpIpv4RouteConfigValidationRules = () => {
                 message: '请输入数量'
             }
         ],
+        addPathCount: [
+            {
+                validator: (value, formData) => {
+                    if (Number(formData.addressFamily) !== BGP_ADDR_FAMILY.IPV4_UNC || !formData.addPathEnabled) {
+                        return true;
+                    }
+                    const count = Number(value);
+                    return REGEX.number.test(`${value}`) && count > 0 && count <= ADD_PATH_GENERATION_COUNT_MAX;
+                },
+                message: `ADD-PATH数量范围为 1 ~ ${ADD_PATH_GENERATION_COUNT_MAX}`
+            }
+        ],
         rt: [
             {
                 validator: value => isValidRtList(value),
@@ -721,7 +734,11 @@ export const createBgpIpv4RouteConfigValidationRules = () => {
                     if (formData.srv6SidMode !== BGP_SRV6_SID_MODE.INCREMENT) return true;
                     const sidBase = ipv6ToBigIntOrNull(formData.srv6Sid);
                     if (sidBase === null || !REGEX.number.test(`${value}`)) return true;
-                    const count = Number(formData.count);
+                    const addPathCount =
+                        formData.addPathEnabled && REGEX.number.test(`${formData.addPathCount}`)
+                            ? Number(formData.addPathCount)
+                            : 1;
+                    const count = Number(formData.count) * addPathCount;
                     if (!Number.isFinite(count) || count <= 0) return true;
                     return sidBase + BigInt(Math.floor(count) - 1) * BigInt(value) <= IPV6_MAX_BIGINT;
                 },
@@ -770,6 +787,16 @@ export const createBgpIpv6RouteConfigValidationRules = () => {
                 message: '请输入数量'
             }
         ],
+        addPathCount: [
+            {
+                validator: (value, formData) => {
+                    if (!formData.addPathEnabled) return true;
+                    const count = Number(value);
+                    return REGEX.number.test(`${value}`) && count > 0 && count <= ADD_PATH_GENERATION_COUNT_MAX;
+                },
+                message: `ADD-PATH数量范围为 1 ~ ${ADD_PATH_GENERATION_COUNT_MAX}`
+            }
+        ],
         rt: [
             {
                 validator: value => isValidRtList(value),
@@ -809,7 +836,11 @@ export const createBgpIpv6RouteConfigValidationRules = () => {
                     if (formData.srv6SidMode !== BGP_SRV6_SID_MODE.INCREMENT) return true;
                     const sidBase = ipv6ToBigIntOrNull(formData.srv6Sid);
                     if (sidBase === null || !REGEX.number.test(`${value}`)) return true;
-                    const count = Number(formData.count);
+                    const addPathCount =
+                        formData.addPathEnabled && REGEX.number.test(`${formData.addPathCount}`)
+                            ? Number(formData.addPathCount)
+                            : 1;
+                    const count = Number(formData.count) * addPathCount;
                     if (!Number.isFinite(count) || count <= 0) return true;
                     return sidBase + BigInt(Math.floor(count) - 1) * BigInt(value) <= IPV6_MAX_BIGINT;
                 },

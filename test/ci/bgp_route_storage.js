@@ -41,7 +41,9 @@ try {
 }
 
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
-const { countBgpRoutes } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpRouteStorage.js'));
+const { countBgpRoutes, readBgpRouteJsonlPage } = require(
+    path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpRouteStorage.js')
+);
 
 function makeStore() {
     const data = new Map();
@@ -154,6 +156,18 @@ function makeWorkerRecorder(resolvers = {}) {
     assert.strictEqual(ipv4GenerateResult.data.total, 2);
     assert.strictEqual(worker.calls.length, 1);
     assert.strictEqual(worker.calls[0].op, BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_ROUTES);
+    assert.deepStrictEqual(
+        worker.calls[0].payload.routes.map(route => route.pathId),
+        [0, 0],
+        'ordinary unicast generation should use path-id 0'
+    );
+
+    const repeatIpv4GenerateResult = await app.handleGenerateIpv4Routes(null, ipv4Config);
+    assert.strictEqual(repeatIpv4GenerateResult.status, 'success');
+    assert.strictEqual(repeatIpv4GenerateResult.data.added, 0);
+    assert.strictEqual(repeatIpv4GenerateResult.data.total, 2);
+    assert.strictEqual(worker.calls.length, 2);
+    assert.strictEqual(worker.calls[1].op, BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_ROUTES);
 
     const firstPage = await app.handleGetRoutes(null, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, 1, 10);
     assert.strictEqual(firstPage.status, 'success');
@@ -162,26 +176,107 @@ function makeWorkerRecorder(resolvers = {}) {
         firstPage.data.list.map(route => route.ip),
         ['192.0.2.1', '192.0.2.2']
     );
-    assert.strictEqual(worker.calls[1].op, BgpConst.BGP_REQ_TYPES.GET_ROUTES);
+    assert.strictEqual(worker.calls[2].op, BgpConst.BGP_REQ_TYPES.GET_ROUTES);
 
     const loadResult = await app.loadBgpRouteStorageToWorker(false, new Set([BgpConst.BGP_ADDR_FAMILY.IPV4_UNC]));
     assert.strictEqual(loadResult.loaded, 2);
-    assert.strictEqual(worker.calls.length, 3);
-    assert.strictEqual(worker.calls[2].op, BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES);
-    assert.strictEqual(worker.calls[2].payload.addressFamily, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
-    assert.strictEqual(worker.calls[2].payload.routes.length, 2);
-    assert(worker.calls[2].payload.routes.every(route => route.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC));
+    assert.strictEqual(worker.calls.length, 4);
+    assert.strictEqual(worker.calls[3].op, BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES);
+    assert.strictEqual(worker.calls[3].payload.addressFamily, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
+    assert.strictEqual(worker.calls[3].payload.routes.length, 2);
+    assert(worker.calls[3].payload.routes.every(route => route.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC));
 
     const deleteResult = await app.handleDeleteAllRoutesByFamily(null, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
     assert.strictEqual(deleteResult.status, 'success');
     assert.strictEqual(deleteResult.data.deleted, 2);
     assert.strictEqual(deleteResult.data.total, 0);
-    assert.strictEqual(worker.calls.length, 4);
-    assert.strictEqual(worker.calls[3].op, BgpConst.BGP_REQ_TYPES.DELETE_ALL_ROUTES_BY_FAMILY);
-    assert.deepStrictEqual(worker.calls[3].payload, {
+    assert.strictEqual(worker.calls.length, 5);
+    assert.strictEqual(worker.calls[4].op, BgpConst.BGP_REQ_TYPES.DELETE_ALL_ROUTES_BY_FAMILY);
+    assert.deepStrictEqual(worker.calls[4].payload, {
         addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC
     });
     assert.strictEqual(await countBgpRoutes(routeFilePath), 0);
+
+    const addPathGenerateResult = await app.handleGenerateIpv4Routes(null, {
+        ...ipv4Config,
+        prefix: '198.51.100.10',
+        count: 2,
+        addPathEnabled: true,
+        addPathCount: 3
+    });
+    assert.strictEqual(addPathGenerateResult.status, 'success');
+    assert.strictEqual(addPathGenerateResult.data.added, 6);
+    assert.strictEqual(addPathGenerateResult.data.total, 6);
+    assert.strictEqual(worker.calls.length, 6);
+    assert.deepStrictEqual(
+        worker.calls[5].payload.routes.map(route => `${route.ip}|${route.pathId}`),
+        [
+            '198.51.100.10|0',
+            '198.51.100.10|1',
+            '198.51.100.10|2',
+            '198.51.100.11|0',
+            '198.51.100.11|1',
+            '198.51.100.11|2'
+        ],
+        'ADD-PATH generation should create addPathCount paths for each prefix starting at path-id 0'
+    );
+    const addPathPage = await readBgpRouteJsonlPage(routeFilePath, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, 1, 10);
+    assert.deepStrictEqual(
+        addPathPage.items.map(route => `${route.ip}|${route.pathId}`),
+        [
+            '198.51.100.10|0',
+            '198.51.100.10|1',
+            '198.51.100.10|2',
+            '198.51.100.11|0',
+            '198.51.100.11|1',
+            '198.51.100.11|2'
+        ],
+        'ADD-PATH routes should be persisted with per-prefix path identifiers'
+    );
+
+    const tooManyAddPathGenerateResult = await app.handleGenerateIpv4Routes(null, {
+        ...ipv4Config,
+        prefix: '198.51.101.10',
+        count: 1,
+        addPathEnabled: true,
+        addPathCount: 256
+    });
+    assert.strictEqual(tooManyAddPathGenerateResult.status, 'error');
+    assert.match(tooManyAddPathGenerateResult.msg, /1 ~ 255/);
+    assert.strictEqual(worker.calls.length, 6, 'invalid ADD-PATH count must not be sent to worker');
+    assert.strictEqual(await countBgpRoutes(routeFilePath), 6, 'invalid ADD-PATH count must not update route storage');
+
+    const normalizedImportedRoutes = app.normalizeImportedUnicastRouteDefaults(BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, [
+        { addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, ip: '203.0.113.1', mask: 24 },
+        { addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, ip: '203.0.113.1', mask: 24 },
+        {
+            addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+            ip: '203.0.113.1',
+            mask: 24,
+            rd: '65000:1',
+            pathId: 5
+        }
+    ]);
+    assert.deepStrictEqual(
+        normalizedImportedRoutes.map(route => `${route.rd}|${route.pathId}|${route.ip}/${route.mask}`),
+        ['0:0|0|203.0.113.1/24', '0:0|0|203.0.113.1/24', '65000:1|5|203.0.113.1/24'],
+        'imported unicast routes should default to RD 0:0 and path-id 0 unless path-id is explicit'
+    );
+
+    const importResult = await app.handleImportRouteViewsData(
+        null,
+        path.join(__dirname, '..', '..', 'scripts', 'test-data', 'test_routes_100.mrt'),
+        5,
+        BgpConst.BGP_ADDR_FAMILY.IPV4_UNC
+    );
+    assert.strictEqual(importResult.status, 'success');
+    assert.strictEqual(worker.calls.length, 7);
+    assert.strictEqual(worker.calls[6].op, BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES);
+    assert.strictEqual(worker.calls[6].payload.routes.length, 5);
+    assert.ok(
+        worker.calls[6].payload.routes.every(route => route.rd === '0:0' && route.pathId === 0),
+        'MRT import should send ordinary public routes with path-id 0 by default'
+    );
 
     fs.rmSync(tempDir, { recursive: true, force: true });
     console.log('BGP route storage tests passed');

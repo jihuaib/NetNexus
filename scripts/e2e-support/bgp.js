@@ -184,6 +184,7 @@ const BgpE2eController = (() => {
         constructor() {
             this.bgpPort = null;
             this.server = null;
+            this.ipv6Server = null;
             this.mockClient = null;
             this.mockClientOutput = '';
             this.mockClientLineBuffer = '';
@@ -548,75 +549,100 @@ const BgpE2eController = (() => {
 
         async startTcpServer(messageId) {
             try {
-                this.server = net.createServer(socket => {
-                    const clientAddress = socket.remoteAddress;
-                    const clientPort = socket.remotePort;
+                const createServer = protocol =>
+                    net.createServer(socket => {
+                        const clientAddress = socket.remoteAddress;
+                        const clientPort = socket.remotePort;
 
-                    this.record('BGP TCP client connected', {
-                        localAddress: socket.localAddress,
-                        localPort: socket.localPort,
-                        remoteAddress: clientAddress,
-                        remotePort: clientPort
-                    });
-
-                    socket.on('data', data => {
-                        this.record('BGP TCP data received', {
+                        this.record('BGP TCP client connected', {
+                            protocol,
+                            localAddress: socket.localAddress,
+                            localPort: socket.localPort,
                             remoteAddress: clientAddress,
-                            remotePort: clientPort,
-                            bytes: data.length
+                            remotePort: clientPort
                         });
+
+                        socket.on('data', data => {
+                            this.record('BGP TCP data received', {
+                                protocol,
+                                remoteAddress: clientAddress,
+                                remotePort: clientPort,
+                                bytes: data.length
+                            });
+                            const session = this.worker.bgpSessionMap.get(BgpSession.makeKey(0, socket.remoteAddress));
+                            if (!session) {
+                                this.record('BGP TCP data rejected because session is missing', {
+                                    remoteAddress: socket.remoteAddress
+                                });
+                                socket.destroy();
+                                return;
+                            }
+                            session.recvMsg(data);
+                        });
+
+                        socket.on('end', () => {
+                            this.record('BGP TCP client ended', {
+                                protocol,
+                                remoteAddress: clientAddress,
+                                remotePort: clientPort
+                            });
+                        });
+
+                        socket.on('close', () => {
+                            this.record('BGP TCP client closed', {
+                                protocol,
+                                remoteAddress: clientAddress,
+                                remotePort: clientPort
+                            });
+                            const session = this.worker.bgpSessionMap.get(BgpSession.makeKey(0, clientAddress));
+                            if (session) {
+                                session.handleSocketClosed(socket);
+                            }
+                        });
+
+                        socket.on('error', error => {
+                            this.record('BGP TCP socket error', {
+                                protocol,
+                                remoteAddress: clientAddress,
+                                remotePort: clientPort,
+                                error: error.message
+                            });
+                        });
+
                         const session = this.worker.bgpSessionMap.get(BgpSession.makeKey(0, socket.remoteAddress));
                         if (!session) {
-                            this.record('BGP TCP data rejected because session is missing', {
+                            this.record('BGP TCP connection rejected because peer is not configured', {
                                 remoteAddress: socket.remoteAddress
                             });
                             socket.destroy();
                             return;
                         }
-                        session.recvMsg(data);
+
+                        session.tcpConnectSuccess(socket);
                     });
 
-                    socket.on('end', () => {
-                        this.record('BGP TCP client ended', { remoteAddress: clientAddress, remotePort: clientPort });
-                    });
-
-                    socket.on('close', () => {
-                        this.record('BGP TCP client closed', { remoteAddress: clientAddress, remotePort: clientPort });
-                        const session = this.worker.bgpSessionMap.get(BgpSession.makeKey(0, clientAddress));
-                        if (session) {
-                            session.handleSocketClosed(socket);
-                        }
-                    });
-
-                    socket.on('error', error => {
-                        this.record('BGP TCP socket error', {
-                            remoteAddress: clientAddress,
-                            remotePort: clientPort,
-                            error: error.message
-                        });
-                    });
-
-                    const session = this.worker.bgpSessionMap.get(BgpSession.makeKey(0, socket.remoteAddress));
-                    if (!session) {
-                        this.record('BGP TCP connection rejected because peer is not configured', {
-                            remoteAddress: socket.remoteAddress
-                        });
-                        socket.destroy();
-                        return;
-                    }
-
-                    session.tcpConnectSuccess(socket);
-                });
+                this.server = createServer('ipv4');
+                this.ipv6Server = createServer('ipv6');
 
                 await new Promise((resolve, reject) => {
                     this.server.once('error', reject);
                     this.server.listen(this.bgpPort, '127.0.0.1', resolve);
                 });
+                try {
+                    await new Promise((resolve, reject) => {
+                        this.ipv6Server.once('error', reject);
+                        this.ipv6Server.listen({ port: this.bgpPort, host: '::1', ipv6Only: true }, resolve);
+                    });
+                } catch (error) {
+                    this.record('BGP IPv6 TCP server start skipped', { error: error.message });
+                    this.ipv6Server = null;
+                }
 
                 this.worker.server = this.server;
-                this.worker.ipv6Server = null;
+                this.worker.ipv6Server = this.ipv6Server;
                 this.record('BGP TCP server started', {
                     host: '127.0.0.1',
+                    ipv6Host: this.ipv6Server ? '::1' : null,
                     port: this.bgpPort
                 });
                 this.worker.messageHandler.sendSuccessResponse(messageId, null, 'bgp协议启动成功');
@@ -635,6 +661,7 @@ const BgpE2eController = (() => {
 
             const result = await this.invokeWorker('stopBgp', null);
             this.server = null;
+            this.ipv6Server = null;
             return result.status === 'success' ? result : successResponse(null, 'bgp协议停止成功');
         }
 
@@ -673,10 +700,13 @@ const BgpE2eController = (() => {
         }
 
         async startMockClient({
+            host = '127.0.0.1',
             localAs = 100,
             routerId = '192.0.2.2',
             holdTime = 90,
-            addressFamilies = ['ipv4-unc']
+            addressFamilies = ['ipv4-unc'],
+            addPathAddressFamilies = [],
+            extendedNextHop = false
         } = {}) {
             if (!this.bgpPort) {
                 throw new Error('BGP server port has not been allocated');
@@ -692,35 +722,42 @@ const BgpE2eController = (() => {
             const scriptPath = path.join(projectRoot, 'scripts', 'mockBgpClient.js');
             this.record('starting mockBgpClient script', {
                 script: 'scripts/mockBgpClient.js',
-                host: '127.0.0.1',
+                host,
                 port: this.bgpPort,
                 localAs,
                 routerId,
-                holdTime
+                holdTime,
+                addressFamilies,
+                addPathAddressFamilies,
+                extendedNextHop
             });
 
-            this.mockClient = spawn(
-                process.execPath,
-                [
-                    scriptPath,
-                    '--host',
-                    '127.0.0.1',
-                    '--port',
-                    String(this.bgpPort),
-                    '--local-as',
-                    String(localAs),
-                    '--router-id',
-                    routerId,
-                    '--hold-time',
-                    String(holdTime),
-                    '--address-family',
-                    addressFamilies.join(',')
-                ],
-                {
-                    cwd: projectRoot,
-                    stdio: ['ignore', 'pipe', 'pipe']
-                }
-            );
+            const args = [
+                scriptPath,
+                '--host',
+                host,
+                '--port',
+                String(this.bgpPort),
+                '--local-as',
+                String(localAs),
+                '--router-id',
+                routerId,
+                '--hold-time',
+                String(holdTime),
+                '--address-family',
+                addressFamilies.join(',')
+            ];
+            if (addPathAddressFamilies.length > 0) {
+                args.push('--add-path-address-family', addPathAddressFamilies.join(','));
+            }
+            if (extendedNextHop) {
+                args.push('--extended-next-hop');
+            }
+
+            this.mockClient = spawn(process.execPath, args, {
+                cwd: projectRoot,
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
 
             this.mockClient.stdout.on('data', chunk => this.handleMockClientOutput(chunk));
             this.mockClient.stderr.on('data', chunk => this.handleMockClientOutput(chunk));

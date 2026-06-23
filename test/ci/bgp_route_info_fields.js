@@ -53,19 +53,12 @@ function assertObjectOmitsFields(object, fields) {
         asPath: '65000 65001'
     });
 
-    assertHasFields(routeInfo, ['addressFamily', 'ip', 'mask', 'nextHop', 'asPath']);
-    assertObjectOmitsFields(route, [
-        'routeType',
-        'rd',
-        'originatingRouterIp',
-        'sourceIp',
-        'groupIp',
-        'sourceAs',
-        'dqpn'
-    ]);
+    assertHasFields(routeInfo, ['addressFamily', 'ip', 'mask', 'rd', 'pathId', 'nextHop', 'asPath']);
+    assert.strictEqual(routeInfo.rd, '0:0');
+    assert.strictEqual(routeInfo.pathId, 0);
+    assertObjectOmitsFields(route, ['routeType', 'originatingRouterIp', 'sourceIp', 'groupIp', 'sourceAs', 'dqpn']);
     assertOmitsFields(routeInfo, [
         'routeType',
-        'rd',
         'originatingRouterIp',
         'sourceIp',
         'groupIp',

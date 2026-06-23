@@ -11,12 +11,18 @@ const DEFAULT_OPTIONS = {
     routerId: '192.0.2.2',
     holdTime: 90,
     once: false,
-    addressFamilies: ['ipv4-unc']
+    addressFamilies: ['ipv4-unc'],
+    addPathAddressFamilies: [],
+    extendedNextHop: false
 };
 
 const ADDRESS_FAMILY_CAPS = {
     'ipv4-unc': {
         afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    },
+    'ipv6-unc': {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
         safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
     },
     'ipv4-qp': {
@@ -57,12 +63,12 @@ function getArgValues(name) {
     return values;
 }
 
-function parseAddressFamilies(values) {
+function parseFamilyList(values, defaultFamilies = []) {
     const families = values
         .flatMap(value => `${value}`.split(','))
         .map(value => value.trim().toLowerCase())
         .filter(Boolean);
-    const selected = families.length > 0 ? families : DEFAULT_OPTIONS.addressFamilies;
+    const selected = families.length > 0 ? families : defaultFamilies;
 
     return selected.map(family => {
         if (!ADDRESS_FAMILY_CAPS[family]) {
@@ -70,6 +76,10 @@ function parseAddressFamilies(values) {
         }
         return family;
     });
+}
+
+function parseAddressFamilies(values) {
+    return parseFamilyList(values, DEFAULT_OPTIONS.addressFamilies);
 }
 
 function u16(value) {
@@ -101,7 +111,7 @@ function optionalParam(value) {
     return Buffer.concat([Buffer.from([BgpConst.BGP_OPEN_OPT_TYPE.OPT_TYPE, value.length]), value]);
 }
 
-function buildOpen({ localAs, routerId, holdTime, addressFamilies }) {
+function buildOpen({ localAs, routerId, holdTime, addressFamilies, addPathAddressFamilies, extendedNextHop }) {
     const mpCapabilities = addressFamilies.map(family => {
         const { afi, safi } = ADDRESS_FAMILY_CAPS[family];
         return capability(
@@ -109,10 +119,46 @@ function buildOpen({ localAs, routerId, holdTime, addressFamilies }) {
             Buffer.concat([u16(afi), Buffer.from([0, safi])])
         );
     });
+    const addPathCapabilities =
+        addPathAddressFamilies.length > 0
+            ? [
+                  capability(
+                      BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH,
+                      Buffer.concat(
+                          addPathAddressFamilies.map(family => {
+                              const { afi, safi } = ADDRESS_FAMILY_CAPS[family];
+                              return Buffer.concat([
+                                  u16(afi),
+                                  Buffer.from([safi, BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY])
+                              ]);
+                          })
+                      )
+                  )
+              ]
+            : [];
+    const extendedNextHopFamilies = extendedNextHop
+        ? addressFamilies.filter(family => ADDRESS_FAMILY_CAPS[family].afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4)
+        : [];
+    const extendedNextHopCapabilities =
+        extendedNextHopFamilies.length > 0
+            ? [
+                  capability(
+                      BgpConst.BGP_OPEN_CAP_CODE.EXTENDED_NEXT_HOP_ENCODING,
+                      Buffer.concat(
+                          extendedNextHopFamilies.map(family => {
+                              const { afi, safi } = ADDRESS_FAMILY_CAPS[family];
+                              return Buffer.concat([u16(afi), u16(safi), u16(BgpConst.IP_TYPE.IPV6)]);
+                          })
+                      )
+                  )
+              ]
+            : [];
     const capabilities = Buffer.concat([
         ...mpCapabilities,
         capability(BgpConst.BGP_OPEN_CAP_CODE.ROUTE_REFRESH),
-        capability(BgpConst.BGP_OPEN_CAP_CODE.FOUR_OCTET_AS, u32(localAs))
+        capability(BgpConst.BGP_OPEN_CAP_CODE.FOUR_OCTET_AS, u32(localAs)),
+        ...addPathCapabilities,
+        ...extendedNextHopCapabilities
     ]);
     const optional = optionalParam(capabilities);
     const body = Buffer.concat([
@@ -135,23 +181,78 @@ function emit(event, data = {}) {
     process.stdout.write(`${JSON.stringify({ event, ...data })}\n`);
 }
 
+function familyKey({ afi, safi }) {
+    return `${afi}|${safi}`;
+}
+
+function createAddPathParseContext(addPathAddressFamilies) {
+    const addPathKeys = new Set(
+        addPathAddressFamilies.map(family => {
+            const { afi, safi } = ADDRESS_FAMILY_CAPS[family];
+            return familyKey({ afi, safi });
+        })
+    );
+
+    return {
+        getAddPathReceiveInfo: (afi, safi) => ({ enabled: addPathKeys.has(familyKey({ afi, safi })) }),
+        isAddPathReceiveEnabled: (afi, safi) => addPathKeys.has(familyKey({ afi, safi }))
+    };
+}
+
+function summarizeNlri(route) {
+    return {
+        prefix: route.prefix,
+        length: route.length,
+        pathId: route.pathId ?? 0,
+        labels: route.labels || undefined,
+        warnings: route.warnings || undefined
+    };
+}
+
+function summarizePrefixSid(prefixSid) {
+    if (!prefixSid) {
+        return null;
+    }
+
+    return {
+        formatted: prefixSid.formatted || '',
+        srv6Services: Array.isArray(prefixSid.srv6Services)
+            ? prefixSid.srv6Services.map(service => ({
+                  serviceType: service.serviceType,
+                  sidInfos: Array.isArray(service.sidInfos)
+                      ? service.sidInfos.map(sidInfo => ({
+                            sid: sidInfo.sid,
+                            endpointBehavior: sidInfo.endpointBehavior,
+                            endpointBehaviorName: sidInfo.endpointBehaviorName
+                        }))
+                      : []
+              }))
+            : []
+    };
+}
+
 function summarizeUpdatePacket(parsed) {
     const pathAttributes = Array.isArray(parsed.pathAttributes) ? parsed.pathAttributes : [];
     const mpReachAttr = pathAttributes.find(attr => attr.mpReach);
     const mpReach = mpReachAttr?.mpReach || null;
+    const prefixSidAttr = pathAttributes.find(attr => attr.prefixSid);
 
     return {
         valid: parsed.valid,
         error: parsed.error || '',
+        nlri: Array.isArray(parsed.nlri) ? parsed.nlri.map(summarizeNlri) : [],
         nlriCount: Array.isArray(parsed.nlri) ? parsed.nlri.length : 0,
+        withdrawnRoutes: Array.isArray(parsed.withdrawnRoutes) ? parsed.withdrawnRoutes.map(summarizeNlri) : [],
         withdrawnCount: Array.isArray(parsed.withdrawnRoutes) ? parsed.withdrawnRoutes.length : 0,
         pathAttrTypes: pathAttributes.map(attr => attr.typeCode),
         pathAttrCount: pathAttributes.length,
+        prefixSid: summarizePrefixSid(prefixSidAttr?.prefixSid),
         mpReach: mpReach
             ? {
                   afi: mpReach.afi,
                   safi: mpReach.safi,
                   nextHop: mpReach.nextHop,
+                  nlri: Array.isArray(mpReach.nlri) ? mpReach.nlri.map(summarizeNlri) : [],
                   nlriCount: Array.isArray(mpReach.nlri) ? mpReach.nlri.length : 0
               }
             : null
@@ -166,7 +267,12 @@ function parseOptions() {
         routerId: getArgValue('router-id', DEFAULT_OPTIONS.routerId),
         holdTime: Number(getArgValue('hold-time', DEFAULT_OPTIONS.holdTime)),
         once: hasArg('once'),
-        addressFamilies: parseAddressFamilies(getArgValues('address-family'))
+        addressFamilies: parseAddressFamilies(getArgValues('address-family')),
+        addPathAddressFamilies: parseFamilyList(
+            getArgValues('add-path-address-family'),
+            DEFAULT_OPTIONS.addPathAddressFamilies
+        ),
+        extendedNextHop: hasArg('extended-next-hop')
     };
 }
 
@@ -178,6 +284,7 @@ async function main() {
     let keepaliveSent = false;
     let established = false;
     let updateCount = 0;
+    const parseContext = createAddPathParseContext(options.addPathAddressFamilies);
 
     const sendOpen = () => {
         if (openSent) {
@@ -188,7 +295,10 @@ async function main() {
         emit('sent-open', {
             localAs: options.localAs,
             routerId: options.routerId,
-            holdTime: options.holdTime
+            holdTime: options.holdTime,
+            addressFamilies: options.addressFamilies,
+            addPathAddressFamilies: options.addPathAddressFamilies,
+            extendedNextHop: options.extendedNextHop
         });
     };
 
@@ -215,7 +325,7 @@ async function main() {
             const packet = packetBuffer.subarray(0, length);
             packetBuffer = packetBuffer.subarray(length);
 
-            const parsed = parseBgpPacket(packet);
+            const parsed = parseBgpPacket(packet, parseContext);
             const summary = getBgpPacketSummary(parsed);
             emit('received-packet', { type, length, summary });
 

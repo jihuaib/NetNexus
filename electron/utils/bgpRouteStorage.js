@@ -3,6 +3,10 @@ const path = require('path');
 const BgpConst = require('../const/bgpConst');
 const { fileExists, ensureParentDir, writeLine, closeWriteStream, renameWithRetry } = require('./rpkiRoaImport');
 
+const DEFAULT_PUBLIC_RD = '0:0';
+const DEFAULT_PATH_ID = 0;
+const MAX_PATH_ID = 0xffffffff;
+
 function getBgpRouteDataFilePath(userDataPath, addressFamily = null) {
     const normalizedAddressFamily = addressFamily === null ? null : normalizeAddressFamily(addressFamily);
     if (normalizedAddressFamily) {
@@ -19,6 +23,39 @@ function normalizeAddressFamily(value) {
 
 function pickDefinedRouteField(route, field) {
     return route[field] === undefined ? null : route[field];
+}
+
+function isUnicastAddressFamily(addressFamily) {
+    return addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC;
+}
+
+function normalizeRouteRd(rd) {
+    if (rd === undefined || rd === null || rd === '') {
+        return DEFAULT_PUBLIC_RD;
+    }
+    return `${rd}`;
+}
+
+function normalizeRoutePathId(pathId) {
+    if (pathId === undefined || pathId === null || pathId === '') {
+        return DEFAULT_PATH_ID;
+    }
+
+    const numericPathId = Number(pathId);
+    if (!Number.isInteger(numericPathId) || numericPathId < 0 || numericPathId > MAX_PATH_ID) {
+        return DEFAULT_PATH_ID;
+    }
+    return numericPathId;
+}
+
+function makeUnicastRouteStorageKey(route) {
+    return [
+        route.addressFamily,
+        normalizeRouteRd(route.rd),
+        normalizeRoutePathId(route.pathId),
+        route.ip,
+        route.mask
+    ].join('|');
 }
 
 function normalizeBgpRouteObject(item) {
@@ -43,6 +80,7 @@ function normalizeBgpRouteObject(item) {
         origin: pickDefinedRouteField(item, 'origin'),
         customAttr: pickDefinedRouteField(item, 'customAttr'),
         rt: pickDefinedRouteField(item, 'rt'),
+        pathId: pickDefinedRouteField(item, 'pathId'),
         label: pickDefinedRouteField(item, 'label'),
         srv6Sid: pickDefinedRouteField(item, 'srv6Sid'),
         srv6EndpointBehavior: pickDefinedRouteField(item, 'srv6EndpointBehavior'),
@@ -55,7 +93,9 @@ function normalizeBgpRouteObject(item) {
         dqpn: pickDefinedRouteField(item, 'dqpn')
     };
 
-    if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC) {
+    if (isUnicastAddressFamily(addressFamily)) {
+        route.rd = normalizeRouteRd(route.rd);
+        route.pathId = normalizeRoutePathId(route.pathId);
         return route.ip && route.mask !== null ? route : null;
     }
 
@@ -81,6 +121,10 @@ function makeBgpRouteStorageKey(route) {
     }
 
     const addressFamily = normalizedRoute.addressFamily;
+    if (isUnicastAddressFamily(addressFamily)) {
+        return makeUnicastRouteStorageKey(normalizedRoute);
+    }
+
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN) {
         return [
             addressFamily,
@@ -327,6 +371,9 @@ module.exports = {
     getBgpRouteDataFilePath,
     normalizeBgpRouteObject,
     makeBgpRouteStorageKey,
+    isUnicastAddressFamily,
+    normalizeRouteRd,
+    normalizeRoutePathId,
     iterateJsonlBgpRoutes,
     countBgpRoutes,
     readBgpRouteJsonlPage,

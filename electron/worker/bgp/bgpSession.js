@@ -55,6 +55,8 @@ class BgpSession {
         // Peer Type
         this.peerType = BgpConst.BGP_PEER_TYPE.PEER_TYPE_INVALID;
         this.addressFamilyOptions = new Map();
+        this.localAddPathMap = new Map();
+        this.peerAddPathMap = new Map();
 
         this.sessState = BgpConst.BGP_PEER_STATE.IDLE;
         this.holdTime = 0;
@@ -104,6 +106,8 @@ class BgpSession {
         this.localAddrFamilyFlags = 0;
         this.localRole = BgpConst.BGP_ROLE_TYPE.ROLE_INVALID;
         this.addressFamilyOptions.clear();
+        this.localAddPathMap.clear();
+        this.peerAddPathMap.clear();
     }
 
     setAddressFamilyOptions(addressFamily, options = {}) {
@@ -114,6 +118,51 @@ class BgpSession {
 
     getAddressFamilyOptions(addressFamily) {
         return this.addressFamilyOptions.get(Number(addressFamily)) || {};
+    }
+
+    static makeAfiSafiKey(afi, safi) {
+        return `${afi}|${safi}`;
+    }
+
+    setLocalAddPath(afi, safi, mode = BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE) {
+        this.localAddPathMap.set(BgpSession.makeAfiSafiKey(afi, safi), Number(mode));
+    }
+
+    setPeerAddPath(afi, safi, mode) {
+        this.peerAddPathMap.set(BgpSession.makeAfiSafiKey(afi, safi), Number(mode));
+    }
+
+    canSendAddPath(mode) {
+        return mode === BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY || mode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE;
+    }
+
+    canReceiveAddPath(mode) {
+        return mode === BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY || mode === BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE;
+    }
+
+    isAddPathSendEnabled(afi, safi) {
+        const key = BgpSession.makeAfiSafiKey(afi, safi);
+        return (
+            this.canSendAddPath(this.localAddPathMap.get(key)) && this.canReceiveAddPath(this.peerAddPathMap.get(key))
+        );
+    }
+
+    isAddPathReceiveEnabled(afi, safi) {
+        const key = BgpSession.makeAfiSafiKey(afi, safi);
+        return (
+            this.canSendAddPath(this.peerAddPathMap.get(key)) && this.canReceiveAddPath(this.localAddPathMap.get(key))
+        );
+    }
+
+    getAddPathReceiveInfo(afi, safi) {
+        return { enabled: this.isAddPathReceiveEnabled(afi, safi) };
+    }
+
+    getAddPathSendParseContext() {
+        return {
+            getAddPathReceiveInfo: (afi, safi) => ({ enabled: this.isAddPathSendEnabled(afi, safi) }),
+            isAddPathReceiveEnabled: (afi, safi) => this.isAddPathSendEnabled(afi, safi)
+        };
     }
 
     resetSession() {
@@ -240,7 +289,7 @@ class BgpSession {
 
             // 提取完整的报文
             const packet = this.packetBuffer.subarray(0, header.length);
-            const parsedPacket = parseBgpPacket(packet);
+            const parsedPacket = parseBgpPacket(packet, this);
             this.refreshHoldTimer();
 
             if (header.type === BgpConst.BGP_PACKET_TYPE.OPEN) {
@@ -309,6 +358,13 @@ class BgpSession {
                             this.peerCapFlags,
                             BgpConst.BGP_CAP_FLAGS.EXTENDED_NEXT_HOP_ENCODING
                         );
+                    } else if (cap.code === BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH) {
+                        this.peerCapFlags = CommonUtils.BIT_SET(this.peerCapFlags, BgpConst.BGP_CAP_FLAGS.ADD_PATH);
+                        if (Array.isArray(cap.addPaths)) {
+                            cap.addPaths.forEach(addPath => {
+                                this.setPeerAddPath(addPath.afi, addPath.safi, addPath.sendReceive);
+                            });
+                        }
                     }
                 });
 
@@ -617,6 +673,26 @@ class BgpSession {
             );
         }
 
+        if (CommonUtils.BIT_TEST(this.localCapFlags, BgpConst.BGP_CAP_FLAGS.ADD_PATH)) {
+            const capInfo = [];
+            this.localAddPathMap.forEach((mode, key) => {
+                const [afi, safi] = key.split('|').map(value => Number(value));
+                capInfo.push(...writeUInt16(afi), safi, mode);
+            });
+
+            if (capInfo.length > 0) {
+                optParams.push(
+                    ...this.buildBgpCapability(
+                        BgpConst.BGP_OPEN_OPT_TYPE.OPT_TYPE,
+                        capInfo.length + 2,
+                        BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH,
+                        capInfo.length,
+                        capInfo
+                    )
+                );
+            }
+        }
+
         // 按已启用的 IPv4 地址族逐条追加扩展下一跳能力
         if (CommonUtils.BIT_TEST(this.localCapFlags, BgpConst.BGP_CAP_FLAGS.EXTENDED_NEXT_HOP_ENCODING)) {
             const extNextHopFamilies = [];
@@ -764,13 +840,13 @@ class BgpSession {
 
     sendRoute(buffer) {
         this.socket.write(buffer);
-        const parsedPacket = parseBgpPacket(buffer);
+        const parsedPacket = parseBgpPacket(buffer, this.getAddPathSendParseContext());
         logger.info(`${this.peerIp} send route msg ${getBgpPacketSummary(parsedPacket)}`);
     }
 
     withdrawRoute(buffer) {
         this.socket.write(buffer);
-        const parsedPacket = parseBgpPacket(buffer);
+        const parsedPacket = parseBgpPacket(buffer, this.getAddPathSendParseContext());
         logger.info(`${this.peerIp} withdraw route msg ${getBgpPacketSummary(parsedPacket)}`);
     }
 }

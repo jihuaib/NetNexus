@@ -66,7 +66,7 @@
         <!-- 收包窗口 -->
         <a-card title="收包窗口" class="tcp-recv-card" size="small">
             <div ref="logContainer" class="tcp-log-list">
-                <div v-if="logs.length === 0" class="tcp-log-empty">暂无数据</div>
+                <a-empty v-if="logs.length === 0" description="暂无收包数据" class="tcp-log-empty" />
                 <div v-for="(log, index) in logs" :key="index" class="tcp-log-item" :class="`tcp-log-${log.type}`">
                     <span class="tcp-log-time">{{ log.time }}</span>
                     <span class="tcp-log-tag">{{ log.tag }}</span>
@@ -117,20 +117,19 @@
 
     const stateName = computed(() => (conn.value ? TCP_TOOL_STATE_NAME[conn.value.state] : '未连接'));
 
-    // 结合项目主色调 #1890ff，用实心标签清晰区分「有效（已连接）」与「禁用（未连接/已关闭）」
     const stateColor = computed(() => {
         if (!conn.value) {
-            return '#8c8c8c'; // 未连接（禁用态）
+            return 'red';
         }
         switch (conn.value.state) {
             case TCP_TOOL_STATE.CONNECTED:
-                return '#1890ff'; // 已连接（有效态）- 主色
+                return 'green';
             case TCP_TOOL_STATE.CONNECTING:
-                return '#faad14'; // 连接中
+                return 'blue';
             case TCP_TOOL_STATE.ERROR:
-                return '#ff4d4f'; // 错误
+                return 'red';
             default:
-                return '#8c8c8c'; // 已关闭（禁用态）
+                return 'red';
         }
     });
 
@@ -299,6 +298,13 @@
         flex: 0 0 auto;
     }
 
+    .tcp-config-card :deep(.ant-tag) {
+        min-width: 64px;
+        margin-inline-end: 0;
+        text-align: center;
+        font-weight: 500;
+    }
+
     /* 主按钮（建立连接/发送）对齐项目主色调 #1890ff，有效态醒目、禁用态保留默认灰 */
     .tcp-tool-page :deep(.ant-btn-primary:not(:disabled)) {
         background-color: #1890ff;
@@ -394,9 +400,23 @@
     }
 
     .tcp-log-empty {
-        color: #777;
-        text-align: center;
-        padding-top: 12px;
+        height: 100%;
+        min-height: 110px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family:
+            -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+        color: rgba(255, 255, 255, 0.55);
+    }
+
+    .tcp-log-empty :deep(.ant-empty-normal) {
+        margin: 0;
+    }
+
+    .tcp-log-empty :deep(.ant-empty-description) {
+        color: rgba(255, 255, 255, 0.55);
+        font-size: 12px;
     }
 
     .tcp-log-item {

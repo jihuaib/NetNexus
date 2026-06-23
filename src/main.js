@@ -20,6 +20,7 @@ import Modal from 'ant-design-vue/es/modal';
 import Popconfirm from 'ant-design-vue/es/popconfirm';
 import Radio from 'ant-design-vue/es/radio';
 import Row from 'ant-design-vue/es/row';
+import Segmented from 'ant-design-vue/es/segmented';
 import Select from 'ant-design-vue/es/select';
 import Space from 'ant-design-vue/es/space';
 import Spin from 'ant-design-vue/es/spin';
@@ -70,6 +71,7 @@ const antdComponents = [
     Popconfirm,
     Radio,
     Row,
+    Segmented,
     Select,
     Space,
     Spin,

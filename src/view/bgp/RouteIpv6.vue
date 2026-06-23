@@ -46,6 +46,31 @@
                 </div>
 
                 <div class="config-section">
+                    <div class="section-title">ADD-PATH</div>
+                    <a-row :gutter="[16, 0]">
+                        <a-col :xs="24" :md="6">
+                            <a-form-item label="生成" name="addPathEnabled">
+                                <a-switch v-model:checked="ipv6Data.addPathEnabled" />
+                            </a-form-item>
+                        </a-col>
+                        <a-col :xs="24" :md="6">
+                            <a-form-item label="Path Count" name="addPathCount">
+                                <a-tooltip
+                                    :title="validationErrors.addPathCount"
+                                    :open="!!validationErrors.addPathCount"
+                                >
+                                    <a-input
+                                        v-model:value="ipv6Data.addPathCount"
+                                        :disabled="!ipv6Data.addPathEnabled"
+                                        :status="validationErrors.addPathCount ? 'error' : ''"
+                                    />
+                                </a-tooltip>
+                            </a-form-item>
+                        </a-col>
+                    </a-row>
+                </div>
+
+                <div class="config-section">
                     <div class="section-title">SRv6</div>
                     <a-row :gutter="[16, 0]">
                         <a-col :xs="24" :md="6">
@@ -53,41 +78,46 @@
                                 <a-switch v-model:checked="ipv6Data.srv6Enabled" />
                             </a-form-item>
                         </a-col>
-                        <a-col v-if="ipv6Data.srv6Enabled" :xs="24" :md="6">
+                        <a-col :xs="24" :md="6">
                             <a-form-item label="SID模式" name="srv6SidMode">
                                 <a-tooltip :title="validationErrors.srv6SidMode" :open="!!validationErrors.srv6SidMode">
-                                    <a-radio-group v-model:value="ipv6Data.srv6SidMode" class="inline-radio-group">
+                                    <a-radio-group
+                                        v-model:value="ipv6Data.srv6SidMode"
+                                        class="inline-radio-group"
+                                        :disabled="!ipv6Data.srv6Enabled"
+                                    >
                                         <a-radio :value="BGP_SRV6_SID_MODE.FIXED">固定</a-radio>
                                         <a-radio :value="BGP_SRV6_SID_MODE.INCREMENT">递增</a-radio>
                                     </a-radio-group>
                                 </a-tooltip>
                             </a-form-item>
                         </a-col>
-                        <a-col v-if="ipv6Data.srv6Enabled" :xs="24" :md="8">
+                        <a-col :xs="24" :md="8">
                             <a-form-item label="SID" name="srv6Sid">
                                 <a-tooltip :title="validationErrors.srv6Sid" :open="!!validationErrors.srv6Sid">
                                     <a-input
                                         v-model:value="ipv6Data.srv6Sid"
+                                        :disabled="!ipv6Data.srv6Enabled"
                                         :status="validationErrors.srv6Sid ? 'error' : ''"
                                     />
                                 </a-tooltip>
                             </a-form-item>
                         </a-col>
-                        <a-col
-                            v-if="ipv6Data.srv6Enabled && ipv6Data.srv6SidMode === BGP_SRV6_SID_MODE.INCREMENT"
-                            :xs="24"
-                            :md="6"
-                        >
+                        <a-col :xs="24" :md="6">
                             <a-form-item label="SID Step" name="srv6SidStep">
                                 <a-tooltip :title="validationErrors.srv6SidStep" :open="!!validationErrors.srv6SidStep">
                                     <a-input
                                         v-model:value="ipv6Data.srv6SidStep"
+                                        :disabled="
+                                            !ipv6Data.srv6Enabled ||
+                                            ipv6Data.srv6SidMode !== BGP_SRV6_SID_MODE.INCREMENT
+                                        "
                                         :status="validationErrors.srv6SidStep ? 'error' : ''"
                                     />
                                 </a-tooltip>
                             </a-form-item>
                         </a-col>
-                        <a-col v-if="ipv6Data.srv6Enabled" :xs="24" :md="6">
+                        <a-col :xs="24" :md="6">
                             <a-form-item label="Endpoint" name="srv6EndpointBehavior">
                                 <a-tooltip
                                     :title="validationErrors.srv6EndpointBehavior"
@@ -96,6 +126,8 @@
                                     <a-select
                                         v-model:value="ipv6Data.srv6EndpointBehavior"
                                         :options="srv6EndpointBehaviorOptions"
+                                        :disabled="!ipv6Data.srv6Enabled"
+                                        :status="validationErrors.srv6EndpointBehavior ? 'error' : ''"
                                     />
                                 </a-tooltip>
                             </a-form-item>
@@ -143,7 +175,7 @@
                 :columns="routeColumns"
                 :pagination="pagination"
                 size="small"
-                :row-key="record => `${record.ip}-${record.mask}`"
+                :row-key="record => `${record.rd || '0:0'}-${record.pathId ?? 0}-${record.ip}-${record.mask}`"
                 :scroll="{ y: '100%' }"
                 class="bgp-route-table"
                 @change="handleTableChange"
@@ -218,6 +250,8 @@
         prefix: DEFAULT_VALUES.IPV6_PREFIX,
         mask: DEFAULT_VALUES.IPV6_MASK,
         count: DEFAULT_VALUES.IPV6_COUNT,
+        addPathEnabled: DEFAULT_VALUES.IPV6_ADD_PATH_ENABLED,
+        addPathCount: DEFAULT_VALUES.IPV6_ADD_PATH_COUNT,
         customAttr: '',
         rt: '',
         srv6Enabled: DEFAULT_VALUES.IPV6_SRV6_ENABLED,
@@ -232,6 +266,7 @@
         prefix: '',
         mask: '',
         count: '',
+        addPathCount: '',
         rt: '',
         srv6SidMode: '',
         srv6Sid: '',
@@ -284,6 +319,23 @@
                 width: 240
             }
         ];
+
+        columns.push(
+            {
+                title: 'RD',
+                dataIndex: 'rd',
+                key: 'rd',
+                width: 90,
+                customRender: ({ text }) => text || '0:0'
+            },
+            {
+                title: 'Path ID',
+                dataIndex: 'pathId',
+                key: 'pathId',
+                width: 90,
+                customRender: ({ text }) => (text === undefined || text === null ? 0 : text)
+            }
+        );
 
         columns.push({
             title: 'RT',
@@ -412,7 +464,9 @@
         try {
             const result = await window.bgpApi.getRouteDetail(BGP_ADDR_FAMILY.IPV6_UNC, {
                 ip: route.ip,
-                mask: route.mask
+                mask: route.mask,
+                rd: route.rd,
+                pathId: route.pathId
             });
             if (result.status === 'success') {
                 routeDetail.value = result.data;
@@ -433,6 +487,8 @@
             const config = {
                 prefix: route.ip,
                 mask: parseInt(route.mask),
+                rd: route.rd || '0:0',
+                pathId: route.pathId ?? 0,
                 count: 1,
                 customAttr: route.customAttr || '',
                 addressFamily: route.addressFamily

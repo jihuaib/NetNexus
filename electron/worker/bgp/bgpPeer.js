@@ -11,6 +11,7 @@ const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const logger = require('../../log/logger');
 const CommonUtils = require('../../utils/commonUtils');
 const { canonicalizeAttr } = require('./bgpPathAttrStore');
+const BgpRoute = require('./bgpRoute');
 
 function parseRouteAsPath(asPathStr, use4ByteAsn = true) {
     if (!asPathStr || typeof asPathStr !== 'string') return null;
@@ -125,8 +126,30 @@ class BgpPeer {
         this.session.messageHandler.sendEvent(BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE, { data: peerInfo });
     }
 
+    getAddPathNegotiationInfo() {
+        if (!this.isIpUnicastFamily()) {
+            return {
+                addPathSendEnabled: false,
+                addPathReceiveEnabled: false
+            };
+        }
+
+        const addPathSendEnabled =
+            typeof this.session.isAddPathSendEnabled === 'function' &&
+            this.session.isAddPathSendEnabled(this.instance.afi, this.instance.safi);
+        const addPathReceiveEnabled =
+            typeof this.session.isAddPathReceiveEnabled === 'function' &&
+            this.session.isAddPathReceiveEnabled(this.instance.afi, this.instance.safi);
+
+        return {
+            addPathSendEnabled,
+            addPathReceiveEnabled
+        };
+    }
+
     getPeerInfo() {
         const addressFamily = getAddrFamilyType(this.instance.afi, this.instance.safi);
+        const addPathInfo = this.getAddPathNegotiationInfo();
         return {
             vrfIndex: this.instance.vrfIndex,
             localIp: this.session.localIp,
@@ -137,7 +160,8 @@ class BgpPeer {
             peerState: BgpConst.BGP_PEER_STATE_NAME[this.peerState],
             addressFamily: addressFamily,
             peerType: this.session.peerType,
-            sendSrv6PrefixSid: this.addressFamilyOptions.sendSrv6PrefixSid
+            sendSrv6PrefixSid: this.addressFamilyOptions.sendSrv6PrefixSid,
+            ...addPathInfo
         };
     }
 
@@ -148,6 +172,80 @@ class BgpPeer {
 
     getRouteAttr(route) {
         return this.instance.getRouteAttr(route) || {};
+    }
+
+    isIpUnicastFamily() {
+        return (
+            (this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 ||
+                this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
+            this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        );
+    }
+
+    shouldSendAddPath() {
+        return (
+            this.isIpUnicastFamily() &&
+            typeof this.session.isAddPathSendEnabled === 'function' &&
+            this.session.isAddPathSendEnabled(this.instance.afi, this.instance.safi)
+        );
+    }
+
+    getRoutePathId(route) {
+        return BgpRoute.normalizePathId(route?.pathId);
+    }
+
+    getRouteUnicastPrefixKey(route) {
+        return BgpRoute.makeUnicastPrefixKey(route?.rd, route?.ip, route?.mask);
+    }
+
+    buildIpPrefixNlri(route, includePathId = false) {
+        const prefixBytes = ipToBytes(route.ip);
+        const prefixLength = Math.ceil(route.mask / 8);
+        const nlri = [];
+        if (includePathId) {
+            nlri.push(...writeUInt32(this.getRoutePathId(route)));
+        }
+        nlri.push(route.mask);
+        nlri.push(...prefixBytes.slice(0, prefixLength));
+        return nlri;
+    }
+
+    getOutboundRoutes() {
+        const routes = Array.from(this.instance.routeMap.values());
+        if (!this.isIpUnicastFamily() || this.shouldSendAddPath()) {
+            return routes;
+        }
+
+        const selectedRoutes = new Map();
+        routes.forEach(route => {
+            const prefixKey = this.getRouteUnicastPrefixKey(route);
+            const selectedRoute = selectedRoutes.get(prefixKey);
+            if (!selectedRoute || this.getRoutePathId(route) < this.getRoutePathId(selectedRoute)) {
+                selectedRoutes.set(prefixKey, route);
+            }
+        });
+        return Array.from(selectedRoutes.values());
+    }
+
+    getWithdrawnRoutes(routes) {
+        if (!this.isIpUnicastFamily() || this.shouldSendAddPath()) {
+            return routes;
+        }
+
+        const withdrawnRoutes = new Map();
+        routes.forEach(route => {
+            const prefixKey = this.getRouteUnicastPrefixKey(route);
+            let hasRemainingRoute = false;
+            this.instance.routeMap.forEach(existingRoute => {
+                if (this.getRouteUnicastPrefixKey(existingRoute) === prefixKey) {
+                    hasRemainingRoute = true;
+                }
+            });
+            if (!hasRemainingRoute && !withdrawnRoutes.has(prefixKey)) {
+                withdrawnRoutes.set(prefixKey, route);
+            }
+        });
+        return Array.from(withdrawnRoutes.values());
     }
 
     getOriginValue(origin) {
@@ -371,7 +469,7 @@ class BgpPeer {
 
     getOutboundRouteGroups() {
         const groups = new Map();
-        this.instance.routeMap.forEach(route => {
+        this.getOutboundRoutes().forEach(route => {
             const key = this.getOutboundRouteAttrGroupKey(route);
             if (!groups.has(key)) {
                 groups.set(key, []);
@@ -512,19 +610,18 @@ class BgpPeer {
             attr.push(...nlriBuf);
             msgLen += nlriBuf.length;
         } else {
-            let prefixLength = Math.ceil(route.mask / 8); // 计算需要的字节数
-            let nlriLen = 1 + prefixLength;
+            const includePathId = this.shouldSendAddPath();
+            let routeNlri = this.buildIpPrefixNlri(route, includePathId);
+            let nlriLen = routeNlri.length;
             while (msgLen + nlriLen < BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
-                attr.push(route.mask); // 前缀长度（单位bit）
-                const prefixBytes = ipToBytes(route.ip);
-                attr.push(...prefixBytes.slice(0, prefixLength));
+                attr.push(...routeNlri);
 
                 routeIndex++;
                 msgLen += nlriLen;
                 if (routeIndex < routes.length) {
                     route = routes[routeIndex];
-                    prefixLength = Math.ceil(route.mask / 8); // 计算需要的字节数
-                    nlriLen = 1 + prefixLength;
+                    routeNlri = this.buildIpPrefixNlri(route, includePathId);
+                    nlriLen = routeNlri.length;
                 } else {
                     break;
                 }
@@ -622,19 +719,18 @@ class BgpPeer {
             attr.push(...nlriBuf);
             msgLen += nlriBuf.length;
         } else {
-            let prefixLength = Math.ceil(route.mask / 8); // 计算需要的字节数
-            let nlriLen = 1 + prefixLength;
+            const includePathId = this.shouldSendAddPath();
+            let routeNlri = this.buildIpPrefixNlri(route, includePathId);
+            let nlriLen = routeNlri.length;
             while (msgLen + nlriLen < BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
-                attr.push(route.mask); // 前缀长度（单位bit）
-                const prefixBytes = ipToBytes(route.ip);
-                attr.push(...prefixBytes.slice(0, prefixLength));
+                attr.push(...routeNlri);
 
                 routeIndex++;
                 msgLen += nlriLen;
                 if (routeIndex < routes.length) {
                     route = routes[routeIndex];
-                    prefixLength = Math.ceil(route.mask / 8); // 计算需要的字节数
-                    nlriLen = 1 + prefixLength;
+                    routeNlri = this.buildIpPrefixNlri(route, includePathId);
+                    nlriLen = routeNlri.length;
                 } else {
                     break;
                 }
@@ -711,19 +807,18 @@ class BgpPeer {
             let msgLen = BgpConst.BGP_HEAD_LEN + withdrawnRoutesBuf.length + pathAttrBuf.length;
 
             let curRoute = routes[routeIndex];
-            let prefixLength = Math.ceil(curRoute.mask / 8); // 计算需要的字节数
-            let nlriLen = 1 + prefixLength;
+            const includePathId = this.shouldSendAddPath();
+            let routeNlri = this.buildIpPrefixNlri(curRoute, includePathId);
+            let nlriLen = routeNlri.length;
             while (msgLen + nlriLen < BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
-                nlri.push(curRoute.mask); // 前缀长度（单位bit）
-                const prefixBytes = ipToBytes(curRoute.ip);
-                nlri.push(...prefixBytes.slice(0, prefixLength));
+                nlri.push(...routeNlri);
 
                 routeIndex++;
                 msgLen += nlriLen;
                 if (routeIndex < routes.length) {
                     curRoute = routes[routeIndex];
-                    prefixLength = Math.ceil(curRoute.mask / 8); // 计算需要的字节数
-                    nlriLen = 1 + prefixLength;
+                    routeNlri = this.buildIpPrefixNlri(curRoute, includePathId);
+                    nlriLen = routeNlri.length;
                 } else {
                     break;
                 }
@@ -763,19 +858,18 @@ class BgpPeer {
             let msgLen = BgpConst.BGP_HEAD_LEN + pathAttrBuf.length + 2; // 固定长度
 
             let route = routes[routeIndex];
-            let prefixLength = Math.ceil(route.mask / 8); // 计算需要的字节数
-            let nlriLen = 1 + prefixLength;
+            const includePathId = this.shouldSendAddPath();
+            let routeNlri = this.buildIpPrefixNlri(route, includePathId);
+            let nlriLen = routeNlri.length;
             while (msgLen + nlriLen < BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
-                withdrawNlri.push(route.mask); // 前缀长度（单位bit）
-                const prefixBytes = ipToBytes(route.ip);
-                withdrawNlri.push(...prefixBytes.slice(0, prefixLength));
+                withdrawNlri.push(...routeNlri);
 
                 routeIndex++;
                 msgLen += nlriLen;
                 if (routeIndex < routes.length) {
                     route = routes[routeIndex];
-                    prefixLength = Math.ceil(route.mask / 8); // 计算需要的字节数
-                    nlriLen = 1 + prefixLength;
+                    routeNlri = this.buildIpPrefixNlri(route, includePathId);
+                    nlriLen = routeNlri.length;
                 } else {
                     break;
                 }
@@ -943,6 +1037,11 @@ class BgpPeer {
         let routeIndex = 0;
 
         if (this.peerState !== BgpConst.BGP_PEER_STATE.ESTABLISHED) {
+            return;
+        }
+
+        withdrawnRoutes = this.getWithdrawnRoutes(withdrawnRoutes || []);
+        if (withdrawnRoutes.length === 0) {
             return;
         }
 

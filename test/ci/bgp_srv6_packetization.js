@@ -15,10 +15,14 @@ const WorkerMessageHandler = require(
 WorkerMessageHandler.prototype.init = function initForUnitTest() {};
 
 const BgpWorker = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpWorker.js'));
+const BgpSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpSession.js'));
 const { getAfiAndSafi } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpUtils.js'));
 
 const INCREMENTAL_SRV6_ROUTE_COUNT = 128;
 const FIXED_SRV6_ROUTE_COUNT = 500;
+const ADD_PATH_SRV6_ROUTE_COUNT = 1000;
+const ADD_PATH_SRV6_PATH_COUNT = 10;
+const ADD_PATH_IPV4_32_NLRI_LEN = 9;
 const IPV6_SRV6_FIXED_ROUTES_PER_FULL_PACKET = 234;
 const IPV6_SRV6_FIXED_FULL_PACKET_LEN = 4087;
 const IPV6_128_NLRI_LEN = 17;
@@ -43,6 +47,29 @@ function createSrv6Peer(instance, sentBuffers) {
         buildBgpMessageHeader,
         processCustomPkt: () => [],
         sendRoute: buffer => sentBuffers.push(Buffer.from(buffer))
+    };
+
+    const peer = new BgpPeer(session, instance, { sendSrv6PrefixSid: true });
+    peer.peerState = BgpConst.BGP_PEER_STATE.ESTABLISHED;
+    return peer;
+}
+
+function createAddPathSrv6Peer(instance, sentBuffers) {
+    const session = {
+        localIp: '2001:db8::fe',
+        localAs: 65000,
+        peerIp: '2001:db8::1',
+        peerAs: 65001,
+        peerType: BgpConst.BGP_PEER_TYPE.PEER_TYPE_IBGP,
+        localCapFlags:
+            BgpConst.BGP_CAP_FLAGS.FOUR_OCTET_AS |
+            BgpConst.BGP_CAP_FLAGS.EXTENDED_NEXT_HOP_ENCODING |
+            BgpConst.BGP_CAP_FLAGS.ADD_PATH,
+        buildBgpMessageHeader,
+        processCustomPkt: () => [],
+        sendRoute: buffer => sentBuffers.push(Buffer.from(buffer)),
+        isAddPathSendEnabled: (afi, safi) =>
+            afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
     };
 
     const peer = new BgpPeer(session, instance, { sendSrv6PrefixSid: true });
@@ -84,8 +111,6 @@ function makeWorkerWithInstance(addressFamily) {
     const worker = new BgpWorker();
     const responses = [];
     const errors = [];
-    const { afi, safi } = getAfiAndSafi(addressFamily);
-    const instance = new BgpInstance(0, afi, safi);
 
     worker.messageHandler.sendSuccessResponse = (messageId, data, msg) => {
         responses.push({ messageId, data, msg });
@@ -93,9 +118,16 @@ function makeWorkerWithInstance(addressFamily) {
     worker.messageHandler.sendErrorResponse = (messageId, msg, data) => {
         errors.push({ messageId, msg, data });
     };
-    worker.bgpInstanceMap.set(BgpInstance.makeKey(0, afi, safi), instance);
 
+    const instance = addWorkerInstance(worker, addressFamily);
     return { worker, instance, responses, errors };
+}
+
+function addWorkerInstance(worker, addressFamily) {
+    const { afi, safi } = getAfiAndSafi(addressFamily);
+    const instance = new BgpInstance(0, afi, safi);
+    worker.bgpInstanceMap.set(BgpInstance.makeKey(0, afi, safi), instance);
+    return instance;
 }
 
 function setWorkerBgpBaseConfig(worker) {
@@ -107,6 +139,10 @@ function setWorkerBgpBaseConfig(worker) {
 
 function ipv6Address(block, index) {
     return `2001:db8:${block}::${(index + 1).toString(16)}`;
+}
+
+function ipv4FromNumber(value) {
+    return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff].join('.');
 }
 
 function addIpv4Route(instance, routeIp, attr = {}) {
@@ -173,6 +209,14 @@ function assertPacketLengths(buffers) {
     });
 }
 
+const ADD_PATH_PARSE_CONTEXT = {
+    getAddPathReceiveInfo: (afi, safi) => ({
+        enabled: afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    }),
+    isAddPathReceiveEnabled: (afi, safi) =>
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+};
+
 {
     const { worker, instance, responses, errors } = makeWorkerWithInstance(BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
 
@@ -205,6 +249,8 @@ function assertPacketLengths(buffers) {
                 addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
                 ip: '198.51.100.1',
                 mask: 32,
+                rd: '0:0',
+                pathId: 0,
                 srv6Sid: '2001:db8:502::1',
                 srv6EndpointBehavior: IPV4_SRV6_ENDPOINT_BEHAVIOR
             },
@@ -220,12 +266,175 @@ function assertPacketLengths(buffers) {
                 addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
                 ip: '198.51.100.2',
                 mask: 32,
+                rd: '0:0',
+                pathId: 0,
                 srv6Sid: '2001:db8:502::2',
                 srv6EndpointBehavior: IPV4_SRV6_ENDPOINT_BEHAVIOR
             }
         ],
         'IPv4-UNC route generation should store incremental SRv6 SID attributes'
     );
+}
+
+{
+    const { worker, instance, responses, errors } = makeWorkerWithInstance(BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
+    const baseIp = (10 << 24) + (70 << 16) + 1;
+
+    worker.generateRoutes('generate-ipv4-add-path-srv6-increment', {
+        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+        prefix: ipv4FromNumber(baseIp),
+        mask: 32,
+        count: ADD_PATH_SRV6_ROUTE_COUNT,
+        addPathEnabled: true,
+        addPathCount: ADD_PATH_SRV6_PATH_COUNT,
+        srv6Enabled: true,
+        srv6SidMode: BgpConst.BGP_SRV6_SID_MODE.INCREMENT,
+        srv6Sid: '2001:db8:710::1',
+        srv6SidStep: 1,
+        srv6EndpointBehavior: IPV4_SRV6_ENDPOINT_BEHAVIOR
+    });
+
+    assert.deepStrictEqual(errors, [], 'IPv4-UNC ADD-PATH SRv6 generation should not report errors');
+    assert.strictEqual(responses.length, 1, 'IPv4-UNC ADD-PATH SRv6 generation should report success');
+    assert.strictEqual(
+        instance.routeMap.size,
+        ADD_PATH_SRV6_ROUTE_COUNT * ADD_PATH_SRV6_PATH_COUNT,
+        'ADD-PATH SRv6 generation should create addPathCount routes for each prefix'
+    );
+    assert.strictEqual(
+        instance.attrStore.attrMap.size,
+        ADD_PATH_SRV6_ROUTE_COUNT * ADD_PATH_SRV6_PATH_COUNT,
+        'incremental SRv6 SID with ADD-PATH should keep one attribute per generated path'
+    );
+
+    const sentBuffers = [];
+    const peer = createAddPathSrv6Peer(instance, sentBuffers);
+    peer.sendRoute();
+    assertPacketLengths(sentBuffers);
+    assert.strictEqual(
+        sentBuffers.length,
+        ADD_PATH_SRV6_ROUTE_COUNT * ADD_PATH_SRV6_PATH_COUNT,
+        'incremental SRv6 SID with ADD-PATH should send one UPDATE per generated path'
+    );
+
+    const seenPaths = new Set();
+    sentBuffers.forEach((buffer, index) => {
+        const packet = parseBgpPacket(buffer, ADD_PATH_PARSE_CONTEXT);
+        const reach = getMpReach(packet);
+        const prefixIndex = Math.floor(index / ADD_PATH_SRV6_PATH_COUNT);
+        const expectedPathId = index % ADD_PATH_SRV6_PATH_COUNT;
+        const expectedPrefix = ipv4FromNumber(baseIp + prefixIndex);
+        const expectedSid = `2001:db8:710::${(index + 1).toString(16)}`;
+
+        assert.strictEqual(reach.nlri.length, 1, 'each ADD-PATH SRv6 UPDATE should carry one NLRI');
+        assert.strictEqual(reach.nlri[0].prefix, expectedPrefix, 'ADD-PATH SRv6 prefix order should be preserved');
+        assert.strictEqual(
+            reach.nlri[0].pathId,
+            expectedPathId,
+            'ADD-PATH SRv6 path-id should stay associated with its prefix'
+        );
+        assert.strictEqual(getPacketSrv6Sid(packet), expectedSid, 'ADD-PATH SRv6 SID should increment per path');
+        seenPaths.add(`${reach.nlri[0].prefix}|${reach.nlri[0].pathId}`);
+    });
+    assert.strictEqual(
+        seenPaths.size,
+        ADD_PATH_SRV6_ROUTE_COUNT * ADD_PATH_SRV6_PATH_COUNT,
+        'ADD-PATH SRv6 packetization should send every generated prefix/path-id pair exactly once'
+    );
+}
+
+{
+    const { worker, instance, responses, errors } = makeWorkerWithInstance(BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
+    const baseIp = (10 << 24) + (71 << 16) + 1;
+    const fixedSid = '2001:db8:720::1';
+    const totalGeneratedPaths = ADD_PATH_SRV6_ROUTE_COUNT * ADD_PATH_SRV6_PATH_COUNT;
+
+    worker.generateRoutes('generate-ipv4-add-path-srv6-fixed', {
+        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+        prefix: ipv4FromNumber(baseIp),
+        mask: 32,
+        count: ADD_PATH_SRV6_ROUTE_COUNT,
+        addPathEnabled: true,
+        addPathCount: ADD_PATH_SRV6_PATH_COUNT,
+        srv6Enabled: true,
+        srv6SidMode: BgpConst.BGP_SRV6_SID_MODE.FIXED,
+        srv6Sid: fixedSid,
+        srv6EndpointBehavior: IPV4_SRV6_ENDPOINT_BEHAVIOR
+    });
+
+    assert.deepStrictEqual(errors, [], 'IPv4-UNC ADD-PATH fixed SRv6 generation should not report errors');
+    assert.strictEqual(responses.length, 1, 'IPv4-UNC ADD-PATH fixed SRv6 generation should report success');
+    assert.strictEqual(
+        instance.routeMap.size,
+        totalGeneratedPaths,
+        'fixed SRv6 ADD-PATH generation should create addPathCount routes for each prefix'
+    );
+    assert.strictEqual(
+        instance.attrStore.attrMap.size,
+        1,
+        'fixed SRv6 ADD-PATH routes should share one outbound attribute group'
+    );
+
+    const sentBuffers = [];
+    const peer = createAddPathSrv6Peer(instance, sentBuffers);
+    peer.sendRoute();
+    assertPacketLengths(sentBuffers);
+    assert.ok(sentBuffers.length > 1, 'fixed SRv6 ADD-PATH routes should be split by 4096-byte UPDATE limit');
+
+    let routeOffset = 0;
+    const parsedPacketSummaries = sentBuffers.map((buffer, packetIndex) => {
+        const packet = parseBgpPacket(buffer, ADD_PATH_PARSE_CONTEXT);
+        const reach = getMpReach(packet);
+        const sid = getPacketSrv6Sid(packet);
+        assert.strictEqual(sid, fixedSid, 'fixed SRv6 ADD-PATH UPDATE should carry the shared SID');
+        assert.ok(reach.nlri.length > 0, 'fixed SRv6 ADD-PATH UPDATE should carry at least one NLRI');
+
+        reach.nlri.forEach((route, routeIndex) => {
+            const globalIndex = routeOffset + routeIndex;
+            const prefixIndex = Math.floor(globalIndex / ADD_PATH_SRV6_PATH_COUNT);
+            const expectedPathId = globalIndex % ADD_PATH_SRV6_PATH_COUNT;
+            assert.strictEqual(
+                route.prefix,
+                ipv4FromNumber(baseIp + prefixIndex),
+                'fixed SRv6 ADD-PATH prefix order should be preserved across packets'
+            );
+            assert.strictEqual(
+                route.pathId,
+                expectedPathId,
+                'fixed SRv6 ADD-PATH path-id should stay associated with its prefix'
+            );
+        });
+
+        const firstRoute = reach.nlri[0];
+        const lastRoute = reach.nlri[reach.nlri.length - 1];
+        const summary = {
+            packet: packetIndex + 1,
+            length: buffer.length,
+            nlriCount: reach.nlri.length,
+            first: `${firstRoute.prefix}|${firstRoute.pathId}`,
+            last: `${lastRoute.prefix}|${lastRoute.pathId}`,
+            srv6Sid: sid
+        };
+
+        routeOffset += reach.nlri.length;
+        return summary;
+    });
+
+    assert.strictEqual(routeOffset, totalGeneratedPaths, 'fixed SRv6 ADD-PATH should send all generated paths');
+    parsedPacketSummaries.forEach((summary, index) => {
+        if (index < parsedPacketSummaries.length - 1) {
+            assert.ok(
+                summary.length + ADD_PATH_IPV4_32_NLRI_LEN >= BgpConst.BGP_MAX_PKT_SIZE,
+                'full fixed SRv6 ADD-PATH UPDATE should not have room for another /32 ADD-PATH NLRI'
+            );
+        }
+    });
+    assert.ok(
+        parsedPacketSummaries[parsedPacketSummaries.length - 1].nlriCount < parsedPacketSummaries[0].nlriCount,
+        'fixed SRv6 ADD-PATH packetization should leave a tail UPDATE after full packets'
+    );
+
+    console.log('[BGP SRv6 ADD-PATH fixed packet parse]', JSON.stringify(parsedPacketSummaries, null, 2));
 }
 
 {
@@ -280,6 +489,45 @@ function assertPacketLengths(buffers) {
         true,
         'IPv6 peer config should enable SRv6 Prefix-SID for IPv4-UNC'
     );
+}
+
+{
+    const { worker, errors } = makeWorkerWithInstance(BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
+    addWorkerInstance(worker, BgpConst.BGP_ADDR_FAMILY.IPV6_UNC);
+    setWorkerBgpBaseConfig(worker);
+
+    worker.configIpv6Peer('config-ipv6-peer-add-path-per-family', {
+        peerIpv6: '2001:db8::2',
+        peerIpv6As: 65001,
+        holdTimeIpv6: 180,
+        openCapIpv6: [BgpConst.BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS, BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH],
+        addressFamilyIpv6: [BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, BgpConst.BGP_ADDR_FAMILY.IPV6_UNC],
+        addressFamilyConfig: {
+            [BgpConst.BGP_ADDR_FAMILY.IPV4_UNC]: {
+                sendAddPath: true
+            },
+            [BgpConst.BGP_ADDR_FAMILY.IPV6_UNC]: {
+                sendAddPath: false
+            }
+        },
+        roleIpv6: '',
+        openCapCustomIpv6: ''
+    });
+
+    const session = worker.bgpSessionMap.get(BgpSession.makeKey(0, '2001:db8::2'));
+    const ipv4AddPathKey = BgpSession.makeAfiSafiKey(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    );
+    const ipv6AddPathKey = BgpSession.makeAfiSafiKey(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    );
+
+    assert.deepStrictEqual(errors, [], 'IPv6 peer ADD-PATH config should not report errors');
+    assert.ok(session, 'IPv6 peer ADD-PATH config should create a session');
+    assert.strictEqual(session.localAddPathMap.has(ipv4AddPathKey), true, 'IPv4-UNC ADD-PATH should be enabled');
+    assert.strictEqual(session.localAddPathMap.has(ipv6AddPathKey), false, 'IPv6-UNC ADD-PATH should remain disabled');
 }
 
 {

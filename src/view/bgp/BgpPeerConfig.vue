@@ -96,6 +96,26 @@
                         </a-row>
                         <a-row>
                             <a-col :span="24">
+                                <a-form-item label="ADD-PATH" name="ipv4AddPathConfig">
+                                    <a-form-item-rest>
+                                        <a-space size="middle">
+                                            <a-checkbox
+                                                v-for="addressFamily in UNICAST_ADD_PATH_ADDRESS_FAMILIES"
+                                                :key="`ipv4-add-path-${addressFamily}`"
+                                                v-model:checked="
+                                                    ipv4PeerConfigData.addressFamilyConfig[addressFamily].sendAddPath
+                                                "
+                                                :disabled="!canSelectIpv4PeerAddPathFamily(addressFamily)"
+                                            >
+                                                {{ getAddressFamilyLabel(addressFamily) }}
+                                            </a-checkbox>
+                                        </a-space>
+                                    </a-form-item-rest>
+                                </a-form-item>
+                            </a-col>
+                        </a-row>
+                        <a-row>
+                            <a-col :span="24">
                                 <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
                                     <a-space size="middle">
                                         <a-button
@@ -199,29 +219,44 @@
                                 </a-form-item>
                             </a-col>
                         </a-row>
-                        <a-row v-if="ipv6PeerHasIpv4Unc || ipv6PeerHasIpv6Unc">
-                            <a-col v-if="ipv6PeerHasIpv4Unc" :span="12">
-                                <a-form-item label="IPv4-UNC" name="ipv6Ipv4UncConfig">
-                                    <a-checkbox
-                                        v-model:checked="
-                                            ipv6PeerConfigData.addressFamilyConfig[BGP_ADDR_FAMILY.IPV4_UNC]
-                                                .sendSrv6PrefixSid
-                                        "
-                                    >
-                                        SRv6 SID
-                                    </a-checkbox>
+                        <a-row>
+                            <a-col :span="24">
+                                <a-form-item label="ADD-PATH" name="ipv6AddPathConfig">
+                                    <a-form-item-rest>
+                                        <a-space size="middle">
+                                            <a-checkbox
+                                                v-for="addressFamily in UNICAST_ADD_PATH_ADDRESS_FAMILIES"
+                                                :key="`ipv6-add-path-${addressFamily}`"
+                                                v-model:checked="
+                                                    ipv6PeerConfigData.addressFamilyConfig[addressFamily].sendAddPath
+                                                "
+                                                :disabled="!canSelectIpv6PeerAddPathFamily(addressFamily)"
+                                            >
+                                                {{ getAddressFamilyLabel(addressFamily) }}
+                                            </a-checkbox>
+                                        </a-space>
+                                    </a-form-item-rest>
                                 </a-form-item>
                             </a-col>
-                            <a-col v-if="ipv6PeerHasIpv6Unc" :span="12">
-                                <a-form-item label="IPv6-UNC" name="ipv6Ipv6UncConfig">
-                                    <a-checkbox
-                                        v-model:checked="
-                                            ipv6PeerConfigData.addressFamilyConfig[BGP_ADDR_FAMILY.IPV6_UNC]
-                                                .sendSrv6PrefixSid
-                                        "
-                                    >
-                                        SRv6 SID
-                                    </a-checkbox>
+                        </a-row>
+                        <a-row>
+                            <a-col :span="24">
+                                <a-form-item label="SRv6 SID" name="ipv6Srv6Config">
+                                    <a-form-item-rest>
+                                        <a-space size="middle">
+                                            <a-checkbox
+                                                v-for="addressFamily in SRV6_PREFIX_SID_ADDRESS_FAMILIES"
+                                                :key="`ipv6-srv6-${addressFamily}`"
+                                                v-model:checked="
+                                                    ipv6PeerConfigData.addressFamilyConfig[addressFamily]
+                                                        .sendSrv6PrefixSid
+                                                "
+                                                :disabled="!canSelectIpv6PeerSrv6Family(addressFamily)"
+                                            >
+                                                {{ getAddressFamilyLabel(addressFamily) }}
+                                            </a-checkbox>
+                                        </a-space>
+                                    </a-form-item-rest>
                                 </a-form-item>
                             </a-col>
                         </a-row>
@@ -544,20 +579,33 @@
     const wrapperCol = { span: 40 };
 
     const SRV6_PREFIX_SID_ADDRESS_FAMILIES = [BGP_ADDR_FAMILY.IPV4_UNC, BGP_ADDR_FAMILY.IPV6_UNC];
+    const UNICAST_ADD_PATH_ADDRESS_FAMILIES = [BGP_ADDR_FAMILY.IPV4_UNC, BGP_ADDR_FAMILY.IPV6_UNC];
+    const ADDRESS_FAMILY_CONFIG_ADDRESS_FAMILIES = [
+        ...new Set([...SRV6_PREFIX_SID_ADDRESS_FAMILIES, ...UNICAST_ADD_PATH_ADDRESS_FAMILIES])
+    ];
+    const ADDRESS_FAMILY_LABEL_MAP = {
+        [BGP_ADDR_FAMILY.IPV4_UNC]: 'IPv4-UNC',
+        [BGP_ADDR_FAMILY.IPV6_UNC]: 'IPv6-UNC'
+    };
+
+    const getAddressFamilyLabel = addressFamily =>
+        ADDRESS_FAMILY_LABEL_MAP[Number(addressFamily)] || `${addressFamily}`;
 
     const createDefaultAddressFamilyConfig = () =>
-        SRV6_PREFIX_SID_ADDRESS_FAMILIES.reduce((config, addressFamily) => {
+        ADDRESS_FAMILY_CONFIG_ADDRESS_FAMILIES.reduce((config, addressFamily) => {
             config[addressFamily] = {
-                sendSrv6PrefixSid: false
+                sendSrv6PrefixSid: false,
+                sendAddPath: false
             };
             return config;
         }, {});
 
     const normalizeAddressFamilyConfig = config => {
         const normalized = createDefaultAddressFamilyConfig();
-        SRV6_PREFIX_SID_ADDRESS_FAMILIES.forEach(addressFamily => {
+        ADDRESS_FAMILY_CONFIG_ADDRESS_FAMILIES.forEach(addressFamily => {
             const familyConfig = config?.[addressFamily] || config?.[String(addressFamily)] || {};
             normalized[addressFamily].sendSrv6PrefixSid = familyConfig.sendSrv6PrefixSid === true;
+            normalized[addressFamily].sendAddPath = familyConfig.sendAddPath === true;
         });
         return normalized;
     };
@@ -567,6 +615,7 @@
         { label: 'Addr Family', value: BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS, disabled: true },
         { label: 'Route-Refresh', value: BGP_OPEN_CAP_CODE.ROUTE_REFRESH },
         { label: 'AS4', value: BGP_OPEN_CAP_CODE.FOUR_OCTET_AS },
+        { label: 'ADD-PATH', value: BGP_OPEN_CAP_CODE.ADD_PATH },
         { label: 'Role', value: BGP_OPEN_CAP_CODE.BGP_ROLE }
     ];
 
@@ -574,6 +623,7 @@
         { label: 'Addr Family', value: BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS, disabled: true },
         { label: 'Route-Refresh', value: BGP_OPEN_CAP_CODE.ROUTE_REFRESH },
         { label: 'AS4', value: BGP_OPEN_CAP_CODE.FOUR_OCTET_AS },
+        { label: 'ADD-PATH', value: BGP_OPEN_CAP_CODE.ADD_PATH },
         { label: 'Role', value: BGP_OPEN_CAP_CODE.BGP_ROLE },
         { label: 'Extended Next Hop Encoding', value: BGP_OPEN_CAP_CODE.EXTENDED_NEXT_HOP_ENCODING }
     ];
@@ -630,12 +680,36 @@
         openCapCustomIpv6: ''
     });
 
-    const ipv6PeerHasIpv4Unc = computed(() =>
-        ipv6PeerConfigData.value.addressFamilyIpv6.includes(BGP_ADDR_FAMILY.IPV4_UNC)
+    const ipv4PeerAddPathEnabled = computed(() =>
+        ipv4PeerConfigData.value.openCap.includes(BGP_OPEN_CAP_CODE.ADD_PATH)
     );
-    const ipv6PeerHasIpv6Unc = computed(() =>
-        ipv6PeerConfigData.value.addressFamilyIpv6.includes(BGP_ADDR_FAMILY.IPV6_UNC)
+    const ipv6PeerAddPathEnabled = computed(() =>
+        ipv6PeerConfigData.value.openCapIpv6.includes(BGP_OPEN_CAP_CODE.ADD_PATH)
     );
+    const hasSelectedAddressFamily = (selectedFamilies, addressFamily) =>
+        (selectedFamilies || []).map(family => Number(family)).includes(Number(addressFamily));
+    const canSelectIpv4PeerAddPathFamily = addressFamily =>
+        ipv4PeerAddPathEnabled.value && hasSelectedAddressFamily(ipv4PeerConfigData.value.addressFamily, addressFamily);
+    const canSelectIpv6PeerAddPathFamily = addressFamily =>
+        ipv6PeerAddPathEnabled.value &&
+        hasSelectedAddressFamily(ipv6PeerConfigData.value.addressFamilyIpv6, addressFamily);
+    const canSelectIpv6PeerSrv6Family = addressFamily =>
+        hasSelectedAddressFamily(ipv6PeerConfigData.value.addressFamilyIpv6, addressFamily);
+    const getAddPathNegotiationText = record => {
+        if (!UNICAST_ADD_PATH_ADDRESS_FAMILIES.includes(record.addressFamily)) {
+            return '-';
+        }
+        if (record.addPathSendEnabled && record.addPathReceiveEnabled) {
+            return '收发';
+        }
+        if (record.addPathSendEnabled) {
+            return '发送';
+        }
+        if (record.addPathReceiveEnabled) {
+            return '接收';
+        }
+        return '未协商';
+    };
 
     // Validation
     const ipv4PeerConfigvalidationErrors = ref({
@@ -675,6 +749,51 @@
         ipv6PeerConfigData.value.openCapCustomIpv6 = data;
     };
 
+    const ensureAddressFamilyConfig = (addressFamilyConfig, addressFamily) => {
+        if (!addressFamilyConfig[addressFamily]) {
+            addressFamilyConfig[addressFamily] = {
+                sendSrv6PrefixSid: false,
+                sendAddPath: false
+            };
+        }
+        return addressFamilyConfig[addressFamily];
+    };
+
+    const clearAddPathAddressFamilyConfig = addressFamilyConfig => {
+        UNICAST_ADD_PATH_ADDRESS_FAMILIES.forEach(addressFamily => {
+            ensureAddressFamilyConfig(addressFamilyConfig, addressFamily).sendAddPath = false;
+        });
+    };
+
+    const clearSrv6AddressFamilyConfig = addressFamilyConfig => {
+        SRV6_PREFIX_SID_ADDRESS_FAMILIES.forEach(addressFamily => {
+            ensureAddressFamilyConfig(addressFamilyConfig, addressFamily).sendSrv6PrefixSid = false;
+        });
+    };
+
+    const clearUnselectedAddressFamilyConfig = (selectedFamilies, addressFamilyConfig) => {
+        const selectedSet = new Set((selectedFamilies || []).map(family => Number(family)));
+        ADDRESS_FAMILY_CONFIG_ADDRESS_FAMILIES.forEach(addressFamily => {
+            const familyConfig = ensureAddressFamilyConfig(addressFamilyConfig, addressFamily);
+            if (!selectedSet.has(Number(addressFamily))) {
+                familyConfig.sendSrv6PrefixSid = false;
+                familyConfig.sendAddPath = false;
+            }
+        });
+    };
+
+    const sanitizeAddressFamilyConfig = (selectedFamilies, openCaps, addressFamilyConfig, allowSrv6PrefixSid) => {
+        const normalized = normalizeAddressFamilyConfig(addressFamilyConfig);
+        clearUnselectedAddressFamilyConfig(selectedFamilies, normalized);
+        if (!(openCaps || []).includes(BGP_OPEN_CAP_CODE.ADD_PATH)) {
+            clearAddPathAddressFamilyConfig(normalized);
+        }
+        if (!allowSrv6PrefixSid) {
+            clearSrv6AddressFamilyConfig(normalized);
+        }
+        return normalized;
+    };
+
     // Watch for role changes
     watch(
         () => ipv4PeerConfigData.value.openCap,
@@ -686,22 +805,19 @@
                     ipv4PeerConfigData.value.role = BGP_ROLE_TYPE.ROLE_PROVIDER;
                 }
             }
+
+            if (!newValue.includes(BGP_OPEN_CAP_CODE.ADD_PATH)) {
+                clearAddPathAddressFamilyConfig(ipv4PeerConfigData.value.addressFamilyConfig);
+            }
         },
         { deep: true }
     );
 
-    const clearUnselectedSrv6AddressFamilyConfig = (selectedFamilies, addressFamilyConfig) => {
-        SRV6_PREFIX_SID_ADDRESS_FAMILIES.forEach(addressFamily => {
-            if (!selectedFamilies.includes(addressFamily)) {
-                addressFamilyConfig[addressFamily].sendSrv6PrefixSid = false;
-            }
-        });
-    };
-
     watch(
         () => ipv4PeerConfigData.value.addressFamily,
         newValue => {
-            clearUnselectedSrv6AddressFamilyConfig(newValue, ipv4PeerConfigData.value.addressFamilyConfig);
+            clearUnselectedAddressFamilyConfig(newValue, ipv4PeerConfigData.value.addressFamilyConfig);
+            clearSrv6AddressFamilyConfig(ipv4PeerConfigData.value.addressFamilyConfig);
         },
         { deep: true }
     );
@@ -709,7 +825,7 @@
     watch(
         () => ipv6PeerConfigData.value.addressFamilyIpv6,
         newValue => {
-            clearUnselectedSrv6AddressFamilyConfig(newValue, ipv6PeerConfigData.value.addressFamilyConfig);
+            clearUnselectedAddressFamilyConfig(newValue, ipv6PeerConfigData.value.addressFamilyConfig);
         },
         { deep: true }
     );
@@ -723,6 +839,10 @@
                 if (ipv6PeerConfigData.value.roleIpv6 === '') {
                     ipv6PeerConfigData.value.roleIpv6 = BGP_ROLE_TYPE.ROLE_PROVIDER;
                 }
+            }
+
+            if (!newValue.includes(BGP_OPEN_CAP_CODE.ADD_PATH)) {
+                clearAddPathAddressFamilyConfig(ipv6PeerConfigData.value.addressFamilyConfig);
             }
         },
         { deep: true }
@@ -738,7 +858,12 @@
 
         try {
             const payload = JSON.parse(JSON.stringify(ipv4PeerConfigData.value));
-            payload.addressFamilyConfig = createDefaultAddressFamilyConfig();
+            payload.addressFamilyConfig = sanitizeAddressFamilyConfig(
+                payload.addressFamily,
+                payload.openCap,
+                payload.addressFamilyConfig,
+                false
+            );
             const saveResult = await window.bgpApi.saveIpv4PeerConfig(payload);
             if (saveResult.status !== 'success') {
                 message.error(saveResult.msg || '配置文件保存失败');
@@ -766,6 +891,12 @@
 
         try {
             const payload = JSON.parse(JSON.stringify(ipv6PeerConfigData.value));
+            payload.addressFamilyConfig = sanitizeAddressFamilyConfig(
+                payload.addressFamilyIpv6,
+                payload.openCapIpv6,
+                payload.addressFamilyConfig,
+                true
+            );
             const saveResult = await window.bgpApi.saveIpv6PeerConfig(payload);
             if (saveResult.status !== 'success') {
                 message.error(saveResult.msg || '配置文件保存失败');
@@ -838,6 +969,12 @@
             title: 'Peer State',
             dataIndex: 'peerState',
             ellipsis: true
+        },
+        {
+            title: 'ADD-PATH',
+            dataIndex: 'addPathSendEnabled',
+            ellipsis: true,
+            customRender: ({ record }) => getAddPathNegotiationText(record)
         },
         {
             title: 'SRv6 SID',
@@ -1005,8 +1142,11 @@
                 : [];
             ipv4PeerConfigData.value.role = savedIpv4PeerConfig.data.role || '';
             ipv4PeerConfigData.value.openCapCustom = savedIpv4PeerConfig.data.openCapCustom || '';
-            ipv4PeerConfigData.value.addressFamilyConfig = normalizeAddressFamilyConfig(
-                savedIpv4PeerConfig.data.addressFamilyConfig
+            ipv4PeerConfigData.value.addressFamilyConfig = sanitizeAddressFamilyConfig(
+                ipv4PeerConfigData.value.addressFamily,
+                ipv4PeerConfigData.value.openCap,
+                savedIpv4PeerConfig.data.addressFamilyConfig,
+                false
             );
         }
 
@@ -1024,8 +1164,11 @@
                 : [];
             ipv6PeerConfigData.value.roleIpv6 = savedIpv6PeerConfig.data.roleIpv6 || '';
             ipv6PeerConfigData.value.openCapCustomIpv6 = savedIpv6PeerConfig.data.openCapCustomIpv6 || '';
-            ipv6PeerConfigData.value.addressFamilyConfig = normalizeAddressFamilyConfig(
-                savedIpv6PeerConfig.data.addressFamilyConfig
+            ipv6PeerConfigData.value.addressFamilyConfig = sanitizeAddressFamilyConfig(
+                ipv6PeerConfigData.value.addressFamilyIpv6,
+                ipv6PeerConfigData.value.openCapIpv6,
+                savedIpv6PeerConfig.data.addressFamilyConfig,
+                true
             );
         }
     };

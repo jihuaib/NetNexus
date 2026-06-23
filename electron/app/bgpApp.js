@@ -17,7 +17,10 @@ const {
     countBgpRoutes,
     upsertBgpRoutesToJsonl,
     deleteBgpRoutesFromJsonl,
-    clearBgpRouteJsonl
+    clearBgpRouteJsonl,
+    isUnicastAddressFamily,
+    normalizeRouteRd,
+    normalizeRoutePathId
 } = require('../utils/bgpRouteStorage');
 const { fileExists, ensureParentDir } = require('../utils/rpkiRoaImport');
 class BgpApp {
@@ -417,9 +420,9 @@ class BgpApp {
             return errorResponse(runtimeError);
         }
 
-        const routes = collectBgpGeneratedRoutes(config, options);
-        const workerResult = await this.worker.sendRequest(reqType, config);
         const filePath = await this.ensureBgpRouteFileStorage(config.addressFamily);
+        const routes = collectBgpGeneratedRoutes(config, options);
+        const workerResult = await this.worker.sendRequest(reqType, { ...config, routes });
         const result = await upsertBgpRoutesToJsonl(filePath, routes);
         await this.updateBgpRouteMeta(result.total);
 
@@ -432,6 +435,19 @@ class BgpApp {
             },
             workerResult.msg || successMsg
         );
+    }
+
+    normalizeImportedUnicastRouteDefaults(addressFamily, routes) {
+        const normalizedAddressFamily = Number(addressFamily);
+        if (!isUnicastAddressFamily(normalizedAddressFamily)) {
+            return routes;
+        }
+
+        return (routes || []).map(route => ({
+            ...route,
+            rd: normalizeRouteRd(route.rd),
+            pathId: normalizeRoutePathId(route.pathId)
+        }));
     }
 
     async deleteGeneratedRoutes(config, reqType, successMsg, options = {}) {
@@ -922,16 +938,17 @@ class BgpApp {
             });
 
             if (result.status === 'success') {
-                const routes = result.data.map(route => ({
+                let routes = result.data.map(route => ({
                     ...route,
                     addressFamily
                 }));
+                const routeFilePath = await this.ensureBgpRouteFileStorage(addressFamily);
+                routes = this.normalizeImportedUnicastRouteDefaults(addressFamily, routes);
                 const workerResult = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES, {
                     addressFamily,
                     routes,
                     announce: true
                 });
-                const routeFilePath = await this.ensureBgpRouteFileStorage(addressFamily);
                 const writeResult = await upsertBgpRoutesToJsonl(routeFilePath, routes);
                 await this.updateBgpRouteMeta(writeResult.total);
 

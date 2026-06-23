@@ -10,6 +10,10 @@ const QP_ROUTES_PER_FULL_PACKET = 402;
 const QP_FULL_PACKET_LEN = 4089;
 const QP_NEXT_HOP_A = '2001:db8::a';
 const QP_NEXT_HOP_B = '2001:db8::b';
+const ADD_PATH_E2E_PREFIX_COUNT = 300;
+const ADD_PATH_E2E_PATH_COUNT = 10;
+const ADD_PATH_IPV4_32_NLRI_LEN = 9;
+const ADD_PATH_SRV6_FIXED_SID = '2001:db8:880::1';
 
 async function recordStep(title) {
     await test.step(title, async () => {});
@@ -38,6 +42,30 @@ function expectedPacketCounts(total, perFullPacket) {
 
 function updateRouteCount(update) {
     return update.mpReach ? update.mpReach.nlriCount : update.nlriCount;
+}
+
+function updateNlri(update) {
+    return update.mpReach ? update.mpReach.nlri || [] : update.nlri || [];
+}
+
+function isFamilyUpdate(update, afi, safi) {
+    return update.mpReach?.afi === afi && update.mpReach?.safi === safi;
+}
+
+function flattenUpdateNlri(updates) {
+    return updates.flatMap(updateNlri);
+}
+
+function ipv4FromNumber(value) {
+    return `${(value >>> 24) & 0xff}.${(value >>> 16) & 0xff}.${(value >>> 8) & 0xff}.${value & 0xff}`;
+}
+
+function updateSrv6Sid(update) {
+    return update.prefixSid?.srv6Services?.[0]?.sidInfos?.[0]?.sid || '';
+}
+
+function updateSrv6Endpoint(update) {
+    return update.prefixSid?.srv6Services?.[0]?.sidInfos?.[0]?.endpointBehaviorName || '';
 }
 
 async function openAndStartIpv4Bgp(page, controller, { localAs = 65535 } = {}) {
@@ -275,6 +303,281 @@ test.describe('BGP pages', () => {
 
             await recordStep(
                 `Output: updates=${updates.length}, nlriPerUpdate=${counts.join(',')}, fullPackets=${fullPacketCount}`
+            );
+        });
+    });
+
+    test('negotiates ADD-PATH and SRv6 per address family and validates receiver-parsed UPDATEs', async ({ page }) => {
+        test.setTimeout(120000);
+
+        const ipv4BaseIp = (10 << 24) + (80 << 16) + 1;
+        const ipv4TotalPaths = ADD_PATH_E2E_PREFIX_COUNT * ADD_PATH_E2E_PATH_COUNT;
+
+        await test.step('Start BGP with IPv4-UNC and IPv6-UNC instances', async () => {
+            const bgpPort = await BgpE2eController.getFreePort();
+            controller.setBgpPort(bgpPort);
+
+            await page.goto('/#/bgp/bgp-config');
+            await expect(page.getByTestId('bgp-config-page')).toBeVisible();
+
+            const startResult = await page.evaluate(
+                addressFamily =>
+                    window.bgpApi.startBgp({
+                        localAs: '65535',
+                        routerId: '192.168.56.1',
+                        addressFamily
+                    }),
+                [BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, BgpConst.BGP_ADDR_FAMILY.IPV6_UNC]
+            );
+            expect(startResult.status).toBe('success');
+            await recordStep(`Output: BGP TCP server started on 127.0.0.1/::1:${bgpPort}, instances=IPv4-UNC,IPv6-UNC`);
+        });
+
+        await test.step('Configure an IPv6 peer with ADD-PATH and SRv6 enabled only for IPv4-UNC', async () => {
+            const peerResult = await page.evaluate(
+                ({ openCapIpv6, addressFamilyIpv6, addressFamilyConfig }) =>
+                    window.bgpApi.configIpv6Peer({
+                        peerIpv6: '::1',
+                        peerIpv6As: '65535',
+                        holdTimeIpv6: '90',
+                        openCapIpv6,
+                        addressFamilyIpv6,
+                        addressFamilyConfig,
+                        roleIpv6: '',
+                        openCapCustomIpv6: ''
+                    }),
+                {
+                    openCapIpv6: [
+                        BgpConst.BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS,
+                        BgpConst.BGP_OPEN_CAP_CODE.ROUTE_REFRESH,
+                        BgpConst.BGP_OPEN_CAP_CODE.FOUR_OCTET_AS,
+                        BgpConst.BGP_OPEN_CAP_CODE.ADD_PATH,
+                        BgpConst.BGP_OPEN_CAP_CODE.EXTENDED_NEXT_HOP_ENCODING
+                    ],
+                    addressFamilyIpv6: [BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, BgpConst.BGP_ADDR_FAMILY.IPV6_UNC],
+                    addressFamilyConfig: {
+                        [BgpConst.BGP_ADDR_FAMILY.IPV4_UNC]: {
+                            sendAddPath: true,
+                            sendSrv6PrefixSid: true
+                        },
+                        [BgpConst.BGP_ADDR_FAMILY.IPV6_UNC]: {
+                            sendAddPath: false,
+                            sendSrv6PrefixSid: false
+                        }
+                    }
+                }
+            );
+            expect(peerResult.status).toBe('success');
+
+            await controller.startMockClient({
+                host: '::1',
+                localAs: 65535,
+                routerId: '192.0.2.2',
+                holdTime: 90,
+                addressFamilies: ['ipv4-unc', 'ipv6-unc'],
+                addPathAddressFamilies: ['ipv4-unc'],
+                extendedNextHop: true
+            });
+            await controller.waitForClientEvent('established');
+            const ipv4Peer = await controller.waitForPeerState(
+                '::1',
+                'Established',
+                10000,
+                BgpConst.BGP_ADDR_FAMILY.IPV4_UNC
+            );
+            const ipv6Peer = await controller.waitForPeerState(
+                '::1',
+                'Established',
+                10000,
+                BgpConst.BGP_ADDR_FAMILY.IPV6_UNC
+            );
+
+            expect(ipv4Peer.addPathSendEnabled).toBe(true);
+            expect(ipv4Peer.addPathReceiveEnabled).toBe(false);
+            expect(ipv4Peer.sendSrv6PrefixSid).toBe(true);
+            expect(ipv6Peer.addPathSendEnabled).toBe(false);
+            expect(ipv6Peer.addPathReceiveEnabled).toBe(false);
+            expect(ipv6Peer.sendSrv6PrefixSid).toBe(false);
+            await recordStep(`Output: IPv4-UNC addPath=发送 srv6=发送, IPv6-UNC addPath=未协商 srv6=不发送`);
+        });
+
+        await test.step('Generate IPv4 ADD-PATH routes with fixed SRv6 SID and verify local RD/path-id state', async () => {
+            const generateResult = await page.evaluate(
+                ({ addressFamily, prefix, count, pathCount, fixedSid, endpointBehavior, sidMode }) =>
+                    window.bgpApi.generateIpv4Routes({
+                        addressFamily,
+                        prefix,
+                        mask: '32',
+                        count: String(count),
+                        addPathEnabled: true,
+                        addPathCount: String(pathCount),
+                        customAttr: '',
+                        rt: '',
+                        srv6Enabled: true,
+                        srv6SidMode: sidMode,
+                        srv6Sid: fixedSid,
+                        srv6SidStep: '1',
+                        srv6EndpointBehavior: endpointBehavior
+                    }),
+                {
+                    addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+                    prefix: ipv4FromNumber(ipv4BaseIp),
+                    count: ADD_PATH_E2E_PREFIX_COUNT,
+                    pathCount: ADD_PATH_E2E_PATH_COUNT,
+                    fixedSid: ADD_PATH_SRV6_FIXED_SID,
+                    endpointBehavior: BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT4,
+                    sidMode: BgpConst.BGP_SRV6_SID_MODE.FIXED
+                }
+            );
+            expect(generateResult.status).toBe('success');
+
+            const routeSnapshot = await controller.waitForRoutes(
+                BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+                ipv4TotalPaths,
+                30000
+            );
+            expect(routeSnapshot.total).toBe(ipv4TotalPaths);
+            expect(
+                routeSnapshot.list.slice(0, ADD_PATH_E2E_PATH_COUNT).map(route => ({
+                    prefix: `${route.ip}/${route.mask}`,
+                    rd: route.rd,
+                    pathId: route.pathId,
+                    srv6Sid: route.srv6Sid
+                }))
+            ).toEqual(
+                Array.from({ length: ADD_PATH_E2E_PATH_COUNT }, (_, pathId) => ({
+                    prefix: `${ipv4FromNumber(ipv4BaseIp)}/32`,
+                    rd: '0:0',
+                    pathId,
+                    srv6Sid: ADD_PATH_SRV6_FIXED_SID
+                }))
+            );
+            await recordStep(`Output: generatedIPv4Routes=${routeSnapshot.total}, firstPrefixRD=0:0,pathId=0..9`);
+        });
+
+        await test.step('Verify the receiver parses IPv4 ADD-PATH SRv6 UPDATE packetization', async () => {
+            const updates = await controller.waitForClientUpdates(items => {
+                const ipv4Updates = items.filter(update =>
+                    isFamilyUpdate(update, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+                );
+                return ipv4Updates.reduce((sum, update) => sum + updateRouteCount(update), 0) >= ipv4TotalPaths;
+            }, 30000);
+            const ipv4Updates = updates.filter(update =>
+                isFamilyUpdate(update, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+            );
+            const ipv4Nlri = flattenUpdateNlri(ipv4Updates);
+            const updateCounts = ipv4Updates.map(updateRouteCount);
+            const fullUpdates = ipv4Updates.slice(0, -1);
+
+            expect(ipv4Updates.length).toBeGreaterThan(1);
+            expect(ipv4Nlri).toHaveLength(ipv4TotalPaths);
+            expect(new Set(updateNlri(ipv4Updates[0]).map(route => route.pathId))).toEqual(
+                new Set(Array.from({ length: ADD_PATH_E2E_PATH_COUNT }, (_, pathId) => pathId))
+            );
+
+            for (const update of ipv4Updates) {
+                expect(update.valid).toBe(true);
+                expect(update.length).toBeLessThanOrEqual(BgpConst.BGP_MAX_PKT_SIZE);
+                expect(updateSrv6Sid(update)).toBe(ADD_PATH_SRV6_FIXED_SID);
+                expect(updateSrv6Endpoint(update)).toBe('End.DT4');
+                expect(update.pathAttrTypes).toContain(BgpConst.BGP_PATH_ATTR.PREFIX_SID);
+            }
+
+            for (const update of fullUpdates) {
+                expect(update.length + ADD_PATH_IPV4_32_NLRI_LEN).toBeGreaterThanOrEqual(BgpConst.BGP_MAX_PKT_SIZE);
+            }
+            expect(updateCounts[updateCounts.length - 1]).toBeLessThan(updateCounts[0]);
+
+            ipv4Nlri.forEach((route, index) => {
+                const prefixIndex = Math.floor(index / ADD_PATH_E2E_PATH_COUNT);
+                const expectedPathId = index % ADD_PATH_E2E_PATH_COUNT;
+                expect({
+                    prefix: route.prefix,
+                    length: route.length,
+                    pathId: route.pathId
+                }).toEqual({
+                    prefix: ipv4FromNumber(ipv4BaseIp + prefixIndex),
+                    length: 32,
+                    pathId: expectedPathId
+                });
+            });
+
+            await recordStep(
+                `Output: receiverParsedIPv4Updates=${ipv4Updates.length}, nlriPerUpdate=${updateCounts.join(',')}`
+            );
+        });
+
+        await test.step('Generate IPv6 ADD-PATH local routes while IPv6 ADD-PATH send is disabled', async () => {
+            const generateResult = await page.evaluate(
+                ({ addressFamily, count, pathCount, endpointBehavior, sidMode }) =>
+                    window.bgpApi.generateIpv6Routes({
+                        addressFamily,
+                        prefix: '2001:db8:990::1',
+                        mask: '128',
+                        count: String(count),
+                        addPathEnabled: true,
+                        addPathCount: String(pathCount),
+                        customAttr: '',
+                        rt: '',
+                        srv6Enabled: false,
+                        srv6SidMode: sidMode,
+                        srv6Sid: '2001:db8:991::1',
+                        srv6SidStep: '1',
+                        srv6EndpointBehavior: endpointBehavior
+                    }),
+                {
+                    addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV6_UNC,
+                    count: ADD_PATH_E2E_PREFIX_COUNT,
+                    pathCount: ADD_PATH_E2E_PATH_COUNT,
+                    endpointBehavior: BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6,
+                    sidMode: BgpConst.BGP_SRV6_SID_MODE.FIXED
+                }
+            );
+            expect(generateResult.status).toBe('success');
+
+            const routeSnapshot = await controller.waitForRoutes(
+                BgpConst.BGP_ADDR_FAMILY.IPV6_UNC,
+                ipv4TotalPaths,
+                30000
+            );
+            expect(routeSnapshot.total).toBe(ipv4TotalPaths);
+            await recordStep(`Output: generatedIPv6LocalPathRoutes=${routeSnapshot.total}`);
+        });
+
+        await test.step('Verify the receiver parses IPv6 as ordinary NLRI without path-id or SRv6 leakage', async () => {
+            const updates = await controller.waitForClientUpdates(items => {
+                const ipv6Updates = items.filter(update =>
+                    isFamilyUpdate(update, BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+                );
+                return (
+                    ipv6Updates.reduce((sum, update) => sum + updateRouteCount(update), 0) >= ADD_PATH_E2E_PREFIX_COUNT
+                );
+            }, 30000);
+            const ipv6Updates = updates.filter(update =>
+                isFamilyUpdate(update, BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+            );
+            const ipv6Nlri = flattenUpdateNlri(ipv6Updates);
+
+            expect(ipv6Nlri).toHaveLength(ADD_PATH_E2E_PREFIX_COUNT);
+            for (const update of ipv6Updates) {
+                expect(update.valid).toBe(true);
+                expect(update.length).toBeLessThanOrEqual(BgpConst.BGP_MAX_PKT_SIZE);
+                expect(update.prefixSid).toBeNull();
+                expect(update.pathAttrTypes).not.toContain(BgpConst.BGP_PATH_ATTR.PREFIX_SID);
+            }
+
+            ipv6Nlri.forEach((route, index) => {
+                expect(route).toEqual(
+                    expect.objectContaining({
+                        prefix: `2001:db8:990::${(index + 1).toString(16)}`,
+                        length: 128,
+                        pathId: 0
+                    })
+                );
+            });
+
+            await recordStep(
+                `Output: receiverParsedIPv6Updates=${ipv6Updates.length}, ordinaryNlri=${ipv6Nlri.length}, encodedPathId=none`
             );
         });
     });

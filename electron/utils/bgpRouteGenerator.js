@@ -6,6 +6,10 @@ const MAX_QP_DQPN = 0xffffff;
 const MAX_IPV6_INT = (1n << 128n) - 1n;
 const MAX_IPV4_INT = (1n << 32n) - 1n;
 const DEFAULT_MPLS_LABEL = 16;
+const DEFAULT_PUBLIC_RD = '0:0';
+const DEFAULT_GENERATED_PATH_ID = 0;
+const MAX_PATH_ID = 0xffffffff;
+const MAX_ADD_PATH_GENERATION_COUNT = 255;
 
 function normalizePositiveInteger(value, fallback = 0) {
     const number = Number(value);
@@ -22,6 +26,57 @@ function normalizeOptionalPositiveInteger(value, fallback = 1) {
     }
 
     return Number(value);
+}
+
+function normalizeRouteRd(rd) {
+    if (rd === undefined || rd === null || rd === '') {
+        return DEFAULT_PUBLIC_RD;
+    }
+    return `${rd}`;
+}
+
+function normalizeOptionalPathId(pathId) {
+    if (pathId === undefined || pathId === null || pathId === '') {
+        return null;
+    }
+
+    const numericPathId = Number(pathId);
+    if (!Number.isInteger(numericPathId) || numericPathId < 0 || numericPathId > MAX_PATH_ID) {
+        throw new Error(`Path ID范围为 0 ~ ${MAX_PATH_ID}`);
+    }
+    return numericPathId;
+}
+
+function isAddPathGenerationEnabled(config = {}) {
+    return config.addPathEnabled === true || config.addPathEnabled === 'true';
+}
+
+function getAddPathGenerationCount(config = {}) {
+    if (!isAddPathGenerationEnabled(config)) {
+        return 1;
+    }
+
+    const addPathCount = normalizePositiveInteger(config.addPathCount, 1);
+    if (!Number.isInteger(addPathCount) || addPathCount <= 0) {
+        throw new Error('ADD-PATH数量必须为正整数');
+    }
+    if (addPathCount > MAX_ADD_PATH_GENERATION_COUNT) {
+        throw new Error(`ADD-PATH数量范围为 1 ~ ${MAX_ADD_PATH_GENERATION_COUNT}`);
+    }
+    return addPathCount;
+}
+
+function getGeneratedUnicastPathIds(config = {}) {
+    const explicitPathId = normalizeOptionalPathId(config.pathId);
+    if (explicitPathId !== null) {
+        return [explicitPathId];
+    }
+
+    const addPathCount = getAddPathGenerationCount(config);
+    if (addPathCount <= 1) {
+        return [DEFAULT_GENERATED_PATH_ID];
+    }
+    return Array.from({ length: addPathCount }, (_, index) => index);
 }
 
 function normalizeQpRouteGrowthMode(mode) {
@@ -400,21 +455,36 @@ function collectBgpGeneratedRoutes(config, options = {}) {
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC) {
         const ipType =
             addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
-        const srv6Context =
-            addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC ? buildSrv6SidGenerationContext(config) : null;
-        forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, (route, index) => {
-            const routeInfo = {
-                addressFamily,
-                ip: route.ip,
-                mask: route.mask,
-                customAttr: config.customAttr || null,
-                rt: config.rt || null
-            };
-            if (srv6Context?.enabled) {
-                routeInfo.srv6Sid = getGeneratedSrv6Sid(srv6Context, index);
-                routeInfo.srv6EndpointBehavior = srv6Context.endpointBehavior;
+        const routeCount = normalizePositiveInteger(config.count, 0);
+        const pathIds = getGeneratedUnicastPathIds(config);
+        const srv6Context = buildSrv6SidGenerationContext(
+            { ...config, count: routeCount * pathIds.length },
+            {
+                defaultEndpointBehavior:
+                    addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC
+                        ? BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT4
+                        : BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6
             }
-            routes.push(routeInfo);
+        );
+        const rd = normalizeRouteRd(config.rd);
+        forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, (route, index) => {
+            pathIds.forEach((pathId, pathIndex) => {
+                const routeIndex = index * pathIds.length + pathIndex;
+                const routeInfo = {
+                    addressFamily,
+                    ip: route.ip,
+                    mask: route.mask,
+                    rd,
+                    pathId,
+                    customAttr: config.customAttr || null,
+                    rt: config.rt || null
+                };
+                if (srv6Context?.enabled) {
+                    routeInfo.srv6Sid = getGeneratedSrv6Sid(srv6Context, routeIndex);
+                    routeInfo.srv6EndpointBehavior = srv6Context.endpointBehavior;
+                }
+                routes.push(routeInfo);
+            });
         });
         return routes;
     }
@@ -465,6 +535,8 @@ function collectBgpGeneratedRoutes(config, options = {}) {
 
 module.exports = {
     collectBgpGeneratedRoutes,
+    getAddPathGenerationCount,
+    getGeneratedUnicastPathIds,
     forEachMvpnGeneratedRoute,
     forEachQpGeneratedRoute,
     buildLabelGenerationContext,
