@@ -50,10 +50,7 @@
                         <a-col :xs="24" :md="6">
                             <a-form-item label="RT" name="rt">
                                 <a-tooltip :title="validationErrors.rt" :open="!!validationErrors.rt">
-                                    <a-input
-                                        v-model:value="ipv4Data.rt"
-                                        :status="validationErrors.rt ? 'error' : ''"
-                                    />
+                                    <a-input v-model:value="ipv4Data.rt" :status="validationErrors.rt ? 'error' : ''" />
                                 </a-tooltip>
                             </a-form-item>
                         </a-col>
@@ -106,10 +103,7 @@
                         </a-col>
                         <a-col v-if="ipv4Data.srv6Enabled" :xs="24" :md="6">
                             <a-form-item label="SID模式" name="srv6SidMode">
-                                <a-tooltip
-                                    :title="validationErrors.srv6SidMode"
-                                    :open="!!validationErrors.srv6SidMode"
-                                >
+                                <a-tooltip :title="validationErrors.srv6SidMode" :open="!!validationErrors.srv6SidMode">
                                     <a-radio-group v-model:value="ipv4Data.srv6SidMode" class="inline-radio-group">
                                         <a-radio :value="BGP_SRV6_SID_MODE.FIXED">固定</a-radio>
                                         <a-radio :value="BGP_SRV6_SID_MODE.INCREMENT">递增</a-radio>

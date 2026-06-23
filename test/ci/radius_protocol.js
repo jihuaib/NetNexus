@@ -7,24 +7,13 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const WorkerWithPromise = require(path.join(
-    __dirname,
-    '..',
-    '..',
-    'electron',
-    'worker',
-    'core',
-    'workerWithPromise.js'
-));
+const WorkerWithPromise = require(
+    path.join(__dirname, '..', '..', 'electron', 'worker', 'core', 'workerWithPromise.js')
+);
 const Radius = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'radiusUtils.js'));
-const { ensureRadiusDefaultConfigFile, loadRadiusRuntimeConfig } = require(path.join(
-    __dirname,
-    '..',
-    '..',
-    'electron',
-    'utils',
-    'radiusConfigLoader.js'
-));
+const { ensureRadiusDefaultConfigFile, loadRadiusRuntimeConfig } = require(
+    path.join(__dirname, '..', '..', 'electron', 'utils', 'radiusConfigLoader.js')
+);
 const RadiusConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'radiusConst.js'));
 
 const { RADIUS_CODES, RADIUS_ATTRIBUTES, RADIUS_SERVICE_TYPES, RADIUS_ACCT_STATUS_TYPES } = RadiusConst;
@@ -89,7 +78,10 @@ function buildAccessRequest({
     const requestAuthenticator = crypto.randomBytes(16);
     const packet = Radius.buildPacket(RADIUS_CODES.ACCESS_REQUEST, id, requestAuthenticator, [
         Radius.stringAttr(RADIUS_ATTRIBUTES.USER_NAME, username),
-        Radius.attr(RADIUS_ATTRIBUTES.USER_PASSWORD, Radius.encryptUserPassword(password, secret, requestAuthenticator)),
+        Radius.attr(
+            RADIUS_ATTRIBUTES.USER_PASSWORD,
+            Radius.encryptUserPassword(password, secret, requestAuthenticator)
+        ),
         ...nasAttributes,
         ...attrs
     ]);
@@ -175,17 +167,20 @@ async function main() {
         'utf8'
     );
 
-    const runtimeConfig = await loadRadiusRuntimeConfig({
-        authPort: 0,
-        accountingPort: 0,
-        coaPort: 0,
-        bindAddress: HOST,
-        bindAddress6: HOST6,
-        enableAuth: true,
-        enableAccounting: true,
-        enableDynamicAuth: true,
-        enableIpv6: ipv6Available
-    }, { configFilePath });
+    const runtimeConfig = await loadRadiusRuntimeConfig(
+        {
+            authPort: 0,
+            accountingPort: 0,
+            coaPort: 0,
+            bindAddress: HOST,
+            bindAddress6: HOST6,
+            enableAuth: true,
+            enableAccounting: true,
+            enableDynamicAuth: true,
+            enableIpv6: ipv6Available
+        },
+        { configFilePath }
+    );
     assert.equal(runtimeConfig.sharedSecret, secret);
     assert.equal(runtimeConfig.users.length, 2);
     assert.equal(runtimeConfig.clients.length, 2);

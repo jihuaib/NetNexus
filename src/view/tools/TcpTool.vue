@@ -54,12 +54,7 @@
                     <a-radio-button :value="TCP_TOOL_ENCODING.BASE64">Base64</a-radio-button>
                 </a-radio-group>
             </div>
-            <a-textarea
-                v-model:value="sendForm.data"
-                :rows="3"
-                :placeholder="sendPlaceholder"
-                class="tcp-send-input"
-            />
+            <a-textarea v-model:value="sendForm.data" :rows="3" :placeholder="sendPlaceholder" class="tcp-send-input" />
             <div class="tcp-send-actions">
                 <span v-if="conn" class="tcp-traffic-info">
                     发送 {{ conn.bytesSent }} B / 接收 {{ conn.bytesReceived }} B
@@ -91,12 +86,7 @@
     import { ref, reactive, computed, nextTick, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
     import EventBus from '../../utils/eventBus';
-    import {
-        TCP_TOOL_STATE,
-        TCP_TOOL_STATE_NAME,
-        TCP_TOOL_EVT_TYPES,
-        TCP_TOOL_ENCODING
-    } from '../../const/toolsConst';
+    import { TCP_TOOL_STATE, TCP_TOOL_STATE_NAME, TCP_TOOL_EVT_TYPES, TCP_TOOL_ENCODING } from '../../const/toolsConst';
 
     defineOptions({
         name: 'TcpTool'

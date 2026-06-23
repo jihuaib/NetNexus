@@ -94,9 +94,16 @@
                                                             title="确定要删除这个 IP 地址吗？"
                                                             ok-text="删除"
                                                             cancel-text="取消"
-                                                            @confirm="handleDelete(record.name, addr.address, addr.family)"
+                                                            @confirm="
+                                                                handleDelete(record.name, addr.address, addr.family)
+                                                            "
                                                         >
-                                                            <a-button type="link" danger size="small" class="action-btn">
+                                                            <a-button
+                                                                type="link"
+                                                                danger
+                                                                size="small"
+                                                                class="action-btn"
+                                                            >
                                                                 <DeleteOutlined />
                                                             </a-button>
                                                         </a-popconfirm>
@@ -368,7 +375,8 @@
 
     const interfaceOptions = computed(() =>
         interfaces.value.map(item => ({
-            label: item.displayName && item.displayName !== item.name ? `${item.displayName} (${item.name})` : item.name,
+            label:
+                item.displayName && item.displayName !== item.name ? `${item.displayName} (${item.name})` : item.name,
             value: item.name
         }))
     );

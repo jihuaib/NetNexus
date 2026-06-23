@@ -27,6 +27,9 @@ const {
 } = require('../utils/bgpUtils');
 const bgpAddressFamily = require('./bgpAddressFamily');
 
+const LABEL_UNICAST_ADD_PATH_INFERRED_WARNING =
+    'label-unicast ADD-PATH is inferred from same-AFI unicast capability; Peer Up did not advertise ADD-PATH for label-unicast';
+
 /**
  * Parse a BGP packet from a buffer
  * @param {Buffer} buffer - The raw BGP packet buffer
@@ -1150,7 +1153,15 @@ function parseMpReachNlri(buffer, context) {
 
     // Check if ADD-PATH is enabled for this AFI/SAFI
     let addPathEnabled = false;
-    if (context && typeof context.isAddPathReceiveEnabled === 'function') {
+    let addPathWarning = null;
+    if (context && typeof context.getAddPathReceiveInfo === 'function') {
+        const addPathInfo = context.getAddPathReceiveInfo(afi, safi) || {};
+        addPathEnabled = addPathInfo.enabled === true;
+        addPathWarning =
+            addPathInfo.inferred === true && safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+                ? LABEL_UNICAST_ADD_PATH_INFERRED_WARNING
+                : null;
+    } else if (context && typeof context.isAddPathReceiveEnabled === 'function') {
         addPathEnabled = context.isAddPathReceiveEnabled(afi, safi);
     } else if (context && context.addPathMap) {
         // Backwards compatibility map check omitted for brevity in this specific patch
@@ -1178,10 +1189,17 @@ function parseMpReachNlri(buffer, context) {
         if (Array.isArray(parsedNlri.route.warnings)) {
             warnings.push(...parsedNlri.route.warnings.map(warning => `NLRI ${nlri.length + 1}: ${warning}`));
         }
+        const routeWarnings = Array.isArray(parsedNlri.route.warnings) ? [...parsedNlri.route.warnings] : [];
+        if (addPathWarning) {
+            routeWarnings.push(addPathWarning);
+        }
+        const routeParseWarning = routeWarnings.length > 0;
 
         nlri.push({
             pathId,
-            ...parsedNlri.route
+            ...parsedNlri.route,
+            parseWarning: routeParseWarning,
+            warnings: routeWarnings
         });
     }
 
@@ -1212,7 +1230,15 @@ function parseMpUnreachNlri(buffer, context) {
 
     // Check if ADD-PATH is enabled for this AFI/SAFI
     let addPathEnabled = false;
-    if (context && typeof context.isAddPathReceiveEnabled === 'function') {
+    let addPathWarning = null;
+    if (context && typeof context.getAddPathReceiveInfo === 'function') {
+        const addPathInfo = context.getAddPathReceiveInfo(afi, safi) || {};
+        addPathEnabled = addPathInfo.enabled === true;
+        addPathWarning =
+            addPathInfo.inferred === true && safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+                ? LABEL_UNICAST_ADD_PATH_INFERRED_WARNING
+                : null;
+    } else if (context && typeof context.isAddPathReceiveEnabled === 'function') {
         addPathEnabled = context.isAddPathReceiveEnabled(afi, safi);
     } else if (context && context.addPathMap) {
         // Backwards compatibility map check omitted for brevity in this specific patch
@@ -1244,10 +1270,17 @@ function parseMpUnreachNlri(buffer, context) {
                 ...parsedNlri.route.warnings.map(warning => `Withdrawn NLRI ${withdrawnRoutes.length + 1}: ${warning}`)
             );
         }
+        const routeWarnings = Array.isArray(parsedNlri.route.warnings) ? [...parsedNlri.route.warnings] : [];
+        if (addPathWarning) {
+            routeWarnings.push(addPathWarning);
+        }
+        const routeParseWarning = routeWarnings.length > 0;
 
         withdrawnRoutes.push({
             pathId,
-            ...parsedNlri.route
+            ...parsedNlri.route,
+            parseWarning: routeParseWarning,
+            warnings: routeWarnings
         });
     }
 

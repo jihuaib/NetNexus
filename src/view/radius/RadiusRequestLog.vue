@@ -29,11 +29,11 @@
                             {{ statusText(record.status) }}
                         </a-tag>
                     </template>
-                    <template v-else-if="column.key === 'codeName'">
-                        {{ record.codeName }}({{ record.code }})
-                    </template>
+                    <template v-else-if="column.key === 'codeName'">{{ record.codeName }}({{ record.code }})</template>
                     <template v-else-if="column.key === 'responseCodeName'">
-                        <span v-if="record.responseCodeName">{{ record.responseCodeName }}({{ record.responseCode }})</span>
+                        <span v-if="record.responseCodeName">
+                            {{ record.responseCodeName }}({{ record.responseCode }})
+                        </span>
                         <span v-else>-</span>
                     </template>
                     <template v-else-if="column.key === 'client'">
@@ -82,8 +82,12 @@
                     <a-descriptions-item label="用户">{{ selectedRequest.userName || '-' }}</a-descriptions-item>
                     <a-descriptions-item label="认证方式">{{ selectedRequest.authMethod || '-' }}</a-descriptions-item>
                     <a-descriptions-item label="Identifier">{{ selectedRequest.identifier }}</a-descriptions-item>
-                    <a-descriptions-item label="报文长度">{{ selectedRequest.packetLength || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="Session Key">{{ selectedRequest.sessionKey || '-' }}</a-descriptions-item>
+                    <a-descriptions-item label="报文长度">
+                        {{ selectedRequest.packetLength || '-' }}
+                    </a-descriptions-item>
+                    <a-descriptions-item label="Session Key">
+                        {{ selectedRequest.sessionKey || '-' }}
+                    </a-descriptions-item>
                     <a-descriptions-item label="说明">{{ selectedRequest.message || '-' }}</a-descriptions-item>
                 </a-descriptions>
 
@@ -106,11 +110,7 @@
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
-    import {
-        RADIUS_EVENT_PAGE_ID,
-        RADIUS_REQUEST_STATUS,
-        RADIUS_SUB_EVT_TYPES
-    } from '../../const/radiusConst';
+    import { RADIUS_EVENT_PAGE_ID, RADIUS_REQUEST_STATUS, RADIUS_SUB_EVT_TYPES } from '../../const/radiusConst';
     import EventBus from '../../utils/eventBus';
 
     defineOptions({ name: 'RadiusRequestLog' });

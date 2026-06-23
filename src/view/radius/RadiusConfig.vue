@@ -106,7 +106,12 @@
 
                         <div class="actions">
                             <a-space>
-                                <a-button type="primary" :loading="serverLoading" :disabled="isServerRunning" @click="startRadius">
+                                <a-button
+                                    type="primary"
+                                    :loading="serverLoading"
+                                    :disabled="isServerRunning"
+                                    @click="startRadius"
+                                >
                                     启动服务器
                                 </a-button>
                                 <a-button type="primary" danger :disabled="!isServerRunning" @click="stopRadius">
@@ -128,16 +133,24 @@
                                 {{ isServerRunning ? '运行中' : '已停止' }}
                             </a-tag>
                         </a-descriptions-item>
-                        <a-descriptions-item label="认证端口">{{ displayedStatus.authPort || formData.authPort }}</a-descriptions-item>
+                        <a-descriptions-item label="认证端口">
+                            {{ displayedStatus.authPort || formData.authPort }}
+                        </a-descriptions-item>
                         <a-descriptions-item label="计费端口">
                             {{ displayedStatus.accountingPort || formData.accountingPort }}
                         </a-descriptions-item>
                         <a-descriptions-item label="动态授权端口">
                             {{ displayedStatus.coaPort || formData.coaPort }}
                         </a-descriptions-item>
-                        <a-descriptions-item label="IPv6认证端口">{{ displayedStatus.authPort6 || '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="IPv6计费端口">{{ displayedStatus.accountingPort6 || '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="IPv6动态授权端口">{{ displayedStatus.coaPort6 || '-' }}</a-descriptions-item>
+                        <a-descriptions-item label="IPv6认证端口">
+                            {{ displayedStatus.authPort6 || '-' }}
+                        </a-descriptions-item>
+                        <a-descriptions-item label="IPv6计费端口">
+                            {{ displayedStatus.accountingPort6 || '-' }}
+                        </a-descriptions-item>
+                        <a-descriptions-item label="IPv6动态授权端口">
+                            {{ displayedStatus.coaPort6 || '-' }}
+                        </a-descriptions-item>
                         <a-descriptions-item label="请求日志">{{ requestCount }}</a-descriptions-item>
                         <a-descriptions-item label="活动会话">{{ sessionCount }}</a-descriptions-item>
                         <a-descriptions-item label="最近请求时间">{{ lastRequestAt }}</a-descriptions-item>

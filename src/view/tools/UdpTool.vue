@@ -52,12 +52,7 @@
                     <a-radio-button :value="UDP_TOOL_ENCODING.BASE64">Base64</a-radio-button>
                 </a-radio-group>
             </div>
-            <a-textarea
-                v-model:value="sendForm.data"
-                :rows="3"
-                :placeholder="sendPlaceholder"
-                class="udp-send-input"
-            />
+            <a-textarea v-model:value="sendForm.data" :rows="3" :placeholder="sendPlaceholder" class="udp-send-input" />
             <div class="udp-send-actions">
                 <span v-if="conn" class="udp-traffic-info">
                     发送 {{ conn.bytesSent }} B / 接收 {{ conn.bytesReceived }} B
@@ -89,12 +84,7 @@
     import { ref, reactive, computed, nextTick, onActivated, onDeactivated } from 'vue';
     import { message } from 'ant-design-vue';
     import EventBus from '../../utils/eventBus';
-    import {
-        UDP_TOOL_STATE,
-        UDP_TOOL_STATE_NAME,
-        UDP_TOOL_EVT_TYPES,
-        UDP_TOOL_ENCODING
-    } from '../../const/toolsConst';
+    import { UDP_TOOL_STATE, UDP_TOOL_STATE_NAME, UDP_TOOL_EVT_TYPES, UDP_TOOL_ENCODING } from '../../const/toolsConst';
 
     defineOptions({
         name: 'UdpTool'

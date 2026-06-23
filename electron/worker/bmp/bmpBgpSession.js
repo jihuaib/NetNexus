@@ -2,6 +2,7 @@ const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const { toSerializableTlvs } = require('../../utils/bmpUtils');
 const { getRoutePrefixIndexKeys } = require('../../utils/routePrefixUtils');
 const BmpConst = require('../../const/bmpConst');
+const BgpConst = require('../../const/bgpConst');
 const { BmpRouteAttrStore, DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
 
 class BmpBgpSession {
@@ -24,6 +25,7 @@ class BmpBgpSession {
         this.peerUpTlvs = [];
         this.peerDownTlvs = [];
         this.lastRouteMonitoringTlvs = [];
+        this.vrfTableNames = [];
         this.peerDownReason = null;
         this.peerDownFsmEventCode = null;
 
@@ -45,8 +47,7 @@ class BmpBgpSession {
         this.ribEpochMap = new Map();
     }
 
-    isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
-        const key = `${afi}|${safi}`;
+    getAddPathEnabledForKey(key, direction = 'receive') {
         if (direction === 'send') {
             return this.addPathSendMap.get(key) === true;
         }
@@ -64,6 +65,29 @@ class BmpBgpSession {
             return this.addPathMap.get(key) === true;
         }
         return false;
+    }
+
+    getAddPathReceiveInfo(afi, safi, direction = 'receive') {
+        const key = `${afi}|${safi}`;
+        if (this.getAddPathEnabledForKey(key, direction)) {
+            return { enabled: true };
+        }
+
+        if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+            const unicastKey = `${afi}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`;
+            if (this.getAddPathEnabledForKey(unicastKey, direction)) {
+                return {
+                    enabled: true,
+                    inferred: true
+                };
+            }
+        }
+
+        return { enabled: false };
+    }
+
+    isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
+        return this.getAddPathReceiveInfo(afi, safi, direction).enabled;
     }
 
     static makeKey(sessionType, sessionRd, sessionIp, sessionAs) {
@@ -366,6 +390,7 @@ class BmpBgpSession {
             peerUpTlvs: toSerializableTlvs(this.peerUpTlvs),
             peerDownTlvs: toSerializableTlvs(this.peerDownTlvs),
             lastRouteMonitoringTlvs: toSerializableTlvs(this.lastRouteMonitoringTlvs),
+            vrfTableNames: this.vrfTableNames,
             peerDownReason: this.peerDownReason,
             peerDownFsmEventCode: this.peerDownFsmEventCode,
             ribEpochMap: Object.fromEntries(this.ribEpochMap),

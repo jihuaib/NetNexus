@@ -17,13 +17,13 @@
                     下载最新的 RIB 数据。 通常位于
                     <code>bgpdata/YYYY.MM/RIBS/</code>
                     目录下。
-                    <br >
+                    <br />
                     支持格式：
                     <code>.gz</code>
                     或解压后的原始文件 (如
                     <code>rib.2024...</code>
                     )。
-                    <br >
+                    <br />
                     <span style="color: #faad14">
                         注意：
                         <code>.bz2</code>

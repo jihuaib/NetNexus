@@ -68,6 +68,12 @@ export const BMP_ROUTE_STATE_NAME = {
     [BMP_ROUTE_STATE.STALE]: '过期'
 };
 
+export const BMP_ROUTE_PARSE_STATUS = {
+    OK: 0,
+    WARNING: 0x01,
+    ERROR: 0x02
+};
+
 export const BMP_SESSION_TYPE_NAME = {
     [BMP_PEER_TYPE.GLOBAL]: 'Global',
     [BMP_PEER_TYPE.L3VPN]: 'L3VPN',

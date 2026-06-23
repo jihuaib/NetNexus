@@ -255,11 +255,30 @@ class BmpSession {
                 return fallbackContext;
             }
             return {
+                getAddPathReceiveInfo: (afi, safi) => {
+                    if (typeof fallbackContext.getAddPathReceiveInfo === 'function') {
+                        return fallbackContext.getAddPathReceiveInfo(afi, safi, direction);
+                    }
+                    return { enabled: fallbackContext.isAddPathReceiveEnabled(afi, safi, direction) };
+                },
                 isAddPathReceiveEnabled: (afi, safi) => fallbackContext.isAddPathReceiveEnabled(afi, safi, direction)
             };
         }
 
         return {
+            getAddPathReceiveInfo: (afi, safi) => {
+                const key = `${afi}|${safi}`;
+                if (statelessAddPathMap.has(key)) {
+                    return { enabled: statelessAddPathMap.get(key) !== 0 };
+                }
+                if (fallbackContext && typeof fallbackContext.getAddPathReceiveInfo === 'function') {
+                    return fallbackContext.getAddPathReceiveInfo(afi, safi, direction);
+                }
+                if (fallbackContext && typeof fallbackContext.isAddPathReceiveEnabled === 'function') {
+                    return { enabled: fallbackContext.isAddPathReceiveEnabled(afi, safi, direction) };
+                }
+                return { enabled: false };
+            },
             isAddPathReceiveEnabled: (afi, safi) => {
                 const key = `${afi}|${safi}`;
                 if (statelessAddPathMap.has(key)) {
@@ -270,6 +289,49 @@ class BmpSession {
                 }
                 return false;
             }
+        };
+    }
+
+    createLocRibBgpParsingContext(locRibPeer) {
+        const getAddPathReceiveInfo = (afi, safi, direction = 'receive') => {
+            const instanceKey = BmpBgpInstance.makeKey(locRibPeer.peerType, locRibPeer.peerRd, afi, safi);
+            const bgpInstance = this.bgpInstanceMap.get(instanceKey);
+            if (bgpInstance) {
+                const addPathInfo =
+                    typeof bgpInstance.getAddPathReceiveInfo === 'function'
+                        ? bgpInstance.getAddPathReceiveInfo(afi, safi, direction)
+                        : { enabled: bgpInstance.isAddPathReceiveEnabled(afi, safi, direction) };
+                if (addPathInfo.enabled || safi !== BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+                    return addPathInfo;
+                }
+            }
+
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+                const unicastInstanceKey = BmpBgpInstance.makeKey(
+                    locRibPeer.peerType,
+                    locRibPeer.peerRd,
+                    afi,
+                    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+                );
+                const unicastInstance = this.bgpInstanceMap.get(unicastInstanceKey);
+                if (
+                    unicastInstance &&
+                    unicastInstance.isAddPathReceiveEnabled(afi, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST, direction)
+                ) {
+                    return {
+                        enabled: true,
+                        inferred: true
+                    };
+                }
+            }
+
+            return { enabled: false };
+        };
+
+        return {
+            getAddPathReceiveInfo,
+            isAddPathReceiveEnabled: (afi, safi, direction = 'receive') =>
+                getAddPathReceiveInfo(afi, safi, direction).enabled
         };
     }
 
@@ -285,6 +347,22 @@ class BmpSession {
                 tlv.valueText = tlv.value.toString('utf8');
                 return tlv.valueText;
             });
+    }
+
+    mergeVrfTableNames(target, vrfTableNames) {
+        if (!target || !Array.isArray(vrfTableNames) || vrfTableNames.length === 0) {
+            return false;
+        }
+
+        const merged = new Set(Array.isArray(target.vrfTableNames) ? target.vrfTableNames : []);
+        const previousSize = merged.size;
+        vrfTableNames.forEach(name => {
+            if (name) {
+                merged.add(name);
+            }
+        });
+        target.vrfTableNames = Array.from(merged);
+        return target.vrfTableNames.length !== previousSize;
     }
 
     decodePathMarkingTlv(tlv) {
@@ -671,6 +749,8 @@ class BmpSession {
     setRouteNlri(route, nlri, afi, safi) {
         const normalizedPathId = BmpBgpRoute.normalizePathId(nlri.pathId);
         const normalizedRd = BmpBgpRoute.normalizeRd(nlri.rd);
+        const nlriDetail = { ...nlri };
+        delete nlriDetail.parseWarning;
         route.pathId = normalizedPathId;
         route.rd = normalizedRd;
         route.ip = nlri.displayPrefix || nlri.prefix;
@@ -682,14 +762,15 @@ class BmpSession {
             : null;
         route.routeType = nlri.routeType || null;
         route.nlriDetail = {
-            ...nlri,
+            ...nlriDetail,
             pathId: normalizedPathId,
             rd: normalizedRd
         };
-        route.parserValid = nlri.valid !== false;
-        route.parseErrors = Array.isArray(nlri.errors) && nlri.errors.length > 0 ? nlri.errors.join('; ') : null;
-        route.parseWarnings =
-            Array.isArray(nlri.warnings) && nlri.warnings.length > 0 ? nlri.warnings.join('; ') : null;
+        route.parseStatus = BmpBgpRoute.makeParseStatus(
+            nlri.valid !== false,
+            nlri.errors,
+            nlri.parseWarning || nlri.warnings
+        );
     }
 
     getRibTypesByFlags(sessionFlags) {
@@ -751,6 +832,14 @@ class BmpSession {
                     ? getEffectivePeerFlags(sessionFlags, routePayload.routeTlvs)
                     : sessionFlags;
             bgpSession.lastRouteMonitoringTlvs = routePayload.routeTlvs || [];
+            const routeVrfTableNames = this.decodeVrfTableNameTlvs(routePayload.routeTlvs);
+            if (this.mergeVrfTableNames(bgpSession, routeVrfTableNames)) {
+                this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.SESSION_UPDATE, {
+                    data: {
+                        client: this.getClientInfo()
+                    }
+                });
+            }
 
             if (!parsedBgpUpdate.valid) {
                 logger.error(`Received BGP Update message is invalid: ${parsedBgpUpdate.error}`);
@@ -1055,7 +1144,7 @@ class BmpSession {
                 message,
                 position,
                 version,
-                this,
+                this.createLocRibBgpParsingContext(locRibPeer),
                 locRibPeer.peerFlags,
                 locRibPeer.peerType
             );
@@ -1736,6 +1825,7 @@ class BmpSession {
             const peerUpTlvResult = parseBmpTlvs(message, position);
             this.logTlvWarnings('Peer Up TLV', peerUpTlvResult.warnings);
             const peerUpTlvs = peerUpTlvResult.tlvs;
+            const vrfTableNames = this.decodeVrfTableNameTlvs(peerUpTlvs);
             const effectiveSessionFlags =
                 version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
                     ? getEffectivePeerFlags(sessionFlags, peerUpTlvs)
@@ -1851,6 +1941,7 @@ class BmpSession {
             bgpSession.sessionFlags = (bgpSession.sessionFlags || 0) | effectiveSessionFlags;
             bgpSession.rawSessionFlags = sessionFlags;
             bgpSession.peerUpTlvs = peerUpTlvs;
+            this.mergeVrfTableNames(bgpSession, vrfTableNames);
 
             // 考虑到不同厂商实现不同，此处不从报文中获取ribType，改为一次性全部创建出来
             const ribTypes = [

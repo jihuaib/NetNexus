@@ -20,9 +20,7 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const { UdpClientManager } = require(
-    path.join(__dirname, '..', '..', 'electron', 'utils', 'udpClientManager.js')
-);
+const { UdpClientManager } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'udpClientManager.js'));
 const { UDP_TOOL_STATE, UDP_TOOL_EVT_TYPES } = require(
     path.join(__dirname, '..', '..', 'electron', 'const', 'toolsConst.js')
 );
@@ -87,7 +85,11 @@ async function testSendCloseErrors() {
     const { emit } = createCollector();
     const manager = new UdpClientManager(emit);
     await assert.rejects(() => manager.send('not-exist', { data: 'x' }), /socket 不存在/, '非法 socket 发送未抛错');
-    assert.deepStrictEqual(manager.close('not-exist'), { id: 'not-exist', closed: false }, '关闭不存在 socket 应返回 false');
+    assert.deepStrictEqual(
+        manager.close('not-exist'),
+        { id: 'not-exist', closed: false },
+        '关闭不存在 socket 应返回 false'
+    );
 
     console.log('  ✓ send/close 错误处理');
 }
@@ -102,7 +104,10 @@ async function testLifecycle() {
         assert.ok(id, '应返回 socket id');
 
         // opening 事件应立即推送
-        assert.ok(states.some(s => s.id === id && s.state === UDP_TOOL_STATE.OPENING), '缺少 opening 状态事件');
+        assert.ok(
+            states.some(s => s.id === id && s.state === UDP_TOOL_STATE.OPENING),
+            '缺少 opening 状态事件'
+        );
 
         // 等待绑定就绪
         await waitFor(() => states.some(s => s.id === id && s.state === UDP_TOOL_STATE.LISTENING));

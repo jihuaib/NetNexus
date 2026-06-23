@@ -198,7 +198,9 @@ server.on('message', (msg, rinfo) => {
     const id = rememberPeer(rinfo);
     const hex = msg.toString('hex');
     const textPreview = msg.toString('utf8').replace(/[^\x20-\x7e]/g, '.');
-    log(`← [${timestamp()}] [#${id} ${rinfo.address}:${rinfo.port}] 收到 ${msg.length} 字节: ${hex}  |  ${textPreview}`);
+    log(
+        `← [${timestamp()}] [#${id} ${rinfo.address}:${rinfo.port}] 收到 ${msg.length} 字节: ${hex}  |  ${textPreview}`
+    );
     if (autoEcho) {
         server.send(msg, rinfo.port, rinfo.address, () => {
             log(`→ [#${id}] 自动回显 ${msg.length} 字节`);

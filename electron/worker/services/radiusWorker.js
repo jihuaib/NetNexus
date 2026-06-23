@@ -106,7 +106,10 @@ class RadiusWorker {
         this.messageHandler.registerHandler(RADIUS_REQ_TYPES.START_RADIUS, this.startRadius.bind(this));
         this.messageHandler.registerHandler(RADIUS_REQ_TYPES.STOP_RADIUS, this.stopRadius.bind(this));
         this.messageHandler.registerHandler(RADIUS_REQ_TYPES.GET_REQUEST_LIST, this.getRequestList.bind(this));
-        this.messageHandler.registerHandler(RADIUS_REQ_TYPES.CLEAR_REQUEST_HISTORY, this.clearRequestHistory.bind(this));
+        this.messageHandler.registerHandler(
+            RADIUS_REQ_TYPES.CLEAR_REQUEST_HISTORY,
+            this.clearRequestHistory.bind(this)
+        );
         this.messageHandler.registerHandler(RADIUS_REQ_TYPES.GET_SESSION_LIST, this.getSessionList.bind(this));
     }
 
@@ -694,7 +697,9 @@ class RadiusWorker {
         if (user.classAttribute) {
             attrs.push(Radius.stringAttr(RADIUS_ATTRIBUTES.CLASS, user.classAttribute));
         }
-        asArray(user.filterIds).forEach(filterId => attrs.push(Radius.stringAttr(RADIUS_ATTRIBUTES.FILTER_ID, filterId)));
+        asArray(user.filterIds).forEach(filterId =>
+            attrs.push(Radius.stringAttr(RADIUS_ATTRIBUTES.FILTER_ID, filterId))
+        );
         asArray(user.vendorAttributes).forEach(vsa => {
             attrs.push(Radius.vendorSpecificAttr(vsa.vendorId, vsa.vendorType || vsa.type, vsa.value || ''));
         });
@@ -858,9 +863,7 @@ class RadiusWorker {
         }
 
         const result =
-            packet.code === RADIUS_CODES.DISCONNECT_REQUEST
-                ? this.processDisconnect(packet)
-                : this.processCoa(packet);
+            packet.code === RADIUS_CODES.DISCONNECT_REQUEST ? this.processDisconnect(packet) : this.processCoa(packet);
         const responseCode =
             packet.code === RADIUS_CODES.DISCONNECT_REQUEST
                 ? result.ok
@@ -907,7 +910,9 @@ class RadiusWorker {
     }
 
     processDisconnect(packet) {
-        const unsupported = packet.attributes.find(attr => !IDENTIFICATION_ATTRIBUTES.has(attr.type) && !META_ATTRIBUTES.has(attr.type));
+        const unsupported = packet.attributes.find(
+            attr => !IDENTIFICATION_ATTRIBUTES.has(attr.type) && !META_ATTRIBUTES.has(attr.type)
+        );
         if (unsupported) {
             return {
                 ok: false,
@@ -937,7 +942,10 @@ class RadiusWorker {
             };
         }
         const unsupported = packet.attributes.find(
-            attr => !IDENTIFICATION_ATTRIBUTES.has(attr.type) && !COA_AUTHORIZATION_ATTRIBUTES.has(attr.type) && !META_ATTRIBUTES.has(attr.type)
+            attr =>
+                !IDENTIFICATION_ATTRIBUTES.has(attr.type) &&
+                !COA_AUTHORIZATION_ATTRIBUTES.has(attr.type) &&
+                !META_ATTRIBUTES.has(attr.type)
         );
         if (unsupported) {
             return {
@@ -974,7 +982,9 @@ class RadiusWorker {
                 }
             };
         }
-        const sessions = Array.from(this.activeSessions.values()).filter(session => this.sessionMatches(session, filters));
+        const sessions = Array.from(this.activeSessions.values()).filter(session =>
+            this.sessionMatches(session, filters)
+        );
         if (sessions.length === 0) {
             return {
                 error: {
@@ -993,7 +1003,10 @@ class RadiusWorker {
                 case RADIUS_ATTRIBUTES.USER_NAME:
                     return session.userName === filter.value.toString('utf8');
                 case RADIUS_ATTRIBUTES.NAS_IP_ADDRESS:
-                    return session.nasIpAddress === Radius.bufferToIp(filter.value) || session.nasAddress === Radius.bufferToIp(filter.value);
+                    return (
+                        session.nasIpAddress === Radius.bufferToIp(filter.value) ||
+                        session.nasAddress === Radius.bufferToIp(filter.value)
+                    );
                 case RADIUS_ATTRIBUTES.NAS_IPV6_ADDRESS: {
                     const nasIpv6Address = Radius.bufferToIpv6(filter.value);
                     return session.nasIpv6Address === nasIpv6Address || session.nasAddress === nasIpv6Address;
@@ -1023,7 +1036,9 @@ class RadiusWorker {
     }
 
     applyCoaAttributes(session, packet) {
-        const filterIds = Radius.getAttributes(packet, RADIUS_ATTRIBUTES.FILTER_ID).map(item => item.value.toString('utf8'));
+        const filterIds = Radius.getAttributes(packet, RADIUS_ATTRIBUTES.FILTER_ID).map(item =>
+            item.value.toString('utf8')
+        );
         if (filterIds.length > 0) {
             session.filterIds = filterIds;
         }

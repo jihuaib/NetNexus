@@ -107,7 +107,11 @@ async function testSendCloseErrors() {
     const { emit } = createCollector();
     const manager = new TcpClientManager(emit);
     assert.throws(() => manager.send('not-exist', { data: 'x' }), /连接不存在/, '非法连接发送未抛错');
-    assert.deepStrictEqual(manager.close('not-exist'), { id: 'not-exist', closed: false }, '关闭不存在连接应返回 false');
+    assert.deepStrictEqual(
+        manager.close('not-exist'),
+        { id: 'not-exist', closed: false },
+        '关闭不存在连接应返回 false'
+    );
 
     console.log('  ✓ send/close 错误处理');
 }
@@ -179,10 +183,7 @@ async function testConnectFailure() {
     const manager = new TcpClientManager(emit);
     const { id } = manager.connect({ host: HOST, port, timeout: 1000 });
 
-    await waitFor(
-        () => states.some(s => s.id === id && s.state === TCP_TOOL_STATE.ERROR),
-        2000
-    );
+    await waitFor(() => states.some(s => s.id === id && s.state === TCP_TOOL_STATE.ERROR), 2000);
     assert.ok(
         states.some(s => s.id === id && s.state === TCP_TOOL_STATE.ERROR),
         '连接失败应推送 error 状态事件'

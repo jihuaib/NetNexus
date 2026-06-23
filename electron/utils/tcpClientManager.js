@@ -76,8 +76,7 @@ class TcpClientManager {
             throw new Error('端口范围为 1 ~ 65535');
         }
 
-        const connectTimeout =
-            Number(options.timeout) > 0 ? Number(options.timeout) : TCP_TOOL_DEFAULT.CONNECT_TIMEOUT;
+        const connectTimeout = Number(options.timeout) > 0 ? Number(options.timeout) : TCP_TOOL_DEFAULT.CONNECT_TIMEOUT;
 
         const id = `tcp-${this.nextId++}`;
         const conn = {

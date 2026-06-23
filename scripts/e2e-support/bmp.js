@@ -285,9 +285,7 @@ const BmpE2eController = (() => {
                 routeState: route.routeState,
                 pathStatusText: route.pathStatusText,
                 pathStatusReasonText: route.pathStatusReasonText,
-                parserValid: route.parserValid,
-                parseWarnings: route.parseWarnings,
-                parseErrors: route.parseErrors,
+                parseStatus: route.parseStatus,
                 routeKey: route.routeKey
             };
         }

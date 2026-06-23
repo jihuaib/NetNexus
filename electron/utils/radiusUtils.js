@@ -104,11 +104,7 @@ function normalizeAddress(address) {
     if (!address) {
         return '';
     }
-    const value = String(address)
-        .trim()
-        .replace(/^\[/, '')
-        .replace(/\]$/, '')
-        .split('%')[0];
+    const value = String(address).trim().replace(/^\[/, '').replace(/\]$/, '').split('%')[0];
     try {
         const parsed = ipaddr.parse(value);
         if (parsed.kind() === 'ipv6' && parsed.isIPv4MappedAddress()) {
@@ -527,7 +523,9 @@ function buildChapPassword(chapId, clearTextPassword, challenge) {
 }
 
 function getProxyStateAttributes(packet) {
-    return getAttributes(packet, RADIUS_ATTRIBUTES.PROXY_STATE).map(item => attr(RADIUS_ATTRIBUTES.PROXY_STATE, item.value));
+    return getAttributes(packet, RADIUS_ATTRIBUTES.PROXY_STATE).map(item =>
+        attr(RADIUS_ATTRIBUTES.PROXY_STATE, item.value)
+    );
 }
 
 function summarizeAttributes(packet) {
@@ -560,9 +558,11 @@ function summarizeAttributes(packet) {
         ) {
             value = item.value.readUInt32BE(0);
         } else if (
-            [RADIUS_ATTRIBUTES.NAS_IP_ADDRESS, RADIUS_ATTRIBUTES.FRAMED_IP_ADDRESS, RADIUS_ATTRIBUTES.FRAMED_IP_NETMASK].includes(
-                item.type
-            ) &&
+            [
+                RADIUS_ATTRIBUTES.NAS_IP_ADDRESS,
+                RADIUS_ATTRIBUTES.FRAMED_IP_ADDRESS,
+                RADIUS_ATTRIBUTES.FRAMED_IP_NETMASK
+            ].includes(item.type) &&
             item.value.length === 4
         ) {
             value = bufferToIp(item.value);

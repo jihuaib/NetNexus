@@ -65,34 +65,40 @@
                                                 </template>
                                             </a-table>
                                             <div class="route-toolbar">
-                                                <a-radio-group v-model:value="routeStateFilter" size="small">
-                                                    <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
-                                                        当前
-                                                    </a-radio-button>
-                                                    <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
-                                                        全部
-                                                    </a-radio-button>
-                                                    <a-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
-                                                        过期
-                                                    </a-radio-button>
-                                                </a-radio-group>
-                                                <a-input
-                                                    v-model:value="routePrefixFilter"
-                                                    allow-clear
-                                                    placeholder="Prefix 或 Prefix/Mask"
-                                                    style="width: 220px"
-                                                    @press-enter="searchInstanceRoutes"
-                                                />
-                                                <a-button type="primary" @click="searchInstanceRoutes">查询</a-button>
-                                                <a-tag color="green">当前 {{ routeSummary.active }}</a-tag>
-                                                <a-tag color="orange">过期 {{ routeSummary.stale }}</a-tag>
-                                                <a-button
-                                                    danger
-                                                    :disabled="routeSummary.stale === 0"
-                                                    @click="purgeStaleInstanceRoutes"
-                                                >
-                                                    清理过期
-                                                </a-button>
+                                                <div class="route-toolbar-query">
+                                                    <a-radio-group v-model:value="routeStateFilter" size="small">
+                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
+                                                            当前
+                                                        </a-radio-button>
+                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
+                                                            全部
+                                                        </a-radio-button>
+                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
+                                                            过期
+                                                        </a-radio-button>
+                                                    </a-radio-group>
+                                                    <a-input
+                                                        v-model:value="routePrefixFilter"
+                                                        allow-clear
+                                                        placeholder="Prefix 或 Prefix/Mask"
+                                                        style="width: 220px"
+                                                        @press-enter="searchInstanceRoutes"
+                                                    />
+                                                    <a-button type="primary" @click="searchInstanceRoutes">
+                                                        查询
+                                                    </a-button>
+                                                </div>
+                                                <div class="route-toolbar-status">
+                                                    <a-tag color="green">当前 {{ routeSummary.active }}</a-tag>
+                                                    <a-tag color="orange">过期 {{ routeSummary.stale }}</a-tag>
+                                                    <a-button
+                                                        danger
+                                                        :disabled="routeSummary.stale === 0"
+                                                        @click="purgeStaleInstanceRoutes"
+                                                    >
+                                                        清理过期
+                                                    </a-button>
+                                                </div>
                                             </div>
                                             <a-table
                                                 class="route-table"
@@ -103,12 +109,13 @@
                                                 :row-key="getRouteRowKey"
                                                 :row-class-name="
                                                     record =>
-                                                        record.routeState === BMP_ROUTE_STATE.STALE
+                                                        getRouteParseStatusRowClass(record.parseStatus) ||
+                                                        (record.routeState === BMP_ROUTE_STATE.STALE
                                                             ? 'route-stale-row'
-                                                            : ''
+                                                            : '')
                                                 "
                                                 size="small"
-                                                :scroll="{ x: 1320, y: '100%' }"
+                                                :scroll="{ x: 1410, y: '100%' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
@@ -123,6 +130,11 @@
                                                                 </a-button>
                                                             </a-tooltip>
                                                         </a-space>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'parseStatus'">
+                                                        <a-tag :color="getRouteParseStatusColor(record.parseStatus)">
+                                                            {{ getRouteParseStatusText(record.parseStatus) }}
+                                                        </a-tag>
                                                     </template>
                                                 </template>
                                             </a-table>
@@ -167,6 +179,11 @@
         getBmpLocRibFlagsName
     } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME } from '../../const/bgpConst';
+    import {
+        getRouteParseStatusColor,
+        getRouteParseStatusRowClass,
+        getRouteParseStatusText
+    } from '../../utils/routeParseStatus';
     import EventBus from '../../utils/eventBus';
     defineOptions({
         name: 'BgpLocRib'
@@ -641,6 +658,7 @@
         { title: 'RD', dataIndex: 'rd', key: 'rd', ellipsis: true, width: 100 },
         { title: 'Path ID', dataIndex: 'pathId', key: 'pathId', ellipsis: true, width: 100 },
         { title: 'Labels', dataIndex: 'labels', key: 'labels', ellipsis: true, width: 100 },
+        { title: '解析', dataIndex: 'parseStatus', key: 'parseStatus', width: 90, align: 'center' },
         { title: 'Origin', dataIndex: 'origin', key: 'origin', ellipsis: true, width: 80 },
         { title: 'MED', dataIndex: 'med', key: 'med', ellipsis: true, width: 80 },
         { title: 'Path Status', dataIndex: 'pathStatusText', key: 'pathStatusText', ellipsis: true, width: 160 },
@@ -743,6 +761,14 @@
         margin-bottom: 8px;
     }
 
+    .bmp-inner-tabs :deep(.ant-tabs-tab) {
+        padding: 8px 0 !important;
+    }
+
+    .bmp-inner-tabs :deep(.ant-tabs-tab + .ant-tabs-tab) {
+        margin-left: 16px !important;
+    }
+
     .client-tabs :deep(.ant-tabs-tab) {
         justify-content: flex-start;
         padding: 8px;
@@ -757,9 +783,32 @@
         flex: 0 0 auto;
         display: flex;
         align-items: center;
-        gap: 12px;
+        justify-content: space-between;
+        gap: 12px 16px;
         flex-wrap: wrap;
         margin-bottom: 8px;
+    }
+
+    .route-toolbar-query,
+    .route-toolbar-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 0;
+    }
+
+    .route-toolbar-query {
+        flex: 1 1 auto;
+    }
+
+    .route-toolbar-status {
+        flex: 0 0 auto;
+        margin-left: auto;
+    }
+
+    .route-toolbar-status :deep(.ant-tag) {
+        margin-inline-end: 0;
     }
 
     .bgp-peer-info-header {
@@ -790,6 +839,14 @@
     :deep(.route-stale-row) {
         color: #8c6d1f;
         background-color: #fffbe6;
+    }
+
+    :deep(.route-parse-warning-row) {
+        background-color: #fff7e6;
+    }
+
+    :deep(.route-parse-error-row) {
+        background-color: #fff1f0;
     }
 
     .detail-table {

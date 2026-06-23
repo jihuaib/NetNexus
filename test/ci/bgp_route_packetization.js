@@ -198,11 +198,7 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
 }
 
 {
-    const instance = new BgpInstance(
-        0,
-        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
-        BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
-    );
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST);
     const sentBuffers = [];
     const peer = createPeer(instance, sentBuffers);
 
@@ -381,8 +377,7 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
         sentBuffers,
         {},
         {
-            localCapFlags:
-                BgpConst.BGP_CAP_FLAGS.FOUR_OCTET_AS | BgpConst.BGP_CAP_FLAGS.EXTENDED_NEXT_HOP_ENCODING
+            localCapFlags: BgpConst.BGP_CAP_FLAGS.FOUR_OCTET_AS | BgpConst.BGP_CAP_FLAGS.EXTENDED_NEXT_HOP_ENCODING
         }
     );
 

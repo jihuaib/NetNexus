@@ -247,16 +247,7 @@ class BgpPeer {
         const endpointBehavior = Number.isInteger(Number(routeAttr.srv6EndpointBehavior))
             ? Number(routeAttr.srv6EndpointBehavior)
             : this.getDefaultSrv6EndpointBehavior();
-        const sidStructureSubSubTlv = [
-            0x01,
-            ...writeUInt16(6),
-            48,
-            16,
-            16,
-            0,
-            0,
-            0
-        ];
+        const sidStructureSubSubTlv = [0x01, ...writeUInt16(6), 48, 16, 16, 0, 0, 0];
         const sidInformationValue = [
             0x00,
             ...sidBytes,

@@ -41,7 +41,8 @@ function areRouteAttrsEqual(left = {}, right = {}) {
 }
 
 function getPeerAddressFamilyOptions(config, addressFamily, allowSrv6PrefixSid = false) {
-    const familyConfig = config?.addressFamilyConfig?.[String(addressFamily)] || config?.addressFamilyConfig?.[addressFamily] || {};
+    const familyConfig =
+        config?.addressFamilyConfig?.[String(addressFamily)] || config?.addressFamilyConfig?.[addressFamily] || {};
     const normalizedFamily = Number(addressFamily);
     return {
         sendSrv6PrefixSid:
@@ -649,8 +650,7 @@ class BgpWorker {
         const addressFamily = Number(config.addressFamily);
         const isLabelUnicast = addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
         const isSrv6CapableUnicast =
-            addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC ||
-            addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC;
+            addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC;
         const labelContext = isLabelUnicast ? buildLabelGenerationContext(config) : null;
         const srv6Context = isSrv6CapableUnicast
             ? buildSrv6SidGenerationContext(config, {
@@ -667,44 +667,46 @@ class BgpWorker {
         if (instance.rt !== nextRt) {
             instance.rt = nextRt;
         }
-        const generatedCount = forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, (route, index) => {
-            const key = BgpRoute.makeKey(route.ip, route.mask);
-            const label = labelContext ? getGeneratedLabel(labelContext, index) : null;
-            const attrOverrides = {
-                customAttr: instance.customAttr,
-                rt: instance.rt
-            };
-            if (srv6Context) {
-                attrOverrides.srv6Sid = srv6Context.enabled ? getGeneratedSrv6Sid(srv6Context, index) : '';
-                attrOverrides.srv6EndpointBehavior = srv6Context.enabled ? srv6Context.endpointBehavior : null;
-            }
+        const generatedCount = forEachGeneratedRouteIp(
+            ipType,
+            config.prefix,
+            config.mask,
+            config.count,
+            (route, index) => {
+                const key = BgpRoute.makeKey(route.ip, route.mask);
+                const label = labelContext ? getGeneratedLabel(labelContext, index) : null;
+                const attrOverrides = {
+                    customAttr: instance.customAttr,
+                    rt: instance.rt
+                };
+                if (srv6Context) {
+                    attrOverrides.srv6Sid = srv6Context.enabled ? getGeneratedSrv6Sid(srv6Context, index) : '';
+                    attrOverrides.srv6EndpointBehavior = srv6Context.enabled ? srv6Context.endpointBehavior : null;
+                }
 
-            if (!instance.routeMap.has(key)) {
-                const bgpRoute = new BgpRoute(instance);
-                bgpRoute.ip = route.ip;
-                bgpRoute.mask = route.mask;
-                if (labelContext) {
-                    bgpRoute.label = label;
-                }
-                instance.setRoute(
-                    key,
-                    bgpRoute,
-                    instance.makeRouteAttr(bgpRoute, attrOverrides)
-                );
-                hasRouteChanged = true;
-            } else {
-                const bgpRoute = instance.routeMap.get(key);
-                if (labelContext && bgpRoute.label !== label) {
-                    bgpRoute.label = label;
+                if (!instance.routeMap.has(key)) {
+                    const bgpRoute = new BgpRoute(instance);
+                    bgpRoute.ip = route.ip;
+                    bgpRoute.mask = route.mask;
+                    if (labelContext) {
+                        bgpRoute.label = label;
+                    }
+                    instance.setRoute(key, bgpRoute, instance.makeRouteAttr(bgpRoute, attrOverrides));
                     hasRouteChanged = true;
-                }
-                const nextAttr = instance.makeRouteAttr(bgpRoute, attrOverrides);
-                if (!areRouteAttrsEqual(instance.getRouteAttr(bgpRoute), nextAttr)) {
-                    instance.assignRouteAttr(key, nextAttr);
-                    hasRouteChanged = true;
+                } else {
+                    const bgpRoute = instance.routeMap.get(key);
+                    if (labelContext && bgpRoute.label !== label) {
+                        bgpRoute.label = label;
+                        hasRouteChanged = true;
+                    }
+                    const nextAttr = instance.makeRouteAttr(bgpRoute, attrOverrides);
+                    if (!areRouteAttrsEqual(instance.getRouteAttr(bgpRoute), nextAttr)) {
+                        instance.assignRouteAttr(key, nextAttr);
+                        hasRouteChanged = true;
+                    }
                 }
             }
-        });
+        );
         if (generatedCount === 0) {
             this.messageHandler.sendSuccessResponse(messageId, null, '路由生成成功');
             return;

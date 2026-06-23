@@ -39,8 +39,7 @@ function createSrv6Peer(instance, sentBuffers) {
         peerIp: '2001:db8::1',
         peerAs: 65001,
         peerType: BgpConst.BGP_PEER_TYPE.PEER_TYPE_IBGP,
-        localCapFlags:
-            BgpConst.BGP_CAP_FLAGS.FOUR_OCTET_AS | BgpConst.BGP_CAP_FLAGS.EXTENDED_NEXT_HOP_ENCODING,
+        localCapFlags: BgpConst.BGP_CAP_FLAGS.FOUR_OCTET_AS | BgpConst.BGP_CAP_FLAGS.EXTENDED_NEXT_HOP_ENCODING,
         buildBgpMessageHeader,
         processCustomPkt: () => [],
         sendRoute: buffer => sentBuffers.push(Buffer.from(buffer))
@@ -284,9 +283,7 @@ function assertPacketLengths(buffers) {
 }
 
 {
-    const { worker, instance, responses, errors } = makeWorkerWithInstance(
-        BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST
-    );
+    const { worker, instance, responses, errors } = makeWorkerWithInstance(BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST);
 
     worker.generateRoutes('generate-ipv4-label-no-srv6', {
         addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST,

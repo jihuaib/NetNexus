@@ -2,6 +2,7 @@ const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const { toSerializableTlvs } = require('../../utils/bmpUtils');
 const { getRoutePrefixIndexKeys } = require('../../utils/routePrefixUtils');
 const BmpConst = require('../../const/bmpConst');
+const BgpConst = require('../../const/bgpConst');
 const { BmpRouteAttrStore, DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
 
 class BmpBgpInstance {
@@ -45,8 +46,7 @@ class BmpBgpInstance {
         this.ribEpoch = 0;
     }
 
-    isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
-        const key = `${afi}|${safi}`;
+    getAddPathEnabledForKey(key, direction = 'receive') {
         if (direction === 'send') {
             return this.addPathSendMap.get(key) === true;
         }
@@ -57,6 +57,29 @@ class BmpBgpInstance {
             return this.addPathReceiveMap.get(key) === true;
         }
         return false;
+    }
+
+    getAddPathReceiveInfo(afi, safi, direction = 'receive') {
+        const key = `${afi}|${safi}`;
+        if (this.getAddPathEnabledForKey(key, direction)) {
+            return { enabled: true };
+        }
+
+        if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+            const unicastKey = `${afi}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`;
+            if (this.getAddPathEnabledForKey(unicastKey, direction)) {
+                return {
+                    enabled: true,
+                    inferred: true
+                };
+            }
+        }
+
+        return { enabled: false };
+    }
+
+    isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
+        return this.getAddPathReceiveInfo(afi, safi, direction).enabled;
     }
 
     static makeKey(instanceType, instanceRd, afi, safi) {

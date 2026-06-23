@@ -56,19 +56,27 @@
                         <a-tag color="processing">{{ selectedSession.lastStatusText || '-' }}</a-tag>
                     </a-descriptions-item>
                     <a-descriptions-item label="开始时间">{{ selectedSession.startedAt || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="更新时间">{{ selectedSession.lastUpdateAt || '-' }}</a-descriptions-item>
+                    <a-descriptions-item label="更新时间">
+                        {{ selectedSession.lastUpdateAt || '-' }}
+                    </a-descriptions-item>
                     <a-descriptions-item label="最近CoA">{{ selectedSession.lastCoaAt || '-' }}</a-descriptions-item>
                 </a-descriptions>
 
                 <a-descriptions title="NAS 与地址" size="small" bordered :column="1" class="detail-section">
                     <a-descriptions-item label="NAS地址">{{ selectedSession.nasAddress || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="NAS-IPv4">{{ selectedSession.nasIpAddress || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="NAS-IPv6">{{ selectedSession.nasIpv6Address || '-' }}</a-descriptions-item>
+                    <a-descriptions-item label="NAS-IPv4">
+                        {{ selectedSession.nasIpAddress || '-' }}
+                    </a-descriptions-item>
+                    <a-descriptions-item label="NAS-IPv6">
+                        {{ selectedSession.nasIpv6Address || '-' }}
+                    </a-descriptions-item>
                     <a-descriptions-item label="NAS-Identifier">
                         {{ selectedSession.nasIdentifier || '-' }}
                     </a-descriptions-item>
                     <a-descriptions-item label="NAS-Port">{{ valueText(selectedSession.nasPort) }}</a-descriptions-item>
-                    <a-descriptions-item label="NAS-Port-Id">{{ selectedSession.nasPortId || '-' }}</a-descriptions-item>
+                    <a-descriptions-item label="NAS-Port-Id">
+                        {{ selectedSession.nasPortId || '-' }}
+                    </a-descriptions-item>
                     <a-descriptions-item label="Calling-Station-Id">
                         {{ selectedSession.callingStationId || '-' }}
                     </a-descriptions-item>
@@ -84,7 +92,9 @@
                 </a-descriptions>
 
                 <a-descriptions title="授权更新" size="small" bordered :column="1" class="detail-section">
-                    <a-descriptions-item label="Filter-Id">{{ arrayText(selectedSession.filterIds) }}</a-descriptions-item>
+                    <a-descriptions-item label="Filter-Id">
+                        {{ arrayText(selectedSession.filterIds) }}
+                    </a-descriptions-item>
                     <a-descriptions-item label="Session-Timeout">
                         {{ valueText(selectedSession.sessionTimeout) }}
                     </a-descriptions-item>

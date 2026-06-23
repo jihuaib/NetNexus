@@ -36,9 +36,7 @@ class BmpBgpRoute {
         this.labels = null;
         this.routeType = null;
         this.nlriDetail = null;
-        this.parserValid = true;
-        this.parseErrors = null;
-        this.parseWarnings = null;
+        this.parseStatus = BmpBgpRoute.makeParseStatus();
 
         this.routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
         this.ribEpoch = 0;
@@ -185,6 +183,27 @@ class BmpBgpRoute {
         return `${BmpBgpRoute.normalizePathId(pathId)}|${BmpBgpRoute.normalizeRd(rd)}|${ip}|${mask}`;
     }
 
+    static hasParseIssue(issue) {
+        if (Array.isArray(issue)) {
+            return issue.some(item => item !== null && item !== undefined && item !== '');
+        }
+        if (typeof issue === 'number') {
+            return issue !== 0;
+        }
+        return issue !== null && issue !== undefined && issue !== '' && issue !== false;
+    }
+
+    static makeParseStatus(valid = true, errors = [], warnings = []) {
+        let parseStatus = BmpConst.BMP_ROUTE_PARSE_STATUS.OK;
+        if (valid === false || BmpBgpRoute.hasParseIssue(errors)) {
+            parseStatus |= BmpConst.BMP_ROUTE_PARSE_STATUS.ERROR;
+        }
+        if (BmpBgpRoute.hasParseIssue(warnings)) {
+            parseStatus |= BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING;
+        }
+        return parseStatus;
+    }
+
     static parseKey(key) {
         const [pathId, rd, ip, mask] = key.split('|');
         return {
@@ -301,9 +320,7 @@ class BmpBgpRoute {
             nextHop: routeAttr.nextHop,
             pathId: BmpBgpRoute.normalizePathId(this.pathId),
             labels: this.labels,
-            parserValid: this.parserValid,
-            parseErrors: this.parseErrors,
-            parseWarnings: this.parseWarnings,
+            parseStatus: this.parseStatus || BmpBgpRoute.makeParseStatus(),
             pathStatus: pathStatusInfo.pathStatus,
             pathStatusNames: pathStatusInfo.pathStatusNames,
             pathStatusText: pathStatusInfo.pathStatusText,
@@ -342,9 +359,7 @@ class BmpBgpRoute {
             routeType: this.routeType,
             rawNlri: this.nlriDetail?.rawNlri || null,
             nlriDetail: this.nlriDetail,
-            parserValid: this.parserValid,
-            parseErrors: this.parseErrors,
-            parseWarnings: this.parseWarnings,
+            parseStatus: this.parseStatus || BmpBgpRoute.makeParseStatus(),
             pathStatus: pathStatusInfo.pathStatus,
             pathStatusNames: pathStatusInfo.pathStatusNames,
             pathStatusText: pathStatusInfo.pathStatusText,
@@ -463,11 +478,11 @@ class BmpBgpRoute {
         this.routeType = null;
         delete this.rawNlri;
         this.nlriDetail = null;
-        this.parserValid = true;
-        this.parseErrors = null;
-        this.parseWarnings = null;
+        this.parseStatus = BmpBgpRoute.makeParseStatus();
         this.clearPathStatus();
     }
 }
+
+BmpBgpRoute.PARSE_STATUS = BmpConst.BMP_ROUTE_PARSE_STATUS;
 
 module.exports = BmpBgpRoute;

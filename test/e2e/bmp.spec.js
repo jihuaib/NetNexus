@@ -1,7 +1,10 @@
 const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { BmpE2eController, getBrowserMockScript } = require('../../scripts/e2e-support');
 
-const EXPECTED_ROUTE_COUNT = 12;
+const MOCK_BASE_ROUTE_COUNT = 12;
+const EXPECTED_PUBLIC_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT + 1;
+const EXPECTED_LOC_RIB_ROUTE_COUNT = Math.max(8, Math.min(25, MOCK_BASE_ROUTE_COUNT)) + 1;
+const EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT;
 
 async function recordStep(title) {
     await test.step(title, async () => {});
@@ -18,6 +21,20 @@ function formatRouteStep(route, index) {
         `status=${route.pathStatusText || '(none)'}`,
         `routeKey=${route.routeKey}`
     ].join(' | ');
+}
+
+function expectPublicAdjRibRoute(route) {
+    expect(
+        route.ip.startsWith('10.10.') || route.ip === '203.0.118.0',
+        `unexpected Adj-RIB route prefix ${route.prefix}`
+    ).toBe(true);
+}
+
+function expectPublicLocRibRoute(route) {
+    expect(
+        route.ip.startsWith('10.30.') || route.ip === '198.51.101.0',
+        `unexpected Loc-RIB route prefix ${route.prefix}`
+    ).toBe(true);
 }
 
 test.describe('BMP pages', () => {
@@ -69,11 +86,11 @@ test.describe('BMP pages', () => {
 
         await test.step('Run scripts/mockBmpClient.js and wait for parsed BMP data', async () => {
             await recordStep(
-                `Input: script=scripts/mockBmpClient.js, host=127.0.0.1, port=${bmpPort}, routes=${EXPECTED_ROUTE_COUNT}, interval=0`
+                `Input: script=scripts/mockBmpClient.js, host=127.0.0.1, port=${bmpPort}, routes=${MOCK_BASE_ROUTE_COUNT}, interval=0`
             );
 
-            await controller.startMockClient({ routes: EXPECTED_ROUTE_COUNT, interval: 0 });
-            await controller.waitForMockData({ routes: EXPECTED_ROUTE_COUNT });
+            await controller.startMockClient({ routes: MOCK_BASE_ROUTE_COUNT, interval: 0 });
+            await controller.waitForMockData({ routes: EXPECTED_PUBLIC_ROUTE_COUNT });
 
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
@@ -96,7 +113,7 @@ test.describe('BMP pages', () => {
 
         await test.step('Verify BGP session page and Adj-RIB routes', async () => {
             await recordStep(
-                'Input: route=/#/bmp/bgp-session, expectedSession=192.0.2.2 AS 65000, routeState=all, expectedRoutes=12'
+                `Input: route=/#/bmp/bgp-session, expectedSession=192.0.2.2 AS 65000, routeState=all, expectedRoutes=${EXPECTED_PUBLIC_ROUTE_COUNT}`
             );
 
             await page.goto('/#/bmp/bgp-session');
@@ -111,18 +128,18 @@ test.describe('BMP pages', () => {
             await expect(sessionRouteTable).toContainText('10.10.0.0', { timeout: 10000 });
             await expect(sessionRouteTable).toContainText('192.0.2.254');
             await expect(sessionRouteTable).toContainText('65000 65100');
-            await expect(page.getByText('当前 12')).toBeVisible();
+            await expect(page.getByText(`当前 ${EXPECTED_PUBLIC_ROUTE_COUNT}`)).toBeVisible();
 
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
-            expect(snapshot.adjRib.total).toBe(EXPECTED_ROUTE_COUNT);
+            expect(snapshot.adjRib.total).toBe(EXPECTED_PUBLIC_ROUTE_COUNT);
             await recordStep(
                 `Output: session=${snapshot.adjRib.session.sessionIp} AS ${snapshot.adjRib.session.sessionAs}, totalRoutes=${snapshot.adjRib.total}`
             );
 
             for (const [index, route] of snapshot.adjRib.routes.entries()) {
                 await test.step(`Output Adj-RIB route ${formatRouteStep(route, index + 1)}`, async () => {
-                    expect(route.prefix).toMatch(/^10\.10\./u);
+                    expectPublicAdjRibRoute(route);
                     expect(route.nextHop).toBe('192.0.2.254');
                     expect(route.asPath).toBe('65000 65100');
                     expect(route.routeState).toBe('active');
@@ -132,7 +149,7 @@ test.describe('BMP pages', () => {
 
         await test.step('Verify BGP Loc-RIB page and Loc-RIB routes', async () => {
             await recordStep(
-                'Input: route=/#/bmp/bgp-loc-rib, expectedInstance=global Local RIB, routeState=all, expectedRoutes=12'
+                `Input: route=/#/bmp/bgp-loc-rib, expectedInstance=global Local RIB, routeState=all, expectedRoutes=${EXPECTED_LOC_RIB_ROUTE_COUNT}`
             );
 
             await page.goto('/#/bmp/bgp-loc-rib');
@@ -145,18 +162,18 @@ test.describe('BMP pages', () => {
             const locRibRouteTable = page.getByTestId('bmp-loc-rib-route-table');
             await expect(locRibRouteTable).toContainText('10.30.0.0', { timeout: 10000 });
             await expect(locRibRouteTable).toContainText('0.0.0.0');
-            await expect(page.getByText('当前 12')).toBeVisible();
+            await expect(page.getByText(`当前 ${EXPECTED_LOC_RIB_ROUTE_COUNT}`)).toBeVisible();
 
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
-            expect(snapshot.locRib.total).toBe(EXPECTED_ROUTE_COUNT);
+            expect(snapshot.locRib.total).toBe(EXPECTED_LOC_RIB_ROUTE_COUNT);
             await recordStep(
                 `Output: instance=${snapshot.locRib.instance.vrfTableNames.join(',')}, totalRoutes=${snapshot.locRib.total}`
             );
 
             for (const [index, route] of snapshot.locRib.routes.entries()) {
                 await test.step(`Output Loc-RIB route ${formatRouteStep(route, index + 1)}`, async () => {
-                    expect(route.prefix).toMatch(/^10\.30\./u);
+                    expectPublicLocRibRoute(route);
                     expect(route.nextHop).toBe('0.0.0.0');
                     expect(route.asPath).toBe('65000');
                     expect(route.routeState).toBe('active');
@@ -169,9 +186,11 @@ test.describe('BMP pages', () => {
 
             await page.goto('/#/bmp/bgp-session-statis-report');
             await expect(page.getByText('192.0.2.2 | AS 65000')).toBeVisible({ timeout: 10000 });
-            await expect(page.getByText('12').first()).toBeVisible();
+            await expect(page.getByText(String(EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT)).first()).toBeVisible();
 
-            await recordStep('Output: session statistics visible, routeCount=12');
+            await recordStep(
+                `Output: session statistics visible, routeCount=${EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT}`
+            );
         });
 
         await test.step('Verify BGP Loc-RIB statistics page', async () => {
@@ -179,9 +198,9 @@ test.describe('BMP pages', () => {
 
             await page.goto('/#/bmp/bgp-loc-rib-statis-report');
             await expect(page.getByText('global').first()).toBeVisible({ timeout: 10000 });
-            await expect(page.getByText('12').first()).toBeVisible();
+            await expect(page.getByText(String(EXPECTED_LOC_RIB_ROUTE_COUNT)).first()).toBeVisible();
 
-            await recordStep('Output: Loc-RIB statistics visible, routeCount=12');
+            await recordStep(`Output: Loc-RIB statistics visible, routeCount=${EXPECTED_LOC_RIB_ROUTE_COUNT}`);
         });
 
         await test.step('Stop BMP server from UI and verify the mock client is disconnected', async () => {
@@ -207,7 +226,7 @@ test.describe('BMP pages', () => {
         const bmpPort = await BmpE2eController.getFreePort();
 
         await test.step('Start BMP server and connect mock client', async () => {
-            await recordStep(`Input: route=/#/bmp/bmp-config, port=${bmpPort}, routes=${EXPECTED_ROUTE_COUNT}`);
+            await recordStep(`Input: route=/#/bmp/bmp-config, port=${bmpPort}, routes=${MOCK_BASE_ROUTE_COUNT}`);
 
             await page.goto('/#/bmp/bmp-config');
             await expect(page.getByTestId('bmp-config-page')).toBeVisible();
@@ -215,8 +234,8 @@ test.describe('BMP pages', () => {
             await page.getByTestId('bmp-start-button').click();
             await expect(page.getByTestId('bmp-stop-button')).toBeEnabled();
 
-            await controller.startMockClient({ routes: EXPECTED_ROUTE_COUNT, interval: 0 });
-            await controller.waitForMockData({ routes: EXPECTED_ROUTE_COUNT });
+            await controller.startMockClient({ routes: MOCK_BASE_ROUTE_COUNT, interval: 0 });
+            await controller.waitForMockData({ routes: EXPECTED_PUBLIC_ROUTE_COUNT });
 
             await expect(page.getByTestId('bmp-client-table')).toContainText('mock-bmp-router', {
                 timeout: 10000

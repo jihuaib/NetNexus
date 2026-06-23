@@ -59,6 +59,12 @@ const BMP_ROUTE_STATE_FILTER = {
     ALL: 'all'
 };
 
+const BMP_ROUTE_PARSE_STATUS = {
+    OK: 0,
+    WARNING: 0x01,
+    ERROR: 0x02
+};
+
 // BMP message types (RFC 7854)
 const BMP_MSG_TYPE = {
     ROUTE_MONITORING: 0,
@@ -282,6 +288,7 @@ module.exports = {
     BMP_ROUTE_UPDATE_TYPE,
     BMP_ROUTE_STATE,
     BMP_ROUTE_STATE_FILTER,
+    BMP_ROUTE_PARSE_STATUS,
     BMP_EVT_TYPES,
     BMP_REQ_TYPES,
     BMP_BGP_RIB_TYPE,

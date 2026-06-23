@@ -133,8 +133,7 @@ function isSrv6Enabled(config) {
 }
 
 function buildSrv6SidGenerationContext(config, options = {}) {
-    const defaultEndpointBehavior =
-        options.defaultEndpointBehavior ?? BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6;
+    const defaultEndpointBehavior = options.defaultEndpointBehavior ?? BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6;
 
     if (!isSrv6Enabled(config)) {
         return {

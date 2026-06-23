@@ -21,8 +21,8 @@
                                     <a-tabs v-model:active-key="activeBgpSessionKey" class="bmp-inner-tabs">
                                         <a-tab-pane
                                             v-for="session in bgpSessionList"
-                                            :key="`${session.sessionType}|${session.sessionRd}|${session.sessionIp}|${session.sessionAs}`"
-                                            :tab="`${session.sessionType} | rd(${session.sessionRd}) | ip(${session.sessionIp}) | as(${session.sessionAs})`"
+                                            :key="getSessionKey(session)"
+                                            :tab="formatSessionTab(session)"
                                         >
                                             <a-table
                                                 class="detail-table"
@@ -83,52 +83,56 @@
                                                 </template>
                                             </a-table>
                                             <div class="route-toolbar">
-                                                <a-select v-model:value="activeLocRibAf" style="width: 200px">
-                                                    <a-select-option
-                                                        v-for="af in session.enabledAddrFamilyTypes"
-                                                        :key="af"
-                                                        :value="af"
+                                                <div class="route-toolbar-query">
+                                                    <a-select v-model:value="activeLocRibAf" style="width: 200px">
+                                                        <a-select-option
+                                                            v-for="af in session.enabledAddrFamilyTypes"
+                                                            :key="af"
+                                                            :value="af"
+                                                        >
+                                                            {{ ADDRESS_FAMILY_NAME[af] || af }}
+                                                        </a-select-option>
+                                                    </a-select>
+                                                    <a-select v-model:value="activeLocRibType" style="width: 200px">
+                                                        <a-select-option
+                                                            v-for="rt in session.ribTypes"
+                                                            :key="rt"
+                                                            :value="rt"
+                                                        >
+                                                            {{ BMP_BGP_RIB_TYPE_NAME[rt] }}
+                                                        </a-select-option>
+                                                    </a-select>
+                                                    <a-radio-group v-model:value="routeStateFilter" size="small">
+                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
+                                                            当前
+                                                        </a-radio-button>
+                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
+                                                            全部
+                                                        </a-radio-button>
+                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
+                                                            过期
+                                                        </a-radio-button>
+                                                    </a-radio-group>
+                                                    <a-input
+                                                        v-model:value="routePrefixFilter"
+                                                        allow-clear
+                                                        placeholder="Prefix 或 Prefix/Mask"
+                                                        style="width: 220px"
+                                                        @press-enter="searchBgpRoutes"
+                                                    />
+                                                    <a-button type="primary" @click="searchBgpRoutes">查询</a-button>
+                                                </div>
+                                                <div class="route-toolbar-status">
+                                                    <a-tag color="green">当前 {{ routeSummary.active }}</a-tag>
+                                                    <a-tag color="orange">过期 {{ routeSummary.stale }}</a-tag>
+                                                    <a-button
+                                                        danger
+                                                        :disabled="routeSummary.stale === 0"
+                                                        @click="purgeStaleRoutes"
                                                     >
-                                                        {{ ADDRESS_FAMILY_NAME[af] || af }}
-                                                    </a-select-option>
-                                                </a-select>
-                                                <a-select v-model:value="activeLocRibType" style="width: 200px">
-                                                    <a-select-option
-                                                        v-for="rt in session.ribTypes"
-                                                        :key="rt"
-                                                        :value="rt"
-                                                    >
-                                                        {{ BMP_BGP_RIB_TYPE_NAME[rt] }}
-                                                    </a-select-option>
-                                                </a-select>
-                                                <a-radio-group v-model:value="routeStateFilter" size="small">
-                                                    <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
-                                                        当前
-                                                    </a-radio-button>
-                                                    <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
-                                                        全部
-                                                    </a-radio-button>
-                                                    <a-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
-                                                        过期
-                                                    </a-radio-button>
-                                                </a-radio-group>
-                                                <a-input
-                                                    v-model:value="routePrefixFilter"
-                                                    allow-clear
-                                                    placeholder="Prefix 或 Prefix/Mask"
-                                                    style="width: 220px"
-                                                    @press-enter="searchBgpRoutes"
-                                                />
-                                                <a-tag color="green">当前 {{ routeSummary.active }}</a-tag>
-                                                <a-tag color="orange">过期 {{ routeSummary.stale }}</a-tag>
-                                                <a-button type="primary" @click="searchBgpRoutes">查询</a-button>
-                                                <a-button
-                                                    danger
-                                                    :disabled="routeSummary.stale === 0"
-                                                    @click="purgeStaleRoutes"
-                                                >
-                                                    清理过期
-                                                </a-button>
+                                                        清理过期
+                                                    </a-button>
+                                                </div>
                                             </div>
                                             <a-table
                                                 class="route-table"
@@ -139,12 +143,13 @@
                                                 :row-key="getRouteRowKey"
                                                 :row-class-name="
                                                     record =>
-                                                        record.routeState === BMP_ROUTE_STATE.STALE
+                                                        getRouteParseStatusRowClass(record.parseStatus) ||
+                                                        (record.routeState === BMP_ROUTE_STATE.STALE
                                                             ? 'route-stale-row'
-                                                            : ''
+                                                            : '')
                                                 "
                                                 size="small"
-                                                :scroll="{ x: 1320, y: '100%' }"
+                                                :scroll="{ x: 1410, y: '100%' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
@@ -159,6 +164,11 @@
                                                                 </a-button>
                                                             </a-tooltip>
                                                         </a-space>
+                                                    </template>
+                                                    <template v-else-if="column.key === 'parseStatus'">
+                                                        <a-tag :color="getRouteParseStatusColor(record.parseStatus)">
+                                                            {{ getRouteParseStatusText(record.parseStatus) }}
+                                                        </a-tag>
                                                     </template>
                                                 </template>
                                             </a-table>
@@ -205,6 +215,11 @@
         getBmpFlagsName
     } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME } from '../../const/bgpConst';
+    import {
+        getRouteParseStatusColor,
+        getRouteParseStatusRowClass,
+        getRouteParseStatusText
+    } from '../../utils/routeParseStatus';
     import EventBus from '../../utils/eventBus';
     defineOptions({
         name: 'BgpSession'
@@ -244,11 +259,12 @@
             ellipsis: true
         },
         {
-            title: 'RD',
+            title: 'RD / VRF',
             dataIndex: 'sessionRd',
             key: 'sessionRd',
-            width: 100,
-            ellipsis: true
+            width: 140,
+            ellipsis: true,
+            customRender: ({ record }) => formatSessionVrfOrRd(record)
         },
         {
             title: 'Router ID',
@@ -316,8 +332,20 @@
 
     const getClientKey = client => `${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`;
 
-    const getSessionKey = session =>
-        `${session.sessionType}|${session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
+    const getSessionKey = session => `${session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
+
+    const getSessionApiInfo = session => {
+        if (!session) {
+            return null;
+        }
+
+        return {
+            sessionType: session.sessionType,
+            sessionRd: session.sessionRd,
+            sessionIp: session.sessionIp,
+            sessionAs: session.sessionAs
+        };
+    };
 
     // View peer details
     const viewSessionDetails = record => {
@@ -342,10 +370,14 @@
             return;
         }
 
+        const sessionInfo = getSessionApiInfo(getActiveSession());
+        if (!sessionInfo) {
+            currentDetails.value = record;
+            return;
+        }
+
         const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
-        const [sessionType, sessionRd, sessionIp, sessionAs] = activeBgpSessionKey.value.split('|');
         const client = { localIp, localPort, remoteIp, remotePort };
-        const sessionInfo = { sessionType, sessionRd, sessionIp, sessionAs };
         const routeKey = getRouteKey(record);
 
         try {
@@ -405,6 +437,22 @@
 
     const formatClientTab = client => {
         return client.remoteIp || '-';
+    };
+
+    const getSessionVrfTableNames = session => {
+        return Array.isArray(session?.vrfTableNames) ? session.vrfTableNames.filter(Boolean) : [];
+    };
+
+    const formatSessionVrfOrRd = session => {
+        const vrfTableNames = getSessionVrfTableNames(session);
+        if (vrfTableNames.length > 0) {
+            return vrfTableNames.join(', ');
+        }
+        return session.sessionRd === '0:0' ? 'global' : session.sessionRd;
+    };
+
+    const formatSessionTab = session => {
+        return `${formatSessionVrfOrRd(session)} | ${session.sessionIp} | ${session.sessionAs}`;
     };
 
     // Close details drawer
@@ -709,6 +757,7 @@
         { title: 'RD', dataIndex: 'rd', key: 'rd', ellipsis: true, width: 100 },
         { title: 'Path ID', dataIndex: 'pathId', key: 'pathId', ellipsis: true, width: 100 },
         { title: 'Labels', dataIndex: 'labels', key: 'labels', ellipsis: true, width: 100 },
+        { title: '解析', dataIndex: 'parseStatus', key: 'parseStatus', width: 90, align: 'center' },
         { title: 'Origin', dataIndex: 'origin', key: 'origin', ellipsis: true, width: 80 },
         { title: 'MED', dataIndex: 'med', key: 'med', ellipsis: true, width: 80 },
         { title: 'Path Status', dataIndex: 'pathStatusText', key: 'pathStatusText', ellipsis: true, width: 160 },
@@ -748,11 +797,14 @@
         const requestId = ++routeListRequestId;
         const requestKey = `${activeClientKey.value}|${activeBgpSessionKey.value}|${activeLocRibAf.value}|${activeLocRibType.value}|${bgpRoutePagination.value.current}|${routeStateFilter.value}|${appliedRoutePrefixFilter.value}`;
 
-        const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
-        const [sessionType, sessionRd, sessionIp, sessionAs] = activeBgpSessionKey.value.split('|');
+        const sessionInfo = getSessionApiInfo(getActiveSession());
+        if (!sessionInfo) {
+            resetRouteData();
+            return;
+        }
 
+        const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
         const client = { localIp, localPort, remoteIp, remotePort };
-        const sessionInfo = { sessionType, sessionRd, sessionIp, sessionAs };
         const af = activeLocRibAf.value;
         const ribType = activeLocRibType.value;
         const page = bgpRoutePagination.value.current;
@@ -802,10 +854,12 @@
         )
             return;
         const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
-        const [sessionType, sessionRd, sessionIp, sessionAs] = activeBgpSessionKey.value.split('|');
+        const sessionInfo = getSessionApiInfo(getActiveSession());
+        if (!sessionInfo) {
+            return;
+        }
 
         const client = { localIp, localPort, remoteIp, remotePort };
-        const sessionInfo = { sessionType, sessionRd, sessionIp, sessionAs };
 
         try {
             const res = await window.bmpApi.purgeStaleBgpRoutes(
@@ -928,6 +982,14 @@
         margin-bottom: 8px;
     }
 
+    .bmp-inner-tabs :deep(.ant-tabs-tab) {
+        padding: 8px 0 !important;
+    }
+
+    .bmp-inner-tabs :deep(.ant-tabs-tab + .ant-tabs-tab) {
+        margin-left: 16px !important;
+    }
+
     .client-tabs :deep(.ant-tabs-tab) {
         justify-content: flex-start;
         padding: 8px;
@@ -957,9 +1019,32 @@
         flex: 0 0 auto;
         display: flex;
         align-items: center;
-        gap: 16px;
+        justify-content: space-between;
+        gap: 12px 16px;
         flex-wrap: wrap;
         margin-bottom: 8px;
+    }
+
+    .route-toolbar-query,
+    .route-toolbar-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 0;
+    }
+
+    .route-toolbar-query {
+        flex: 1 1 auto;
+    }
+
+    .route-toolbar-status {
+        flex: 0 0 auto;
+        margin-left: auto;
+    }
+
+    .route-toolbar-status :deep(.ant-tag) {
+        margin-inline-end: 0;
     }
 
     .no-result-message {
@@ -975,6 +1060,14 @@
     :deep(.route-stale-row) {
         color: #8c6d1f;
         background-color: #fffbe6;
+    }
+
+    :deep(.route-parse-warning-row) {
+        background-color: #fff7e6;
+    }
+
+    :deep(.route-parse-error-row) {
+        background-color: #fff1f0;
     }
 
     .detail-table {

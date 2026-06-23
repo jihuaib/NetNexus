@@ -8,9 +8,9 @@ on:
             - master
 
 jobs:
-    test:
-        name: Lint, Test, Build
-        runs-on: ubuntu-22.04
+    e2e-macos:
+        name: macOS Tests and Packaged E2E
+        runs-on: macos-latest
         env:
             NODE_VERSION: '16.20.2'
 
@@ -30,34 +30,31 @@ jobs:
             - name: Install dependencies
               run: npm ci
 
-            - name: Run lint
+            - name: Run macOS lint
               run: npm run lint
 
-            - name: Run tests
+            - name: Run macOS tests
               run: npm test
 
-            - name: Run minified CI tests
+            - name: Run macOS minified CI tests
               run: npm run test:ci:minified
 
-            - name: Install Playwright browsers
-              run: npx playwright install --with-deps chromium
+            - name: Build on macOS
+              run: npm run build
 
-            - name: Run UI tests
-              run: xvfb-run --auto-servernum npm run test:e2e
+            - name: Run macOS packaged UI tests
+              run: npm run test:e2e
 
             - name: Upload Playwright report
               if: ${{ always() }}
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-report-linux
+                  name: playwright-report-macos
                   path: |
                       playwright-report/
                       test-results/
                   if-no-files-found: ignore
                   retention-days: 7
-
-            - name: Build
-              run: npm run build
 
     e2e-windows:
         name: Windows Tests and Packaged E2E
@@ -81,11 +78,17 @@ jobs:
             - name: Install dependencies
               run: npm ci
 
+            - name: Run Windows lint
+              run: npm run lint
+
             - name: Run Windows tests
               run: npm test
 
             - name: Run Windows minified CI tests
               run: npm run test:ci:minified
+
+            - name: Build on Windows
+              run: npm run build
 
             - name: Run Windows packaged UI tests
               run: npm run test:e2e

@@ -30,6 +30,10 @@ function ip(ipAddress) {
     return Buffer.from(ipAddress.split('.').map(part => parseInt(part, 10)));
 }
 
+function rd(asn = 0, assigned = 0) {
+    return Buffer.concat([u16(BgpConst.RD_TYPE.AS2), u16(asn), u32(assigned)]);
+}
+
 function bgpPacket(type, body) {
     return Buffer.concat([
         Buffer.alloc(BgpConst.BGP_MARKER_LEN, 0xff),
@@ -53,18 +57,38 @@ function bgpOpenForAf({
     safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
     addPathMode = null
 } = {}) {
-    const capabilities = [
-        capability(
-            BgpConst.BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS,
-            Buffer.concat([u16(afi), Buffer.from([0, safi])])
-        ),
+    return bgpOpenForAddressFamilies({
+        routerId,
+        addressFamilies: [{ afi, safi, addPathMode }]
+    });
+}
+
+function bgpOpenForAddressFamilies({
+    routerId = '192.0.2.1',
+    addressFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+            addPathMode: null
+        }
+    ]
+} = {}) {
+    const capabilities = [];
+    addressFamilies.forEach(({ afi, safi, addPathMode = null }) => {
+        capabilities.push(
+            capability(
+                BgpConst.BGP_OPEN_CAP_CODE.MULTIPROTOCOL_EXTENSIONS,
+                Buffer.concat([u16(afi), Buffer.from([0, safi])])
+            )
+        );
+        if (addPathMode !== null) {
+            capabilities.push(addPathCapability(addPathMode, afi, safi));
+        }
+    });
+    capabilities.push(
         capability(BgpConst.BGP_OPEN_CAP_CODE.ROUTE_REFRESH, Buffer.alloc(0)),
         capability(BgpConst.BGP_OPEN_CAP_CODE.FOUR_OCTET_AS, u32(65000))
-    ];
-
-    if (addPathMode !== null) {
-        capabilities.push(addPathCapability(addPathMode, afi, safi));
-    }
+    );
 
     const capabilityValue = Buffer.concat(capabilities);
     const optionalParam = Buffer.concat([
@@ -130,6 +154,54 @@ function ipv4Update(
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, body);
 }
 
+function labeledUnicastNlri(prefix, label = 300, pathId = null) {
+    const rawLabel = (label << 4) | 1;
+    const labelBytes = Buffer.from([(rawLabel >> 16) & 0xff, (rawLabel >> 8) & 0xff, rawLabel & 0xff]);
+    const nlri = Buffer.concat([Buffer.from([48]), labelBytes, ip(prefix).subarray(0, 3)]);
+    if (pathId === null || pathId === undefined) {
+        return nlri;
+    }
+    return Buffer.concat([u32(pathId), nlri]);
+}
+
+function labeledUnicastNlriWithoutLabel(prefix, { prefixLength = 16, pathId = null } = {}) {
+    const nlri = Buffer.concat([Buffer.from([prefixLength]), ip(prefix).subarray(0, Math.ceil(prefixLength / 8))]);
+    if (pathId === null || pathId === undefined) {
+        return nlri;
+    }
+    return Buffer.concat([u32(pathId), nlri]);
+}
+
+function labeledUnicastUpdate(prefix, { nextHop = '192.0.2.251', label = 300, pathId = null } = {}) {
+    const mpReachValue = Buffer.concat([
+        u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+        Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST, 4]),
+        ip(nextHop),
+        Buffer.from([0]),
+        labeledUnicastNlri(prefix, label, pathId)
+    ]);
+    const attrs = Buffer.concat([
+        pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+        pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, mpReachValue, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL)
+    ]);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrs.length), attrs]));
+}
+
+function labeledUnicastNoLabelUpdate(prefix, { nextHop = '192.0.2.251', pathId = null, prefixLength = 16 } = {}) {
+    const mpReachValue = Buffer.concat([
+        u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+        Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST, 4]),
+        ip(nextHop),
+        Buffer.from([0]),
+        labeledUnicastNlriWithoutLabel(prefix, { prefixLength, pathId })
+    ]);
+    const attrs = Buffer.concat([
+        pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+        pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, mpReachValue, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL)
+    ]);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrs.length), attrs]));
+}
+
 function evpnRaw24(value) {
     return Buffer.from([(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
 }
@@ -184,6 +256,7 @@ function bmpMessage(type, payload, version = BmpConst.BMP_VERSION.V4) {
 function peerHeader({
     flags = 0,
     peerType = BmpConst.BMP_PEER_TYPE.GLOBAL,
+    rd: peerRd = Buffer.alloc(BgpConst.BGP_RD_LEN),
     peerAddress = '192.0.2.2',
     peerAs = 65000,
     routerId = '192.0.2.1',
@@ -193,7 +266,7 @@ function peerHeader({
     const address = peerType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB ? Buffer.alloc(4) : ip(peerAddress);
     return Buffer.concat([
         Buffer.from([peerType, flags]),
-        Buffer.alloc(BgpConst.BGP_RD_LEN),
+        peerRd,
         Buffer.alloc(12),
         address,
         u32(peerAs),
@@ -205,6 +278,8 @@ function peerHeader({
 
 function peerUpPayload({
     flags = 0,
+    peerType = BmpConst.BMP_PEER_TYPE.GLOBAL,
+    rd: peerRd = Buffer.alloc(BgpConst.BGP_RD_LEN),
     peerAddress = '192.0.2.2',
     peerAs = 65000,
     routerId = '192.0.2.1',
@@ -214,28 +289,53 @@ function peerUpPayload({
     afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4,
     safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
     recvAddPathMode = null,
-    sendAddPathMode = null
+    sendAddPathMode = null,
+    recvAddressFamilies = null,
+    sendAddressFamilies = null,
+    vrfName = null
 } = {}) {
+    const tlvs = [];
+    if (vrfName) {
+        tlvs.push(tlv(BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME, Buffer.from(vrfName)));
+    }
+
     return Buffer.concat([
-        peerHeader({ flags, peerAddress, peerAs, routerId }),
+        peerHeader({ flags, peerType, rd: peerRd, peerAddress, peerAs, routerId }),
         Buffer.alloc(12),
         ip(localAddress),
         u16(localPort),
         u16(remotePort),
-        bgpOpenForAf({ routerId: peerAddress, afi, safi, addPathMode: recvAddPathMode }),
-        bgpOpenForAf({ routerId, afi, safi, addPathMode: sendAddPathMode })
+        Array.isArray(recvAddressFamilies)
+            ? bgpOpenForAddressFamilies({ routerId: peerAddress, addressFamilies: recvAddressFamilies })
+            : bgpOpenForAf({ routerId: peerAddress, afi, safi, addPathMode: recvAddPathMode }),
+        Array.isArray(sendAddressFamilies)
+            ? bgpOpenForAddressFamilies({ routerId, addressFamilies: sendAddressFamilies })
+            : bgpOpenForAf({ routerId, afi, safi, addPathMode: sendAddPathMode }),
+        ...tlvs
     ]);
 }
 
-function locRibPeerUpPayload(flags = BmpConst.BMP_LOC_RIB_FLAGS.FILTERED) {
+function locRibPeerUpPayload({
+    flags = BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
+    rd: peerRd = Buffer.alloc(BgpConst.BGP_RD_LEN),
+    vrfName = 'global',
+    recvAddPathMode = null,
+    sendAddPathMode = null,
+    recvAddressFamilies = null,
+    sendAddressFamilies = null
+} = {}) {
     return Buffer.concat([
-        peerHeader({ flags, peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB }),
+        peerHeader({ flags, peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB, rd: peerRd }),
         Buffer.alloc(16),
         u16(0),
         u16(0),
-        bgpOpenForAf(),
-        bgpOpenForAf(),
-        tlv(BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME, Buffer.from('global'))
+        Array.isArray(recvAddressFamilies)
+            ? bgpOpenForAddressFamilies({ addressFamilies: recvAddressFamilies })
+            : bgpOpenForAf({ addPathMode: recvAddPathMode }),
+        Array.isArray(sendAddressFamilies)
+            ? bgpOpenForAddressFamilies({ addressFamilies: sendAddressFamilies })
+            : bgpOpenForAf({ addPathMode: sendAddPathMode }),
+        tlv(BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME, Buffer.from(vrfName))
     ]);
 }
 
@@ -372,6 +472,30 @@ function buildScenario(options) {
         peerAs: 65001,
         routerId: '192.0.2.3'
     };
+    const privateRibInRd = rd(65000, 200);
+    const privateRibInPeer = {
+        peerType: BmpConst.BMP_PEER_TYPE.L3VPN,
+        rd: privateRibInRd,
+        peerAddress: '192.0.2.5',
+        peerAs: 65003,
+        routerId: '192.0.2.5'
+    };
+    const privateLabelRibInRd = rd(65000, 201);
+    const privateLabelRibInPeer = {
+        peerType: BmpConst.BMP_PEER_TYPE.L3VPN,
+        rd: privateLabelRibInRd,
+        peerAddress: '192.0.2.6',
+        peerAs: 65004,
+        routerId: '192.0.2.6'
+    };
+    const privateLabelRibInErrorRd = rd(65000, 202);
+    const privateLabelRibInErrorPeer = {
+        peerType: BmpConst.BMP_PEER_TYPE.L3VPN,
+        rd: privateLabelRibInErrorRd,
+        peerAddress: '192.0.2.7',
+        peerAs: 65005,
+        routerId: '192.0.2.7'
+    };
     const evpnPeer = {
         peerAddress: '192.0.2.4',
         peerAs: 65002,
@@ -381,10 +505,83 @@ function buildScenario(options) {
         flags: BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
         peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB
     };
+    const privateLocRibRd = rd(65000, 100);
+    const privateLocRibPeer = {
+        flags: BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
+        peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        rd: privateLocRibRd
+    };
+    const privateLabelLocRibRd = rd(65000, 102);
+    const privateLabelLocRibPeer = {
+        flags: BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
+        peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        rd: privateLabelLocRibRd
+    };
+    const privateLabelLocRibErrorRd = rd(65000, 103);
+    const privateLabelLocRibErrorPeer = {
+        flags: BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
+        peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        rd: privateLabelLocRibErrorRd
+    };
+    const unicastAddPathAndLabelFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+            addPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY
+        },
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+        }
+    ];
+    const unicastReceiveAddPathAndLabelFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+            addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+        },
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+        }
+    ];
+    const labelAddPathAndUnicastNoAddPathFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        },
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+            addPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY
+        }
+    ];
+    const labelReceiveAddPathAndUnicastNoAddPathFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        },
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+            addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+        }
+    ];
 
     const ipv4Prefixes = makePrefixes(options.routes, 10);
     const addPathPrefixes = makePrefixes(Math.max(5, Math.min(10, options.routes)), 20);
     const locRibPrefixes = makePrefixes(Math.max(8, Math.min(25, options.routes)), 30);
+    const ribInIsolationPublicPrefix = '203.0.118.0';
+    const ribInIsolationPrivatePrefix = '10.200.0.0';
+    const ribInLabelUnicastPlainPrefix = '10.201.1.0';
+    const ribInLabelUnicastLabeledPrefix = '10.201.2.0';
+    const ribInLabelUnicastNoLabelPrefix = '10.201.0.0';
+    const locRibIsolationPublicPrefix = '198.51.101.0';
+    const locRibIsolationPrivatePrefix = '10.100.0.0';
+    const locRibLabelUnicastPlainPrefix = '10.102.1.0';
+    const locRibLabelUnicastLabeledPrefix = '10.102.2.0';
+    const locRibLabelUnicastNoLabelPrefix = '10.102.0.0';
+    const publicLocRibRouteCount = locRibPrefixes.length + 1;
 
     const messages = [
         { name: 'initiation', data: initiationMessage() },
@@ -462,6 +659,129 @@ function buildScenario(options) {
             )
         })),
         {
+            name: 'peer-up-private-rib-in-add-path',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...privateRibInPeer,
+                    recvAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY,
+                    sendAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY,
+                    vrfName: 'vrf-blue'
+                })
+            )
+        },
+        {
+            name: 'private-rib-in-add-path-route',
+            data: routeMonitoringMessage(
+                privateRibInPeer,
+                ipv4Update([ribInIsolationPrivatePrefix], {
+                    nextHop: '192.0.2.251',
+                    asns: [65003, 65103],
+                    addPath: true,
+                    pathIdStart: 66
+                }),
+                {
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
+        },
+        {
+            name: 'public-rib-in-no-add-path-after-private',
+            data: routeMonitoringMessage(
+                ipv4Peer,
+                ipv4Update([ribInIsolationPublicPrefix], {
+                    nextHop: '192.0.2.254',
+                    asns: [65000, 65100]
+                })
+            )
+        },
+        {
+            name: 'statistics-private-rib-in-add-path',
+            data: statisticsReportMessage(privateRibInPeer, [
+                { type: BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN, value: 1 },
+                {
+                    type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_ADJ_RIB_IN,
+                    afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                    value: 1
+                }
+            ])
+        },
+        {
+            name: 'peer-up-private-rib-in-label-add-path-warning',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...privateLabelRibInPeer,
+                    recvAddressFamilies: unicastAddPathAndLabelFamilies,
+                    sendAddressFamilies: unicastReceiveAddPathAndLabelFamilies,
+                    vrfName: 'vrf-label'
+                })
+            )
+        },
+        {
+            name: 'private-rib-in-label-peer-unicast-add-path-route',
+            data: routeMonitoringMessage(
+                privateLabelRibInPeer,
+                ipv4Update([ribInLabelUnicastPlainPrefix], {
+                    nextHop: '192.0.2.250',
+                    asns: [65004, 65104],
+                    addPath: true,
+                    pathIdStart: 68
+                }),
+                {
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
+        },
+        {
+            name: 'private-rib-in-label-peer-labeled-add-path-warning-route',
+            data: routeMonitoringMessage(
+                privateLabelRibInPeer,
+                labeledUnicastUpdate(ribInLabelUnicastLabeledPrefix, {
+                    nextHop: '192.0.2.250',
+                    label: 301,
+                    pathId: 69
+                }),
+                {
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
+        },
+        {
+            name: 'peer-up-private-rib-in-label-add-path-error',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...privateLabelRibInErrorPeer,
+                    recvAddressFamilies: labelAddPathAndUnicastNoAddPathFamilies,
+                    sendAddressFamilies: labelReceiveAddPathAndUnicastNoAddPathFamilies,
+                    vrfName: 'vrf-label-error'
+                })
+            )
+        },
+        {
+            name: 'private-rib-in-label-peer-exact-no-label-error-route',
+            data: routeMonitoringMessage(
+                privateLabelRibInErrorPeer,
+                labeledUnicastNoLabelUpdate(ribInLabelUnicastNoLabelPrefix, {
+                    nextHop: '192.0.2.249',
+                    pathId: 76
+                }),
+                {
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
+        },
+        {
             name: 'peer-up-evpn',
             data: bmpMessage(
                 BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
@@ -484,6 +804,122 @@ function buildScenario(options) {
         {
             name: 'peer-up-loc-rib',
             data: bmpMessage(BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, locRibPeerUpPayload())
+        },
+        {
+            name: 'peer-up-private-loc-rib-add-path',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                locRibPeerUpPayload({
+                    rd: privateLocRibRd,
+                    vrfName: 'vrf-blue',
+                    recvAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY,
+                    sendAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+                })
+            )
+        },
+        {
+            name: 'private-loc-rib-add-path-route',
+            data: routeMonitoringMessage(
+                privateLocRibPeer,
+                ipv4Update([locRibIsolationPrivatePrefix], {
+                    nextHop: '0.0.0.0',
+                    asns: [65000],
+                    addPath: true,
+                    pathIdStart: 55
+                }),
+                {
+                    vrfName: 'vrf-blue',
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
+        },
+        {
+            name: 'peer-up-private-loc-rib-label-add-path-warning',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                locRibPeerUpPayload({
+                    rd: privateLabelLocRibRd,
+                    vrfName: 'vrf-label',
+                    recvAddressFamilies: unicastAddPathAndLabelFamilies,
+                    sendAddressFamilies: unicastReceiveAddPathAndLabelFamilies
+                })
+            )
+        },
+        {
+            name: 'private-loc-rib-label-peer-unicast-add-path-route',
+            data: routeMonitoringMessage(
+                privateLabelLocRibPeer,
+                ipv4Update([locRibLabelUnicastPlainPrefix], {
+                    nextHop: '0.0.0.0',
+                    asns: [65000],
+                    addPath: true,
+                    pathIdStart: 70
+                }),
+                {
+                    vrfName: 'vrf-label',
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
+        },
+        {
+            name: 'private-loc-rib-label-peer-labeled-add-path-warning-route',
+            data: routeMonitoringMessage(
+                privateLabelLocRibPeer,
+                labeledUnicastUpdate(locRibLabelUnicastLabeledPrefix, {
+                    nextHop: '0.0.0.0',
+                    label: 302,
+                    pathId: 71
+                }),
+                {
+                    vrfName: 'vrf-label',
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
+        },
+        {
+            name: 'peer-up-private-loc-rib-label-add-path-error',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                locRibPeerUpPayload({
+                    rd: privateLabelLocRibErrorRd,
+                    vrfName: 'vrf-label-error',
+                    recvAddressFamilies: labelAddPathAndUnicastNoAddPathFamilies,
+                    sendAddressFamilies: labelReceiveAddPathAndUnicastNoAddPathFamilies
+                })
+            )
+        },
+        {
+            name: 'private-loc-rib-label-peer-exact-no-label-error-route',
+            data: routeMonitoringMessage(
+                privateLabelLocRibErrorPeer,
+                labeledUnicastNoLabelUpdate(locRibLabelUnicastNoLabelPrefix, {
+                    nextHop: '0.0.0.0',
+                    pathId: 77
+                }),
+                {
+                    vrfName: 'vrf-label-error',
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
+        },
+        {
+            name: 'public-loc-rib-no-add-path-after-private',
+            data: routeMonitoringMessage(
+                locRibPeer,
+                ipv4Update([locRibIsolationPublicPrefix], {
+                    nextHop: '0.0.0.0',
+                    asns: [65000]
+                }),
+                { vrfName: 'global' }
+            )
         }
     );
 
@@ -504,12 +940,25 @@ function buildScenario(options) {
     messages.push({
         name: 'statistics-loc-rib',
         data: statisticsReportMessage(locRibPeer, [
-            { type: BmpConst.BMP_STATS_TYPE.NUM_LOC_RIB, value: locRibPrefixes.length },
+            { type: BmpConst.BMP_STATS_TYPE.NUM_LOC_RIB, value: publicLocRibRouteCount },
             {
                 type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_LOC_RIB,
                 afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
                 safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
-                value: locRibPrefixes.length
+                value: publicLocRibRouteCount
+            }
+        ])
+    });
+
+    messages.push({
+        name: 'statistics-private-loc-rib-add-path',
+        data: statisticsReportMessage(privateLocRibPeer, [
+            { type: BmpConst.BMP_STATS_TYPE.NUM_LOC_RIB, value: 1 },
+            {
+                type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_LOC_RIB,
+                afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                value: 1
             }
         ])
     });
