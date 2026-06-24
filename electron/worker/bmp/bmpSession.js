@@ -17,6 +17,10 @@ const { parseBgpPacket } = require('../../utils/bgpPacketParser');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const BmpBgpInstance = require('./bmpBgpInstance');
 
+const LOC_RIB_DEFAULT_RD = '0:0';
+const LOC_RIB_DEFAULT_RD_ADD_PATH_INFERRED_WARNING =
+    'Loc-RIB ADD-PATH is inferred from RD 0:0 for the same AFI/SAFI; Peer Up did not advertise ADD-PATH for this RD';
+
 class BmpSession {
     constructor(messageHandler, bmpWorker) {
         this.socket = null;
@@ -293,20 +297,30 @@ class BmpSession {
     }
 
     createLocRibBgpParsingContext(locRibPeer) {
+        const getInstanceAddPathReceiveInfo = (bgpInstance, afi, safi, direction) => {
+            if (!bgpInstance) {
+                return { enabled: false };
+            }
+            return typeof bgpInstance.getAddPathReceiveInfo === 'function'
+                ? bgpInstance.getAddPathReceiveInfo(afi, safi, direction)
+                : { enabled: bgpInstance.isAddPathReceiveEnabled(afi, safi, direction) };
+        };
+
         const getAddPathReceiveInfo = (afi, safi, direction = 'receive') => {
             const instanceKey = BmpBgpInstance.makeKey(locRibPeer.peerType, locRibPeer.peerRd, afi, safi);
             const bgpInstance = this.bgpInstanceMap.get(instanceKey);
+            const negotiatedForRequestedAf = this.hasNegotiatedAddressFamily(bgpInstance, afi, safi);
             if (bgpInstance) {
-                const addPathInfo =
-                    typeof bgpInstance.getAddPathReceiveInfo === 'function'
-                        ? bgpInstance.getAddPathReceiveInfo(afi, safi, direction)
-                        : { enabled: bgpInstance.isAddPathReceiveEnabled(afi, safi, direction) };
-                if (addPathInfo.enabled || safi !== BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+                const addPathInfo = getInstanceAddPathReceiveInfo(bgpInstance, afi, safi, direction);
+                if (
+                    addPathInfo.enabled ||
+                    (negotiatedForRequestedAf && safi !== BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST)
+                ) {
                     return addPathInfo;
                 }
             }
 
-            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST && negotiatedForRequestedAf) {
                 const unicastInstanceKey = BmpBgpInstance.makeKey(
                     locRibPeer.peerType,
                     locRibPeer.peerRd,
@@ -322,6 +336,21 @@ class BmpSession {
                         enabled: true,
                         inferred: true
                     };
+                }
+            }
+
+            if (!negotiatedForRequestedAf && locRibPeer.peerRd !== LOC_RIB_DEFAULT_RD) {
+                const defaultInstanceKey = BmpBgpInstance.makeKey(locRibPeer.peerType, LOC_RIB_DEFAULT_RD, afi, safi);
+                const defaultInstance = this.bgpInstanceMap.get(defaultInstanceKey);
+                if (this.hasNegotiatedAddressFamily(defaultInstance, afi, safi)) {
+                    const defaultAddPathInfo = getInstanceAddPathReceiveInfo(defaultInstance, afi, safi, direction);
+                    return defaultAddPathInfo.enabled
+                        ? {
+                              ...defaultAddPathInfo,
+                              inferred: true,
+                              warning: LOC_RIB_DEFAULT_RD_ADD_PATH_INFERRED_WARNING
+                          }
+                        : defaultAddPathInfo;
                 }
             }
 
@@ -363,6 +392,20 @@ class BmpSession {
         });
         target.vrfTableNames = Array.from(merged);
         return target.vrfTableNames.length !== previousSize;
+    }
+
+    hasNegotiatedAddressFamily(target, afi, safi) {
+        if (!target) {
+            return false;
+        }
+
+        const hasAddressFamily = addressFamilies =>
+            Array.isArray(addressFamilies) &&
+            addressFamilies.some(
+                addrFamily => Number(addrFamily.afi) === Number(afi) && Number(addrFamily.safi) === Number(safi)
+            );
+
+        return hasAddressFamily(target.recvAddressFamilies) && hasAddressFamily(target.sendAddressFamilies);
     }
 
     decodePathMarkingTlv(tlv) {

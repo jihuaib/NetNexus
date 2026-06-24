@@ -30,6 +30,16 @@ const bgpAddressFamily = require('./bgpAddressFamily');
 const LABEL_UNICAST_ADD_PATH_INFERRED_WARNING =
     'label-unicast ADD-PATH is inferred from same-AFI unicast capability; Peer Up did not advertise ADD-PATH for label-unicast';
 
+function getAddPathWarning(addPathInfo, safi) {
+    if (typeof addPathInfo.warning === 'string' && addPathInfo.warning.length > 0) {
+        return addPathInfo.warning;
+    }
+
+    return addPathInfo.inferred === true && safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+        ? LABEL_UNICAST_ADD_PATH_INFERRED_WARNING
+        : null;
+}
+
 /**
  * Parse a BGP packet from a buffer
  * @param {Buffer} buffer - The raw BGP packet buffer
@@ -1157,10 +1167,7 @@ function parseMpReachNlri(buffer, context) {
     if (context && typeof context.getAddPathReceiveInfo === 'function') {
         const addPathInfo = context.getAddPathReceiveInfo(afi, safi) || {};
         addPathEnabled = addPathInfo.enabled === true;
-        addPathWarning =
-            addPathInfo.inferred === true && safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
-                ? LABEL_UNICAST_ADD_PATH_INFERRED_WARNING
-                : null;
+        addPathWarning = getAddPathWarning(addPathInfo, safi);
     } else if (context && typeof context.isAddPathReceiveEnabled === 'function') {
         addPathEnabled = context.isAddPathReceiveEnabled(afi, safi);
     } else if (context && context.addPathMap) {
@@ -1234,10 +1241,7 @@ function parseMpUnreachNlri(buffer, context) {
     if (context && typeof context.getAddPathReceiveInfo === 'function') {
         const addPathInfo = context.getAddPathReceiveInfo(afi, safi) || {};
         addPathEnabled = addPathInfo.enabled === true;
-        addPathWarning =
-            addPathInfo.inferred === true && safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
-                ? LABEL_UNICAST_ADD_PATH_INFERRED_WARNING
-                : null;
+        addPathWarning = getAddPathWarning(addPathInfo, safi);
     } else if (context && typeof context.isAddPathReceiveEnabled === 'function') {
         addPathEnabled = context.isAddPathReceiveEnabled(afi, safi);
     } else if (context && context.addPathMap) {

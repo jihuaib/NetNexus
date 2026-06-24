@@ -210,7 +210,12 @@ function evpnNlri(routeType, body) {
     return Buffer.concat([Buffer.from([routeType, body.length]), body]);
 }
 
-function evpnVxlanUpdate(vni = 10000, sequence = 1) {
+function evpnVxlanUpdate(vni = 10000, sequence = 1, options = {}) {
+    if (typeof sequence === 'object' && sequence !== null) {
+        options = sequence;
+        sequence = 1;
+    }
+    const { pathId = null } = options;
     const rd65000 = Buffer.from([0, 0, 0xfd, 0xe8, 0, 0, 0, sequence]);
     const esi = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, sequence & 0xff]);
     const mac = Buffer.from([0xaa, 0xbb, 0xcc, 0xdd, 0xee, sequence & 0xff]);
@@ -225,12 +230,13 @@ function evpnVxlanUpdate(vni = 10000, sequence = 1) {
             evpnRaw24(vni)
         ])
     );
+    const nlri = pathId === null || pathId === undefined ? evpnRoute : Buffer.concat([u32(pathId), evpnRoute]);
     const mpReachValue = Buffer.concat([
         u16(BgpConst.BGP_AFI_TYPE.AFI_L2VPN),
         Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, 4]),
         ip('10.0.0.1'),
         Buffer.from([0]),
-        evpnRoute
+        nlri
     ]);
     const vxlanEncapsulationCommunity = Buffer.concat([Buffer.from([0x03, 0x0c, 0, 0, 0, 0]), u16(8)]);
     const attrs = Buffer.concat([
@@ -523,6 +529,12 @@ function buildScenario(options) {
         peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
         rd: privateLabelLocRibErrorRd
     };
+    const privateEvpnLocRibRd = rd(65000, 200);
+    const privateEvpnLocRibPeer = {
+        flags: BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
+        peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        rd: privateEvpnLocRibRd
+    };
     const unicastAddPathAndLabelFamilies = [
         {
             afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -564,6 +576,20 @@ function buildScenario(options) {
         {
             afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+            addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+        }
+    ];
+    const evpnAddPathFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+            addPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY
+        }
+    ];
+    const evpnReceiveAddPathFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
             addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
         }
     ];
@@ -804,6 +830,30 @@ function buildScenario(options) {
         {
             name: 'peer-up-loc-rib',
             data: bmpMessage(BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, locRibPeerUpPayload())
+        },
+        {
+            name: 'peer-up-loc-rib-evpn-add-path-default-rd',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                locRibPeerUpPayload({
+                    vrfName: 'global-evpn',
+                    recvAddressFamilies: evpnAddPathFamilies,
+                    sendAddressFamilies: evpnReceiveAddPathFamilies
+                })
+            )
+        },
+        {
+            name: 'private-loc-rib-evpn-default-rd-add-path-warning-route',
+            data: routeMonitoringMessage(
+                privateEvpnLocRibPeer,
+                evpnVxlanUpdate(10002, 3, { pathId: 88 }),
+                {
+                    vrfName: 'vrf-evpn-blue',
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
         },
         {
             name: 'peer-up-private-loc-rib-add-path',

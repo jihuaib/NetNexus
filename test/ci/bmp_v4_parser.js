@@ -8,6 +8,8 @@ const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 
 const LABEL_UNICAST_ADD_PATH_INFERRED_WARNING =
     'label-unicast ADD-PATH is inferred from same-AFI unicast capability; Peer Up did not advertise ADD-PATH for label-unicast';
+const LOC_RIB_DEFAULT_RD_ADD_PATH_INFERRED_WARNING =
+    'Loc-RIB ADD-PATH is inferred from RD 0:0 for the same AFI/SAFI; Peer Up did not advertise ADD-PATH for this RD';
 
 function u16(value) {
     return Buffer.from([(value >> 8) & 0xff, value & 0xff]);
@@ -172,7 +174,7 @@ function evpnNlri(routeType, body) {
     return Buffer.concat([Buffer.from([routeType, body.length]), body]);
 }
 
-function bgpUpdateEvpnVxlan(vni = 10000) {
+function bgpUpdateEvpnVxlan(vni = 10000, { pathId = null } = {}) {
     const rd65000 = Buffer.from([0, 0, 0xfd, 0xe8, 0, 0, 0, 1]);
     const esi = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     const evpnRoute = evpnNlri(
@@ -185,12 +187,13 @@ function bgpUpdateEvpnVxlan(vni = 10000) {
             evpnRaw24(vni)
         ])
     );
+    const nlri = pathId === null || pathId === undefined ? evpnRoute : Buffer.concat([u32(pathId), evpnRoute]);
     const mpReachValue = Buffer.concat([
         u16(BgpConst.BGP_AFI_TYPE.AFI_L2VPN),
         Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, 4]),
         ip('10.0.0.1'),
         Buffer.from([0]),
-        evpnRoute
+        nlri
     ]);
     const vxlanEncapsulationCommunity = Buffer.concat([Buffer.from([0x03, 0x0c, 0, 0, 0, 0]), u16(8)]);
     const attrs = Buffer.concat([
@@ -732,6 +735,129 @@ assert.ok(locRibInstance, 'BMPv4 Loc-RIB Route Monitoring should create a Loc-RI
 assert.equal(locRibInstance.instanceFlags, BmpConst.BMP_LOC_RIB_FLAGS.FILTERED);
 assert.deepEqual(locRibInstance.vrfTableNames, ['global']);
 assert.equal([...locRibInstance.bgpRoutes.values()][0].ip, '198.51.100.0');
+
+const { session: locRibDefaultRdEvpnAddPathSession } = makeSession();
+const locRibDefaultRdEvpnPrivateRd = rd(65000, 200);
+const locRibDefaultRdEvpnAddPathFamilies = [
+    {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+        addPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY
+    }
+];
+const locRibDefaultRdEvpnReceiveAddPathFamilies = [
+    {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+        addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+    }
+];
+locRibDefaultRdEvpnAddPathSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, {
+            vrfTableName: 'global-evpn',
+            recvAddressFamilies: locRibDefaultRdEvpnAddPathFamilies,
+            sendAddressFamilies: locRibDefaultRdEvpnReceiveAddPathFamilies
+        })
+    )
+);
+locRibDefaultRdEvpnAddPathSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, BmpConst.BMP_PEER_TYPE.LOCAL_RIB, {
+                rd: locRibDefaultRdEvpnPrivateRd
+            }),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME, 0, Buffer.from('vrf-evpn-blue')),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                bgpUpdateEvpnVxlan(10002, { pathId: 88 })
+            )
+        ])
+    )
+);
+const locRibDefaultRdEvpnInstance = locRibDefaultRdEvpnAddPathSession.bgpInstanceMap.get(
+    BmpBgpInstance.makeKey(
+        BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        '65000:200',
+        BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        BgpConst.BGP_SAFI_TYPE.SAFI_EVPN
+    )
+);
+assert.ok(
+    locRibDefaultRdEvpnInstance,
+    'Loc-RIB EVPN route should create private RD instance from Route Monitoring header RD'
+);
+const locRibDefaultRdEvpnRoute = [...locRibDefaultRdEvpnInstance.bgpRoutes.values()].find(
+    route => route.pathId === 88
+);
+assert.ok(locRibDefaultRdEvpnRoute, 'Loc-RIB EVPN route should parse ADD-PATH path-id from RD 0:0 capability');
+assert.equal(locRibDefaultRdEvpnRoute.labels, 'VNI 10002');
+assert.ok(
+    hasRouteParseStatus(locRibDefaultRdEvpnRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING),
+    'Loc-RIB EVPN route parsed via RD 0:0 ADD-PATH should be marked warning'
+);
+assert.equal(locRibDefaultRdEvpnRoute.nlriDetail.errors.length, 0);
+assert.ok(
+    locRibDefaultRdEvpnRoute.nlriDetail.warnings.includes(LOC_RIB_DEFAULT_RD_ADD_PATH_INFERRED_WARNING),
+    'Loc-RIB EVPN route parsed via RD 0:0 ADD-PATH should keep warning detail'
+);
+assert.equal(locRibDefaultRdEvpnRoute.getRouteListInfo().warnings, undefined);
+assert.equal(locRibDefaultRdEvpnRoute.getRouteListInfo().errors, undefined);
+
+const locRibExactRdEvpnNoAddPathRd = rd(65000, 201);
+const locRibExactRdEvpnFamilies = [
+    {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN
+    }
+];
+locRibDefaultRdEvpnAddPathSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, {
+            rd: locRibExactRdEvpnNoAddPathRd,
+            vrfTableName: 'vrf-evpn-exact',
+            recvAddressFamilies: locRibExactRdEvpnFamilies,
+            sendAddressFamilies: locRibExactRdEvpnFamilies
+        })
+    )
+);
+locRibDefaultRdEvpnAddPathSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, BmpConst.BMP_PEER_TYPE.LOCAL_RIB, {
+                rd: locRibExactRdEvpnNoAddPathRd
+            }),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME, 0, Buffer.from('vrf-evpn-exact')),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdateEvpnVxlan(10003))
+        ])
+    )
+);
+const locRibExactRdEvpnNoAddPathInstance = locRibDefaultRdEvpnAddPathSession.bgpInstanceMap.get(
+    BmpBgpInstance.makeKey(
+        BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        '65000:201',
+        BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+        BgpConst.BGP_SAFI_TYPE.SAFI_EVPN
+    )
+);
+const locRibExactRdEvpnNoAddPathRoute = [...locRibExactRdEvpnNoAddPathInstance.bgpRoutes.values()].find(
+    route => route.pathId === 0
+);
+assert.ok(
+    locRibExactRdEvpnNoAddPathRoute,
+    'Loc-RIB EVPN exact RD without ADD-PATH must not fall back to RD 0:0 ADD-PATH'
+);
+assert.equal(locRibExactRdEvpnNoAddPathRoute.labels, 'VNI 10003');
+assert.equal(locRibExactRdEvpnNoAddPathRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
 
 const { session: locRibPublicPrivateAddPathSession } = makeSession();
 const privateLocRibRd = rd(65000, 100);
@@ -1485,6 +1611,63 @@ assert.ok(
 );
 assert.equal(inferredAddPathLocRibLabeledRoute.getRouteListInfo().warnings, undefined);
 assert.equal(inferredAddPathLocRibLabeledRoute.getRouteListInfo().errors, undefined);
+
+const { session: locRibUnadvertisedLabelAfSession } = makeSession();
+const locRibUnadvertisedLabelAfRd = rd(65000, 104);
+locRibUnadvertisedLabelAfSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, {
+            rd: locRibUnadvertisedLabelAfRd,
+            vrfTableName: 'vrf-label-unadvertised',
+            recvAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY,
+            sendAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+        })
+    )
+);
+locRibUnadvertisedLabelAfSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, BmpConst.BMP_PEER_TYPE.LOCAL_RIB, {
+                rd: locRibUnadvertisedLabelAfRd
+            }),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME,
+                0,
+                Buffer.from('vrf-label-unadvertised')
+            ),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                labeledUnicastUpdate('1.1.1.0', { nextHop: '0.0.0.0', label: 305 })
+            )
+        ])
+    )
+);
+const locRibUnadvertisedLabelAfInstance = locRibUnadvertisedLabelAfSession.bgpInstanceMap.get(
+    BmpBgpInstance.makeKey(
+        BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        '65000:104',
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+    )
+);
+assert.ok(
+    locRibUnadvertisedLabelAfInstance,
+    'Loc-RIB IPv4 label route should create instance even when Peer Up omitted label AF'
+);
+const locRibUnadvertisedLabelAfRoute = [...locRibUnadvertisedLabelAfInstance.bgpRoutes.values()].find(
+    route => route.ip === '1.1.1.0' && route.pathId === 0
+);
+assert.ok(
+    locRibUnadvertisedLabelAfRoute,
+    'Loc-RIB IPv4 label route without advertised label AF must parse without inferred ADD-PATH'
+);
+assert.equal(locRibUnadvertisedLabelAfRoute.labels, '305(BOS)');
+assert.equal(locRibUnadvertisedLabelAfRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
 
 const { session: locRibLabeledAddPathUnicastNoAddPathSession } = makeSession();
 const locRibExactLabeledRouteRd = rd(65000, 103);
