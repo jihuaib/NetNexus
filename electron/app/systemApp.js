@@ -30,6 +30,7 @@ const FtpConst = require('../const/ftpConst');
 const ExternalApiServer = require('./externalApiServer');
 const createBmpApiRoutes = require('./bmpApiRoutes');
 const CliAccessServer = require('./cli');
+const WiresharkPluginInstaller = require('./wiresharkPluginInstaller');
 /**
  * 用于系统菜单处理
  */
@@ -79,6 +80,7 @@ class SystemApp {
             bmpApp: this.bmpApp,
             externalApiServer: this.externalApiServer
         });
+        this.wiresharkPluginInstaller = new WiresharkPluginInstaller();
         this.externalApiRoutesLoaded = false;
     }
 
@@ -228,6 +230,10 @@ class SystemApp {
         ipc.handle('common:saveUpdateSettings', (event, settings) => this.handleSaveUpdateSettings(settings));
         ipc.handle('common:getUpdateSettings', () => this.handleGetUpdateSettings());
         ipc.handle('common:selectDirectory', () => this.handleSelectDirectory());
+        ipc.handle('common:getWiresharkBmpPluginStatus', () => this.handleGetWiresharkBmpPluginStatus());
+        ipc.handle('common:installWiresharkBmpPlugin', () => this.handleInstallWiresharkBmpPlugin());
+        ipc.handle('common:uninstallWiresharkBmpPlugin', () => this.handleUninstallWiresharkBmpPlugin());
+        ipc.handle('common:openWiresharkPluginDirectory', () => this.handleOpenWiresharkPluginDirectory());
 
         // 服务器部署
         ipc.handle('common:deployServer', (event, deployConfig) => this.handleDeployServer(deployConfig));
@@ -312,6 +318,46 @@ class SystemApp {
         } catch (error) {
             logger.error('Error getting server deployment status:', error.message);
             return successResponse({ success: false }, '');
+        }
+    }
+
+    async handleGetWiresharkBmpPluginStatus() {
+        try {
+            const status = await this.wiresharkPluginInstaller.getStatus();
+            return successResponse(status, 'Wireshark插件状态获取成功');
+        } catch (error) {
+            logger.error('Error getting Wireshark BMP plugin status:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleInstallWiresharkBmpPlugin() {
+        try {
+            const status = await this.wiresharkPluginInstaller.install();
+            return successResponse(status, 'Wireshark插件已安装');
+        } catch (error) {
+            logger.error('Error installing Wireshark BMP plugin:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleUninstallWiresharkBmpPlugin() {
+        try {
+            const status = await this.wiresharkPluginInstaller.uninstall();
+            return successResponse(status, 'Wireshark插件已卸载');
+        } catch (error) {
+            logger.error('Error uninstalling Wireshark BMP plugin:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleOpenWiresharkPluginDirectory() {
+        try {
+            const status = await this.wiresharkPluginInstaller.openPluginDirectory();
+            return successResponse(status, 'Wireshark插件目录已打开');
+        } catch (error) {
+            logger.error('Error opening Wireshark plugin directory:', error.message);
+            return errorResponse(error.message);
         }
     }
 
