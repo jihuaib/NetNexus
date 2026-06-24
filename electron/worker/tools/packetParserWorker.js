@@ -1,8 +1,12 @@
 const { parentPort } = require('worker_threads');
 const { parseBgpPacket } = require('../../pktParser/bgpPacketParser');
+const { parseBmpPacket } = require('../../pktParser/bmpPacketParser');
 const registry = require('../../pktParser/packetParserRegistry');
 const { hexStringToBuffer } = require('../../utils/commonUtils');
 const { PROTOCOL_TYPE, START_LAYER, TRANSPORT_PROTOCOL } = require('../../const/toolsConst');
+
+const DEFAULT_BGP_PORT = 179;
+const DEFAULT_BMP_PORT = 1790;
 
 // 处理传入的消息
 parentPort.on('message', data => {
@@ -16,20 +20,30 @@ parentPort.on('message', data => {
         };
 
         // 如果提供了协议端口，先注册端口解析器
-        let customBgpPort = null;
+        const registeredParsers = [];
+        const registerProtocolParser = (layer, port, parser) => {
+            registry.registerParser(layer, port, parser, true);
+            registeredParsers.push({ layer, port });
+        };
+        let customProtocolPort = null;
         if (data.protocolType === PROTOCOL_TYPE.BGP) {
             if (data.protocolPort && data.protocolPort !== '') {
-                customBgpPort = parseInt(data.protocolPort);
+                customProtocolPort = parseInt(data.protocolPort);
                 // 注册BGP解析器到指定端口，第四个参数为true表明这是一个应用层协议
-                registry.registerParser('bgp', customBgpPort, parseBgpPacket, true);
+                registerProtocolParser('bgp', customProtocolPort, parseBgpPacket);
             } else {
                 // 使用默认BGP端口
-                customBgpPort = 179;
-                registry.registerParser('bgp', customBgpPort, parseBgpPacket, true);
+                customProtocolPort = DEFAULT_BGP_PORT;
+                registerProtocolParser('bgp', customProtocolPort, parseBgpPacket);
             }
+        } else if (data.protocolType === PROTOCOL_TYPE.BMP) {
+            customProtocolPort =
+                data.protocolPort && data.protocolPort !== '' ? parseInt(data.protocolPort) : DEFAULT_BMP_PORT;
+            registerProtocolParser('bmp', customProtocolPort, parseBmpPacket);
         } else {
-            customBgpPort = 179;
-            registry.registerParser('bgp', customBgpPort, parseBgpPacket, true);
+            customProtocolPort = DEFAULT_BGP_PORT;
+            registerProtocolParser('bgp', DEFAULT_BGP_PORT, parseBgpPacket);
+            registerProtocolParser('bmp', DEFAULT_BMP_PORT, parseBmpPacket);
         }
 
         let tree = null;
@@ -48,7 +62,17 @@ parentPort.on('message', data => {
                             children: []
                         };
 
-                        result = registry.parse('bgp', customBgpPort, tree, buffer, 0);
+                        result = registry.parse('bgp', customProtocolPort, tree, buffer, 0);
+                    } else if (data.protocolType === PROTOCOL_TYPE.BMP) {
+                        tree = {
+                            name: 'Packet ' + buffer.length + ' bytes',
+                            offset: 0,
+                            length: buffer.length,
+                            value: '',
+                            children: []
+                        };
+
+                        result = registry.parse('bmp', customProtocolPort, tree, buffer, 0);
                     }
                     break;
                 }
@@ -104,9 +128,7 @@ parentPort.on('message', data => {
             }
         } finally {
             // 清理注册的解析器，防止影响后续解析
-            if (customBgpPort) {
-                registry.unregisterParser('bgp', customBgpPort);
-            }
+            registeredParsers.forEach(({ layer, port }) => registry.unregisterParser(layer, port));
         }
 
         if (result.valid) {

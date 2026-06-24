@@ -607,7 +607,8 @@ const BmpE2eController = (() => {
                     '--routes',
                     String(routes),
                     '--interval',
-                    String(interval)
+                    String(interval),
+                    '--no-dump-packets'
                 ],
                 {
                     cwd: projectRoot,

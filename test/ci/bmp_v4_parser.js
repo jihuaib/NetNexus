@@ -772,11 +772,7 @@ locRibDefaultRdEvpnAddPathSession.processMessage(
                 rd: locRibDefaultRdEvpnPrivateRd
             }),
             indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME, 0, Buffer.from('vrf-evpn-blue')),
-            indexedTlv(
-                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
-                0,
-                bgpUpdateEvpnVxlan(10002, { pathId: 88 })
-            )
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdateEvpnVxlan(10002, { pathId: 88 }))
         ])
     )
 );
@@ -792,9 +788,7 @@ assert.ok(
     locRibDefaultRdEvpnInstance,
     'Loc-RIB EVPN route should create private RD instance from Route Monitoring header RD'
 );
-const locRibDefaultRdEvpnRoute = [...locRibDefaultRdEvpnInstance.bgpRoutes.values()].find(
-    route => route.pathId === 88
-);
+const locRibDefaultRdEvpnRoute = [...locRibDefaultRdEvpnInstance.bgpRoutes.values()].find(route => route.pathId === 88);
 assert.ok(locRibDefaultRdEvpnRoute, 'Loc-RIB EVPN route should parse ADD-PATH path-id from RD 0:0 capability');
 assert.equal(locRibDefaultRdEvpnRoute.labels, 'VNI 10002');
 assert.ok(
@@ -1501,6 +1495,7 @@ const exactPrivateLabeledRoute = exactPrivateLabeledUnicastRoutes.find(
 );
 assert.ok(exactPrivateLabeledRoute, 'Labeled-unicast exact ADD-PATH must not fall back to IPv4 unicast no ADD-PATH');
 assert.equal(exactPrivateLabeledRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
+assert.equal(exactPrivateLabeledRoute.nlriDetail.warnings.length, 0);
 const invalidPrivateNoLabelRoute = exactPrivateLabeledUnicastRoutes.find(
     route => route.ip === '10.202.0.0' && route.mask === 16 && route.pathId === 74
 );
@@ -1612,7 +1607,9 @@ assert.ok(
 assert.equal(inferredAddPathLocRibLabeledRoute.getRouteListInfo().warnings, undefined);
 assert.equal(inferredAddPathLocRibLabeledRoute.getRouteListInfo().errors, undefined);
 
-const { session: locRibUnadvertisedLabelAfSession } = makeSession();
+const { session: locRibUnadvertisedLabelAfSession } = makeSession({
+    bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+});
 const locRibUnadvertisedLabelAfRd = rd(65000, 104);
 locRibUnadvertisedLabelAfSession.processMessage(
     bmpMessage(
@@ -1635,14 +1632,14 @@ locRibUnadvertisedLabelAfSession.processMessage(
                 rd: locRibUnadvertisedLabelAfRd
             }),
             indexedTlv(
-                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME,
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE_LEGACY.VRF_TABLE_NAME,
                 0,
                 Buffer.from('vrf-label-unadvertised')
             ),
             indexedTlv(
-                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE_LEGACY.BGP_MESSAGE,
                 0,
-                labeledUnicastUpdate('1.1.1.0', { nextHop: '0.0.0.0', label: 305 })
+                labeledUnicastUpdate('1.1.1.0', { nextHop: '0.0.0.0', label: 305, pathId: 76 })
             )
         ])
     )
@@ -1660,14 +1657,93 @@ assert.ok(
     'Loc-RIB IPv4 label route should create instance even when Peer Up omitted label AF'
 );
 const locRibUnadvertisedLabelAfRoute = [...locRibUnadvertisedLabelAfInstance.bgpRoutes.values()].find(
-    route => route.ip === '1.1.1.0' && route.pathId === 0
+    route => route.ip === '1.1.1.0' && route.pathId === 76
 );
 assert.ok(
     locRibUnadvertisedLabelAfRoute,
-    'Loc-RIB IPv4 label route without advertised label AF must parse without inferred ADD-PATH'
+    'Loc-RIB IPv4 label route should infer ADD-PATH from same-RD IPv4 unicast when Peer Up omitted label AF'
 );
 assert.equal(locRibUnadvertisedLabelAfRoute.labels, '305(BOS)');
-assert.equal(locRibUnadvertisedLabelAfRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
+assert.ok(
+    hasRouteParseStatus(locRibUnadvertisedLabelAfRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING),
+    'Loc-RIB IPv4 label route inferred from unicast ADD-PATH should be marked warning'
+);
+assert.ok(
+    locRibUnadvertisedLabelAfRoute.nlriDetail.warnings.includes(LABEL_UNICAST_ADD_PATH_INFERRED_WARNING),
+    'Loc-RIB IPv4 label route inferred from unicast ADD-PATH should keep warning detail'
+);
+assert.ok(
+    ![...locRibUnadvertisedLabelAfInstance.bgpRoutes.values()].some(route => route.ip === '0.0.0.0'),
+    'Loc-RIB IPv4 label ADD-PATH inference must not leave a bogus 0.0.0.0 route'
+);
+
+const { session: locRibDefaultRdLabelAddPathSession } = makeSession();
+const locRibCrossRdLabelRouteRd = rd(65000, 105);
+const locRibDefaultRdLabelAddPathFamilies = [
+    {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+        addPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY
+    }
+];
+const locRibDefaultRdLabelReceiveAddPathFamilies = [
+    {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+        addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+    }
+];
+locRibDefaultRdLabelAddPathSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, {
+            vrfTableName: 'global-label',
+            recvAddressFamilies: locRibDefaultRdLabelAddPathFamilies,
+            sendAddressFamilies: locRibDefaultRdLabelReceiveAddPathFamilies
+        })
+    )
+);
+locRibDefaultRdLabelAddPathSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, BmpConst.BMP_PEER_TYPE.LOCAL_RIB, {
+                rd: locRibCrossRdLabelRouteRd
+            }),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME, 0, Buffer.from('vrf-label-cross-rd')),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                labeledUnicastUpdate('10.105.2.0', { nextHop: '0.0.0.0', label: 306 })
+            )
+        ])
+    )
+);
+const locRibCrossRdLabelInstance = locRibDefaultRdLabelAddPathSession.bgpInstanceMap.get(
+    BmpBgpInstance.makeKey(
+        BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        '65000:105',
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+    )
+);
+assert.ok(locRibCrossRdLabelInstance, 'Loc-RIB IPv4 label route should create its own RD instance');
+const locRibCrossRdLabelRoute = [...locRibCrossRdLabelInstance.bgpRoutes.values()].find(
+    route => route.ip === '10.105.2.0' && route.pathId === 0
+);
+assert.ok(
+    locRibCrossRdLabelRoute,
+    'Loc-RIB IPv4 label route must not infer ADD-PATH from RD 0:0 label-unicast capability'
+);
+assert.equal(locRibCrossRdLabelRoute.labels, '306(BOS)');
+assert.equal(locRibCrossRdLabelRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
+assert.equal(locRibCrossRdLabelRoute.nlriDetail.warnings.length, 0);
+assert.ok(
+    ![...locRibCrossRdLabelInstance.bgpRoutes.values()].some(route => route.ip === '0.0.0.0'),
+    'Loc-RIB IPv4 label route must not create a bogus 0.0.0.0 route from cross-RD ADD-PATH'
+);
 
 const { session: locRibLabeledAddPathUnicastNoAddPathSession } = makeSession();
 const locRibExactLabeledRouteRd = rd(65000, 103);
@@ -1750,6 +1826,7 @@ const exactLocRibLabeledRoute = [...exactLocRibLabeledRouteInstance.bgpRoutes.va
 );
 assert.ok(exactLocRibLabeledRoute, 'Loc-RIB labeled exact ADD-PATH must not fall back to IPv4 unicast no ADD-PATH');
 assert.equal(exactLocRibLabeledRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
+assert.equal(exactLocRibLabeledRoute.nlriDetail.warnings.length, 0);
 const invalidLocRibNoLabelRoute = [...exactLocRibLabeledRouteInstance.bgpRoutes.values()].find(
     route => route.ip === '10.103.0.0' && route.mask === 16 && route.pathId === 75
 );
@@ -1886,6 +1963,87 @@ const huaweiRoutes = [...huaweiLocRibInstance.bgpRoutes.values()];
 assert.equal(huaweiRoutes.length, 1);
 assert.equal(huaweiRoutes[0].ip, '2.1.1.1');
 assert.ok(huaweiEvents.some(event => event.type === BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE));
+
+const huaweiDraft19LabelAddPathFrame = bytesFromDump(`
+0000   00 50 56 c0 00 03 fa bb 55 54 00 10 08 00 45 00
+0010   03 3b 08 04 00 00 ff 06 67 59 c0 a8 64 0b c0 a8
+0020   64 03 ca 2c 06 fe 60 b2 82 28 be ba 22 0b 50 18
+0030   f0 00 25 89 00 00 04 00 00 00 b0 03 03 80 00 00
+0040   00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0050   00 00 00 00 00 00 00 00 00 64 c0 a8 64 0b 6a 3c
+0060   5e bf 00 08 29 d8 00 00 00 00 00 00 00 00 00 00
+0070   00 00 00 00 00 00 00 00 00 00 ff ff ff ff ff ff
+0080   ff ff ff ff ff ff ff ff ff ff 00 31 01 04 00 64
+0090   00 b4 c0 a8 64 0b 14 02 12 41 04 00 00 00 64 01
+00a0   04 00 01 00 01 45 04 00 01 01 03 ff ff ff ff ff
+00b0   ff ff ff ff ff ff ff ff ff ff ff 00 31 01 04 00
+00c0   64 00 b4 c0 a8 64 0b 14 02 12 41 04 00 00 00 64
+00d0   01 04 00 01 00 01 45 04 00 01 01 03 00 03 00 06
+00e0   67 6c 6f 62 61 6c 04 00 00 00 ae 03 03 80 00 00
+00f0   00 01 00 00 00 01 00 00 00 00 00 00 00 00 00 00
+0100   00 00 00 00 00 00 00 00 00 64 c0 a8 64 0b 6a 3c
+0110   5e bf 00 08 29 d8 00 00 00 00 00 00 00 00 00 00
+0120   00 00 00 00 00 00 00 00 00 00 ff ff ff ff ff ff
+0130   ff ff ff ff ff ff ff ff ff ff 00 31 01 04 00 64
+0140   00 b4 c0 a8 64 0b 14 02 12 41 04 00 00 00 64 01
+0150   04 00 01 00 01 45 04 00 01 01 03 ff ff ff ff ff
+0160   ff ff ff ff ff ff ff ff ff ff ff 00 31 01 04 00
+0170   64 00 b4 c0 a8 64 0b 14 02 12 41 04 00 00 00 64
+0180   01 04 00 01 00 01 45 04 00 01 01 03 00 03 00 04
+0190   76 72 66 31 04 00 00 00 59 00 03 80 00 00 00 00
+01a0   00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+01b0   00 00 00 00 00 00 00 64 c0 a8 64 0b 6a 3c 5e bf
+01c0   00 08 2f b9 00 03 00 06 00 00 67 6c 6f 62 61 6c
+01d0   00 04 00 17 00 00 ff ff ff ff ff ff ff ff ff ff
+01e0   ff ff ff ff ff ff 00 17 02 00 00 00 00 04 00 00
+01f0   00 75 00 03 80 00 00 00 01 00 00 00 01 00 00 00
+0200   00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0210   64 c0 a8 64 0b 6a 3c 5e 69 00 08 31 9c 00 03 00
+0220   04 00 00 76 72 66 31 00 04 00 35 00 00 ff ff ff
+0230   ff ff ff ff ff ff ff ff ff ff ff ff ff 00 35 02
+0240   00 00 00 15 40 01 01 02 40 02 00 40 03 04 00 00
+0250   00 00 80 04 04 00 00 00 00 00 00 00 00 20 02 01
+0260   01 01 04 00 00 00 90 00 03 80 00 00 00 01 00 00
+0270   00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0280   00 00 00 00 00 64 c0 a8 64 0b 6a 3c 5e 69 00 08
+0290   31 d6 00 03 00 04 00 00 76 72 66 31 00 04 00 50
+02a0   00 00 ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+02b0   ff ff 00 50 02 00 00 00 39 40 01 01 02 40 02 00
+02c0   80 04 04 00 00 00 00 40 05 04 00 00 00 64 c0 10
+02d0   08 00 02 00 01 00 00 00 01 90 0e 00 15 00 01 04
+02e0   04 0b 01 01 02 00 00 00 00 00 38 0b b8 01 02 01
+02f0   01 02 04 00 00 00 57 00 03 80 00 00 00 01 00 00
+0300   00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0310   00 00 00 00 00 64 c0 a8 64 0b 6a 3c 5e bf 00 08
+0320   31 e2 00 03 00 04 00 00 76 72 66 31 00 04 00 17
+0330   00 00 ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+0340   ff ff 00 17 02 00 00 00 00
+`);
+
+const { session: huaweiLabelAddPathSession } = makeSession({
+    bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+});
+huaweiLabelAddPathSession.recvMsg(tcpPayloadFromEthernetFrame(huaweiDraft19LabelAddPathFrame));
+const huaweiLabelAddPathInstance = huaweiLabelAddPathSession.bgpInstanceMap.get(
+    BmpBgpInstance.makeKey(
+        BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        '1:1',
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+    )
+);
+assert.ok(huaweiLabelAddPathInstance, 'Huawei draft-19 Loc-RIB IPv4 label ADD-PATH frame should create label instance');
+const huaweiLabelAddPathRoutes = [...huaweiLabelAddPathInstance.bgpRoutes.values()];
+assert.ok(
+    huaweiLabelAddPathRoutes.some(
+        route => route.ip === '2.1.1.2' && route.mask === 32 && route.pathId === 0 && route.labels === '48000(BOS)'
+    ),
+    'Huawei draft-19 Loc-RIB IPv4 label ADD-PATH frame should keep the real labeled route'
+);
+assert.ok(
+    !huaweiLabelAddPathRoutes.some(route => route.ip === '0.0.0.0'),
+    'Huawei draft-19 Loc-RIB IPv4 label ADD-PATH frame must not leave a bogus 0.0.0.0 route'
+);
 
 const { session: draft19StatsSession, events: draft19StatsEvents } = makeSession({
     bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19

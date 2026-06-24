@@ -1,47 +1,51 @@
 <template>
     <div class="mt-container packet-parser-page">
         <a-card title="报文解析器" class="packet-parser-card">
-            <a-form
-                :model="formState"
-                :label-col="labelCol"
-                :wrapper-col="wrapperCol"
-                class="packet-parser-form"
-                @finish="handleParsePacket"
-            >
-                <a-form-item label="解析起始层" name="startLayer">
-                    <a-select v-model:value="formState.startLayer">
-                        <a-select-option :value="START_LAYER.L2">数据链路层</a-select-option>
-                        <a-select-option :value="START_LAYER.L3">网络层</a-select-option>
-                        <a-select-option :value="START_LAYER.L4">传输层</a-select-option>
-                        <a-select-option :value="START_LAYER.L5">应用层</a-select-option>
-                    </a-select>
-                </a-form-item>
+            <a-form :model="formState" layout="vertical" class="packet-parser-form" @finish="handleParsePacket">
+                <div class="packet-config-grid">
+                    <a-form-item label="解析起始层" name="startLayer" class="packet-config-item">
+                        <a-select v-model:value="formState.startLayer">
+                            <a-select-option :value="START_LAYER.L2">数据链路层</a-select-option>
+                            <a-select-option :value="START_LAYER.L3">网络层</a-select-option>
+                            <a-select-option :value="START_LAYER.L4">传输层</a-select-option>
+                            <a-select-option :value="START_LAYER.L5">应用层</a-select-option>
+                        </a-select>
+                    </a-form-item>
 
-                <a-form-item v-if="formState.startLayer === START_LAYER.L4" label="传输协议" name="transportProtocol">
-                    <a-select v-model:value="formState.transportProtocol">
-                        <a-select-option :value="TRANSPORT_PROTOCOL.TCP">TCP</a-select-option>
-                        <a-select-option :value="TRANSPORT_PROTOCOL.UDP">UDP</a-select-option>
-                    </a-select>
-                </a-form-item>
+                    <a-form-item
+                        v-if="formState.startLayer === START_LAYER.L4"
+                        label="传输协议"
+                        name="transportProtocol"
+                        class="packet-config-item packet-config-item-narrow"
+                    >
+                        <a-select v-model:value="formState.transportProtocol">
+                            <a-select-option :value="TRANSPORT_PROTOCOL.TCP">TCP</a-select-option>
+                            <a-select-option :value="TRANSPORT_PROTOCOL.UDP">UDP</a-select-option>
+                        </a-select>
+                    </a-form-item>
 
-                <!-- 报文类型选择 -->
-                <a-form-item label="应用协议类型" name="protocolType">
-                    <a-select v-model:value="formState.protocolType">
-                        <a-select-option :value="PROTOCOL_TYPE.AUTO">自动识别</a-select-option>
-                        <a-select-option :value="PROTOCOL_TYPE.BGP">BGP</a-select-option>
-                        <!-- 预留其他报文类型 -->
-                    </a-select>
-                </a-form-item>
+                    <a-form-item label="应用协议类型" name="protocolType" class="packet-config-item">
+                        <a-select v-model:value="formState.protocolType">
+                            <a-select-option :value="PROTOCOL_TYPE.AUTO">自动识别</a-select-option>
+                            <a-select-option :value="PROTOCOL_TYPE.BGP">BGP</a-select-option>
+                            <a-select-option :value="PROTOCOL_TYPE.BMP">BMP</a-select-option>
+                        </a-select>
+                    </a-form-item>
 
-                <!-- 协议端口输入 -->
-                <a-form-item label="应用协议端口" name="protocolPort">
-                    <a-tooltip :title="validationErrors.protocolPort" :open="!!validationErrors.protocolPort">
-                        <a-input
-                            v-model:value="formState.protocolPort"
-                            :status="validationErrors.protocolPort ? 'error' : ''"
-                        />
-                    </a-tooltip>
-                </a-form-item>
+                    <a-form-item
+                        label="应用协议端口"
+                        name="protocolPort"
+                        class="packet-config-item packet-config-item-narrow"
+                    >
+                        <a-tooltip :title="validationErrors.protocolPort" :open="!!validationErrors.protocolPort">
+                            <a-input
+                                v-model:value="formState.protocolPort"
+                                placeholder="可选"
+                                :status="validationErrors.protocolPort ? 'error' : ''"
+                            />
+                        </a-tooltip>
+                    </a-form-item>
+                </div>
 
                 <!-- 报文输入框 -->
                 <a-form-item
@@ -61,12 +65,12 @@
                     </div>
                 </a-form-item>
                 <!-- 操作按钮 -->
-                <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                <div class="packet-action-bar">
                     <a-space>
                         <a-button type="primary" html-type="submit">解析报文</a-button>
                         <a-button type="default" @click="showParseHistory">识别历史</a-button>
                     </a-space>
-                </a-form-item>
+                </div>
             </a-form>
         </a-card>
     </div>
@@ -135,9 +139,6 @@
     });
 
     const _emit = defineEmits(['openSettings']);
-
-    const labelCol = { style: { width: '100px' } };
-    const wrapperCol = { span: 40 };
 
     const validationErrors = ref({
         packetData: '',
@@ -355,6 +356,31 @@
         flex: 0 0 auto;
     }
 
+    .packet-config-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px 16px;
+        margin-bottom: 12px;
+    }
+
+    .packet-config-item {
+        min-width: 0;
+        margin-bottom: 0;
+    }
+
+    .packet-config-item-narrow {
+        min-width: 140px;
+    }
+
+    .packet-config-item :deep(.ant-form-item-label) {
+        padding-bottom: 4px;
+    }
+
+    .packet-config-item :deep(.ant-select),
+    .packet-config-item :deep(.ant-input) {
+        width: 100%;
+    }
+
     .packet-data-item {
         flex: 1 1 0 !important;
         min-height: 0;
@@ -397,6 +423,28 @@
         min-height: 0;
         width: 100%;
         height: auto !important;
+    }
+
+    .packet-action-bar {
+        flex: 0 0 auto;
+        display: flex;
+        justify-content: center;
+        padding-top: 12px;
+    }
+
+    @media (max-width: 640px) {
+        .packet-config-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .packet-action-bar {
+            justify-content: stretch;
+        }
+
+        .packet-action-bar :deep(.ant-space),
+        .packet-action-bar :deep(.ant-btn) {
+            width: 100%;
+        }
     }
 
     :deep(.ant-table-body) {

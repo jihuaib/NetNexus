@@ -2,7 +2,8 @@
 // 直接使用这个值处理
 export const PROTOCOL_TYPE = {
     AUTO: 1,
-    BGP: 2
+    BGP: 2,
+    BMP: 3
 };
 
 // 需要和后台定义保持一致, 后台会
@@ -43,7 +44,8 @@ export const START_LAYER_NAME = {
 
 export const PROTOCOL_TYPE_NAME = {
     [PROTOCOL_TYPE.AUTO]: '自动识别',
-    [PROTOCOL_TYPE.BGP]: 'BGP'
+    [PROTOCOL_TYPE.BGP]: 'BGP',
+    [PROTOCOL_TYPE.BMP]: 'BMP'
 };
 
 export const TRANSPORT_PROTOCOL_NAME = {

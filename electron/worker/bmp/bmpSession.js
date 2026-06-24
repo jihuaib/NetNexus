@@ -14,6 +14,7 @@ const BmpBgpSession = require('./bmpBgpSession');
 const BmpBgpRoute = require('./bmpBgpRoute');
 const { rdBufferToString, ipv4BufferToString, ipv6BufferToString } = require('../../utils/ipUtils');
 const { parseBgpPacket } = require('../../utils/bgpPacketParser');
+const { parseBmpPacket, getBmpPacketSummary } = require('../../utils/bmpPacketParser');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const BmpBgpInstance = require('./bmpBgpInstance');
 
@@ -320,7 +321,7 @@ class BmpSession {
                 }
             }
 
-            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST && negotiatedForRequestedAf) {
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
                 const unicastInstanceKey = BmpBgpInstance.makeKey(
                     locRibPeer.peerType,
                     locRibPeer.peerRd,
@@ -339,7 +340,11 @@ class BmpSession {
                 }
             }
 
-            if (!negotiatedForRequestedAf && locRibPeer.peerRd !== LOC_RIB_DEFAULT_RD) {
+            if (
+                safi !== BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST &&
+                !negotiatedForRequestedAf &&
+                locRibPeer.peerRd !== LOC_RIB_DEFAULT_RD
+            ) {
                 const defaultInstanceKey = BmpBgpInstance.makeKey(locRibPeer.peerType, LOC_RIB_DEFAULT_RD, afi, safi);
                 const defaultInstance = this.bgpInstanceMap.get(defaultInstanceKey);
                 if (this.hasNegotiatedAddressFamily(defaultInstance, afi, safi)) {
@@ -2491,6 +2496,10 @@ class BmpSession {
             logger.info(
                 `Received BMPv${version} message type ${BmpConst.BMP_MSG_TYPE_NAME[type]} from ${clientAddress}, length ${length}`
             );
+            if (version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20() && logger.shouldLog('info')) {
+                const parsedPacket = parseBmpPacket(message);
+                logger.info(`Received BMP packet detail:\n${getBmpPacketSummary(parsedPacket)}`);
+            }
 
             const msg = message.slice(BmpConst.BMP_HEADER_LENGTH, length);
 

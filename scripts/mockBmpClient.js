@@ -9,7 +9,8 @@ const DEFAULT_OPTIONS = {
     port: 1790,
     routes: 25,
     interval: 30,
-    once: false
+    once: false,
+    dumpPackets: true
 };
 
 function u16(value) {
@@ -420,6 +421,17 @@ function makePrefixes(count, secondOctet = 0) {
     });
 }
 
+function formatPacketHex(buffer, bytesPerLine = 16) {
+    const lines = [];
+    for (let offset = 0; offset < buffer.length; offset += bytesPerLine) {
+        const line = Array.from(buffer.subarray(offset, offset + bytesPerLine), byte =>
+            byte.toString(16).padStart(2, '0').toUpperCase()
+        ).join(' ');
+        lines.push(line);
+    }
+    return lines.join('\n');
+}
+
 function parseArgs(argv) {
     const options = { ...DEFAULT_OPTIONS };
     for (let index = 0; index < argv.length; index += 1) {
@@ -436,6 +448,10 @@ function parseArgs(argv) {
             options.interval = Number(argv[++index] || options.interval);
         } else if (arg === '--once') {
             options.once = true;
+        } else if (arg === '--dump-packets') {
+            options.dumpPackets = true;
+        } else if (arg === '--no-dump-packets') {
+            options.dumpPackets = false;
         } else {
             throw new Error(`Unknown option: ${arg}`);
         }
@@ -463,6 +479,8 @@ Options:
   --routes <count>   IPv4 route count, default ${DEFAULT_OPTIONS.routes}
   --interval <ms>    Delay between message batches, default ${DEFAULT_OPTIONS.interval}
   --once             Send data once and close the TCP connection
+  --dump-packets     Print each sent BMP packet as copyable hex bytes, default on
+  --no-dump-packets  Do not print packet hex bytes
   -h, --help         Show this help
 `);
 }
@@ -844,16 +862,12 @@ function buildScenario(options) {
         },
         {
             name: 'private-loc-rib-evpn-default-rd-add-path-warning-route',
-            data: routeMonitoringMessage(
-                privateEvpnLocRibPeer,
-                evpnVxlanUpdate(10002, 3, { pathId: 88 }),
-                {
-                    vrfName: 'vrf-evpn-blue',
-                    pathStatus: {
-                        status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
-                    }
+            data: routeMonitoringMessage(privateEvpnLocRibPeer, evpnVxlanUpdate(10002, 3, { pathId: 88 }), {
+                vrfName: 'vrf-evpn-blue',
+                pathStatus: {
+                    status: BmpConst.BMP_PATH_STATUS.ADD_PATH | BmpConst.BMP_PATH_STATUS.BEST
                 }
-            )
+            })
         },
         {
             name: 'peer-up-private-loc-rib-add-path',
@@ -1022,12 +1036,15 @@ function delay(ms) {
     });
 }
 
-async function sendScenario(socket, messages, interval) {
+async function sendScenario(socket, messages, options) {
     for (const message of messages) {
         socket.write(message.data);
         console.log(`sent ${message.name} (${message.data.length} bytes)`);
-        if (interval > 0) {
-            await delay(interval);
+        if (options.dumpPackets) {
+            console.log(formatPacketHex(message.data));
+        }
+        if (options.interval > 0) {
+            await delay(options.interval);
         }
     }
 }
@@ -1061,7 +1078,7 @@ async function run() {
     });
 
     console.log(`connected to BMP server ${options.host}:${options.port}`);
-    await sendScenario(socket, messages, options.interval);
+    await sendScenario(socket, messages, options);
 
     if (options.once) {
         socket.end();

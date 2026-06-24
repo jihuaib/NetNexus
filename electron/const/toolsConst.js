@@ -1,6 +1,7 @@
 const PROTOCOL_TYPE = {
     AUTO: 1,
-    BGP: 2
+    BGP: 2,
+    BMP: 3
 };
 
 const START_LAYER = {
