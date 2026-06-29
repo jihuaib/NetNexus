@@ -208,16 +208,29 @@ assert.equal(parsedRouteMonitoring.valid, true, parsedRouteMonitoring.error);
 const bgpMessageTlv = parsedRouteMonitoring.payload.tlvs.find(
     tlvItem => tlvItem.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE
 );
-assert.ok(bgpMessageTlv.decoded.bgp.valid, 'BMP Route Monitoring BGP Message TLV should parse embedded BGP');
+assert.ok(
+    bgpMessageTlv.decoded.bgpHeader.valid,
+    'BMP Route Monitoring BGP Message TLV should keep embedded BGP header detail'
+);
+assert.equal(
+    bgpMessageTlv.decoded.bgpHeader.type,
+    BgpConst.BGP_PACKET_TYPE.UPDATE,
+    'BMP Route Monitoring BGP Message TLV should identify embedded BGP UPDATE type'
+);
+assert.equal(
+    bgpMessageTlv.decoded.bgp,
+    undefined,
+    'BMP Route Monitoring entry log parser should not deep-parse UPDATE without Peer Up context'
+);
 const routeMonitoringSummary = getBmpPacketSummary(parsedRouteMonitoring);
 assert.ok(routeMonitoringSummary.includes('BGP UPDATE Message'));
-assert.ok(bgpMessageTlv.decoded.bgp.pathAttributes.length > 0, 'BMP parser should keep parsed BGP path attributes');
-assert.ok(bgpMessageTlv.decoded.bgp.withdrawnRoutes.length > 0, 'BMP parser should keep parsed BGP withdrawn routes');
-assert.ok(bgpMessageTlv.decoded.bgp.nlri.length > 0, 'BMP parser should keep parsed BGP NLRI');
+assert.ok(routeMonitoringSummary.includes('header only'), 'BMP Route Monitoring summary should be header-only');
 assert.ok(
     !routeMonitoringSummary.includes('Parsed BGP:'),
     'BMP summary should not include full parsed BGP UPDATE object'
 );
+assert.ok(!routeMonitoringSummary.includes('Path Attributes:'), 'BMP summary should not include context-free UPDATE attributes');
+assert.ok(!routeMonitoringSummary.includes('Withdrawn Routes:'), 'BMP summary should not include context-free UPDATE NLRI');
 assert.ok(!routeMonitoringSummary.includes('Route Changes:'), 'BMP summary should not include route changes');
 assert.ok(!routeMonitoringSummary.includes('announce IPv4/Unicast 203.0.113.0/24'));
 assert.ok(!routeMonitoringSummary.includes('withdraw IPv4/Unicast 198.51.100.0/24'));

@@ -205,10 +205,6 @@ function toSerializableTlvs(tlvs) {
 }
 
 function getEffectivePeerFlags(peerFlags, tlvs = []) {
-    if ((peerFlags & BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS) === 0) {
-        return peerFlags;
-    }
-
     const extendedFlagsTlv = tlvs.find(
         tlv => !tlv.enterprise && tlv.type === BmpConst.BMP_TLV_TYPE.EXTENDED_FLAGS && tlv.value.length > 0
     );
@@ -216,7 +212,7 @@ function getEffectivePeerFlags(peerFlags, tlvs = []) {
         return peerFlags;
     }
 
-    return extendedFlagsTlv.value[0];
+    return (peerFlags & ~BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS) | extendedFlagsTlv.value[0];
 }
 
 function parseStatsRecords(buffer, offset = 0, options = {}) {

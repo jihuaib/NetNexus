@@ -47,6 +47,24 @@ function setBit(buffer, bitIndex, value) {
     buffer[byteIndex] |= 1 << bitOffset;
 }
 
+function isIpv4MappedIpv6Address(buffer, position) {
+    for (let index = 0; index < 10; index += 1) {
+        if (buffer[position + index] !== 0) {
+            return false;
+        }
+    }
+
+    return buffer[position + 10] === 0xff && buffer[position + 11] === 0xff;
+}
+
+function formatIpv6OrMappedIpv4(buffer, position) {
+    if (isIpv4MappedIpv6Address(buffer, position)) {
+        return `::ffff:${ipv4BufferToString(buffer.subarray(position + 12, position + 16), BgpConst.IP_HOST_LEN)}`;
+    }
+
+    return ipv6BufferToString(buffer.subarray(position, position + 16), BgpConst.IPV6_HOST_LEN);
+}
+
 function formatIpAddressList(buffer, position, byteLength) {
     if (byteLength === 0) {
         return '';
@@ -57,15 +75,12 @@ function formatIpAddressList(buffer, position, byteLength) {
     }
 
     if (byteLength === BgpConst.IPV6_HOST_BYTE_LEN) {
-        return ipv6BufferToString(buffer.subarray(position, position + 16), BgpConst.IPV6_HOST_LEN);
+        return formatIpv6OrMappedIpv4(buffer, position);
     }
 
     if (byteLength === BgpConst.IPV6_HOST_BYTE_LEN * 2) {
-        const globalNextHop = ipv6BufferToString(buffer.subarray(position, position + 16), BgpConst.IPV6_HOST_LEN);
-        const linkLocalNextHop = ipv6BufferToString(
-            buffer.subarray(position + 16, position + 32),
-            BgpConst.IPV6_HOST_LEN
-        );
+        const globalNextHop = formatIpv6OrMappedIpv4(buffer, position);
+        const linkLocalNextHop = formatIpv6OrMappedIpv4(buffer, position + BgpConst.IPV6_HOST_BYTE_LEN);
         return `${globalNextHop}, ${linkLocalNextHop}`;
     }
 
@@ -165,6 +180,8 @@ module.exports = {
     readBigEndianValue,
     getBit,
     setBit,
+    isIpv4MappedIpv6Address,
+    formatIpv6OrMappedIpv4,
     formatIpAddressList,
     parseFlowSpecLength,
     isSimpleIpNlri,

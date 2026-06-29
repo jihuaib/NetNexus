@@ -8,7 +8,7 @@ const {
     parseStatsRecords
 } = require('./bmpUtils');
 const { ipv4BufferToString, ipv6BufferToString } = require('./ipUtils');
-const { getBgpAfiName, getBgpSafiName, getBgpAddPathTypeName } = require('./bgpUtils');
+const { getBgpPacketTypeName, getBgpAfiName, getBgpSafiName, getBgpAddPathTypeName } = require('./bgpUtils');
 const { parseBgpPacket, getBgpPacketSummary } = require('./bgpPacketParser');
 
 function getBmpMessageTypeName(type) {
@@ -152,6 +152,48 @@ function parseEmbeddedBgpPacket(buffer, position, label = 'BGP Message') {
     };
 }
 
+function decodeBgpPacketHeader(buffer, label = 'BGP Message') {
+    if (!Buffer.isBuffer(buffer) || buffer.length < BgpConst.BGP_HEAD_LEN) {
+        return {
+            label,
+            valid: false,
+            error: `${label} header is truncated`,
+            length: 0,
+            summary: `Invalid BGP packet: ${label} header is truncated`
+        };
+    }
+
+    const marker = buffer.subarray(0, BgpConst.BGP_MARKER_LEN);
+    if (!marker.every(byte => byte === 0xff)) {
+        return {
+            label,
+            valid: false,
+            error: `${label} has invalid marker`,
+            length: 0,
+            summary: `Invalid BGP packet: ${label} has invalid marker`
+        };
+    }
+
+    const length = buffer.readUInt16BE(BgpConst.BGP_MARKER_LEN);
+    const type = buffer[BgpConst.BGP_MARKER_LEN + 2];
+    const typeName = getBgpPacketTypeName(type);
+    const validLength = length >= BgpConst.BGP_HEAD_LEN && length <= buffer.length;
+    const error = validLength ? null : `${label} has invalid length ${length}`;
+
+    return {
+        label,
+        valid: validLength,
+        error,
+        type,
+        typeName,
+        length,
+        bodyLength: Math.max(0, length - BgpConst.BGP_HEAD_LEN),
+        summary: validLength
+            ? `BGP ${typeName} Message (${length} bytes, header only; body parsing requires Peer Up capabilities)`
+            : `Invalid BGP packet: ${error}`
+    };
+}
+
 function decodeStatelessParsingTlv(tlv) {
     const capabilities = [];
     let position = 0;
@@ -282,11 +324,11 @@ function decodeBmpTlv(tlv, context) {
         (context === 'route-monitoring' || context === 'route-mirroring') &&
         decoded.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE
     ) {
-        const parsedBgp = parseBgpPacket(decoded.value);
+        const bgpHeader = decodeBgpPacketHeader(decoded.value);
         decoded.decoded = {
             ...(decoded.decoded || {}),
-            bgp: parsedBgp,
-            bgpSummary: getBgpPacketSummary(parsedBgp)
+            bgpHeader,
+            bgpSummary: bgpHeader.summary
         };
     }
 

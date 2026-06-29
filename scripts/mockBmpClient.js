@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const net = require('net');
+const ipaddr = require('ipaddr.js');
 const BmpConst = require('../electron/const/bmpConst');
 const BgpConst = require('../electron/const/bgpConst');
 
@@ -29,6 +30,10 @@ function u64(value) {
 
 function ip(ipAddress) {
     return Buffer.from(ipAddress.split('.').map(part => parseInt(part, 10)));
+}
+
+function ipBytes(ipAddress) {
+    return Buffer.from(ipaddr.parse(ipAddress).toByteArray());
 }
 
 function rd(asn = 0, assigned = 0) {
@@ -195,6 +200,40 @@ function labeledUnicastNoLabelUpdate(prefix, { nextHop = '192.0.2.251', pathId =
         ip(nextHop),
         Buffer.from([0]),
         labeledUnicastNlriWithoutLabel(prefix, { prefixLength, pathId })
+    ]);
+    const attrs = Buffer.concat([
+        pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+        pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, mpReachValue, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL)
+    ]);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrs.length), attrs]));
+}
+
+function ipv4MappedIpv6(ipAddress) {
+    return Buffer.concat([Buffer.alloc(10), Buffer.from([0xff, 0xff]), ip(ipAddress)]);
+}
+
+function ipv6LabeledUnicastNlri(prefix, { label = 400, pathId = null, prefixLength = 64 } = {}) {
+    const rawLabel = (label << 4) | 1;
+    const labelBytes = Buffer.from([(rawLabel >> 16) & 0xff, (rawLabel >> 8) & 0xff, rawLabel & 0xff]);
+    const prefixBytes = ipBytes(prefix).subarray(0, Math.ceil(prefixLength / 8));
+    const nlri = Buffer.concat([Buffer.from([24 + prefixLength]), labelBytes, prefixBytes]);
+    if (pathId === null || pathId === undefined) {
+        return nlri;
+    }
+    return Buffer.concat([u32(pathId), nlri]);
+}
+
+function sixPeLabeledUnicastUpdate(
+    prefix,
+    { nextHop = '192.0.2.250', label = 400, pathId = null, prefixLength = 64 } = {}
+) {
+    const nextHopBytes = ipv4MappedIpv6(nextHop);
+    const mpReachValue = Buffer.concat([
+        u16(BgpConst.BGP_AFI_TYPE.AFI_IPV6),
+        Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST, nextHopBytes.length]),
+        nextHopBytes,
+        Buffer.from([0]),
+        ipv6LabeledUnicastNlri(prefix, { label, pathId, prefixLength })
     ]);
     const attrs = Buffer.concat([
         pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
@@ -387,10 +426,15 @@ function initiationMessage() {
     );
 }
 
-function routeMonitoringMessage(peer, bgpMessage, { pathStatus = null, vrfName = null } = {}) {
+function routeMonitoringMessage(peer, bgpMessage, { pathStatus = null, vrfName = null, extendedFlags = null } = {}) {
     const tlvs = [];
     if (vrfName) {
         tlvs.push(indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME, 0, Buffer.from(vrfName)));
+    }
+    if (extendedFlags !== null && extendedFlags !== undefined) {
+        tlvs.push(
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS, 0, Buffer.from([extendedFlags]))
+        );
     }
     tlvs.push(indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpMessage));
     if (pathStatus) {
@@ -496,6 +540,16 @@ function buildScenario(options) {
         peerAs: 65001,
         routerId: '192.0.2.3'
     };
+    const extendedFlagsRibOutPeer = {
+        peerAddress: '192.0.2.8',
+        peerAs: 65006,
+        routerId: '192.0.2.8'
+    };
+    const sixPePeer = {
+        peerAddress: '192.0.2.9',
+        peerAs: 65007,
+        routerId: '192.0.2.9'
+    };
     const privateRibInRd = rd(65000, 200);
     const privateRibInPeer = {
         peerType: BmpConst.BMP_PEER_TYPE.L3VPN,
@@ -553,26 +607,18 @@ function buildScenario(options) {
         peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
         rd: privateEvpnLocRibRd
     };
-    const unicastAddPathAndLabelFamilies = [
+    const unicastAddPathOnlyFamilies = [
         {
             afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
             addPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY
-        },
-        {
-            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
-            safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
         }
     ];
-    const unicastReceiveAddPathAndLabelFamilies = [
+    const unicastReceiveAddPathOnlyFamilies = [
         {
             afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
             addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
-        },
-        {
-            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
-            safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
         }
     ];
     const labelAddPathAndUnicastNoAddPathFamilies = [
@@ -609,6 +655,12 @@ function buildScenario(options) {
             afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
             addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+        }
+    ];
+    const sixPeFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
         }
     ];
 
@@ -662,6 +714,57 @@ function buildScenario(options) {
                     value: ipv4Prefixes.length
                 }
             ])
+        },
+        {
+            name: 'peer-up-extended-flags-rib-out',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...extendedFlagsRibOutPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                })
+            )
+        },
+        {
+            name: 'extended-flags-rib-out-route',
+            data: routeMonitoringMessage(
+                {
+                    ...extendedFlagsRibOutPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS | BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT
+                },
+                ipv4Update(['203.0.119.0'], {
+                    nextHop: '192.0.2.248',
+                    asns: [65006, 65106]
+                }),
+                { extendedFlags: 0 }
+            )
+        },
+        {
+            name: 'peer-up-6pe-ipv6-label',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...sixPePeer,
+                    recvAddressFamilies: sixPeFamilies,
+                    sendAddressFamilies: sixPeFamilies,
+                    vrfName: '6pe'
+                })
+            )
+        },
+        {
+            name: '6pe-ipv6-label-route',
+            data: routeMonitoringMessage(
+                sixPePeer,
+                sixPeLabeledUnicastUpdate('2001:db8:60::', {
+                    nextHop: '192.0.2.250',
+                    label: 401
+                }),
+                {
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.BEST
+                    }
+                }
+            )
         },
         {
             name: 'peer-up-add-path',
@@ -759,8 +862,8 @@ function buildScenario(options) {
                 BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
                 peerUpPayload({
                     ...privateLabelRibInPeer,
-                    recvAddressFamilies: unicastAddPathAndLabelFamilies,
-                    sendAddressFamilies: unicastReceiveAddPathAndLabelFamilies,
+                    recvAddressFamilies: unicastAddPathOnlyFamilies,
+                    sendAddressFamilies: unicastReceiveAddPathOnlyFamilies,
                     vrfName: 'vrf-label'
                 })
             )
@@ -906,8 +1009,8 @@ function buildScenario(options) {
                 locRibPeerUpPayload({
                     rd: privateLabelLocRibRd,
                     vrfName: 'vrf-label',
-                    recvAddressFamilies: unicastAddPathAndLabelFamilies,
-                    sendAddressFamilies: unicastReceiveAddPathAndLabelFamilies
+                    recvAddressFamilies: unicastAddPathOnlyFamilies,
+                    sendAddressFamilies: unicastReceiveAddPathOnlyFamilies
                 })
             )
         },

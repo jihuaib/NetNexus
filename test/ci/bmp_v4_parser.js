@@ -1,4 +1,5 @@
 const assert = require('assert');
+const ipaddr = require('ipaddr.js');
 const BmpConst = require('../../electron/const/bmpConst');
 const BgpConst = require('../../electron/const/bgpConst');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
@@ -21,6 +22,10 @@ function u32(value) {
 
 function ip(ipAddress) {
     return Buffer.from(ipAddress.split('.').map(part => parseInt(part, 10)));
+}
+
+function ipBytes(ipAddress) {
+    return Buffer.from(ipaddr.parse(ipAddress).toByteArray());
 }
 
 function rd(asn = 0, assigned = 0) {
@@ -143,6 +148,40 @@ function labeledUnicastUpdate(prefix, { nextHop = '192.0.2.251', label = 300, pa
         ip(nextHop),
         Buffer.from([0]),
         labeledUnicastNlri(prefix, label, pathId)
+    ]);
+    const attrs = Buffer.concat([
+        pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+        pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, mpReachValue, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL)
+    ]);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrs.length), attrs]));
+}
+
+function ipv4MappedIpv6(ipAddress) {
+    return Buffer.concat([Buffer.alloc(10), Buffer.from([0xff, 0xff]), ip(ipAddress)]);
+}
+
+function ipv6LabeledUnicastNlri(prefix, { label = 400, pathId = null, prefixLength = 64 } = {}) {
+    const rawLabel = (label << 4) | 1;
+    const labelBytes = Buffer.from([(rawLabel >> 16) & 0xff, (rawLabel >> 8) & 0xff, rawLabel & 0xff]);
+    const prefixBytes = ipBytes(prefix).subarray(0, Math.ceil(prefixLength / 8));
+    const nlri = Buffer.concat([Buffer.from([24 + prefixLength]), labelBytes, prefixBytes]);
+    if (pathId === null || pathId === undefined) {
+        return nlri;
+    }
+    return Buffer.concat([u32(pathId), nlri]);
+}
+
+function sixPeLabeledUnicastUpdate(
+    prefix,
+    { nextHop = '192.0.2.250', label = 400, pathId = null, prefixLength = 64 } = {}
+) {
+    const nextHopBytes = ipv4MappedIpv6(nextHop);
+    const mpReachValue = Buffer.concat([
+        u16(BgpConst.BGP_AFI_TYPE.AFI_IPV6),
+        Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST, nextHopBytes.length]),
+        nextHopBytes,
+        Buffer.from([0]),
+        ipv6LabeledUnicastNlri(prefix, { label, pathId, prefixLength })
     ]);
     const attrs = Buffer.concat([
         pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
@@ -1306,6 +1345,123 @@ const globalAndL3vpnPrivateRoutes = [
 assert.ok(globalAndL3vpnPublicRoutes.some(route => route.ip === '203.0.118.0' && route.pathId === 0));
 assert.ok(globalAndL3vpnPrivateRoutes.some(route => route.ip === '10.200.0.0' && route.pathId === 66));
 
+const { session: postRibOutUnadvertisedAfSession } = makeSession();
+postRibOutUnadvertisedAfSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+postRibOutUnadvertisedAfSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_SESSION_FLAGS.POST_POLICY | BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                labeledUnicastUpdate('10.210.0.0', { nextHop: '0.0.0.0', label: 307 })
+            )
+        ])
+    )
+);
+const postRibOutUnadvertisedAfBgpSession = postRibOutUnadvertisedAfSession.bgpSessionMap.get(bgpSessionKey);
+const postRibOutUnadvertisedLabelRoutes = [
+    ...postRibOutUnadvertisedAfBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT)
+        .values()
+];
+assert.ok(
+    postRibOutUnadvertisedLabelRoutes.some(route => route.ip === '10.210.0.0' && route.labels === '307(BOS)'),
+    'Session Post-Policy Adj-RIB-Out should store routes for AFs missing from Peer Up capabilities'
+);
+assert.ok(
+    postRibOutUnadvertisedAfBgpSession
+        .getSessionInfo()
+        .enabledAddrFamilyTypes.includes(BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST),
+    'Dynamically observed session AF should be exposed in session info'
+);
+
+const { session: extendedFlagsHeaderRibOutSession } = makeSession();
+extendedFlagsHeaderRibOutSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+extendedFlagsHeaderRibOutSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS | BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS, 0, Buffer.from([0])),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate('203.0.119.0'))
+        ])
+    )
+);
+const extendedFlagsHeaderRibOutBgpSession = extendedFlagsHeaderRibOutSession.bgpSessionMap.get(bgpSessionKey);
+const extendedFlagsHeaderRibOutRoutes = [
+    ...extendedFlagsHeaderRibOutBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT)
+        .values()
+];
+assert.ok(
+    extendedFlagsHeaderRibOutRoutes.some(route => route.ip === '203.0.119.0'),
+    'Route Monitoring with X flag must preserve Adj-RIB-Out from current peer-header flags'
+);
+
+const { session: sixPeSession } = makeSession();
+sixPeSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        peerUpPayloadForAddressFamilies(0, {
+            recvAddressFamilies: [
+                {
+                    afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+                    safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+                }
+            ],
+            sendAddressFamilies: [
+                {
+                    afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+                    safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+                }
+            ]
+        })
+    )
+);
+sixPeSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                sixPeLabeledUnicastUpdate('2001:db8:60::', {
+                    nextHop: '192.0.2.250',
+                    label: 401
+                })
+            )
+        ])
+    )
+);
+const sixPeBgpSession = sixPeSession.bgpSessionMap.get(bgpSessionKey);
+const sixPeRoutes = [
+    ...sixPeBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV6}|${BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
+        .values()
+];
+const sixPeRoute = sixPeRoutes.find(route => route.ip === '2001:db8:60::' && route.labels === '401(BOS)');
+assert.ok(sixPeRoute, '6PE IPv6 labeled-unicast route should be stored');
+assert.equal(
+    sixPeRoute.nextHop,
+    '::ffff:192.0.2.250',
+    '6PE IPv4-mapped IPv6 next-hop should be displayed as IPv4-mapped IPv6'
+);
+assert.equal(sixPeRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
+
 const { session: privateUnicastAddPathLabeledRouteSession } = makeSession();
 const privateLabeledRouteRd = rd(65000, 201);
 const privateLabeledRoutePeer = {
@@ -1372,7 +1528,7 @@ privateUnicastAddPathLabeledRouteSession.processMessage(
             indexedTlv(
                 BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
                 0,
-                labeledUnicastUpdate('10.201.2.0', { label: 301, pathId: 69 })
+                labeledUnicastUpdate('10.201.2.0', { label: 301 })
             )
         ])
     )
@@ -1393,18 +1549,16 @@ const privateLabeledUnicastRoutes = [
         .values()
 ];
 assert.ok(privateUnicastAddPathRoutes.some(route => route.ip === '10.201.1.0' && route.pathId === 68));
-assert.ok(privateLabeledUnicastRoutes.some(route => route.ip === '10.201.2.0' && route.pathId === 69));
-const inferredAddPathLabeledRoute = privateLabeledUnicastRoutes.find(
-    route => route.ip === '10.201.2.0' && route.pathId === 69
-);
+assert.ok(privateLabeledUnicastRoutes.some(route => route.ip === '10.201.2.0' && route.pathId === 0));
 assert.ok(
-    hasRouteParseStatus(inferredAddPathLabeledRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING),
-    'Labeled-unicast route parsed via inferred ADD-PATH should be marked warning'
+    !privateLabeledUnicastRoutes.some(route => route.pathId === 69),
+    'Labeled-unicast must not infer ADD-PATH from IPv4 unicast when label AF was advertised'
 );
-assert.ok(
-    inferredAddPathLabeledRoute.nlriDetail.warnings.includes(LABEL_UNICAST_ADD_PATH_INFERRED_WARNING),
-    'Labeled-unicast route parsed via inferred ADD-PATH should keep warning detail'
+const nonAddPathLabeledRoute = privateLabeledUnicastRoutes.find(
+    route => route.ip === '10.201.2.0' && route.pathId === 0
 );
+assert.equal(nonAddPathLabeledRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
+assert.equal(nonAddPathLabeledRoute.nlriDetail.warnings.length, 0);
 
 const { session: privateLabeledAddPathUnicastNoAddPathSession } = makeSession();
 const privateExactLabeledRouteRd = rd(65000, 202);
@@ -1577,7 +1731,7 @@ locRibUnicastAddPathLabeledRouteSession.processMessage(
             indexedTlv(
                 BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
                 0,
-                labeledUnicastUpdate('10.102.2.0', { nextHop: '0.0.0.0', label: 302, pathId: 71 })
+                labeledUnicastUpdate('10.102.2.0', { nextHop: '0.0.0.0', label: 302 })
             )
         ])
     )
@@ -1591,21 +1745,19 @@ const locRibLabeledRouteInstance = locRibUnicastAddPathLabeledRouteSession.bgpIn
     )
 );
 const locRibLabeledRoutes = [...locRibLabeledRouteInstance.bgpRoutes.values()];
-const inferredAddPathLocRibLabeledRoute = locRibLabeledRoutes.find(
-    route => route.ip === '10.102.2.0' && route.pathId === 71
-);
-assert.ok(inferredAddPathLocRibLabeledRoute, 'Loc-RIB labeled route should parse with inferred ADD-PATH path-id');
 assert.ok(
-    hasRouteParseStatus(inferredAddPathLocRibLabeledRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING),
-    'Loc-RIB labeled route parsed via inferred ADD-PATH should be marked warning'
+    !locRibLabeledRoutes.some(route => route.pathId === 71),
+    'Loc-RIB labeled route must not infer ADD-PATH from IPv4 unicast when label AF was advertised'
 );
-assert.equal(inferredAddPathLocRibLabeledRoute.nlriDetail.errors.length, 0);
-assert.ok(
-    inferredAddPathLocRibLabeledRoute.nlriDetail.warnings.includes(LABEL_UNICAST_ADD_PATH_INFERRED_WARNING),
-    'Loc-RIB labeled route parsed via inferred ADD-PATH should keep warning detail'
+const nonAddPathLocRibLabeledRoute = locRibLabeledRoutes.find(
+    route => route.ip === '10.102.2.0' && route.pathId === 0
 );
-assert.equal(inferredAddPathLocRibLabeledRoute.getRouteListInfo().warnings, undefined);
-assert.equal(inferredAddPathLocRibLabeledRoute.getRouteListInfo().errors, undefined);
+assert.ok(nonAddPathLocRibLabeledRoute, 'Loc-RIB labeled route should parse without ADD-PATH when label AF has no ADD-PATH');
+assert.equal(nonAddPathLocRibLabeledRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
+assert.equal(nonAddPathLocRibLabeledRoute.nlriDetail.errors.length, 0);
+assert.equal(nonAddPathLocRibLabeledRoute.nlriDetail.warnings.length, 0);
+assert.equal(nonAddPathLocRibLabeledRoute.getRouteListInfo().warnings, undefined);
+assert.equal(nonAddPathLocRibLabeledRoute.getRouteListInfo().errors, undefined);
 
 const { session: locRibUnadvertisedLabelAfSession } = makeSession({
     bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19

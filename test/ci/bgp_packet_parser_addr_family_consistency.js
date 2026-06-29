@@ -24,6 +24,10 @@ function ipv6Bytes(hex) {
     return Buffer.from(hex.replace(/:/g, ''), 'hex');
 }
 
+function ipv4MappedIpv6Bytes(ipAddress) {
+    return Buffer.concat([Buffer.alloc(10), Buffer.from([0xff, 0xff]), ipBytes(ipAddress)]);
+}
+
 function bgpPacket(type, body = Buffer.alloc(0)) {
     return Buffer.concat([
         Buffer.alloc(BgpConst.BGP_MARKER_LEN, 0xff),
@@ -537,5 +541,26 @@ fixtures.forEach(fixture => {
     assertReach(fixture);
     assertUnreach(fixture);
 });
+
+const sixPeFixture = withAfiSafi({
+    name: 'IPV6_LABEL_UNICAST_6PE',
+    family: BgpConst.BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST,
+    nextHop: ipv4MappedIpv6Bytes('192.0.2.250'),
+    nlri: labeledUnicastNlri(64, ipv6Bytes('20010db8006000000000000000000000').subarray(0, 8), 401),
+    withdrawNlri: labeledUnicastWithdrawNlri(64, ipv6Bytes('20010db8006000000000000000000000').subarray(0, 8)),
+    assertReach(route, mpReach) {
+        assert.equal(mpReach.nextHop, '::ffff:192.0.2.250');
+        assert.equal(route.prefix, '2001:db8:60::');
+        assert.equal(route.length, 64);
+        assert.equal(route.labels[0].label, 401);
+    },
+    assertUnreach(route) {
+        assert.equal(route.prefix, '2001:db8:60::');
+        assert.equal(route.length, 64);
+        assert.equal(route.compatibilityField, '000000');
+    }
+});
+assertReach(sixPeFixture);
+assertUnreach(sixPeFixture);
 
 console.log('BGP packet parser address-family consistency tests passed');

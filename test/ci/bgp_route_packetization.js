@@ -567,8 +567,8 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
     const reach = getMpReach(parseBgpPacket(sentBuffers[0]));
     assert.strictEqual(
         reach.nextHop,
-        '::ffff:c000:2fe',
-        'IPv6-UNC over IPv4 peer should use IPv4-mapped IPv6 next-hop even when Extended Next Hop is enabled'
+        '::ffff:192.0.2.254',
+        'IPv6-UNC over IPv4 peer should display IPv4-mapped IPv6 next-hop in dotted form'
     );
     assert.deepStrictEqual(
         reach.nlri.map(route => route.prefix),

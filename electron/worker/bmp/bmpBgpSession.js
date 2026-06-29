@@ -67,13 +67,32 @@ class BmpBgpSession {
         return false;
     }
 
+    hasAddressFamily(addressFamilies, afi, safi) {
+        return (
+            Array.isArray(addressFamilies) &&
+            addressFamilies.some(
+                addrFamily => Number(addrFamily.afi) === Number(afi) && Number(addrFamily.safi) === Number(safi)
+            )
+        );
+    }
+
+    hasAdvertisedAddressFamily(afi, safi) {
+        return (
+            this.hasAddressFamily(this.recvAddressFamilies, afi, safi) ||
+            this.hasAddressFamily(this.sendAddressFamilies, afi, safi)
+        );
+    }
+
     getAddPathReceiveInfo(afi, safi, direction = 'receive') {
         const key = `${afi}|${safi}`;
         if (this.getAddPathEnabledForKey(key, direction)) {
             return { enabled: true };
         }
 
-        if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+        if (
+            safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST &&
+            !this.hasAdvertisedAddressFamily(afi, safi)
+        ) {
             const unicastKey = `${afi}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`;
             if (this.getAddPathEnabledForKey(unicastKey, direction)) {
                 return {
