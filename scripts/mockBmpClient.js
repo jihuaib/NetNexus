@@ -393,6 +393,17 @@ function indexedTlv(type, index, value) {
     return Buffer.concat([u16(type), u16(value.length), u16(index), value]);
 }
 
+function groupValue(indexes) {
+    return Buffer.concat(indexes.map(index => u16(index)));
+}
+
+function statelessParsingValue() {
+    return Buffer.concat([
+        addPathCapability(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST),
+        capability(BgpConst.BGP_OPEN_CAP_CODE.FOUR_OCTET_AS, u32(65000))
+    ]);
+}
+
 function pathMarkingValue(status, reason = null) {
     if (reason === null || reason === undefined) {
         return u32(status);
@@ -426,15 +437,49 @@ function initiationMessage() {
     );
 }
 
-function routeMonitoringMessage(peer, bgpMessage, { pathStatus = null, vrfName = null, extendedFlags = null } = {}) {
+function routeMonitoringAllSupportedTlvs({
+    sequenceNumber = 1,
+    timestampSeconds = 1719811200,
+    timestampMicroseconds = 123456,
+    extendedFlags = 0,
+    vrfName = 'global',
+    groupIndex = 0x8001,
+    pathStatus = BmpConst.BMP_PATH_STATUS.BEST | BmpConst.BMP_PATH_STATUS.PRIMARY,
+    pathReason = BmpConst.BMP_PATH_STATUS_REASON.NOT_PREFERRED_ROUTER_ID
+} = {}) {
+    return [
+        indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.SEQUENCE_NUMBER, 0, u32(sequenceNumber)),
+        indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS, 0, Buffer.from([extendedFlags])),
+        indexedTlv(
+            BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.TIMESTAMP,
+            0,
+            Buffer.concat([u32(timestampSeconds), u32(timestampMicroseconds)])
+        ),
+        indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.GROUP, groupIndex, groupValue([1])),
+        indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME, 0, Buffer.from(vrfName)),
+        indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.STATELESS_PARSING, 0, statelessParsingValue()),
+        indexedTlv(
+            BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.PATH_MARKING,
+            groupIndex,
+            pathMarkingValue(pathStatus, pathReason)
+        )
+    ];
+}
+
+function routeMonitoringMessage(
+    peer,
+    bgpMessage,
+    { pathStatus = null, vrfName = null, extendedFlags = null, routeTlvs = [] } = {}
+) {
     const tlvs = [];
     if (vrfName) {
         tlvs.push(indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME, 0, Buffer.from(vrfName)));
     }
     if (extendedFlags !== null && extendedFlags !== undefined) {
-        tlvs.push(
-            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS, 0, Buffer.from([extendedFlags]))
-        );
+        tlvs.push(indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS, 0, Buffer.from([extendedFlags])));
+    }
+    if (Array.isArray(routeTlvs)) {
+        tlvs.push(...routeTlvs);
     }
     tlvs.push(indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpMessage));
     if (pathStatus) {
@@ -668,16 +713,20 @@ function buildScenario(options) {
     const addPathPrefixes = makePrefixes(Math.max(5, Math.min(10, options.routes)), 20);
     const locRibPrefixes = makePrefixes(Math.max(8, Math.min(25, options.routes)), 30);
     const ribInIsolationPublicPrefix = '203.0.118.0';
+    const ribInPostPolicyExtendedFlagsPrefix = '203.0.126.0';
+    const ribInAllTlvsPrefix = '203.0.128.0';
+    const ribOutPostPolicyExtendedFlagsPrefix = '203.0.127.0';
     const ribInIsolationPrivatePrefix = '10.200.0.0';
     const ribInLabelUnicastPlainPrefix = '10.201.1.0';
     const ribInLabelUnicastLabeledPrefix = '10.201.2.0';
     const ribInLabelUnicastNoLabelPrefix = '10.201.0.0';
     const locRibIsolationPublicPrefix = '198.51.101.0';
+    const locRibAllTlvsPrefix = '198.51.102.0';
     const locRibIsolationPrivatePrefix = '10.100.0.0';
     const locRibLabelUnicastPlainPrefix = '10.102.1.0';
     const locRibLabelUnicastLabeledPrefix = '10.102.2.0';
     const locRibLabelUnicastNoLabelPrefix = '10.102.0.0';
-    const publicLocRibRouteCount = locRibPrefixes.length + 1;
+    const publicLocRibRouteCount = locRibPrefixes.length + 2;
 
     const messages = [
         { name: 'initiation', data: initiationMessage() },
@@ -736,7 +785,23 @@ function buildScenario(options) {
                     nextHop: '192.0.2.248',
                     asns: [65006, 65106]
                 }),
-                { extendedFlags: 0 }
+                { extendedFlags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT }
+            )
+        },
+        {
+            name: 'extended-flags-post-policy-rib-out-route',
+            data: routeMonitoringMessage(
+                {
+                    ...extendedFlagsRibOutPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([ribOutPostPolicyExtendedFlagsPrefix], {
+                    nextHop: '192.0.2.248',
+                    asns: [65006, 65106]
+                }),
+                {
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT | BmpConst.BMP_SESSION_FLAGS.POST_POLICY
+                }
             )
         },
         {
@@ -842,6 +907,47 @@ function buildScenario(options) {
                     nextHop: '192.0.2.254',
                     asns: [65000, 65100]
                 })
+            )
+        },
+        {
+            name: 'public-rib-in-pre-policy-extended-flags-route',
+            data: routeMonitoringMessage(
+                ipv4Peer,
+                ipv4Update([ribInPostPolicyExtendedFlagsPrefix], {
+                    nextHop: '192.0.2.254',
+                    asns: [65000, 65100]
+                })
+            )
+        },
+        {
+            name: 'public-rib-in-post-policy-extended-flags-route',
+            data: routeMonitoringMessage(
+                {
+                    ...ipv4Peer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([ribInPostPolicyExtendedFlagsPrefix], {
+                    nextHop: '192.0.2.254',
+                    asns: [65000, 65100]
+                }),
+                { extendedFlags: BmpConst.BMP_SESSION_FLAGS.POST_POLICY }
+            )
+        },
+        {
+            name: 'public-rib-in-all-supported-tlvs-route',
+            data: routeMonitoringMessage(
+                ipv4Peer,
+                ipv4Update([ribInAllTlvsPrefix], {
+                    nextHop: '192.0.2.254',
+                    asns: [65000, 65100]
+                }),
+                {
+                    routeTlvs: routeMonitoringAllSupportedTlvs({
+                        sequenceNumber: 9001,
+                        vrfName: 'global',
+                        extendedFlags: 0
+                    })
+                }
             )
         },
         {
@@ -1086,6 +1192,23 @@ function buildScenario(options) {
                     asns: [65000]
                 }),
                 { vrfName: 'global' }
+            )
+        },
+        {
+            name: 'public-loc-rib-all-supported-tlvs-route',
+            data: routeMonitoringMessage(
+                locRibPeer,
+                ipv4Update([locRibAllTlvsPrefix], {
+                    nextHop: '0.0.0.0',
+                    asns: [65000]
+                }),
+                {
+                    routeTlvs: routeMonitoringAllSupportedTlvs({
+                        sequenceNumber: 9101,
+                        vrfName: 'global',
+                        extendedFlags: 0
+                    })
+                }
             )
         }
     );

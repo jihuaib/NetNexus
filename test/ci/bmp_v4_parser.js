@@ -353,6 +353,11 @@ function indexedTlv(type, index, value) {
     return Buffer.concat([u16(type), u16(value.length), u16(index), value]);
 }
 
+function enterpriseIndexedTlv(type, index, enterpriseNumber, value) {
+    const rawValue = Buffer.concat([u32(enterpriseNumber), value]);
+    return Buffer.concat([u16(type | 0x8000), u16(rawValue.length), u16(index), rawValue]);
+}
+
 function tlv(type, value) {
     return Buffer.concat([u16(type), u16(value.length), value]);
 }
@@ -527,6 +532,50 @@ assert.equal(ipv4UnicastRoute.getRouteInfo().nlriDetail.rd, '0:0');
 assert.equal(ipv4UnicastRoute.getRouteInfo().nlriDetail.pathId, 0);
 assert.ok(events.some(event => event.type === BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE));
 
+const { session: bmp3RibInPolicySession } = makeSession();
+bmp3RibInPolicySession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V3, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+bmp3RibInPolicySession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V3,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([peerHeader(), bgpUpdate('203.0.115.0')])
+    )
+);
+bmp3RibInPolicySession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V3,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([peerHeader(BmpConst.BMP_SESSION_FLAGS.POST_POLICY), bgpUpdate('203.0.116.0')])
+    )
+);
+const bmp3RibInPolicyBgpSession = bmp3RibInPolicySession.bgpSessionMap.get(bgpSessionKey);
+const bmp3PrePolicyRoutes = [
+    ...bmp3RibInPolicyBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
+        .values()
+];
+const bmp3PostPolicyRoutes = [
+    ...bmp3RibInPolicyBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN)
+        .values()
+];
+assert.ok(
+    bmp3PrePolicyRoutes.some(route => route.ip === '203.0.115.0'),
+    'BMPv3 Route Monitoring without post-policy flag should store pre-policy Adj-RIB-In routes'
+);
+assert.ok(
+    !bmp3PrePolicyRoutes.some(route => route.ip === '203.0.116.0'),
+    'BMPv3 Route Monitoring with post-policy flag should not be copied into pre-policy Adj-RIB-In'
+);
+assert.ok(
+    bmp3PostPolicyRoutes.some(route => route.ip === '203.0.116.0'),
+    'BMPv3 Route Monitoring with post-policy flag should store post-policy Adj-RIB-In routes'
+);
+
 const { session: pathMarkingGroupSession } = makeSession();
 pathMarkingGroupSession.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
@@ -566,8 +615,11 @@ pathMarkingGroupRoutes.forEach(route => {
     assert.equal(route.pathStatusText, 'Best, Primary');
     assert.equal(route.pathStatusReason, BmpConst.BMP_PATH_STATUS_REASON.NOT_PREFERRED_ROUTER_ID);
     assert.equal(route.pathStatusReasonName, 'Not preferred for router ID');
-    assert.equal(route.pathStatusTlvs[0].rawIndex, 0x800b);
-    assert.equal(route.pathStatusTlvs[0].group, true);
+    const routePathMarkingTlv = route
+        .getRouteInfo()
+        .routeTlvs.find(tlv => tlv.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.PATH_MARKING);
+    assert.equal(routePathMarkingTlv.rawIndex, 0x800b);
+    assert.equal(routePathMarkingTlv.group, true);
 });
 assert.ok(pathMarkingGroupRoutes[0].attrId, 'routes with parsed attributes should have attrId');
 assert.equal(pathMarkingGroupRoutes[0].attrId, pathMarkingGroupRoutes[1].attrId);
@@ -606,6 +658,54 @@ const markedRoute = pathMarkingIndexRoutes.find(route => route.ip === '203.0.123
 assert.equal(unmarkedRoute.pathStatus, null);
 assert.equal(markedRoute.pathStatus, BmpConst.BMP_PATH_STATUS.BACKUP);
 assert.equal(markedRoute.pathStatusText, 'Backup');
+assert.equal(markedRoute.getRouteListInfo().routeTlvCount, 1);
+assert.equal(markedRoute.getRouteInfo().routeTlvs[0].type, BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.PATH_MARKING);
+assert.equal(markedRoute.getRouteInfo().routeTlvs[0].appliedNlriIndex, 2);
+assert.equal(unmarkedRoute.getRouteInfo().routeTlvCount, 0);
+
+const { session: enterpriseRouteTlvSession } = makeSession();
+enterpriseRouteTlvSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+enterpriseRouteTlvSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            enterpriseIndexedTlv(1234, 2, 64512, Buffer.from('enterprise-route-tlv')),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                bgpUpdateMulti(['203.0.128.0', '203.0.129.0'])
+            )
+        ])
+    )
+);
+const enterpriseRouteTlvBgpSession = enterpriseRouteTlvSession.bgpSessionMap.get(bgpSessionKey);
+const enterpriseRouteTlvRouteMap = enterpriseRouteTlvBgpSession.bgpRoutes
+    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
+const enterpriseRouteTlvRoutes = [...enterpriseRouteTlvRouteMap.values()];
+const enterpriseRouteTlvFirstRoute = enterpriseRouteTlvRoutes.find(route => route.ip === '203.0.128.0');
+const enterpriseRouteTlvSecondRouteInfo = enterpriseRouteTlvRoutes
+    .find(route => route.ip === '203.0.129.0')
+    .getRouteInfo();
+assert.equal(enterpriseRouteTlvFirstRoute.getRouteInfo().routeTlvCount, 0);
+assert.equal(enterpriseRouteTlvSecondRouteInfo.routeTlvCount, 1);
+assert.deepEqual(enterpriseRouteTlvSecondRouteInfo.routeTlvs[0], {
+    type: 1234,
+    rawType: 0x8000 | 1234,
+    length: 24,
+    enterprise: true,
+    enterpriseNumber: 64512,
+    valueHex: Buffer.from('enterprise-route-tlv').toString('hex'),
+    rawValueHex: Buffer.concat([u32(64512), Buffer.from('enterprise-route-tlv')]).toString('hex'),
+    index: 2,
+    rawIndex: 2,
+    group: false,
+    appliedNlriIndex: 2
+});
 
 const { session: draft19PathMarkingSession } = makeSession({
     bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
@@ -773,7 +873,16 @@ const locRibInstance = session.bgpInstanceMap.get(locRibInstanceKey);
 assert.ok(locRibInstance, 'BMPv4 Loc-RIB Route Monitoring should create a Loc-RIB instance');
 assert.equal(locRibInstance.instanceFlags, BmpConst.BMP_LOC_RIB_FLAGS.FILTERED);
 assert.deepEqual(locRibInstance.vrfTableNames, ['global']);
-assert.equal([...locRibInstance.bgpRoutes.values()][0].ip, '198.51.100.0');
+const locRibRouteMonitoringRoute = [...locRibInstance.bgpRoutes.values()][0];
+assert.equal(locRibRouteMonitoringRoute.ip, '198.51.100.0');
+assert.ok(
+    locRibRouteMonitoringRoute
+        .getRouteInfo()
+        .routeTlvs.some(
+            tlv => tlv.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME && tlv.value === 'global'
+        ),
+    'Route detail should include route-scoped BMPv4 VRF/Table Name TLV'
+);
 
 const { session: locRibDefaultRdEvpnAddPathSession } = makeSession();
 const locRibDefaultRdEvpnPrivateRd = rd(65000, 200);
@@ -1381,6 +1490,47 @@ assert.ok(
     'Dynamically observed session AF should be exposed in session info'
 );
 
+const { session: extendedFlagsPostPolicyRibOutSession } = makeSession();
+extendedFlagsPostPolicyRibOutSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+extendedFlagsPostPolicyRibOutSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS,
+                0,
+                Buffer.from([BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT | BmpConst.BMP_SESSION_FLAGS.POST_POLICY])
+            ),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate('203.0.127.0'))
+        ])
+    )
+);
+const extendedFlagsPostPolicyRibOutBgpSession = extendedFlagsPostPolicyRibOutSession.bgpSessionMap.get(bgpSessionKey);
+const extendedFlagsPostPolicyAdjRibOutRoutes = [
+    ...extendedFlagsPostPolicyRibOutBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT)
+        .values()
+];
+const extendedFlagsPostPolicyPostAdjRibOutRoutes = [
+    ...extendedFlagsPostPolicyRibOutBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT)
+        .values()
+];
+assert.ok(
+    !extendedFlagsPostPolicyAdjRibOutRoutes.some(route => route.ip === '203.0.127.0'),
+    'BMPv4 Extended Flags TLV post-policy RIB-Out should not be copied into Adj-RIB-Out'
+);
+assert.ok(
+    extendedFlagsPostPolicyPostAdjRibOutRoutes.some(route => route.ip === '203.0.127.0'),
+    'BMPv4 Extended Flags TLV post-policy RIB-Out should update Post Adj-RIB-Out'
+);
+
 const { session: extendedFlagsHeaderRibOutSession } = makeSession();
 extendedFlagsHeaderRibOutSession.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
@@ -1397,15 +1547,108 @@ extendedFlagsHeaderRibOutSession.processMessage(
     )
 );
 const extendedFlagsHeaderRibOutBgpSession = extendedFlagsHeaderRibOutSession.bgpSessionMap.get(bgpSessionKey);
-const extendedFlagsHeaderRibOutRoutes = [
+const extendedFlagsClearedRibInRoutes = [
+    ...extendedFlagsHeaderRibOutBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
+        .values()
+];
+assert.ok(
+    extendedFlagsClearedRibInRoutes.some(route => route.ip === '203.0.119.0'),
+    'BMPv4 Extended Flags TLV should override peer-header flags and clear Adj-RIB-Out for pre-policy RIB-In'
+);
+assert.ok(
+    ![
+        ...extendedFlagsHeaderRibOutBgpSession.bgpRoutes
+            .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+            .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT)
+            .values()
+    ].some(route => route.ip === '203.0.119.0'),
+    'BMPv4 Extended Flags TLV value 0 must not leak header Adj-RIB-Out into the effective RIB type'
+);
+extendedFlagsHeaderRibOutSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS,
+                0,
+                Buffer.from([BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT])
+            ),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate('203.0.125.0'))
+        ])
+    )
+);
+const extendedFlagsSetRibOutRoutes = [
     ...extendedFlagsHeaderRibOutBgpSession.bgpRoutes
         .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
         .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT)
         .values()
 ];
 assert.ok(
-    extendedFlagsHeaderRibOutRoutes.some(route => route.ip === '203.0.119.0'),
-    'Route Monitoring with X flag must preserve Adj-RIB-Out from current peer-header flags'
+    extendedFlagsSetRibOutRoutes.some(route => route.ip === '203.0.125.0'),
+    'BMPv4 Extended Flags TLV should set Adj-RIB-Out even when peer-header only carries the X flag'
+);
+
+const { session: extendedFlagsPostPolicyRibInSession } = makeSession();
+extendedFlagsPostPolicyRibInSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+extendedFlagsPostPolicyRibInSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS,
+                0,
+                Buffer.from([BmpConst.BMP_SESSION_FLAGS.POST_POLICY])
+            ),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate('203.0.126.0'))
+        ])
+    )
+);
+const extendedFlagsPostPolicyRibInBgpSession = extendedFlagsPostPolicyRibInSession.bgpSessionMap.get(bgpSessionKey);
+const extendedFlagsPostPolicyPreRibInRoutes = [
+    ...extendedFlagsPostPolicyRibInBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
+        .values()
+];
+const extendedFlagsPostPolicyRibInRoutes = [
+    ...extendedFlagsPostPolicyRibInBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN)
+        .values()
+];
+assert.ok(
+    !extendedFlagsPostPolicyPreRibInRoutes.some(route => route.ip === '203.0.126.0'),
+    'BMPv4 Extended Flags TLV post-policy RIB-In should not be copied into pre-policy Adj-RIB-In'
+);
+assert.ok(
+    extendedFlagsPostPolicyRibInRoutes.some(route => route.ip === '203.0.126.0'),
+    'BMPv4 Extended Flags TLV post-policy RIB-In should update Adj-RIB-In'
+);
+const extendedFlagsPostPolicyRibInRouteInfo = extendedFlagsPostPolicyRibInRoutes
+    .find(route => route.ip === '203.0.126.0')
+    .getRouteInfo();
+assert.ok(
+    extendedFlagsPostPolicyRibInRouteInfo.routeTlvs.some(
+        tlv =>
+            tlv.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS &&
+            tlv.valueHex === '40' &&
+            tlv.decoded?.flagsHex === '0x40'
+    ),
+    'Route detail should include route-scoped BMPv4 Extended Flags TLV'
+);
+assert.ok(
+    !extendedFlagsPostPolicyRibInRouteInfo.routeTlvs.some(
+        tlv => tlv.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE
+    ),
+    'Route detail should not duplicate the full BGP Message TLV on each route'
 );
 
 const { session: sixPeSession } = makeSession();
@@ -1749,10 +1992,11 @@ assert.ok(
     !locRibLabeledRoutes.some(route => route.pathId === 71),
     'Loc-RIB labeled route must not infer ADD-PATH from IPv4 unicast when label AF was advertised'
 );
-const nonAddPathLocRibLabeledRoute = locRibLabeledRoutes.find(
-    route => route.ip === '10.102.2.0' && route.pathId === 0
+const nonAddPathLocRibLabeledRoute = locRibLabeledRoutes.find(route => route.ip === '10.102.2.0' && route.pathId === 0);
+assert.ok(
+    nonAddPathLocRibLabeledRoute,
+    'Loc-RIB labeled route should parse without ADD-PATH when label AF has no ADD-PATH'
 );
-assert.ok(nonAddPathLocRibLabeledRoute, 'Loc-RIB labeled route should parse without ADD-PATH when label AF has no ADD-PATH');
 assert.equal(nonAddPathLocRibLabeledRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
 assert.equal(nonAddPathLocRibLabeledRoute.nlriDetail.errors.length, 0);
 assert.equal(nonAddPathLocRibLabeledRoute.nlriDetail.warnings.length, 0);

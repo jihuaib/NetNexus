@@ -89,10 +89,7 @@ class BmpBgpSession {
             return { enabled: true };
         }
 
-        if (
-            safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST &&
-            !this.hasAdvertisedAddressFamily(afi, safi)
-        ) {
+        if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST && !this.hasAdvertisedAddressFamily(afi, safi)) {
             const unicastKey = `${afi}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`;
             if (this.getAddPathEnabledForKey(unicastKey, direction)) {
                 return {

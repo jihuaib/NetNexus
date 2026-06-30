@@ -2,8 +2,9 @@ const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { BmpE2eController, getBrowserMockScript } = require('../../scripts/e2e-support');
 
 const MOCK_BASE_ROUTE_COUNT = 12;
-const EXPECTED_PUBLIC_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT + 1;
-const EXPECTED_LOC_RIB_ROUTE_COUNT = Math.max(8, Math.min(25, MOCK_BASE_ROUTE_COUNT)) + 1;
+const EXPECTED_PUBLIC_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT + 3;
+const EXPECTED_LOC_RIB_ROUTE_COUNT = Math.max(8, Math.min(25, MOCK_BASE_ROUTE_COUNT)) + 2;
+const EXPECTED_MOCK_READY_ROUTE_COUNT = EXPECTED_LOC_RIB_ROUTE_COUNT;
 const EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT;
 
 async function recordStep(title) {
@@ -25,14 +26,17 @@ function formatRouteStep(route, index) {
 
 function expectPublicAdjRibRoute(route) {
     expect(
-        route.ip.startsWith('10.10.') || route.ip === '203.0.118.0',
+        route.ip.startsWith('10.10.') ||
+            route.ip === '203.0.118.0' ||
+            route.ip === '203.0.126.0' ||
+            route.ip === '203.0.128.0',
         `unexpected Adj-RIB route prefix ${route.prefix}`
     ).toBe(true);
 }
 
 function expectPublicLocRibRoute(route) {
     expect(
-        route.ip.startsWith('10.30.') || route.ip === '198.51.101.0',
+        route.ip.startsWith('10.30.') || route.ip === '198.51.101.0' || route.ip === '198.51.102.0',
         `unexpected Loc-RIB route prefix ${route.prefix}`
     ).toBe(true);
 }
@@ -90,7 +94,7 @@ test.describe('BMP pages', () => {
             );
 
             await controller.startMockClient({ routes: MOCK_BASE_ROUTE_COUNT, interval: 0 });
-            await controller.waitForMockData({ routes: EXPECTED_PUBLIC_ROUTE_COUNT });
+            await controller.waitForMockData({ routes: EXPECTED_MOCK_READY_ROUTE_COUNT });
 
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
@@ -233,7 +237,7 @@ test.describe('BMP pages', () => {
             await expect(page.getByTestId('bmp-stop-button')).toBeEnabled();
 
             await controller.startMockClient({ routes: MOCK_BASE_ROUTE_COUNT, interval: 0 });
-            await controller.waitForMockData({ routes: EXPECTED_PUBLIC_ROUTE_COUNT });
+            await controller.waitForMockData({ routes: EXPECTED_MOCK_READY_ROUTE_COUNT });
 
             await expect(page.getByTestId('bmp-client-table')).toContainText('mock-bmp-router', {
                 timeout: 10000

@@ -584,6 +584,122 @@ class BmpSession {
         route.setPathStatusMarkings(assignments?.get(nlri) || []);
     }
 
+    isRouteTlvVisibleOnRoute(tlv) {
+        if (!tlv || !Buffer.isBuffer(tlv.value)) {
+            return false;
+        }
+        if (!tlv.enterprise && (this.isRouteMonitoringBgpMessageTlv(tlv) || this.isRouteMonitoringGroupTlv(tlv))) {
+            return false;
+        }
+        return true;
+    }
+
+    decorateRouteTlvForDisplay(tlv) {
+        if (!tlv || !Buffer.isBuffer(tlv.value)) {
+            return;
+        }
+
+        if (
+            this.isBmpV4TlvDraft20() &&
+            !tlv.enterprise &&
+            tlv.type === BmpConst.BMP_TLV_TYPE.EXTENDED_FLAGS &&
+            tlv.value.length > 0
+        ) {
+            const flags = tlv.value[0];
+            tlv.name = 'Extended Flags';
+            tlv.decoded = {
+                flags,
+                flagsHex: `0x${flags.toString(16).padStart(2, '0')}`
+            };
+            return;
+        }
+
+        if (
+            this.isBmpV4TlvDraft20() &&
+            !tlv.enterprise &&
+            tlv.type === BmpConst.BMP_TLV_TYPE.SEQUENCE_NUMBER &&
+            tlv.value.length === 4
+        ) {
+            tlv.name = 'Sequence Number';
+            tlv.decoded = {
+                sequenceNumber: tlv.value.readUInt32BE(0)
+            };
+            return;
+        }
+
+        if (
+            this.isBmpV4TlvDraft20() &&
+            !tlv.enterprise &&
+            tlv.type === BmpConst.BMP_TLV_TYPE.TIMESTAMP &&
+            tlv.value.length >= 8
+        ) {
+            tlv.name = 'Timestamp';
+            tlv.decoded = {
+                seconds: tlv.value.readUInt32BE(0),
+                microseconds: tlv.value.readUInt32BE(4)
+            };
+            return;
+        }
+
+        if (this.isVrfTableNameTlv(tlv)) {
+            tlv.name = 'VRF/Table Name';
+            tlv.valueText = tlv.value.toString('utf8');
+            return;
+        }
+
+        if (this.isRouteMonitoringStatelessParsingTlv(tlv) && !tlv.decoded) {
+            this.decodeStatelessParsingTlvs([tlv]);
+            return;
+        }
+
+        if (this.isPathMarkingTlv(tlv) && !tlv.decoded) {
+            this.decodePathMarkingTlv(tlv);
+        }
+    }
+
+    buildRouteTlvAssignments(parsedBgpUpdate, routeTlvs) {
+        const assignments = new Map();
+        if (!Array.isArray(routeTlvs)) {
+            return assignments;
+        }
+
+        const nlriList = this.getRouteMonitoringNlriList(parsedBgpUpdate);
+        if (nlriList.length === 0) {
+            return assignments;
+        }
+
+        const groupMap = this.buildRouteMonitoringGroupMap(routeTlvs);
+        routeTlvs.forEach(tlv => {
+            if (!this.isRouteTlvVisibleOnRoute(tlv)) {
+                return;
+            }
+
+            this.decorateRouteTlvForDisplay(tlv);
+            const indexes = this.resolveIndexedTlvRouteIndexes(tlv, groupMap, nlriList.length);
+            indexes.forEach(index => {
+                const nlri = nlriList[index - 1];
+                if (!nlri) {
+                    return;
+                }
+                if (!assignments.has(nlri)) {
+                    assignments.set(nlri, []);
+                }
+
+                const serializable = toSerializableTlvs([tlv])[0];
+                assignments.get(nlri).push({
+                    ...serializable,
+                    appliedNlriIndex: index
+                });
+            });
+        });
+
+        return assignments;
+    }
+
+    applyRouteTlvs(route, assignments, nlri) {
+        route.setRouteTlvs(assignments?.get(nlri) || []);
+    }
+
     getOrCreateLocRibInstance(peer, afi, safi, options = {}) {
         const instanceKey = BmpBgpInstance.makeKey(peer.peerType, peer.peerRd, afi, safi);
         let bgpInstance = this.bgpInstanceMap.get(instanceKey);
@@ -963,6 +1079,7 @@ class BmpSession {
             }
             const parsedBgpUpdate = routePayload.parsedBgpUpdate;
             const pathMarkingAssignments = this.buildPathMarkingAssignments(parsedBgpUpdate, routePayload.routeTlvs);
+            const routeTlvAssignments = this.buildRouteTlvAssignments(parsedBgpUpdate, routePayload.routeTlvs);
             const effectiveSessionFlags =
                 version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
                     ? getEffectivePeerFlags(sessionFlags, routePayload.routeTlvs)
@@ -1135,6 +1252,7 @@ class BmpSession {
                         // 设置路由属性
                         this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
                         this.applyPathMarkings(bmpBgpRoute, pathMarkingAssignments, nlri);
+                        this.applyRouteTlvs(bmpBgpRoute, routeTlvAssignments, nlri);
                         bmpBgpRoute.markActive(
                             bgpSession.getRibEpoch(
                                 BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -1216,6 +1334,7 @@ class BmpSession {
                         // 设置路由属性
                         this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
                         this.applyPathMarkings(bmpBgpRoute, pathMarkingAssignments, nlri);
+                        this.applyRouteTlvs(bmpBgpRoute, routeTlvAssignments, nlri);
                         bmpBgpRoute.markActive(bgpSession.getRibEpoch(mpReachNlri.afi, mpReachNlri.safi, ribType));
                         if (isNewRoute) {
                             bgpSession.recordRouteAdd(mpReachNlri.afi, mpReachNlri.safi, ribType, bmpBgpRoute);
@@ -1279,6 +1398,7 @@ class BmpSession {
             }
             const parsedBgpUpdate = routePayload.parsedBgpUpdate;
             const pathMarkingAssignments = this.buildPathMarkingAssignments(parsedBgpUpdate, routePayload.routeTlvs);
+            const routeTlvAssignments = this.buildRouteTlvAssignments(parsedBgpUpdate, routePayload.routeTlvs);
             const effectiveLocRibFlags =
                 version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
                     ? getEffectivePeerFlags(locRibPeer.peerFlags, routePayload.routeTlvs)
@@ -1405,6 +1525,7 @@ class BmpSession {
                     // 设置路由属性
                     this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
                     this.applyPathMarkings(bmpBgpRoute, pathMarkingAssignments, nlri);
+                    this.applyRouteTlvs(bmpBgpRoute, routeTlvAssignments, nlri);
                     bmpBgpRoute.markActive(bgpInstance.getRibEpoch());
                     if (isNewRoute) {
                         bgpInstance.recordRouteAdd(bmpBgpRoute);
@@ -1459,6 +1580,7 @@ class BmpSession {
                     // 设置路由属性
                     this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
                     this.applyPathMarkings(bmpBgpRoute, pathMarkingAssignments, nlri);
+                    this.applyRouteTlvs(bmpBgpRoute, routeTlvAssignments, nlri);
                     bmpBgpRoute.markActive(bgpInstance.getRibEpoch());
                     if (isNewRoute) {
                         bgpInstance.recordRouteAdd(bmpBgpRoute);

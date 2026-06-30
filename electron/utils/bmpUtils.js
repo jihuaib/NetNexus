@@ -212,7 +212,7 @@ function getEffectivePeerFlags(peerFlags, tlvs = []) {
         return peerFlags;
     }
 
-    return (peerFlags & ~BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS) | extendedFlagsTlv.value[0];
+    return extendedFlagsTlv.value[0];
 }
 
 function parseStatsRecords(buffer, offset = 0, options = {}) {

@@ -13,8 +13,11 @@ const DEFAULT_PATH_STATUS_INFO = Object.freeze({
     pathStatusReason: null,
     pathStatusReasonName: null,
     pathStatusReasonText: null,
-    pathStatusReasons: EMPTY_ARRAY,
-    pathStatusTlvs: EMPTY_ARRAY
+    pathStatusReasons: EMPTY_ARRAY
+});
+const DEFAULT_ROUTE_TLV_INFO = Object.freeze({
+    routeTlvs: EMPTY_ARRAY,
+    routeTlvCount: 0
 });
 
 class BmpBgpRoute {
@@ -36,6 +39,7 @@ class BmpBgpRoute {
         this.labels = null;
         this.routeType = null;
         this.nlriDetail = null;
+        this.routeTlvs = [];
         this.parseStatus = BmpBgpRoute.makeParseStatus();
 
         this.routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
@@ -297,15 +301,22 @@ class BmpBgpRoute {
             pathStatusReasons:
                 this.pathStatusReasons === undefined
                     ? DEFAULT_PATH_STATUS_INFO.pathStatusReasons
-                    : this.pathStatusReasons,
-            pathStatusTlvs:
-                this.pathStatusTlvs === undefined ? DEFAULT_PATH_STATUS_INFO.pathStatusTlvs : this.pathStatusTlvs
+                    : this.pathStatusReasons
+        };
+    }
+
+    getRouteTlvInfo() {
+        const routeTlvs = Array.isArray(this.routeTlvs) ? this.routeTlvs : DEFAULT_ROUTE_TLV_INFO.routeTlvs;
+        return {
+            routeTlvs,
+            routeTlvCount: routeTlvs.length
         };
     }
 
     getRouteListInfo() {
         const routeAttr = this.getRouteAttr();
         const pathStatusInfo = this.getPathStatusInfo();
+        const routeTlvInfo = this.getRouteTlvInfo();
         return {
             routeKey: this.getRouteKey(),
             addrFamilyType: this.getAddrFamilyType(),
@@ -328,6 +339,7 @@ class BmpBgpRoute {
             pathStatusReason: pathStatusInfo.pathStatusReason,
             pathStatusReasonName: pathStatusInfo.pathStatusReasonName,
             pathStatusReasonText: pathStatusInfo.pathStatusReasonText,
+            routeTlvCount: routeTlvInfo.routeTlvCount,
             routeState: this.routeState
         };
     }
@@ -336,6 +348,7 @@ class BmpBgpRoute {
         const routeAttr = this.getRouteAttr();
         const attrEntry = this.getRouteAttrEntry();
         const pathStatusInfo = this.getPathStatusInfo();
+        const routeTlvInfo = this.getRouteTlvInfo();
         const routeInfo = {
             routeKey: this.getRouteKey(),
             addrFamilyType: this.getAddrFamilyType(),
@@ -368,7 +381,8 @@ class BmpBgpRoute {
             pathStatusReasonName: pathStatusInfo.pathStatusReasonName,
             pathStatusReasonText: pathStatusInfo.pathStatusReasonText,
             pathStatusReasons: pathStatusInfo.pathStatusReasons,
-            pathStatusTlvs: pathStatusInfo.pathStatusTlvs,
+            routeTlvs: routeTlvInfo.routeTlvs,
+            routeTlvCount: routeTlvInfo.routeTlvCount,
             routeState: this.routeState,
             ribEpoch: this.ribEpoch,
             staleEpoch: this.staleEpoch,
@@ -404,7 +418,6 @@ class BmpBgpRoute {
         delete this.pathStatusReasonName;
         delete this.pathStatusReasonText;
         delete this.pathStatusReasons;
-        delete this.pathStatusTlvs;
     }
 
     setPathStatusMarkings(markings) {
@@ -469,7 +482,10 @@ class BmpBgpRoute {
         this.pathStatusReasonName = reasons.length > 0 ? reasons[0].reasonName : null;
         this.pathStatusReasonText = reasonTexts.length > 0 ? reasonTexts.join(', ') : null;
         this.pathStatusReasons = reasons;
-        this.pathStatusTlvs = normalizedMarkings;
+    }
+
+    setRouteTlvs(routeTlvs) {
+        this.routeTlvs = Array.isArray(routeTlvs) ? routeTlvs : [];
     }
 
     clearAttributes() {
@@ -478,6 +494,7 @@ class BmpBgpRoute {
         this.routeType = null;
         delete this.rawNlri;
         this.nlriDetail = null;
+        this.routeTlvs = [];
         this.parseStatus = BmpBgpRoute.makeParseStatus();
         this.clearPathStatus();
     }

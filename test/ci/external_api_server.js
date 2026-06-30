@@ -99,7 +99,6 @@ const mockRouteDetail = {
         length: 33
     },
     pathStatusReasons: [],
-    pathStatusTlvs: [],
     ribEpoch: 1,
     staleEpoch: null,
     lastSeenAt: '2026-06-12T00:00:00.000Z',

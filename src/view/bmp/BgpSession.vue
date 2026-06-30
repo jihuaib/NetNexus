@@ -149,7 +149,7 @@
                                                             : '')
                                                 "
                                                 size="small"
-                                                :scroll="{ x: 1410, y: '100%' }"
+                                                :scroll="{ x: 1490, y: '100%' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
@@ -758,6 +758,14 @@
         { title: 'Path ID', dataIndex: 'pathId', key: 'pathId', ellipsis: true, width: 100 },
         { title: 'Labels', dataIndex: 'labels', key: 'labels', ellipsis: true, width: 100 },
         { title: '解析', dataIndex: 'parseStatus', key: 'parseStatus', width: 90, align: 'center' },
+        {
+            title: 'TLV数量',
+            dataIndex: 'routeTlvCount',
+            key: 'routeTlvCount',
+            width: 80,
+            align: 'right',
+            customRender: ({ text }) => text || 0
+        },
         { title: 'Origin', dataIndex: 'origin', key: 'origin', ellipsis: true, width: 80 },
         { title: 'MED', dataIndex: 'med', key: 'med', ellipsis: true, width: 80 },
         { title: 'Path Status', dataIndex: 'pathStatusText', key: 'pathStatusText', ellipsis: true, width: 160 },

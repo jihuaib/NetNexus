@@ -229,8 +229,14 @@ assert.ok(
     !routeMonitoringSummary.includes('Parsed BGP:'),
     'BMP summary should not include full parsed BGP UPDATE object'
 );
-assert.ok(!routeMonitoringSummary.includes('Path Attributes:'), 'BMP summary should not include context-free UPDATE attributes');
-assert.ok(!routeMonitoringSummary.includes('Withdrawn Routes:'), 'BMP summary should not include context-free UPDATE NLRI');
+assert.ok(
+    !routeMonitoringSummary.includes('Path Attributes:'),
+    'BMP summary should not include context-free UPDATE attributes'
+);
+assert.ok(
+    !routeMonitoringSummary.includes('Withdrawn Routes:'),
+    'BMP summary should not include context-free UPDATE NLRI'
+);
 assert.ok(!routeMonitoringSummary.includes('Route Changes:'), 'BMP summary should not include route changes');
 assert.ok(!routeMonitoringSummary.includes('announce IPv4/Unicast 203.0.113.0/24'));
 assert.ok(!routeMonitoringSummary.includes('withdraw IPv4/Unicast 198.51.100.0/24'));
