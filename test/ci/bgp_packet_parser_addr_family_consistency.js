@@ -48,9 +48,12 @@ function pathAttr(typeCode, value, flags = BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL
     return Buffer.concat([Buffer.from([flags, typeCode, value.length]), value]);
 }
 
-function updatePacket(attrs) {
+function updatePacket(attrs, nlri = Buffer.alloc(0), withdrawnRoutes = Buffer.alloc(0)) {
     const attrBuffer = Buffer.concat(attrs);
-    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrBuffer.length), attrBuffer]));
+    return bgpPacket(
+        BgpConst.BGP_PACKET_TYPE.UPDATE,
+        Buffer.concat([u16(withdrawnRoutes.length), withdrawnRoutes, u16(attrBuffer.length), attrBuffer, nlri])
+    );
 }
 
 function mpReachUpdate(afi, safi, nextHop, nlri) {
@@ -66,6 +69,20 @@ function mpUnreachUpdate(afi, safi, nlri) {
     return updatePacket([
         pathAttr(BgpConst.BGP_PATH_ATTR.MP_UNREACH_NLRI, Buffer.concat([u16(afi), Buffer.from([safi]), nlri]))
     ]);
+}
+
+function addPathContextFor(afi, safi) {
+    return {
+        getAddPathReceiveInfo(queryAfi, querySafi) {
+            return {
+                enabled: Number(queryAfi) === Number(afi) && Number(querySafi) === Number(safi)
+            };
+        }
+    };
+}
+
+function addPathNlri(pathId, nlri) {
+    return Buffer.concat([u32(pathId), nlri]);
 }
 
 function ipv4Prefix(prefixLength, ipAddress) {
@@ -253,6 +270,23 @@ function assertReach(fixture) {
     assertTreeFamily(packet, fixture, 'reach');
 }
 
+function assertReachAddPath(fixture, pathId) {
+    const packet = mpReachUpdate(fixture.afi, fixture.safi, fixture.nextHop, addPathNlri(pathId, fixture.nlri));
+    const parsed = parsePacketObject(packet, addPathContextFor(fixture.afi, fixture.safi));
+    assert.equal(parsed.valid, true, parsed.error || `${fixture.name} ADD-PATH MP_REACH should parse`);
+    const attr = parsed.pathAttributes.find(item => item.typeCode === BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI);
+    assert.ok(attr, `${fixture.name} ADD-PATH MP_REACH attribute should exist`);
+    assert.equal(attr.mpReach.afi, fixture.afi);
+    assert.equal(attr.mpReach.safi, fixture.safi);
+    assert.equal(attr.mpReach.nlri.length, 1, `${fixture.name} ADD-PATH MP_REACH should contain one NLRI`);
+    assert.equal(getAddrFamilyType(attr.mpReach.afi, attr.mpReach.safi), fixture.family);
+    const route = attr.mpReach.nlri[0];
+    assert.equal(route.pathId, pathId, `${fixture.name} ADD-PATH MP_REACH should preserve path-id`);
+    assertRouteValid(route, fixture, 'add-path reach');
+    fixture.assertReach(route, attr.mpReach);
+    assertSummary(parsed, route, fixture, 'MP_REACH_NLRI', 'add-path reach');
+}
+
 function assertUnreach(fixture) {
     const packet = mpUnreachUpdate(fixture.afi, fixture.safi, fixture.withdrawNlri || fixture.nlri);
     const parsed = parsePacketObject(packet);
@@ -268,6 +302,31 @@ function assertUnreach(fixture) {
     fixture.assertUnreach ? fixture.assertUnreach(route, attr.mpUnreach) : fixture.assertReach(route, attr.mpUnreach);
     assertSummary(parsed, route, fixture, 'MP_UNREACH_NLRI', 'unreach');
     assertTreeFamily(packet, fixture, 'unreach');
+}
+
+function assertUnreachAddPath(fixture, pathId) {
+    const packet = mpUnreachUpdate(
+        fixture.afi,
+        fixture.safi,
+        addPathNlri(pathId, fixture.withdrawNlri || fixture.nlri)
+    );
+    const parsed = parsePacketObject(packet, addPathContextFor(fixture.afi, fixture.safi));
+    assert.equal(parsed.valid, true, parsed.error || `${fixture.name} ADD-PATH MP_UNREACH should parse`);
+    const attr = parsed.pathAttributes.find(item => item.typeCode === BgpConst.BGP_PATH_ATTR.MP_UNREACH_NLRI);
+    assert.ok(attr, `${fixture.name} ADD-PATH MP_UNREACH attribute should exist`);
+    assert.equal(attr.mpUnreach.afi, fixture.afi);
+    assert.equal(attr.mpUnreach.safi, fixture.safi);
+    assert.equal(
+        attr.mpUnreach.withdrawnRoutes.length,
+        1,
+        `${fixture.name} ADD-PATH MP_UNREACH should contain one NLRI`
+    );
+    assert.equal(getAddrFamilyType(attr.mpUnreach.afi, attr.mpUnreach.safi), fixture.family);
+    const route = attr.mpUnreach.withdrawnRoutes[0];
+    assert.equal(route.pathId, pathId, `${fixture.name} ADD-PATH MP_UNREACH should preserve path-id`);
+    assertRouteValid(route, fixture, 'add-path unreach');
+    fixture.assertUnreach ? fixture.assertUnreach(route, attr.mpUnreach) : fixture.assertReach(route, attr.mpUnreach);
+    assertSummary(parsed, route, fixture, 'MP_UNREACH_NLRI', 'add-path unreach');
 }
 
 function withAfiSafi(fixture) {
@@ -540,7 +599,55 @@ assert.deepEqual(
 fixtures.forEach(fixture => {
     assertReach(fixture);
     assertUnreach(fixture);
+    assertReachAddPath(fixture, 1000 + fixture.family);
+    assertUnreachAddPath(fixture, 2000 + fixture.family);
 });
+
+const ipv4TopLevelAddPathPacket = updatePacket([], addPathNlri(3001, ipv4Prefix(24, '203.0.250.0')));
+const ipv4TopLevelAddPathParsed = parsePacketObject(
+    ipv4TopLevelAddPathPacket,
+    addPathContextFor(BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+);
+assert.equal(ipv4TopLevelAddPathParsed.valid, true, ipv4TopLevelAddPathParsed.error);
+assert.equal(ipv4TopLevelAddPathParsed.nlri.length, 1);
+assert.deepEqual(
+    {
+        prefix: ipv4TopLevelAddPathParsed.nlri[0].prefix,
+        length: ipv4TopLevelAddPathParsed.nlri[0].length,
+        pathId: ipv4TopLevelAddPathParsed.nlri[0].pathId
+    },
+    {
+        prefix: '203.0.250.0',
+        length: 24,
+        pathId: 3001
+    },
+    'top-level IPv4 unicast ADD-PATH NLRI should preserve path-id'
+);
+
+const ipv4TopLevelWithdrawAddPathPacket = updatePacket(
+    [],
+    Buffer.alloc(0),
+    addPathNlri(3002, ipv4Prefix(24, '203.0.251.0'))
+);
+const ipv4TopLevelWithdrawAddPathParsed = parsePacketObject(
+    ipv4TopLevelWithdrawAddPathPacket,
+    addPathContextFor(BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+);
+assert.equal(ipv4TopLevelWithdrawAddPathParsed.valid, true, ipv4TopLevelWithdrawAddPathParsed.error);
+assert.equal(ipv4TopLevelWithdrawAddPathParsed.withdrawnRoutes.length, 1);
+assert.deepEqual(
+    {
+        prefix: ipv4TopLevelWithdrawAddPathParsed.withdrawnRoutes[0].prefix,
+        length: ipv4TopLevelWithdrawAddPathParsed.withdrawnRoutes[0].length,
+        pathId: ipv4TopLevelWithdrawAddPathParsed.withdrawnRoutes[0].pathId
+    },
+    {
+        prefix: '203.0.251.0',
+        length: 24,
+        pathId: 3002
+    },
+    'top-level IPv4 unicast ADD-PATH withdrawn route should preserve path-id'
+);
 
 const sixPeFixture = withAfiSafi({
     name: 'IPV6_LABEL_UNICAST_6PE',
@@ -562,5 +669,7 @@ const sixPeFixture = withAfiSafi({
 });
 assertReach(sixPeFixture);
 assertUnreach(sixPeFixture);
+assertReachAddPath(sixPeFixture, 3013);
+assertUnreachAddPath(sixPeFixture, 4013);
 
 console.log('BGP packet parser address-family consistency tests passed');

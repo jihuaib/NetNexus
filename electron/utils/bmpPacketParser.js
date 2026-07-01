@@ -5,6 +5,7 @@ const {
     parseCommonHeader,
     parsePeerHeader,
     parseBmpTlvs,
+    decodeExtendedPeerFlagsValue,
     parseStatsRecords
 } = require('./bmpUtils');
 const { ipv4BufferToString, ipv6BufferToString } = require('./ipUtils');
@@ -297,7 +298,7 @@ function decodeBmpTlv(tlv, context) {
     } else if (decoded.type === BmpConst.BMP_TLV_TYPE.SEQUENCE_NUMBER && decoded.value.length === 4) {
         decoded.decoded = { sequenceNumber: decoded.value.readUInt32BE(0) };
     } else if (decoded.type === BmpConst.BMP_TLV_TYPE.EXTENDED_FLAGS && decoded.value.length > 0) {
-        decoded.decoded = { flags: decoded.value[0] };
+        decoded.decoded = { flags: decodeExtendedPeerFlagsValue(decoded.value) };
     } else if (decoded.type === BmpConst.BMP_TLV_TYPE.TIMESTAMP && decoded.value.length >= 8) {
         decoded.decoded = {
             seconds: decoded.value.readUInt32BE(0),

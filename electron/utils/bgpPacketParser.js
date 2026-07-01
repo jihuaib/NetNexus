@@ -29,6 +29,10 @@ const bgpAddressFamily = require('./bgpAddressFamily');
 
 const LABEL_UNICAST_ADD_PATH_INFERRED_WARNING =
     'label-unicast ADD-PATH is inferred from same-AFI unicast capability; Peer Up did not advertise ADD-PATH for label-unicast';
+const ADD_PATH_NLRI_LENGTH_COMPAT_WARNING =
+    'ADD-PATH parsing context did not match NLRI length; parsed as non-ADD-PATH and ignored Path Identifier';
+const STATELESS_ADD_PATH_NLRI_COMPAT_WARNING =
+    'BMP Stateless Parsing TLV advertised ADD-PATH but NLRI length fits non-ADD-PATH; parsed without Path Identifier';
 
 function getAddPathWarning(addPathInfo, safi) {
     if (typeof addPathInfo.warning === 'string' && addPathInfo.warning.length > 0) {
@@ -38,6 +42,259 @@ function getAddPathWarning(addPathInfo, safi) {
     return addPathInfo.inferred === true && safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
         ? LABEL_UNICAST_ADD_PATH_INFERRED_WARNING
         : null;
+}
+
+function getAddPathReceiveInfo(context, afi, safi) {
+    if (context && typeof context.getAddPathReceiveInfo === 'function') {
+        return context.getAddPathReceiveInfo(afi, safi) || {};
+    }
+
+    if (context && typeof context.isAddPathReceiveEnabled === 'function') {
+        return {
+            enabled: context.isAddPathReceiveEnabled(afi, safi)
+        };
+    }
+
+    return {
+        enabled: false
+    };
+}
+
+function isWeakAddPathInfo(addPathInfo) {
+    return addPathInfo?.source === 'bmp-stateless-parsing-tlv' && addPathInfo.fallbackEnabled !== true;
+}
+
+function appendUniqueWarning(warnings, warning) {
+    if (!warning) {
+        return Array.isArray(warnings) ? warnings : [];
+    }
+
+    const normalizedWarnings = Array.isArray(warnings) ? [...warnings] : [];
+    if (!normalizedWarnings.includes(warning)) {
+        normalizedWarnings.push(warning);
+    }
+    return normalizedWarnings;
+}
+
+function withRouteWarning(route, warning) {
+    const warnings = appendUniqueWarning(route.warnings, warning);
+    return {
+        ...route,
+        parseWarning: true,
+        warnings
+    };
+}
+
+function withNlriParseWarning(result, warning) {
+    return {
+        ...result,
+        routes: result.routes.map(route => withRouteWarning(route, warning)),
+        warnings: appendUniqueWarning(result.warnings, warning),
+        compatibilityWarning: warning
+    };
+}
+
+function chooseNlriParseByLength(parseCandidate, addPathInfo) {
+    if (addPathInfo?.enabled !== true) {
+        return parseCandidate(false);
+    }
+
+    const addPathResult = parseCandidate(true);
+    const nonAddPathResult = parseCandidate(false);
+    const warning = isWeakAddPathInfo(addPathInfo)
+        ? STATELESS_ADD_PATH_NLRI_COMPAT_WARNING
+        : ADD_PATH_NLRI_LENGTH_COMPAT_WARNING;
+
+    if (isWeakAddPathInfo(addPathInfo) && nonAddPathResult.valid) {
+        return withNlriParseWarning(nonAddPathResult, warning);
+    }
+
+    if (addPathResult.valid) {
+        return addPathResult;
+    }
+
+    if (nonAddPathResult.valid) {
+        return withNlriParseWarning(nonAddPathResult, warning);
+    }
+
+    return addPathResult;
+}
+
+function parseIpv4NlriSequenceCandidate(buffer, startPosition, endPosition, addPathEnabled, routeLabel) {
+    let position = startPosition;
+    const routes = [];
+    const errors = [];
+    const warnings = [];
+    const maxPrefixLength = BgpConst.IP_HOST_LEN;
+
+    while (position < endPosition) {
+        const routeIndex = routes.length + 1;
+        let pathId = 0;
+
+        if (addPathEnabled) {
+            if (position + 4 > endPosition) {
+                errors.push(`${routeLabel} ${routeIndex}: ADD-PATH Path Identifier is truncated`);
+                position = endPosition;
+                break;
+            }
+            pathId = buffer.readUInt32BE(position);
+            position += 4;
+        }
+
+        if (position >= endPosition) {
+            errors.push(`${routeLabel} ${routeIndex}: prefix length is missing`);
+            position = endPosition;
+            break;
+        }
+
+        const prefixLength = buffer[position];
+        position += 1;
+        const prefixBytes = Math.ceil(prefixLength / 8);
+        const routeErrors = [];
+
+        if (prefixLength > maxPrefixLength) {
+            routeErrors.push(`prefix length ${prefixLength} exceeds IPv4 maximum ${maxPrefixLength}`);
+        }
+
+        if (position + prefixBytes > endPosition) {
+            routeErrors.push('prefix is truncated');
+        }
+
+        const prefixBuffer = buffer.subarray(position, Math.min(position + prefixBytes, endPosition));
+        position = Math.min(position + prefixBytes, endPosition);
+        errors.push(...routeErrors.map(error => `${routeLabel} ${routeIndex}: ${error}`));
+
+        routes.push({
+            pathId,
+            prefix: ipv4BufferToString(prefixBuffer, Math.min(prefixLength, maxPrefixLength)),
+            length: prefixLength,
+            valid: routeErrors.length === 0,
+            errors: routeErrors.length > 0 ? routeErrors : undefined
+        });
+    }
+
+    return {
+        routes,
+        errors,
+        warnings,
+        position,
+        valid: errors.length === 0 && position === endPosition
+    };
+}
+
+function parseIpv4NlriSequence(buffer, startPosition, endPosition, addPathInfo, routeLabel = 'NLRI') {
+    return chooseNlriParseByLength(
+        addPathEnabled =>
+            parseIpv4NlriSequenceCandidate(buffer, startPosition, endPosition, addPathEnabled, routeLabel),
+        addPathInfo
+    );
+}
+
+function parseAddressFamilyNlriSequenceCandidate(
+    buffer,
+    startPosition,
+    endPosition,
+    afi,
+    safi,
+    isWithdrawn,
+    addPathEnabled,
+    addPathWarning,
+    routeLabel
+) {
+    let position = startPosition;
+    const routes = [];
+    const errors = [];
+    const warnings = [];
+
+    while (position < endPosition) {
+        const routeIndex = routes.length + 1;
+        let pathId = 0;
+
+        if (addPathEnabled) {
+            if (position + 4 > endPosition) {
+                errors.push(`${routeLabel} ${routeIndex}: ADD-PATH Path Identifier is truncated`);
+                position = endPosition;
+                break;
+            }
+            pathId = buffer.readUInt32BE(position);
+            position += 4;
+        }
+
+        if (position >= endPosition) {
+            errors.push(`${routeLabel} ${routeIndex}: NLRI is truncated`);
+            position = endPosition;
+            break;
+        }
+
+        const nlriStart = position;
+        const parsedNlri = bgpAddressFamily.parseNlriEntry(buffer, position, afi, safi, isWithdrawn);
+        if (!parsedNlri || parsedNlri.position <= nlriStart) {
+            errors.push(`${routeLabel} ${routeIndex}: parser did not advance`);
+            position = endPosition;
+            break;
+        }
+
+        position = parsedNlri.position;
+        if (position > endPosition) {
+            errors.push(`${routeLabel} ${routeIndex}: NLRI length exceeds remaining buffer`);
+            position = endPosition;
+        }
+
+        if (parsedNlri.route.valid === false && Array.isArray(parsedNlri.route.errors)) {
+            errors.push(...parsedNlri.route.errors.map(error => `${routeLabel} ${routeIndex}: ${error}`));
+        }
+        if (Array.isArray(parsedNlri.route.warnings)) {
+            warnings.push(...parsedNlri.route.warnings.map(warning => `${routeLabel} ${routeIndex}: ${warning}`));
+        }
+
+        let routeWarnings = Array.isArray(parsedNlri.route.warnings) ? [...parsedNlri.route.warnings] : [];
+        if (addPathWarning) {
+            routeWarnings = appendUniqueWarning(routeWarnings, addPathWarning);
+        }
+
+        routes.push({
+            pathId,
+            ...parsedNlri.route,
+            parseWarning: routeWarnings.length > 0,
+            warnings: routeWarnings
+        });
+    }
+
+    return {
+        routes,
+        errors,
+        warnings,
+        position,
+        valid: errors.length === 0 && position === endPosition
+    };
+}
+
+function parseAddressFamilyNlriSequence(
+    buffer,
+    startPosition,
+    endPosition,
+    afi,
+    safi,
+    isWithdrawn,
+    addPathInfo,
+    routeLabel
+) {
+    const addPathWarning = getAddPathWarning(addPathInfo || {}, safi);
+    return chooseNlriParseByLength(
+        addPathEnabled =>
+            parseAddressFamilyNlriSequenceCandidate(
+                buffer,
+                startPosition,
+                endPosition,
+                afi,
+                safi,
+                isWithdrawn,
+                addPathEnabled,
+                addPathWarning,
+                routeLabel
+            ),
+        addPathInfo || {}
+    );
 }
 
 /**
@@ -258,50 +515,24 @@ function parseUpdateMessage(buffer, context) {
     let position = BgpConst.BGP_HEAD_LEN;
     const withdrawnRoutesLength = buffer.readUInt16BE(position);
     position += 2;
-    const withdrawnRoutes = [];
 
-    // Check if ADD-PATH is enabled for IPv4 Unicast
-    let addPathEnabled = false;
-    if (context && typeof context.isAddPathReceiveEnabled === 'function') {
-        addPathEnabled = context.isAddPathReceiveEnabled(
-            BgpConst.BGP_AFI_TYPE.AFI_IPV4,
-            BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
-        );
-    }
-    // Backward compatibility or if context is map
-    else if (context && context.addPathMap) {
-        // If context is just the object we constructed (though we pass the class instance usually)
-        // Not implementing this branch since we pass the instance.
-    }
+    const addPathInfo = getAddPathReceiveInfo(
+        context,
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    );
 
     // Parse withdrawn routes
     const withdrawnRoutesEnd = position + withdrawnRoutesLength;
-    while (position < withdrawnRoutesEnd) {
-        let pathId = 0;
-        if (addPathEnabled) {
-            pathId = buffer.readUInt32BE(position);
-            position += 4;
-        }
-
-        const prefixLength = buffer[position];
-        position += 1;
-
-        // Calculate bytes needed for the prefix
-        const prefixBytes = Math.ceil(prefixLength / 8);
-
-        // Extract the prefix
-        const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-        position += prefixBytes;
-
-        // Convert to dotted decimal format for IPv4
-        const prefix = ipv4BufferToString(prefixBuffer, prefixLength);
-
-        withdrawnRoutes.push({
-            pathId,
-            prefix,
-            length: prefixLength
-        });
-    }
+    const parsedWithdrawnRoutes = parseIpv4NlriSequence(
+        buffer,
+        position,
+        Math.min(withdrawnRoutesEnd, buffer.length),
+        addPathInfo,
+        'Withdrawn route'
+    );
+    const withdrawnRoutes = parsedWithdrawnRoutes.routes;
+    position = withdrawnRoutesEnd;
 
     // Parse path attributes
     const pathAttributesLength = buffer.readUInt16BE(position);
@@ -312,40 +543,23 @@ function parseUpdateMessage(buffer, context) {
     position = nextPosition;
     annotateEvpnPathAttributes(pathAttributes);
     const attributeErrors = [];
+    const attributeWarnings = [];
     pathAttributes.forEach(attr => {
         if (attr.valid === false && Array.isArray(attr.errors)) {
             attributeErrors.push(...attr.errors.map(error => `${getBgpPathAttrTypeName(attr.typeCode)}: ${error}`));
         }
+        if (Array.isArray(attr.warnings)) {
+            attributeWarnings.push(
+                ...attr.warnings.map(warning => `${getBgpPathAttrTypeName(attr.typeCode)}: ${warning}`)
+            );
+        }
     });
 
     // Parse NLRI
-    const nlri = [];
-    while (position < buffer.length) {
-        let pathId = 0;
-        if (addPathEnabled) {
-            pathId = buffer.readUInt32BE(position);
-            position += 4;
-        }
-
-        const prefixLength = buffer[position];
-        position += 1;
-
-        // Calculate bytes needed for the prefix
-        const prefixBytes = Math.ceil(prefixLength / 8);
-
-        // Extract the prefix
-        const prefixBuffer = buffer.subarray(position, position + prefixBytes);
-        position += prefixBytes;
-
-        // Convert to dotted decimal format for IPv4
-        const prefix = ipv4BufferToString(prefixBuffer, prefixLength);
-
-        nlri.push({
-            pathId,
-            prefix,
-            length: prefixLength
-        });
-    }
+    const parsedNlri = parseIpv4NlriSequence(buffer, position, buffer.length, addPathInfo, 'NLRI');
+    const nlri = parsedNlri.routes;
+    const routeErrors = [...parsedWithdrawnRoutes.errors, ...parsedNlri.errors];
+    const routeWarnings = [...parsedWithdrawnRoutes.warnings, ...parsedNlri.warnings];
 
     return {
         withdrawnRoutesLength,
@@ -353,9 +567,10 @@ function parseUpdateMessage(buffer, context) {
         pathAttributesLength,
         pathAttributes,
         nlri,
-        valid: attributeErrors.length === 0,
-        error: attributeErrors.join('; '),
-        errors: attributeErrors
+        valid: attributeErrors.length === 0 && routeErrors.length === 0,
+        error: [...attributeErrors, ...routeErrors].join('; '),
+        errors: [...attributeErrors, ...routeErrors],
+        warnings: [...attributeWarnings, ...routeWarnings]
     };
 }
 
@@ -1161,64 +1376,26 @@ function parseMpReachNlri(buffer, context) {
     // Skip the reserved byte
     position += 1;
 
-    // Check if ADD-PATH is enabled for this AFI/SAFI
-    let addPathEnabled = false;
-    let addPathWarning = null;
-    if (context && typeof context.getAddPathReceiveInfo === 'function') {
-        const addPathInfo = context.getAddPathReceiveInfo(afi, safi) || {};
-        addPathEnabled = addPathInfo.enabled === true;
-        addPathWarning = getAddPathWarning(addPathInfo, safi);
-    } else if (context && typeof context.isAddPathReceiveEnabled === 'function') {
-        addPathEnabled = context.isAddPathReceiveEnabled(afi, safi);
-    } else if (context && context.addPathMap) {
-        // Backwards compatibility map check omitted for brevity in this specific patch
-    }
-
-    // Parse NLRI
-    const nlri = [];
-    const errors = [];
-    const warnings = [];
-    while (position < buffer.length) {
-        let pathId = 0;
-        if (addPathEnabled) {
-            pathId = buffer.readUInt32BE(position);
-            position += 4;
-        }
-
-        const parsedNlri = bgpAddressFamily.parseNlriEntry(buffer, position, afi, safi);
-        if (parsedNlri.position <= position) {
-            break;
-        }
-        position = parsedNlri.position;
-        if (parsedNlri.route.valid === false && Array.isArray(parsedNlri.route.errors)) {
-            errors.push(...parsedNlri.route.errors.map(error => `NLRI ${nlri.length + 1}: ${error}`));
-        }
-        if (Array.isArray(parsedNlri.route.warnings)) {
-            warnings.push(...parsedNlri.route.warnings.map(warning => `NLRI ${nlri.length + 1}: ${warning}`));
-        }
-        const routeWarnings = Array.isArray(parsedNlri.route.warnings) ? [...parsedNlri.route.warnings] : [];
-        if (addPathWarning) {
-            routeWarnings.push(addPathWarning);
-        }
-        const routeParseWarning = routeWarnings.length > 0;
-
-        nlri.push({
-            pathId,
-            ...parsedNlri.route,
-            parseWarning: routeParseWarning,
-            warnings: routeWarnings
-        });
-    }
+    const parsedNlri = parseAddressFamilyNlriSequence(
+        buffer,
+        position,
+        buffer.length,
+        afi,
+        safi,
+        false,
+        getAddPathReceiveInfo(context, afi, safi),
+        'NLRI'
+    );
 
     return {
         afi,
         safi,
         nextHopLength,
         nextHop,
-        nlri,
-        valid: errors.length === 0,
-        errors,
-        warnings
+        nlri: parsedNlri.routes,
+        valid: parsedNlri.errors.length === 0,
+        errors: parsedNlri.errors,
+        warnings: parsedNlri.warnings
     };
 }
 
@@ -1235,66 +1412,24 @@ function parseMpUnreachNlri(buffer, context) {
     const safi = buffer[position];
     position += 1;
 
-    // Check if ADD-PATH is enabled for this AFI/SAFI
-    let addPathEnabled = false;
-    let addPathWarning = null;
-    if (context && typeof context.getAddPathReceiveInfo === 'function') {
-        const addPathInfo = context.getAddPathReceiveInfo(afi, safi) || {};
-        addPathEnabled = addPathInfo.enabled === true;
-        addPathWarning = getAddPathWarning(addPathInfo, safi);
-    } else if (context && typeof context.isAddPathReceiveEnabled === 'function') {
-        addPathEnabled = context.isAddPathReceiveEnabled(afi, safi);
-    } else if (context && context.addPathMap) {
-        // Backwards compatibility map check omitted for brevity in this specific patch
-    }
-
-    // Parse withdrawn routes
-    const withdrawnRoutes = [];
-    const errors = [];
-    const warnings = [];
-    while (position < buffer.length) {
-        let pathId = 0;
-        if (addPathEnabled) {
-            pathId = buffer.readUInt32BE(position);
-            position += 4;
-        }
-
-        const parsedNlri = bgpAddressFamily.parseNlriEntry(buffer, position, afi, safi, true);
-        if (parsedNlri.position <= position) {
-            break;
-        }
-        position = parsedNlri.position;
-        if (parsedNlri.route.valid === false && Array.isArray(parsedNlri.route.errors)) {
-            errors.push(
-                ...parsedNlri.route.errors.map(error => `Withdrawn NLRI ${withdrawnRoutes.length + 1}: ${error}`)
-            );
-        }
-        if (Array.isArray(parsedNlri.route.warnings)) {
-            warnings.push(
-                ...parsedNlri.route.warnings.map(warning => `Withdrawn NLRI ${withdrawnRoutes.length + 1}: ${warning}`)
-            );
-        }
-        const routeWarnings = Array.isArray(parsedNlri.route.warnings) ? [...parsedNlri.route.warnings] : [];
-        if (addPathWarning) {
-            routeWarnings.push(addPathWarning);
-        }
-        const routeParseWarning = routeWarnings.length > 0;
-
-        withdrawnRoutes.push({
-            pathId,
-            ...parsedNlri.route,
-            parseWarning: routeParseWarning,
-            warnings: routeWarnings
-        });
-    }
+    const parsedWithdrawnRoutes = parseAddressFamilyNlriSequence(
+        buffer,
+        position,
+        buffer.length,
+        afi,
+        safi,
+        true,
+        getAddPathReceiveInfo(context, afi, safi),
+        'Withdrawn NLRI'
+    );
 
     return {
         afi,
         safi,
-        withdrawnRoutes,
-        valid: errors.length === 0,
-        errors,
-        warnings
+        withdrawnRoutes: parsedWithdrawnRoutes.routes,
+        valid: parsedWithdrawnRoutes.errors.length === 0,
+        errors: parsedWithdrawnRoutes.errors,
+        warnings: parsedWithdrawnRoutes.warnings
     };
 }
 

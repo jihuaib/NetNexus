@@ -187,6 +187,22 @@ function richUpdatePacket() {
     );
 }
 
+function originValidationStateUpdatePacket(prefix = '203.0.250.0') {
+    return updatePacket(
+        [],
+        [
+            pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+            pathAttr(BgpConst.BGP_PATH_ATTR.NEXT_HOP, ipBytes('192.0.2.254')),
+            pathAttr(
+                BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES,
+                Buffer.from('4300000000000001', 'hex'),
+                BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+            )
+        ],
+        ipv4Prefix(24, prefix)
+    );
+}
+
 function walk(node, predicate) {
     if (predicate(node)) {
         return node;
@@ -431,6 +447,30 @@ const fixtures = [
         }
     },
     {
+        name: 'UPDATE with Origin Validation State extended community',
+        type: BgpConst.BGP_PACKET_TYPE.UPDATE,
+        packet: originValidationStateUpdatePacket(),
+        summaryStartsWith: 'BGP UPDATE Message',
+        summaryIncludes: ['EXTENDED_COMMUNITIES: Origin Validation State: NotFound', 'Routes:', '203.0.250.0/24'],
+        validate({ parsedObject, bgpNode }) {
+            assert.equal(parsedObject.nlri.length, 1);
+            assert.equal(parsedObject.nlri[0].prefix, '203.0.250.0');
+            assert.equal(parsedObject.nlri[0].pathId, 0);
+
+            const extCommunityAttr = parsedObject.pathAttributes.find(
+                attr => attr.typeCode === BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES
+            );
+            assert.ok(extCommunityAttr);
+            assert.equal(extCommunityAttr.extCommunities[0].formatted, 'Origin Validation State: NotFound');
+            assert.ok(
+                findNode(
+                    bgpNode,
+                    node => node.name === 'Extended Community 1' && node.value === 'Origin Validation State: NotFound'
+                )
+            );
+        }
+    },
+    {
         name: 'NOTIFICATION',
         type: BgpConst.BGP_PACKET_TYPE.NOTIFICATION,
         packet: bgpPacket(
@@ -493,5 +533,23 @@ fixtures.forEach(fixture => {
     fixture.validate(result);
     assertSummary(result.parsedObject, fixture);
 });
+
+const statelessAddPathContext = {
+    getAddPathReceiveInfo() {
+        return {
+            enabled: true,
+            source: 'bmp-stateless-parsing-tlv',
+            fallbackEnabled: false
+        };
+    }
+};
+const statelessParsed = parsePacketObject(originValidationStateUpdatePacket(), statelessAddPathContext);
+assert.equal(statelessParsed.valid, true, statelessParsed.error);
+assert.equal(statelessParsed.nlri.length, 1);
+assert.equal(statelessParsed.nlri[0].prefix, '203.0.250.0');
+assert.equal(statelessParsed.nlri[0].pathId, 0);
+assert.ok(
+    statelessParsed.nlri[0].warnings.some(warning => warning.includes('BMP Stateless Parsing TLV advertised ADD-PATH'))
+);
 
 console.log('BGP packet parser consistency tests passed');

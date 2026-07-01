@@ -204,6 +204,34 @@ function toSerializableTlvs(tlvs) {
     });
 }
 
+const EXTENDED_PEER_FLAGS_COMPAT_MASK =
+    BmpConst.BMP_SESSION_FLAGS.IPV6 |
+    BmpConst.BMP_SESSION_FLAGS.POST_POLICY |
+    BmpConst.BMP_SESSION_FLAGS.AS_PATH |
+    BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT |
+    BmpConst.BMP_SESSION_FLAGS.FILTERED;
+const EXTENDED_PEER_FLAGS_COMPAT_MAX_LENGTH = 4;
+
+function decodeExtendedPeerFlagsValue(value) {
+    if (!Buffer.isBuffer(value) || value.length === 0) {
+        return null;
+    }
+
+    const flags = value[0];
+    if (flags !== 0 || value.length === 1 || value.length > EXTENDED_PEER_FLAGS_COMPAT_MAX_LENGTH) {
+        return flags;
+    }
+
+    const lastByte = value[value.length - 1];
+    const rightAlignedFlags = lastByte & EXTENDED_PEER_FLAGS_COMPAT_MASK;
+    const leadingBytesAreZero = value.subarray(0, value.length - 1).every(byte => byte === 0);
+    if (leadingBytesAreZero && rightAlignedFlags !== 0 && rightAlignedFlags === lastByte) {
+        return rightAlignedFlags;
+    }
+
+    return flags;
+}
+
 function getEffectivePeerFlags(peerFlags, tlvs = []) {
     const extendedFlagsTlv = tlvs.find(
         tlv => !tlv.enterprise && tlv.type === BmpConst.BMP_TLV_TYPE.EXTENDED_FLAGS && tlv.value.length > 0
@@ -212,7 +240,7 @@ function getEffectivePeerFlags(peerFlags, tlvs = []) {
         return peerFlags;
     }
 
-    return extendedFlagsTlv.value[0];
+    return decodeExtendedPeerFlagsValue(extendedFlagsTlv.value);
 }
 
 function parseStatsRecords(buffer, offset = 0, options = {}) {
@@ -289,6 +317,7 @@ module.exports = {
     parsePeerHeader,
     parseBmpTlvs,
     toSerializableTlvs,
+    decodeExtendedPeerFlagsValue,
     getEffectivePeerFlags,
     parseStatsRecords
 };

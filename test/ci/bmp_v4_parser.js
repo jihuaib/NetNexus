@@ -6,6 +6,7 @@ const BmpSession = require('../../electron/worker/bmp/bmpSession');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
+const { decodeExtendedPeerFlagsValue } = require('../../electron/utils/bmpUtils');
 
 const LABEL_UNICAST_ADD_PATH_INFERRED_WARNING =
     'label-unicast ADD-PATH is inferred from same-AFI unicast capability; Peer Up did not advertise ADD-PATH for label-unicast';
@@ -107,6 +108,21 @@ function bgpUpdate(prefix = '203.0.113.0') {
     const attrs = Buffer.concat([
         pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
         pathAttr(BgpConst.BGP_PATH_ATTR.NEXT_HOP, ip('192.0.2.254'))
+    ]);
+    const nlri = Buffer.concat([Buffer.from([24]), ip(prefix).subarray(0, 3)]);
+    const body = Buffer.concat([u16(0), u16(attrs.length), attrs, nlri]);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, body);
+}
+
+function bgpUpdateWithOriginValidationState(prefix = '203.0.250.0') {
+    const attrs = Buffer.concat([
+        pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+        pathAttr(BgpConst.BGP_PATH_ATTR.NEXT_HOP, ip('192.0.2.254')),
+        pathAttr(
+            BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES,
+            Buffer.from('4300000000000001', 'hex'),
+            BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+        )
     ]);
     const nlri = Buffer.concat([Buffer.from([24]), ip(prefix).subarray(0, 3)]);
     const body = Buffer.concat([u16(0), u16(attrs.length), attrs, nlri]);
@@ -433,9 +449,21 @@ assert.equal(
     BmpBgpRoute.makeParseStatus(false, ['invalid'], ['warning']),
     BmpConst.BMP_ROUTE_PARSE_STATUS.ERROR | BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING
 );
+assert.equal(decodeExtendedPeerFlagsValue(Buffer.from([BmpConst.BMP_SESSION_FLAGS.POST_POLICY, 0])), 0x40);
+assert.equal(decodeExtendedPeerFlagsValue(Buffer.from([0, BmpConst.BMP_SESSION_FLAGS.POST_POLICY])), 0x40);
+assert.equal(decodeExtendedPeerFlagsValue(Buffer.from([0, 0, BmpConst.BMP_SESSION_FLAGS.POST_POLICY])), 0x40);
+assert.equal(decodeExtendedPeerFlagsValue(Buffer.from([0, 0, 0, BmpConst.BMP_SESSION_FLAGS.POST_POLICY])), 0x40);
+assert.equal(decodeExtendedPeerFlagsValue(Buffer.from([0, 0, 0, 0, BmpConst.BMP_SESSION_FLAGS.POST_POLICY])), 0);
 
 function hasRouteParseStatus(parseStatus, flag) {
     return (parseStatus & flag) !== 0;
+}
+
+function hasStatelessAddPathCompatibilityWarning(route) {
+    return (
+        Array.isArray(route?.nlriDetail?.warnings) &&
+        route.nlriDetail.warnings.some(warning => warning.includes('BMP Stateless Parsing TLV advertised ADD-PATH'))
+    );
 }
 
 function addLocRibRoute(session, afi, safi, prefix, mask) {
@@ -1651,6 +1679,59 @@ assert.ok(
     'Route detail should not duplicate the full BGP Message TLV on each route'
 );
 
+const { session: rightAlignedExtendedFlagsRibInSession } = makeSession();
+rightAlignedExtendedFlagsRibInSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+rightAlignedExtendedFlagsRibInSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS,
+                0,
+                Buffer.from([0, 0, 0, BmpConst.BMP_SESSION_FLAGS.POST_POLICY])
+            ),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate('203.0.129.0'))
+        ])
+    )
+);
+const rightAlignedExtendedFlagsRibInBgpSession = rightAlignedExtendedFlagsRibInSession.bgpSessionMap.get(bgpSessionKey);
+const rightAlignedExtendedFlagsPreRibInRoutes = [
+    ...rightAlignedExtendedFlagsRibInBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
+        .values()
+];
+const rightAlignedExtendedFlagsRibInRoutes = [
+    ...rightAlignedExtendedFlagsRibInBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN)
+        .values()
+];
+assert.ok(
+    !rightAlignedExtendedFlagsPreRibInRoutes.some(route => route.ip === '203.0.129.0'),
+    'BMPv4 right-aligned Extended Flags TLV post-policy RIB-In should not update pre-policy Adj-RIB-In'
+);
+assert.ok(
+    rightAlignedExtendedFlagsRibInRoutes.some(route => route.ip === '203.0.129.0'),
+    'BMPv4 right-aligned Extended Flags TLV post-policy RIB-In should update Adj-RIB-In'
+);
+assert.ok(
+    rightAlignedExtendedFlagsRibInRoutes
+        .find(route => route.ip === '203.0.129.0')
+        .getRouteInfo()
+        .routeTlvs.some(
+            tlv =>
+                tlv.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.EXTENDED_FLAGS &&
+                tlv.valueHex === '00000040' &&
+                tlv.decoded?.flagsHex === '0x40'
+        ),
+    'Route detail should decode right-aligned BMPv4 Extended Flags TLV compatibility value'
+);
+
 const { session: sixPeSession } = makeSession();
 sixPeSession.processMessage(
     bmpMessage(
@@ -2277,6 +2358,110 @@ assert.ok(statelessRoutes.some(route => route.ip === '203.0.116.0' && route.path
 assert.equal(
     statelessBgpSession.addPathMap.has(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`),
     false
+);
+
+const { session: statelessNoAddPathCompatSession } = makeSession();
+statelessNoAddPathCompatSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+const statelessNoAddPathCompatCases = [
+    {
+        flags: 0,
+        ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
+        prefix: '203.0.250.0'
+    },
+    {
+        flags: BmpConst.BMP_SESSION_FLAGS.POST_POLICY,
+        ribType: BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN,
+        prefix: '203.0.251.0'
+    },
+    {
+        flags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT,
+        ribType: BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT,
+        prefix: '203.0.252.0'
+    },
+    {
+        flags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT | BmpConst.BMP_SESSION_FLAGS.POST_POLICY,
+        ribType: BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT,
+        prefix: '203.0.253.0'
+    }
+];
+statelessNoAddPathCompatCases.forEach(({ flags, prefix }) => {
+    statelessNoAddPathCompatSession.processMessage(
+        bmpMessage(
+            BmpConst.BMP_VERSION.V4,
+            BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+            Buffer.concat([
+                peerHeader(flags),
+                indexedTlv(
+                    BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.STATELESS_PARSING,
+                    0,
+                    addPathCapability(BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE)
+                ),
+                indexedTlv(
+                    BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                    0,
+                    bgpUpdateWithOriginValidationState(prefix)
+                )
+            ])
+        )
+    );
+});
+const statelessNoAddPathCompatBgpSession = statelessNoAddPathCompatSession.bgpSessionMap.get(bgpSessionKey);
+statelessNoAddPathCompatCases.forEach(({ ribType, prefix }) => {
+    const routeMap = statelessNoAddPathCompatBgpSession.bgpRoutes
+        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
+        .get(ribType);
+    const route = [...routeMap.values()].find(candidate => candidate.ip === prefix && candidate.pathId === 0);
+    assert.ok(route, `stateless non-ADD-PATH route should be stored in RIB type ${ribType}`);
+    assert.ok(
+        hasRouteParseStatus(route.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING),
+        `stateless non-ADD-PATH route in RIB type ${ribType} should be marked warning`
+    );
+    assert.ok(
+        hasStatelessAddPathCompatibilityWarning(route),
+        `stateless non-ADD-PATH route in RIB type ${ribType} should keep compatibility warning`
+    );
+});
+statelessNoAddPathCompatSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, BmpConst.BMP_PEER_TYPE.LOCAL_RIB),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.STATELESS_PARSING,
+                0,
+                addPathCapability(BgpConst.BGP_ADD_PATH_TYPE.SEND_RECEIVE)
+            ),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                bgpUpdateWithOriginValidationState('203.0.254.0')
+            )
+        ])
+    )
+);
+const statelessNoAddPathCompatLocRibInstance = statelessNoAddPathCompatSession.bgpInstanceMap.get(
+    BmpBgpInstance.makeKey(
+        BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        '0:0',
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    )
+);
+assert.ok(statelessNoAddPathCompatLocRibInstance, 'stateless non-ADD-PATH Loc-RIB route should create instance');
+const statelessNoAddPathCompatLocRibRoute = [...statelessNoAddPathCompatLocRibInstance.bgpRoutes.values()].find(
+    route => route.ip === '203.0.254.0' && route.pathId === 0
+);
+assert.ok(statelessNoAddPathCompatLocRibRoute, 'stateless non-ADD-PATH route should be stored in Loc-RIB');
+assert.ok(
+    hasRouteParseStatus(statelessNoAddPathCompatLocRibRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING),
+    'stateless non-ADD-PATH Loc-RIB route should be marked warning'
+);
+assert.ok(
+    hasStatelessAddPathCompatibilityWarning(statelessNoAddPathCompatLocRibRoute),
+    'stateless non-ADD-PATH Loc-RIB route should keep compatibility warning'
 );
 
 const { session: statsTypeSession, events: statsTypeEvents } = makeSession();

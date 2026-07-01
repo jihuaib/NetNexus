@@ -6,6 +6,7 @@ const {
     parsePeerHeader,
     parseBmpTlvs,
     toSerializableTlvs,
+    decodeExtendedPeerFlagsValue,
     getEffectivePeerFlags,
     parseStatsRecords
 } = require('../../utils/bmpUtils');
@@ -255,6 +256,19 @@ class BmpSession {
 
     createBgpParsingContext(tlvs, fallbackContext, direction = 'receive') {
         const statelessAddPathMap = this.decodeStatelessParsingTlvs(tlvs);
+        const getFallbackAddPathInfo = (afi, safi) => {
+            if (!fallbackContext) {
+                return { enabled: false };
+            }
+            if (typeof fallbackContext.getAddPathReceiveInfo === 'function') {
+                return fallbackContext.getAddPathReceiveInfo(afi, safi, direction) || { enabled: false };
+            }
+            if (typeof fallbackContext.isAddPathReceiveEnabled === 'function') {
+                return { enabled: fallbackContext.isAddPathReceiveEnabled(afi, safi, direction) };
+            }
+            return { enabled: false };
+        };
+
         if (statelessAddPathMap.size === 0) {
             if (!fallbackContext || typeof fallbackContext.isAddPathReceiveEnabled !== 'function') {
                 return fallbackContext;
@@ -274,7 +288,12 @@ class BmpSession {
             getAddPathReceiveInfo: (afi, safi) => {
                 const key = `${afi}|${safi}`;
                 if (statelessAddPathMap.has(key)) {
-                    return { enabled: statelessAddPathMap.get(key) !== 0 };
+                    const fallbackInfo = getFallbackAddPathInfo(afi, safi);
+                    return {
+                        enabled: statelessAddPathMap.get(key) !== 0,
+                        source: 'bmp-stateless-parsing-tlv',
+                        fallbackEnabled: fallbackInfo.enabled === true
+                    };
                 }
                 if (fallbackContext && typeof fallbackContext.getAddPathReceiveInfo === 'function') {
                     return fallbackContext.getAddPathReceiveInfo(afi, safi, direction);
@@ -605,7 +624,7 @@ class BmpSession {
             tlv.type === BmpConst.BMP_TLV_TYPE.EXTENDED_FLAGS &&
             tlv.value.length > 0
         ) {
-            const flags = tlv.value[0];
+            const flags = decodeExtendedPeerFlagsValue(tlv.value);
             tlv.name = 'Extended Flags';
             tlv.decoded = {
                 flags,

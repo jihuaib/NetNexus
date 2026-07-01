@@ -181,6 +181,17 @@ function extCommunitiesBufferToString(buffer) {
     const subType = buffer.readUint8(1); // 前2字节是 Type
     let admin, assigned;
 
+    if (ipFormat === 0x43 && subType === 0x00) {
+        const state = buffer.readUint8(7);
+        const stateName =
+            {
+                0: 'Valid',
+                1: 'NotFound',
+                2: 'Invalid'
+            }[state] || `Unknown(${state})`;
+        return `Origin Validation State: ${stateName}`;
+    }
+
     switch (subType) {
         case BgpConst.EXT_COMMUNITY_SUB_TYPE.RT:
             if (ipFormat === BgpConst.EXT_COMMUNITY_TYPE.IP) {
