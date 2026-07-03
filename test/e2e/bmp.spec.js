@@ -6,6 +6,8 @@ const EXPECTED_PUBLIC_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT + 3;
 const EXPECTED_LOC_RIB_ROUTE_COUNT = Math.max(8, Math.min(25, MOCK_BASE_ROUTE_COUNT)) + 2;
 const EXPECTED_MOCK_READY_ROUTE_COUNT = EXPECTED_LOC_RIB_ROUTE_COUNT;
 const EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT;
+const EXPECTED_CLIENT_NAME = 'demo-bmp-router';
+const EXPECTED_CLIENT_DESCRIPTION = 'NetNexus local BMP demo data';
 
 async function recordStep(title) {
     await test.step(title, async () => {});
@@ -104,15 +106,17 @@ test.describe('BMP pages', () => {
         });
 
         await test.step('Verify BMP config page client table', async () => {
-            await recordStep('Input: expectedClient=mock-bmp-router, expectedDescription=NetNexus local BMP mock data');
+            await recordStep(
+                `Input: expectedClient=${EXPECTED_CLIENT_NAME}, expectedDescription=${EXPECTED_CLIENT_DESCRIPTION}`
+            );
 
             const clientTable = page.getByTestId('bmp-client-table');
-            await expect(clientTable).toContainText('mock-bmp-router', { timeout: 10000 });
-            await expect(clientTable).toContainText('NetNexus local BMP mock data');
+            await expect(clientTable).toContainText(EXPECTED_CLIENT_NAME, { timeout: 10000 });
+            await expect(clientTable).toContainText(EXPECTED_CLIENT_DESCRIPTION);
             await expect(clientTable).toContainText('BMPv4');
             await expect(clientTable).toContainText('draft-20');
 
-            await recordStep('Output: clientTable contains mock-bmp-router, BMPv4, draft-20');
+            await recordStep(`Output: clientTable contains ${EXPECTED_CLIENT_NAME}, BMPv4, draft-20`);
         });
 
         await test.step('Verify BGP session page and Adj-RIB routes', async () => {
@@ -218,7 +222,7 @@ test.describe('BMP pages', () => {
             expect(exitInfo.output).toContain('BMP mock connection closed');
 
             await expect(page.getByTestId('bmp-stop-button')).toBeDisabled();
-            await expect(page.getByTestId('bmp-client-table')).not.toContainText('mock-bmp-router');
+            await expect(page.getByTestId('bmp-client-table')).not.toContainText(EXPECTED_CLIENT_NAME);
 
             await recordStep(`Output: stopButtonDisabled=true, mockClientExitCode=${exitInfo.code}, socketClosed=true`);
         });
@@ -239,7 +243,7 @@ test.describe('BMP pages', () => {
             await controller.startMockClient({ routes: MOCK_BASE_ROUTE_COUNT, interval: 0 });
             await controller.waitForMockData({ routes: EXPECTED_MOCK_READY_ROUTE_COUNT });
 
-            await expect(page.getByTestId('bmp-client-table')).toContainText('mock-bmp-router', {
+            await expect(page.getByTestId('bmp-client-table')).toContainText(EXPECTED_CLIENT_NAME, {
                 timeout: 10000
             });
 
@@ -270,7 +274,7 @@ test.describe('BMP pages', () => {
             await expect(page.getByTestId('bmp-session-page')).not.toContainText('10.10.0.0');
 
             await page.goto('/#/bmp/bmp-config');
-            await expect(page.getByTestId('bmp-client-table')).not.toContainText('mock-bmp-router', {
+            await expect(page.getByTestId('bmp-client-table')).not.toContainText(EXPECTED_CLIENT_NAME, {
                 timeout: 10000
             });
 
