@@ -1,6 +1,6 @@
 # BMP 监控器
 
-BMP 监控器用于接收路由器或测试脚本发送的 BMP 数据，并在本地查看客户端、BGP session、Loc-RIB、路由明细和统计报告。
+BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并在本地查看客户端、BGP session、Loc-RIB、路由明细和统计报告。
 
 ## 已实现能力
 
@@ -10,6 +10,8 @@ BMP 监控器用于接收路由器或测试脚本发送的 BMP 数据，并在�
 - 客户端连接列表。
 - BGP session 列表和 session RIB 路由列表。
 - Loc-RIB instance 列表和 Loc-RIB 路由列表。
+- BMP 路由按 AFI/SAFI 归类到页面地址组。
+- IPv4 / IPv6 单播、VPN、Label Unicast、MVPN、FlowSpec、QP、L2VPN EVPN、BGP-LS、BGP-LS VPN 地址组解析。
 - 路由状态过滤：active、stale、all。
 - 前缀关键字过滤。
 - 路由详情查询。
@@ -17,9 +19,13 @@ BMP 监控器用于接收路由器或测试脚本发送的 BMP 数据，并在�
 - BMPv4 Path Marking TLV 展示。
 - 过期路由清理。
 - 只读 HTTP API 查询。
-- 本地 mock BMP 客户端脚本。
 
-未实现的能力不在本文档中承诺，例如趋势图、告警规则、定时报表、文件导出、历史库查询。
+核心亮点：
+
+- 多地址组覆盖：BMP Route Monitoring 和 Loc-RIB 可识别 IPv4-UNC、IPv6-UNC、VPNv4、VPNv6、IPv4/IPv6 Label Unicast、IPv4/IPv6 MVPN、IPv4/IPv6 FlowSpec、IPv4/IPv6 QP、L2VPN EVPN、BGP-LS 和 BGP-LS VPN。
+- Add-Path 友好：路由 key 和列表字段包含 `pathId`，同一 RD、前缀、掩码下的多路径可以分开查看。
+- BMPv4 TLV：支持 draft-19 / draft-20 切换，Route Monitoring、Statistics Report 和 Path Marking TLV 可在列表或详情中查看。
+- Loc-RIB instance：Local-RIB 按 instance 维度拆分，便于查看不同路由表实例的路由与统计项。
 
 ## 页面
 
@@ -29,11 +35,23 @@ BMP 监控器用于接收路由器或测试脚本发送的 BMP 数据，并在�
 
 ![BMP 配置和客户端信息](images/bmp/bmp-config-and-client-info.png)
 
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 启动BMP / BMP已启动 | 按监听端口、TLV draft 和 MD5 参数启动 BMP 服务；启动后显示运行状态。 |
+| 停止BMP | 停止 BMP 服务并断开当前客户端连接。 |
+| 详情 | 打开当前 BMP 客户端的连接、Initiation TLV 和 Termination 信息。 |
+
+客户端详情：
+
+![BMP 客户端详情](images/bmp/bmp-client-detail.png)
+
 注意：
 
 - `draft-20` 的 Route Monitoring `BGP Message TLV` 类型为 `7`。
 - `draft-19` 的 Route Monitoring `BGP Message TLV` 类型为 `4`。
-- 如果设备或 mock 脚本的 draft 与页面配置不一致，日志可能出现 `does not contain mandatory BGP Message TLV`。
+- 如果发送端的 draft 与页面配置不一致，日志可能出现 `does not contain mandatory BGP Message TLV`。
 
 ### BGP Session
 
@@ -41,7 +59,24 @@ BMP 监控器用于接收路由器或测试脚本发送的 BMP 数据，并在�
 
 ![BMP 客户端和 BGP 监控对等体信息](images/bmp/bmp-client-and-bgp-monitor-peer-info.png)
 
-路由列表包含 `pathId`、`rd`、前缀、掩码、下一跳、AS Path、路由状态等字段。IPv4/IPv6 单播没有携带 RD 时，页面和存储按 `0:0` 处理，避免路由 key 歧义。
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 查询 / 刷新 | 按客户端和过滤条件重新加载 Session 或路由数据。 |
+| 详情 | 在 Session 列表中查看 peer 详情；在路由列表中查看单条路由详情。 |
+| 解析BGP | 按需解析并展示该路由携带的原始 BGP 报文摘要。 |
+| 清理 stale | 清理当前过滤范围内的 stale 路由。 |
+
+Session 详情：
+
+![BMP Session 详情](images/bmp/bmp-session-detail.png)
+
+Session RIB 路由详情：
+
+![BMP Session 路由详情](images/bmp/bmp-session-route-detail.png)
+
+路由列表包含地址组、`pathId`、`rd`、前缀、掩码、下一跳、AS Path、路由状态等字段。IPv4/IPv6 单播没有携带 RD 时，页面和存储按 `0:0` 处理，避免路由 key 歧义。
 
 路由操作：
 
@@ -49,13 +84,36 @@ BMP 监控器用于接收路由器或测试脚本发送的 BMP 数据，并在�
 - 查询 BGP 原始报文解析摘要。
 - 清理 stale 路由。
 
+Session RIB 适合检查：
+
+- per-peer 的 Adj-RIB-In / Route Monitoring 数据。
+- 同一前缀下不同 `pathId` 的 Add-Path 路由。
+- VPN、MVPN、QP 等携带 RD 或扩展 NLRI 的地址组。
+
 ### Loc-RIB
 
 展示 BMP Local-RIB instance 和 Loc-RIB 路由。
 
 ![BMP 监控 BGP 路由](images/bmp/bmp-monitor-bgp-route.png)
 
-Loc-RIB 使用 instance 维度查询，支持路由列表、路由详情和 stale 路由清理。
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 查询 / 刷新 | 按客户端、Instance 和过滤条件重新加载 Loc-RIB 数据。 |
+| 详情 | 在 Instance 列表中查看 Loc-RIB instance 详情；在路由列表中查看单条路由详情。 |
+| 解析BGP | 按需解析 Loc-RIB 路由携带的原始 BGP 报文摘要。 |
+| 清理 stale | 清理当前 Instance 下的 stale Loc-RIB 路由。 |
+
+Loc-RIB instance 详情：
+
+![BMP Loc-RIB Instance 详情](images/bmp/bmp-loc-rib-instance-detail.png)
+
+Loc-RIB 路由详情：
+
+![BMP Loc-RIB 路由详情](images/bmp/bmp-loc-rib-route-detail.png)
+
+Loc-RIB 使用 instance 维度查询，支持路由列表、路由详情和 stale 路由清理。页面会保留 instance 名称、RD、地址组、`pathId` 和路由状态，便于对比不同 Loc-RIB 实例中的同一前缀。
 
 ### 统计报告
 
@@ -66,30 +124,33 @@ Loc-RIB 使用 instance 维度查询，支持路由列表、路由详情和 stal
 - BMPv4 TLV 信息
 - per-AFI/SAFI 统计项
 
+统计项中的 per-AFI/SAFI 数据用于观察不同地址组的路由量，例如 IPv4/IPv6 单播、VPN、MVPN、QP、EVPN 和 BGP-LS 类路由。
+
 ![BMP BGP 会话统计](images/bmp/bmp-session-statis-report.png)
+
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 查询 / 刷新 | 重新加载指定客户端的 Session Statistics Report。 |
+| 详情 | 打开单条 Statistics Report 详情，查看统计项和 TLV。 |
+
+Session 统计详情：
+
+![BMP Session 统计详情](images/bmp/bmp-session-statis-detail.png)
 
 ![BMP Loc-RIB 统计](images/bmp/bmp-loc-rib-statis-report.png)
 
-## 本地 mock 数据
+按钮说明：
 
-项目提供 mock BMP 客户端，便于不接真实路由器时查看页面布局和 API 返回：
+| 按钮 | 功能 |
+| --- | --- |
+| 查询 / 刷新 | 重新加载指定客户端和 Instance 的 Loc-RIB Statistics Report。 |
+| 详情 | 打开单条 Loc-RIB Statistics Report 详情。 |
 
-```bash
-npm run mock:bmp
-```
+Loc-RIB 统计详情：
 
-常用参数：
-
-```bash
-node scripts/mockBmpClient.js --host 127.0.0.1 --port 11019 --routes 25 --interval 30 --once
-```
-
-使用步骤：
-
-1. 在 BMP 配置页将 `v4 TLV格式` 设为 `draft-20`。
-2. 启动 BMP 服务。
-3. 运行 `npm run mock:bmp`。
-4. 查看 BGP Session、Loc-RIB 和统计报告页面。
+![BMP Loc-RIB 统计详情](images/bmp/bmp-loc-rib-statis-detail.png)
 
 ## 外部 API
 

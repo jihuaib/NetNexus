@@ -533,6 +533,23 @@ export const createBgpConfigValidationRules = () => {
                 validator: validators.ipv4,
                 message: '请输入有效的IPv4地址'
             }
+        ],
+        port: [
+            {
+                required: true,
+                message: '请输入监听端口'
+            },
+            {
+                validator: value => {
+                    const normalized = String(value ?? '').trim();
+                    if (!/^\d+$/.test(normalized)) {
+                        return false;
+                    }
+                    const port = Number(normalized);
+                    return port >= 1 && port <= 65535;
+                },
+                message: '端口范围 1-65535'
+            }
         ]
     };
 };

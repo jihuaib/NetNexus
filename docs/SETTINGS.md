@@ -6,6 +6,13 @@
 
 ![设置界面](images/setting/setting.png)
 
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 保存 | 保存当前通用设置，并同步到已启动的协议 worker。 |
+| 关闭 | 关闭设置窗口。 |
+
 ### 日志级别
 
 可选值：
@@ -31,18 +38,43 @@
 
 ## 工具集合设置
 
+![工具集合设置](images/setting/setting-tools.png)
+
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 保存 | 保存字符串生成和报文解析历史记录上限。 |
+| 关闭 | 关闭设置窗口。 |
+
 配置工具历史记录数量：
 
 - 字符串生成历史最大条数。
 - 报文解析历史最大条数。
 
-当前不提供统一历史导出或备份功能。
-
 ## FTP 设置
+
+![FTP 设置](images/setting/setting-ftp.png)
+
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 保存 | 保存 FTP 用户最大保存数量。 |
+| 关闭 | 关闭设置窗口。 |
 
 配置 FTP 用户最大保存数量。超过上限时，新增用户会触发旧数据淘汰逻辑。
 
 ## HTTP API 设置
+
+![HTTP API 设置](images/setting/setting-api.png)
+
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 保存 | 保存 API 启用状态、端口和分页上限；启用状态变化会立即启动或停止服务。 |
+| 关闭 | 关闭设置窗口。 |
 
 外部 HTTP API 是本机只读服务，当前已注册 BMP 查询接口。
 
@@ -57,6 +89,17 @@
 详见 [外部 API 文档](API.md)。
 
 ## 服务器部署
+
+![服务器部署设置](images/setting/setting-server-deployment.png)
+
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 保存 | 保存远端 Linux 主机和 SSH 登录配置。 |
+| 测试连接 | 使用当前 SSH 参数测试远端连接是否可用。 |
+| 部署 | 执行 TCP MD5 代理部署流程。 |
+| 关闭 | 关闭设置窗口。 |
 
 服务器部署用于向远端 Linux 主机部署 TCP MD5 代理程序，供 BMP/RPKI 的 MD5 认证场景使用。
 
@@ -83,6 +126,16 @@
 
 ![更新设置](images/setting/setting-updater.png)
 
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 检查更新 | 主动检查 GitHub Releases 是否存在新版本。 |
+| 下载更新 | 下载已发现的新版本安装包。 |
+| 重启并安装 | 退出当前应用并安装已下载版本。 |
+| 保存 | 保存启动时检查更新和自动下载更新选项。 |
+| 关闭 | 关闭设置窗口。 |
+
 更新页包含：
 
 - 当前版本。
@@ -97,20 +150,3 @@
 - 更新能力只在打包后的应用中有意义。
 - 开发模式下可能无法完整执行更新流程。
 - 更新源使用 GitHub Releases。
-
-## 截图维护
-
-文档截图可以通过脚本生成：
-
-```bash
-npm start
-npm run docs:screenshots
-```
-
-也可以指定页面地址：
-
-```bash
-NETNEXUS_DOCS_URL=http://127.0.0.1:3000 npm run docs:screenshots
-```
-
-脚本会把当前页面状态截图写入 `docs/images`。截图视口默认不小于 `1920x1200`，避免宽表格截出横向滚动条；可用 `NETNEXUS_DOCS_WINDOW_WIDTH` 和 `NETNEXUS_DOCS_WINDOW_HEIGHT` 覆盖。BMP 截图会自动启动本地 BMP 服务并注入 mock 路由数据；可用 `NETNEXUS_DOCS_BMP_PORT` 和 `NETNEXUS_DOCS_BMP_ROUTES` 覆盖端口和路由数。

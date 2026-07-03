@@ -431,8 +431,8 @@ function initiationMessage() {
     return bmpMessage(
         BmpConst.BMP_MSG_TYPE.INITIATION,
         Buffer.concat([
-            tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME, Buffer.from('mock-bmp-router')),
-            tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC, Buffer.from('NetNexus local BMP mock data'))
+            tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME, Buffer.from('demo-bmp-router')),
+            tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC, Buffer.from('NetNexus local BMP demo data'))
         ])
     );
 }

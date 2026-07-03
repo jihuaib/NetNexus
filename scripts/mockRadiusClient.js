@@ -60,7 +60,7 @@ function parseOptions() {
         secret: getArgValue('secret', DEFAULT_OPTIONS.secret),
         username: getArgValue('username', DEFAULT_OPTIONS.username),
         password: getArgValue('password', DEFAULT_OPTIONS.password),
-        sessionId: getArgValue('session-id', DEFAULT_OPTIONS.sessionId) || `mock-${Date.now()}`,
+        sessionId: getArgValue('session-id', DEFAULT_OPTIONS.sessionId) || `demo-${Date.now()}`,
         interval: Number(getArgValue('interval', DEFAULT_OPTIONS.interval)),
         timeout: Number(getArgValue('timeout', DEFAULT_OPTIONS.timeout)),
         ipv6,
@@ -106,7 +106,7 @@ Options:
   --secret <secret>        Shared secret, default ${DEFAULT_OPTIONS.secret}
   --username <name>        User-Name, default ${DEFAULT_OPTIONS.username}
   --password <password>    PAP password, default ${DEFAULT_OPTIONS.password}
-  --session-id <id>        Acct-Session-Id, default mock-<timestamp>
+  --session-id <id>        Acct-Session-Id, default demo-<timestamp>
   --interval <ms>          Delay between requests, default ${DEFAULT_OPTIONS.interval}
   --timeout <ms>           UDP response timeout, default ${DEFAULT_OPTIONS.timeout}
   --ipv6                   Send IPv6 NAS attributes over udp6
@@ -139,7 +139,7 @@ function buildAccessRequest(options, identifier) {
         ),
         ...nasAttributes(options),
         Radius.integerAttr(RADIUS_ATTRIBUTES.NAS_PORT, 1001),
-        Radius.stringAttr(RADIUS_ATTRIBUTES.NAS_IDENTIFIER, 'netnexus-radius-mock'),
+        Radius.stringAttr(RADIUS_ATTRIBUTES.NAS_IDENTIFIER, 'netnexus-radius-demo'),
         Radius.stringAttr(RADIUS_ATTRIBUTES.CALLING_STATION_ID, '00-11-22-33-44-55'),
         Radius.stringAttr(RADIUS_ATTRIBUTES.CALLED_STATION_ID, 'netnexus-lab')
     ];
@@ -157,7 +157,7 @@ function accountingAttributes(options, statusType) {
         Radius.stringAttr(RADIUS_ATTRIBUTES.ACCT_SESSION_ID, options.sessionId),
         ...nasAttributes(options),
         Radius.integerAttr(RADIUS_ATTRIBUTES.NAS_PORT, 1001),
-        Radius.stringAttr(RADIUS_ATTRIBUTES.NAS_IDENTIFIER, 'netnexus-radius-mock'),
+        Radius.stringAttr(RADIUS_ATTRIBUTES.NAS_IDENTIFIER, 'netnexus-radius-demo'),
         Radius.stringAttr(RADIUS_ATTRIBUTES.CALLING_STATION_ID, '00-11-22-33-44-55'),
         Radius.stringAttr(RADIUS_ATTRIBUTES.CALLED_STATION_ID, 'netnexus-lab')
     ];
@@ -186,7 +186,7 @@ function buildCoaRequest(options, identifier) {
         identifier,
         [
             Radius.stringAttr(RADIUS_ATTRIBUTES.ACCT_SESSION_ID, options.sessionId),
-            Radius.stringAttr(RADIUS_ATTRIBUTES.FILTER_ID, 'netnexus-mock-filter'),
+            Radius.stringAttr(RADIUS_ATTRIBUTES.FILTER_ID, 'netnexus-demo-filter'),
             Radius.integerAttr(RADIUS_ATTRIBUTES.SESSION_TIMEOUT, 3600),
             ...(options.ipv6
                 ? [Radius.ipv6PrefixAttr(RADIUS_ATTRIBUTES.FRAMED_IPV6_PREFIX, '2001:db8:200::/64')]

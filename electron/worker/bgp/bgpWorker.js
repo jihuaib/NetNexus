@@ -28,17 +28,32 @@ function makeRouteLookupKey(addressFamily, route) {
     }
 
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN) {
-        return [
-            route?.routeType,
-            route?.rd,
-            route?.sourceAs || '',
-            route?.sourceIp || '',
-            route?.groupIp || '',
-            route?.originatingRouterIp || ''
-        ].join('|');
+        return makeMvpnRouteKey(route);
     }
 
     return BgpRoute.makeKey(route?.ip, route?.mask);
+}
+
+function getMvpnRouteKeySourceAs(routeType, sourceAs) {
+    const type = Number(routeType);
+    return [
+        BgpConst.BGP_MVPN_ROUTE_TYPE.INTER_AS_I_PMSI_AD,
+        BgpConst.BGP_MVPN_ROUTE_TYPE.SHARED_TREE_JOIN,
+        BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_TREE_JOIN
+    ].includes(type)
+        ? sourceAs || ''
+        : '';
+}
+
+function makeMvpnRouteKey(route) {
+    return [
+        route?.routeType,
+        route?.rd,
+        getMvpnRouteKeySourceAs(route?.routeType, route?.sourceAs),
+        route?.sourceIp || '',
+        route?.groupIp || '',
+        route?.originatingRouterIp || ''
+    ].join('|');
 }
 
 function isUnicastAddressFamily(addressFamily) {
@@ -199,6 +214,7 @@ class BgpWorker {
 
     async startTcpServer(messageId) {
         try {
+            const listenPort = this.getListenPort();
             this.server = net.createServer(socket => {
                 const clientAddress = socket.remoteAddress;
                 const clientPort = socket.remotePort;
@@ -285,12 +301,12 @@ class BgpWorker {
 
             // 启动ipv4服务器并监听端口
             const listenPormise = util.promisify(this.server.listen).bind(this.server);
-            await listenPormise(BgpConst.BGP_DEFAULT_PORT, '0.0.0.0');
-            logger.info(`TCP Server listening on port ${BgpConst.BGP_DEFAULT_PORT} at 0.0.0.0`);
+            await listenPormise(listenPort, '0.0.0.0');
+            logger.info(`TCP Server listening on port ${listenPort} at 0.0.0.0`);
             // 启动ipv6服务器并监听端口
             const listenIpv6Pormise = util.promisify(this.ipv6Server.listen).bind(this.ipv6Server);
-            await listenIpv6Pormise(BgpConst.BGP_DEFAULT_PORT, '::');
-            logger.info(`TCP Server listening on port ${BgpConst.BGP_DEFAULT_PORT} at ::`);
+            await listenIpv6Pormise(listenPort, '::');
+            logger.info(`TCP Server listening on port ${listenPort} at ::`);
 
             logger.info(`bgp协议启动成功`);
             this.messageHandler.sendSuccessResponse(messageId, null, 'bgp协议启动成功');
@@ -298,6 +314,14 @@ class BgpWorker {
             logger.error(`Error starting TCP server: ${err.message}`);
             this.messageHandler.sendErrorResponse(messageId, 'bgp协议启动失败');
         }
+    }
+
+    getListenPort() {
+        const port = Number(this.bgpConfigData?.port);
+        if (Number.isInteger(port) && port >= 1 && port <= 65535) {
+            return port;
+        }
+        return BgpConst.BGP_DEFAULT_PORT;
     }
 
     startBgp(messageId, bgpConfigData) {
@@ -1250,9 +1274,14 @@ class BgpWorker {
                 currentGroupIp = currentIp;
             }
 
-            // Create a comprehensive key
-            // Key format: type|rd|sourceAs|sourceIp|groupIp|origRouterIp
-            const routeKey = `${config.routeType}|${config.rd}|${config.sourceAs || ''}|${config.sourceIp || ''}|${currentGroupIp || ''}|${currentOrigRouterIp || ''}`;
+            const routeKey = makeMvpnRouteKey({
+                routeType: config.routeType,
+                rd: config.rd,
+                sourceAs: config.sourceAs,
+                sourceIp: config.sourceIp,
+                groupIp: currentGroupIp,
+                originatingRouterIp: currentOrigRouterIp
+            });
 
             if (!instance.routeMap.has(routeKey)) {
                 const bgpRoute = new BgpRoute(instance);
@@ -1334,8 +1363,14 @@ class BgpWorker {
                 currentGroupIp = currentIp;
             }
 
-            // Use same key logic as generation
-            const routeKey = `${config.routeType}|${config.rd}|${config.sourceAs || ''}|${config.sourceIp || ''}|${currentGroupIp || ''}|${currentOrigRouterIp || ''}`;
+            const routeKey = makeMvpnRouteKey({
+                routeType: config.routeType,
+                rd: config.rd,
+                sourceAs: config.sourceAs,
+                sourceIp: config.sourceIp,
+                groupIp: currentGroupIp,
+                originatingRouterIp: currentOrigRouterIp
+            });
 
             if (instance.routeMap.has(routeKey)) {
                 const bgpRoute = instance.deleteRoute(routeKey);
@@ -1394,7 +1429,7 @@ class BgpWorker {
                 route.pathId = BgpRoute.normalizePathId(route.pathId);
                 key = BgpRoute.makeUnicastKey(route.pathId, route.rd, route.ip, route.mask);
             } else if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN) {
-                key = `${route.routeType}|${route.rd}|${route.sourceAs || ''}|${route.sourceIp || ''}|${route.groupIp || ''}|${route.originatingRouterIp || ''}`;
+                key = makeMvpnRouteKey(route);
             } else if (
                 addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP ||
                 addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_QP

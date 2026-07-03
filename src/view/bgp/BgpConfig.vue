@@ -4,7 +4,7 @@
         <a-form :model="bgpConfigData" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBgp">
             <a-card title="BGP配置" class="bgp-config-card">
                 <a-row>
-                    <a-col :span="12">
+                    <a-col :span="8">
                         <a-form-item label="Local AS" name="localAs">
                             <a-tooltip
                                 :title="bgpConfigvalidationErrors.localAs"
@@ -19,7 +19,7 @@
                             </a-tooltip>
                         </a-form-item>
                     </a-col>
-                    <a-col :span="12">
+                    <a-col :span="8">
                         <a-form-item label="Router ID" name="routerId">
                             <a-tooltip
                                 :title="bgpConfigvalidationErrors.routerId"
@@ -30,6 +30,18 @@
                                     data-testid="bgp-router-id-input"
                                     :disabled="bgpRunning"
                                     :status="bgpConfigvalidationErrors.routerId ? 'error' : ''"
+                                />
+                            </a-tooltip>
+                        </a-form-item>
+                    </a-col>
+                    <a-col :span="8">
+                        <a-form-item label="监听端口" name="port">
+                            <a-tooltip :title="bgpConfigvalidationErrors.port" :open="!!bgpConfigvalidationErrors.port">
+                                <a-input
+                                    v-model:value="bgpConfigData.port"
+                                    data-testid="bgp-port-input"
+                                    :disabled="bgpRunning"
+                                    :status="bgpConfigvalidationErrors.port ? 'error' : ''"
                                 />
                             </a-tooltip>
                         </a-form-item>
@@ -134,12 +146,14 @@
     const bgpConfigData = ref({
         localAs: DEFAULT_VALUES.LOCAL_AS,
         routerId: DEFAULT_VALUES.ROUTER_ID,
+        port: DEFAULT_VALUES.BGP_PORT,
         addressFamily: [BGP_ADDR_FAMILY.IPV4_UNC]
     });
 
     const bgpConfigvalidationErrors = ref({
         localAs: '',
-        routerId: ''
+        routerId: '',
+        port: ''
     });
 
     let bgpValidator = new FormValidator(bgpConfigvalidationErrors);
@@ -182,6 +196,7 @@
         if (savedBgpConfig.status === 'success' && savedBgpConfig.data) {
             bgpConfigData.value.localAs = savedBgpConfig.data.localAs;
             bgpConfigData.value.routerId = savedBgpConfig.data.routerId;
+            bgpConfigData.value.port = savedBgpConfig.data.port || DEFAULT_VALUES.BGP_PORT;
             bgpConfigData.value.addressFamily = Array.isArray(savedBgpConfig.data.addressFamily)
                 ? [...savedBgpConfig.data.addressFamily]
                 : [BGP_ADDR_FAMILY.IPV4_UNC];

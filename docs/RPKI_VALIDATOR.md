@@ -16,8 +16,6 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
 - 运行时 client 列表。
 - 可选 TCP MD5 代理配置。
 
-未实现的能力不在本文档中承诺，例如 Trust Anchor 管理、证书仓库同步、自动 ROA 更新、BGP 路由批量验证报告、REST API 集成。
-
 ## 页面
 
 ### RPKI 配置
@@ -25,6 +23,13 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
 配置 RPKI-RTR 服务端口、最高协议版本、ASPA 编码格式和可选 MD5 认证参数。
 
 ![RPKI 配置和客户端](images/rpki/rpki-config-and-client.png)
+
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 启动服务 / 已启动 | 按端口、协议版本、ASPA 编码和 MD5 参数启动 RPKI-RTR 服务。 |
+| 停止服务 | 停止 RPKI-RTR 服务并断开客户端连接。 |
 
 说明：
 
@@ -38,6 +43,17 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
 ROA 页面用于维护本地 ROA 数据。
 
 ![RPKI ROA 记录](images/rpki/rpki-roa.png)
+
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 新增 | 新增一条 ROA/VRP 记录。 |
+| 删除 | 删除选中的 ROA 记录。 |
+| 删除全部 | 清空当前本地 ROA 数据。 |
+| JSON导入 | 从 JSON 文件导入 ROA/VRP 数据。 |
+| 查询 | 按 IP 类型、Prefix、Max Length 或 ASN 过滤列表。 |
+| 重置 | 清空过滤条件并重新加载列表。 |
 
 支持：
 
@@ -67,6 +83,17 @@ JSON 导入支持常见 ROA/VRP 结构：
 
 Router Key 页面用于维护 RPKI-RTR v1+ 的 Router Key PDU 数据。
 
+![RPKI Router Key 记录](images/rpki/rpki-router-key.png)
+
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 新增 | 新增一条 Router Key 记录。 |
+| 删除 | 删除选中的 Router Key 记录。 |
+| 查询 | 按 ASN 或 SKI 条件过滤列表。 |
+| 重置 | 清空过滤条件并重新加载列表。 |
+
 支持字段：
 
 - ASN。
@@ -78,6 +105,17 @@ Router Key 页面用于维护 RPKI-RTR v1+ 的 Router Key PDU 数据。
 ASPA 页面用于维护 RPKI-RTR v2 的 ASPA PDU 数据。
 
 ![RPKI ASPA 记录](images/rpki/rpki-aspa.png)
+
+按钮说明：
+
+| 按钮 | 功能 |
+| --- | --- |
+| 新增 | 新增一条 ASPA 记录。 |
+| 删除 | 删除选中的 ASPA 记录。 |
+| 删除全部 | 清空当前本地 ASPA 数据。 |
+| JSON导入 | 从 JSON 文件导入 ASPA 数据。 |
+| 查询 | 按 Customer ASN 过滤列表。 |
+| 重置 | 清空过滤条件并重新加载列表。 |
 
 支持：
 

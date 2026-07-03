@@ -57,6 +57,7 @@ export const BGP_LABEL_MODE = {
 };
 
 export const BGP_MPLS_LABEL_MAX = 0xfffff;
+export const BGP_DEFAULT_PORT = 179;
 
 export const BGP_SRV6_SID_MODE = {
     FIXED: 'fixed',
@@ -127,6 +128,7 @@ export const getAddrFamilyType = (afi, safi) => {
 export const DEFAULT_VALUES = {
     LOCAL_AS: '65535',
     ROUTER_ID: '192.168.56.1',
+    BGP_PORT: String(BGP_DEFAULT_PORT),
     PEER_IP: '192.168.56.11',
     PEER_AS: '100',
     HOLD_TIME: '180',

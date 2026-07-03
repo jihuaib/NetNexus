@@ -18,11 +18,13 @@ NetNexus 是一个基于 Vue 3、Ant Design Vue 和 Electron 的本地网络工�
 - [FTP 服务器](docs/FTP_SERVER.md)：本地 FTP 服务、用户目录配置、客户端连接列表。
 - [DHCP 服务器](docs/DHCP_SERVER.md)：DHCPv4/DHCPv6 地址分配、租约列表和测试脚本。
 - [NTP 服务器](docs/NTP_SERVER.md)：本地 NTP 响应、时间参数配置和请求日志。
+- [RADIUS 服务器](docs/RADIUS_SERVER.md)：RADIUS 认证、计费、动态授权、请求日志和会话状态。
 - [TFTP 服务器](docs/TFTP_SERVER.md)：TFTP 上传/下载、选项协商和传输日志。
+- [Syslog 服务器](docs/SYSLOG_SERVER.md)：UDP/TCP Syslog 接收、RFC3164/RFC5424 解析、消息日志和详情查看。
 
 ### 开发和系统工具
 
-- [工具集合](docs/TOOLS.md)：字符串生成、报文解析、端口监控、网络信息、HTTP API 测试、TCP-AO MAC 计算。
+- [工具集合](docs/TOOLS.md)：字符串生成、报文解析、端口监控、网络信息、HTTP API 测试、TCP-AO MAC 计算、TCP/UDP 收发工具。
 - [设置](docs/SETTINGS.md)：日志级别、工具历史数量、FTP 用户数量、外部 HTTP API、TCP MD5 代理部署和更新设置。
 - [外部 API](docs/API.md)：当前只注册 BMP 查询接口，API 服务不负责启动 BMP。
 
@@ -42,12 +44,14 @@ npm run lint
 npm test
 npm run mock:bmp
 npm run docs:screenshots
+npm run docs:pdf
 ```
 
 说明：
 
 - `npm run mock:bmp` 会向本机 BMP 服务发送模拟数据，用于查看 BMP 页面布局和接口返回。
-- `npm run docs:screenshots` 会打开本地页面并更新 `docs/images` 下的文档截图，需要先启动 `npm start` 或设置 `NETNEXUS_DOCS_URL`；截图视口默认不小于 `1920x1200`，可用 `NETNEXUS_DOCS_WINDOW_WIDTH`、`NETNEXUS_DOCS_WINDOW_HEIGHT` 覆盖；脚本会自动启动 BMP 并注入 mock 路由数据，可用 `NETNEXUS_DOCS_BMP_PORT` 和 `NETNEXUS_DOCS_BMP_ROUTES` 覆盖端口和路由数。
+- `npm run docs:screenshots` 会打开本地页面并更新 `docs/images` 下的文档截图，需要先启动 `npm start` 或设置 `NETNEXUS_DOCS_URL`；截图视口默认不小于 `1920x1200`，可用 `NETNEXUS_DOCS_WINDOW_WIDTH`、`NETNEXUS_DOCS_WINDOW_HEIGHT` 覆盖。脚本会自动启动 BGP、BMP、RPKI、FTP、DHCP、SNMP、NTP、RADIUS、TFTP、Syslog 和 TCP/UDP 工具 mock 服务，并注入演示数据。
+- `npm run docs:pdf` 会合并 `docs` 目录下的功能文档，生成带目录且展开全部截图的 `output/pdf/netnexus-docs.pdf`。README 和外部 API 参考不进入功能 PDF。
 - 标准端口如 `67`、`69`、`123` 在部分系统上需要管理员/root 权限，联调时可以改用高位端口。
 
 ## 技术栈
@@ -90,7 +94,9 @@ NetNexus/
 - [FTP 服务器](docs/FTP_SERVER.md)
 - [DHCP 服务器](docs/DHCP_SERVER.md)
 - [NTP 服务器](docs/NTP_SERVER.md)
+- [RADIUS 服务器](docs/RADIUS_SERVER.md)
 - [TFTP 服务器](docs/TFTP_SERVER.md)
+- [Syslog 服务器](docs/SYSLOG_SERVER.md)
 - [工具集合](docs/TOOLS.md)
 - [设置](docs/SETTINGS.md)
 - [外部 API](docs/API.md)
