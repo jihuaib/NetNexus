@@ -9,6 +9,7 @@ const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const SnmpConst = require('../const/snmpConst');
 const { LOG_REQ_TYPES } = require('../const/toolsConst');
 const EventDispatcher = require('../utils/eventDispatcher');
+const { formatSnmpValue } = require('../utils/snmpValueFormatter');
 class SnmpApp {
     constructor(ipcMain, store) {
         this.ipcMain = ipcMain;
@@ -1058,10 +1059,12 @@ class SnmpApp {
     }
 
     formatSessionVarbind(varbind) {
+        const shouldFormatValue = Buffer.isBuffer(varbind.value) || typeof varbind.value === 'bigint';
+        const formattedValue = shouldFormatValue ? formatSnmpValue(varbind.value) : { value: varbind.value };
         return {
             oid: varbind.oid,
             type: snmp.ObjectType[varbind.type] || varbind.type,
-            value: Buffer.isBuffer(varbind.value) ? varbind.value.toString() : varbind.value
+            ...formattedValue
         };
     }
 

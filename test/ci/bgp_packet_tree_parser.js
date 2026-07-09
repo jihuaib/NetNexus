@@ -93,6 +93,16 @@ function findNode(tree, predicate) {
     return walk(tree, predicate);
 }
 
+function collectNodes(node, predicate, result = []) {
+    if (predicate(node)) {
+        result.push(node);
+    }
+    for (const child of node.children || []) {
+        collectNodes(child, predicate, result);
+    }
+    return result;
+}
+
 function parseAtOffset(packet, offset = 0) {
     const tree = {
         name: `Packet ${packet.length} bytes`,
@@ -107,6 +117,7 @@ function parseAtOffset(packet, offset = 0) {
 }
 
 const emptyUpdate = updatePacket();
+const keepalive = bgpPacket(BgpConst.BGP_PACKET_TYPE.KEEPALIVE);
 const wrappedUpdate = Buffer.concat([Buffer.from([0xaa, 0xbb, 0xcc, 0xdd]), emptyUpdate, Buffer.from([0xee, 0xff])]);
 const wrappedTree = parseAtOffset(wrappedUpdate, 4);
 const wrappedBgpNode = findNode(wrappedTree, node => node.name === 'BGP Packet');
@@ -145,6 +156,42 @@ try {
         findNode(tcpBgpNode, node => node.name === 'NLRI'),
         null,
         'Trailing TCP bytes must not become BGP NLRI'
+    );
+
+    const tcpMultiTree = {
+        name: 'TCP Segment',
+        offset: 0,
+        length: 0,
+        value: '',
+        children: []
+    };
+    const tcpMultiResult = registry.parse('tcp', 6, tcpMultiTree, tcpSegment(Buffer.concat([emptyUpdate, keepalive])));
+    assert.equal(tcpMultiResult.valid, true, tcpMultiResult.error);
+    const tcpBgpNodes = collectNodes(tcpMultiTree, node => node.name === 'BGP Packet');
+    assert.equal(tcpBgpNodes.length, 2, 'TCP payload with two BGP messages should parse both frames');
+    assert.ok(
+        findNode(tcpMultiTree, node => node.name === 'Type' && node.value.includes('KEEPALIVE')),
+        'Second BGP frame should be parsed as KEEPALIVE'
+    );
+
+    const directMultiTree = {
+        name: 'BGP Stream',
+        offset: 0,
+        length: 0,
+        value: '',
+        children: []
+    };
+    const directMultiResult = registry.parse(
+        'bgp',
+        BgpConst.BGP_DEFAULT_PORT,
+        directMultiTree,
+        Buffer.concat([emptyUpdate, keepalive])
+    );
+    assert.equal(directMultiResult.valid, true, directMultiResult.error);
+    assert.equal(
+        collectNodes(directMultiTree, node => node.name === 'BGP Packet').length,
+        2,
+        'Direct BGP parser entry should parse consecutive BGP frames'
     );
 } finally {
     registry.unregisterParser('bgp', BgpConst.BGP_DEFAULT_PORT);

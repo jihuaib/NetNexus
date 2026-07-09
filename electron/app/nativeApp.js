@@ -628,43 +628,276 @@ class NativeApp {
         const { execFile } = require('child_process');
         const { promisify } = require('util');
         const execFileAsync = promisify(execFile);
-        const script = [
-            'Get-NetRoute',
-            '| Select-Object DestinationPrefix,NextHop,InterfaceAlias,InterfaceIndex,RouteMetric,Protocol,State,AddressFamily',
-            '| ConvertTo-Json -Depth 3'
+        let getNetRouteError = null;
+
+        try {
+            const script = this.buildWindowsGetRouteScript();
+            const { stdout } = await execFileAsync(
+                'powershell.exe',
+                ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+                {
+                    encoding: 'buffer',
+                    maxBuffer: 10 * 1024 * 1024
+                }
+            );
+            const routes = this.parseWindowsRouteJson(this.decodeCommandOutput(stdout, 'utf8'));
+            if (routes.length > 0) {
+                return routes;
+            }
+            logger.warn('Get-NetRoute 未返回可用路由，尝试 route print 兜底');
+        } catch (err) {
+            getNetRouteError = err;
+            logger.warn(`Get-NetRoute 获取本地路由失败，尝试 route print 兜底: ${err.message}`);
+        }
+
+        try {
+            const { stdout } = await execFileAsync('route.exe', ['print'], {
+                encoding: 'buffer',
+                maxBuffer: 10 * 1024 * 1024
+            });
+            return this.parseWindowsRoutePrintOutput(this.decodeCommandOutput(stdout, 'cp936'));
+        } catch (err) {
+            if (getNetRouteError) {
+                throw new Error(`Get-NetRoute 失败: ${getNetRouteError.message}; route print 失败: ${err.message}`);
+            }
+            throw err;
+        }
+    }
+
+    buildWindowsGetRouteScript() {
+        return [
+            '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;',
+            '$OutputEncoding = [System.Text.Encoding]::UTF8;',
+            'Get-NetRoute | Select-Object DestinationPrefix,NextHop,InterfaceAlias,InterfaceIndex,RouteMetric,Protocol,State,AddressFamily | ConvertTo-Json -Depth 3 -Compress'
         ].join(' ');
-        const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
-            maxBuffer: 10 * 1024 * 1024
-        });
-        const trimmed = stdout.trim();
+    }
+
+    decodeCommandOutput(output, encoding = 'utf8') {
+        if (!Buffer.isBuffer(output)) {
+            return String(output || '').replace(/^\uFEFF/u, '');
+        }
+
+        let decoded = iconv.decode(output, encoding);
+        if (decoded.includes('\u0000')) {
+            const utf16 = iconv.decode(output, 'utf16-le');
+            if (!utf16.includes('\u0000')) {
+                decoded = utf16;
+            }
+        }
+        return decoded.replace(/^\uFEFF/u, '');
+    }
+
+    parseWindowsRouteJson(output) {
+        const trimmed = String(output || '').trim();
         if (!trimmed) {
             return [];
         }
 
-        const parsed = JSON.parse(trimmed);
+        const parsed = JSON.parse(this.extractJsonPayload(trimmed));
         const rows = Array.isArray(parsed) ? parsed : [parsed];
-        return rows.map((route, index) => {
-            const family = this.normalizeWindowsAddressFamily(route.AddressFamily, route.DestinationPrefix);
-            return {
-                id: `win-${family}-${index}-${route.DestinationPrefix}-${route.NextHop}-${route.InterfaceIndex}`,
-                family,
-                destinationPrefix: route.DestinationPrefix || '',
-                rawDestination: route.DestinationPrefix || '',
-                gateway: route.NextHop || '',
-                interfaceName: route.InterfaceAlias || '',
-                interfaceIndex: route.InterfaceIndex ?? '',
-                metric: route.RouteMetric ?? '',
-                protocol: route.Protocol || '',
-                state: route.State || '',
-                flags: ''
-            };
-        });
+        return rows
+            .filter(route => route && route.DestinationPrefix)
+            .map((route, index) => {
+                const destinationPrefix = String(route.DestinationPrefix || '');
+                const nextHop = this.toWindowsRouteText(route.NextHop);
+                const interfaceName = this.toWindowsRouteText(route.InterfaceAlias);
+                const protocol = this.toWindowsRouteText(route.Protocol);
+                const state = this.toWindowsRouteText(route.State);
+                const family = this.normalizeWindowsAddressFamily(route.AddressFamily, destinationPrefix);
+                return {
+                    id: `win-${family}-${index}-${destinationPrefix}-${nextHop}-${route.InterfaceIndex}`,
+                    family,
+                    destinationPrefix,
+                    rawDestination: destinationPrefix,
+                    gateway: nextHop,
+                    interfaceName,
+                    interfaceIndex: route.InterfaceIndex ?? '',
+                    metric: route.RouteMetric ?? '',
+                    protocol,
+                    state,
+                    flags: ''
+                };
+            });
+    }
+
+    extractJsonPayload(output) {
+        const text = String(output || '').trim();
+        const last = Math.max(text.lastIndexOf(']'), text.lastIndexOf('}'));
+        if (last === -1) {
+            return text;
+        }
+
+        for (let index = 0; index <= last; index += 1) {
+            if (text[index] !== '[' && text[index] !== '{') {
+                continue;
+            }
+            const candidate = text.slice(index, last + 1);
+            try {
+                JSON.parse(candidate);
+                return candidate;
+            } catch (_) {
+                // Continue looking for the actual ConvertTo-Json payload after warnings.
+            }
+        }
+        return text;
+    }
+
+    toWindowsRouteText(value) {
+        return value === null || value === undefined ? '' : String(value);
+    }
+
+    parseWindowsRoutePrintOutput(output) {
+        const routes = [];
+        const lines = String(output || '').split(/\r?\n/u);
+        let family = '';
+        let state = '';
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || /^=+$/u.test(trimmed)) {
+                continue;
+            }
+
+            if (trimmed.includes('IPv4')) {
+                family = 'IPv4';
+                state = '';
+                continue;
+            }
+            if (trimmed.includes('IPv6')) {
+                family = 'IPv6';
+                state = '';
+                continue;
+            }
+            if (/^(Active Routes|活动路由)/u.test(trimmed)) {
+                state = 'Active';
+                continue;
+            }
+            if (/^(Persistent Routes|永久路由)/u.test(trimmed)) {
+                state = 'Persistent';
+                continue;
+            }
+            if (!family || this.isWindowsRoutePrintHeader(trimmed)) {
+                continue;
+            }
+
+            const route =
+                family === 'IPv4'
+                    ? this.parseWindowsIpv4RoutePrintLine(trimmed, routes.length)
+                    : this.parseWindowsIpv6RoutePrintLine(trimmed, routes.length);
+            if (route) {
+                route.state = state || route.state;
+                routes.push(route);
+            }
+        }
+
+        return routes;
+    }
+
+    isWindowsRoutePrintHeader(line) {
+        return (
+            /^Interface List$/iu.test(line) ||
+            /^(Network Destination|网络目标|Netmask|网络掩码|Gateway|网关|Interface|接口|Metric|跃点数|If)\b/iu.test(
+                line
+            ) ||
+            /^(None|无)$/iu.test(line)
+        );
+    }
+
+    parseWindowsIpv4RoutePrintLine(line, index) {
+        const parts = line.split(/\s+/u);
+        if (parts.length < 5 || !this.isIpv4Address(parts[0]) || !this.isIpv4Address(parts[1])) {
+            return null;
+        }
+
+        const destination = parts[0];
+        const netmask = parts[1];
+        const metric = parts[parts.length - 1] || '';
+        const interfaceName = parts[parts.length - 2] || '';
+        const gateway = parts.slice(2, -2).join(' ');
+        const prefixLength = this.ipv4MaskToPrefixLength(netmask);
+        const destinationPrefix =
+            prefixLength === null ? `${destination} ${netmask}` : `${destination}/${prefixLength}`;
+
+        return {
+            id: `win-routeprint-ipv4-${index}-${destinationPrefix}-${gateway}-${interfaceName}`,
+            family: 'IPv4',
+            destinationPrefix,
+            rawDestination: `${destination} ${netmask}`,
+            gateway,
+            interfaceName,
+            interfaceIndex: '',
+            metric,
+            protocol: 'route print',
+            state: 'Active',
+            flags: ''
+        };
+    }
+
+    parseWindowsIpv6RoutePrintLine(line, index) {
+        const parts = line.split(/\s+/u);
+        if (parts.length < 4 || !/^\d+$/u.test(parts[0]) || !/^\d+$/u.test(parts[1])) {
+            return null;
+        }
+
+        const interfaceIndex = parts[0];
+        const metric = parts[1];
+        const destination = parts[2];
+        if (!destination.includes(':')) {
+            return null;
+        }
+
+        const gateway = parts.slice(3).join(' ');
+        const destinationPrefix = this.normalizeWindowsRoutePrintIpv6Destination(destination);
+        return {
+            id: `win-routeprint-ipv6-${index}-${destinationPrefix}-${gateway}-${interfaceIndex}`,
+            family: 'IPv6',
+            destinationPrefix,
+            rawDestination: destination,
+            gateway,
+            interfaceName: `if ${interfaceIndex}`,
+            interfaceIndex: Number(interfaceIndex),
+            metric,
+            protocol: 'route print',
+            state: 'Active',
+            flags: ''
+        };
+    }
+
+    isIpv4Address(value) {
+        const octets = String(value || '').split('.');
+        return (
+            octets.length === 4 &&
+            octets.every(octet => /^\d+$/u.test(octet) && Number(octet) >= 0 && Number(octet) <= 255)
+        );
+    }
+
+    ipv4MaskToPrefixLength(mask) {
+        if (!this.isIpv4Address(mask)) {
+            return null;
+        }
+        const bits = mask
+            .split('.')
+            .map(octet => Number(octet).toString(2).padStart(8, '0'))
+            .join('');
+        if (!/^1*0*$/u.test(bits)) {
+            return null;
+        }
+        const firstZero = bits.indexOf('0');
+        return firstZero === -1 ? 32 : firstZero;
+    }
+
+    normalizeWindowsRoutePrintIpv6Destination(destination) {
+        const normalized = String(destination || '').replace(/%[^/]+/u, '');
+        return normalized.includes('/') ? normalized : `${normalized}/128`;
     }
 
     normalizeWindowsAddressFamily(addressFamily, destinationPrefix) {
         const value = String(addressFamily || '').toLowerCase();
-        if (value.includes('ipv6') || String(destinationPrefix || '').includes(':')) {
+        if (value === '23' || value.includes('ipv6') || String(destinationPrefix || '').includes(':')) {
             return 'IPv6';
+        }
+        if (value === '2' || value.includes('ipv4')) {
+            return 'IPv4';
         }
         return 'IPv4';
     }

@@ -111,7 +111,71 @@ function parseRouteDistinguisherNlri(buffer, position, afi) {
     };
 }
 
+function parseRouteDistinguisherWithdrawalNlri(buffer, position, afi) {
+    const errors = [];
+    const nlriBitLength = buffer[position];
+    position += 1;
+    const valueStart = position;
+    const nlriEnd = position + Math.ceil(nlriBitLength / 8);
+    const boundedNlriEnd = Math.min(nlriEnd, buffer.length);
+
+    if (nlriEnd > buffer.length) {
+        errors.push('VPN withdrawal NLRI length exceeds remaining buffer');
+    }
+    if (nlriBitLength < 24 + (BgpConst.BGP_RD_LEN << 3)) {
+        errors.push(`VPN withdrawal NLRI length is too short: ${nlriBitLength}`);
+    }
+
+    const compatibilityField = buffer.subarray(position, Math.min(position + 3, boundedNlriEnd)).toString('hex');
+    if (position + 3 > boundedNlriEnd) {
+        errors.push('VPN withdrawal compatibility field is truncated');
+        position = boundedNlriEnd;
+    } else {
+        position += 3;
+    }
+
+    let rd = null;
+    if (position + BgpConst.BGP_RD_LEN <= boundedNlriEnd) {
+        rd = rdBufferToString(buffer.subarray(position, position + BgpConst.BGP_RD_LEN));
+    } else {
+        errors.push('VPN withdrawal RD is truncated');
+    }
+    position = Math.min(position + BgpConst.BGP_RD_LEN, boundedNlriEnd);
+
+    const prefixLength = Math.max(nlriBitLength - 24 - (BgpConst.BGP_RD_LEN << 3), 0);
+    const maxPrefixLength = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IPV6_HOST_LEN : BgpConst.IP_HOST_LEN;
+    if (prefixLength > maxPrefixLength) {
+        errors.push(`VPN withdrawal prefix length ${prefixLength} exceeds AFI maximum ${maxPrefixLength}`);
+    }
+    const prefixBytes = Math.ceil(prefixLength / 8);
+    if (position + prefixBytes > boundedNlriEnd) {
+        errors.push('VPN withdrawal prefix is truncated');
+    }
+    const prefixBuffer = buffer.subarray(position, Math.min(position + prefixBytes, boundedNlriEnd));
+    position = Math.min(position + prefixBytes, boundedNlriEnd);
+
+    const prefix =
+        afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6
+            ? ipv6BufferToString(prefixBuffer, prefixLength)
+            : ipv4BufferToString(prefixBuffer, prefixLength);
+
+    return {
+        position,
+        route: {
+            prefix,
+            rd,
+            length: prefixLength,
+            compatibilityField,
+            nlriBits: nlriBitLength,
+            rawNlri: buffer.subarray(valueStart, boundedNlriEnd).toString('hex'),
+            valid: errors.length === 0,
+            errors
+        }
+    };
+}
+
 module.exports = {
     parseRouteDistinguisherNlri,
+    parseRouteDistinguisherWithdrawalNlri,
     parseVpnNextHop
 };

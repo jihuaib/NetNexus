@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const snmp = require('net-snmp');
 const logger = require('../log/logger');
+const { formatSnmpValue } = require('./snmpValueFormatter');
 
 const MIB_FILE_EXTENSIONS = new Set(['.mib', '.txt', '.my', '']);
 const MIB_CACHE_SCHEMA_VERSION = 1;
@@ -815,14 +816,15 @@ class MibRegistry {
         const oidInfo = this.translateOid(varbind.oid);
         const rawType = varbind.rawType || varbind.type;
         const typeName = this.getObjectTypeName(rawType);
-        const value = this.formatValue(varbind.value);
+        const formattedValue = formatSnmpValue(varbind.value);
+        const value = formattedValue.value;
         const valueInfo = this.shouldTranslateValue(rawType, value) ? this.translateOid(value) : null;
 
         return {
             ...varbind,
             type: typeName,
             rawType,
-            value,
+            ...formattedValue,
             oidName: oidInfo.moduleQualifiedName || oidInfo.objectName || '',
             oidModule: oidInfo.moduleName || '',
             oidObject: oidInfo.objectName || '',
@@ -887,39 +889,7 @@ class MibRegistry {
     }
 
     formatValue(value) {
-        if (value === null || value === undefined) {
-            return '';
-        }
-
-        if (Buffer.isBuffer(value)) {
-            return this.isPrintableBuffer(value) ? value.toString('utf8') : value.toString('hex');
-        }
-
-        if (typeof value === 'bigint') {
-            return value.toString();
-        }
-
-        if (typeof value === 'object') {
-            try {
-                return JSON.stringify(value);
-            } catch (error) {
-                return String(value);
-            }
-        }
-
-        return String(value);
-    }
-
-    isPrintableBuffer(buffer) {
-        for (const byte of buffer.values()) {
-            if (byte === 9 || byte === 10 || byte === 13) {
-                continue;
-            }
-            if (byte < 32 || byte > 126) {
-                return false;
-            }
-        }
-        return true;
+        return formatSnmpValue(value).value;
     }
 
     formatSyntax(syntax) {

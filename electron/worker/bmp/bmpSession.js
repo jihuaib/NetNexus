@@ -722,16 +722,22 @@ class BmpSession {
     getOrCreateLocRibInstance(peer, afi, safi, options = {}) {
         const instanceKey = BmpBgpInstance.makeKey(peer.peerType, peer.peerRd, afi, safi);
         let bgpInstance = this.bgpInstanceMap.get(instanceKey);
+        let instanceInfoChanged = false;
         if (!bgpInstance) {
             bgpInstance = new BmpBgpInstance(this);
             this.bgpInstanceMap.set(instanceKey, bgpInstance);
+            instanceInfoChanged = true;
         }
 
         const addrFamily = { afi, safi };
-        this.mergeAddressFamilies(bgpInstance.enabledAddressFamilies, [addrFamily]);
+        if (!this.hasAddressFamily(bgpInstance.enabledAddressFamilies, afi, safi)) {
+            this.mergeAddressFamilies(bgpInstance.enabledAddressFamilies, [addrFamily]);
+            instanceInfoChanged = true;
+        }
         if (!bgpInstance.afi) {
             bgpInstance.afi = afi;
             bgpInstance.safi = safi;
+            instanceInfoChanged = true;
         }
 
         bgpInstance.instanceType = peer.peerType;
@@ -760,9 +766,23 @@ class BmpSession {
             ...this.decodeVrfTableNameTlvs(options.routeTlvs)
         ];
         if (vrfTableNames.length > 0) {
-            bgpInstance.vrfTableNames = Array.from(new Set([...(bgpInstance.vrfTableNames || []), ...vrfTableNames]));
+            if (this.mergeVrfTableNames(bgpInstance, vrfTableNames)) {
+                instanceInfoChanged = true;
+            }
         } else if (!bgpInstance.vrfTableNames || bgpInstance.vrfTableNames.length === 0) {
-            bgpInstance.vrfTableNames = peer.peerRd === '0:0' ? ['global'] : [];
+            const defaultVrfTableNames = peer.peerRd === '0:0' ? ['global'] : [];
+            if (!Array.isArray(bgpInstance.vrfTableNames) || defaultVrfTableNames.length > 0) {
+                bgpInstance.vrfTableNames = defaultVrfTableNames;
+                instanceInfoChanged = true;
+            }
+        }
+
+        if (instanceInfoChanged) {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE, {
+                data: {
+                    client: this.getClientInfo()
+                }
+            });
         }
 
         return bgpInstance;

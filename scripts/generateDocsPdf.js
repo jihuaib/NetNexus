@@ -22,10 +22,7 @@ const PREFERRED_DOCS = [
     'docs/SETTINGS.md'
 ];
 
-const EXCLUDED_DOCS = new Set([
-    'README.md',
-    'docs/API.md'
-]);
+const EXCLUDED_DOCS = new Set(['README.md', 'docs/API.md']);
 
 function getMarkdownTitle(markdown, fallback) {
     const title = markdown.match(/^\s*#\s+(.+?)\s*#*\s*$/m)?.[1]?.trim();
@@ -166,10 +163,7 @@ async function renderInline(text, baseDir) {
         });
 
     codePlaceholders.forEach((code, index) => {
-        working = working.replace(
-            `@@CODE_${index}@@`,
-            `<code>${escapeHtml(code)}</code>`
-        );
+        working = working.replace(`@@CODE_${index}@@`, `<code>${escapeHtml(code)}</code>`);
     });
 
     const renderedImages = [];
@@ -511,13 +505,8 @@ function updateCatalogDictionary(pdfText, rootObjectId, outlineRootId, xrefOffse
     if (!original.includes('/Type /Catalog')) {
         throw new Error(`PDF root object ${rootObjectId} is not a catalog`);
     }
-    const clean = original
-        .replace(/\s*\/Outlines\s+\d+\s+\d+\s+R/g, '')
-        .replace(/\s*\/PageMode\s+\/[A-Za-z0-9]+/g, '');
-    return clean.replace(
-        />>\s*$/,
-        `\n/Outlines ${outlineRootId} 0 R\n/PageMode /UseOutlines>>`
-    );
+    const clean = original.replace(/\s*\/Outlines\s+\d+\s+\d+\s+R/g, '').replace(/\s*\/PageMode\s+\/[A-Za-z0-9]+/g, '');
+    return clean.replace(/>>\s*$/, `\n/Outlines ${outlineRootId} 0 R\n/PageMode /UseOutlines>>`);
 }
 
 function addPdfOutlines(pdfBuffer, docs) {

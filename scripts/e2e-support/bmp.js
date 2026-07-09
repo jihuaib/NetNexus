@@ -96,6 +96,7 @@ const BmpE2eController = (() => {
     const workspaceElectronRoot = path.join(projectRoot, 'electron');
     const electronRoot = process.env.E2E_TARGET === 'browser' ? workspaceElectronRoot : findPackagedElectronRoot();
     const BmpConst = require(path.join(electronRoot, 'const', 'bmpConst'));
+    const BgpConst = require(path.join(electronRoot, 'const', 'bgpConst'));
     const BmpSession = require(path.join(electronRoot, 'worker', 'bmp', 'bmpSession'));
     const RouteUpdateAggregator = require(path.join(electronRoot, 'utils', 'routeUpdateAggregator'));
 
@@ -121,6 +122,127 @@ const BmpE2eController = (() => {
         return new Promise(resolve => {
             setTimeout(resolve, ms);
         });
+    }
+
+    function u16(value) {
+        return Buffer.from([(value >> 8) & 0xff, value & 0xff]);
+    }
+
+    function u32(value) {
+        return Buffer.from([(value >> 24) & 0xff, (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
+    }
+
+    function ip(ipAddress) {
+        return Buffer.from(ipAddress.split('.').map(part => parseInt(part, 10)));
+    }
+
+    function bgpPacket(type, body) {
+        return Buffer.concat([
+            Buffer.alloc(BgpConst.BGP_MARKER_LEN, 0xff),
+            u16(BgpConst.BGP_HEAD_LEN + body.length),
+            Buffer.from([type]),
+            body
+        ]);
+    }
+
+    function pathAttr(typeCode, value, flags = BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE) {
+        if (value.length > 255) {
+            return Buffer.concat([
+                Buffer.from([flags | BgpConst.BGP_PATH_ATTR_FLAGS.EXTENDED_LENGTH, typeCode]),
+                u16(value.length),
+                value
+            ]);
+        }
+
+        return Buffer.concat([Buffer.from([flags, typeCode, value.length]), value]);
+    }
+
+    function asPathAttr(asns = [65000]) {
+        return pathAttr(
+            BgpConst.BGP_PATH_ATTR.AS_PATH,
+            Buffer.concat([
+                Buffer.from([BgpConst.BGP_AS_PATH_TYPE.AS_SEQUENCE, asns.length]),
+                Buffer.concat(asns.map(asn => u16(asn)))
+            ])
+        );
+    }
+
+    function labeledUnicastNlri(prefix, label) {
+        const rawLabel = (label << 4) | 1;
+        const labelBytes = Buffer.from([(rawLabel >> 16) & 0xff, (rawLabel >> 8) & 0xff, rawLabel & 0xff]);
+        return Buffer.concat([Buffer.from([48]), labelBytes, ip(prefix).subarray(0, 3)]);
+    }
+
+    function labeledUnicastUpdate(prefix, { nextHop = '0.0.0.0', label = 777 } = {}) {
+        const mpReachValue = Buffer.concat([
+            u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+            Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST, 4]),
+            ip(nextHop),
+            Buffer.from([0]),
+            labeledUnicastNlri(prefix, label)
+        ]);
+        const attrs = Buffer.concat([
+            pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+            asPathAttr([65000]),
+            pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, mpReachValue, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL)
+        ]);
+        return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrs.length), attrs]));
+    }
+
+    function bmpMessage(type, payload, version = BmpConst.BMP_VERSION.V4) {
+        return Buffer.concat([
+            Buffer.from([version]),
+            u32(BmpConst.BMP_HEADER_LENGTH + payload.length),
+            Buffer.from([type]),
+            payload
+        ]);
+    }
+
+    function peerHeader({
+        flags = BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
+        peerType = BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        rd = Buffer.alloc(BgpConst.BGP_RD_LEN),
+        peerAddress = '192.0.2.2',
+        peerAs = 65000,
+        routerId = '192.0.2.1',
+        timestamp = Math.floor(Date.now() / 1000),
+        timestampMs = 0
+    } = {}) {
+        const address = peerType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB ? Buffer.alloc(4) : ip(peerAddress);
+        return Buffer.concat([
+            Buffer.from([peerType, flags]),
+            rd,
+            Buffer.alloc(12),
+            address,
+            u32(peerAs),
+            ip(routerId),
+            u32(timestamp),
+            u32(timestampMs)
+        ]);
+    }
+
+    function indexedTlv(type, index, value) {
+        return Buffer.concat([u16(type), u16(value.length), u16(index), value]);
+    }
+
+    function routeMonitoringMessage(peer, bgpMessage, { vrfName = null } = {}) {
+        const tlvs = [];
+        if (vrfName) {
+            tlvs.push(indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME, 0, Buffer.from(vrfName)));
+        }
+        tlvs.push(indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpMessage));
+        return bmpMessage(BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING, Buffer.concat([peerHeader(peer), ...tlvs]));
+    }
+
+    function lazyLocRibLabelRouteMessage({ prefix, label, vrfName }) {
+        return routeMonitoringMessage(
+            {
+                flags: BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
+                peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB
+            },
+            labeledUnicastUpdate(prefix, { label }),
+            { vrfName }
+        );
     }
 
     function loadBmpWorkerClass() {
@@ -663,6 +785,23 @@ const BmpE2eController = (() => {
                     }
                 });
             });
+        }
+
+        async injectLazyLocRibLabelRoute({ prefix = '10.250.0.0', label = 777, vrfName = 'global-lazy-label' } = {}) {
+            const bmpSession = Array.from(this.worker.bmpSessionMap.values())[0];
+            if (!bmpSession) {
+                throw new Error('BMP worker has no active session');
+            }
+
+            const message = lazyLocRibLabelRouteMessage({ prefix, label, vrfName });
+            this.record('injecting lazy Loc-RIB label route', {
+                prefix,
+                label,
+                vrfName,
+                bytes: message.length
+            });
+            bmpSession.recvMsg(message);
+            return { prefix, label, vrfName };
         }
 
         async waitForMockData({ routes = 12, timeout = 10000 } = {}) {

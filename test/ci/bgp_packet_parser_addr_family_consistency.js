@@ -114,6 +114,14 @@ function vpnNlri(prefixLength, prefixBytes, label = 200) {
     ]);
 }
 
+function vpnWithdrawNlri(prefixLength, prefixBytes) {
+    return Buffer.concat([
+        Buffer.from([24 + BgpConst.BGP_RD_LEN * 8 + prefixLength, 0x80, 0, 0]),
+        rd65000,
+        prefixBytes
+    ]);
+}
+
 function evpnNlri(routeType, body) {
     return Buffer.concat([Buffer.from([routeType, body.length]), body]);
 }
@@ -405,6 +413,7 @@ const fixtures = [
         family: BgpConst.BGP_ADDR_FAMILY.VPNV4,
         nextHop: Buffer.concat([rd65000, ipBytes('192.0.2.254')]),
         nlri: vpnNlri(24, ipBytes('203.0.113.0').subarray(0, 3), 200),
+        withdrawNlri: vpnWithdrawNlri(24, ipBytes('203.0.113.0').subarray(0, 3)),
         assertReach(route, mpReach) {
             assert.equal(mpReach.nextHop, '192.0.2.254');
             assert.equal(route.rd, '65000:1');
@@ -414,7 +423,7 @@ const fixtures = [
         assertUnreach(route) {
             assert.equal(route.rd, '65000:1');
             assert.equal(route.prefix, '203.0.113.0');
-            assert.equal(route.labels[0].label, 200);
+            assert.equal(route.compatibilityField, '800000');
         }
     }),
     withAfiSafi({
@@ -422,6 +431,7 @@ const fixtures = [
         family: BgpConst.BGP_ADDR_FAMILY.VPNV6,
         nextHop: Buffer.concat([rd65000, ipv6Bytes('20010db8000000000000000000000001')]),
         nlri: vpnNlri(32, ipv6Bytes('20010db8000100000000000000000000').subarray(0, 4), 201),
+        withdrawNlri: vpnWithdrawNlri(32, ipv6Bytes('20010db8000100000000000000000000').subarray(0, 4)),
         assertReach(route, mpReach) {
             assert.equal(mpReach.nextHop, '2001:db8::1');
             assert.equal(route.rd, '65000:1');
@@ -431,7 +441,7 @@ const fixtures = [
         assertUnreach(route) {
             assert.equal(route.rd, '65000:1');
             assert.equal(route.prefix, '2001:db8::');
-            assert.equal(route.labels[0].label, 201);
+            assert.equal(route.compatibilityField, '800000');
         }
     }),
     withAfiSafi({

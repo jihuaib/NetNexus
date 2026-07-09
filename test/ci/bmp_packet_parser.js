@@ -157,6 +157,16 @@ function findNode(tree, predicate) {
     return walk(tree, predicate);
 }
 
+function collectNodes(node, predicate, result = []) {
+    if (predicate(node)) {
+        result.push(node);
+    }
+    for (const child of node.children || []) {
+        collectNodes(child, predicate, result);
+    }
+    return result;
+}
+
 const initiation = bmpMessage(
     BmpConst.BMP_MSG_TYPE.INITIATION,
     Buffer.concat([
@@ -291,6 +301,47 @@ try {
     assert.ok(
         findNode(tcpTree, node => node.name === 'BMP Packet'),
         'TCP parser should recurse into BMP parser by port'
+    );
+
+    const tcpMultiTree = {
+        name: 'TCP Segment',
+        offset: 0,
+        length: 0,
+        value: '',
+        children: []
+    };
+    const tcpMultiResult = registry.parse(
+        'tcp',
+        6,
+        tcpMultiTree,
+        tcpSegment(Buffer.concat([initiation, routeMonitoring]))
+    );
+    assert.equal(tcpMultiResult.valid, true, tcpMultiResult.error);
+    const tcpBmpNodes = collectNodes(tcpMultiTree, node => node.name === 'BMP Packet');
+    assert.equal(tcpBmpNodes.length, 2, 'TCP payload with two BMP messages should parse both frames');
+    assert.ok(
+        findNode(tcpMultiTree, node => node.name === 'Message Type' && node.value.includes('ROUTE_MONITORING')),
+        'Second BMP frame should be parsed as Route Monitoring'
+    );
+
+    const directMultiTree = {
+        name: 'BMP Stream',
+        offset: 0,
+        length: 0,
+        value: '',
+        children: []
+    };
+    const directMultiResult = registry.parse(
+        'bmp',
+        1790,
+        directMultiTree,
+        Buffer.concat([initiation, routeMonitoring])
+    );
+    assert.equal(directMultiResult.valid, true, directMultiResult.error);
+    assert.equal(
+        collectNodes(directMultiTree, node => node.name === 'BMP Packet').length,
+        2,
+        'Direct BMP parser entry should parse consecutive BMP frames'
     );
 } finally {
     registry.unregisterParser('bmp', 1790);

@@ -1,7 +1,13 @@
 const { bgpBrowserMockScript, BgpE2eController } = require('./bgp');
 const { bmpBrowserMockScript, BmpE2eController } = require('./bmp');
 const { featurePageBrowserMockScript } = require('./page-browser-mocks');
-const { formatEvents, recordStep, setupFeaturePagesE2e, verifyPage } = require('./page-test-helper');
+const {
+    expectAnyTextVisible,
+    formatEvents,
+    recordStep,
+    setupFeaturePagesE2e,
+    verifyPage
+} = require('./page-test-helper');
 const { rpkiBrowserMockScript, RpkiE2eController } = require('./rpki');
 const { stringGeneratorBrowserMockScript } = require('./string-generator');
 
@@ -24,6 +30,7 @@ function getBrowserMockScript(name) {
 module.exports = {
     BgpE2eController,
     BmpE2eController,
+    expectAnyTextVisible,
     formatEvents,
     getBrowserMockScript,
     recordStep,

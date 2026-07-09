@@ -1407,11 +1407,10 @@ async function setupDhcpDemo(win) {
 
 async function setupSnmpDemo(win, longRunningProcesses) {
     const mibPath = path.join(OUTPUT_ROOT, 'scripts/manual/snmp/mibs/NETNEXUS-DEMO-MIB.mib');
-    const agent = startNodeProcess(
-        'manual/snmp/snmp_mib_browser_agent.js',
-        [String(SNMP_DOCS_QUERY_PORT), 'public'],
-        { readyPattern: '[snmp-demo-agent] listening', timeoutMs: 15000 }
-    );
+    const agent = startNodeProcess('manual/snmp/snmp_mib_browser_agent.js', [String(SNMP_DOCS_QUERY_PORT), 'public'], {
+        readyPattern: '[snmp-demo-agent] listening',
+        timeoutMs: 15000
+    });
     longRunningProcesses.push(agent.child);
     await agent.ready;
 
@@ -1442,11 +1441,9 @@ async function setupSnmpDemo(win, longRunningProcesses) {
     `,
         'start SNMP demo trap server'
     );
-    await runNodeScript(
-        'manual/snmp/snmp_test.js',
-        ['127.0.0.1', String(SNMP_DOCS_TRAP_PORT), '12'],
-        { timeoutMs: 20000 }
-    );
+    await runNodeScript('manual/snmp/snmp_test.js', ['127.0.0.1', String(SNMP_DOCS_TRAP_PORT), '12'], {
+        timeoutMs: 20000
+    });
     await waitForRendererCondition(
         win,
         `
@@ -1481,9 +1478,13 @@ async function setupNtpDemo(win) {
     `,
         'start NTP demo server'
     );
-    await runNodeScript('testNtpClient.js', ['--server', '127.0.0.1', '--port', String(NTP_DOCS_PORT), '--count', '3'], {
-        timeoutMs: 12000
-    });
+    await runNodeScript(
+        'testNtpClient.js',
+        ['--server', '127.0.0.1', '--port', String(NTP_DOCS_PORT), '--count', '3'],
+        {
+            timeoutMs: 12000
+        }
+    );
     await waitForRendererCondition(
         win,
         `

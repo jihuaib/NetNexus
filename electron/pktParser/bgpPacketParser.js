@@ -43,6 +43,45 @@ function createTreeNode(name, offset, length, value = '', children = []) {
     };
 }
 
+function getBgpFrameLength(buffer, offset = 0, endOffset = buffer.length) {
+    if (!Buffer.isBuffer(buffer) || offset < 0 || offset >= endOffset) {
+        return {
+            validStart: false,
+            complete: false
+        };
+    }
+
+    if (offset + BgpConst.BGP_HEAD_LEN > endOffset) {
+        return {
+            validStart: false,
+            complete: false
+        };
+    }
+
+    const marker = buffer.subarray(offset, offset + BgpConst.BGP_MARKER_LEN);
+    if (!marker.every(byte => byte === 0xff)) {
+        return {
+            validStart: false,
+            complete: false
+        };
+    }
+
+    const length = buffer.readUInt16BE(offset + BgpConst.BGP_MARKER_LEN);
+    if (length < BgpConst.BGP_HEAD_LEN || length > BgpConst.BGP_MAX_PKT_SIZE) {
+        return {
+            validStart: true,
+            complete: false,
+            error: `Invalid BGP length ${length}`
+        };
+    }
+
+    return {
+        validStart: true,
+        complete: offset + length <= endOffset,
+        length
+    };
+}
+
 function addLeafNode(parentNode, name, offset, length, value = '') {
     const node = createTreeNode(name, offset, length, value);
     parentNode.children.push(node);
@@ -652,6 +691,13 @@ function parseBgpPacket(buffer, tree, offset = 0) {
         };
         headerNode.children.push(lengthNode);
         curOffset += 2;
+        if (length < BgpConst.BGP_HEAD_LEN || length > BgpConst.BGP_MAX_PKT_SIZE) {
+            return {
+                valid: false,
+                error: `Invalid BGP length ${length}`,
+                tree
+            };
+        }
         const messageEndOffset = offset + length;
 
         // 解析类型
@@ -716,7 +762,9 @@ function parseBgpPacket(buffer, tree, offset = 0) {
 
         return {
             valid: true,
-            payload
+            payload,
+            nextOffset: messageEndOffset,
+            length
         };
     } catch (error) {
         return {
@@ -2107,5 +2155,8 @@ function parseRouteRefreshMessageTree(buffer, curOffset, parentNode, messageEndO
 }
 
 module.exports = {
-    parseBgpPacket
+    parseBgpPacket,
+    getBgpFrameLength
 };
+
+parseBgpPacket.getFrameLength = getBgpFrameLength;

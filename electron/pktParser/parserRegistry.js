@@ -97,7 +97,106 @@ class ParserRegistry {
      * @param {number} offset - The starting offset in the buffer
      * @returns {Object} The parse result
      */
-    parse(layer, type, tree, buffer, offset = 0) {
+    parseFramedSequence(layer, type, parser, tree, buffer, offset, endOffset) {
+        let position = offset;
+        let parsedFrames = 0;
+        let firstResult = null;
+        let lastResult = null;
+
+        while (position < endOffset) {
+            const frame = parser.getFrameLength(buffer, position, endOffset);
+
+            if (!frame || !frame.validStart) {
+                if (parsedFrames === 0) {
+                    return this.parseSingle(layer, type, parser, tree, buffer, position, { singleFrame: true });
+                }
+                break;
+            }
+
+            if (frame.error) {
+                return {
+                    valid: false,
+                    error: frame.error
+                };
+            }
+
+            if (!frame.complete) {
+                if (parsedFrames === 0) {
+                    return this.parseSingle(layer, type, parser, tree, buffer, position, { singleFrame: true });
+                }
+                break;
+            }
+
+            const result = this.parseSingle(layer, type, parser, tree, buffer, position, { singleFrame: true });
+            if (!result.valid) {
+                return result;
+            }
+            if (!firstResult) {
+                firstResult = result;
+            }
+            lastResult = result;
+
+            const nextOffset = result.nextOffset || position + frame.length;
+            if (nextOffset <= position) {
+                return {
+                    valid: false,
+                    error: `Parser for ${layer} did not advance while parsing framed payload`
+                };
+            }
+
+            position = nextOffset;
+            parsedFrames += 1;
+        }
+
+        if (parsedFrames === 0) {
+            return this.parseSingle(layer, type, parser, tree, buffer, position, { singleFrame: true });
+        }
+
+        if (parsedFrames === 1) {
+            return {
+                ...firstResult,
+                frames: parsedFrames,
+                nextOffset: position,
+                trailingBytes: Math.max(endOffset - position, 0)
+            };
+        }
+
+        return {
+            valid: true,
+            payload: null,
+            nextOffset: position,
+            frames: parsedFrames,
+            lastResult
+        };
+    }
+
+    parseSingle(layer, type, parser, tree, buffer, offset, options = {}) {
+        const endOffset = options.endOffset ?? buffer.length;
+
+        if (!options.singleFrame && typeof parser.getFrameLength === 'function') {
+            return this.parseFramedSequence(layer, type, parser, tree, buffer, offset, endOffset);
+        }
+
+        const result = parser(buffer, tree, offset);
+        if (!result.valid) return result;
+        const payload = result.payload;
+        if (payload) {
+            if (payload.type && payload.nextLayer) {
+                const payloadEndOffset =
+                    payload.length === undefined || payload.length === null
+                        ? buffer.length
+                        : payload.offset + payload.length;
+                const nextResult = this.parse(payload.nextLayer, payload.type, tree, buffer, payload.offset, {
+                    endOffset: payloadEndOffset
+                });
+                if (!nextResult.valid) return nextResult;
+            }
+        }
+
+        return result;
+    }
+
+    parse(layer, type, tree, buffer, offset = 0, options = {}) {
         const parser = this.getParser(layer, type);
         if (!parser) {
             return {
@@ -107,17 +206,7 @@ class ParserRegistry {
         }
 
         try {
-            const result = parser(buffer, tree, offset);
-            if (!result.valid) return result;
-            const payload = result.payload;
-            if (payload) {
-                if (payload.type && payload.nextLayer) {
-                    const nextResult = this.parse(payload.nextLayer, payload.type, tree, buffer, payload.offset);
-                    if (!nextResult.valid) return nextResult;
-                }
-            }
-
-            return result;
+            return this.parseSingle(layer, type, parser, tree, buffer, offset, options);
         } catch (error) {
             return {
                 valid: false,

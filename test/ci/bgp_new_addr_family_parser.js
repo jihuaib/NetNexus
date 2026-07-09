@@ -356,6 +356,17 @@ const invalidLabeledUnicast = firstReachRoute(
 );
 assert.equal(invalidLabeledUnicast.valid, false);
 assert.ok(invalidLabeledUnicast.errors.some(error => error.includes('bottom-of-stack')));
+const invalidLabeledUnicastSummary = getBgpPacketSummary(
+    parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+        Buffer.from([1, 1, 1, 1]),
+        Buffer.concat([Buffer.from([48]), labelEntry(100, false), Buffer.from([192, 0, 2])])
+    )
+);
+assert.ok(invalidLabeledUnicastSummary.includes('Labels 100'));
+assert.ok(invalidLabeledUnicastSummary.includes('bottom-of-stack'));
+assert.ok(invalidLabeledUnicastSummary.includes('Raw'));
 
 const labeledWithdrawal = firstUnreachRoute(
     parseUpdateWithMpUnreach(
@@ -392,6 +403,19 @@ new BmpSession({ sendEvent() {} }, {}).setRouteNlri(
 assert.equal(vpnv4BmpRoute.ip, '203.0.113.0');
 assert.equal(vpnv4BmpRoute.rd, '65000:1');
 assert.equal(vpnv4BmpRoute.labels, '100(BOS)');
+
+const vpnv4Withdrawal = firstUnreachRoute(
+    parseUpdateWithMpUnreach(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_VPN,
+        Buffer.concat([Buffer.from([112, 0x80, 0, 0]), rd65000, Buffer.from([203, 0, 113])])
+    )
+);
+assert.equal(vpnv4Withdrawal.valid, true);
+assert.equal(vpnv4Withdrawal.prefix, '203.0.113.0');
+assert.equal(vpnv4Withdrawal.rd, '65000:1');
+assert.equal(vpnv4Withdrawal.compatibilityField, '800000');
+assert.equal(vpnv4Withdrawal.labels, undefined);
 
 const vpnv6Packet = parseUpdateWithMpReach(
     BgpConst.BGP_AFI_TYPE.AFI_IPV6,

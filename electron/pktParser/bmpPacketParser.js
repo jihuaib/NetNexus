@@ -20,6 +20,44 @@ function createTreeNode(name, offset, length, value = '', children = []) {
     };
 }
 
+function getBmpFrameLength(buffer, offset = 0, endOffset = buffer.length) {
+    if (!Buffer.isBuffer(buffer) || offset < 0 || offset >= endOffset) {
+        return {
+            validStart: false,
+            complete: false
+        };
+    }
+
+    if (offset + BmpConst.BMP_HEADER_LENGTH > endOffset) {
+        return {
+            validStart: false,
+            complete: false
+        };
+    }
+
+    if (buffer[offset] !== BmpConst.BMP_VERSION.V4) {
+        return {
+            validStart: false,
+            complete: false
+        };
+    }
+
+    const length = buffer.readUInt32BE(offset + 1);
+    if (length < BmpConst.BMP_HEADER_LENGTH) {
+        return {
+            validStart: true,
+            complete: false,
+            error: `Invalid BMP length ${length}`
+        };
+    }
+
+    return {
+        validStart: true,
+        complete: offset + length <= endOffset,
+        length
+    };
+}
+
 function addLeafNode(parent, name, offset, length, value = '') {
     const node = createTreeNode(name, offset, length, value);
     parent.children.push(node);
@@ -484,7 +522,9 @@ function parseBmpPacket(buffer, tree, offset = 0) {
 
         return {
             valid: true,
-            payload: null
+            payload: null,
+            nextOffset: endOffset,
+            length
         };
     } catch (error) {
         return {
@@ -495,5 +535,8 @@ function parseBmpPacket(buffer, tree, offset = 0) {
 }
 
 module.exports = {
-    parseBmpPacket
+    parseBmpPacket,
+    getBmpFrameLength
 };
+
+parseBmpPacket.getFrameLength = getBmpFrameLength;

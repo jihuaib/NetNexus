@@ -1466,16 +1466,42 @@ function formatBgpSummaryRoute(route, afi, safi, indent, includePathId = true) {
     }
 
     const pathId = includePathId && route.pathId !== undefined ? `${route.pathId} ` : '';
-    return `${indent}- ${pathId}${route.prefix}/${getBgpSummaryRouteLength(route, afi, safi)}`;
+    const details = [];
+
+    if (route.rd) {
+        details.push(`RD ${route.rd}`);
+    }
+    if (Array.isArray(route.labels) && route.labels.length > 0) {
+        details.push(
+            `Labels ${route.labels.map(label => label.display || `${label.label}${label.bottom ? '(BOS)' : ''}`).join(',')}`
+        );
+    }
+    if (Array.isArray(route.errors) && route.errors.length > 0) {
+        details.push(`Errors ${route.errors.join('; ')}`);
+    }
+    if (Array.isArray(route.warnings) && route.warnings.length > 0) {
+        details.push(`Warnings ${route.warnings.join('; ')}`);
+    }
+    if (route.valid === false && route.rawNlri) {
+        details.push(`Raw ${route.rawNlri}`);
+    }
+
+    const detailText = details.length > 0 ? ` (${details.join('; ')})` : '';
+    return `${indent}- ${pathId}${route.prefix}/${getBgpSummaryRouteLength(route, afi, safi)}${detailText}`;
 }
 
 function getBgpPacketSummary(parsedPacket) {
-    if (!parsedPacket || !parsedPacket.valid) {
+    if (!parsedPacket || parsedPacket.type === undefined || parsedPacket.type === null) {
         return `Invalid BGP packet: ${parsedPacket?.error || 'Unknown error'}`;
     }
 
     const typeName = getBgpPacketTypeName(parsedPacket.type);
     let summary = `BGP ${typeName} Message (${parsedPacket.length} bytes)`;
+    if (parsedPacket.valid === false) {
+        const issues = Array.isArray(parsedPacket.errors) && parsedPacket.errors.length > 0 ? parsedPacket.errors : [];
+        const issueText = parsedPacket.error || issues.join('; ') || 'Unknown error';
+        summary += `\nInvalid: ${issueText}`;
+    }
 
     switch (parsedPacket.type) {
         case BgpConst.BGP_PACKET_TYPE.OPEN: // OPEN

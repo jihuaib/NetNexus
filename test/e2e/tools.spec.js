@@ -1,5 +1,5 @@
 const { test } = require('../../scripts/e2e-support/electron-test');
-const { setupFeaturePagesE2e, verifyPage } = require('../../scripts/e2e-support');
+const { expectAnyTextVisible, setupFeaturePagesE2e, verifyPage } = require('../../scripts/e2e-support');
 
 const pageCases = [
     { route: '/#/tools/packet-parser', title: '报文解析器' },
@@ -26,5 +26,17 @@ test.describe('Tools pages', () => {
         for (const pageCase of pageCases) {
             await verifyPage(test, page, pageCase);
         }
+    });
+
+    test('renders network route info with mock routes', async ({ page }) => {
+        await page.goto('/#/tools/network-info');
+        await expectAnyTextVisible(page, '网络信息', { timeout: 10000 });
+
+        await page.getByText('路由信息').click();
+
+        await expectAnyTextVisible(page, '0.0.0.0/0', { timeout: 10000 });
+        await expectAnyTextVisible(page, '10.0.0.1', { timeout: 10000 });
+        await expectAnyTextVisible(page, '2001:db8::/64', { timeout: 10000 });
+        await expectAnyTextVisible(page, 'fe80::1', { timeout: 10000 });
     });
 });

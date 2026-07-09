@@ -189,6 +189,28 @@ test.describe('BMP pages', () => {
             }
         });
 
+        await test.step('Verify lazy-created Loc-RIB address-family tab appears after route update', async () => {
+            await recordStep(
+                'Input: inject Loc-RIB IPv4 Label route after the Loc-RIB page has loaded, without a matching Peer Up address family'
+            );
+
+            const lazyRoute = await controller.injectLazyLocRibLabelRoute();
+            const lazyTab = page.getByText(`${lazyRoute.vrfName} | IPv4 Label`).first();
+            await expect(lazyTab).toBeVisible({ timeout: 10000 });
+            await lazyTab.click();
+
+            const locRibRouteTable = page
+                .getByLabel(`${lazyRoute.vrfName} | IPv4 Label`)
+                .getByTestId('bmp-loc-rib-route-table');
+            await expect(locRibRouteTable).toContainText(lazyRoute.prefix, { timeout: 10000 });
+            await expect(locRibRouteTable).toContainText(`${lazyRoute.label}(BOS)`);
+            await expect(locRibRouteTable).toContainText('0.0.0.0');
+
+            await recordStep(
+                `Output: lazyInstanceTab="${lazyRoute.vrfName} | IPv4 Label", route=${lazyRoute.prefix}, label=${lazyRoute.label}(BOS)`
+            );
+        });
+
         await test.step('Verify BGP session statistics page', async () => {
             await recordStep('Input: route=/#/bmp/bgp-session-statis-report, expectedSession=192.0.2.2 | AS 65000');
 

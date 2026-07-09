@@ -6,7 +6,7 @@ const {
     parseLabeledUnicastWithdrawalNlri,
     parseLabeledUnicastNextHop
 } = require('./labeledUnicast');
-const { parseRouteDistinguisherNlri, parseVpnNextHop } = require('./vpn');
+const { parseRouteDistinguisherNlri, parseRouteDistinguisherWithdrawalNlri, parseVpnNextHop } = require('./vpn');
 const { parseFlowSpecNlri, parseFlowSpecNextHop } = require('./flowSpec');
 const { parseBgpLsNlri, parseBgpLsNextHop } = require('./bgpLs');
 const {
@@ -110,6 +110,9 @@ function parseNlriEntry(buffer, position, afi, safi, isWithdrawn = false) {
     }
 
     if (isVpnNlri(afi, safi)) {
+        if (isWithdrawn) {
+            return parseRouteDistinguisherWithdrawalNlri(buffer, position, afi);
+        }
         return parseRouteDistinguisherNlri(buffer, position, afi);
     }
 
