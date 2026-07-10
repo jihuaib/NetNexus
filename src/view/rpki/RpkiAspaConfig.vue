@@ -1,13 +1,13 @@
 <template>
     <div class="mt-container adaptive-list-page">
-        <a-row class="adaptive-form-row">
-            <a-col :span="24">
-                <a-card title="RPKI ASPA 配置 (协议 v2)">
+        <nn-row class="adaptive-form-row">
+            <nn-col :span="24">
+                <nn-card title="RPKI ASPA 配置 (协议 v2)">
                     <a-form :model="aspaConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="submitAspa">
-                        <a-row>
-                            <a-col :span="24">
+                        <nn-row>
+                            <nn-col :span="24">
                                 <a-form-item label="Customer ASN" name="customerAsn">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.customerAsn"
                                         :open="!!validationErrors.customerAsn"
                                     >
@@ -15,14 +15,14 @@
                                             v-model:value="aspaConfig.customerAsn"
                                             :status="validationErrors.customerAsn ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
                                 <a-form-item label="Provider ASNs" name="providerAsnsRaw">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.providerAsnsRaw"
                                         :open="!!validationErrors.providerAsnsRaw"
                                     >
@@ -31,43 +31,43 @@
                                             placeholder="逗号分隔，如 65001,65002"
                                             :status="validationErrors.providerAsnsRaw ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
                                 <a-form-item label="AFI Flags" name="afiFlags">
-                                    <a-radio-group v-model:value="aspaConfig.afiFlags">
-                                        <a-radio :value="RPKI_ASPA_AFI_FLAGS.IPV4">IPv4</a-radio>
-                                        <a-radio :value="RPKI_ASPA_AFI_FLAGS.IPV6">IPv6</a-radio>
-                                        <a-radio :value="RPKI_ASPA_AFI_FLAGS.BOTH">Both</a-radio>
-                                    </a-radio-group>
+                                    <nn-radio-group v-model:value="aspaConfig.afiFlags">
+                                        <nn-radio :value="RPKI_ASPA_AFI_FLAGS.IPV4">IPv4</nn-radio>
+                                        <nn-radio :value="RPKI_ASPA_AFI_FLAGS.IPV6">IPv6</nn-radio>
+                                        <nn-radio :value="RPKI_ASPA_AFI_FLAGS.BOTH">Both</nn-radio>
+                                    </nn-radio-group>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
+                            </nn-col>
+                        </nn-row>
                         <a-form-item class="rpki-form-actions" :wrapper-col="{ span: 24 }">
-                            <a-space>
-                                <a-button type="primary" html-type="submit" :loading="submitLoading">
+                            <nn-space>
+                                <nn-button type="primary" html-type="submit" :loading="submitLoading">
                                     添加 ASPA
-                                </a-button>
-                                <a-button @click="showAspaImportModal">
+                                </nn-button>
+                                <nn-button @click="showAspaImportModal">
                                     <template #icon><UploadOutlined /></template>
                                     导入JSON
-                                </a-button>
-                                <a-button @click="resetForm">重置</a-button>
-                            </a-space>
+                                </nn-button>
+                                <nn-button @click="resetForm">重置</nn-button>
+                            </nn-space>
                         </a-form-item>
                     </a-form>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
-        <a-row class="adaptive-list-row">
-            <a-col :span="24">
-                <a-card :title="aspaListTitle" class="adaptive-list-card">
+        <nn-row class="adaptive-list-row">
+            <nn-col :span="24">
+                <nn-card :title="aspaListTitle" class="adaptive-list-card">
                     <template #extra>
-                        <a-button
+                        <nn-button
                             class="aspa-delete-all-button"
                             danger
                             :disabled="aspaStorageTotal === 0"
@@ -75,7 +75,7 @@
                             @click="confirmDeleteAllAspa"
                         >
                             批量删除
-                        </a-button>
+                        </nn-button>
                     </template>
                     <a-table
                         :columns="aspaColumns"
@@ -90,23 +90,23 @@
                     >
                         <template #bodyCell="{ column, record }">
                             <template v-if="column.key === 'providerAsns'">
-                                <a-tooltip :title="providerAsnsTooltip(record.providerAsns)">
+                                <nn-tooltip :title="providerAsnsTooltip(record.providerAsns)">
                                     <span class="provider-asns-preview">
                                         {{ formatProviderAsns(record.providerAsns) }}
                                     </span>
-                                </a-tooltip>
+                                </nn-tooltip>
                             </template>
                             <template v-if="column.key === 'afiFlags'">
                                 {{ afiText(record.afiFlags) }}
                             </template>
                             <template v-if="column.key === 'action'">
-                                <a-button type="link" danger @click="deleteAspa(record)">删除</a-button>
+                                <nn-button type="link" danger @click="deleteAspa(record)">删除</nn-button>
                             </template>
                         </template>
                     </a-table>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <RpkiAspaImportModal v-model:open="aspaImportModalVisible" @imported="handleAspaImported" />
     </div>
@@ -114,8 +114,9 @@
 
 <script setup>
     import { computed, ref, onMounted } from 'vue';
-    import { message, Modal } from 'ant-design-vue';
-    import UploadOutlined from '@ant-design/icons-vue/es/icons/UploadOutlined';
+    import { dialog } from '../../utils/dialog';
+    import { notify } from '../../utils/notify';
+    import { UploadOutlined } from '../../ui/icons';
     import RpkiAspaImportModal from '../../components/RpkiAspaImportModal.vue';
     import { FormValidator, createRpkiAspaValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES, RPKI_ASPA_AFI_FLAGS } from '../../const/rpkiConst';
@@ -193,7 +194,7 @@
     const submitAspa = async () => {
         const hasErrors = validator.validate(aspaConfig.value);
         if (hasErrors) {
-            message.error('请检查 ASPA 配置');
+            notify.error('请检查 ASPA 配置');
             return;
         }
         submitLoading.value = true;
@@ -209,13 +210,13 @@
             };
             const result = await window.rpkiApi.addAspa(payload);
             if (result.status === 'success') {
-                message.success(result.msg || 'ASPA 保存成功');
+                notify.success(result.msg || 'ASPA 保存成功');
                 fetchList(aspaPagination.value.current);
             } else {
-                message.error(result.msg || '添加失败');
+                notify.error(result.msg || '添加失败');
             }
         } catch (e) {
-            message.error(`添加出错: ${e.message}`);
+            notify.error(`添加出错: ${e.message}`);
         } finally {
             submitLoading.value = false;
         }
@@ -241,17 +242,17 @@
         try {
             const result = await window.rpkiApi.deleteAspa({ customerAsn: record.customerAsn });
             if (result.status === 'success') {
-                message.success('删除成功');
+                notify.success('删除成功');
                 const nextPage =
                     aspaList.value.length === 1 && aspaPagination.value.current > 1
                         ? aspaPagination.value.current - 1
                         : aspaPagination.value.current;
                 fetchList(nextPage);
             } else {
-                message.error(result.msg || '删除失败');
+                notify.error(result.msg || '删除失败');
             }
         } catch (e) {
-            message.error(`删除出错: ${e.message}`);
+            notify.error(`删除出错: ${e.message}`);
         }
     };
 
@@ -260,20 +261,20 @@
         try {
             const result = await window.rpkiApi.deleteAllAspa();
             if (result.status === 'success') {
-                message.success(`ASPA批量删除成功：删除 ${result.data?.deleted || 0} 条`);
+                notify.success(`ASPA批量删除成功：删除 ${result.data?.deleted || 0} 条`);
                 fetchList(1);
             } else {
-                message.error(result.msg || 'ASPA批量删除失败');
+                notify.error(result.msg || 'ASPA批量删除失败');
             }
         } catch (e) {
-            message.error(`ASPA批量删除出错: ${e.message}`);
+            notify.error(`ASPA批量删除出错: ${e.message}`);
         } finally {
             deleteAllLoading.value = false;
         }
     };
 
     const confirmDeleteAllAspa = () => {
-        Modal.confirm({
+        dialog.confirm({
             title: '确认批量删除ASPA？',
             content: `将删除全部 ${aspaStorageTotal.value} 条 ASPA。RPKI服务运行时会向客户端批量发送撤销报文。`,
             okText: '删除',
@@ -347,7 +348,7 @@
         min-height: 0;
     }
 
-    .adaptive-list-row :deep(.ant-col) {
+    .adaptive-list-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -359,7 +360,7 @@
         overflow: hidden;
     }
 
-    .adaptive-list-card :deep(.ant-card-body) {
+    .adaptive-list-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -381,20 +382,20 @@
     }
 
     .aspa-delete-all-button:disabled,
-    .aspa-delete-all-button.ant-btn-disabled {
-        color: #8c8c8c !important;
-        background: #f0f0f0 !important;
-        border-color: #bfbfbf !important;
+    .aspa-delete-all-button.nn-button-disabled {
+        color: var(--nn-color-text-muted) !important;
+        background: var(--nn-color-bg-disabled) !important;
+        border-color: var(--nn-color-border) !important;
         opacity: 1 !important;
     }
 
     .aspa-delete-all-button:disabled:hover,
-    .aspa-delete-all-button.ant-btn-disabled:hover,
+    .aspa-delete-all-button.nn-button-disabled:hover,
     .aspa-delete-all-button:disabled:focus,
-    .aspa-delete-all-button.ant-btn-disabled:focus {
-        color: #8c8c8c !important;
-        background: #f0f0f0 !important;
-        border-color: #bfbfbf !important;
+    .aspa-delete-all-button.nn-button-disabled:focus {
+        color: var(--nn-color-text-muted) !important;
+        background: var(--nn-color-bg-disabled) !important;
+        border-color: var(--nn-color-border) !important;
     }
 
     .adaptive-table,

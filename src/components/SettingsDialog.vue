@@ -51,12 +51,15 @@
 
 <script setup>
     import { ref, computed, watch } from 'vue';
-    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
-    import CodeOutlined from '@ant-design/icons-vue/es/icons/CodeOutlined';
-    import CloudDownloadOutlined from '@ant-design/icons-vue/es/icons/CloudDownloadOutlined';
-    import DownloadOutlined from '@ant-design/icons-vue/es/icons/DownloadOutlined';
-    import CloudServerOutlined from '@ant-design/icons-vue/es/icons/CloudServerOutlined';
-    import ApiOutlined from '@ant-design/icons-vue/es/icons/ApiOutlined';
+    import {
+        ApiOutlined,
+        CloudDownloadOutlined,
+        CloudServerOutlined,
+        CodeOutlined,
+        DownloadOutlined,
+        SettingOutlined
+    } from '../ui/icons';
+
     import GeneralSettings from '../view/settings/GeneralSettings.vue';
     import ToolsSettings from '../view/settings/ToolsSettings.vue';
     import UpdateSettings from '../view/settings/UpdateSettings.vue';
@@ -164,7 +167,7 @@
     .settings-sidebar {
         flex: 0 0 140px;
         min-height: 0;
-        border-right: 1px solid #f0f0f0;
+        border-right: 1px solid var(--nn-color-border-light);
         overflow: auto;
     }
 
@@ -212,7 +215,7 @@
         overflow: hidden;
     }
 
-    .settings-content :deep(.settings-card > .ant-card-body) {
+    .settings-content :deep(.settings-card > .nn-card-body) {
         flex: 1 1 0;
         min-height: 0;
         overflow: auto;

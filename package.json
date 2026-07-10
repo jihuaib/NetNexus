@@ -202,6 +202,7 @@
     "devDependencies": {
         "@babel/eslint-parser": "^7.23.10",
         "@babel/preset-env": "^7.27.1",
+        "@lucide/vue": "^1.24.0",
         "@playwright/test": "1.44.1",
         "@vitejs/plugin-vue": "^4.2.3",
         "ant-design-vue": "^4.2.6",

@@ -1,11 +1,11 @@
 <template>
     <div class="mt-container adaptive-table-page">
-        <a-card title="NTP请求日志" class="adaptive-table-card">
+        <nn-card title="NTP请求日志" class="adaptive-table-card">
             <template #extra>
-                <a-space>
-                    <a-button :loading="loading" @click="loadRequestList">刷新</a-button>
-                    <a-button danger :loading="clearLoading" @click="clearHistory">清空历史</a-button>
-                </a-space>
+                <nn-space>
+                    <nn-button :loading="loading" @click="loadRequestList">刷新</nn-button>
+                    <nn-button danger :loading="clearLoading" @click="clearHistory">清空历史</nn-button>
+                </nn-space>
             </template>
 
             <a-table
@@ -25,19 +25,19 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'status'">
-                        <a-tag :color="statusColor(record.status)">
+                        <nn-tag :color="statusColor(record.status)">
                             {{ statusText(record.status) }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                 </template>
             </a-table>
-        </a-card>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { NTP_SUB_EVT_TYPES, NTP_EVENT_PAGE_ID, NTP_REQUEST_STATUS } from '../../const/ntpConst';
     import EventBus from '../../utils/eventBus';
 
@@ -95,10 +95,10 @@
             if (result.status === 'success') {
                 requestList.value = result.data || [];
             } else {
-                message.error(result.msg || '获取NTP请求日志失败');
+                notify.error(result.msg || '获取NTP请求日志失败');
             }
         } catch (error) {
-            message.error('获取NTP请求日志失败: ' + error.message);
+            notify.error('获取NTP请求日志失败: ' + error.message);
         } finally {
             loading.value = false;
         }
@@ -110,12 +110,12 @@
             const result = await window.ntpApi.clearRequestHistory();
             if (result.status === 'success') {
                 requestList.value = [];
-                message.success(result.msg || 'NTP请求日志已清空');
+                notify.success(result.msg || 'NTP请求日志已清空');
             } else {
-                message.error(result.msg || '清空NTP请求日志失败');
+                notify.error(result.msg || '清空NTP请求日志失败');
             }
         } catch (error) {
-            message.error('清空NTP请求日志失败: ' + error.message);
+            notify.error('清空NTP请求日志失败: ' + error.message);
         } finally {
             clearLoading.value = false;
         }
@@ -160,7 +160,7 @@
         overflow: hidden;
     }
 
-    .adaptive-table-card :deep(.ant-card-body) {
+    .adaptive-table-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         min-width: 0;

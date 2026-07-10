@@ -1,45 +1,45 @@
 <template>
     <div class="mt-container port-monitor-page">
         <!-- 配置面板 -->
-        <a-card title="端口监听配置" class="port-config-card">
+        <nn-card title="端口监听配置" class="port-config-card">
             <a-form :label-col="labelCol" :wrapper-col="wrapperCol">
                 <a-form-item label="刷新间隔">
-                    <a-space>
-                        <a-switch v-model:checked="autoRefresh" @change="handleAutoRefreshChange" />
+                    <nn-space>
+                        <nn-switch v-model:checked="autoRefresh" @change="handleAutoRefreshChange" />
                         <a-select v-model:value="refreshInterval" :disabled="!autoRefresh" style="width: 120px">
                             <a-select-option :value="3000">3 秒</a-select-option>
                             <a-select-option :value="5000">5 秒</a-select-option>
                             <a-select-option :value="10000">10 秒</a-select-option>
                             <a-select-option :value="30000">30 秒</a-select-option>
                         </a-select>
-                    </a-space>
+                    </nn-space>
                 </a-form-item>
                 <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                    <a-space>
-                        <a-button type="primary" :loading="isLoading" @click="loadPorts">
+                    <nn-space>
+                        <nn-button type="primary" :loading="isLoading" @click="loadPorts">
                             <template #icon>
                                 <ReloadOutlined />
                             </template>
                             刷新
-                        </a-button>
-                        <a-button @click="clearFilter">清空筛选</a-button>
-                    </a-space>
+                        </nn-button>
+                        <nn-button @click="clearFilter">清空筛选</nn-button>
+                    </nn-space>
                 </a-form-item>
             </a-form>
-        </a-card>
+        </nn-card>
 
         <!-- 端口列表 -->
-        <a-card title="端口连接列表" class="port-list-card">
+        <nn-card title="端口连接列表" class="port-list-card">
             <template #extra>
-                <a-space>
+                <nn-space>
                     <a-input-search
                         v-model:value="searchText"
                         placeholder="搜索端口、地址、进程名或PID"
                         style="width: 250px"
                         @search="handleSearch"
                     />
-                    <a-tag color="blue">共 {{ filteredPorts.length }} 个端口</a-tag>
-                </a-space>
+                    <nn-tag color="blue">共 {{ filteredPorts.length }} 个端口</nn-tag>
+                </nn-space>
             </template>
 
             <a-table
@@ -59,12 +59,12 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'protocol'">
-                        <a-tag :color="record.protocol === 'TCP' ? 'blue' : 'green'">
+                        <nn-tag :color="record.protocol === 'TCP' ? 'blue' : 'green'">
                             {{ record.protocol }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                     <template v-else-if="column.key === 'state'">
-                        <a-tag
+                        <nn-tag
                             :color="
                                 record.state === 'LISTENING'
                                     ? 'success'
@@ -74,13 +74,13 @@
                             "
                         >
                             {{ record.state }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                     <template v-else-if="column.key === 'port'">
-                        <a-tag color="orange">{{ record.port }}</a-tag>
+                        <nn-tag color="orange">{{ record.port }}</nn-tag>
                     </template>
                     <template v-else-if="column.key === 'action'">
-                        <a-button
+                        <nn-button
                             v-if="record.pid && record.pid !== '-'"
                             type="link"
                             danger
@@ -88,19 +88,19 @@
                             @click="handleKillProcess(record)"
                         >
                             关闭
-                        </a-button>
+                        </nn-button>
                     </template>
                 </template>
             </a-table>
-        </a-card>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { ref, computed, onActivated, onDeactivated } from 'vue';
-    import { message, Modal } from 'ant-design-vue';
-    import ReloadOutlined from '@ant-design/icons-vue/es/icons/ReloadOutlined';
-
+    import { dialog } from '../../utils/dialog';
+    import { notify } from '../../utils/notify';
+    import { ReloadOutlined } from '../../ui/icons';
     defineOptions({
         name: 'PortMonitor'
     });
@@ -223,7 +223,7 @@
     // 加载端口信息
     async function loadPorts() {
         if (!window.nativeApi) {
-            message.error('端口监听API不可用');
+            notify.error('端口监听API不可用');
             return;
         }
 
@@ -238,13 +238,13 @@
                     ...port,
                     key: `${port.protocol}-${port.address}-${port.port}-${index}`
                 }));
-                message.success(`成功获取 ${ports.value.length} 个连接`);
+                notify.success(`成功获取 ${ports.value.length} 个连接`);
             } else {
-                message.error(`获取端口失败: ${response.msg}`);
+                notify.error(`获取端口失败: ${response.msg}`);
                 ports.value = [];
             }
         } catch (err) {
-            message.error(`获取端口失败: ${err.message}`);
+            notify.error(`获取端口失败: ${err.message}`);
             ports.value = [];
         } finally {
             isLoading.value = false;
@@ -301,7 +301,7 @@
         }
 
         // 确认对话框
-        Modal.confirm({
+        dialog.confirm({
             title: isCritical ? '⚠️ 关闭关键进程' : '确认关闭进程',
             content: content,
             okText: '确定',
@@ -309,7 +309,7 @@
             cancelText: '取消',
             async onOk() {
                 if (!window.nativeApi) {
-                    message.error('进程管理API不可用');
+                    notify.error('进程管理API不可用');
                     return;
                 }
 
@@ -317,16 +317,16 @@
                     const response = await window.nativeApi.killProcess(pid);
 
                     if (response.status === 'success') {
-                        message.success(response.msg || `成功关闭进程 ${pid}`);
+                        notify.success(response.msg || `成功关闭进程 ${pid}`);
                         // 刷新端口列表
                         setTimeout(() => {
                             loadPorts();
                         }, 500);
                     } else {
-                        message.error(response.msg || '关闭进程失败');
+                        notify.error(response.msg || '关闭进程失败');
                     }
                 } catch (err) {
-                    message.error(`关闭进程失败: ${err.message}`);
+                    notify.error(`关闭进程失败: ${err.message}`);
                 }
             }
         });
@@ -362,7 +362,7 @@
         overflow: hidden;
     }
 
-    .port-list-card :deep(.ant-card-body) {
+    .port-list-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;

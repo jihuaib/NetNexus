@@ -1,16 +1,16 @@
 <template>
     <div class="mt-container bmp-full-page" data-testid="bmp-loc-rib-page">
-        <a-row class="bmp-full-row">
-            <a-col :span="24">
-                <a-card title="BGP Loc-RIB" class="bmp-full-card">
+        <nn-row class="bmp-full-row">
+            <nn-col :span="24">
+                <nn-card title="BGP Loc-RIB" class="bmp-full-card">
                     <div v-if="clientList.length > 0" class="bmp-tabs-shell">
-                        <a-tabs
+                        <nn-tabs
                             v-model:active-key="activeClientKey"
                             tab-position="left"
                             class="client-tabs"
                             :tab-bar-style="clientTabBarStyle"
                         >
-                            <a-tab-pane
+                            <nn-tab-pane
                                 v-for="client in clientList"
                                 :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
                             >
@@ -18,8 +18,8 @@
                                     <span class="client-tab-label">{{ formatClientTab(client) }}</span>
                                 </template>
                                 <div v-if="bgpInstances.length > 0" class="bmp-inner-tabs-shell">
-                                    <a-tabs v-model:active-key="activeInstanceKey" class="bmp-inner-tabs">
-                                        <a-tab-pane
+                                    <nn-tabs v-model:active-key="activeInstanceKey" class="bmp-inner-tabs">
+                                        <nn-tab-pane
                                             v-for="instance in bgpInstances"
                                             :key="`${instance.instanceType}|${instance.instanceRd}|${instance.addrFamilyType}`"
                                             :tab="`${formatVrfTableName(instance)} | ${ADDRESS_FAMILY_NAME[instance.addrFamilyType]}`"
@@ -37,15 +37,15 @@
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'addPath'">
-                                                        <a-tag v-if="record.isAddPath" color="green">Yes</a-tag>
-                                                        <a-tag v-else color="red">No</a-tag>
+                                                        <nn-tag v-if="record.isAddPath" color="green">Yes</nn-tag>
+                                                        <nn-tag v-else color="red">No</nn-tag>
                                                     </template>
                                                     <template v-else-if="column.key === 'instanceFlags'">
-                                                        <a-tooltip :title="getBmpLocRibFlagsName(record.instanceFlags)">
+                                                        <nn-tooltip :title="getBmpLocRibFlagsName(record.instanceFlags)">
                                                             <span>
                                                                 {{ getBmpLocRibFlagsName(record.instanceFlags) }}
                                                             </span>
-                                                        </a-tooltip>
+                                                        </nn-tooltip>
                                                     </template>
                                                     <template v-else-if="column.key === 'rawInstanceFlags'">
                                                         <span>{{ formatRawFlags(record.rawInstanceFlags) }}</span>
@@ -54,29 +54,29 @@
                                                         <span>{{ getInstanceTlvCount(record) }}</span>
                                                     </template>
                                                     <template v-else-if="column.key === 'action'">
-                                                        <a-button
+                                                        <nn-button
                                                             type="link"
                                                             size="small"
                                                             @click="viewInstanceDetails(record)"
                                                         >
                                                             详情
-                                                        </a-button>
+                                                        </nn-button>
                                                     </template>
                                                 </template>
                                             </a-table>
                                             <div class="route-toolbar">
                                                 <div class="route-toolbar-query">
-                                                    <a-radio-group v-model:value="routeStateFilter" size="small">
-                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
+                                                    <nn-radio-group v-model:value="routeStateFilter" size="small">
+                                                        <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
                                                             当前
-                                                        </a-radio-button>
-                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
+                                                        </nn-radio-button>
+                                                        <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
                                                             全部
-                                                        </a-radio-button>
-                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
+                                                        </nn-radio-button>
+                                                        <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
                                                             过期
-                                                        </a-radio-button>
-                                                    </a-radio-group>
+                                                        </nn-radio-button>
+                                                    </nn-radio-group>
                                                     <a-input
                                                         v-model:value="routePrefixFilter"
                                                         allow-clear
@@ -84,20 +84,20 @@
                                                         style="width: 220px"
                                                         @press-enter="searchInstanceRoutes"
                                                     />
-                                                    <a-button type="primary" @click="searchInstanceRoutes">
+                                                    <nn-button type="primary" @click="searchInstanceRoutes">
                                                         查询
-                                                    </a-button>
+                                                    </nn-button>
                                                 </div>
                                                 <div class="route-toolbar-status">
-                                                    <a-tag color="green">当前 {{ routeSummary.active }}</a-tag>
-                                                    <a-tag color="orange">过期 {{ routeSummary.stale }}</a-tag>
-                                                    <a-button
+                                                    <nn-tag color="green">当前 {{ routeSummary.active }}</nn-tag>
+                                                    <nn-tag color="orange">过期 {{ routeSummary.stale }}</nn-tag>
+                                                    <nn-button
                                                         danger
                                                         :disabled="routeSummary.stale === 0"
                                                         @click="purgeStaleInstanceRoutes"
                                                     >
                                                         清理过期
-                                                    </a-button>
+                                                    </nn-button>
                                                 </div>
                                             </div>
                                             <a-table
@@ -119,38 +119,38 @@
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
-                                                        <a-space size="small">
-                                                            <a-tooltip title="查询路由detail">
-                                                                <a-button
+                                                        <nn-space size="small">
+                                                            <nn-tooltip title="查询路由detail">
+                                                                <nn-button
                                                                     type="text"
                                                                     size="small"
                                                                     @click="viewRouteDetailJson(record)"
                                                                 >
                                                                     <template #icon><ProfileOutlined /></template>
-                                                                </a-button>
-                                                            </a-tooltip>
-                                                        </a-space>
+                                                                </nn-button>
+                                                            </nn-tooltip>
+                                                        </nn-space>
                                                     </template>
                                                     <template v-else-if="column.key === 'parseStatus'">
-                                                        <a-tag :color="getRouteParseStatusColor(record.parseStatus)">
+                                                        <nn-tag :color="getRouteParseStatusColor(record.parseStatus)">
                                                             {{ getRouteParseStatusText(record.parseStatus) }}
-                                                        </a-tag>
+                                                        </nn-tag>
                                                     </template>
                                                 </template>
                                             </a-table>
-                                        </a-tab-pane>
-                                    </a-tabs>
+                                        </nn-tab-pane>
+                                    </nn-tabs>
                                 </div>
-                            </a-tab-pane>
-                        </a-tabs>
+                            </nn-tab-pane>
+                        </nn-tabs>
                     </div>
 
                     <div v-else class="no-result-message">
-                        <a-empty description="暂无数据" />
+                        <nn-empty description="暂无数据" />
                     </div>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <a-drawer
             v-model:open="detailsDrawerVisible"
@@ -168,8 +168,8 @@
 
 <script setup>
     import { ref, onActivated, watch, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
-    import ProfileOutlined from '@ant-design/icons-vue/es/icons/ProfileOutlined';
+    import { notify } from '../../utils/notify';
+    import { ProfileOutlined } from '../../ui/icons';
     import {
         BMP_SESSION_TYPE_NAME,
         BMP_SESSION_STATE_NAME,
@@ -407,7 +407,7 @@
                 activeClientKey.value = `${clientList.value[0].localIp}|${clientList.value[0].localPort}|${clientList.value[0].remoteIp}|${clientList.value[0].remotePort}`;
             }
         } else {
-            message.error('客户端列表获取失败');
+            notify.error('客户端列表获取失败');
         }
     };
 
@@ -424,7 +424,7 @@
             }
         } catch (error) {
             console.error(error);
-            message.error('加载数据失败');
+            notify.error('加载数据失败');
         }
     };
 
@@ -487,7 +487,7 @@
         } catch (error) {
             console.error(error);
             bgpInstances.value = [];
-            message.error('Load BMP instances failed');
+            notify.error('Load BMP instances failed');
         }
     };
 
@@ -532,7 +532,7 @@
             }
         } catch (e) {
             console.error(e);
-            message.error('Load instance routes failed');
+            notify.error('Load instance routes failed');
         }
     };
 
@@ -551,15 +551,15 @@
         try {
             const res = await window.bmpApi.purgeStaleBgpInstanceRoutes(client, instance);
             if (res.status === 'success') {
-                message.success(`已清理 ${res.data?.deleted || 0} 条过期路由`);
+                notify.success(`已清理 ${res.data?.deleted || 0} 条过期路由`);
                 bgpRoutePagination.value.current = 1;
                 loadInstanceRoutes();
             } else {
-                message.error('清理过期路由失败');
+                notify.error('清理过期路由失败');
             }
         } catch (e) {
             console.error(e);
-            message.error('清理过期路由失败');
+            notify.error('清理过期路由失败');
         }
     };
 
@@ -594,12 +594,12 @@
                 currentDetails.value = res.data;
             } else {
                 currentDetails.value = record;
-                message.error('查询路由detail失败');
+                notify.error('查询路由detail失败');
             }
         } catch (error) {
             console.error(error);
             currentDetails.value = record;
-            message.error('查询路由detail失败');
+            notify.error('查询路由detail失败');
         }
     };
 
@@ -701,7 +701,7 @@
     }
 
     .bmp-full-row,
-    .bmp-full-row :deep(.ant-col) {
+    .bmp-full-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -713,7 +713,7 @@
         overflow: hidden;
     }
 
-    .bmp-full-card :deep(.ant-card-body) {
+    .bmp-full-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         min-width: 0;
@@ -749,12 +749,12 @@
         overflow: hidden;
     }
 
-    .client-tabs :deep(.ant-tabs-content-holder),
-    .client-tabs :deep(.ant-tabs-content),
-    .client-tabs :deep(.ant-tabs-tabpane),
-    .bmp-inner-tabs :deep(.ant-tabs-content-holder),
-    .bmp-inner-tabs :deep(.ant-tabs-content),
-    .bmp-inner-tabs :deep(.ant-tabs-tabpane) {
+    .client-tabs :deep(.nn-tabs-content-holder),
+    .client-tabs :deep(.nn-tabs-content),
+    .client-tabs :deep(.nn-tabs-tabpane),
+    .bmp-inner-tabs :deep(.nn-tabs-content-holder),
+    .bmp-inner-tabs :deep(.nn-tabs-content),
+    .bmp-inner-tabs :deep(.nn-tabs-tabpane) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
@@ -764,26 +764,22 @@
         overflow: hidden;
     }
 
-    .bmp-inner-tabs :deep(.ant-tabs-nav) {
+    .bmp-inner-tabs :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin-bottom: 8px;
     }
 
-    .bmp-inner-tabs :deep(.ant-tabs-tab) {
+    .bmp-inner-tabs :deep(.nn-tabs-tab) {
         padding: 8px 0 !important;
     }
 
-    .bmp-inner-tabs :deep(.ant-tabs-tab + .ant-tabs-tab) {
-        margin-left: 16px !important;
-    }
-
-    .client-tabs :deep(.ant-tabs-tab) {
+    .client-tabs :deep(.nn-tabs-tab) {
         justify-content: flex-start;
         padding: 8px;
         text-align: left;
     }
 
-    .client-tabs :deep(.ant-tabs-tab-btn) {
+    .client-tabs :deep(.nn-tabs-tab-button) {
         width: 100%;
     }
 
@@ -815,7 +811,7 @@
         margin-left: auto;
     }
 
-    .route-toolbar-status :deep(.ant-tag) {
+    .route-toolbar-status :deep(.nn-tag) {
         margin-inline-end: 0;
     }
 
@@ -825,7 +821,7 @@
         gap: 8px;
         margin-bottom: 8px;
         padding: 8px;
-        background-color: #f5f5f5;
+        background-color: var(--nn-color-bg-muted);
         border-radius: 4px;
     }
 
@@ -840,21 +836,21 @@
         align-items: center;
         height: 100%;
         width: 100%;
-        color: #999;
+        color: var(--nn-color-text-muted);
         overflow: auto;
     }
 
     :deep(.route-stale-row) {
-        color: #8c6d1f;
-        background-color: #fffbe6;
+        color: var(--nn-color-text-stale);
+        background-color: var(--nn-color-bg-stale);
     }
 
     :deep(.route-parse-warning-row) {
-        background-color: #fff7e6;
+        background-color: var(--nn-color-bg-warning-subtle);
     }
 
     :deep(.route-parse-error-row) {
-        background-color: #fff1f0;
+        background-color: var(--nn-color-bg-danger-subtle);
     }
 
     .detail-table {

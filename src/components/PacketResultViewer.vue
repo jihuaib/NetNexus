@@ -9,13 +9,13 @@
     >
         <div class="packet-result-viewer">
             <div class="result-summary">
-                <a-space size="small" wrap>
-                    <a-tag color="blue">总长度 {{ hexBuffer.length }} bytes</a-tag>
-                    <a-tag v-if="selectedNode" color="red">
+                <nn-space size="small" wrap>
+                    <nn-tag color="blue">总长度 {{ hexBuffer.length }} bytes</nn-tag>
+                    <nn-tag v-if="selectedNode" color="red">
                         选中 {{ formatOffset(selectedNode.offset) }} +{{ selectedNode.length }}
-                    </a-tag>
-                    <a-tag v-else>未选择字段</a-tag>
-                </a-space>
+                    </nn-tag>
+                    <nn-tag v-else>未选择字段</nn-tag>
+                </nn-space>
                 <div v-if="selectedNode && selectedNode.value" class="selected-value">
                     {{ selectedNode.name }}: {{ selectedNode.value }}
                 </div>
@@ -28,7 +28,7 @@
                         <span class="panel-title">报文详情</span>
                         <div class="panel-actions">
                             <span class="panel-subtitle">Packet Details</span>
-                            <a-button
+                            <nn-button
                                 type="link"
                                 size="small"
                                 class="copy-tree-button"
@@ -36,7 +36,7 @@
                                 @click="copyTreeText"
                             >
                                 复制
-                            </a-button>
+                            </nn-button>
                         </div>
                     </div>
                     <div
@@ -106,7 +106,7 @@
 
 <script setup>
     import { ref, computed, nextTick, watch } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../utils/notify';
 
     defineOptions({
         name: 'PacketResultViewer'
@@ -262,16 +262,16 @@
 
     const copyTreeText = async () => {
         if (!treeCopyText.value) {
-            message.warning('暂无可复制的解析树');
+            notify.warning('暂无可复制的解析树');
             return;
         }
 
         try {
             await writeClipboardText(treeCopyText.value);
-            message.success('解析树已复制');
+            notify.success('解析树已复制');
         } catch (error) {
             console.error('复制解析树失败:', error);
-            message.error('复制失败');
+            notify.error('复制失败');
         }
     };
 
@@ -601,7 +601,7 @@
         min-width: 0;
         max-width: 62%;
         overflow: hidden;
-        color: #444;
+        color: var(--nn-color-text-secondary);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 12px;
         text-overflow: ellipsis;
@@ -623,9 +623,9 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
-        border: 1px solid #e8e8e8;
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
-        background: #fff;
+        background: var(--nn-color-bg-surface);
     }
 
     .panel-header {
@@ -635,18 +635,18 @@
         justify-content: space-between;
         height: 36px;
         padding: 0 12px;
-        border-bottom: 1px solid #f0f0f0;
-        background: #fafafa;
+        border-bottom: 1px solid var(--nn-color-border-light);
+        background: var(--nn-color-bg-subtle);
     }
 
     .panel-title {
-        color: #222;
+        color: var(--nn-color-text);
         font-size: 13px;
         font-weight: 600;
     }
 
     .panel-subtitle {
-        color: #888;
+        color: var(--nn-color-text-muted);
         font-size: 12px;
     }
 
@@ -671,7 +671,7 @@
         white-space: nowrap;
         font-size: 12px;
         overflow: auto;
-        background-color: #fcfcfc;
+        background-color: var(--nn-color-bg-subtle);
     }
 
     .hex-table-header {
@@ -682,9 +682,9 @@
         align-items: center;
         min-width: max-content;
         padding: 6px 8px;
-        border-bottom: 1px solid #e8e8e8;
-        background: #f5f5f5;
-        color: #666;
+        border-bottom: 1px solid var(--nn-color-border-light);
+        background: var(--nn-color-bg-muted);
+        color: var(--nn-color-text-secondary);
         font-weight: 600;
     }
 
@@ -693,17 +693,17 @@
         align-items: center;
         min-width: max-content;
         padding: 3px 8px;
-        border-bottom: 1px solid #f5f5f5;
+        border-bottom: 1px solid var(--nn-color-border-light);
     }
 
     .hex-data-row:hover {
-        background-color: #f7fbff;
+        background-color: var(--nn-color-bg-hover);
     }
 
     .offset-col {
         width: 78px;
         flex-shrink: 0;
-        color: #666;
+        color: var(--nn-color-text-secondary);
         font-weight: 500;
     }
 
@@ -718,7 +718,7 @@
         width: 154px;
         flex: 0 0 auto;
         display: flex;
-        border-left: 1px solid #eee;
+        border-left: 1px solid var(--nn-color-border-light);
         padding-left: 10px;
     }
 
@@ -730,7 +730,7 @@
     }
 
     .header-byte {
-        color: #666;
+        color: var(--nn-color-text-secondary);
         font-weight: 600;
     }
 
@@ -742,10 +742,10 @@
     }
 
     .highlighted {
-        background: #fff1f0;
-        color: #cf1322;
+        background: var(--nn-color-bg-danger-subtle);
+        color: var(--nn-color-error);
         font-weight: bold;
-        outline: 1px solid #ffa39e;
+        outline: 1px solid var(--nn-color-border-danger);
     }
 
     .clickable {
@@ -753,7 +753,7 @@
     }
 
     .clickable:hover {
-        background-color: #e6f7ff;
+        background-color: var(--nn-color-bg-selected);
     }
 
     .tree-view-panel {
@@ -766,7 +766,7 @@
         align-items: center;
         height: 100%;
         width: 100%;
-        color: #999;
+        color: var(--nn-color-text-placeholder);
     }
 
     /* 树结构区域字体样式 */
@@ -776,14 +776,14 @@
         padding: 4px 6px 8px;
         overflow: auto;
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        background: #fff;
+        background: var(--nn-color-bg-surface);
     }
 
     .packet-tree {
         width: max-content;
         min-width: 100%;
         font-size: 12px;
-        background: #fff;
+        background: var(--nn-color-bg-surface);
     }
 
     .packet-tree :deep(.ant-tree-node-content-wrapper) {
@@ -794,7 +794,7 @@
     }
 
     .packet-tree :deep(.ant-tree-node-content-wrapper:hover) {
-        background: #e6f4ff;
+        background: var(--nn-color-bg-hover);
     }
 
     .packet-tree :deep(.ant-tree-title) {
@@ -804,7 +804,7 @@
 
     .tree-node-title {
         display: block;
-        color: #1f1f1f;
+        color: var(--nn-color-text);
         line-height: 22px;
         overflow-wrap: normal;
         white-space: nowrap;
@@ -813,15 +813,15 @@
 
     /* 设置树节点选中的颜色 */
     :deep(.ant-tree-node-selected) {
-        background-color: #fff1f0 !important;
+        background-color: var(--nn-color-bg-danger-subtle) !important;
     }
 
     :deep(.ant-tree-node-content-wrapper.ant-tree-node-selected) {
-        background-color: #fff1f0 !important;
+        background-color: var(--nn-color-bg-danger-subtle) !important;
     }
 
     :deep(.ant-tree-node-content-wrapper.ant-tree-node-selected .ant-tree-title) {
-        color: #cf1322;
+        color: var(--nn-color-error);
     }
 
     @media (max-width: 1100px) {

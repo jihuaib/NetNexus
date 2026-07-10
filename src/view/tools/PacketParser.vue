@@ -1,6 +1,6 @@
 <template>
     <div class="mt-container packet-parser-page">
-        <a-card title="报文解析器" class="packet-parser-card">
+        <nn-card title="报文解析器" class="packet-parser-card">
             <a-form :model="formState" layout="vertical" class="packet-parser-form" @finish="handleParsePacket">
                 <div class="packet-config-grid">
                     <a-form-item label="解析起始层" name="startLayer" class="packet-config-item">
@@ -37,13 +37,13 @@
                         name="protocolPort"
                         class="packet-config-item packet-config-item-narrow"
                     >
-                        <a-tooltip :title="validationErrors.protocolPort" :open="!!validationErrors.protocolPort">
+                        <nn-tooltip :title="validationErrors.protocolPort" :open="!!validationErrors.protocolPort">
                             <a-input
                                 v-model:value="formState.protocolPort"
                                 placeholder="可选"
                                 :status="validationErrors.protocolPort ? 'error' : ''"
                             />
-                        </a-tooltip>
+                        </nn-tooltip>
                     </a-form-item>
                 </div>
 
@@ -66,13 +66,13 @@
                 </a-form-item>
                 <!-- 操作按钮 -->
                 <div class="packet-action-bar">
-                    <a-space>
-                        <a-button type="primary" html-type="submit">解析报文</a-button>
-                        <a-button type="default" @click="showParseHistory">识别历史</a-button>
-                    </a-space>
+                    <nn-space>
+                        <nn-button type="primary" html-type="submit">解析报文</nn-button>
+                        <nn-button type="default" @click="showParseHistory">识别历史</nn-button>
+                    </nn-space>
                 </div>
             </a-form>
-        </a-card>
+        </nn-card>
     </div>
 
     <!-- 报文结果查看器弹窗 -->
@@ -105,7 +105,7 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'action'">
-                        <a-button type="link" @click="loadHistoryItem(record)">使用</a-button>
+                        <nn-button type="link" @click="loadHistoryItem(record)">使用</nn-button>
                     </template>
                     <template v-else-if="column.key === 'packetData'">
                         <div>{{ truncateString(record.packetData, 40) }}</div>
@@ -114,8 +114,8 @@
             </a-table>
         </div>
         <template #footer>
-            <a-button type="primary" @click="closeHistoryModal">关闭</a-button>
-            <a-button v-if="parseHistory.length > 0" danger @click="clearHistory">清空历史</a-button>
+            <nn-button type="primary" @click="closeHistoryModal">关闭</nn-button>
+            <nn-button v-if="parseHistory.length > 0" danger @click="clearHistory">清空历史</nn-button>
         </template>
     </a-modal>
 </template>
@@ -124,7 +124,7 @@
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
     import PacketResultViewer from '../../components/PacketResultViewer.vue';
     import { ref, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { FormValidator, createPacketDataValidationRules } from '../../utils/validationCommon';
     import {
         PROTOCOL_TYPE,
@@ -219,10 +219,10 @@
                 parseHistory.value = resp.data || [];
                 historyModalVisible.value = true;
             } else {
-                message.error(resp.msg || '获取历史记录失败');
+                notify.error(resp.msg || '获取历史记录失败');
             }
         } catch (e) {
-            message.error(e.message || String(e));
+            notify.error(e.message || String(e));
             console.error('获取历史记录错误:', e);
         }
     };
@@ -260,12 +260,12 @@
             const resp = await window.toolsApi.clearPacketParserHistory();
             if (resp.status === 'success') {
                 parseHistory.value = [];
-                message.success('历史记录已清空');
+                notify.success('历史记录已清空');
             } else {
-                message.error(resp.msg || '清空历史记录失败');
+                notify.error(resp.msg || '清空历史记录失败');
             }
         } catch (e) {
-            message.error(e.message || String(e));
+            notify.error(e.message || String(e));
             console.error('清空历史记录错误:', e);
         }
     };
@@ -278,7 +278,7 @@
         try {
             const hasError = validator.validate(formState.value);
             if (hasError) {
-                message.error('请检查配置信息是否正确');
+                notify.error('请检查配置信息是否正确');
                 return;
             }
 
@@ -297,14 +297,14 @@
 
             if (resp.status === 'success') {
                 rawParseResult.value = resp.data;
-                message.success('报文解析成功');
+                notify.success('报文解析成功');
                 showResultViewer();
             } else {
-                message.error(resp.msg || '解析失败');
+                notify.error(resp.msg || '解析失败');
                 rawParseResult.value = null;
             }
         } catch (e) {
-            message.error(e.message || String(e));
+            notify.error(e.message || String(e));
             console.error('解析错误:', e);
             rawParseResult.value = null;
         }
@@ -336,7 +336,7 @@
         overflow: hidden;
     }
 
-    .packet-parser-card :deep(.ant-card-body) {
+    .packet-parser-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -441,8 +441,8 @@
             justify-content: stretch;
         }
 
-        .packet-action-bar :deep(.ant-space),
-        .packet-action-bar :deep(.ant-btn) {
+        .packet-action-bar :deep(.nn-space),
+        .packet-action-bar :deep(.nn-button) {
             width: 100%;
         }
     }

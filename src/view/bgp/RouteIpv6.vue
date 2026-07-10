@@ -1,61 +1,61 @@
 <template>
     <div class="mt-container bgp-route-page">
-        <a-card title="IPv6-UNC路由配置" class="bgp-route-card">
+        <nn-card title="IPv6-UNC路由配置" class="bgp-route-card">
             <a-form :model="ipv6Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <div class="config-section">
                     <div class="section-title">基础配置</div>
-                    <a-row :gutter="[16, 0]">
-                        <a-col :xs="24" :md="6">
+                    <nn-row :gutter="[16, 0]">
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="Prefix" name="prefix">
-                                <a-tooltip :title="validationErrors.prefix" :open="!!validationErrors.prefix">
+                                <nn-tooltip :title="validationErrors.prefix" :open="!!validationErrors.prefix">
                                     <a-input
                                         v-model:value="ipv6Data.prefix"
                                         :status="validationErrors.prefix ? 'error' : ''"
                                     />
-                                </a-tooltip>
+                                </nn-tooltip>
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="Mask" name="mask">
-                                <a-tooltip :title="validationErrors.mask" :open="!!validationErrors.mask">
+                                <nn-tooltip :title="validationErrors.mask" :open="!!validationErrors.mask">
                                     <a-input
                                         v-model:value="ipv6Data.mask"
                                         :status="validationErrors.mask ? 'error' : ''"
                                     />
-                                </a-tooltip>
+                                </nn-tooltip>
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="Count" name="count">
-                                <a-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
+                                <nn-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
                                     <a-input
                                         v-model:value="ipv6Data.count"
                                         :status="validationErrors.count ? 'error' : ''"
                                     />
-                                </a-tooltip>
+                                </nn-tooltip>
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="RT" name="rt">
-                                <a-tooltip :title="validationErrors.rt" :open="!!validationErrors.rt">
+                                <nn-tooltip :title="validationErrors.rt" :open="!!validationErrors.rt">
                                     <a-input v-model:value="ipv6Data.rt" :status="validationErrors.rt ? 'error' : ''" />
-                                </a-tooltip>
+                                </nn-tooltip>
                             </a-form-item>
-                        </a-col>
-                    </a-row>
+                        </nn-col>
+                    </nn-row>
                 </div>
 
                 <div class="config-section">
                     <div class="section-title">ADD-PATH</div>
-                    <a-row :gutter="[16, 0]">
-                        <a-col :xs="24" :md="6">
+                    <nn-row :gutter="[16, 0]">
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="生成" name="addPathEnabled">
-                                <a-switch v-model:checked="ipv6Data.addPathEnabled" />
+                                <nn-switch v-model:checked="ipv6Data.addPathEnabled" />
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="Path Count" name="addPathCount">
-                                <a-tooltip
+                                <nn-tooltip
                                     :title="validationErrors.addPathCount"
                                     :open="!!validationErrors.addPathCount"
                                 >
@@ -64,48 +64,48 @@
                                         :disabled="!ipv6Data.addPathEnabled"
                                         :status="validationErrors.addPathCount ? 'error' : ''"
                                     />
-                                </a-tooltip>
+                                </nn-tooltip>
                             </a-form-item>
-                        </a-col>
-                    </a-row>
+                        </nn-col>
+                    </nn-row>
                 </div>
 
                 <div class="config-section">
                     <div class="section-title">SRv6</div>
-                    <a-row :gutter="[16, 0]">
-                        <a-col :xs="24" :md="6">
+                    <nn-row :gutter="[16, 0]">
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="发送SID" name="srv6Enabled">
-                                <a-switch v-model:checked="ipv6Data.srv6Enabled" />
+                                <nn-switch v-model:checked="ipv6Data.srv6Enabled" />
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="SID模式" name="srv6SidMode">
-                                <a-tooltip :title="validationErrors.srv6SidMode" :open="!!validationErrors.srv6SidMode">
-                                    <a-radio-group
+                                <nn-tooltip :title="validationErrors.srv6SidMode" :open="!!validationErrors.srv6SidMode">
+                                    <nn-radio-group
                                         v-model:value="ipv6Data.srv6SidMode"
                                         class="inline-radio-group"
                                         :disabled="!ipv6Data.srv6Enabled"
                                     >
-                                        <a-radio :value="BGP_SRV6_SID_MODE.FIXED">固定</a-radio>
-                                        <a-radio :value="BGP_SRV6_SID_MODE.INCREMENT">递增</a-radio>
-                                    </a-radio-group>
-                                </a-tooltip>
+                                        <nn-radio :value="BGP_SRV6_SID_MODE.FIXED">固定</nn-radio>
+                                        <nn-radio :value="BGP_SRV6_SID_MODE.INCREMENT">递增</nn-radio>
+                                    </nn-radio-group>
+                                </nn-tooltip>
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="8">
+                        </nn-col>
+                        <nn-col :xs="24" :md="8">
                             <a-form-item label="SID" name="srv6Sid">
-                                <a-tooltip :title="validationErrors.srv6Sid" :open="!!validationErrors.srv6Sid">
+                                <nn-tooltip :title="validationErrors.srv6Sid" :open="!!validationErrors.srv6Sid">
                                     <a-input
                                         v-model:value="ipv6Data.srv6Sid"
                                         :disabled="!ipv6Data.srv6Enabled"
                                         :status="validationErrors.srv6Sid ? 'error' : ''"
                                     />
-                                </a-tooltip>
+                                </nn-tooltip>
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="SID Step" name="srv6SidStep">
-                                <a-tooltip :title="validationErrors.srv6SidStep" :open="!!validationErrors.srv6SidStep">
+                                <nn-tooltip :title="validationErrors.srv6SidStep" :open="!!validationErrors.srv6SidStep">
                                     <a-input
                                         v-model:value="ipv6Data.srv6SidStep"
                                         :disabled="
@@ -114,12 +114,12 @@
                                         "
                                         :status="validationErrors.srv6SidStep ? 'error' : ''"
                                     />
-                                </a-tooltip>
+                                </nn-tooltip>
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
                             <a-form-item label="Endpoint" name="srv6EndpointBehavior">
-                                <a-tooltip
+                                <nn-tooltip
                                     :title="validationErrors.srv6EndpointBehavior"
                                     :open="!!validationErrors.srv6EndpointBehavior"
                                 >
@@ -129,34 +129,34 @@
                                         :disabled="!ipv6Data.srv6Enabled"
                                         :status="validationErrors.srv6EndpointBehavior ? 'error' : ''"
                                     />
-                                </a-tooltip>
+                                </nn-tooltip>
                             </a-form-item>
-                        </a-col>
-                    </a-row>
+                        </nn-col>
+                    </nn-row>
                 </div>
 
                 <div class="action-row">
-                    <a-button class="custom-attr-button" type="link" @click="showCustomRouteAttr">
+                    <nn-button class="custom-attr-button" type="link" @click="showCustomRouteAttr">
                         <template #icon><SettingOutlined /></template>
                         配置自定义路由属性
-                    </a-button>
-                    <a-button
+                    </nn-button>
+                    <nn-button
                         class="generate-route-button"
                         type="primary"
                         :loading="routesGenerating"
                         @click="generateRoutes"
                     >
                         生成IPv6路由
-                    </a-button>
+                    </nn-button>
                 </div>
             </a-form>
-        </a-card>
+        </nn-card>
 
-        <a-card title="已生成IPv6路由列表" class="bgp-route-list-card">
+        <nn-card title="已生成IPv6路由列表" class="bgp-route-list-card">
             <template #extra>
-                <a-space>
-                    <a-button size="small" @click="showRouteViewsImport">从 RouteViews 导入</a-button>
-                    <a-button
+                <nn-space>
+                    <nn-button size="small" @click="showRouteViewsImport">从 RouteViews 导入</nn-button>
+                    <nn-button
                         class="route-delete-all-button"
                         :disabled="!hasRoutes || deleteAllLoading"
                         :loading="deleteAllLoading"
@@ -166,8 +166,8 @@
                     >
                         <template #icon><DeleteOutlined /></template>
                         删除所有
-                    </a-button>
-                </a-space>
+                    </nn-button>
+                </nn-space>
             </template>
 
             <a-table
@@ -182,23 +182,23 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'action'">
-                        <a-space>
-                            <a-button size="small" @click="showRouteDetail(record)">
+                        <nn-space>
+                            <nn-button size="small" @click="showRouteDetail(record)">
                                 <template #icon><FileSearchOutlined /></template>
                                 详情
-                            </a-button>
-                            <a-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
+                            </nn-button>
+                            <nn-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
                                 <template #icon><DeleteOutlined /></template>
                                 删除
-                            </a-button>
-                        </a-space>
+                            </nn-button>
+                        </nn-space>
                     </template>
                     <template v-else-if="column.key === 'ip'">
                         <div>{{ record.ip }}/{{ record.mask }}</div>
                     </template>
                 </template>
             </a-table>
-        </a-card>
+        </nn-card>
 
         <CustomPktDrawer
             v-model:open="customRouteAttrVisible"
@@ -221,10 +221,10 @@
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import RouteViewsImportModal from '../../components/RouteViewsImportModal.vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
-    import { message, Modal } from 'ant-design-vue';
-    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
-    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
-    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
+    import { dialog } from '../../utils/dialog';
+    import { notify } from '../../utils/notify';
+    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from '../../ui/icons';
+
     import {
         BGP_ADDR_FAMILY,
         BGP_SRV6_ENDPOINT_BEHAVIOR,
@@ -427,7 +427,7 @@
         try {
             const hasErrors = validator.validate(ipv6Data.value);
             if (hasErrors) {
-                message.error('请检查IPv6路由配置信息是否正确');
+                notify.error('请检查IPv6路由配置信息是否正确');
                 return;
             }
 
@@ -437,20 +437,20 @@
             const payload = JSON.parse(JSON.stringify(ipv6Data.value));
             const saveResult = await window.bgpApi.saveIpv6UNCRouteConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
             const result = await window.bgpApi.generateIpv6Routes(payload);
             if (result.status === 'success') {
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
                 pagination.value.current = 1;
                 await refreshRoutes();
             } else {
-                message.error(`${result.msg}`);
+                notify.error(`${result.msg}`);
             }
         } catch (e) {
-            message.error(`IPv6路由生成失败: ${e.message}`);
+            notify.error(`IPv6路由生成失败: ${e.message}`);
         } finally {
             routesGenerating.value = false;
         }
@@ -472,11 +472,11 @@
                 routeDetail.value = result.data;
             } else {
                 routeDetailVisible.value = false;
-                message.error(`路由详情查询失败: ${result.msg}`);
+                notify.error(`路由详情查询失败: ${result.msg}`);
             }
         } catch (e) {
             routeDetailVisible.value = false;
-            message.error(`路由详情查询失败: ${e.message}`);
+            notify.error(`路由详情查询失败: ${e.message}`);
         } finally {
             routeDetailLoading.value = false;
         }
@@ -497,20 +497,20 @@
             const result = await window.bgpApi.deleteIpv6Routes(config);
 
             if (result.status === 'success') {
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
                 await refreshRoutes();
             } else {
-                message.error(`路由删除失败: ${result.msg}`);
+                notify.error(`路由删除失败: ${result.msg}`);
             }
         } catch (e) {
-            message.error(`路由删除失败: ${e.message}`);
+            notify.error(`路由删除失败: ${e.message}`);
         }
     };
 
     const deleteAllRoutes = async () => {
         try {
             // 显示确认对话框
-            Modal.confirm({
+            dialog.confirm({
                 title: '确认删除',
                 content: `确定要删除所有 ${pagination.value.total} 条IPv6路由吗？此操作不可恢复。`,
                 okText: '确定',
@@ -523,22 +523,22 @@
                         const result = await window.bgpApi.deleteAllRoutesByFamily(BGP_ADDR_FAMILY.IPV6_UNC);
 
                         if (result.status === 'success') {
-                            message.success(result.msg || '成功删除所有路由');
+                            notify.success(result.msg || '成功删除所有路由');
                             // 刷新路由列表
                             pagination.value.current = 1;
                             await refreshRoutes();
                         } else {
-                            message.error(`删除失败: ${result.msg}`);
+                            notify.error(`删除失败: ${result.msg}`);
                         }
                     } catch (e) {
-                        message.error(`批量删除失败: ${e.message}`);
+                        notify.error(`批量删除失败: ${e.message}`);
                     } finally {
                         deleteAllLoading.value = false;
                     }
                 }
             });
         } catch (e) {
-            message.error(`批量删除失败: ${e.message}`);
+            notify.error(`批量删除失败: ${e.message}`);
         }
     };
 </script>
@@ -568,22 +568,22 @@
         overflow: hidden;
     }
 
-    .bgp-route-card :deep(.ant-card-head),
-    .bgp-route-list-card :deep(.ant-card-head) {
+    .bgp-route-card :deep(.nn-card-head),
+    .bgp-route-list-card :deep(.nn-card-head) {
         flex: 0 0 auto;
         min-height: 36px !important;
     }
 
-    .bgp-route-card :deep(.ant-card-head-title),
-    .bgp-route-list-card :deep(.ant-card-head-title) {
+    .bgp-route-card :deep(.nn-card-head-title),
+    .bgp-route-list-card :deep(.nn-card-head-title) {
         padding: 8px 0 !important;
     }
 
-    .bgp-route-list-card :deep(.ant-card-extra) {
+    .bgp-route-list-card :deep(.nn-card-extra) {
         padding: 6px 0 !important;
     }
 
-    .bgp-route-card :deep(.ant-card-body) {
+    .bgp-route-card :deep(.nn-card-body) {
         min-height: 0;
         overflow: visible;
         display: flex;
@@ -591,7 +591,7 @@
         padding: 8px 10px !important;
     }
 
-    .bgp-route-list-card :deep(.ant-card-body) {
+    .bgp-route-list-card :deep(.nn-card-body) {
         flex: 1 1 0;
         min-height: 0;
         overflow: hidden;
@@ -630,7 +630,7 @@
     }
 
     .config-section {
-        border-top: 1px solid #f0f0f0;
+        border-top: 1px solid var(--nn-color-border-light);
         padding: 8px 0 0;
     }
 
@@ -641,13 +641,13 @@
 
     .section-title {
         margin-bottom: 6px;
-        color: rgba(0, 0, 0, 0.65);
+        color: var(--nn-color-text-secondary);
         font-size: 12px;
         font-weight: 600;
     }
 
     .action-row {
-        border-top: 1px solid #f0f0f0;
+        border-top: 1px solid var(--nn-color-border-light);
         display: grid;
         grid-template-columns: 1fr auto 1fr;
         gap: 12px;
@@ -666,20 +666,20 @@
     }
 
     .route-delete-all-button:disabled,
-    .route-delete-all-button.ant-btn-disabled {
-        color: #8c8c8c !important;
-        background: #f0f0f0 !important;
-        border-color: #bfbfbf !important;
+    .route-delete-all-button.nn-button-disabled {
+        color: var(--nn-color-text-muted) !important;
+        background: var(--nn-color-bg-disabled) !important;
+        border-color: var(--nn-color-border) !important;
         opacity: 1 !important;
     }
 
     .route-delete-all-button:disabled:hover,
-    .route-delete-all-button.ant-btn-disabled:hover,
+    .route-delete-all-button.nn-button-disabled:hover,
     .route-delete-all-button:disabled:focus,
-    .route-delete-all-button.ant-btn-disabled:focus {
-        color: #8c8c8c !important;
-        background: #f0f0f0 !important;
-        border-color: #bfbfbf !important;
+    .route-delete-all-button.nn-button-disabled:focus {
+        color: var(--nn-color-text-muted) !important;
+        background: var(--nn-color-bg-disabled) !important;
+        border-color: var(--nn-color-border) !important;
     }
 
     .bgp-route-table,

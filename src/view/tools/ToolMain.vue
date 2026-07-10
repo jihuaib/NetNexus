@@ -2,16 +2,16 @@
     <div class="mt-main-container">
         <!-- 固定 Tabs -->
         <div class="fixed-tabs">
-            <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <a-tab-pane key="string-generator" tab="字符串生成" />
-                <a-tab-pane key="packet-parser" tab="报文解析" />
-                <a-tab-pane key="port-monitor" tab="端口监听" />
-                <a-tab-pane key="network-info" tab="网络信息" />
-                <a-tab-pane key="tcp-ao-mac" tab="TCP-AO MAC" />
-                <a-tab-pane key="http-api-tester" tab="HTTP API测试" />
-                <a-tab-pane key="tcp-tool" tab="TCP工具" />
-                <a-tab-pane key="udp-tool" tab="UDP工具" />
-            </a-tabs>
+            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+                <nn-tab-pane key="string-generator" tab="字符串生成" />
+                <nn-tab-pane key="packet-parser" tab="报文解析" />
+                <nn-tab-pane key="port-monitor" tab="端口监听" />
+                <nn-tab-pane key="network-info" tab="网络信息" />
+                <nn-tab-pane key="tcp-ao-mac" tab="TCP-AO MAC" />
+                <nn-tab-pane key="http-api-tester" tab="HTTP API测试" />
+                <nn-tab-pane key="tcp-tool" tab="TCP工具" />
+                <nn-tab-pane key="udp-tool" tab="UDP工具" />
+            </nn-tabs>
         </div>
 
         <!-- 可滚动内容区域 -->

@@ -1,39 +1,39 @@
 <template>
     <div class="mt-container adaptive-config-page">
-        <a-row class="adaptive-config-row">
-            <a-col :span="24">
-                <a-card title="NTP服务器配置">
+        <nn-row class="adaptive-config-row">
+            <nn-col :span="24">
+                <nn-card title="NTP服务器配置">
                     <a-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
-                        <a-row :gutter="24">
-                            <a-col :span="8">
+                        <nn-row :gutter="24">
+                            <nn-col :span="8">
                                 <a-form-item label="监听端口">
-                                    <a-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
-                                        <a-input-number
+                                    <nn-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
+                                        <nn-input-number
                                             v-model:value="formData.port"
                                             :min="1"
                                             :max="65535"
                                             style="width: 100%"
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
+                            </nn-col>
+                            <nn-col :span="8">
                                 <a-form-item label="Stratum">
-                                    <a-tooltip :title="validationErrors.stratum" :open="!!validationErrors.stratum">
-                                        <a-input-number
+                                    <nn-tooltip :title="validationErrors.stratum" :open="!!validationErrors.stratum">
+                                        <nn-input-number
                                             v-model:value="formData.stratum"
                                             :min="1"
                                             :max="15"
                                             style="width: 100%"
                                             :status="validationErrors.stratum ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
+                            </nn-col>
+                            <nn-col :span="8">
                                 <a-form-item label="Reference ID">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.referenceId"
                                         :open="!!validationErrors.referenceId"
                                     >
@@ -43,19 +43,19 @@
                                             placeholder="例如 LOCL"
                                             :status="validationErrors.referenceId ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row :gutter="24">
-                            <a-col :span="8">
+                        <nn-row :gutter="24">
+                            <nn-col :span="8">
                                 <a-form-item label="时间偏移">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.timeOffsetMs"
                                         :open="!!validationErrors.timeOffsetMs"
                                     >
-                                        <a-input-number
+                                        <nn-input-number
                                             v-model:value="formData.timeOffsetMs"
                                             :min="-86400000"
                                             :max="86400000"
@@ -63,16 +63,16 @@
                                             style="width: 100%"
                                             :status="validationErrors.timeOffsetMs ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
+                            </nn-col>
+                            <nn-col :span="8">
                                 <a-form-item label="Root Delay">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.rootDelayMs"
                                         :open="!!validationErrors.rootDelayMs"
                                     >
-                                        <a-input-number
+                                        <nn-input-number
                                             v-model:value="formData.rootDelayMs"
                                             :min="0"
                                             :max="60000"
@@ -80,16 +80,16 @@
                                             style="width: 100%"
                                             :status="validationErrors.rootDelayMs ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
+                            </nn-col>
+                            <nn-col :span="8">
                                 <a-form-item label="Root Dispersion">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.rootDispersionMs"
                                         :open="!!validationErrors.rootDispersionMs"
                                     >
-                                        <a-input-number
+                                        <nn-input-number
                                             v-model:value="formData.rootDispersionMs"
                                             :min="0"
                                             :max="60000"
@@ -97,85 +97,85 @@
                                             style="width: 100%"
                                             :status="validationErrors.rootDispersionMs ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
+                            </nn-col>
+                        </nn-row>
 
-                        <div style="margin-top: 8px; color: rgba(0, 0, 0, 0.45)">
+                        <div style="margin-top: 8px; color: var(--nn-color-text-muted)">
                             默认端口为 123。若系统服务已占用或当前进程没有特权，可改为其他端口供测试脚本验证。
                         </div>
 
                         <div style="margin-top: 12px; display: flex; justify-content: center">
-                            <a-space>
-                                <a-button
+                            <nn-space>
+                                <nn-button
                                     type="primary"
                                     :loading="serverLoading"
                                     :disabled="isServerRunning"
                                     @click="startNtp"
                                 >
                                     启动服务器
-                                </a-button>
-                                <a-button type="primary" danger :disabled="!isServerRunning" @click="stopNtp">
+                                </nn-button>
+                                <nn-button type="primary" danger :disabled="!isServerRunning" @click="stopNtp">
                                     停止服务器
-                                </a-button>
-                            </a-space>
+                                </nn-button>
+                            </nn-space>
                         </div>
                     </a-form>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
-        <a-row class="adaptive-config-fill-row">
-            <a-col :span="24">
-                <a-card title="服务状态" class="adaptive-config-fill-card">
+        <nn-row class="adaptive-config-fill-row">
+            <nn-col :span="24">
+                <nn-card title="服务状态" class="adaptive-config-fill-card">
                     <template #extra>
-                        <a-button @click="refreshDisplayedTimes">刷新时间</a-button>
+                        <nn-button @click="refreshDisplayedTimes">刷新时间</nn-button>
                     </template>
-                    <a-descriptions :column="2" bordered>
-                        <a-descriptions-item label="服务状态">
-                            <a-tag :color="isServerRunning ? 'green' : 'red'">
+                    <nn-descriptions :column="2" bordered>
+                        <nn-descriptions-item label="服务状态">
+                            <nn-tag :color="isServerRunning ? 'green' : 'red'">
                                 {{ isServerRunning ? '运行中' : '已停止' }}
-                            </a-tag>
-                        </a-descriptions-item>
-                        <a-descriptions-item label="监听端口">
+                            </nn-tag>
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="监听端口">
                             {{ formData.port }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="当前本机时间">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="当前本机时间">
                             {{ systemTimeText }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="当前NTP时间">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="当前NTP时间">
                             {{ serverTimeText }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="Stratum">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="Stratum">
                             {{ formData.stratum }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="Reference ID">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="Reference ID">
                             {{ formData.referenceId }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="时间偏移">{{ formData.timeOffsetMs }} ms</a-descriptions-item>
-                        <a-descriptions-item label="已记录请求">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="时间偏移">{{ formData.timeOffsetMs }} ms</nn-descriptions-item>
+                        <nn-descriptions-item label="已记录请求">
                             {{ requestCount }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="最近请求时间">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="最近请求时间">
                             {{ lastRequestAt }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="最近客户端">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="最近客户端">
                             {{ lastClient }}
-                        </a-descriptions-item>
-                    </a-descriptions>
-                    <div style="margin-top: 12px; color: rgba(0, 0, 0, 0.45)">
+                        </nn-descriptions-item>
+                    </nn-descriptions>
+                    <div style="margin-top: 12px; color: var(--nn-color-text-muted)">
                         点击“刷新时间”后按“本机当前时间 + 时间偏移”同步显示，对应服务端响应里的 `transmitTimestamp`。
                     </div>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
     </div>
 </template>
 
 <script setup>
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { DEFAULT_VALUES, NTP_SUB_EVT_TYPES, NTP_EVENT_PAGE_ID } from '../../const/ntpConst';
     import EventBus from '../../utils/eventBus';
 
@@ -277,13 +277,13 @@
                 refreshDisplayedTimes();
             }
         } catch (error) {
-            message.error('加载配置失败: ' + error.message);
+            notify.error('加载配置失败: ' + error.message);
         }
     };
 
     const startNtp = async () => {
         if (!validateConfig()) {
-            message.error('请检查输入的数据');
+            notify.error('请检查输入的数据');
             return;
         }
 
@@ -291,7 +291,7 @@
             const payload = JSON.parse(JSON.stringify(formData.value));
             const saveResult = await window.ntpApi.saveNtpConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
@@ -299,12 +299,12 @@
             const startResult = await window.ntpApi.startNtp(payload);
             if (startResult.status === 'success') {
                 isServerRunning.value = true;
-                message.success(startResult.msg || 'NTP服务启动成功');
+                notify.success(startResult.msg || 'NTP服务启动成功');
             } else {
-                message.error(startResult.msg || 'NTP服务启动失败');
+                notify.error(startResult.msg || 'NTP服务启动失败');
             }
         } catch (error) {
-            message.error('NTP服务启动失败: ' + error.message);
+            notify.error('NTP服务启动失败: ' + error.message);
         } finally {
             serverLoading.value = false;
         }
@@ -314,16 +314,16 @@
         try {
             const result = await window.ntpApi.stopNtp();
             if (result.status === 'success') {
-                message.success(result.msg || 'NTP服务已停止');
+                notify.success(result.msg || 'NTP服务已停止');
                 isServerRunning.value = false;
                 requestCount.value = 0;
                 lastRequestAt.value = '-';
                 lastClient.value = '-';
             } else {
-                message.error(result.msg || 'NTP服务停止失败');
+                notify.error(result.msg || 'NTP服务停止失败');
             }
         } catch (error) {
-            message.error('NTP服务停止失败: ' + error.message);
+            notify.error('NTP服务停止失败: ' + error.message);
         }
     };
 
@@ -397,7 +397,7 @@
         min-height: 0;
     }
 
-    .adaptive-config-fill-row :deep(.ant-col) {
+    .adaptive-config-fill-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -409,7 +409,7 @@
         overflow: hidden;
     }
 
-    .adaptive-config-fill-card :deep(.ant-card-body) {
+    .adaptive-config-fill-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: auto;

@@ -1,11 +1,11 @@
 <template>
     <div class="mt-container adaptive-table-page">
-        <a-card title="TFTP传输日志" class="adaptive-table-card">
+        <nn-card title="TFTP传输日志" class="adaptive-table-card">
             <template #extra>
-                <a-space>
-                    <a-button :loading="loading" @click="loadTransferList">刷新</a-button>
-                    <a-button danger :loading="clearLoading" @click="clearHistory">清空历史</a-button>
-                </a-space>
+                <nn-space>
+                    <nn-button :loading="loading" @click="loadTransferList">刷新</nn-button>
+                    <nn-button danger :loading="clearLoading" @click="clearHistory">清空历史</nn-button>
+                </nn-space>
             </template>
 
             <a-table
@@ -25,24 +25,24 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'type'">
-                        <a-tag :color="record.type === TFTP_TRANSFER_TYPE.READ ? 'blue' : 'purple'">
+                        <nn-tag :color="record.type === TFTP_TRANSFER_TYPE.READ ? 'blue' : 'purple'">
                             {{ typeText(record.type) }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                     <template v-else-if="column.key === 'status'">
-                        <a-tag :color="statusColor(record.status)">
+                        <nn-tag :color="statusColor(record.status)">
                             {{ statusText(record.status) }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                 </template>
             </a-table>
-        </a-card>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import {
         TFTP_SUB_EVT_TYPES,
         TFTP_EVENT_PAGE_ID,
@@ -106,10 +106,10 @@
             if (result.status === 'success') {
                 transferList.value = result.data || [];
             } else {
-                message.error(result.msg || '获取TFTP传输日志失败');
+                notify.error(result.msg || '获取TFTP传输日志失败');
             }
         } catch (error) {
-            message.error('获取TFTP传输日志失败: ' + error.message);
+            notify.error('获取TFTP传输日志失败: ' + error.message);
         } finally {
             loading.value = false;
         }
@@ -121,12 +121,12 @@
             const result = await window.tftpApi.clearTransferHistory();
             if (result.status === 'success') {
                 transferList.value = [];
-                message.success(result.msg || 'TFTP传输日志已清空');
+                notify.success(result.msg || 'TFTP传输日志已清空');
             } else {
-                message.error(result.msg || '清空TFTP传输日志失败');
+                notify.error(result.msg || '清空TFTP传输日志失败');
             }
         } catch (error) {
-            message.error('清空TFTP传输日志失败: ' + error.message);
+            notify.error('清空TFTP传输日志失败: ' + error.message);
         } finally {
             clearLoading.value = false;
         }
@@ -172,7 +172,7 @@
         overflow: hidden;
     }
 
-    .adaptive-table-card :deep(.ant-card-body) {
+    .adaptive-table-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         min-width: 0;

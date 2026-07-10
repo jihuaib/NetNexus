@@ -3,12 +3,12 @@
         <!-- 侧边菜单导航 -->
         <div class="sider" :class="{ collapsed: isCollapsed }">
             <div class="toggle-btn" @click="toggleCollapse">
-                <a-button type="text">
+                <nn-button type="text">
                     <template #icon>
                         <MenuFoldOutlined v-if="!isCollapsed" />
                         <MenuUnfoldOutlined v-else />
                     </template>
-                </a-button>
+                </nn-button>
             </div>
             <a-menu
                 v-model:selected-keys="current"
@@ -22,34 +22,34 @@
             />
             <!-- 底部菜单按钮 -->
             <div class="bottom-menu-btn">
-                <a-dropdown :trigger="['click']" placement="topRight">
-                    <a-button type="text">
+                <nn-dropdown :trigger="['click']" placement="topRight">
+                    <nn-button type="text">
                         <template #icon><SettingOutlined /></template>
                         <span v-if="!isCollapsed">更多选项</span>
-                    </a-button>
+                    </nn-button>
                     <template #overlay>
                         <a-menu>
                             <a-menu-item key="settings" @click="handleBottomMenuClick('settings')">
-                                <a-space>
+                                <nn-space>
                                     <SettingOutlined />
                                     <span>设置</span>
-                                </a-space>
+                                </nn-space>
                             </a-menu-item>
                             <a-menu-item key="developer" @click="handleBottomMenuClick('developer')">
-                                <a-space>
+                                <nn-space>
                                     <ToolOutlined />
                                     <span>开发人员选项</span>
-                                </a-space>
+                                </nn-space>
                             </a-menu-item>
                             <a-menu-item key="about" @click="handleBottomMenuClick('about')">
-                                <a-space>
+                                <nn-space>
                                     <InfoCircleOutlined />
                                     <span>关于</span>
-                                </a-space>
+                                </nn-space>
                             </a-menu-item>
                         </a-menu>
                     </template>
-                </a-dropdown>
+                </nn-dropdown>
             </div>
         </div>
         <!-- 内容区域 -->
@@ -75,22 +75,25 @@
     import { ref, watch, h, onMounted, onUnmounted } from 'vue';
     import { useRouter, useRoute } from 'vue-router';
     import { useStore } from 'vuex';
-    import MenuFoldOutlined from '@ant-design/icons-vue/es/icons/MenuFoldOutlined';
-    import MenuUnfoldOutlined from '@ant-design/icons-vue/es/icons/MenuUnfoldOutlined';
-    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
-    import ToolOutlined from '@ant-design/icons-vue/es/icons/ToolOutlined';
-    import InfoCircleOutlined from '@ant-design/icons-vue/es/icons/InfoCircleOutlined';
-    import AppstoreOutlined from '@ant-design/icons-vue/es/icons/AppstoreOutlined';
-    import ApiOutlined from '@ant-design/icons-vue/es/icons/ApiOutlined';
-    import ClusterOutlined from '@ant-design/icons-vue/es/icons/ClusterOutlined';
-    import SafetyOutlined from '@ant-design/icons-vue/es/icons/SafetyOutlined';
-    import FolderOutlined from '@ant-design/icons-vue/es/icons/FolderOutlined';
-    import CodeOutlined from '@ant-design/icons-vue/es/icons/CodeOutlined';
-    import WifiOutlined from '@ant-design/icons-vue/es/icons/WifiOutlined';
-    import ClockCircleOutlined from '@ant-design/icons-vue/es/icons/ClockCircleOutlined';
-    import KeyOutlined from '@ant-design/icons-vue/es/icons/KeyOutlined';
-    import SwapOutlined from '@ant-design/icons-vue/es/icons/SwapOutlined';
-    import FileTextOutlined from '@ant-design/icons-vue/es/icons/FileTextOutlined';
+    import {
+        ApiOutlined,
+        AppstoreOutlined,
+        ClockCircleOutlined,
+        ClusterOutlined,
+        CodeOutlined,
+        FileTextOutlined,
+        FolderOutlined,
+        InfoCircleOutlined,
+        KeyOutlined,
+        MenuFoldOutlined,
+        MenuUnfoldOutlined,
+        SafetyOutlined,
+        SettingOutlined,
+        SwapOutlined,
+        ToolOutlined,
+        WifiOutlined
+    } from '../ui/icons';
+
     import SettingsDialog from '../components/SettingsDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
     import modalResizeHandler from '../utils/modalResizeHandler';
@@ -284,6 +287,8 @@
         min-height: 100vh;
         display: flex;
         flex-direction: row;
+        background: var(--nn-color-bg-layout);
+        color: var(--nn-color-text);
     }
 
     .sider {
@@ -292,8 +297,8 @@
         left: 0;
         top: 0;
         z-index: 1000;
-        background-color: #2c3e50;
-        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+        background-color: var(--nn-color-bg-sider);
+        box-shadow: var(--nn-shadow-sider);
         transition: all 0.2s;
         width: 160px;
         overflow: hidden;
@@ -317,7 +322,7 @@
     }
 
     .bottom-menu-btn {
-        border-top: 1px solid #f0f0f0;
+        border-top: 1px solid var(--nn-color-border-sider);
         padding: 16px;
         text-align: center;
     }
@@ -340,6 +345,7 @@
         flex-direction: column;
         width: 100%;
         box-sizing: border-box;
+        background: var(--nn-color-bg-layout);
     }
 
     /* 菜单图标样式 */

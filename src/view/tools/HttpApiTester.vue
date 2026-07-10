@@ -1,40 +1,40 @@
 <template>
     <div class="mt-container http-api-page">
-        <a-card title="HTTP API测试" class="http-api-card">
+        <nn-card title="HTTP API测试" class="http-api-card">
             <template #extra>
-                <a-space>
-                    <a-tag v-if="pageLoading" color="processing">加载中</a-tag>
-                    <a-button type="primary" size="small" @click="createApiConnection">
+                <nn-space>
+                    <nn-tag v-if="pageLoading" color="processing">加载中</nn-tag>
+                    <nn-button type="primary" size="small" @click="createApiConnection">
                         <template #icon>
                             <PlusOutlined />
                         </template>
                         新建
-                    </a-button>
-                    <a-button size="small" :loading="saveLoading" @click="saveApiConnections">
+                    </nn-button>
+                    <nn-button size="small" :loading="saveLoading" @click="saveApiConnections">
                         <template #icon>
                             <SaveOutlined />
                         </template>
                         保存
-                    </a-button>
-                    <a-button size="small" @click="resetBmpDefaults">
+                    </nn-button>
+                    <nn-button size="small" @click="resetBmpDefaults">
                         <template #icon>
                             <ReloadOutlined />
                         </template>
                         BMP默认
-                    </a-button>
-                </a-space>
+                    </nn-button>
+                </nn-space>
             </template>
 
             <div class="api-workspace">
-                <a-empty v-if="apiItems.length === 0" description="暂无API连接" class="empty-api-list">
+                <nn-empty v-if="apiItems.length === 0" description="暂无API连接" class="empty-api-list">
                     <template #description>
                         <span>暂无API连接</span>
                     </template>
-                    <a-button type="primary" @click="resetBmpDefaults">恢复BMP默认API</a-button>
-                </a-empty>
+                    <nn-button type="primary" @click="resetBmpDefaults">恢复BMP默认API</nn-button>
+                </nn-empty>
                 <div v-else class="api-layout">
                     <div class="api-sidebar">
-                        <a-dropdown v-for="api in apiItems" :key="api.id" :trigger="['contextmenu']">
+                        <nn-dropdown v-for="api in apiItems" :key="api.id" :trigger="['contextmenu']">
                             <div
                                 class="api-list-item"
                                 :class="{ active: activeKey === api.id }"
@@ -46,26 +46,26 @@
                             <template #overlay>
                                 <a-menu>
                                     <a-menu-item key="rename" @click="renameApiConnection(api)">
-                                        <a-space>
+                                        <nn-space>
                                             <EditOutlined />
                                             <span>修改名称</span>
-                                        </a-space>
+                                        </nn-space>
                                     </a-menu-item>
                                     <a-menu-item key="copy" @click="copyApiConnection(api)">
-                                        <a-space>
+                                        <nn-space>
                                             <CopyOutlined />
                                             <span>复制</span>
-                                        </a-space>
+                                        </nn-space>
                                     </a-menu-item>
                                     <a-menu-item key="delete" @click="deleteApiConnection(api)">
-                                        <a-space class="danger-menu-item">
+                                        <nn-space class="danger-menu-item">
                                             <DeleteOutlined />
                                             <span>删除</span>
-                                        </a-space>
+                                        </nn-space>
                                     </a-menu-item>
                                 </a-menu>
                             </template>
-                        </a-dropdown>
+                        </nn-dropdown>
                     </div>
                     <div class="api-content">
                         <a-form
@@ -77,8 +77,8 @@
                             :wrapper-col="inlineWrapperCol"
                         >
                             <div class="request-panel">
-                                <a-row :gutter="8" class="request-basic-row">
-                                    <a-col :span="7">
+                                <nn-row :gutter="8" class="request-basic-row">
+                                    <nn-col :span="7">
                                         <a-form-item label="方法">
                                             <a-select v-model:value="activeApi.method">
                                                 <a-select-option
@@ -90,8 +90,8 @@
                                                 </a-select-option>
                                             </a-select>
                                         </a-form-item>
-                                    </a-col>
-                                    <a-col :span="17">
+                                    </nn-col>
+                                    <nn-col :span="17">
                                         <a-form-item label="URL">
                                             <a-input
                                                 v-model:value="activeApi.url"
@@ -99,13 +99,13 @@
                                                 @press-enter="sendRequest(activeApi)"
                                             />
                                         </a-form-item>
-                                    </a-col>
-                                </a-row>
+                                    </nn-col>
+                                </nn-row>
 
-                                <a-row :gutter="8" class="request-action-row">
-                                    <a-col :span="6">
+                                <nn-row :gutter="8" class="request-action-row">
+                                    <nn-col :span="6">
                                         <a-form-item label="超时(ms)">
-                                            <a-input-number
+                                            <nn-input-number
                                                 v-model:value="activeApi.timeout"
                                                 :min="1000"
                                                 :max="600000"
@@ -113,11 +113,11 @@
                                                 style="width: 100%"
                                             />
                                         </a-form-item>
-                                    </a-col>
-                                    <a-col :span="18">
+                                    </nn-col>
+                                    <nn-col :span="18">
                                         <a-form-item label="操作">
-                                            <a-space class="request-actions">
-                                                <a-button
+                                            <nn-space class="request-actions">
+                                                <nn-button
                                                     type="primary"
                                                     :loading="sendingId === activeApi.id"
                                                     @click="sendRequest(activeApi)"
@@ -126,39 +126,39 @@
                                                         <SendOutlined />
                                                     </template>
                                                     发送
-                                                </a-button>
-                                                <a-button @click="formatRequestBody(activeApi)">格式化JSON</a-button>
-                                            </a-space>
+                                                </nn-button>
+                                                <nn-button @click="formatRequestBody(activeApi)">格式化JSON</nn-button>
+                                            </nn-space>
                                         </a-form-item>
-                                    </a-col>
-                                </a-row>
+                                    </nn-col>
+                                </nn-row>
 
-                                <a-tabs v-model:active-key="requestTabKey" size="small" class="request-tabs">
-                                    <a-tab-pane key="headers" tab="请求头">
+                                <nn-tabs v-model:active-key="requestTabKey" size="small" class="request-tabs">
+                                    <nn-tab-pane key="headers" tab="请求头">
                                         <div class="header-grid">
                                             <div v-if="activeApi.headers.length === 0" class="header-empty-row">
-                                                <a-button size="small" type="dashed" @click="addHeader(activeApi)">
+                                                <nn-button size="small" type="dashed" @click="addHeader(activeApi)">
                                                     <template #icon>
                                                         <PlusOutlined />
                                                     </template>
                                                     添加请求头
-                                                </a-button>
+                                                </nn-button>
                                             </div>
                                             <div
                                                 v-for="header in activeApi.headers"
                                                 :key="header.rowId"
                                                 class="header-row"
                                             >
-                                                <a-checkbox v-model:checked="header.enabled" />
+                                                <nn-checkbox v-model:checked="header.enabled" />
                                                 <a-input v-model:value="header.key" placeholder="Header" />
                                                 <a-input v-model:value="header.value" placeholder="Value" />
                                                 <div class="header-row-actions">
-                                                    <a-button type="text" @click="addHeader(activeApi)">
+                                                    <nn-button type="text" @click="addHeader(activeApi)">
                                                         <template #icon>
                                                             <PlusOutlined />
                                                         </template>
-                                                    </a-button>
-                                                    <a-button
+                                                    </nn-button>
+                                                    <nn-button
                                                         type="text"
                                                         danger
                                                         @click="removeHeader(activeApi, header.rowId)"
@@ -166,66 +166,70 @@
                                                         <template #icon>
                                                             <DeleteOutlined />
                                                         </template>
-                                                    </a-button>
+                                                    </nn-button>
                                                 </div>
                                             </div>
                                         </div>
-                                    </a-tab-pane>
-                                    <a-tab-pane key="body" tab="请求体">
+                                    </nn-tab-pane>
+                                    <nn-tab-pane key="body" tab="请求体">
                                         <div class="request-body-pane">
                                             <ScrollTextarea v-model:model-value="activeApi.body" height="100%" />
                                         </div>
-                                    </a-tab-pane>
-                                </a-tabs>
+                                    </nn-tab-pane>
+                                </nn-tabs>
                             </div>
 
                             <div class="response-panel">
-                                <a-divider>响应</a-divider>
+                                <nn-divider>响应</nn-divider>
                                 <div v-if="activeApi.response" class="response-summary">
-                                    <a-tag :color="getStatusColor(activeApi.response.statusCode)">
+                                    <nn-tag :color="getStatusColor(activeApi.response.statusCode)">
                                         {{ activeApi.response.statusCode }} {{ activeApi.response.statusMessage }}
-                                    </a-tag>
-                                    <a-tag color="blue">{{ activeApi.response.durationMs }} ms</a-tag>
-                                    <a-tag>{{ formatBytes(activeApi.response.sizeBytes) }}</a-tag>
+                                    </nn-tag>
+                                    <nn-tag color="blue">{{ activeApi.response.durationMs }} ms</nn-tag>
+                                    <nn-tag>{{ formatBytes(activeApi.response.sizeBytes) }}</nn-tag>
                                 </div>
-                                <a-alert
+                                <nn-alert
                                     v-if="activeApi.responseError"
                                     class="response-error"
                                     type="error"
                                     :message="activeApi.responseError"
                                     show-icon
                                 />
-                                <a-tabs v-model:active-key="responseTabKey" size="small" class="response-tabs">
-                                    <a-tab-pane key="body" tab="响应体">
+                                <nn-tabs v-model:active-key="responseTabKey" size="small" class="response-tabs">
+                                    <nn-tab-pane key="body" tab="响应体">
                                         <ScrollTextarea :model-value="activeApi.responseBody" height="100%" readonly />
-                                    </a-tab-pane>
-                                    <a-tab-pane key="headers" tab="响应头">
+                                    </nn-tab-pane>
+                                    <nn-tab-pane key="headers" tab="响应头">
                                         <ScrollTextarea
                                             :model-value="activeApi.responseHeaders"
                                             height="100%"
                                             readonly
                                         />
-                                    </a-tab-pane>
-                                </a-tabs>
+                                    </nn-tab-pane>
+                                </nn-tabs>
                             </div>
                         </a-form>
                     </div>
                 </div>
             </div>
-        </a-card>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { computed, h, ref, onMounted } from 'vue';
-    import { Input, message, Modal } from 'ant-design-vue';
-    import CopyOutlined from '@ant-design/icons-vue/es/icons/CopyOutlined';
-    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
-    import EditOutlined from '@ant-design/icons-vue/es/icons/EditOutlined';
-    import PlusOutlined from '@ant-design/icons-vue/es/icons/PlusOutlined';
-    import ReloadOutlined from '@ant-design/icons-vue/es/icons/ReloadOutlined';
-    import SaveOutlined from '@ant-design/icons-vue/es/icons/SaveOutlined';
-    import SendOutlined from '@ant-design/icons-vue/es/icons/SendOutlined';
+    import { notify } from '../../utils/notify';
+    import { dialog } from '../../utils/dialog';
+    import {
+        CopyOutlined,
+        DeleteOutlined,
+        EditOutlined,
+        PlusOutlined,
+        ReloadOutlined,
+        SaveOutlined,
+        SendOutlined
+    } from '../../ui/icons';
+
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
 
     defineOptions({
@@ -301,7 +305,7 @@
 
     async function loadApiConnections() {
         if (!window.toolsApi) {
-            message.error('工具API不可用');
+            notify.error('工具API不可用');
             return;
         }
 
@@ -309,7 +313,7 @@
         try {
             const resp = await window.toolsApi.getHttpApiConnections();
             if (resp.status !== 'success') {
-                message.error(resp.msg || '获取API连接信息失败');
+                notify.error(resp.msg || '获取API连接信息失败');
                 return;
             }
             let connections = Array.isArray(resp.data) ? resp.data : [];
@@ -319,7 +323,7 @@
             }
             setApiConnections(connections);
         } catch (error) {
-            message.error(error.message || String(error));
+            notify.error(error.message || String(error));
         } finally {
             pageLoading.value = false;
         }
@@ -350,13 +354,13 @@
 
     function renameApiConnection(api) {
         const inputValue = ref(api.name || '');
-        Modal.confirm({
+        dialog.confirm({
             title: '修改API名称',
             okText: '保存',
             cancelText: '取消',
             content: () =>
                 h('div', { class: 'rename-api-modal' }, [
-                    h(Input, {
+                    dialog.textInput({
                         value: inputValue.value,
                         maxlength: 80,
                         placeholder: '请输入API名称',
@@ -366,18 +370,18 @@
                         onPressEnter: () => {
                             const name = String(inputValue.value || '').trim();
                             if (!name) {
-                                message.error('API名称不能为空');
+                                notify.error('API名称不能为空');
                                 return;
                             }
                             api.name = name;
-                            Modal.destroyAll();
+                            dialog.destroyAll();
                         }
                     })
                 ]),
             onOk() {
                 const name = String(inputValue.value || '').trim();
                 if (!name) {
-                    message.error('API名称不能为空');
+                    notify.error('API名称不能为空');
                     return Promise.reject(new Error('API名称不能为空'));
                 }
                 api.name = name;
@@ -403,19 +407,19 @@
             const payload = apiItems.value.map(serializeApiItem);
             const resp = await window.toolsApi.saveHttpApiConnections(payload);
             if (resp.status === 'success') {
-                message.success('API连接信息已保存');
+                notify.success('API连接信息已保存');
             } else {
-                message.error(resp.msg || '保存API连接信息失败');
+                notify.error(resp.msg || '保存API连接信息失败');
             }
         } catch (error) {
-            message.error(error.message || String(error));
+            notify.error(error.message || String(error));
         } finally {
             saveLoading.value = false;
         }
     }
 
     function resetBmpDefaults() {
-        Modal.confirm({
+        dialog.confirm({
             title: '恢复BMP默认API',
             content: '当前API连接列表会被BMP默认接口模板覆盖。',
             okText: '恢复',
@@ -425,14 +429,14 @@
                 try {
                     const resp = await window.toolsApi.resetHttpApiConnections();
                     if (resp.status !== 'success') {
-                        message.error(resp.msg || '恢复BMP默认API失败');
+                        notify.error(resp.msg || '恢复BMP默认API失败');
                         return;
                     }
                     apiItems.value = (resp.data || []).map(normalizeApiItem);
                     activeKey.value = apiItems.value[0]?.id || '';
-                    message.success('已恢复BMP默认API');
+                    notify.success('已恢复BMP默认API');
                 } catch (error) {
-                    message.error(error.message || String(error));
+                    notify.error(error.message || String(error));
                 } finally {
                     pageLoading.value = false;
                 }
@@ -458,7 +462,7 @@
         try {
             api.body = JSON.stringify(JSON.parse(api.body), null, 4);
         } catch (error) {
-            message.error('请求体不是合法JSON');
+            notify.error('请求体不是合法JSON');
         }
     }
 
@@ -475,7 +479,7 @@
 
     async function sendRequest(api) {
         if (!api.url || !api.url.trim()) {
-            message.error('URL不能为空');
+            notify.error('URL不能为空');
             return;
         }
 
@@ -496,9 +500,9 @@
             api.responseBody = formatResponseBody(resp.data.body);
             api.responseHeaders = JSON.stringify(resp.data.headers || {}, null, 4);
             if (resp.data.statusCode >= 200 && resp.data.statusCode < 400) {
-                message.success(`请求完成: ${resp.data.statusCode}`);
+                notify.success(`请求完成: ${resp.data.statusCode}`);
             } else {
-                message.warning(`请求完成: ${resp.data.statusCode}`);
+                notify.warning(`请求完成: ${resp.data.statusCode}`);
             }
         } catch (error) {
             api.responseError = error.message || String(error);
@@ -544,7 +548,7 @@
         overflow: hidden;
     }
 
-    :deep(.http-api-card > .ant-card-body) {
+    :deep(.http-api-card > .nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -574,7 +578,7 @@
         min-height: 0;
         overflow-y: auto;
         overflow-x: hidden;
-        border-right: 1px solid #f0f0f0;
+        border-right: 1px solid var(--nn-color-border-light);
         padding: 0 0 8px;
     }
 
@@ -585,20 +589,20 @@
         padding: 10px 20px;
         line-height: 1.35;
         text-align: left;
-        color: rgba(0, 0, 0, 0.88);
+        color: var(--nn-color-text);
         word-break: break-all;
         cursor: context-menu;
         user-select: none;
     }
 
     .api-list-item:hover {
-        color: #1677ff;
+        color: var(--nn-color-primary);
     }
 
     .api-list-item.active {
-        color: #1677ff;
+        color: var(--nn-color-primary);
         font-weight: 600;
-        background: #fff;
+        background: var(--nn-color-bg-surface);
     }
 
     .api-list-item.active::after {
@@ -607,12 +611,12 @@
         right: -1px;
         bottom: 0;
         width: 2px;
-        background: #1677ff;
+        background: var(--nn-color-primary);
         content: '';
     }
 
     .danger-menu-item {
-        color: #ff4d4f;
+        color: var(--nn-color-error);
     }
 
     .api-content {
@@ -676,19 +680,19 @@
         overflow: hidden;
     }
 
-    :deep(.request-tabs > .ant-tabs-nav) {
+    :deep(.request-tabs > .nn-tabs-nav) {
         flex: 0 0 auto;
     }
 
-    :deep(.request-tabs .ant-tabs-content-holder) {
+    :deep(.request-tabs .nn-tabs-content-holder) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         overflow: hidden;
     }
 
-    :deep(.request-tabs .ant-tabs-content),
-    :deep(.request-tabs .ant-tabs-tabpane) {
+    :deep(.request-tabs .nn-tabs-content),
+    :deep(.request-tabs .nn-tabs-tabpane) {
         height: 100%;
         min-height: 0;
         display: flex;
@@ -751,7 +755,7 @@
         overflow: hidden;
     }
 
-    .response-panel :deep(.ant-divider) {
+    .response-panel :deep(.nn-divider) {
         flex: 0 0 auto;
     }
 
@@ -776,19 +780,19 @@
         overflow: hidden;
     }
 
-    :deep(.response-tabs > .ant-tabs-nav) {
+    :deep(.response-tabs > .nn-tabs-nav) {
         flex: 0 0 auto;
     }
 
-    :deep(.response-tabs .ant-tabs-content-holder) {
+    :deep(.response-tabs .nn-tabs-content-holder) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         overflow: hidden;
     }
 
-    :deep(.response-tabs .ant-tabs-content),
-    :deep(.response-tabs .ant-tabs-tabpane) {
+    :deep(.response-tabs .nn-tabs-content),
+    :deep(.response-tabs .nn-tabs-tabpane) {
         flex: 1 1 0;
         height: 100% !important;
         min-height: 0;

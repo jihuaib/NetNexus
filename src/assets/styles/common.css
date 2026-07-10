@@ -1,25 +1,25 @@
 /* Card 头部样式 */
-.ant-card-head {
-    background: #1890ff !important;
+.nn-card-head {
+    background: var(--nn-color-bg-card-head) !important;
     border-bottom: none !important;
 }
 
-.ant-card-head-title {
-    color: #ffffff !important;
+.nn-card-head-title {
+    color: var(--nn-color-text-inverse) !important;
     font-weight: 600 !important;
 }
 
-.ant-card-extra {
-    color: #ffffff !important;
+.nn-card-extra {
+    color: var(--nn-color-text-inverse) !important;
 }
 
 /* Card 头部的按钮样式调整 */
-.ant-card-head .ant-btn-text {
-    color: #ffffff !important;
+.nn-card-head .nn-button-text {
+    color: var(--nn-color-text-inverse) !important;
 }
 
-.ant-card-head .ant-btn-text:hover {
-    background: rgba(255, 255, 255, 0.2) !important;
+.nn-card-head .nn-button-text:hover {
+    background: var(--nn-color-bg-card-head-hover) !important;
 }
 
 /* 侧边栏菜单样式 */
@@ -28,76 +28,93 @@
 }
 
 .main-menu .ant-menu-item {
-    color: rgba(255, 255, 255, 0.85) !important;
+    color: var(--nn-color-text-sider) !important;
     font-weight: 500 !important;
 }
 
 .main-menu .ant-menu-item-selected {
-    background: #1890ff !important;
-    color: #ffffff !important;
+    background: var(--nn-color-bg-sider-active) !important;
+    color: var(--nn-color-text-inverse) !important;
 }
 
 .main-menu .ant-menu-item:hover {
-    background: rgba(255, 255, 255, 0.15) !important;
-    color: #ffffff !important;
+    background: var(--nn-color-bg-sider-hover) !important;
+    color: var(--nn-color-text-inverse) !important;
 }
 
 /* 选中状态的菜单项 hover 时保持不变 */
 .main-menu .ant-menu-item-selected:hover {
-    background: #1890ff !important;
-    color: #ffffff !important;
+    background: var(--nn-color-bg-sider-active) !important;
+    color: var(--nn-color-text-inverse) !important;
 }
 
-.main-menu .anticon {
-    color: rgba(255, 255, 255, 0.85) !important;
+.nn-icon {
+    display: inline-block;
+    flex-shrink: 0;
+    color: currentcolor;
+    vertical-align: -0.125em;
 }
 
-.main-menu .ant-menu-item-selected .anticon {
-    color: #ffffff !important;
+.nn-icon-spin {
+    animation: nn-icon-spin 1s linear infinite;
 }
 
-.main-menu .ant-menu-item:hover .anticon {
-    color: #ffffff !important;
+@keyframes nn-icon-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.main-menu .nn-icon {
+    color: var(--nn-color-text-sider) !important;
+}
+
+.main-menu .ant-menu-item-selected .nn-icon {
+    color: var(--nn-color-text-inverse) !important;
+}
+
+.main-menu .ant-menu-item:hover .nn-icon {
+    color: var(--nn-color-text-inverse) !important;
 }
 
 /* 底部菜单按钮样式 */
 .bottom-menu-btn {
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    border-top: 1px solid var(--nn-color-border-sider);
 }
 
-.bottom-menu-btn .ant-btn {
-    color: rgba(255, 255, 255, 0.85) !important;
+.bottom-menu-btn .nn-button {
+    color: var(--nn-color-text-sider) !important;
 }
 
-.bottom-menu-btn .ant-btn:hover {
-    color: #ffffff !important;
-    background: rgba(255, 255, 255, 0.15) !important;
+.bottom-menu-btn .nn-button:hover {
+    color: var(--nn-color-text-inverse) !important;
+    background: var(--nn-color-bg-sider-hover) !important;
 }
 
-.bottom-menu-btn .anticon {
-    color: rgba(255, 255, 255, 0.85) !important;
+.bottom-menu-btn .nn-icon {
+    color: var(--nn-color-text-sider) !important;
 }
 
-.bottom-menu-btn .ant-btn:hover .anticon {
-    color: #ffffff !important;
+.bottom-menu-btn .nn-button:hover .nn-icon {
+    color: var(--nn-color-text-inverse) !important;
 }
 
 /* 折叠按钮样式 */
-.toggle-btn .ant-btn {
-    color: rgba(255, 255, 255, 0.85) !important;
+.toggle-btn .nn-button {
+    color: var(--nn-color-text-sider) !important;
 }
 
-.toggle-btn .ant-btn:hover {
-    color: #ffffff !important;
-    background: rgba(255, 255, 255, 0.15) !important;
+.toggle-btn .nn-button:hover {
+    color: var(--nn-color-text-inverse) !important;
+    background: var(--nn-color-bg-sider-hover) !important;
 }
 
-.toggle-btn .anticon {
-    color: rgba(255, 255, 255, 0.85) !important;
+.toggle-btn .nn-icon {
+    color: var(--nn-color-text-sider) !important;
 }
 
-.toggle-btn .ant-btn:hover .anticon {
-    color: #ffffff !important;
+.toggle-btn .nn-button:hover .nn-icon {
+    color: var(--nn-color-text-inverse) !important;
 }
 
 /* 主页面样式 */
@@ -112,34 +129,30 @@
 .mt-main-container .fixed-tabs {
     height: 40px;
     flex-shrink: 0;
-    background-color: #fff;
+    background-color: var(--nn-color-bg-surface);
     z-index: 10;
     margin-left: 8px;
 }
 
-.mt-main-container .fixed-tabs .ant-tabs {
+.mt-main-container .fixed-tabs .nn-tabs {
     height: 100%;
 }
 
-.mt-main-container .fixed-tabs .ant-tabs-nav {
+.mt-main-container .fixed-tabs .nn-tabs-nav {
     height: 40px;
     margin: 0 !important;
 }
 
-.mt-main-container .fixed-tabs .ant-tabs-nav-wrap {
+.mt-main-container .fixed-tabs .nn-tabs-nav-wrap {
     align-items: center;
 }
 
-.mt-main-container .fixed-tabs .ant-tabs-tab {
+.mt-main-container .fixed-tabs .nn-tabs-tab {
     padding: 8px 0 !important;
     font-size: 14px;
 }
 
-.mt-main-container .fixed-tabs .ant-tabs-tab + .ant-tabs-tab {
-    margin-left: 16px !important;
-}
-
-.mt-main-container .fixed-tabs .ant-tabs-ink-bar {
+.mt-main-container .fixed-tabs .nn-tabs-tab-active::after {
     height: 2px;
 }
 
@@ -161,44 +174,32 @@
 }
 
 /* 卡片样式 - 增加优先级 */
-.ant-card .ant-card-body {
+.nn-card .nn-card-body {
     padding: 10px !important;
 }
 
-.ant-card .ant-card-head {
+.nn-card .nn-card-head {
     padding: 0 10px !important;
     min-height: 40px !important;
 }
 
-.ant-card .ant-card-head-title {
+.nn-card .nn-card-head-title {
     padding: 10px 0 !important;
     font-size: 14px !important;
 }
 
 /* 输入框错误样式 */
 .ant-input-status-error {
-    border-color: #ff4d4f !important;
+    border-color: var(--nn-color-error) !important;
 }
 
 .ant-input-status-error:hover {
-    border-color: #ff4d4f;
+    border-color: var(--nn-color-error);
 }
 
 .ant-input-status-error:focus {
-    border-color: #ff4d4f !important;
-    box-shadow: 0 0 0 2px rgba(255, 77, 79, 0.2) !important;
-}
-
-/* 提示框样式 */
-.ant-tooltip {
-    z-index: 1000 !important;
-}
-
-.ant-tooltip-inner {
-    color: white !important;
-    border-radius: 4px !important;
-    padding: 8px 12px !important;
-    font-size: 12px !important;
+    border-color: var(--nn-color-error) !important;
+    box-shadow: var(--nn-focus-shadow-error) !important;
 }
 
 /* 表格样式 */
@@ -224,34 +225,34 @@
 }
 
 .ant-table-row:hover {
-    background-color: #f5f5f5 !important;
+    background-color: var(--nn-color-bg-hover) !important;
 }
 
 /* 表单样式 */
 .ant-input[disabled] {
-    background-color: #f5f5f5 !important;
-    color: rgba(0, 0, 0, 0.85) !important;
+    background-color: var(--nn-color-bg-disabled) !important;
+    color: var(--nn-color-text-disabled) !important;
 }
 
 .ant-select-disabled .ant-select-selector {
-    background-color: #f5f5f5 !important;
-    color: rgba(0, 0, 0, 0.85) !important;
+    background-color: var(--nn-color-bg-disabled) !important;
+    color: var(--nn-color-text-disabled) !important;
 }
 
-.ant-checkbox-disabled + span {
-    color: rgba(0, 0, 0, 0.85) !important;
+.nn-checkbox-wrapper-disabled {
+    color: var(--nn-color-text-disabled) !important;
 }
 
-.ant-checkbox-disabled .ant-checkbox-inner {
-    background-color: #e6e6e6 !important;
-    border-color: #d9d9d9 !important;
+.nn-checkbox-wrapper-disabled .nn-checkbox-inner {
+    border-color: var(--nn-color-border) !important;
+    background-color: var(--nn-color-bg-disabled) !important;
 }
 
 .ant-form-item {
     margin-bottom: 8px !important;
 }
 
-.ant-divider {
+.nn-divider {
     font-size: 12px !important;
     margin: 5px 0 !important;
 }
@@ -274,6 +275,8 @@
 
 /* 弹出框主体样式 */
 .ant-modal-content {
+    background: var(--nn-color-bg-elevated) !important;
+    color: var(--nn-color-text) !important;
     max-height: 92vh !important;
     display: flex !important;
     flex-direction: column !important;
@@ -290,6 +293,7 @@
 }
 
 .ant-modal-header {
+    background: var(--nn-color-bg-elevated) !important;
     padding: 8px 8px !important;
     flex-shrink: 0 !important;
     min-height: 50px !important;
@@ -299,6 +303,8 @@
 }
 
 .ant-modal-footer {
+    background: var(--nn-color-bg-elevated) !important;
+    border-top-color: var(--nn-color-border-light) !important;
     padding: 8px 8px !important;
     flex-shrink: 0 !important;
     min-height: 50px !important;
@@ -343,11 +349,11 @@
     font-size: 14px !important;
 }
 
-.ant-modal-body .ant-card {
+.ant-modal-body .nn-card {
     margin-bottom: 0 !important;
 }
 
-.ant-modal-body .ant-card .ant-card-body {
+.ant-modal-body .nn-card .nn-card-body {
     padding: 10px !important;
 }
 
@@ -356,7 +362,7 @@
     min-height: 150px !important;
 }
 
-.ant-modal-body .ant-btn {
+.ant-modal-body .nn-button {
     font-size: 13px !important;
     padding: 4px 12px !important;
     height: 28px !important;
@@ -375,5 +381,6 @@
 }
 
 .ant-modal-title {
+    color: var(--nn-color-text) !important;
     font-size: 16px !important;
 }

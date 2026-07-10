@@ -1,61 +1,61 @@
 <template>
     <div class="mt-container tcpao-page">
-        <a-card title="TCP-AO MAC 计算器" class="tcpao-card">
+        <nn-card title="TCP-AO MAC 计算器" class="tcpao-card">
             <a-form :model="formState" layout="vertical" class="tcpao-form" @finish="handleCalculate">
                 <div class="tcpao-layout">
                     <div class="tcpao-main">
                         <div class="panel-block">
                             <div class="panel-title">输入上下文</div>
-                            <a-row :gutter="12">
-                                <a-col :xs="24" :lg="12">
+                            <nn-row :gutter="12">
+                                <nn-col :xs="24" :lg="12">
                                     <a-form-item label="密钥 (Key)" name="key" class="compact-item">
-                                        <a-tooltip :title="validationErrors.key" :open="!!validationErrors.key">
+                                        <nn-tooltip :title="validationErrors.key" :open="!!validationErrors.key">
                                             <a-input
                                                 v-model:value="formState.key"
                                                 placeholder="如: mypassword"
                                                 :status="validationErrors.key ? 'error' : ''"
                                             />
-                                        </a-tooltip>
+                                        </nn-tooltip>
                                     </a-form-item>
-                                </a-col>
-                                <a-col :xs="24" :lg="12">
+                                </nn-col>
+                                <nn-col :xs="24" :lg="12">
                                     <a-form-item label="SNE（可选）" name="sne" class="compact-item">
-                                        <a-tooltip :title="validationErrors.sne" :open="!!validationErrors.sne">
+                                        <nn-tooltip :title="validationErrors.sne" :open="!!validationErrors.sne">
                                             <ScrollTextarea
                                                 v-model:model-value="formState.sne"
                                                 :height="44"
                                                 placeholder="SNE（4字节hex）"
                                                 :status="validationErrors.sne ? 'error' : ''"
                                             />
-                                        </a-tooltip>
+                                        </nn-tooltip>
                                     </a-form-item>
-                                </a-col>
-                            </a-row>
+                                </nn-col>
+                            </nn-row>
 
-                            <a-row v-if="showKdfIsnInputs" :gutter="12">
-                                <a-col :xs="24" :md="12">
+                            <nn-row v-if="showKdfIsnInputs" :gutter="12">
+                                <nn-col :xs="24" :md="12">
                                     <a-form-item label="ISN A（可选）" name="isnA" class="compact-item">
-                                        <a-tooltip :title="validationErrors.isnA" :open="!!validationErrors.isnA">
+                                        <nn-tooltip :title="validationErrors.isnA" :open="!!validationErrors.isnA">
                                             <a-input
                                                 v-model:value="formState.isnA"
                                                 placeholder="留空取报文 Seq"
                                                 :status="validationErrors.isnA ? 'error' : ''"
                                             />
-                                        </a-tooltip>
+                                        </nn-tooltip>
                                     </a-form-item>
-                                </a-col>
-                                <a-col :xs="24" :md="12">
+                                </nn-col>
+                                <nn-col :xs="24" :md="12">
                                     <a-form-item label="ISN B（可选）" name="isnB" class="compact-item">
-                                        <a-tooltip :title="validationErrors.isnB" :open="!!validationErrors.isnB">
+                                        <nn-tooltip :title="validationErrors.isnB" :open="!!validationErrors.isnB">
                                             <a-input
                                                 v-model:value="formState.isnB"
                                                 placeholder="留空取报文 Ack"
                                                 :status="validationErrors.isnB ? 'error' : ''"
                                             />
-                                        </a-tooltip>
+                                        </nn-tooltip>
                                     </a-form-item>
-                                </a-col>
-                            </a-row>
+                                </nn-col>
+                            </nn-row>
                             <div v-if="showKdfIsnInputs" class="field-hint">
                                 仅覆盖 KDF 使用的 ISN，上层报文里的 Seq/Ack 不会被修改。
                             </div>
@@ -86,27 +86,27 @@
                         <div class="panel-block">
                             <div class="panel-title">算法</div>
                             <a-form-item label="MAC 算法" class="compact-item">
-                                <a-radio-group v-model:value="algorithm" class="choice-grid algo-grid">
-                                    <a-radio value="hmac-md5">HMAC-MD5</a-radio>
-                                    <a-radio value="hmac-sha1">HMAC-SHA1-12</a-radio>
-                                    <a-radio value="hmac-sha1-20">HMAC-SHA1-20</a-radio>
-                                    <a-radio value="hmac-sha256">HMAC-SHA-256</a-radio>
-                                    <a-radio value="hmac-sha384">HMAC-SHA-384</a-radio>
-                                    <a-radio value="hmac-sha512">HMAC-SHA-512</a-radio>
-                                    <a-radio value="hmac-sm3">HMAC-SM3</a-radio>
-                                    <a-radio value="aes-cmac">AES-128-CMAC</a-radio>
-                                    <a-radio value="md5">MD5</a-radio>
-                                    <a-radio value="sha1">SHA-1</a-radio>
-                                    <a-radio value="sha256">SHA-256</a-radio>
-                                    <a-radio value="sm3">SM3</a-radio>
-                                </a-radio-group>
+                                <nn-radio-group v-model:value="algorithm" class="choice-grid algo-grid">
+                                    <nn-radio value="hmac-md5">HMAC-MD5</nn-radio>
+                                    <nn-radio value="hmac-sha1">HMAC-SHA1-12</nn-radio>
+                                    <nn-radio value="hmac-sha1-20">HMAC-SHA1-20</nn-radio>
+                                    <nn-radio value="hmac-sha256">HMAC-SHA-256</nn-radio>
+                                    <nn-radio value="hmac-sha384">HMAC-SHA-384</nn-radio>
+                                    <nn-radio value="hmac-sha512">HMAC-SHA-512</nn-radio>
+                                    <nn-radio value="hmac-sm3">HMAC-SM3</nn-radio>
+                                    <nn-radio value="aes-cmac">AES-128-CMAC</nn-radio>
+                                    <nn-radio value="md5">MD5</nn-radio>
+                                    <nn-radio value="sha1">SHA-1</nn-radio>
+                                    <nn-radio value="sha256">SHA-256</nn-radio>
+                                    <nn-radio value="sm3">SM3</nn-radio>
+                                </nn-radio-group>
                             </a-form-item>
                         </div>
 
                         <div class="panel-block">
                             <div class="panel-title panel-title-row">
                                 <span>KDF 与消息构造</span>
-                                <a-tooltip v-if="isPlainAlgo && !skipKdf">
+                                <nn-tooltip v-if="isPlainAlgo && !skipKdf">
                                     <template #title>
                                         非 H 算法固定使用
                                         <code>hash(kdfInput ‖ key)</code>
@@ -115,44 +115,44 @@
                                         。
                                     </template>
                                     <InfoCircleOutlined class="mode-info-icon" />
-                                </a-tooltip>
+                                </nn-tooltip>
                             </div>
 
                             <a-form-item v-if="isKdfAlgo" class="compact-item compact-flag">
-                                <a-checkbox v-model:checked="skipKdf">跳过 KDF（直接用 master key）</a-checkbox>
+                                <nn-checkbox v-model:checked="skipKdf">跳过 KDF（直接用 master key）</nn-checkbox>
                             </a-form-item>
 
                             <a-form-item label="TCP 选项" class="compact-item">
                                 <div class="stacked-checks">
-                                    <a-checkbox v-model:checked="includeOtherOptions">包含其他 TCP 选项</a-checkbox>
-                                    <a-checkbox v-model:checked="includePseudoHeader">包含 IP 伪头部</a-checkbox>
+                                    <nn-checkbox v-model:checked="includeOtherOptions">包含其他 TCP 选项</nn-checkbox>
+                                    <nn-checkbox v-model:checked="includePseudoHeader">包含 IP 伪头部</nn-checkbox>
                                 </div>
                             </a-form-item>
                         </div>
 
                         <div class="action-bar">
-                            <a-button type="primary" html-type="submit">计算 MAC</a-button>
-                            <a-button @click="clearAll">清空</a-button>
+                            <nn-button type="primary" html-type="submit">计算 MAC</nn-button>
+                            <nn-button @click="clearAll">清空</nn-button>
                         </div>
                     </div>
                 </div>
             </a-form>
-        </a-card>
+        </nn-card>
 
         <!-- 计算结果弹出框 -->
         <a-modal v-model:open="showResultModal" title="MAC 计算结果" :footer="null" width="680px">
             <template v-if="result">
-                <a-descriptions :column="1" bordered size="small">
-                    <a-descriptions-item :label="pseudoHeaderLabel">
+                <nn-descriptions :column="1" bordered size="small">
+                    <nn-descriptions-item :label="pseudoHeaderLabel">
                         <div class="result-row">
                             <span style="font-family: monospace; word-break: break-all">
                                 {{ result.pseudoHeaderHex }}
                             </span>
-                            <a-button size="small" @click="copyToClipboard(result.pseudoHeaderHex)">复制</a-button>
+                            <nn-button size="small" @click="copyToClipboard(result.pseudoHeaderHex)">复制</nn-button>
                         </div>
                         <div class="field-hint">{{ pseudoHeaderHint }}</div>
-                    </a-descriptions-item>
-                    <a-descriptions-item
+                    </nn-descriptions-item>
+                    <nn-descriptions-item
                         v-if="result.trafficKeyHex !== undefined && result.trafficKeyHex !== null"
                         label="Traffic Key"
                     >
@@ -160,31 +160,31 @@
                             <span style="font-family: monospace; word-break: break-all">
                                 {{ result.trafficKeyHex }}
                             </span>
-                            <a-button size="small" @click="copyToClipboard(result.trafficKeyHex)">复制</a-button>
+                            <nn-button size="small" @click="copyToClipboard(result.trafficKeyHex)">复制</nn-button>
                         </div>
                         <div class="field-hint">KDF 派生的 Traffic Key</div>
-                    </a-descriptions-item>
-                    <a-descriptions-item label="消息体">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="消息体">
                         <div class="result-row">
                             <span style="font-family: monospace; word-break: break-all">{{ result.messageHex }}</span>
-                            <a-button size="small" @click="copyToClipboard(result.messageHex)">复制</a-button>
+                            <nn-button size="small" @click="copyToClipboard(result.messageHex)">复制</nn-button>
                         </div>
                         <div class="field-hint">SNE（可选） + 伪头部（可选） + TCP 段</div>
-                    </a-descriptions-item>
-                    <a-descriptions-item label="MAC（完整）">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="MAC（完整）">
                         <div class="result-row">
                             <span style="font-family: monospace">{{ result.mac }}</span>
-                            <a-button size="small" @click="copyToClipboard(result.mac)">复制</a-button>
+                            <nn-button size="small" @click="copyToClipboard(result.mac)">复制</nn-button>
                         </div>
-                    </a-descriptions-item>
-                    <a-descriptions-item :label="`MAC（前${result.macLen}字节）`">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item :label="`MAC（前${result.macLen}字节）`">
                         <div class="result-row">
                             <span style="font-family: monospace">{{ result.mac96 }}</span>
-                            <a-button size="small" @click="copyToClipboard(result.mac96)">复制</a-button>
+                            <nn-button size="small" @click="copyToClipboard(result.mac96)">复制</nn-button>
                         </div>
                         <div class="field-hint">TCP-AO 报文字段中实际填入的 MAC 值</div>
-                    </a-descriptions-item>
-                </a-descriptions>
+                    </nn-descriptions-item>
+                </nn-descriptions>
             </template>
         </a-modal>
     </div>
@@ -192,9 +192,9 @@
 
 <script setup>
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
-    import InfoCircleOutlined from '@ant-design/icons-vue/es/icons/InfoCircleOutlined';
+    import { InfoCircleOutlined } from '../../ui/icons';
     import { ref, computed, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { FormValidator, createTcpAoMacValidationRules } from '../../utils/validationCommon';
 
     defineOptions({
@@ -265,7 +265,7 @@
 
     const handleCalculate = async () => {
         if (validator.validate(formState.value)) {
-            message.error('请检查输入是否正确');
+            notify.error('请检查输入是否正确');
             return;
         }
 
@@ -287,11 +287,11 @@
                 showResultModal.value = true;
                 saveState();
             } else {
-                message.error(resp.msg || '计算失败');
+                notify.error(resp.msg || '计算失败');
                 result.value = null;
             }
         } catch (e) {
-            message.error(e.message || String(e));
+            notify.error(e.message || String(e));
             result.value = null;
         }
     };
@@ -317,9 +317,9 @@
             el.select();
             document.execCommand('copy');
             document.body.removeChild(el);
-            message.success('已复制到剪贴板');
+            notify.success('已复制到剪贴板');
         } catch (_e) {
-            message.error('复制失败');
+            notify.error('复制失败');
         }
     };
 </script>
@@ -337,15 +337,15 @@
         overflow: hidden;
     }
 
-    .tcpao-card :deep(.ant-card-head) {
+    .tcpao-card :deep(.nn-card-head) {
         min-height: 38px !important;
     }
 
-    .tcpao-card :deep(.ant-card-head-title) {
+    .tcpao-card :deep(.nn-card-head-title) {
         padding: 8px 0 !important;
     }
 
-    .tcpao-card :deep(.ant-card-body) {
+    .tcpao-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -396,9 +396,9 @@
 
     .panel-block {
         padding: 12px;
-        border: 1px solid #e8edf3;
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 12px;
-        background: linear-gradient(180deg, #fcfdff 0%, #f7f9fc 100%);
+        background: var(--nn-gradient-panel);
     }
 
     .panel-block-grow {
@@ -460,7 +460,7 @@
         margin-bottom: 10px;
         font-size: 13px;
         font-weight: 600;
-        color: #334155;
+        color: var(--nn-color-text-strong);
         letter-spacing: 0.01em;
     }
 
@@ -473,13 +473,13 @@
 
     .mode-info-icon {
         flex: 0 0 auto;
-        color: #64748b;
+        color: var(--nn-color-text-muted);
         cursor: help;
         font-size: 14px;
     }
 
     .mode-info-icon:hover {
-        color: #1677ff;
+        color: var(--nn-color-primary);
     }
 
     .compact-item:last-child {
@@ -501,13 +501,13 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .choice-grid :deep(.ant-radio-wrapper) {
+    .choice-grid :deep(.nn-radio-wrapper) {
         margin-inline-end: 0;
         min-height: 34px;
         padding: 6px 8px;
-        border: 1px solid #d7dee8;
+        border: 1px solid var(--nn-color-border);
         border-radius: 10px;
-        background: #fff;
+        background: var(--nn-color-bg-surface);
         display: flex;
         align-items: center;
         line-height: 1.35;
@@ -517,14 +517,14 @@
             box-shadow 0.2s ease;
     }
 
-    .choice-grid :deep(.ant-radio-wrapper:hover) {
-        border-color: #91caff;
+    .choice-grid :deep(.nn-radio-wrapper:hover) {
+        border-color: var(--nn-color-border-info);
     }
 
-    .choice-grid :deep(.ant-radio-wrapper-checked) {
-        border-color: #1677ff;
-        background: #eff6ff;
-        box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.08);
+    .choice-grid :deep(.nn-radio-wrapper-checked) {
+        border-color: var(--nn-color-primary);
+        background: var(--nn-color-bg-info-subtle);
+        box-shadow: var(--nn-focus-shadow-primary);
     }
 
     .stacked-checks {
@@ -532,7 +532,7 @@
         gap: 8px;
     }
 
-    .stacked-checks :deep(.ant-checkbox-wrapper) {
+    .stacked-checks :deep(.nn-checkbox-wrapper) {
         margin-inline-start: 0;
     }
 
@@ -545,7 +545,7 @@
 
     .field-hint {
         font-size: 12px;
-        color: #64748b;
+        color: var(--nn-color-text-muted);
         margin-top: 4px;
     }
 
@@ -584,7 +584,7 @@
             justify-content: stretch;
         }
 
-        .action-bar :deep(.ant-btn) {
+        .action-bar :deep(.nn-button) {
             flex: 1;
         }
     }

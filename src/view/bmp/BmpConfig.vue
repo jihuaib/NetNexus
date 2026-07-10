@@ -1,38 +1,38 @@
 <template>
     <div class="mt-container adaptive-list-page" data-testid="bmp-config-page">
-        <a-row class="adaptive-form-row">
-            <a-col :span="24">
-                <a-card title="BMP服务器配置">
+        <nn-row class="adaptive-form-row">
+            <nn-col :span="24">
+                <nn-card title="BMP服务器配置">
                     <a-form :model="bmpConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBmp">
-                        <a-row>
-                            <a-col :span="24">
+                        <nn-row>
+                            <nn-col :span="24">
                                 <a-form-item label="服务端端口" name="port">
-                                    <a-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
+                                    <nn-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
                                         <a-input
                                             v-model:value="bmpConfig.port"
                                             data-testid="bmp-port-input"
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row :gutter="12">
-                            <a-col :span="12">
+                            </nn-col>
+                        </nn-row>
+                        <nn-row :gutter="12">
+                            <nn-col :span="12">
                                 <a-form-item label="v4 TLV格式" name="bmpV4TlvDraft">
-                                    <a-radio-group v-model:value="bmpConfig.bmpV4TlvDraft" button-style="solid">
-                                        <a-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_20">draft-20</a-radio-button>
-                                        <a-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_19">draft-19</a-radio-button>
-                                    </a-radio-group>
+                                    <nn-radio-group v-model:value="bmpConfig.bmpV4TlvDraft" button-style="solid">
+                                        <nn-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_20">draft-20</nn-radio-button>
+                                        <nn-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_19">draft-19</nn-radio-button>
+                                    </nn-radio-group>
                                 </a-form-item>
-                            </a-col>
-                            <a-col :span="12">
+                            </nn-col>
+                            <nn-col :span="12">
                                 <a-form-item label="Path TLV类型" name="pathMarkingTlvType">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.pathMarkingTlvType"
                                         :open="!!validationErrors.pathMarkingTlvType"
                                     >
-                                        <a-input-number
+                                        <nn-input-number
                                             v-model:value="bmpConfig.pathMarkingTlvType"
                                             :min="1"
                                             :max="16383"
@@ -40,23 +40,23 @@
                                             style="width: 100%"
                                             :status="validationErrors.pathMarkingTlvType ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
                                 <a-form-item label="启用认证" name="enableAuth">
-                                    <a-checkbox v-model:checked="bmpConfig.enableAuth" />
+                                    <nn-checkbox v-model:checked="bmpConfig.enableAuth" />
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
+                            </nn-col>
+                        </nn-row>
 
                         <!-- 认证配置 -->
-                        <a-row :gutter="12">
-                            <a-col :span="8">
+                        <nn-row :gutter="12">
+                            <nn-col :span="8">
                                 <a-form-item label="本地监听端口" name="localPort">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.localPort"
                                         :open="bmpConfig.enableAuth && !!validationErrors.localPort"
                                     >
@@ -65,12 +65,12 @@
                                             :disabled="!bmpConfig.enableAuth"
                                             :status="bmpConfig.enableAuth && validationErrors.localPort ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
+                            </nn-col>
+                            <nn-col :span="8">
                                 <a-form-item label="路由器IP" name="peerIP">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.peerIP"
                                         :open="bmpConfig.enableAuth && !!validationErrors.peerIP"
                                     >
@@ -79,12 +79,12 @@
                                             :disabled="!bmpConfig.enableAuth"
                                             :status="bmpConfig.enableAuth && validationErrors.peerIP ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
+                            </nn-col>
+                            <nn-col :span="8">
                                 <a-form-item label="MD5密钥" name="md5Password">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.md5Password"
                                         :open="bmpConfig.enableAuth && !!validationErrors.md5Password"
                                     >
@@ -95,14 +95,14 @@
                                                 bmpConfig.enableAuth && validationErrors.md5Password ? 'error' : ''
                                             "
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
+                            </nn-col>
+                        </nn-row>
 
                         <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                            <a-space>
-                                <a-button
+                            <nn-space>
+                                <nn-button
                                     type="primary"
                                     html-type="submit"
                                     data-testid="bmp-start-button"
@@ -110,8 +110,8 @@
                                     :disabled="serverRunning"
                                 >
                                     启动服务器
-                                </a-button>
-                                <a-button
+                                </nn-button>
+                                <nn-button
                                     type="primary"
                                     danger
                                     data-testid="bmp-stop-button"
@@ -119,18 +119,18 @@
                                     @click="stopBmp"
                                 >
                                     停止服务器
-                                </a-button>
-                            </a-space>
+                                </nn-button>
+                            </nn-space>
                         </a-form-item>
                     </a-form>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <!-- BMP客户端列表 -->
-        <a-row class="adaptive-list-row">
-            <a-col :span="24">
-                <a-card title="BMP客户端列表" class="adaptive-list-card">
+        <nn-row class="adaptive-list-row">
+            <nn-col :span="24">
+                <nn-card title="BMP客户端列表" class="adaptive-list-card">
                     <div>
                         <a-table
                             class="adaptive-table"
@@ -152,31 +152,31 @@
                         >
                             <template #bodyCell="{ column, record }">
                                 <template v-if="column.key === 'bmpVersion'">
-                                    <a-tag :color="record.bmpVersion === 4 ? 'blue' : 'default'">
+                                    <nn-tag :color="record.bmpVersion === 4 ? 'blue' : 'default'">
                                         {{ getBmpVersionName(record.bmpVersion) }}
-                                    </a-tag>
+                                    </nn-tag>
                                 </template>
                                 <template v-else-if="column.key === 'bmpV4TlvDraft'">
-                                    <a-tag>{{ getBmpV4TlvDraftName(record.bmpV4TlvDraft) }}</a-tag>
+                                    <nn-tag>{{ getBmpV4TlvDraftName(record.bmpV4TlvDraft) }}</nn-tag>
                                 </template>
                                 <template v-else-if="column.key === 'tlvCount'">
                                     {{ getClientTlvCount(record) }}
                                 </template>
                                 <template v-else-if="column.key === 'action'">
-                                    <a-button
+                                    <nn-button
                                         type="link"
                                         data-testid="bmp-client-detail-button"
                                         @click="viewClientDetails(record)"
                                     >
                                         详情
-                                    </a-button>
+                                    </nn-button>
                                 </template>
                             </template>
                         </a-table>
                     </div>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <a-drawer
             v-model:open="detailsDrawerVisible"
@@ -192,7 +192,7 @@
 
 <script setup>
     import { ref, onMounted, onActivated, onDeactivated, watch } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { FormValidator, createBmpConfigValidationRules } from '../../utils/validationCommon';
     import {
         DEFAULT_VALUES,
@@ -332,12 +332,12 @@
     const startBmp = async () => {
         const hasErrors = validator.validate(bmpConfig.value);
         if (hasErrors) {
-            message.error('请检查配置信息是否正确');
+            notify.error('请检查配置信息是否正确');
             return;
         }
 
         if (bmpConfig.value.enableAuth && !(await isServerDeployed())) {
-            message.error('请先部署服务器');
+            notify.error('请先部署服务器');
             return;
         }
 
@@ -347,7 +347,7 @@
             payload.pathMarkingTlvType = normalizePathMarkingTlvType(payload.pathMarkingTlvType, payload.bmpV4TlvDraft);
             const saveResult = await window.bmpApi.saveBmpConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
@@ -358,12 +358,12 @@
                 serverRunning.value = true;
                 // Clear the client list when starting the server
                 clientList.value = [];
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
             } else {
-                message.error(result.msg || 'BMP服务器启动失败');
+                notify.error(result.msg || 'BMP服务器启动失败');
             }
         } catch (error) {
-            message.error(`BMP服务器启动出错: ${error.message}`);
+            notify.error(`BMP服务器启动出错: ${error.message}`);
         } finally {
             serverLoading.value = false;
         }
@@ -375,12 +375,12 @@
             if (result.status === 'success') {
                 serverRunning.value = false;
                 clientList.value = [];
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
             } else {
-                message.error(result.msg || 'BMP服务器停止失败');
+                notify.error(result.msg || 'BMP服务器停止失败');
             }
         } catch (error) {
-            message.error(`BMP服务器停止出错: ${error.message}`);
+            notify.error(`BMP服务器停止出错: ${error.message}`);
         }
     };
 
@@ -442,7 +442,7 @@
             }
         } catch (error) {
             console.error(error);
-            message.error('加载数据失败');
+            notify.error('加载数据失败');
         }
     };
 
@@ -511,7 +511,7 @@
         min-height: 0;
     }
 
-    .adaptive-list-row :deep(.ant-col) {
+    .adaptive-list-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -523,8 +523,8 @@
         overflow: hidden;
     }
 
-    .adaptive-list-card :deep(.ant-card-body),
-    .adaptive-list-card :deep(.ant-card-body > div) {
+    .adaptive-list-card :deep(.nn-card-body),
+    .adaptive-list-card :deep(.nn-card-body > div) {
         flex: 1;
         min-height: 0;
         min-width: 0;

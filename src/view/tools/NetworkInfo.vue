@@ -1,10 +1,10 @@
 <template>
     <div class="mt-container network-info-page">
         <!-- 面板头部 -->
-        <a-card title="网络信息" class="network-info-card">
+        <nn-card title="网络信息" class="network-info-card">
             <div class="network-info-content">
-                <a-tabs v-model:active-key="activePanelKey" size="small" class="network-tabs">
-                    <a-tab-pane key="interfaces" tab="接口信息">
+                <nn-tabs v-model:active-key="activePanelKey" size="small" class="network-tabs">
+                    <nn-tab-pane key="interfaces" tab="接口信息">
                         <div class="network-pane">
                             <div class="network-toolbar">
                                 <a-select
@@ -14,12 +14,12 @@
                                     :options="interfaceOptions"
                                     :loading="isLoading"
                                 />
-                                <a-button :loading="isLoading" @click="loadNetworkInfo">
+                                <nn-button :loading="isLoading" @click="loadNetworkInfo">
                                     <template #icon>
                                         <ReloadOutlined />
                                     </template>
                                     刷新
-                                </a-button>
+                                </nn-button>
                             </div>
 
                             <div class="network-table-wrap">
@@ -39,14 +39,14 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'status'">
-                                            <a-tag v-if="record.isUp" color="success">UP</a-tag>
-                                            <a-tag v-else color="default">DOWN</a-tag>
+                                            <nn-tag v-if="record.isUp" color="success">UP</nn-tag>
+                                            <nn-tag v-else color="default">DOWN</nn-tag>
                                         </template>
                                         <template v-else-if="column.key === 'family'">
-                                            <a-tag color="blue">{{ record.family }}</a-tag>
+                                            <nn-tag color="blue">{{ record.family }}</nn-tag>
                                         </template>
                                         <template v-else-if="column.key === 'mac'">
-                                            <a-tag color="green">{{ record.mac }}</a-tag>
+                                            <nn-tag color="green">{{ record.mac }}</nn-tag>
                                         </template>
                                         <template v-else-if="column.key === 'addresses'">
                                             <div class="ip-address-list">
@@ -56,12 +56,12 @@
                                                     class="ip-address-item"
                                                 >
                                                     <div class="ip-info">
-                                                        <a-tag
+                                                        <nn-tag
                                                             :color="addr.family === 'IPv4' ? 'blue' : 'purple'"
                                                             class="family-tag"
                                                         >
                                                             {{ addr.family }}
-                                                        </a-tag>
+                                                        </nn-tag>
                                                         <div class="address-details">
                                                             <span class="ip-text">{{ addr.address }}</span>
                                                             <span
@@ -80,16 +80,16 @@
                                                     </div>
 
                                                     <div class="ip-actions">
-                                                        <a-button
+                                                        <nn-button
                                                             type="link"
                                                             size="small"
                                                             class="action-btn"
                                                             @click="prepareEdit(record.name, addr)"
                                                         >
                                                             <EditOutlined />
-                                                        </a-button>
+                                                        </nn-button>
 
-                                                        <a-popconfirm
+                                                        <nn-popconfirm
                                                             v-if="addr.family === 'IPv6'"
                                                             title="确定要删除这个 IP 地址吗？"
                                                             ok-text="删除"
@@ -98,27 +98,27 @@
                                                                 handleDelete(record.name, addr.address, addr.family)
                                                             "
                                                         >
-                                                            <a-button
+                                                            <nn-button
                                                                 type="link"
                                                                 danger
                                                                 size="small"
                                                                 class="action-btn"
                                                             >
                                                                 <DeleteOutlined />
-                                                            </a-button>
-                                                        </a-popconfirm>
+                                                            </nn-button>
+                                                        </nn-popconfirm>
                                                     </div>
                                                 </div>
 
                                                 <div class="add-ip-btn-wrapper">
-                                                    <a-button
+                                                    <nn-button
                                                         type="link"
                                                         size="small"
                                                         class="action-btn"
                                                         @click="handleAddIPv6(record)"
                                                     >
                                                         <PlusOutlined />
-                                                    </a-button>
+                                                    </nn-button>
                                                 </div>
                                             </div>
                                         </template>
@@ -126,12 +126,12 @@
                                 </a-table>
                             </div>
                         </div>
-                    </a-tab-pane>
+                    </nn-tab-pane>
 
-                    <a-tab-pane key="routes" tab="路由信息">
+                    <nn-tab-pane key="routes" tab="路由信息">
                         <div class="network-pane">
                             <div class="network-toolbar">
-                                <a-segmented
+                                <nn-segmented
                                     v-model:value="routeFamilyFilter"
                                     :options="[
                                         { label: '全部', value: 'all' },
@@ -139,18 +139,18 @@
                                         { label: 'IPv6', value: 'IPv6' }
                                     ]"
                                 />
-                                <a-button type="primary" @click="openAddRouteModal">
+                                <nn-button type="primary" @click="openAddRouteModal">
                                     <template #icon>
                                         <PlusOutlined />
                                     </template>
                                     添加路由
-                                </a-button>
-                                <a-button :loading="isRouteLoading" @click="loadRouteInfo">
+                                </nn-button>
+                                <nn-button :loading="isRouteLoading" @click="loadRouteInfo">
                                     <template #icon>
                                         <ReloadOutlined />
                                     </template>
                                     刷新
-                                </a-button>
+                                </nn-button>
                             </div>
 
                             <div class="network-table-wrap">
@@ -170,9 +170,9 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'family'">
-                                            <a-tag :color="record.family === 'IPv4' ? 'blue' : 'purple'">
+                                            <nn-tag :color="record.family === 'IPv4' ? 'blue' : 'purple'">
                                                 {{ record.family }}
-                                            </a-tag>
+                                            </nn-tag>
                                         </template>
                                         <template v-else-if="column.key === 'gateway'">
                                             {{ routeValue(record.gateway) }}
@@ -187,23 +187,23 @@
                                             {{ routeValue(record.flags || record.state) }}
                                         </template>
                                         <template v-else-if="column.key === 'action'">
-                                            <a-popconfirm
+                                            <nn-popconfirm
                                                 title="确定要删除这条路由吗？"
                                                 ok-text="删除"
                                                 cancel-text="取消"
                                                 @confirm="handleDeleteRoute(record)"
                                             >
-                                                <a-button type="link" danger size="small">删除</a-button>
-                                            </a-popconfirm>
+                                                <nn-button type="link" danger size="small">删除</nn-button>
+                                            </nn-popconfirm>
                                         </template>
                                     </template>
                                 </a-table>
                             </div>
                         </div>
-                    </a-tab-pane>
-                </a-tabs>
+                    </nn-tab-pane>
+                </nn-tabs>
             </div>
-        </a-card>
+        </nn-card>
 
         <!-- 添加 IPv6 弹窗 -->
         <a-modal v-model:open="isAddModalVisible" title="添加 IPv6 地址" :confirm-loading="isAdding" @ok="handleAddOk">
@@ -213,31 +213,31 @@
                 </a-form-item>
 
                 <a-form-item label="IPv6 地址" required>
-                    <a-tooltip :title="addValidationErrors.ip" :open="!!addValidationErrors.ip">
+                    <nn-tooltip :title="addValidationErrors.ip" :open="!!addValidationErrors.ip">
                         <a-input
                             v-model:value="addForm.ip"
                             placeholder="例如: 2001:db8::1"
                             :status="addValidationErrors.ip ? 'error' : ''"
                         />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
                 <a-form-item label="前缀长度" required>
-                    <a-tooltip :title="addValidationErrors.mask" :open="!!addValidationErrors.mask">
+                    <nn-tooltip :title="addValidationErrors.mask" :open="!!addValidationErrors.mask">
                         <a-input
                             v-model:value="addForm.mask"
                             placeholder="例如: 64"
                             :status="addValidationErrors.mask ? 'error' : ''"
                         />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
                 <a-form-item label="默认网关">
-                    <a-tooltip :title="addValidationErrors.gateway" :open="!!addValidationErrors.gateway">
+                    <nn-tooltip :title="addValidationErrors.gateway" :open="!!addValidationErrors.gateway">
                         <a-input
                             v-model:value="addForm.gateway"
                             placeholder="可选"
                             :status="addValidationErrors.gateway ? 'error' : ''"
                         />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
             </a-form>
         </a-modal>
@@ -255,25 +255,25 @@
                 </a-form-item>
 
                 <a-form-item :label="editForm.family === 'ipv6' ? 'IPv6 地址' : 'IP 地址'" required>
-                    <a-tooltip :title="editValidationErrors.ip" :open="!!editValidationErrors.ip">
+                    <nn-tooltip :title="editValidationErrors.ip" :open="!!editValidationErrors.ip">
                         <a-input v-model:value="editForm.ip" :status="editValidationErrors.ip ? 'error' : ''" />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
 
                 <a-form-item :label="editForm.family === 'ipv6' ? '前缀长度' : '子网掩码'" required>
-                    <a-tooltip :title="editValidationErrors.mask" :open="!!editValidationErrors.mask">
+                    <nn-tooltip :title="editValidationErrors.mask" :open="!!editValidationErrors.mask">
                         <a-input v-model:value="editForm.mask" :status="editValidationErrors.mask ? 'error' : ''" />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
 
                 <a-form-item label="默认网关">
-                    <a-tooltip :title="editValidationErrors.gateway" :open="!!editValidationErrors.gateway">
+                    <nn-tooltip :title="editValidationErrors.gateway" :open="!!editValidationErrors.gateway">
                         <a-input
                             v-model:value="editForm.gateway"
                             placeholder="可选"
                             :status="editValidationErrors.gateway ? 'error' : ''"
                         />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
             </a-form>
         </a-modal>
@@ -286,37 +286,37 @@
         >
             <a-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
                 <a-form-item label="地址族" required>
-                    <a-radio-group v-model:value="routeForm.family">
-                        <a-radio-button value="ipv4">IPv4</a-radio-button>
-                        <a-radio-button value="ipv6">IPv6</a-radio-button>
-                    </a-radio-group>
+                    <nn-radio-group v-model:value="routeForm.family">
+                        <nn-radio-button value="ipv4">IPv4</nn-radio-button>
+                        <nn-radio-button value="ipv6">IPv6</nn-radio-button>
+                    </nn-radio-group>
                 </a-form-item>
                 <a-form-item label="目标地址" required>
-                    <a-tooltip :title="routeValidationErrors.destination" :open="!!routeValidationErrors.destination">
+                    <nn-tooltip :title="routeValidationErrors.destination" :open="!!routeValidationErrors.destination">
                         <a-input
                             v-model:value="routeForm.destination"
                             :placeholder="routeForm.family === 'ipv6' ? '例如: 2001:db8::' : '例如: 192.0.2.0'"
                             :status="routeValidationErrors.destination ? 'error' : ''"
                         />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
                 <a-form-item label="前缀长度" required>
-                    <a-tooltip :title="routeValidationErrors.prefixLength" :open="!!routeValidationErrors.prefixLength">
+                    <nn-tooltip :title="routeValidationErrors.prefixLength" :open="!!routeValidationErrors.prefixLength">
                         <a-input
                             v-model:value="routeForm.prefixLength"
                             :placeholder="routeForm.family === 'ipv6' ? '例如: 64' : '例如: 24'"
                             :status="routeValidationErrors.prefixLength ? 'error' : ''"
                         />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
                 <a-form-item label="下一跳" required>
-                    <a-tooltip :title="routeValidationErrors.gateway" :open="!!routeValidationErrors.gateway">
+                    <nn-tooltip :title="routeValidationErrors.gateway" :open="!!routeValidationErrors.gateway">
                         <a-input
                             v-model:value="routeForm.gateway"
                             :placeholder="routeForm.family === 'ipv6' ? '例如: fe80::1' : '例如: 192.0.2.1'"
                             :status="routeValidationErrors.gateway ? 'error' : ''"
                         />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
                 <a-form-item label="接口">
                     <a-select
@@ -327,13 +327,13 @@
                     />
                 </a-form-item>
                 <a-form-item label="Metric">
-                    <a-tooltip :title="routeValidationErrors.metric" :open="!!routeValidationErrors.metric">
+                    <nn-tooltip :title="routeValidationErrors.metric" :open="!!routeValidationErrors.metric">
                         <a-input
                             v-model:value="routeForm.metric"
                             placeholder="可选"
                             :status="routeValidationErrors.metric ? 'error' : ''"
                         />
-                    </a-tooltip>
+                    </nn-tooltip>
                 </a-form-item>
             </a-form>
         </a-modal>
@@ -342,11 +342,9 @@
 
 <script setup>
     import { ref, reactive, computed, onMounted, onActivated, watch } from 'vue';
-    import { message } from 'ant-design-vue';
-    import ReloadOutlined from '@ant-design/icons-vue/es/icons/ReloadOutlined';
-    import EditOutlined from '@ant-design/icons-vue/es/icons/EditOutlined';
-    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
-    import PlusOutlined from '@ant-design/icons-vue/es/icons/PlusOutlined';
+    import { notify } from '../../utils/notify';
+    import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '../../ui/icons';
+
     import {
         FormValidator,
         createNetworkInfoValidationRules,
@@ -556,7 +554,7 @@
 
     async function loadNetworkInfo() {
         if (!window.nativeApi) {
-            message.error('网络信息API不可用');
+            notify.error('网络信息API不可用');
             return;
         }
 
@@ -575,10 +573,10 @@
                     selectedInterfaceName.value = '';
                 }
             } else {
-                message.error(`获取网络信息失败: ${response.msg}`);
+                notify.error(`获取网络信息失败: ${response.msg}`);
             }
         } catch (err) {
-            message.error(`获取网络信息出错: ${err.message}`);
+            notify.error(`获取网络信息出错: ${err.message}`);
         } finally {
             isLoading.value = false;
         }
@@ -669,7 +667,7 @@
 
     async function loadRouteInfo() {
         if (!window.nativeApi?.getRoutes) {
-            message.error('本地路由API不可用');
+            notify.error('本地路由API不可用');
             return;
         }
 
@@ -682,10 +680,10 @@
                     id: route.id || `route-${index}`
                 }));
             } else {
-                message.error(`获取本地路由失败: ${response.msg}`);
+                notify.error(`获取本地路由失败: ${response.msg}`);
             }
         } catch (err) {
-            message.error(`获取本地路由出错: ${err.message}`);
+            notify.error(`获取本地路由出错: ${err.message}`);
         } finally {
             isRouteLoading.value = false;
         }
@@ -696,7 +694,7 @@
             return;
         }
         if (!window.nativeApi?.manageRoute) {
-            message.error('本地路由管理API不可用');
+            notify.error('本地路由管理API不可用');
             return;
         }
 
@@ -712,14 +710,14 @@
             });
 
             if (response.status === 'success') {
-                message.success('添加路由成功');
+                notify.success('添加路由成功');
                 isAddRouteModalVisible.value = false;
                 await loadRouteInfo();
             } else {
-                message.error(`添加路由失败: ${response.msg}`);
+                notify.error(`添加路由失败: ${response.msg}`);
             }
         } catch (err) {
-            message.error(`添加路由出错: ${err.message}`);
+            notify.error(`添加路由出错: ${err.message}`);
         } finally {
             isRouteAdding.value = false;
         }
@@ -727,11 +725,11 @@
 
     async function handleDeleteRoute(record) {
         if (!window.nativeApi?.manageRoute) {
-            message.error('本地路由管理API不可用');
+            notify.error('本地路由管理API不可用');
             return;
         }
         if (!record?.destinationPrefix) {
-            message.error('路由目标网段为空，无法删除');
+            notify.error('路由目标网段为空，无法删除');
             return;
         }
 
@@ -745,13 +743,13 @@
             });
 
             if (response.status === 'success') {
-                message.success('删除路由成功');
+                notify.success('删除路由成功');
                 await loadRouteInfo();
             } else {
-                message.error(`删除路由失败: ${response.msg}`);
+                notify.error(`删除路由失败: ${response.msg}`);
             }
         } catch (err) {
-            message.error(`删除路由出错: ${err.message}`);
+            notify.error(`删除路由出错: ${err.message}`);
         }
     }
 
@@ -786,14 +784,14 @@
 
             const response = await window.nativeApi.manageNetwork(config);
             if (response.status === 'success') {
-                message.success('更新成功');
+                notify.success('更新成功');
                 closeEditModal();
                 setTimeout(loadNetworkInfo, 1000); // Reduce timeout slightly
             } else {
-                message.error('更新失败: ' + response.msg);
+                notify.error('更新失败: ' + response.msg);
             }
         } catch (err) {
-            message.error('更新出错: ' + err.message);
+            notify.error('更新出错: ' + err.message);
         } finally {
             isUpdating.value = false;
         }
@@ -815,13 +813,13 @@
 
             const response = await window.nativeApi.manageNetwork(config);
             if (response.status === 'success') {
-                message.success('删除成功');
+                notify.success('删除成功');
                 setTimeout(loadNetworkInfo, 1000);
             } else {
-                message.error('删除失败: ' + response.msg);
+                notify.error('删除失败: ' + response.msg);
             }
         } catch (err) {
-            message.error('删除出错: ' + err.message);
+            notify.error('删除出错: ' + err.message);
         }
     }
 
@@ -854,14 +852,14 @@
             const response = await window.nativeApi.manageNetwork(config);
 
             if (response.status === 'success') {
-                message.success('添加成功');
+                notify.success('添加成功');
                 isAddModalVisible.value = false;
                 setTimeout(loadNetworkInfo, 1500);
             } else {
-                message.error(`添加失败: ${response.msg}`);
+                notify.error(`添加失败: ${response.msg}`);
             }
         } catch (err) {
-            message.error(`添加出错: ${err.message}`);
+            notify.error(`添加出错: ${err.message}`);
         } finally {
             isAdding.value = false;
         }
@@ -891,7 +889,7 @@
         overflow: hidden;
     }
 
-    .network-info-card :deep(.ant-card-body) {
+    .network-info-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -908,16 +906,16 @@
     }
 
     .network-tabs,
-    .network-tabs :deep(.ant-tabs-content-holder),
-    .network-tabs :deep(.ant-tabs-content),
-    .network-tabs :deep(.ant-tabs-tabpane) {
+    .network-tabs :deep(.nn-tabs-content-holder),
+    .network-tabs :deep(.nn-tabs-content),
+    .network-tabs :deep(.nn-tabs-tabpane) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .network-tabs :deep(.ant-tabs-nav) {
+    .network-tabs :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin: 0 0 8px;
     }
@@ -1002,15 +1000,15 @@
         align-items: center;
         justify-content: space-between;
         padding: 6px 10px;
-        background-color: #fafafa;
-        border: 1px solid #f0f0f0;
+        background-color: var(--nn-color-bg-subtle);
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
         transition: all 0.2s;
     }
 
     .ip-address-item:hover {
-        background-color: #f0f7ff;
-        border-color: #d6e4ff;
+        background-color: var(--nn-color-bg-info-subtle);
+        border-color: var(--nn-color-border-info);
     }
 
     .ip-info {
@@ -1036,7 +1034,7 @@
     .ip-text {
         font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
         font-weight: 600;
-        color: #1f1f1f;
+        color: var(--nn-color-text-strong);
         margin-right: 4px;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -1044,7 +1042,7 @@
 
     .subnet-text {
         font-size: 12px;
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
     }
 
     .ip-actions {
@@ -1071,10 +1069,10 @@
     }
 
     .add-ip-btn {
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
     }
 
     .add-ip-btn:hover {
-        color: #1890ff;
+        color: var(--nn-color-primary);
     }
 </style>

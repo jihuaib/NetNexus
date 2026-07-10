@@ -1,7 +1,19 @@
 <template>
     <div class="general-settings">
-        <a-card title="通用设置" class="settings-card">
+        <nn-card title="通用设置" class="settings-card">
             <a-form :model="settingsForm" layout="vertical">
+                <a-form-item label="主题" name="themePreset">
+                    <a-select
+                        v-model:value="settingsForm.themePreset"
+                        style="width: 100%"
+                        @change="handleThemePresetChange"
+                    >
+                        <a-select-option v-for="option in themePresetOptions" :key="option.value" :value="option.value">
+                            {{ option.label }}
+                        </a-select-option>
+                    </a-select>
+                </a-form-item>
+
                 <a-form-item label="日志级别" name="logLevel">
                     <a-select v-model:value="settingsForm.logLevel" style="width: 100%">
                         <a-select-option value="off">关闭</a-select-option>
@@ -13,19 +25,24 @@
                 </a-form-item>
 
                 <a-form-item>
-                    <a-button type="primary" @click="saveSettings">保存设置</a-button>
+                    <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
                 </a-form-item>
             </a-form>
-        </a-card>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { ref, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { DEFAULT_LOG_SETTINGS } from '../../const/toolsConst';
+    import { APP_THEME_PRESET_OPTIONS, DEFAULT_THEME_PRESET, normalizeThemePreset } from '../../theme/themeConst';
+    import { getThemeState, setThemePreset } from '../../utils/themeManager';
 
+    const { themePreset } = getThemeState();
+    const themePresetOptions = APP_THEME_PRESET_OPTIONS;
     const settingsForm = ref({
+        themePreset: normalizeThemePreset(themePreset.value, DEFAULT_THEME_PRESET),
         logLevel: DEFAULT_LOG_SETTINGS.logLevel
     });
 
@@ -36,23 +53,34 @@
             if (settings.status === 'success' && settings.data) {
                 settingsForm.value = {
                     ...DEFAULT_LOG_SETTINGS,
-                    ...settings.data
+                    logLevel: settings.data.logLevel || DEFAULT_LOG_SETTINGS.logLevel,
+                    themePreset: normalizeThemePreset(settings.data.themePreset, themePreset.value)
                 };
+                setThemePreset(settingsForm.value.themePreset, { persistLocal: false });
             }
         } catch (error) {
             console.error('获取设置失败', error);
         }
     };
 
+    const handleThemePresetChange = value => {
+        setThemePreset(value, { persistLocal: false });
+    };
+
     // 保存设置
     const saveSettings = async () => {
         try {
             const payload = JSON.parse(JSON.stringify(settingsForm.value));
-            await window.commonApi.saveGeneralSettings(payload);
-            message.success('设置已保存');
+            payload.themePreset = normalizeThemePreset(payload.themePreset);
+            const result = await window.commonApi.saveGeneralSettings(payload);
+            if (result?.status && result.status !== 'success') {
+                throw new Error(result.message || '保存设置失败');
+            }
+            setThemePreset(payload.themePreset);
+            notify.success('设置已保存');
         } catch (error) {
             console.error('保存设置失败', error);
-            message.error('保存设置失败');
+            notify.error('保存设置失败');
         }
     };
 

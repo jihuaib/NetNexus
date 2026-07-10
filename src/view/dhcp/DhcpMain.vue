@@ -2,10 +2,10 @@
     <div class="mt-main-container">
         <!-- 固定 Tabs -->
         <div class="fixed-tabs">
-            <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <a-tab-pane key="dhcp-config" tab="DHCP配置" />
-                <a-tab-pane key="dhcp-lease" tab="租约列表" />
-            </a-tabs>
+            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+                <nn-tab-pane key="dhcp-config" tab="DHCP配置" />
+                <nn-tab-pane key="dhcp-lease" tab="租约列表" />
+            </nn-tabs>
         </div>
 
         <!-- 可滚动内容区域 -->

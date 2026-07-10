@@ -5,11 +5,11 @@
             <div v-if="showNotification" class="update-notification" @click="handleNotificationClick">
                 <div class="notification-content">
                     <div class="notification-icon">
-                        <loading-outlined v-if="isChecking" spin />
-                        <download-outlined v-else-if="isDownloading" />
-                        <cloud-download-outlined v-else-if="updateAvailable" />
-                        <check-circle-outlined v-else-if="updateDownloaded" />
-                        <exclamation-circle-outlined v-else-if="hasError" />
+                        <loading-outlined v-if="isChecking" class="notification-icon-primary" spin />
+                        <download-outlined v-else-if="isDownloading" class="notification-icon-success" />
+                        <cloud-download-outlined v-else-if="updateAvailable" class="notification-icon-primary" />
+                        <check-circle-outlined v-else-if="updateDownloaded" class="notification-icon-success" />
+                        <exclamation-circle-outlined v-else-if="hasError" class="notification-icon-error" />
                     </div>
                     <div class="notification-text">
                         <div class="notification-title">{{ notificationTitle }}</div>
@@ -19,18 +19,18 @@
                         </div>
                     </div>
                     <div class="notification-actions">
-                        <a-button
+                        <nn-button
                             v-if="updateAvailable && !isDownloading && !updateDownloaded"
                             type="primary"
                             size="small"
                             @click.stop="downloadUpdate"
                         >
                             下载
-                        </a-button>
-                        <a-button v-if="updateDownloaded" type="primary" size="small" @click.stop="installUpdate">
+                        </nn-button>
+                        <nn-button v-if="updateDownloaded" type="primary" size="small" @click.stop="installUpdate">
                             安装
-                        </a-button>
-                        <a-button size="small" @click.stop="closeNotification">关闭</a-button>
+                        </nn-button>
+                        <nn-button size="small" @click.stop="closeNotification">关闭</nn-button>
                     </div>
                 </div>
             </div>
@@ -40,12 +40,15 @@
 
 <script setup>
     import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-    import { message } from 'ant-design-vue';
-    import LoadingOutlined from '@ant-design/icons-vue/es/icons/LoadingOutlined';
-    import DownloadOutlined from '@ant-design/icons-vue/es/icons/DownloadOutlined';
-    import CloudDownloadOutlined from '@ant-design/icons-vue/es/icons/CloudDownloadOutlined';
-    import CheckCircleOutlined from '@ant-design/icons-vue/es/icons/CheckCircleOutlined';
-    import ExclamationCircleOutlined from '@ant-design/icons-vue/es/icons/ExclamationCircleOutlined';
+    import { notify } from '../utils/notify';
+    import {
+        CheckCircleOutlined,
+        CloudDownloadOutlined,
+        DownloadOutlined,
+        ExclamationCircleOutlined,
+        LoadingOutlined
+    } from '../ui/icons';
+
     import EventBus from '../utils/eventBus';
     import { TOOLS_EVENT_PAGE_ID } from '../const/toolsConst';
 
@@ -89,7 +92,7 @@
     // 处理更新状态
     const handleUpdateStatus = respData => {
         if (respData.status !== 'success') {
-            message.error('检查更新失败');
+            notify.error('检查更新失败');
             return;
         }
         const { type, data } = respData.data;
@@ -139,7 +142,7 @@
     // 下载更新
     const downloadUpdate = async () => {
         if (!window.updaterApi) {
-            message.warning('更新功能仅在生产环境中可用');
+            notify.warning('更新功能仅在生产环境中可用');
             return;
         }
 
@@ -147,14 +150,14 @@
             await window.updaterApi.downloadUpdate();
         } catch (error) {
             console.error('下载更新失败:', error);
-            message.error('下载更新失败');
+            notify.error('下载更新失败');
         }
     };
 
     // 安装更新
     const installUpdate = async () => {
         if (!window.updaterApi) {
-            message.warning('更新功能仅在生产环境中可用');
+            notify.warning('更新功能仅在生产环境中可用');
             return;
         }
 
@@ -162,7 +165,7 @@
             await window.updaterApi.quitAndInstall();
         } catch (error) {
             console.error('安装更新失败:', error);
-            message.error('安装更新失败');
+            notify.error('安装更新失败');
         }
     };
 
@@ -191,10 +194,10 @@
         position: fixed;
         bottom: 20px;
         right: 20px;
-        background: #fff;
+        background: var(--nn-color-bg-elevated);
         border-radius: 8px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-        border: 1px solid #e8e8e8;
+        box-shadow: var(--nn-shadow-floating);
+        border: 1px solid var(--nn-color-border-light);
         max-width: 400px;
         min-width: 300px;
         z-index: 9999;
@@ -203,7 +206,7 @@
     }
 
     .update-notification:hover {
-        box-shadow: 0 6px 25px rgba(0, 0, 0, 0.2);
+        box-shadow: var(--nn-shadow-floating-hover);
         transform: translateY(-2px);
     }
 
@@ -216,7 +219,7 @@
 
     .notification-icon {
         font-size: 20px;
-        color: #1890ff;
+        color: var(--nn-color-primary);
         margin-top: 2px;
         flex-shrink: 0;
     }
@@ -229,13 +232,13 @@
     .notification-title {
         font-weight: 500;
         font-size: 14px;
-        color: #262626;
+        color: var(--nn-color-text);
         margin-bottom: 4px;
     }
 
     .notification-description {
         font-size: 12px;
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
         line-height: 1.4;
         margin-bottom: 8px;
     }
@@ -243,7 +246,7 @@
     .progress-bar {
         width: 100%;
         height: 4px;
-        background: #f5f5f5;
+        background: var(--nn-color-bg-progress);
         border-radius: 2px;
         overflow: hidden;
         margin-top: 8px;
@@ -251,7 +254,7 @@
 
     .progress-fill {
         height: 100%;
-        background: linear-gradient(90deg, #1890ff, #40a9ff);
+        background: var(--nn-gradient-progress);
         border-radius: 2px;
         transition: width 0.3s ease;
     }
@@ -262,7 +265,7 @@
         flex-shrink: 0;
     }
 
-    .notification-actions .ant-btn {
+    .notification-actions .nn-button {
         font-size: 12px;
         height: 24px;
         padding: 0 8px;
@@ -295,23 +298,15 @@
     }
 
     /* 状态特定样式 */
-    .notification-icon :deep(.anticon-loading) {
-        color: #1890ff;
+    .notification-icon :deep(.notification-icon-primary) {
+        color: var(--nn-color-primary);
     }
 
-    .notification-icon :deep(.anticon-download) {
-        color: #52c41a;
+    .notification-icon :deep(.notification-icon-success) {
+        color: var(--nn-color-success);
     }
 
-    .notification-icon :deep(.anticon-cloud-download) {
-        color: #1890ff;
-    }
-
-    .notification-icon :deep(.anticon-check-circle) {
-        color: #52c41a;
-    }
-
-    .notification-icon :deep(.anticon-exclamation-circle) {
-        color: #ff4d4f;
+    .notification-icon :deep(.notification-icon-error) {
+        color: var(--nn-color-error);
     }
 </style>

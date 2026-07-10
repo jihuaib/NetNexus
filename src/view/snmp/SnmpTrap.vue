@@ -1,34 +1,34 @@
 <template>
     <div class="mt-container snmp-trap-page">
-        <a-card title="SNMP Trap 监控" class="trap-card">
+        <nn-card title="SNMP Trap 监控" class="trap-card">
             <template #extra>
-                <a-space>
-                    <a-button danger :loading="clearLoading" @click="clearHistory">
+                <nn-space>
+                    <nn-button danger :loading="clearLoading" @click="clearHistory">
                         <template #icon><DeleteOutlined /></template>
                         清空历史
-                    </a-button>
-                </a-space>
+                    </nn-button>
+                </nn-space>
             </template>
 
             <!-- 统计信息 -->
-            <a-row :gutter="16" class="stats-row">
-                <a-col :span="6">
-                    <a-statistic title="总接收数量" :value="totalTraps" prefix="#" />
-                </a-col>
-                <a-col :span="6">
-                    <a-statistic title="今日接收" :value="todayTraps" prefix="#" />
-                </a-col>
-                <a-col :span="6">
-                    <a-statistic title="最近1小时" :value="recentTraps" prefix="#" />
-                </a-col>
-                <a-col :span="6">
-                    <a-statistic title="在线代理" :value="onlineAgents" prefix="#" />
-                </a-col>
-            </a-row>
+            <nn-row :gutter="16" class="stats-row">
+                <nn-col :span="6">
+                    <nn-statistic title="总接收数量" :value="totalTraps" prefix="#" />
+                </nn-col>
+                <nn-col :span="6">
+                    <nn-statistic title="今日接收" :value="todayTraps" prefix="#" />
+                </nn-col>
+                <nn-col :span="6">
+                    <nn-statistic title="最近1小时" :value="recentTraps" prefix="#" />
+                </nn-col>
+                <nn-col :span="6">
+                    <nn-statistic title="在线代理" :value="onlineAgents" prefix="#" />
+                </nn-col>
+            </nn-row>
 
             <!-- 筛选器 -->
-            <a-row :gutter="16" class="filter-row">
-                <a-col :span="6">
+            <nn-row :gutter="16" class="filter-row">
+                <nn-col :span="6">
                     <a-select
                         v-model:value="filters.version"
                         placeholder="选择SNMP版本"
@@ -40,24 +40,24 @@
                         <a-select-option value="v2c">SNMPv2c</a-select-option>
                         <a-select-option value="v3">SNMPv3</a-select-option>
                     </a-select>
-                </a-col>
-                <a-col :span="6">
+                </nn-col>
+                <nn-col :span="6">
                     <a-input
                         v-model:value="filters.sourceIp"
                         placeholder="源IP地址"
                         allow-clear
                         @change="handleFilterChange"
                     />
-                </a-col>
-                <a-col :span="6">
+                </nn-col>
+                <nn-col :span="6">
                     <a-input
                         v-model:value="filters.community"
                         placeholder="Community"
                         allow-clear
                         @change="handleFilterChange"
                     />
-                </a-col>
-                <a-col :span="6">
+                </nn-col>
+                <nn-col :span="6">
                     <a-range-picker
                         v-model:value="filters.timeRange"
                         show-time
@@ -65,8 +65,8 @@
                         style="width: 100%"
                         @change="handleFilterChange"
                     />
-                </a-col>
-            </a-row>
+                </nn-col>
+            </nn-row>
 
             <!-- Trap列表表格 -->
             <a-table
@@ -81,29 +81,29 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'version'">
-                        <a-tag :color="getVersionColor(record.version)">
+                        <nn-tag :color="getVersionColor(record.version)">
                             {{ record.version.toUpperCase() }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                     <template v-else-if="column.key === 'status'">
-                        <a-tag :color="getStatusColor(record.status)">
+                        <nn-tag :color="getStatusColor(record.status)">
                             {{ getStatusText(record.status) }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                     <template v-else-if="column.key === 'timestamp'">
                         {{ formatTimestamp(record.timestamp) }}
                     </template>
                     <template v-else-if="column.key === 'action'">
-                        <a-space>
-                            <a-button type="link" size="small" @click="showTrapDetail(record)">
+                        <nn-space>
+                            <nn-button type="link" size="small" @click="showTrapDetail(record)">
                                 <template #icon><EyeOutlined /></template>
                                 详情
-                            </a-button>
-                        </a-space>
+                            </nn-button>
+                        </nn-space>
                     </template>
                 </template>
             </a-table>
-        </a-card>
+        </nn-card>
 
         <!-- Trap详情模态框 -->
         <a-modal
@@ -114,39 +114,39 @@
         >
             <div v-if="selectedTrap" class="trap-detail">
                 <div class="trap-detail-section-title">基本信息</div>
-                <a-descriptions :column="2" bordered size="small">
-                    <a-descriptions-item label="Trap ID">{{ selectedTrap.id }}</a-descriptions-item>
-                    <a-descriptions-item label="接收时间">
+                <nn-descriptions :column="2" bordered size="small">
+                    <nn-descriptions-item label="Trap ID">{{ selectedTrap.id }}</nn-descriptions-item>
+                    <nn-descriptions-item label="接收时间">
                         {{ formatTimestamp(selectedTrap.timestamp) }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="源IP地址">{{ selectedTrap.sourceIp }}</a-descriptions-item>
-                    <a-descriptions-item label="源端口">{{ selectedTrap.sourcePort }}</a-descriptions-item>
-                    <a-descriptions-item label="SNMP版本">
-                        <a-tag :color="getVersionColor(selectedTrap.version)">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="源IP地址">{{ selectedTrap.sourceIp }}</nn-descriptions-item>
+                    <nn-descriptions-item label="源端口">{{ selectedTrap.sourcePort }}</nn-descriptions-item>
+                    <nn-descriptions-item label="SNMP版本">
+                        <nn-tag :color="getVersionColor(selectedTrap.version)">
                             {{ selectedTrap.version.toUpperCase() }}
-                        </a-tag>
-                    </a-descriptions-item>
-                    <a-descriptions-item label="状态">
-                        <a-tag :color="getStatusColor(selectedTrap.status)">
+                        </nn-tag>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="状态">
+                        <nn-tag :color="getStatusColor(selectedTrap.status)">
                             {{ getStatusText(selectedTrap.status) }}
-                        </a-tag>
-                    </a-descriptions-item>
-                    <a-descriptions-item v-if="selectedTrap.community" label="Community">
+                        </nn-tag>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item v-if="selectedTrap.community" label="Community">
                         {{ selectedTrap.community }}
-                    </a-descriptions-item>
-                    <a-descriptions-item v-if="selectedTrap.enterpriseOid" label="企业OID">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item v-if="selectedTrap.enterpriseOid" label="企业OID">
                         {{ selectedTrap.enterpriseOid }}
-                    </a-descriptions-item>
-                    <a-descriptions-item v-if="selectedTrap.enterpriseName" label="企业名称">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item v-if="selectedTrap.enterpriseName" label="企业名称">
                         {{ selectedTrap.enterpriseName }}
-                    </a-descriptions-item>
-                    <a-descriptions-item v-if="selectedTrap.trapOid" label="Trap OID">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item v-if="selectedTrap.trapOid" label="Trap OID">
                         {{ selectedTrap.trapOid }}
-                    </a-descriptions-item>
-                    <a-descriptions-item v-if="selectedTrap.trapName" label="Trap 名称">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item v-if="selectedTrap.trapName" label="Trap 名称">
                         {{ selectedTrap.trapName }}
-                    </a-descriptions-item>
-                    <a-descriptions-item
+                    </nn-descriptions-item>
+                    <nn-descriptions-item
                         v-if="hasTrapField(selectedTrap.genericType) || hasTrapField(selectedTrap.specificType)"
                         label="Trap类型"
                     >
@@ -158,8 +158,8 @@
                                 特定: {{ selectedTrap.specificType }}
                             </span>
                         </div>
-                    </a-descriptions-item>
-                </a-descriptions>
+                    </nn-descriptions-item>
+                </nn-descriptions>
 
                 <!-- 变量绑定 -->
                 <div class="trap-detail-section-title">变量绑定 (Variable Bindings)</div>
@@ -175,7 +175,7 @@
                     <template #bodyCell="{ column, record }">
                         <template v-if="column.key === 'value'">
                             <div class="varbind-value">
-                                <a-typography-text copyable>{{ record.value }}</a-typography-text>
+                                <nn-typography-text copyable>{{ record.value }}</nn-typography-text>
                                 <div v-if="record.valueName" class="varbind-value-name">
                                     {{ record.valueName }}
                                 </div>
@@ -190,9 +190,9 @@
 
 <script setup>
     import { ref, reactive, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
-    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
-    import EyeOutlined from '@ant-design/icons-vue/es/icons/EyeOutlined';
+    import { notify } from '../../utils/notify';
+    import { DeleteOutlined, EyeOutlined } from '../../ui/icons';
+
     import { SNMP_TRAP_STATUS, SNMP_SUB_EVT_TYPES, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
     import dayjs from 'dayjs';
     import EventBus from '../../utils/eventBus';
@@ -503,11 +503,11 @@
             if (result.status === 'success') {
                 setTrapPage(normalizeTrapListPayload(result.data));
             } else if (showLoading) {
-                message.error(result.msg || '获取Trap列表失败');
+                notify.error(result.msg || '获取Trap列表失败');
             }
         } catch (error) {
             if (showLoading) {
-                message.error('获取Trap列表失败: ' + error.message);
+                notify.error('获取Trap列表失败: ' + error.message);
             }
         } finally {
             trapListLoading = false;
@@ -538,12 +538,12 @@
                     recentTraps: 0,
                     onlineAgents: 0
                 });
-                message.success(result.msg || '历史记录清空成功');
+                notify.success(result.msg || '历史记录清空成功');
             } else {
-                message.error(result.msg || '清空失败');
+                notify.error(result.msg || '清空失败');
             }
         } catch (error) {
-            message.error('清空失败: ' + error.message);
+            notify.error('清空失败: ' + error.message);
         } finally {
             clearLoading.value = false;
         }
@@ -616,7 +616,7 @@
         overflow: hidden;
     }
 
-    .trap-card :deep(.ant-card-body) {
+    .trap-card :deep(.nn-card-body) {
         display: flex;
         flex: 1;
         flex-direction: column;
@@ -629,12 +629,12 @@
         flex-shrink: 0;
     }
 
-    .stats-row :deep(.ant-statistic-title) {
+    .stats-row :deep(.nn-statistic-title) {
         margin-bottom: 2px;
         font-size: 13px;
     }
 
-    .stats-row :deep(.ant-statistic-content) {
+    .stats-row :deep(.nn-statistic-content) {
         font-size: 20px;
         line-height: 28px;
     }
@@ -649,7 +649,7 @@
 
     .varbind-value-name {
         margin-top: 4px;
-        color: #666;
+        color: var(--nn-color-text-muted);
         font-size: 12px;
     }
 
@@ -685,7 +685,7 @@
 
     .trap-detail-section-title {
         margin: 8px 0;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         font-weight: 600;
         line-height: 22px;
     }
@@ -694,11 +694,11 @@
         margin-top: 0;
     }
 
-    .trap-detail :deep(.ant-descriptions-item-label) {
+    .trap-detail :deep(.nn-descriptions-item-label) {
         width: 92px;
     }
 
-    .trap-detail :deep(.ant-descriptions-item-content) {
+    .trap-detail :deep(.nn-descriptions-item-content) {
         min-width: 0;
         word-break: break-all;
     }

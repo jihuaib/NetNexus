@@ -1,57 +1,57 @@
 <template>
     <div class="update-settings">
-        <a-card title="应用更新" class="settings-card">
+        <nn-card title="应用更新" class="settings-card">
             <!-- 当前版本信息 -->
-            <a-row class="version-info">
-                <a-col :span="12">
-                    <a-statistic title="当前版本" :value="currentVersion" />
-                </a-col>
-                <a-col :span="12">
-                    <a-statistic title="更新状态" :value="updateStatusText" />
-                </a-col>
-            </a-row>
+            <nn-row class="version-info">
+                <nn-col :span="12">
+                    <nn-statistic title="当前版本" :value="currentVersion" />
+                </nn-col>
+                <nn-col :span="12">
+                    <nn-statistic title="更新状态" :value="updateStatusText" />
+                </nn-col>
+            </nn-row>
 
             <!-- 更新检查按钮 -->
             <div class="update-actions">
-                <a-space>
-                    <a-button type="primary" :loading="isChecking" :disabled="isDownloading" @click="checkForUpdates">
+                <nn-space>
+                    <nn-button type="primary" :loading="isChecking" :disabled="isDownloading" @click="checkForUpdates">
                         检查更新
-                    </a-button>
-                    <a-button
+                    </nn-button>
+                    <nn-button
                         v-if="updateAvailable && !isDownloading && !updateDownloaded"
                         type="default"
                         @click="downloadUpdate"
                     >
                         下载更新
-                    </a-button>
-                    <a-button v-if="updateDownloaded" type="danger" @click="installUpdate">重启并安装</a-button>
-                </a-space>
+                    </nn-button>
+                    <nn-button v-if="updateDownloaded" type="danger" @click="installUpdate">重启并安装</nn-button>
+                </nn-space>
             </div>
 
             <!-- 自动更新设置 -->
-            <a-divider>自动更新设置</a-divider>
+            <nn-divider>自动更新设置</nn-divider>
             <div class="auto-update-settings">
                 <a-form layout="vertical">
                     <a-form-item label="启动时检查更新">
-                        <a-switch
+                        <nn-switch
                             v-model:checked="updateSettings.autoCheckOnStartup"
                             @change="saveAutoUpdateSettings"
                         />
                         <div class="setting-description">启用后，应用启动时会自动检查更新</div>
                     </a-form-item>
                     <a-form-item label="自动下载更新">
-                        <a-switch v-model:checked="updateSettings.autoDownload" @change="saveAutoUpdateSettings" />
+                        <nn-switch v-model:checked="updateSettings.autoDownload" @change="saveAutoUpdateSettings" />
                         <div class="setting-description">启用后，发现更新时会自动下载（仍需手动安装）</div>
                     </a-form-item>
                 </a-form>
             </div>
-        </a-card>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import EventBus from '../../utils/eventBus';
     import { TOOLS_EVENT_PAGE_ID } from '../../const/toolsConst';
 
@@ -88,7 +88,7 @@
     // 检查更新
     const checkForUpdates = async () => {
         if (!window.updaterApi) {
-            message.warning('更新功能仅在生产环境中可用');
+            notify.warning('更新功能仅在生产环境中可用');
             return;
         }
 
@@ -99,13 +99,13 @@
             const result = await window.updaterApi.checkForUpdates();
             if (result) {
                 updateStatusText.value = '检查完成';
-                message.success('更新检查完成');
+                notify.success('更新检查完成');
             } else {
                 updateStatusText.value = '检查失败';
             }
         } catch (error) {
             console.error('检查更新失败:', error);
-            message.error('检查更新失败: ' + error.message);
+            notify.error('检查更新失败: ' + error.message);
             updateStatusText.value = '检查失败';
         } finally {
             isChecking.value = false;
@@ -115,7 +115,7 @@
     // 下载更新
     const downloadUpdate = async () => {
         if (!window.updaterApi) {
-            message.warning('更新功能仅在生产环境中可用');
+            notify.warning('更新功能仅在生产环境中可用');
             return;
         }
 
@@ -126,14 +126,14 @@
         } catch (error) {
             console.error('下载更新失败:', error);
             isDownloading.value = false;
-            message.error('下载更新失败: ' + error.message);
+            notify.error('下载更新失败: ' + error.message);
         }
     };
 
     // 安装更新
     const installUpdate = async () => {
         if (!window.updaterApi) {
-            message.warning('更新功能仅在生产环境中可用');
+            notify.warning('更新功能仅在生产环境中可用');
             return;
         }
 
@@ -141,14 +141,14 @@
             await window.updaterApi.quitAndInstall();
         } catch (error) {
             console.error('安装更新失败:', error);
-            message.error('安装更新失败: ' + error.message);
+            notify.error('安装更新失败: ' + error.message);
         }
     };
 
     // 处理更新状态
     const handleUpdateStatus = respData => {
         if (respData.status !== 'success') {
-            message.error('检查更新失败');
+            notify.error('检查更新失败');
             return;
         }
         const { type, data } = respData.data;
@@ -160,12 +160,12 @@
             case 'update-available':
                 updateAvailable.value = true;
                 updateStatusText.value = `发现新版本 ${data.version}`;
-                message.info(`发现新版本 ${data.version}`);
+                notify.info(`发现新版本 ${data.version}`);
                 break;
             case 'update-not-available':
                 updateAvailable.value = false;
                 updateStatusText.value = '已是最新版本';
-                message.success('当前已是最新版本');
+                notify.success('当前已是最新版本');
                 break;
             case 'download-started':
                 isDownloading.value = true;
@@ -179,11 +179,11 @@
                 isDownloading.value = false;
                 updateDownloaded.value = true;
                 updateStatusText.value = '下载完成，可以安装';
-                message.success('更新下载完成，可以安装');
+                notify.success('更新下载完成，可以安装');
                 break;
             case 'update-error':
                 isDownloading.value = false;
-                message.error('更新过程中发生错误: ' + data.error);
+                notify.error('更新过程中发生错误: ' + data.error);
                 updateStatusText.value = '更新失败';
                 break;
         }
@@ -202,10 +202,10 @@
 
             // 这里可以保存到本地设置
             window.commonApi.saveUpdateSettings(settings);
-            message.success('设置已保存');
+            notify.success('设置已保存');
         } catch (error) {
             console.error('保存设置失败:', error);
-            message.error('保存设置失败');
+            notify.error('保存设置失败');
         }
     };
 
@@ -263,27 +263,27 @@
         justify-content: space-between;
         margin-top: 8px;
         font-size: 12px;
-        color: #666;
+        color: var(--nn-color-text-secondary);
     }
 
     .auto-update-settings h4 {
         margin-bottom: 16px;
-        color: #333;
+        color: var(--nn-color-text);
     }
 
     .setting-description {
         margin-top: 4px;
         font-size: 12px;
-        color: #666;
+        color: var(--nn-color-text-secondary);
     }
 
-    :deep(.ant-statistic-title) {
-        color: #666;
+    :deep(.nn-statistic-title) {
+        color: var(--nn-color-text-secondary);
         font-size: 14px;
     }
 
-    :deep(.ant-statistic-content) {
-        color: #333;
+    :deep(.nn-statistic-content) {
+        color: var(--nn-color-text);
         font-size: 18px;
         font-weight: 500;
     }

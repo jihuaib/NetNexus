@@ -1,46 +1,46 @@
 <template>
     <div class="mt-container snmp-mib-page" @click="hideContextMenu">
-        <a-card title="MIB 管理" class="mib-card">
+        <nn-card title="MIB 管理" class="mib-card">
             <div class="mib-workspace">
                 <div class="mib-toolbar">
                     <div class="mib-action-group">
-                        <a-button type="primary" :loading="mibCompileLoading" @click="selectMibFiles">
+                        <nn-button type="primary" :loading="mibCompileLoading" @click="selectMibFiles">
                             <template #icon><FileSearchOutlined /></template>
                             导入文件
-                        </a-button>
-                        <a-button :loading="mibCompileLoading" @click="selectMibDirectory">
+                        </nn-button>
+                        <nn-button :loading="mibCompileLoading" @click="selectMibDirectory">
                             <template #icon><FolderOpenOutlined /></template>
                             导入目录
-                        </a-button>
-                        <a-button
+                        </nn-button>
+                        <nn-button
                             :disabled="mibFiles.length === 0"
                             :loading="mibCompileLoading"
                             @click="compileStoredMibs"
                         >
                             <template #icon><ReloadOutlined /></template>
                             重新编译
-                        </a-button>
-                        <a-button :disabled="mibFiles.length === 0" :loading="projectSaving" @click="showSaveProject">
+                        </nn-button>
+                        <nn-button :disabled="mibFiles.length === 0" :loading="projectSaving" @click="showSaveProject">
                             <template #icon><SaveOutlined /></template>
                             保存工程
-                        </a-button>
-                        <a-button :loading="projectLoading || projectImporting" @click="showImportProject">
+                        </nn-button>
+                        <nn-button :loading="projectLoading || projectImporting" @click="showImportProject">
                             <template #icon><ImportOutlined /></template>
                             导入工程
-                        </a-button>
-                        <a-button danger :disabled="mibFiles.length === 0" @click="clearMibs">
+                        </nn-button>
+                        <nn-button danger :disabled="mibFiles.length === 0" @click="clearMibs">
                             <template #icon><DeleteOutlined /></template>
                             清空
-                        </a-button>
+                        </nn-button>
                     </div>
 
                     <div class="mib-status-group">
-                        <a-tag v-if="mibCompileLoading" color="processing">后台编译中</a-tag>
-                        <a-tag v-else-if="mibStatus.cacheHit" color="success">缓存命中</a-tag>
-                        <a-tag color="blue">用户 {{ mibStatus.modules.length }}</a-tag>
-                        <a-tag color="cyan">基础 {{ mibStatus.baseModules.length }}</a-tag>
-                        <a-tag color="green">OID {{ mibStatus.totalObjects }}</a-tag>
-                        <a-tag color="default">文件 {{ mibStatus.expandedFileCount }}</a-tag>
+                        <nn-tag v-if="mibCompileLoading" color="processing">后台编译中</nn-tag>
+                        <nn-tag v-else-if="mibStatus.cacheHit" color="success">缓存命中</nn-tag>
+                        <nn-tag color="blue">用户 {{ mibStatus.modules.length }}</nn-tag>
+                        <nn-tag color="cyan">基础 {{ mibStatus.baseModules.length }}</nn-tag>
+                        <nn-tag color="green">OID {{ mibStatus.totalObjects }}</nn-tag>
+                        <nn-tag color="default">文件 {{ mibStatus.expandedFileCount }}</nn-tag>
                     </div>
                 </div>
 
@@ -51,7 +51,7 @@
                         allow-clear
                         @press-enter="translateOid"
                     />
-                    <a-button :loading="oidTranslateLoading" @click="translateOid">解析OID</a-button>
+                    <nn-button :loading="oidTranslateLoading" @click="translateOid">解析OID</nn-button>
                 </div>
 
                 <div class="mib-main">
@@ -92,7 +92,7 @@
                                     </span>
                                 </template>
                             </a-tree>
-                            <a-empty v-else description="暂无MIB树" />
+                            <nn-empty v-else description="暂无MIB树" />
                         </div>
                     </section>
 
@@ -102,49 +102,49 @@
                                 <span class="mib-panel-title">节点详情</span>
                             </div>
                             <div class="mib-detail-scroll">
-                                <a-descriptions
+                                <nn-descriptions
                                     v-if="selectedOidNode"
                                     :column="1"
                                     bordered
                                     size="small"
                                     class="mib-node-detail"
                                 >
-                                    <a-descriptions-item label="名称">
+                                    <nn-descriptions-item label="名称">
                                         {{ selectedOidNode.moduleQualifiedName || selectedOidNode.objectName }}
-                                    </a-descriptions-item>
-                                    <a-descriptions-item label="OID">
-                                        <a-typography-text copyable>
+                                    </nn-descriptions-item>
+                                    <nn-descriptions-item label="OID">
+                                        <nn-typography-text copyable>
                                             {{ selectedOidNode.oid }}
-                                        </a-typography-text>
-                                    </a-descriptions-item>
-                                    <a-descriptions-item label="路径">
+                                        </nn-typography-text>
+                                    </nn-descriptions-item>
+                                    <nn-descriptions-item label="路径">
                                         {{ selectedOidNode.pathName || '-' }}
-                                    </a-descriptions-item>
-                                    <a-descriptions-item label="类型">
+                                    </nn-descriptions-item>
+                                    <nn-descriptions-item label="类型">
                                         {{ selectedOidNode.macro || '-' }}
-                                    </a-descriptions-item>
-                                    <a-descriptions-item label="语法">
+                                    </nn-descriptions-item>
+                                    <nn-descriptions-item label="语法">
                                         {{ selectedOidNode.syntax || '-' }}
-                                    </a-descriptions-item>
-                                    <a-descriptions-item label="访问">
+                                    </nn-descriptions-item>
+                                    <nn-descriptions-item label="访问">
                                         {{ selectedOidNode.maxAccess || '-' }}
-                                    </a-descriptions-item>
-                                    <a-descriptions-item
+                                    </nn-descriptions-item>
+                                    <nn-descriptions-item
                                         v-if="selectedOidNode.canGet || selectedOidNode.canSet"
                                         label="查询OID"
                                     >
-                                        <a-typography-text copyable>
+                                        <nn-typography-text copyable>
                                             {{ selectedOidNode.queryOid || selectedOidNode.oid }}
-                                        </a-typography-text>
-                                    </a-descriptions-item>
-                                    <a-descriptions-item label="能力">
+                                        </nn-typography-text>
+                                    </nn-descriptions-item>
+                                    <nn-descriptions-item label="能力">
                                         {{ getNodeAbilityText(selectedOidNode) }}
-                                    </a-descriptions-item>
-                                    <a-descriptions-item label="状态">
+                                    </nn-descriptions-item>
+                                    <nn-descriptions-item label="状态">
                                         {{ selectedOidNode.status || '-' }}
-                                    </a-descriptions-item>
-                                </a-descriptions>
-                                <a-empty v-else description="请选择OID节点" />
+                                    </nn-descriptions-item>
+                                </nn-descriptions>
+                                <nn-empty v-else description="请选择OID节点" />
                             </div>
                         </section>
 
@@ -157,26 +157,29 @@
                             </div>
                             <div class="mib-file-list">
                                 <div v-for="record in mibFiles" :key="record.filePath" class="mib-file-row">
-                                    <a-tag :color="record.status === 'compiled' ? 'green' : 'red'" class="mib-file-tag">
+                                    <nn-tag
+                                        :color="record.status === 'compiled' ? 'green' : 'red'"
+                                        class="mib-file-tag"
+                                    >
                                         {{ record.status === 'compiled' ? '已编译' : '失败' }}
-                                    </a-tag>
-                                    <a-tooltip :title="record.filePath">
+                                    </nn-tag>
+                                    <nn-tooltip :title="record.filePath">
                                         <span class="mib-file-name">{{ record.fileName }}</span>
-                                    </a-tooltip>
-                                    <a-tooltip v-if="record.msg" :title="record.msg">
+                                    </nn-tooltip>
+                                    <nn-tooltip v-if="record.msg" :title="record.msg">
                                         <InfoCircleOutlined class="mib-file-info" />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </div>
-                                <a-empty v-if="mibFiles.length === 0" description="暂无文件" />
+                                <nn-empty v-if="mibFiles.length === 0" description="暂无文件" />
                             </div>
                         </section>
                     </aside>
                 </div>
             </div>
-        </a-card>
+        </nn-card>
 
         <a-modal v-model:open="oidResultModalOpen" title="OID解析结果" :footer="null" width="640px">
-            <a-alert
+            <nn-alert
                 v-if="oidResult"
                 :type="oidResult.matched ? 'success' : 'warning'"
                 show-icon
@@ -184,43 +187,43 @@
                 :description="oidResult.matched ? oidResult.pathName || oidResult.oid : oidResult.oid"
             />
 
-            <a-descriptions v-if="oidResult" :column="1" bordered size="small" class="oid-result-detail">
-                <a-descriptions-item label="查询OID">
-                    <a-typography-text copyable>
+            <nn-descriptions v-if="oidResult" :column="1" bordered size="small" class="oid-result-detail">
+                <nn-descriptions-item label="查询OID">
+                    <nn-typography-text copyable>
                         {{ oidResult.oid || '-' }}
-                    </a-typography-text>
-                </a-descriptions-item>
-                <a-descriptions-item label="匹配OID">
-                    <a-typography-text v-if="oidResult.matchedOid" copyable>
+                    </nn-typography-text>
+                </nn-descriptions-item>
+                <nn-descriptions-item label="匹配OID">
+                    <nn-typography-text v-if="oidResult.matchedOid" copyable>
                         {{ oidResult.matchedOid }}
-                    </a-typography-text>
+                    </nn-typography-text>
                     <span v-else>-</span>
-                </a-descriptions-item>
-                <a-descriptions-item label="对象名称">
+                </nn-descriptions-item>
+                <nn-descriptions-item label="对象名称">
                     {{ oidResult.moduleQualifiedName || oidResult.objectName || '-' }}
-                </a-descriptions-item>
-                <a-descriptions-item label="模块">
+                </nn-descriptions-item>
+                <nn-descriptions-item label="模块">
                     {{ oidResult.moduleName || '-' }}
-                </a-descriptions-item>
-                <a-descriptions-item label="路径">
+                </nn-descriptions-item>
+                <nn-descriptions-item label="路径">
                     {{ oidResult.pathName || '-' }}
-                </a-descriptions-item>
-                <a-descriptions-item label="实例后缀">
+                </nn-descriptions-item>
+                <nn-descriptions-item label="实例后缀">
                     {{ oidResult.instanceSuffix || '-' }}
-                </a-descriptions-item>
-                <a-descriptions-item label="类型">
+                </nn-descriptions-item>
+                <nn-descriptions-item label="类型">
                     {{ oidResult.macro || '-' }}
-                </a-descriptions-item>
-                <a-descriptions-item label="语法">
+                </nn-descriptions-item>
+                <nn-descriptions-item label="语法">
                     {{ oidResult.syntax || '-' }}
-                </a-descriptions-item>
-                <a-descriptions-item label="访问">
+                </nn-descriptions-item>
+                <nn-descriptions-item label="访问">
                     {{ oidResult.maxAccess || '-' }}
-                </a-descriptions-item>
-                <a-descriptions-item label="状态">
+                </nn-descriptions-item>
+                <nn-descriptions-item label="状态">
                     {{ oidResult.status || '-' }}
-                </a-descriptions-item>
-            </a-descriptions>
+                </nn-descriptions-item>
+            </nn-descriptions>
         </a-modal>
 
         <a-modal
@@ -252,10 +255,10 @@
 
         <a-modal v-model:open="projectImportOpen" title="导入MIB工程" :footer="null" width="760px">
             <div class="mib-project-header">
-                <a-tooltip :title="projectRootDir">
+                <nn-tooltip :title="projectRootDir">
                     <span class="mib-project-root">{{ projectRootDir || 'userData/snmp-mib-projects' }}</span>
-                </a-tooltip>
-                <a-button size="small" :loading="projectLoading" @click="loadMibProjects">刷新</a-button>
+                </nn-tooltip>
+                <nn-button size="small" :loading="projectLoading" @click="loadMibProjects">刷新</nn-button>
             </div>
             <a-table
                 :columns="projectColumns"
@@ -268,22 +271,22 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'name'">
-                        <a-tooltip :title="record.directory">
+                        <nn-tooltip :title="record.directory">
                             <span class="mib-project-name">{{ record.name }}</span>
-                        </a-tooltip>
+                        </nn-tooltip>
                     </template>
                     <template v-else-if="column.key === 'updatedAt'">
                         {{ formatProjectTime(record.updatedAt) }}
                     </template>
                     <template v-else-if="column.key === 'action'">
-                        <a-button
+                        <nn-button
                             type="link"
                             size="small"
                             :loading="projectImporting && importingProjectName === record.name"
                             @click="importMibProject(record)"
                         >
                             导入
-                        </a-button>
+                        </nn-button>
                     </template>
                 </template>
             </a-table>
@@ -319,19 +322,19 @@
                 <a-form-item label="实际OID">
                     <div class="mib-oid-input-row">
                         <a-input v-model:value="getForm.oid" />
-                        <a-button
+                        <nn-button
                             v-if="getTargetNode?.isTableColumn && !isGetNextMode"
                             :loading="instanceLoading && instanceTargetForm === 'get'"
                             @click="showInstanceSelector('get')"
                         >
                             选择实例
-                        </a-button>
+                        </nn-button>
                     </div>
                 </a-form-item>
             </a-form>
 
-            <a-descriptions v-if="getResult" :column="1" bordered size="small" class="mib-request-result">
-                <a-descriptions-item label="对象">
+            <nn-descriptions v-if="getResult" :column="1" bordered size="small" class="mib-request-result">
+                <nn-descriptions-item label="对象">
                     <div class="mib-request-object">
                         <div class="mib-request-object-title">
                             {{ getVarbindObjectName(getResult) }}
@@ -339,20 +342,20 @@
                         <div class="mib-request-object-meta">
                             {{ getVarbindObjectPath(getResult) }}
                         </div>
-                        <a-typography-text copyable class="mib-request-object-oid">
+                        <nn-typography-text copyable class="mib-request-object-oid">
                             {{ getResult.oid }}
-                        </a-typography-text>
+                        </nn-typography-text>
                     </div>
-                </a-descriptions-item>
-                <a-descriptions-item label="类型">
+                </nn-descriptions-item>
+                <nn-descriptions-item label="类型">
                     {{ getResult.type || '-' }}
-                </a-descriptions-item>
-                <a-descriptions-item label="值">
-                    <a-typography-text copyable>
+                </nn-descriptions-item>
+                <nn-descriptions-item label="值">
+                    <nn-typography-text copyable>
                         {{ getResult.value }}
-                    </a-typography-text>
-                </a-descriptions-item>
-            </a-descriptions>
+                    </nn-typography-text>
+                </nn-descriptions-item>
+            </nn-descriptions>
         </a-modal>
 
         <a-modal
@@ -385,17 +388,17 @@
                 <a-form-item label="实际OID">
                     <div class="mib-oid-input-row">
                         <a-input v-model:value="setForm.oid" />
-                        <a-button
+                        <nn-button
                             v-if="setTargetNode?.isTableColumn"
                             :loading="instanceLoading && instanceTargetForm === 'set'"
                             @click="showInstanceSelector('set')"
                         >
                             选择实例
-                        </a-button>
+                        </nn-button>
                     </div>
                 </a-form-item>
-                <a-row :gutter="12">
-                    <a-col :span="12">
+                <nn-row :gutter="12">
+                    <nn-col :span="12">
                         <a-form-item label="类型">
                             <a-select v-model:value="setForm.type">
                                 <a-select-option
@@ -407,13 +410,13 @@
                                 </a-select-option>
                             </a-select>
                         </a-form-item>
-                    </a-col>
-                    <a-col :span="12">
+                    </nn-col>
+                    <nn-col :span="12">
                         <a-form-item label="值">
                             <a-input v-model:value="setForm.value" placeholder="请输入SET值" />
                         </a-form-item>
-                    </a-col>
-                </a-row>
+                    </nn-col>
+                </nn-row>
             </a-form>
         </a-modal>
 
@@ -424,7 +427,7 @@
             :z-index="INSTANCE_MODAL_Z_INDEX"
             width="760px"
         >
-            <a-alert
+            <nn-alert
                 v-if="instanceMeta?.limitReached"
                 type="warning"
                 show-icon
@@ -432,7 +435,7 @@
                 description="仅显示前100条实例，可手动填写实例后缀或提高后台限制后重试。"
                 class="mib-request-alert"
             />
-            <a-alert
+            <nn-alert
                 v-else-if="instanceMeta?.rows?.length === 0"
                 type="info"
                 show-icon
@@ -455,18 +458,18 @@
                             <div class="instance-object-title">
                                 {{ getInstanceObjectName(record) }}
                             </div>
-                            <a-typography-text copyable class="instance-object-oid">
+                            <nn-typography-text copyable class="instance-object-oid">
                                 {{ record.oid }}
-                            </a-typography-text>
+                            </nn-typography-text>
                         </div>
                     </template>
                     <template v-else-if="column.key === 'value'">
-                        <a-tooltip :title="record.value">
+                        <nn-tooltip :title="record.value">
                             <span class="instance-value">{{ record.value || '-' }}</span>
-                        </a-tooltip>
+                        </nn-tooltip>
                     </template>
                     <template v-else-if="column.key === 'action'">
-                        <a-button type="link" size="small" @click="selectInstance(record)">选择</a-button>
+                        <nn-button type="link" size="small" @click="selectInstance(record)">选择</nn-button>
                     </template>
                 </template>
             </a-table>
@@ -486,18 +489,18 @@
         >
             <div class="walk-modal-body">
                 <a-form :model="walkForm" :label-col="{ style: { width: '92px' } }" class="mib-request-form walk-form">
-                    <a-row :gutter="12">
-                        <a-col :xs="24" :sm="12">
+                    <nn-row :gutter="12">
+                        <nn-col :xs="24" :sm="12">
                             <a-form-item label="目标">
                                 <div class="mib-request-readonly">{{ getRequestTargetText(walkForm) }}</div>
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :sm="12">
+                        </nn-col>
+                        <nn-col :xs="24" :sm="12">
                             <a-form-item label="版本">
                                 <div class="mib-request-readonly">{{ getRequestAuthText(walkForm) }}</div>
                             </a-form-item>
-                        </a-col>
-                    </a-row>
+                        </nn-col>
+                    </nn-row>
                     <a-form-item label="起始对象">
                         <div class="mib-request-object">
                             <div class="mib-request-object-title">
@@ -508,25 +511,25 @@
                             </div>
                         </div>
                     </a-form-item>
-                    <a-row :gutter="12">
-                        <a-col :xs="24" :md="12">
+                    <nn-row :gutter="12">
+                        <nn-col :xs="24" :md="12">
                             <a-form-item label="起始OID">
                                 <a-input v-model:value="walkForm.oid" />
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="12" :md="6">
+                        </nn-col>
+                        <nn-col :xs="12" :md="6">
                             <a-form-item label="上限">
-                                <a-input-number
+                                <nn-input-number
                                     v-model:value="walkForm.limit"
                                     :min="1"
                                     :max="1000"
                                     style="width: 100%"
                                 />
                             </a-form-item>
-                        </a-col>
-                        <a-col :xs="12" :md="6">
+                        </nn-col>
+                        <nn-col :xs="12" :md="6">
                             <a-form-item label="批量数">
-                                <a-input-number
+                                <nn-input-number
                                     v-model:value="walkForm.maxRepetitions"
                                     :min="1"
                                     :max="50"
@@ -534,16 +537,16 @@
                                     :disabled="walkForm.version !== 'v2c'"
                                 />
                             </a-form-item>
-                        </a-col>
-                    </a-row>
+                        </nn-col>
+                    </nn-row>
                 </a-form>
 
                 <div v-if="walkMeta" class="walk-summary">
-                    <a-space>
-                        <a-tag color="blue">{{ walkRows.length }} 条</a-tag>
-                        <a-tag v-if="walkMeta.limitReached" color="orange">达到上限</a-tag>
-                        <a-tag v-else color="green">已停止: {{ walkMeta.stoppedBy || '-' }}</a-tag>
-                    </a-space>
+                    <nn-space>
+                        <nn-tag color="blue">{{ walkRows.length }} 条</nn-tag>
+                        <nn-tag v-if="walkMeta.limitReached" color="orange">达到上限</nn-tag>
+                        <nn-tag v-else color="green">已停止: {{ walkMeta.stoppedBy || '-' }}</nn-tag>
+                    </nn-space>
                 </div>
                 <div class="walk-output-shell">
                     <textarea
@@ -606,21 +609,23 @@
 
 <script setup>
     import { computed, reactive, ref, nextTick, onActivated, onBeforeUnmount, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { DEFAULT_VALUES } from '../../const/snmpConst';
-    import ApiOutlined from '@ant-design/icons-vue/es/icons/ApiOutlined';
-    import BellOutlined from '@ant-design/icons-vue/es/icons/BellOutlined';
-    import CopyOutlined from '@ant-design/icons-vue/es/icons/CopyOutlined';
-    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
-    import EditOutlined from '@ant-design/icons-vue/es/icons/EditOutlined';
-    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
-    import FolderOpenOutlined from '@ant-design/icons-vue/es/icons/FolderOpenOutlined';
-    import ImportOutlined from '@ant-design/icons-vue/es/icons/ImportOutlined';
-    import InfoCircleOutlined from '@ant-design/icons-vue/es/icons/InfoCircleOutlined';
-    import ReloadOutlined from '@ant-design/icons-vue/es/icons/ReloadOutlined';
-    import SaveOutlined from '@ant-design/icons-vue/es/icons/SaveOutlined';
-    import SearchOutlined from '@ant-design/icons-vue/es/icons/SearchOutlined';
-    import StepForwardOutlined from '@ant-design/icons-vue/es/icons/StepForwardOutlined';
+    import {
+        ApiOutlined,
+        BellOutlined,
+        CopyOutlined,
+        DeleteOutlined,
+        EditOutlined,
+        FileSearchOutlined,
+        FolderOpenOutlined,
+        ImportOutlined,
+        InfoCircleOutlined,
+        ReloadOutlined,
+        SaveOutlined,
+        SearchOutlined,
+        StepForwardOutlined
+    } from '../../ui/icons';
 
     defineOptions({ name: 'SnmpMib' });
 
@@ -891,7 +896,7 @@
         const loadPromise = (async () => {
             const result = await window.snmpApi.getMibTreeChildren(key);
             if (result.status !== 'success') {
-                message.error(result.msg || '获取MIB树节点失败');
+                notify.error(result.msg || '获取MIB树节点失败');
                 return [];
             }
 
@@ -909,7 +914,7 @@
         try {
             return await loadPromise;
         } catch (error) {
-            message.error('获取MIB树节点失败: ' + error.message);
+            notify.error('获取MIB树节点失败: ' + error.message);
             return [];
         } finally {
             treeLoadingPromises.delete(key);
@@ -1278,15 +1283,15 @@
             if (result.status === 'success') {
                 setMibStatus(result.data);
                 if (result.data?.failedFiles?.length > 0) {
-                    message.warning(`MIB编译完成，${result.data.failedFiles.length} 个文件失败`);
+                    notify.warning(`MIB编译完成，${result.data.failedFiles.length} 个文件失败`);
                 } else {
-                    message.success('MIB编译完成');
+                    notify.success('MIB编译完成');
                 }
             } else {
-                message.error(result.msg || 'MIB编译失败');
+                notify.error(result.msg || 'MIB编译失败');
             }
         } catch (error) {
-            message.error('MIB编译失败: ' + error.message);
+            notify.error('MIB编译失败: ' + error.message);
         } finally {
             mibCompileLoading.value = false;
         }
@@ -1296,7 +1301,7 @@
         try {
             const result = await window.snmpApi.selectMibFiles();
             if (result.status !== 'success') {
-                message.error(result.msg || '选择MIB文件失败');
+                notify.error(result.msg || '选择MIB文件失败');
                 return;
             }
 
@@ -1311,7 +1316,7 @@
             const allFiles = Array.from(new Set([...currentFiles, ...selectedFiles]));
             await compileMibFiles(allFiles);
         } catch (error) {
-            message.error('选择MIB文件失败: ' + error.message);
+            notify.error('选择MIB文件失败: ' + error.message);
         }
     };
 
@@ -1319,7 +1324,7 @@
         try {
             const result = await window.snmpApi.selectMibDirectory();
             if (result.status !== 'success') {
-                message.error(result.msg || '选择MIB目录失败');
+                notify.error(result.msg || '选择MIB目录失败');
                 return;
             }
 
@@ -1333,7 +1338,7 @@
             const allPaths = Array.from(new Set([...currentFiles, result.data]));
             await compileMibFiles(allPaths);
         } catch (error) {
-            message.error('选择MIB目录失败: ' + error.message);
+            notify.error('选择MIB目录失败: ' + error.message);
         }
     };
 
@@ -1383,7 +1388,7 @@
     const saveMibProject = async () => {
         const name = projectForm.name.trim();
         if (!name) {
-            message.warning('请输入工程名');
+            notify.warning('请输入工程名');
             return;
         }
 
@@ -1391,17 +1396,17 @@
             projectSaving.value = true;
             const result = await window.snmpApi.saveMibProject({ name });
             if (result.status !== 'success') {
-                message.error(result.msg || '保存MIB工程失败');
+                notify.error(result.msg || '保存MIB工程失败');
                 return;
             }
 
             projectSaveOpen.value = false;
-            message.success(result.msg || 'MIB工程保存成功');
+            notify.success(result.msg || 'MIB工程保存成功');
             if (projectImportOpen.value) {
                 await loadMibProjects();
             }
         } catch (error) {
-            message.error('保存MIB工程失败: ' + error.message);
+            notify.error('保存MIB工程失败: ' + error.message);
         } finally {
             projectSaving.value = false;
         }
@@ -1412,14 +1417,14 @@
             projectLoading.value = true;
             const result = await window.snmpApi.listMibProjects();
             if (result.status !== 'success') {
-                message.error(result.msg || '获取MIB工程列表失败');
+                notify.error(result.msg || '获取MIB工程列表失败');
                 return;
             }
 
             projectRootDir.value = result.data?.rootDir || '';
             mibProjects.value = Array.isArray(result.data?.projects) ? result.data.projects : [];
         } catch (error) {
-            message.error('获取MIB工程列表失败: ' + error.message);
+            notify.error('获取MIB工程列表失败: ' + error.message);
         } finally {
             projectLoading.value = false;
         }
@@ -1441,15 +1446,15 @@
             importingProjectName.value = record.name;
             const result = await window.snmpApi.importMibProject({ name: record.name });
             if (result.status !== 'success') {
-                message.error(result.msg || '导入MIB工程失败');
+                notify.error(result.msg || '导入MIB工程失败');
                 return;
             }
 
             setMibStatus(result.data?.summary || result.data);
             projectImportOpen.value = false;
-            message.success(result.msg || 'MIB工程导入成功');
+            notify.success(result.msg || 'MIB工程导入成功');
         } catch (error) {
-            message.error('导入MIB工程失败: ' + error.message);
+            notify.error('导入MIB工程失败: ' + error.message);
         } finally {
             projectImporting.value = false;
             importingProjectName.value = '';
@@ -1464,12 +1469,12 @@
                 setMibStatus(result.data);
                 oidResult.value = null;
                 oidResultModalOpen.value = false;
-                message.success(result.msg || 'MIB配置已清空');
+                notify.success(result.msg || 'MIB配置已清空');
             } else {
-                message.error(result.msg || '清空MIB配置失败');
+                notify.error(result.msg || '清空MIB配置失败');
             }
         } catch (error) {
-            message.error('清空MIB配置失败: ' + error.message);
+            notify.error('清空MIB配置失败: ' + error.message);
         }
     };
 
@@ -1558,10 +1563,10 @@
 
         try {
             await navigator.clipboard.writeText(oid);
-            message.success('OID已复制');
+            notify.success('OID已复制');
         } catch (error) {
             oidQuery.value = oid;
-            message.warning('复制失败，已填入OID输入框');
+            notify.warning('复制失败，已填入OID输入框');
         } finally {
             hideContextMenu();
         }
@@ -1626,7 +1631,7 @@
 
     const showNotifyCapability = () => {
         hideContextMenu();
-        message.info('该节点用于Trap/Inform变量绑定，不用于普通GET/SET');
+        notify.info('该节点用于Trap/Inform变量绑定，不用于普通GET/SET');
     };
 
     const loadRequestDefaults = async form => {
@@ -1650,7 +1655,7 @@
         const node = targetForm === 'set' ? setTargetNode.value : getTargetNode.value;
         const form = targetForm === 'set' ? setForm : getForm;
         if (!node?.oid) {
-            message.warning('请选择表字段节点');
+            notify.warning('请选择表字段节点');
             return;
         }
 
@@ -1669,7 +1674,7 @@
             });
 
             if (result.status !== 'success') {
-                message.error(result.msg || '实例枚举失败');
+                notify.error(result.msg || '实例枚举失败');
                 return;
             }
 
@@ -1684,10 +1689,10 @@
             };
 
             if (instanceRows.value.length === 0) {
-                message.info('未发现当前字段下的实例');
+                notify.info('未发现当前字段下的实例');
             }
         } catch (error) {
-            message.error('实例枚举失败: ' + error.message);
+            notify.error('实例枚举失败: ' + error.message);
         } finally {
             instanceLoading.value = false;
         }
@@ -1711,12 +1716,12 @@
         await loadRequestDefaults(getForm);
         const actionText = isGetNextMode.value ? 'GET-NEXT' : 'GET';
         if (!getForm.targetHost || !getForm.targetPort || !getForm.version) {
-            message.warning(`请在SNMP配置中填写${actionText}目标并启用SNMPv1/v2c`);
+            notify.warning(`请在SNMP配置中填写${actionText}目标并启用SNMPv1/v2c`);
             return;
         }
 
         if (!getForm.oid) {
-            message.warning('请填写OID');
+            notify.warning('请填写OID');
             return;
         }
 
@@ -1729,13 +1734,13 @@
             if (result.status === 'success') {
                 const varbind = result.data?.varbinds?.[0] || null;
                 getResult.value = await enrichResultVarbind(varbind);
-                message.success(`${actionText}查询成功`);
+                notify.success(`${actionText}查询成功`);
                 return;
             }
 
-            message.error(result.msg || `${actionText}查询失败`);
+            notify.error(result.msg || `${actionText}查询失败`);
         } catch (error) {
-            message.error(`${actionText}查询失败: ` + error.message);
+            notify.error(`${actionText}查询失败: ` + error.message);
         } finally {
             getSending.value = false;
         }
@@ -1744,12 +1749,12 @@
     const sendWalkRequest = async () => {
         await loadRequestDefaults(walkForm);
         if (!walkForm.targetHost || !walkForm.targetPort || !walkForm.version) {
-            message.warning('请在SNMP配置中填写WALK目标并启用SNMPv1/v2c');
+            notify.warning('请在SNMP配置中填写WALK目标并启用SNMPv1/v2c');
             return;
         }
 
         if (!walkForm.oid) {
-            message.warning('请填写起始OID');
+            notify.warning('请填写起始OID');
             return;
         }
 
@@ -1765,7 +1770,7 @@
             });
 
             if (result.status !== 'success') {
-                message.error(result.msg || 'WALK查询失败');
+                notify.error(result.msg || 'WALK查询失败');
                 return;
             }
 
@@ -1784,12 +1789,12 @@
             };
 
             if (enrichedRows.length === 0) {
-                message.info('WALK未返回当前OID子树下的数据');
+                notify.info('WALK未返回当前OID子树下的数据');
             } else {
-                message.success(`WALK完成，共 ${enrichedRows.length} 条`);
+                notify.success(`WALK完成，共 ${enrichedRows.length} 条`);
             }
         } catch (error) {
-            message.error('WALK查询失败: ' + error.message);
+            notify.error('WALK查询失败: ' + error.message);
         } finally {
             walkLoading.value = false;
         }
@@ -1798,12 +1803,12 @@
     const sendSetRequest = async () => {
         await loadRequestDefaults(setForm);
         if (!setForm.targetHost || !setForm.targetPort || !setForm.version) {
-            message.warning('请在SNMP配置中填写SET目标并启用SNMPv1/v2c');
+            notify.warning('请在SNMP配置中填写SET目标并启用SNMPv1/v2c');
             return;
         }
 
         if (!setForm.oid || !setForm.value) {
-            message.warning('请填写OID和值');
+            notify.warning('请填写OID和值');
             return;
         }
 
@@ -1818,13 +1823,13 @@
                 setModalOpen.value = false;
                 const varbind = result.data?.varbinds?.[0];
                 const objectText = getRequestObjectName(setTargetNode.value, setForm.oid);
-                message.success(`SET成功: ${objectText}${varbind?.value !== undefined ? ` = ${varbind.value}` : ''}`);
+                notify.success(`SET成功: ${objectText}${varbind?.value !== undefined ? ` = ${varbind.value}` : ''}`);
                 return;
             }
 
-            message.error(result.msg || 'SET发送失败');
+            notify.error(result.msg || 'SET发送失败');
         } catch (error) {
-            message.error('SET发送失败: ' + error.message);
+            notify.error('SET发送失败: ' + error.message);
         } finally {
             setSending.value = false;
         }
@@ -1833,7 +1838,7 @@
     const translateOid = async () => {
         const oid = oidQuery.value.trim();
         if (!oid) {
-            message.warning('请输入OID');
+            notify.warning('请输入OID');
             return;
         }
 
@@ -1847,10 +1852,10 @@
                     await selectOidNode(result.data.matchedOid, result.data.treePath || []);
                 }
             } else {
-                message.error(result.msg || 'OID解析失败');
+                notify.error(result.msg || 'OID解析失败');
             }
         } catch (error) {
-            message.error('OID解析失败: ' + error.message);
+            notify.error('OID解析失败: ' + error.message);
         } finally {
             oidTranslateLoading.value = false;
         }
@@ -1886,7 +1891,7 @@
         overflow: hidden;
     }
 
-    .mib-card :deep(.ant-card-body) {
+    .mib-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -1946,8 +1951,8 @@
         min-width: 0;
         min-height: 0;
         overflow: hidden;
-        background: #fff;
-        border: 1px solid #f0f0f0;
+        background: var(--nn-color-bg-surface);
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
     }
 
@@ -1973,13 +1978,13 @@
         justify-content: space-between;
         height: 34px;
         padding: 0 10px;
-        border-bottom: 1px solid #f0f0f0;
+        border-bottom: 1px solid var(--nn-color-border-light);
     }
 
     .mib-panel-title {
         overflow: hidden;
         font-weight: 600;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         text-overflow: ellipsis;
         white-space: nowrap;
     }
@@ -1987,7 +1992,7 @@
     .mib-panel-meta {
         flex-shrink: 0;
         margin-left: 8px;
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
         font-size: 12px;
         white-space: nowrap;
     }
@@ -2023,7 +2028,7 @@
     }
 
     .mib-node-name {
-        color: #262626;
+        color: var(--nn-color-text-strong);
         white-space: nowrap;
     }
 
@@ -2031,13 +2036,13 @@
     .mib-node-module,
     .mib-node-macro {
         flex-shrink: 0;
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
         font-size: 12px;
         white-space: nowrap;
     }
 
     .mib-node-macro {
-        color: #1677ff;
+        color: var(--nn-color-primary);
     }
 
     .mib-node-role {
@@ -2050,30 +2055,30 @@
     }
 
     .mib-node-role.is-read {
-        color: #0958d9;
-        background: #e6f4ff;
+        color: var(--nn-color-text-info);
+        background: var(--nn-color-bg-info-subtle);
     }
 
     .mib-node-role.is-write {
-        color: #389e0d;
-        background: #f6ffed;
+        color: var(--nn-color-text-success);
+        background: var(--nn-color-bg-success-subtle);
     }
 
     .mib-node-role.is-notify {
-        color: #d46b08;
-        background: #fff7e6;
+        color: var(--nn-color-text-warning);
+        background: var(--nn-color-bg-warning-subtle);
     }
 
     .mib-node-role.is-disabled {
-        color: #8c8c8c;
-        background: #f5f5f5;
+        color: var(--nn-color-text-muted);
+        background: var(--nn-color-bg-muted);
     }
 
     .mib-detail-scroll {
         padding: 8px;
     }
 
-    .mib-node-detail :deep(.ant-descriptions-item-label) {
+    .mib-node-detail :deep(.nn-descriptions-item-label) {
         width: 72px;
     }
 
@@ -2087,7 +2092,7 @@
         align-items: center;
         min-width: 0;
         height: 28px;
-        border-bottom: 1px solid #f5f5f5;
+        border-bottom: 1px solid var(--nn-color-border-light);
     }
 
     .mib-file-row:last-child {
@@ -2109,24 +2114,24 @@
 
     .mib-file-info {
         flex-shrink: 0;
-        color: #faad14;
+        color: var(--nn-color-warning);
     }
 
     .oid-result-detail {
         margin-top: 10px;
     }
 
-    .oid-result-detail :deep(.ant-descriptions-item-label) {
+    .oid-result-detail :deep(.nn-descriptions-item-label) {
         width: 92px;
     }
 
     .mib-project-meta {
         min-height: 32px;
         padding: 0 11px;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         line-height: 30px;
-        background: #fafafa;
-        border: 1px solid #f0f0f0;
+        background: var(--nn-color-bg-subtle);
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
     }
 
@@ -2151,7 +2156,7 @@
 
     .mib-project-root {
         flex: 1;
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
         font-size: 12px;
     }
 
@@ -2167,12 +2172,12 @@
         min-height: 32px;
         overflow: hidden;
         padding: 0 11px;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         line-height: 30px;
         text-overflow: ellipsis;
         white-space: nowrap;
-        background: #fafafa;
-        border: 1px solid #f0f0f0;
+        background: var(--nn-color-bg-subtle);
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
     }
 
@@ -2181,14 +2186,14 @@
         min-width: 0;
         overflow: hidden;
         padding: 7px 11px;
-        background: #fafafa;
-        border: 1px solid #f0f0f0;
+        background: var(--nn-color-bg-subtle);
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
     }
 
     .mib-request-object-title {
         overflow: hidden;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         font-weight: 600;
         line-height: 20px;
         text-overflow: ellipsis;
@@ -2201,13 +2206,13 @@
         max-width: 100%;
         overflow-wrap: anywhere;
         word-break: break-word;
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
         font-size: 12px;
         line-height: 18px;
         white-space: normal;
     }
 
-    .mib-request-object-oid :deep(.ant-typography-copy) {
+    .mib-request-object-oid :deep(.nn-typography-copy) {
         margin-inline-start: 4px;
     }
 
@@ -2222,7 +2227,7 @@
         min-width: 0;
     }
 
-    .mib-oid-input-row :deep(.ant-btn) {
+    .mib-oid-input-row :deep(.nn-button) {
         flex-shrink: 0;
     }
 
@@ -2240,11 +2245,11 @@
         margin-top: 10px;
     }
 
-    .mib-request-result :deep(.ant-descriptions-item-label) {
+    .mib-request-result :deep(.nn-descriptions-item-label) {
         width: 86px;
     }
 
-    .mib-request-result :deep(.ant-descriptions-item-content) {
+    .mib-request-result :deep(.nn-descriptions-item-content) {
         min-width: 0;
         overflow: hidden;
     }
@@ -2290,14 +2295,14 @@
         overflow: auto;
         resize: none;
         padding: 10px 12px;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
         font-size: 12px;
         line-height: 18px;
         white-space: pre-wrap;
         word-break: break-word;
-        background: #fafafa;
-        border: 1px solid #f0f0f0;
+        background: var(--nn-color-bg-subtle);
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
         outline: none;
     }
@@ -2307,11 +2312,11 @@
         top: 8px;
         right: 10px;
         padding: 2px 8px;
-        color: #1677ff;
+        color: var(--nn-color-primary);
         font-size: 12px;
         line-height: 20px;
-        background: rgba(230, 244, 255, 0.95);
-        border: 1px solid #91caff;
+        background: var(--nn-color-bg-info-subtle);
+        border: 1px solid var(--nn-color-border-info);
         border-radius: 4px;
     }
 
@@ -2360,7 +2365,7 @@
 
     .instance-object-title {
         overflow: hidden;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         line-height: 20px;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -2369,7 +2374,7 @@
     .instance-object-oid {
         display: block;
         overflow: hidden;
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
         font-size: 12px;
         line-height: 18px;
         text-overflow: ellipsis;
@@ -2383,22 +2388,22 @@
         max-height: calc(100vh - 16px);
         padding: 4px 0;
         overflow-y: auto;
-        background: #fff;
-        border: 1px solid #f0f0f0;
+        background: var(--nn-color-bg-elevated);
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+        box-shadow: var(--nn-shadow-elevated);
     }
 
     .mib-context-menu-title {
         overflow: hidden;
         padding: 5px 12px 6px;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         font-weight: 600;
         font-size: 13px;
         line-height: 20px;
         text-overflow: ellipsis;
         white-space: nowrap;
-        border-bottom: 1px solid #f0f0f0;
+        border-bottom: 1px solid var(--nn-color-border-light);
     }
 
     .mib-context-menu-list {
@@ -2418,10 +2423,10 @@
 
     .mib-context-menu-hint {
         padding: 6px 12px 4px;
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
         font-size: 12px;
         line-height: 18px;
-        border-top: 1px solid #f0f0f0;
+        border-top: 1px solid var(--nn-color-border-light);
     }
 
     @media (max-width: 900px) {

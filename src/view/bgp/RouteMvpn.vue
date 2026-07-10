@@ -1,43 +1,43 @@
 <template>
     <div class="mt-container bgp-route-page">
-        <a-card title="IPv4-MVPN路由配置" class="bgp-route-card">
+        <nn-card title="IPv4-MVPN路由配置" class="bgp-route-card">
             <a-form :model="ipv4MvpnData" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
-                <a-row>
-                    <a-col :span="6">
+                <nn-row>
+                    <nn-col :span="6">
                         <a-form-item label="RD" name="rd">
-                            <a-tooltip :title="validationErrors.rd" :open="!!validationErrors.rd">
+                            <nn-tooltip :title="validationErrors.rd" :open="!!validationErrors.rd">
                                 <a-input v-model:value="ipv4MvpnData.rd" :status="validationErrors.rd ? 'error' : ''" />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                    <a-col :span="6">
+                    </nn-col>
+                    <nn-col :span="6">
                         <a-form-item label="Route Type" name="routeType">
                             <a-select v-model:value="ipv4MvpnData.routeType" :options="mvpnRouteTypeOptions" />
                         </a-form-item>
-                    </a-col>
-                    <a-col :span="6">
+                    </nn-col>
+                    <nn-col :span="6">
                         <a-form-item label="RT" name="rt">
-                            <a-tooltip :title="validationErrors.rt" :open="!!validationErrors.rt">
+                            <nn-tooltip :title="validationErrors.rt" :open="!!validationErrors.rt">
                                 <a-input v-model:value="ipv4MvpnData.rt" :status="validationErrors.rt ? 'error' : ''" />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                    <a-col :span="6">
+                    </nn-col>
+                    <nn-col :span="6">
                         <a-form-item label="Count" name="count">
-                            <a-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
+                            <nn-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
                                 <a-input
                                     v-model:value="ipv4MvpnData.count"
                                     :status="validationErrors.count ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                </a-row>
+                    </nn-col>
+                </nn-row>
                 <!-- Type 1: Intra-AS I-PMSI A-D - Only Originating Router -->
-                <a-row v-if="ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.INTRA_AS_I_PMSI_AD">
-                    <a-col :span="12">
+                <nn-row v-if="ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.INTRA_AS_I_PMSI_AD">
+                    <nn-col :span="12">
                         <a-form-item label="Orig Router" name="originatingRouterIp">
-                            <a-tooltip
+                            <nn-tooltip
                                 :title="validationErrors.originatingRouterIp"
                                 :open="!!validationErrors.originatingRouterIp"
                             >
@@ -45,48 +45,48 @@
                                     v-model:value="ipv4MvpnData.originatingRouterIp"
                                     :status="validationErrors.originatingRouterIp ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                </a-row>
+                    </nn-col>
+                </nn-row>
                 <!-- Type 2: Inter-AS I-PMSI A-D - Only Source AS -->
-                <a-row v-if="ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.INTER_AS_I_PMSI_AD">
-                    <a-col :span="12">
+                <nn-row v-if="ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.INTER_AS_I_PMSI_AD">
+                    <nn-col :span="12">
                         <a-form-item label="Source AS" name="sourceAs">
-                            <a-tooltip :title="validationErrors.sourceAs" :open="!!validationErrors.sourceAs">
+                            <nn-tooltip :title="validationErrors.sourceAs" :open="!!validationErrors.sourceAs">
                                 <a-input
                                     v-model:value="ipv4MvpnData.sourceAs"
                                     :status="validationErrors.sourceAs ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                </a-row>
+                    </nn-col>
+                </nn-row>
                 <!-- Type 3: S-PMSI A-D - Source, Group, Orig Router -->
-                <a-row v-if="ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.S_PMSI_AD">
-                    <a-col :span="8">
+                <nn-row v-if="ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.S_PMSI_AD">
+                    <nn-col :span="8">
                         <a-form-item label="Source IP" name="sourceIp">
-                            <a-tooltip :title="validationErrors.sourceIp" :open="!!validationErrors.sourceIp">
+                            <nn-tooltip :title="validationErrors.sourceIp" :open="!!validationErrors.sourceIp">
                                 <a-input
                                     v-model:value="ipv4MvpnData.sourceIp"
                                     :status="validationErrors.sourceIp ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                    <a-col :span="8">
+                    </nn-col>
+                    <nn-col :span="8">
                         <a-form-item label="Group IP" name="groupIp">
-                            <a-tooltip :title="validationErrors.groupIp" :open="!!validationErrors.groupIp">
+                            <nn-tooltip :title="validationErrors.groupIp" :open="!!validationErrors.groupIp">
                                 <a-input
                                     v-model:value="ipv4MvpnData.groupIp"
                                     :status="validationErrors.groupIp ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                    <a-col :span="8">
+                    </nn-col>
+                    <nn-col :span="8">
                         <a-form-item label="Orig Router" name="originatingRouterIp">
-                            <a-tooltip
+                            <nn-tooltip
                                 :title="validationErrors.originatingRouterIp"
                                 :open="!!validationErrors.originatingRouterIp"
                             >
@@ -94,81 +94,83 @@
                                     v-model:value="ipv4MvpnData.originatingRouterIp"
                                     :status="validationErrors.originatingRouterIp ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                </a-row>
+                    </nn-col>
+                </nn-row>
                 <!-- Type 5: Source Active A-D - Source, Group -->
-                <a-row v-if="ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.SOURCE_ACTIVE_AD">
-                    <a-col :span="12">
+                <nn-row v-if="ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.SOURCE_ACTIVE_AD">
+                    <nn-col :span="12">
                         <a-form-item label="Source IP" name="sourceIp">
-                            <a-tooltip :title="validationErrors.sourceIp" :open="!!validationErrors.sourceIp">
+                            <nn-tooltip :title="validationErrors.sourceIp" :open="!!validationErrors.sourceIp">
                                 <a-input
                                     v-model:value="ipv4MvpnData.sourceIp"
                                     :status="validationErrors.sourceIp ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                    <a-col :span="12">
+                    </nn-col>
+                    <nn-col :span="12">
                         <a-form-item label="Group IP" name="groupIp">
-                            <a-tooltip :title="validationErrors.groupIp" :open="!!validationErrors.groupIp">
+                            <nn-tooltip :title="validationErrors.groupIp" :open="!!validationErrors.groupIp">
                                 <a-input
                                     v-model:value="ipv4MvpnData.groupIp"
                                     :status="validationErrors.groupIp ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                </a-row>
+                    </nn-col>
+                </nn-row>
                 <!-- Type 6/7: Join routes - Source AS, Group, Source -->
-                <a-row
+                <nn-row
                     v-if="
                         ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.SHARED_TREE_JOIN ||
                         ipv4MvpnData.routeType === BGP_MVPN_ROUTE_TYPE.SOURCE_TREE_JOIN
                     "
                 >
-                    <a-col :span="8">
+                    <nn-col :span="8">
                         <a-form-item label="Source AS" name="sourceAs">
-                            <a-tooltip :title="validationErrors.sourceAs" :open="!!validationErrors.sourceAs">
+                            <nn-tooltip :title="validationErrors.sourceAs" :open="!!validationErrors.sourceAs">
                                 <a-input
                                     v-model:value="ipv4MvpnData.sourceAs"
                                     :status="validationErrors.sourceAs ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                    <a-col :span="8">
+                    </nn-col>
+                    <nn-col :span="8">
                         <a-form-item label="Group IP" name="groupIp">
-                            <a-tooltip :title="validationErrors.groupIp" :open="!!validationErrors.groupIp">
+                            <nn-tooltip :title="validationErrors.groupIp" :open="!!validationErrors.groupIp">
                                 <a-input
                                     v-model:value="ipv4MvpnData.groupIp"
                                     :status="validationErrors.groupIp ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                    <a-col :span="8">
+                    </nn-col>
+                    <nn-col :span="8">
                         <a-form-item label="Source IP" name="sourceIp">
-                            <a-tooltip :title="validationErrors.sourceIp" :open="!!validationErrors.sourceIp">
+                            <nn-tooltip :title="validationErrors.sourceIp" :open="!!validationErrors.sourceIp">
                                 <a-input
                                     v-model:value="ipv4MvpnData.sourceIp"
                                     :status="validationErrors.sourceIp ? 'error' : ''"
                                 />
-                            </a-tooltip>
+                            </nn-tooltip>
                         </a-form-item>
-                    </a-col>
-                </a-row>
+                    </nn-col>
+                </nn-row>
 
                 <a-form-item :wrapper-col="{ offset: 8, span: 16 }">
-                    <a-button type="primary" :loading="routesGenerating" @click="generateRoutes">生成MVPN路由</a-button>
+                    <nn-button type="primary" :loading="routesGenerating" @click="generateRoutes">
+                        生成MVPN路由
+                    </nn-button>
                 </a-form-item>
             </a-form>
-        </a-card>
+        </nn-card>
 
-        <a-card title="已生成MVPN路由列表" class="bgp-route-list-card">
+        <nn-card title="已生成MVPN路由列表" class="bgp-route-list-card">
             <template #extra>
-                <a-button
+                <nn-button
                     class="route-delete-all-button"
                     :disabled="!hasRoutes || deleteAllLoading"
                     :loading="deleteAllLoading"
@@ -178,12 +180,12 @@
                 >
                     <template #icon><DeleteOutlined /></template>
                     删除所有
-                </a-button>
+                </nn-button>
             </template>
 
             <!-- 按路由类型分组显示 -->
-            <a-tabs v-model:active-key="activeMvpnTab" type="card" class="mvpn-route-tabs">
-                <a-tab-pane v-for="group in groupedMvpnRoutes" :key="group.type" :tab="group.typeName">
+            <nn-tabs v-model:active-key="activeMvpnTab" type="card" class="mvpn-route-tabs">
+                <nn-tab-pane v-for="group in groupedMvpnRoutes" :key="group.type" :tab="group.typeName">
                     <a-table
                         :data-source="group.routes"
                         :columns="getRouteColumns(group.type)"
@@ -199,16 +201,16 @@
                     >
                         <template #bodyCell="{ column, record }">
                             <template v-if="column.key === 'action'">
-                                <a-space>
-                                    <a-button size="small" @click="showRouteDetail(record)">
+                                <nn-space>
+                                    <nn-button size="small" @click="showRouteDetail(record)">
                                         <template #icon><FileSearchOutlined /></template>
                                         详情
-                                    </a-button>
-                                    <a-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
+                                    </nn-button>
+                                    <nn-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
                                         <template #icon><DeleteOutlined /></template>
                                         删除
-                                    </a-button>
-                                </a-space>
+                                    </nn-button>
+                                </nn-space>
                             </template>
                             <template v-else-if="column.key === 'rd'">
                                 {{ record.rd }}
@@ -230,9 +232,9 @@
                             </template>
                         </template>
                     </a-table>
-                </a-tab-pane>
-            </a-tabs>
-        </a-card>
+                </nn-tab-pane>
+            </nn-tabs>
+        </nn-card>
 
         <BgpRouteDetailDrawer v-model:open="routeDetailVisible" :loading="routeDetailLoading" :route="routeDetail" />
     </div>
@@ -241,9 +243,10 @@
 <script setup>
     import { onMounted, ref, computed, watch, onActivated, nextTick } from 'vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
-    import { message, Modal } from 'ant-design-vue';
-    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
-    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
+    import { dialog } from '../../utils/dialog';
+    import { notify } from '../../utils/notify';
+    import { DeleteOutlined, FileSearchOutlined } from '../../ui/icons';
+
     import { BGP_ADDR_FAMILY, DEFAULT_VALUES, BGP_MVPN_ROUTE_TYPE } from '../../const/bgpConst';
     import { FormValidator, createBgpMvpnRouteConfigValidationRules } from '../../utils/validationCommon';
 
@@ -450,7 +453,7 @@
         try {
             const hasErrors = validator.validate(ipv4MvpnData.value);
             if (hasErrors) {
-                message.error('请检查MVPN路由配置信息是否正确');
+                notify.error('请检查MVPN路由配置信息是否正确');
                 return;
             }
 
@@ -482,21 +485,21 @@
 
             const saveResult = await window.bgpApi.saveIpv4MvpnRouteConfig(config);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
             const result = await window.bgpApi.generateIpv4MvpnRoutes(config);
 
             if (result.status === 'success') {
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
                 pagination.value.current = 1;
                 await refreshRoutes();
             } else {
-                message.error(`${result.msg}`);
+                notify.error(`${result.msg}`);
             }
         } catch (e) {
-            message.error(`MVPN路由生成失败: ${e.message}`);
+            notify.error(`MVPN路由生成失败: ${e.message}`);
         } finally {
             routesGenerating.value = false;
         }
@@ -504,7 +507,7 @@
 
     const deleteRoutes = async () => {
         try {
-            Modal.confirm({
+            dialog.confirm({
                 title: '确认删除',
                 content: `确定要删除所有 ${pagination.value.total} 条MVPN路由吗？此操作不可恢复。`,
                 okText: '确定',
@@ -520,21 +523,21 @@
                         const result = await window.bgpApi.deleteAllRoutesByFamily(BGP_ADDR_FAMILY.IPV4_MVPN);
 
                         if (result.status === 'success') {
-                            message.success(`${result.msg}`);
+                            notify.success(`${result.msg}`);
                             pagination.value.current = 1;
                             await refreshRoutes();
                         } else {
-                            message.error(`${result.msg}`);
+                            notify.error(`${result.msg}`);
                         }
                     } catch (e) {
-                        message.error(`MVPN路由删除失败: ${e.message}`);
+                        notify.error(`MVPN路由删除失败: ${e.message}`);
                     } finally {
                         deleteAllLoading.value = false;
                     }
                 }
             });
         } catch (e) {
-            message.error(`MVPN路由删除失败: ${e.message}`);
+            notify.error(`MVPN路由删除失败: ${e.message}`);
         }
     };
 
@@ -556,11 +559,11 @@
                 routeDetail.value = result.data;
             } else {
                 routeDetailVisible.value = false;
-                message.error(`路由详情查询失败: ${result.msg}`);
+                notify.error(`路由详情查询失败: ${result.msg}`);
             }
         } catch (e) {
             routeDetailVisible.value = false;
-            message.error(`路由详情查询失败: ${e.message}`);
+            notify.error(`路由详情查询失败: ${e.message}`);
         } finally {
             routeDetailLoading.value = false;
         }
@@ -582,13 +585,13 @@
             const result = await window.bgpApi.deleteIpv4MvpnRoutes(config);
 
             if (result.status === 'success') {
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
                 await refreshRoutes();
             } else {
-                message.error(`路由删除失败: ${result.msg}`);
+                notify.error(`路由删除失败: ${result.msg}`);
             }
         } catch (e) {
-            message.error(`路由删除失败: ${e.message}`);
+            notify.error(`路由删除失败: ${e.message}`);
         }
     };
 </script>
@@ -619,21 +622,21 @@
         overflow: hidden;
     }
 
-    .bgp-route-card :deep(.ant-card-head),
-    .bgp-route-list-card :deep(.ant-card-head) {
+    .bgp-route-card :deep(.nn-card-head),
+    .bgp-route-list-card :deep(.nn-card-head) {
         min-height: 36px !important;
     }
 
-    .bgp-route-card :deep(.ant-card-head-title),
-    .bgp-route-list-card :deep(.ant-card-head-title) {
+    .bgp-route-card :deep(.nn-card-head-title),
+    .bgp-route-list-card :deep(.nn-card-head-title) {
         padding: 8px 0 !important;
     }
 
-    .bgp-route-list-card :deep(.ant-card-extra) {
+    .bgp-route-list-card :deep(.nn-card-extra) {
         padding: 6px 0 !important;
     }
 
-    .bgp-route-card :deep(.ant-card-body) {
+    .bgp-route-card :deep(.nn-card-body) {
         flex: 0 0 auto;
         min-height: 0;
         overflow: visible;
@@ -642,7 +645,7 @@
         padding: 8px 10px !important;
     }
 
-    .bgp-route-list-card :deep(.ant-card-body) {
+    .bgp-route-list-card :deep(.nn-card-body) {
         flex: 1 1 0;
         min-height: 0;
         overflow: hidden;
@@ -671,14 +674,14 @@
         overflow: hidden;
     }
 
-    .mvpn-route-tabs :deep(.ant-tabs-nav) {
+    .mvpn-route-tabs :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin-bottom: 8px;
     }
 
-    .mvpn-route-tabs :deep(.ant-tabs-content-holder),
-    .mvpn-route-tabs :deep(.ant-tabs-content),
-    .mvpn-route-tabs :deep(.ant-tabs-tabpane) {
+    .mvpn-route-tabs :deep(.nn-tabs-content-holder),
+    .mvpn-route-tabs :deep(.nn-tabs-content),
+    .mvpn-route-tabs :deep(.nn-tabs-tabpane) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
@@ -741,19 +744,19 @@
     }
 
     .route-delete-all-button:disabled,
-    .route-delete-all-button.ant-btn-disabled {
-        color: #8c8c8c !important;
-        background: #f0f0f0 !important;
-        border-color: #bfbfbf !important;
+    .route-delete-all-button.nn-button-disabled {
+        color: var(--nn-color-text-muted) !important;
+        background: var(--nn-color-bg-disabled) !important;
+        border-color: var(--nn-color-border) !important;
         opacity: 1 !important;
     }
 
     .route-delete-all-button:disabled:hover,
-    .route-delete-all-button.ant-btn-disabled:hover,
+    .route-delete-all-button.nn-button-disabled:hover,
     .route-delete-all-button:disabled:focus,
-    .route-delete-all-button.ant-btn-disabled:focus {
-        color: #8c8c8c !important;
-        background: #f0f0f0 !important;
-        border-color: #bfbfbf !important;
+    .route-delete-all-button.nn-button-disabled:focus {
+        color: var(--nn-color-text-muted) !important;
+        background: var(--nn-color-bg-disabled) !important;
+        border-color: var(--nn-color-border) !important;
     }
 </style>

@@ -1,22 +1,22 @@
 <template>
     <div class="api-settings">
-        <a-card title="外部接入" class="settings-card">
+        <nn-card title="外部接入" class="settings-card">
             <a-form :model="settingsForm" layout="vertical">
                 <a-form-item label="接入方式" name="mode">
-                    <a-radio-group v-model:value="settingsForm.mode" button-style="solid">
-                        <a-radio-button :value="API_ACCESS_MODE.NONE">关闭</a-radio-button>
-                        <a-radio-button :value="API_ACCESS_MODE.HTTP">HTTP API</a-radio-button>
-                        <a-radio-button :value="API_ACCESS_MODE.CLI">Telnet CLI</a-radio-button>
-                    </a-radio-group>
+                    <nn-radio-group v-model:value="settingsForm.mode" button-style="solid">
+                        <nn-radio-button :value="API_ACCESS_MODE.NONE">关闭</nn-radio-button>
+                        <nn-radio-button :value="API_ACCESS_MODE.HTTP">HTTP API</nn-radio-button>
+                        <nn-radio-button :value="API_ACCESS_MODE.CLI">Telnet CLI</nn-radio-button>
+                    </nn-radio-group>
                 </a-form-item>
 
                 <template v-if="settingsForm.mode === API_ACCESS_MODE.HTTP">
                     <a-form-item label="HTTP监听端口" name="port">
-                        <a-input-number v-model:value="settingsForm.port" :min="1" :max="65535" style="width: 100%" />
+                        <nn-input-number v-model:value="settingsForm.port" :min="1" :max="65535" style="width: 100%" />
                     </a-form-item>
 
                     <a-form-item label="分页最大条数" name="maxPageSize">
-                        <a-input-number
+                        <nn-input-number
                             v-model:value="settingsForm.maxPageSize"
                             :min="1"
                             :max="10000"
@@ -27,7 +27,7 @@
 
                 <template v-if="settingsForm.mode === API_ACCESS_MODE.CLI">
                     <a-form-item label="Telnet监听端口" name="cliPort">
-                        <a-input-number
+                        <nn-input-number
                             v-model:value="settingsForm.cliPort"
                             :min="1"
                             :max="65535"
@@ -37,7 +37,7 @@
                     </a-form-item>
 
                     <a-form-item label="最大会话数" name="cliMaxSessions">
-                        <a-input-number
+                        <nn-input-number
                             v-model:value="settingsForm.cliMaxSessions"
                             :min="1"
                             :max="100"
@@ -47,38 +47,38 @@
                 </template>
 
                 <a-form-item label="运行状态">
-                    <a-space direction="vertical" size="small">
-                        <a-space>
-                            <a-tag :color="apiStatus.running ? 'green' : 'default'">
+                    <nn-space direction="vertical" size="small">
+                        <nn-space>
+                            <nn-tag :color="apiStatus.running ? 'green' : 'default'">
                                 {{ apiStatus.running ? '运行中' : '未运行' }}
-                            </a-tag>
+                            </nn-tag>
                             <span v-if="apiStatus.running">{{ modeLabel(apiStatus.mode) }}</span>
-                        </a-space>
-                        <a-space wrap>
-                            <a-tag :color="apiStatus.http.running ? 'green' : 'default'">HTTP API</a-tag>
+                        </nn-space>
+                        <nn-space wrap>
+                            <nn-tag :color="apiStatus.http.running ? 'green' : 'default'">HTTP API</nn-tag>
                             <span>{{ apiStatus.http.host }}:{{ apiStatus.http.port }}</span>
-                        </a-space>
-                        <a-space wrap>
-                            <a-tag :color="apiStatus.cli.running ? 'green' : 'default'">Telnet CLI</a-tag>
+                        </nn-space>
+                        <nn-space wrap>
+                            <nn-tag :color="apiStatus.cli.running ? 'green' : 'default'">Telnet CLI</nn-tag>
                             <span>{{ apiStatus.cli.host }}:{{ apiStatus.cli.port }}</span>
-                        </a-space>
-                    </a-space>
+                        </nn-space>
+                    </nn-space>
                 </a-form-item>
 
                 <a-form-item>
-                    <a-space>
-                        <a-button type="primary" @click="saveSettings">保存并应用</a-button>
-                        <a-button @click="refreshStatus">刷新状态</a-button>
-                    </a-space>
+                    <nn-space>
+                        <nn-button type="primary" @click="saveSettings">保存并应用</nn-button>
+                        <nn-button @click="refreshStatus">刷新状态</nn-button>
+                    </nn-space>
                 </a-form-item>
             </a-form>
-        </a-card>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { ref, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { API_ACCESS_MODE, DEFAULT_API_SETTINGS } from '../../const/apiConst';
 
     const settingsForm = ref({
@@ -113,21 +113,21 @@
 
         if (settingsForm.value.mode === API_ACCESS_MODE.HTTP) {
             if (!Number.isInteger(port) || port < 1 || port > 65535) {
-                message.error('HTTP监听端口必须是1到65535之间的整数');
+                notify.error('HTTP监听端口必须是1到65535之间的整数');
                 return false;
             }
             if (!Number.isInteger(maxPageSize) || maxPageSize < 1 || maxPageSize > 10000) {
-                message.error('分页最大条数必须是1到10000之间的整数');
+                notify.error('分页最大条数必须是1到10000之间的整数');
                 return false;
             }
         }
         if (settingsForm.value.mode === API_ACCESS_MODE.CLI) {
             if (!Number.isInteger(cliPort) || cliPort < 1 || cliPort > 65535) {
-                message.error('CLI监听端口必须是1到65535之间的整数');
+                notify.error('CLI监听端口必须是1到65535之间的整数');
                 return false;
             }
             if (!Number.isInteger(cliMaxSessions) || cliMaxSessions < 1 || cliMaxSessions > 100) {
-                message.error('CLI最大会话数必须是1到100之间的整数');
+                notify.error('CLI最大会话数必须是1到100之间的整数');
                 return false;
             }
         }
@@ -213,14 +213,14 @@
             payload.cliHost = DEFAULT_API_SETTINGS.cliHost;
             const result = await window.commonApi.saveApiSettings(payload);
             if (result.status === 'success') {
-                message.success('设置已保存');
+                notify.success('设置已保存');
                 await refreshStatus();
             } else {
-                message.error(result.msg || '保存设置失败');
+                notify.error(result.msg || '保存设置失败');
             }
         } catch (error) {
             console.error('保存API设置失败', error);
-            message.error('保存设置失败');
+            notify.error('保存设置失败');
         }
     };
 

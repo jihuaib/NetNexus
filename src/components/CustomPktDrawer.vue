@@ -6,10 +6,10 @@
             </a-form-item>
         </a-form>
         <template #footer>
-            <a-space>
-                <a-button @click="onClose">取消</a-button>
-                <a-button type="primary" @click="onSubmit">确定</a-button>
-            </a-space>
+            <nn-space>
+                <nn-button @click="onClose">取消</nn-button>
+                <nn-button type="primary" @click="onSubmit">确定</nn-button>
+            </nn-space>
         </template>
     </a-drawer>
 </template>

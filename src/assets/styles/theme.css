@@ -1,0 +1,179 @@
+:root,
+html[data-theme='light'] {
+    --nn-font-family:
+        -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+    --nn-color-primary: #f97316;
+    --nn-color-primary-hover: #fb923c;
+    --nn-color-primary-active: #ea580c;
+    --nn-color-link: #ea580c;
+    --nn-color-success: #52c41a;
+    --nn-color-warning: #faad14;
+    --nn-color-error: #ff4d4f;
+    --nn-color-info: #f97316;
+    --nn-color-bg-body: #f5f7fb;
+    --nn-color-bg-layout: #f5f7fb;
+    --nn-color-bg-surface: #ffffff;
+    --nn-color-bg-elevated: #ffffff;
+    --nn-color-bg-muted: #f5f5f5;
+    --nn-color-bg-subtle: #fafafa;
+    --nn-color-bg-hover: #fff7ed;
+    --nn-color-bg-disabled: #f5f5f5;
+    --nn-color-bg-code: #f5f5f5;
+    --nn-color-bg-selected: #ffedd5;
+    --nn-color-bg-info-subtle: #fff7ed;
+    --nn-color-bg-success-subtle: #f6ffed;
+    --nn-color-bg-warning-subtle: #fff7e6;
+    --nn-color-bg-stale: #fffbe6;
+    --nn-color-bg-danger-subtle: #fff1f0;
+    --nn-color-bg-progress: #f5f5f5;
+    --nn-color-bg-console: #1e1e1e;
+    --nn-color-bg-console-muted: #333333;
+    --nn-color-bg-console-success: #2d5a2d;
+    --nn-color-bg-console-info: #1f4e7a;
+    --nn-color-bg-console-error: #6b2222;
+    --nn-color-bg-sider: #243447;
+    --nn-color-bg-sider-hover: rgba(255, 255, 255, 0.15);
+    --nn-color-bg-sider-active: #f97316;
+    --nn-color-bg-card-head: #f97316;
+    --nn-color-bg-card-head-hover: rgba(255, 255, 255, 0.2);
+    --nn-color-text: #1f2937;
+    --nn-color-text-strong: #262626;
+    --nn-color-text-secondary: rgba(31, 41, 55, 0.72);
+    --nn-color-text-muted: #8c8c8c;
+    --nn-color-text-placeholder: #bfbfbf;
+    --nn-color-text-disabled: rgba(31, 41, 55, 0.85);
+    --nn-color-text-inverse: #ffffff;
+    --nn-color-text-sider: rgba(255, 255, 255, 0.86);
+    --nn-color-text-info: #c2410c;
+    --nn-color-text-success: #389e0d;
+    --nn-color-text-warning: #d46b08;
+    --nn-color-text-stale: #8c6d1f;
+    --nn-color-text-console: #d4d4d4;
+    --nn-color-text-console-muted: rgba(255, 255, 255, 0.55);
+    --nn-color-text-console-label: #cccccc;
+    --nn-color-text-console-success: #9cdc9c;
+    --nn-color-text-console-success-strong: #b5f5b5;
+    --nn-color-text-console-info: #9cd2ff;
+    --nn-color-text-console-info-strong: #a6d8ff;
+    --nn-color-text-console-error: #ff9c9c;
+    --nn-color-text-console-error-strong: #ffb3b3;
+    --nn-color-border: #d9e2ef;
+    --nn-color-border-light: #e8eef6;
+    --nn-color-border-info: #fdba74;
+    --nn-color-border-sider: rgba(255, 255, 255, 0.2);
+    --nn-color-border-danger: #ffa39e;
+    --nn-color-tooltip-bg: rgba(15, 23, 42, 0.92);
+    --nn-color-tooltip-text: #ffffff;
+    --nn-shadow-sider: 2px 0 8px rgba(15, 23, 42, 0.15);
+    --nn-shadow-elevated: 0 6px 16px rgba(15, 23, 42, 0.12);
+    --nn-shadow-floating: 0 4px 20px rgba(15, 23, 42, 0.15);
+    --nn-shadow-floating-hover: 0 6px 25px rgba(15, 23, 42, 0.2);
+    --nn-focus-shadow-error: 0 0 0 2px rgba(255, 77, 79, 0.2);
+    --nn-focus-shadow-primary: 0 0 0 2px rgba(249, 115, 22, 0.14);
+    --nn-gradient-panel: linear-gradient(180deg, #fcfdff 0%, #f7f9fc 100%);
+    --nn-gradient-progress: linear-gradient(90deg, #f97316, #fb923c);
+}
+
+html[data-theme-preset='blue'] {
+    --nn-color-primary: #1677ff;
+    --nn-color-primary-hover: #4096ff;
+    --nn-color-primary-active: #0958d9;
+    --nn-color-link: #1677ff;
+    --nn-color-info: #1677ff;
+    --nn-color-bg-hover: #eef6ff;
+    --nn-color-bg-selected: #e6f4ff;
+    --nn-color-bg-info-subtle: #e6f4ff;
+    --nn-color-bg-sider-active: #1677ff;
+    --nn-color-bg-card-head: #1677ff;
+    --nn-color-text-info: #0958d9;
+    --nn-color-border-info: #91caff;
+    --nn-focus-shadow-primary: 0 0 0 2px rgba(22, 119, 255, 0.08);
+    --nn-gradient-progress: linear-gradient(90deg, #1677ff, #4096ff);
+}
+
+html[data-theme='dark'],
+html[data-theme-preset='dark'] {
+    --nn-color-primary: #60a5fa;
+    --nn-color-primary-hover: #93c5fd;
+    --nn-color-primary-active: #3b82f6;
+    --nn-color-link: #93c5fd;
+    --nn-color-success: #5ecf89;
+    --nn-color-warning: #f5bf4f;
+    --nn-color-error: #ff7875;
+    --nn-color-info: #60a5fa;
+    --nn-color-bg-body: #0f172a;
+    --nn-color-bg-layout: #0f172a;
+    --nn-color-bg-surface: #162033;
+    --nn-color-bg-elevated: #1b263b;
+    --nn-color-bg-muted: #263244;
+    --nn-color-bg-subtle: #1e293b;
+    --nn-color-bg-hover: #22324a;
+    --nn-color-bg-disabled: #243044;
+    --nn-color-bg-code: #111827;
+    --nn-color-bg-selected: #1d4ed8;
+    --nn-color-bg-info-subtle: rgba(37, 99, 235, 0.22);
+    --nn-color-bg-success-subtle: rgba(22, 101, 52, 0.28);
+    --nn-color-bg-warning-subtle: rgba(146, 64, 14, 0.3);
+    --nn-color-bg-stale: rgba(113, 63, 18, 0.32);
+    --nn-color-bg-danger-subtle: rgba(127, 29, 29, 0.42);
+    --nn-color-bg-progress: #263244;
+    --nn-color-bg-console: #0b1020;
+    --nn-color-bg-console-muted: #1e293b;
+    --nn-color-bg-console-success: rgba(22, 101, 52, 0.45);
+    --nn-color-bg-console-info: rgba(30, 64, 175, 0.5);
+    --nn-color-bg-console-error: rgba(127, 29, 29, 0.5);
+    --nn-color-bg-sider: #111827;
+    --nn-color-bg-sider-hover: rgba(148, 163, 184, 0.18);
+    --nn-color-bg-sider-active: #2563eb;
+    --nn-color-bg-card-head: #2563eb;
+    --nn-color-bg-card-head-hover: rgba(248, 250, 252, 0.16);
+    --nn-color-text: #e5e7eb;
+    --nn-color-text-strong: #f8fafc;
+    --nn-color-text-secondary: rgba(229, 231, 235, 0.72);
+    --nn-color-text-muted: #94a3b8;
+    --nn-color-text-placeholder: #64748b;
+    --nn-color-text-disabled: rgba(229, 231, 235, 0.65);
+    --nn-color-text-inverse: #f8fafc;
+    --nn-color-text-sider: rgba(248, 250, 252, 0.86);
+    --nn-color-text-info: #bfdbfe;
+    --nn-color-text-success: #86efac;
+    --nn-color-text-warning: #fbbf24;
+    --nn-color-text-stale: #fde68a;
+    --nn-color-text-console: #dbeafe;
+    --nn-color-text-console-muted: rgba(219, 234, 254, 0.58);
+    --nn-color-text-console-label: #cbd5e1;
+    --nn-color-text-console-success: #86efac;
+    --nn-color-text-console-success-strong: #bbf7d0;
+    --nn-color-text-console-info: #93c5fd;
+    --nn-color-text-console-info-strong: #bfdbfe;
+    --nn-color-text-console-error: #fca5a5;
+    --nn-color-text-console-error-strong: #fecaca;
+    --nn-color-border: #334155;
+    --nn-color-border-light: #293548;
+    --nn-color-border-info: #2563eb;
+    --nn-color-border-sider: rgba(148, 163, 184, 0.24);
+    --nn-color-border-danger: #f87171;
+    --nn-color-tooltip-bg: rgba(2, 6, 23, 0.96);
+    --nn-color-tooltip-text: #f8fafc;
+    --nn-shadow-sider: 2px 0 10px rgba(0, 0, 0, 0.32);
+    --nn-shadow-elevated: 0 8px 20px rgba(0, 0, 0, 0.35);
+    --nn-shadow-floating: 0 4px 20px rgba(0, 0, 0, 0.35);
+    --nn-shadow-floating-hover: 0 8px 28px rgba(0, 0, 0, 0.42);
+    --nn-focus-shadow-error: 0 0 0 2px rgba(255, 120, 117, 0.22);
+    --nn-focus-shadow-primary: 0 0 0 2px rgba(96, 165, 250, 0.16);
+    --nn-gradient-panel: linear-gradient(180deg, #1e293b 0%, #162033 100%);
+    --nn-gradient-progress: linear-gradient(90deg, #3b82f6, #93c5fd);
+}
+
+html,
+body,
+#app {
+    min-height: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--nn-color-bg-body);
+    color: var(--nn-color-text);
+    font-family: var(--nn-font-family);
+}

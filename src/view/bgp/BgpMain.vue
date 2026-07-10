@@ -2,15 +2,15 @@
     <div class="mt-main-container">
         <!-- 固定 Tabs -->
         <div class="fixed-tabs">
-            <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <a-tab-pane key="bgp-config" tab="BGP配置" />
-                <a-tab-pane key="bgp-peer-config" tab="邻居配置" />
-                <a-tab-pane key="route-ipv4" tab="IPv4路由" />
-                <a-tab-pane key="route-ipv6" tab="IPv6路由" />
-                <a-tab-pane key="route-mvpn" tab="MVPN路由" />
-                <a-tab-pane key="route-ipv4-qp" tab="IPv4 QP路由" />
-                <a-tab-pane key="route-ipv6-qp" tab="IPv6 QP路由" />
-            </a-tabs>
+            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+                <nn-tab-pane key="bgp-config" tab="BGP配置" />
+                <nn-tab-pane key="bgp-peer-config" tab="邻居配置" />
+                <nn-tab-pane key="route-ipv4" tab="IPv4路由" />
+                <nn-tab-pane key="route-ipv6" tab="IPv6路由" />
+                <nn-tab-pane key="route-mvpn" tab="MVPN路由" />
+                <nn-tab-pane key="route-ipv4-qp" tab="IPv4 QP路由" />
+                <nn-tab-pane key="route-ipv6-qp" tab="IPv6 QP路由" />
+            </nn-tabs>
         </div>
 
         <!-- 可滚动内容区域 -->

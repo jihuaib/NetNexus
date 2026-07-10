@@ -1,49 +1,49 @@
 <template>
     <div class="mt-container adaptive-list-page" data-testid="rpki-config-page">
-        <a-row class="adaptive-form-row">
-            <a-col :span="24">
-                <a-card title="RPKI服务器配置">
+        <nn-row class="adaptive-form-row">
+            <nn-col :span="24">
+                <nn-card title="RPKI服务器配置">
                     <a-form :model="rpkiConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startRpki">
-                        <a-row>
-                            <a-col :span="24">
+                        <nn-row>
+                            <nn-col :span="24">
                                 <a-form-item label="服务端端口" name="port">
-                                    <a-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
+                                    <nn-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
                                         <a-input
                                             v-model:value="rpkiConfig.port"
                                             data-testid="rpki-port-input"
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
                                 <a-form-item label="启用认证" name="enableAuth">
-                                    <a-checkbox v-model:checked="rpkiConfig.enableAuth" />
+                                    <nn-checkbox v-model:checked="rpkiConfig.enableAuth" />
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
                                 <a-form-item label="最高协议版本" name="maxProtocolVersion">
-                                    <a-radio-group v-model:value="rpkiConfig.maxProtocolVersion">
-                                        <a-radio :value="RPKI_PROTOCOL_VERSION.V2">v2 - 支持 ASPA</a-radio>
-                                        <a-radio :value="RPKI_PROTOCOL_VERSION.V1">v1 - 支持 Router Key</a-radio>
-                                        <a-radio :value="RPKI_PROTOCOL_VERSION.V0">v0 - 仅基础 ROA</a-radio>
-                                    </a-radio-group>
-                                    <div style="color: #999; font-size: 12px; line-height: 1.5">
+                                    <nn-radio-group v-model:value="rpkiConfig.maxProtocolVersion">
+                                        <nn-radio :value="RPKI_PROTOCOL_VERSION.V2">v2 - 支持 ASPA</nn-radio>
+                                        <nn-radio :value="RPKI_PROTOCOL_VERSION.V1">v1 - 支持 Router Key</nn-radio>
+                                        <nn-radio :value="RPKI_PROTOCOL_VERSION.V0">v0 - 仅基础 ROA</nn-radio>
+                                    </nn-radio-group>
+                                    <div style="color: var(--nn-color-text-muted); font-size: 12px; line-height: 1.5">
                                         用于模拟不同能力的 RPKI-RTR cache。客户端请求高于该版本时，服务端返回
                                         Unsupported Protocol Version 并断开连接，客户端应按错误 PDU 版本重试。
                                     </div>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
+                            </nn-col>
+                        </nn-row>
                         <!-- 认证配置 -->
-                        <a-row :gutter="12">
-                            <a-col :span="8">
+                        <nn-row :gutter="12">
+                            <nn-col :span="8">
                                 <a-form-item label="本地监听端口" name="localPort">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.localPort"
                                         :open="rpkiConfig.enableAuth && !!validationErrors.localPort"
                                     >
@@ -52,12 +52,12 @@
                                             :disabled="!rpkiConfig.enableAuth"
                                             :status="rpkiConfig.enableAuth && validationErrors.localPort ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
+                            </nn-col>
+                            <nn-col :span="8">
                                 <a-form-item label="路由器IP" name="peerIP">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.peerIP"
                                         :open="rpkiConfig.enableAuth && !!validationErrors.peerIP"
                                     >
@@ -66,12 +66,12 @@
                                             :disabled="!rpkiConfig.enableAuth"
                                             :status="rpkiConfig.enableAuth && validationErrors.peerIP ? 'error' : ''"
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
+                            </nn-col>
+                            <nn-col :span="8">
                                 <a-form-item label="MD5密钥" name="md5Password">
-                                    <a-tooltip
+                                    <nn-tooltip
                                         :title="validationErrors.md5Password"
                                         :open="rpkiConfig.enableAuth && !!validationErrors.md5Password"
                                     >
@@ -82,31 +82,31 @@
                                                 rpkiConfig.enableAuth && validationErrors.md5Password ? 'error' : ''
                                             "
                                         />
-                                    </a-tooltip>
+                                    </nn-tooltip>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
                                 <a-form-item label="ASPA编码格式" name="aspaFormat">
-                                    <a-radio-group
+                                    <nn-radio-group
                                         v-model:value="rpkiConfig.aspaFormat"
                                         :disabled="rpkiConfig.maxProtocolVersion < RPKI_PROTOCOL_VERSION.V2"
                                     >
-                                        <a-radio :value="RPKI_ASPA_FORMAT.LATEST">最新 (current 8210bis)</a-radio>
-                                        <a-radio :value="RPKI_ASPA_FORMAT.LEGACY">兼容 (draft-10 / 华为 VRP)</a-radio>
-                                    </a-radio-group>
-                                    <div style="color: #999; font-size: 12px; line-height: 1.5">
+                                        <nn-radio :value="RPKI_ASPA_FORMAT.LATEST">最新 (current 8210bis)</nn-radio>
+                                        <nn-radio :value="RPKI_ASPA_FORMAT.LEGACY">兼容 (draft-10 / 华为 VRP)</nn-radio>
+                                    </nn-radio-group>
+                                    <div style="color: var(--nn-color-text-muted); font-size: 12px; line-height: 1.5">
                                         最新格式遵循当前 draft-ietf-sidrops-8210bis 规范；兼容格式按 draft-10 在 body
                                         中携带 Flags、AFI Flags 和 Provider AS Count，适用于华为 VRP
                                         等老旧设备。仅在协议 v2 协商成功时生效。
                                     </div>
                                 </a-form-item>
-                            </a-col>
-                        </a-row>
+                            </nn-col>
+                        </nn-row>
                         <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                            <a-space>
-                                <a-button
+                            <nn-space>
+                                <nn-button
                                     data-testid="rpki-start-button"
                                     type="primary"
                                     html-type="submit"
@@ -114,8 +114,8 @@
                                     :disabled="serverRunning"
                                 >
                                     启动服务器
-                                </a-button>
-                                <a-button
+                                </nn-button>
+                                <nn-button
                                     data-testid="rpki-stop-button"
                                     type="primary"
                                     danger
@@ -123,18 +123,18 @@
                                     @click="stopRpki"
                                 >
                                     停止服务器
-                                </a-button>
-                            </a-space>
+                                </nn-button>
+                            </nn-space>
                         </a-form-item>
                     </a-form>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <!-- RPKI客户端列表 -->
-        <a-row class="adaptive-list-row">
-            <a-col :span="24">
-                <a-card title="RPKI客户端列表" class="adaptive-list-card">
+        <nn-row class="adaptive-list-row">
+            <nn-col :span="24">
+                <nn-card title="RPKI客户端列表" class="adaptive-list-card">
                     <div>
                         <a-table
                             data-testid="rpki-client-table"
@@ -156,14 +156,14 @@
                         >
                             <template #bodyCell="{ column, record }">
                                 <template v-if="column.key === 'action'">
-                                    <a-button type="link" @click="viewClientDetails(record)">详情</a-button>
+                                    <nn-button type="link" @click="viewClientDetails(record)">详情</nn-button>
                                 </template>
                             </template>
                         </a-table>
                     </div>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <a-drawer
             v-model:open="detailsDrawerVisible"
@@ -179,7 +179,7 @@
 
 <script setup>
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { FormValidator, createRpkiConfigValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES, RPKI_EVENT_PAGE_ID, RPKI_PROTOCOL_VERSION, RPKI_ASPA_FORMAT } from '../../const/rpkiConst';
     import EventBus from '../../utils/eventBus';
@@ -285,12 +285,12 @@
     const startRpki = async () => {
         const hasErrors = validator.validate(rpkiConfig.value);
         if (hasErrors) {
-            message.error('请检查配置信息是否正确');
+            notify.error('请检查配置信息是否正确');
             return;
         }
 
         if (rpkiConfig.value.enableAuth && !(await isServerDeployed())) {
-            message.error('请先部署服务器');
+            notify.error('请先部署服务器');
             return;
         }
 
@@ -298,7 +298,7 @@
             const payload = JSON.parse(JSON.stringify(rpkiConfig.value));
             const saveResult = await window.rpkiApi.saveRpkiConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
@@ -309,12 +309,12 @@
                 serverRunning.value = true;
                 // 清空客户端列表
                 clientList.value = [];
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
             } else {
-                message.error(result.msg || 'RPKI服务器启动失败');
+                notify.error(result.msg || 'RPKI服务器启动失败');
             }
         } catch (error) {
-            message.error(`RPKI服务器启动出错: ${error.message}`);
+            notify.error(`RPKI服务器启动出错: ${error.message}`);
         } finally {
             serverLoading.value = false;
         }
@@ -327,12 +327,12 @@
                 serverRunning.value = false;
                 // 清空客户端列表
                 clientList.value = [];
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
             } else {
-                message.error(result.msg || 'RPKI服务器停止失败');
+                notify.error(result.msg || 'RPKI服务器停止失败');
             }
         } catch (error) {
-            message.error(`RPKI服务器停止出错: ${error.message}`);
+            notify.error(`RPKI服务器停止出错: ${error.message}`);
         }
     };
 
@@ -370,7 +370,7 @@
                 }
             }
         } else {
-            message.error(result.msg || '获取客户端列表失败');
+            notify.error(result.msg || '获取客户端列表失败');
         }
     };
 
@@ -382,7 +382,7 @@
             }
         } catch (error) {
             console.error(error);
-            message.error('加载数据失败');
+            notify.error('加载数据失败');
         }
     };
 
@@ -437,7 +437,7 @@
         min-height: 0;
     }
 
-    .adaptive-list-row :deep(.ant-col) {
+    .adaptive-list-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -449,8 +449,8 @@
         overflow: hidden;
     }
 
-    .adaptive-list-card :deep(.ant-card-body),
-    .adaptive-list-card :deep(.ant-card-body > div) {
+    .adaptive-list-card :deep(.nn-card-body),
+    .adaptive-list-card :deep(.nn-card-body > div) {
         flex: 1;
         min-height: 0;
         overflow: hidden;

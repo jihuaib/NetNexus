@@ -1,9 +1,9 @@
 <template>
     <a-drawer :open="open" title="BGP路由详情" width="640px" placement="right" @close="close">
-        <a-spin :spinning="loading">
-            <a-empty v-if="!route" description="暂无详情" />
+        <nn-spin :spinning="loading">
+            <nn-empty v-if="!route" description="暂无详情" />
             <pre v-else class="json-detail">{{ routeJson }}</pre>
-        </a-spin>
+        </nn-spin>
     </a-drawer>
 </template>
 
@@ -50,9 +50,9 @@
 
 <style scoped>
     .json-detail {
-        background: #0f172a;
+        background: var(--nn-color-bg-console);
         border-radius: 6px;
-        color: #e5e7eb;
+        color: var(--nn-color-text-console);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
         font-size: 12px;
         line-height: 1.6;

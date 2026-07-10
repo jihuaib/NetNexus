@@ -1,8 +1,8 @@
 <template>
     <div class="mt-container radius-table-page">
-        <a-card title="RADIUS会话状态" class="radius-table-card">
+        <nn-card title="RADIUS会话状态" class="radius-table-card">
             <template #extra>
-                <a-button :loading="loading" @click="loadSessionList">刷新</a-button>
+                <nn-button :loading="loading" @click="loadSessionList">刷新</nn-button>
             </template>
 
             <a-table
@@ -25,14 +25,14 @@
                         {{ framedAddress(record) }}
                     </template>
                     <template v-else-if="column.key === 'lastStatusText'">
-                        <a-tag color="processing">{{ record.lastStatusText || '-' }}</a-tag>
+                        <nn-tag color="processing">{{ record.lastStatusText || '-' }}</nn-tag>
                     </template>
                     <template v-else-if="column.key === 'action'">
-                        <a-button type="link" size="small" @click="showDetail(record)">详情</a-button>
+                        <nn-button type="link" size="small" @click="showDetail(record)">详情</nn-button>
                     </template>
                 </template>
             </a-table>
-        </a-card>
+        </nn-card>
 
         <a-drawer
             v-model:open="detailDrawerVisible"
@@ -41,67 +41,67 @@
             placement="right"
             @close="closeDetailDrawer"
         >
-            <a-empty v-if="!selectedSession" description="暂无详情" />
+            <nn-empty v-if="!selectedSession" description="暂无详情" />
             <template v-else>
-                <a-descriptions title="会话摘要" size="small" bordered :column="1">
-                    <a-descriptions-item label="会话Key">{{ selectedSession.key || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="用户">{{ selectedSession.userName || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="Acct-Session-Id">
+                <nn-descriptions title="会话摘要" size="small" bordered :column="1">
+                    <nn-descriptions-item label="会话Key">{{ selectedSession.key || '-' }}</nn-descriptions-item>
+                    <nn-descriptions-item label="用户">{{ selectedSession.userName || '-' }}</nn-descriptions-item>
+                    <nn-descriptions-item label="Acct-Session-Id">
                         {{ selectedSession.acctSessionId || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Acct-Multi-Session-Id">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Acct-Multi-Session-Id">
                         {{ selectedSession.acctMultiSessionId || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="最后状态">
-                        <a-tag color="processing">{{ selectedSession.lastStatusText || '-' }}</a-tag>
-                    </a-descriptions-item>
-                    <a-descriptions-item label="开始时间">{{ selectedSession.startedAt || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="更新时间">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="最后状态">
+                        <nn-tag color="processing">{{ selectedSession.lastStatusText || '-' }}</nn-tag>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="开始时间">{{ selectedSession.startedAt || '-' }}</nn-descriptions-item>
+                    <nn-descriptions-item label="更新时间">
                         {{ selectedSession.lastUpdateAt || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="最近CoA">{{ selectedSession.lastCoaAt || '-' }}</a-descriptions-item>
-                </a-descriptions>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="最近CoA">{{ selectedSession.lastCoaAt || '-' }}</nn-descriptions-item>
+                </nn-descriptions>
 
-                <a-descriptions title="NAS 与地址" size="small" bordered :column="1" class="detail-section">
-                    <a-descriptions-item label="NAS地址">{{ selectedSession.nasAddress || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="NAS-IPv4">
+                <nn-descriptions title="NAS 与地址" size="small" bordered :column="1" class="detail-section">
+                    <nn-descriptions-item label="NAS地址">{{ selectedSession.nasAddress || '-' }}</nn-descriptions-item>
+                    <nn-descriptions-item label="NAS-IPv4">
                         {{ selectedSession.nasIpAddress || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="NAS-IPv6">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="NAS-IPv6">
                         {{ selectedSession.nasIpv6Address || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="NAS-Identifier">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="NAS-Identifier">
                         {{ selectedSession.nasIdentifier || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="NAS-Port">{{ valueText(selectedSession.nasPort) }}</a-descriptions-item>
-                    <a-descriptions-item label="NAS-Port-Id">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="NAS-Port">{{ valueText(selectedSession.nasPort) }}</nn-descriptions-item>
+                    <nn-descriptions-item label="NAS-Port-Id">
                         {{ selectedSession.nasPortId || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Calling-Station-Id">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Calling-Station-Id">
                         {{ selectedSession.callingStationId || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Called-Station-Id">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Called-Station-Id">
                         {{ selectedSession.calledStationId || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Framed-IP">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Framed-IP">
                         {{ selectedSession.framedIpAddress || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Framed-IPv6-Prefix">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Framed-IPv6-Prefix">
                         {{ selectedSession.framedIpv6Prefix || '-' }}
-                    </a-descriptions-item>
-                </a-descriptions>
+                    </nn-descriptions-item>
+                </nn-descriptions>
 
-                <a-descriptions title="授权更新" size="small" bordered :column="1" class="detail-section">
-                    <a-descriptions-item label="Filter-Id">
+                <nn-descriptions title="授权更新" size="small" bordered :column="1" class="detail-section">
+                    <nn-descriptions-item label="Filter-Id">
                         {{ arrayText(selectedSession.filterIds) }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Session-Timeout">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Session-Timeout">
                         {{ valueText(selectedSession.sessionTimeout) }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Idle-Timeout">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Idle-Timeout">
                         {{ valueText(selectedSession.idleTimeout) }}
-                    </a-descriptions-item>
-                </a-descriptions>
+                    </nn-descriptions-item>
+                </nn-descriptions>
 
                 <div class="detail-section">
                     <div class="detail-section-title">最近计费属性</div>
@@ -121,7 +121,7 @@
 
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { RADIUS_EVENT_PAGE_ID, RADIUS_SUB_EVT_TYPES } from '../../const/radiusConst';
     import EventBus from '../../utils/eventBus';
 
@@ -182,10 +182,10 @@
             if (result.status === 'success') {
                 sessionList.value = result.data || [];
             } else {
-                message.error(result.msg || '获取RADIUS会话列表失败');
+                notify.error(result.msg || '获取RADIUS会话列表失败');
             }
         } catch (error) {
-            message.error('获取RADIUS会话列表失败: ' + error.message);
+            notify.error('获取RADIUS会话列表失败: ' + error.message);
         } finally {
             loading.value = false;
         }
@@ -228,7 +228,7 @@
         overflow: hidden;
     }
 
-    .radius-table-card :deep(.ant-card-body) {
+    .radius-table-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         min-width: 0;
@@ -282,7 +282,7 @@
 
     .detail-section-title {
         margin: 10px 0 6px;
-        color: rgba(0, 0, 0, 0.65);
+        color: var(--nn-color-text-secondary);
         font-weight: 600;
     }
 

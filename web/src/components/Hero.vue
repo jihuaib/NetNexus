@@ -14,6 +14,7 @@
             <div class="hero-actions animate-fade-in" style="animation-delay: 0.4s">
                 <button class="btn btn-primary" @click="learnMore">了解更多</button>
             </div>
+            <DownloadStats class="animate-fade-in" style="animation-delay: 0.5s" />
             <div class="hero-platforms animate-fade-in" style="animation-delay: 0.6s">
                 <span>支持平台：</span>
                 <span class="platform-tag">Windows x64</span>
@@ -29,6 +30,8 @@
 </template>
 
 <script setup>
+    import DownloadStats from './DownloadStats.vue';
+
     const learnMore = () => {
         document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' });
     };

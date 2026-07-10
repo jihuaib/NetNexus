@@ -10,7 +10,7 @@
         @ok="handleImport"
     >
         <div class="mrt-import-container">
-            <a-alert message="数据来源说明" type="info" show-icon style="margin-bottom: 16px">
+            <nn-alert message="数据来源说明" type="info" show-icon style="margin-bottom: 16px">
                 <template #description>
                     您可以从
                     <a class="external-link" @click="openRouteViews">RouteViews Archive</a>
@@ -24,20 +24,20 @@
                     <code>rib.2024...</code>
                     )。
                     <br />
-                    <span style="color: #faad14">
+                    <span class="import-warning">
                         注意：
                         <code>.bz2</code>
                         文件请先解压，解压后即便没有后缀名也可导入。
                     </span>
                 </template>
-            </a-alert>
+            </nn-alert>
 
             <!-- 文件来源选择 -->
             <a-form layout="vertical" style="margin-top: 16px">
-                <a-radio-group v-model:value="fileSource" button-style="solid">
-                    <a-radio-button value="default">默认文件</a-radio-button>
-                    <a-radio-button value="custom">自定义文件</a-radio-button>
-                </a-radio-group>
+                <nn-radio-group v-model:value="fileSource" button-style="solid">
+                    <nn-radio-button value="default">默认文件</nn-radio-button>
+                    <nn-radio-button value="custom">自定义文件</nn-radio-button>
+                </nn-radio-group>
             </a-form>
 
             <!-- 默认文件选择 -->
@@ -59,14 +59,14 @@
 
             <!-- 自定义文件选择 -->
             <div v-else class="file-selector">
-                <a-button type="primary" @click="selectLocalFile">
+                <nn-button type="primary" @click="selectLocalFile">
                     <template #icon><FileSearchOutlined /></template>
                     选择本地 MRT 文件
-                </a-button>
+                </nn-button>
                 <div v-if="selectedFilePath" class="selected-path">
                     <span class="label">已选文件:</span>
                     <span class="path">{{ selectedFilePath }}</span>
-                    <a-button type="link" size="small" danger @click="clearSelection">清除</a-button>
+                    <nn-button type="link" size="small" danger @click="clearSelection">清除</nn-button>
                 </div>
                 <div v-else class="empty-selection">
                     尚未选择文件，请点击上方按钮选择一个
@@ -78,10 +78,10 @@
             <div class="import-options" style="margin-top: 20px">
                 <a-form layout="vertical">
                     <a-form-item label="导入数量限制 (建议 10,000 - 100,000)">
-                        <a-input-number v-model:value="importLimit" :min="1" :max="1000000" style="width: 100%" />
+                        <nn-input-number v-model:value="importLimit" :min="1" :max="1000000" style="width: 100%" />
                     </a-form-item>
                     <div v-if="importing" class="importing-feedback">
-                        <a-spin size="small" />
+                        <nn-spin size="small" />
                         <span class="status-text">{{ importingStatus }}</span>
                     </div>
                 </a-form>
@@ -92,9 +92,8 @@
 
 <script setup>
     import { ref, watch, onMounted, computed } from 'vue';
-    import { message } from 'ant-design-vue';
-    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
-
+    import { notify } from '../utils/notify';
+    import { FileSearchOutlined } from '../ui/icons';
     const props = defineProps({
         open: {
             type: Boolean,
@@ -156,7 +155,7 @@
                     selectedDefaultFile.value = defaultFiles.value[0].path;
                 }
             } else {
-                message.warning('无法加载默认文件列表');
+                notify.warning('无法加载默认文件列表');
             }
         } catch (e) {
             console.error('加载默认文件失败:', e);
@@ -171,10 +170,10 @@
             if (result.status === 'success' && result.data) {
                 selectedFilePath.value = result.data;
             } else if (result.status === 'error') {
-                message.error(result.msg);
+                notify.error(result.msg);
             }
         } catch (e) {
-            message.error(`选择文件失败: ${e.message}`);
+            notify.error(`选择文件失败: ${e.message}`);
         }
     };
 
@@ -191,11 +190,11 @@
         const filePath = effectiveFilePath.value;
 
         if (!filePath) {
-            message.warning('请先选择一个 MRT 文件');
+            notify.warning('请先选择一个 MRT 文件');
             return;
         }
         if (filePath.endsWith('.bz2')) {
-            message.warning('检测到 .bz2 文件，请先使用 7-Zip 或 WinRAR 解压后再导入');
+            notify.warning('检测到 .bz2 文件，请先使用 7-Zip 或 WinRAR 解压后再导入');
             return;
         }
 
@@ -206,15 +205,15 @@
             const result = await window.bgpApi.importRouteViewsData(filePath, importLimit.value, props.addressFamily);
 
             if (result.status === 'success') {
-                message.success(result.msg);
+                notify.success(result.msg);
                 emit('imported');
                 open.value = false;
                 selectedFilePath.value = ''; // Reset for next time
             } else {
-                message.error(result.msg);
+                notify.error(result.msg);
             }
         } catch (e) {
-            message.error(`导入失败: ${e.message}`);
+            notify.error(`导入失败: ${e.message}`);
         } finally {
             importing.value = false;
         }
@@ -226,9 +225,13 @@
         padding: 8px;
     }
 
+    .import-warning {
+        color: var(--nn-color-warning);
+    }
+
     .file-selector {
-        background: #fafafa;
-        border: 1px dashed #d9d9d9;
+        background: var(--nn-color-bg-subtle);
+        border: 1px dashed var(--nn-color-border);
         border-radius: 4px;
         padding: 24px;
         text-align: center;
@@ -236,10 +239,10 @@
 
     .selected-path {
         margin-top: 16px;
-        background: #fff;
+        background: var(--nn-color-bg-surface);
         padding: 8px 12px;
         border-radius: 4px;
-        border: 1px solid #e8e8e8;
+        border: 1px solid var(--nn-color-border-light);
         display: flex;
         align-items: center;
         gap: 8px;
@@ -247,7 +250,7 @@
     }
 
     .selected-path .label {
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
         white-space: nowrap;
     }
 
@@ -258,11 +261,11 @@
 
     .empty-selection {
         margin-top: 12px;
-        color: #bfbfbf;
+        color: var(--nn-color-text-placeholder);
     }
 
     .external-link {
-        color: #1890ff;
+        color: var(--nn-color-link);
         text-decoration: underline;
         cursor: pointer;
     }
@@ -272,7 +275,7 @@
         align-items: center;
         gap: 8px;
         margin-top: 8px;
-        color: #1890ff;
+        color: var(--nn-color-primary);
     }
 
     .status-text {
@@ -280,7 +283,8 @@
     }
 
     code {
-        background-color: #f5f5f5;
+        color: var(--nn-color-text);
+        background-color: var(--nn-color-bg-code);
         padding: 2px 4px;
         border-radius: 3px;
         font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
