@@ -3,10 +3,10 @@
         <nn-row class="adaptive-config-row">
             <nn-col :span="24">
                 <nn-card title="NTP服务器配置">
-                    <a-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
+                    <nn-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
                         <nn-row :gutter="24">
                             <nn-col :span="8">
-                                <a-form-item label="监听端口">
+                                <nn-form-item label="监听端口">
                                     <nn-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
                                         <nn-input-number
                                             v-model:value="formData.port"
@@ -16,10 +16,10 @@
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="Stratum">
+                                <nn-form-item label="Stratum">
                                     <nn-tooltip :title="validationErrors.stratum" :open="!!validationErrors.stratum">
                                         <nn-input-number
                                             v-model:value="formData.stratum"
@@ -29,28 +29,28 @@
                                             :status="validationErrors.stratum ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="Reference ID">
+                                <nn-form-item label="Reference ID">
                                     <nn-tooltip
                                         :title="validationErrors.referenceId"
                                         :open="!!validationErrors.referenceId"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="formData.referenceId"
                                             :maxlength="4"
                                             placeholder="例如 LOCL"
                                             :status="validationErrors.referenceId ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
                         <nn-row :gutter="24">
                             <nn-col :span="8">
-                                <a-form-item label="时间偏移">
+                                <nn-form-item label="时间偏移">
                                     <nn-tooltip
                                         :title="validationErrors.timeOffsetMs"
                                         :open="!!validationErrors.timeOffsetMs"
@@ -64,10 +64,10 @@
                                             :status="validationErrors.timeOffsetMs ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="Root Delay">
+                                <nn-form-item label="Root Delay">
                                     <nn-tooltip
                                         :title="validationErrors.rootDelayMs"
                                         :open="!!validationErrors.rootDelayMs"
@@ -81,10 +81,10 @@
                                             :status="validationErrors.rootDelayMs ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="Root Dispersion">
+                                <nn-form-item label="Root Dispersion">
                                     <nn-tooltip
                                         :title="validationErrors.rootDispersionMs"
                                         :open="!!validationErrors.rootDispersionMs"
@@ -98,7 +98,7 @@
                                             :status="validationErrors.rootDispersionMs ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
@@ -121,7 +121,7 @@
                                 </nn-button>
                             </nn-space>
                         </div>
-                    </a-form>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>

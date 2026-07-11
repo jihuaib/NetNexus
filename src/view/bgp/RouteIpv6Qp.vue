@@ -1,58 +1,58 @@
 <template>
     <div class="mt-container qp-page">
         <nn-card class="qp-card" title="IPv6-QP路由配置">
-            <a-form class="qp-config-form" :model="ipv6QpData" :label-col="labelCol" :wrapper-col="wrapperCol">
+            <nn-form class="qp-config-form" :model="ipv6QpData" :label-col="labelCol" :wrapper-col="wrapperCol">
                 <div class="config-section">
                     <div class="section-title">生成范围</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :xl="24">
-                            <a-form-item label="增长模式" name="routeGrowthMode">
+                            <nn-form-item label="增长模式" name="routeGrowthMode">
                                 <nn-radio-group v-model:value="ipv6QpData.routeGrowthMode">
                                     <nn-radio :value="BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN">IP + DQPN</nn-radio>
                                     <nn-radio :value="BGP_QP_ROUTE_GROWTH_MODE.IP">仅 IP</nn-radio>
                                     <nn-radio :value="BGP_QP_ROUTE_GROWTH_MODE.DQPN">仅 DQPN</nn-radio>
                                 </nn-radio-group>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="Prefix" name="prefix">
+                            <nn-form-item label="Prefix" name="prefix">
                                 <nn-tooltip :title="validationErrors.prefix" :open="!!validationErrors.prefix">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv6QpData.prefix"
                                         :status="validationErrors.prefix ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="Mask" name="mask">
+                            <nn-form-item label="Mask" name="mask">
                                 <nn-tooltip :title="validationErrors.mask" :open="!!validationErrors.mask">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv6QpData.mask"
                                         :status="validationErrors.mask ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="Count" name="count">
+                            <nn-form-item label="Count" name="count">
                                 <nn-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv6QpData.count"
                                         :status="validationErrors.count ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col v-if="routeGrowthIncludesIp" :xs="24" :md="6">
-                            <a-form-item label="IP Step" name="ipStep">
+                            <nn-form-item label="IP Step" name="ipStep">
                                 <nn-tooltip :title="validationErrors.ipStep" :open="!!validationErrors.ipStep">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv6QpData.ipStep"
                                         :status="validationErrors.ipStep ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                     </nn-row>
                 </div>
@@ -61,24 +61,24 @@
                     <div class="section-title">DQPN</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="8">
-                            <a-form-item label="Start DQPN" name="startDqpn">
+                            <nn-form-item label="Start DQPN" name="startDqpn">
                                 <nn-tooltip :title="validationErrors.startDqpn" :open="!!validationErrors.startDqpn">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv6QpData.startDqpn"
                                         :status="validationErrors.startDqpn ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col v-if="routeGrowthIncludesDqpn" :xs="24" :md="8">
-                            <a-form-item label="DQPN Step" name="dqpnStep">
+                            <nn-form-item label="DQPN Step" name="dqpnStep">
                                 <nn-tooltip :title="validationErrors.dqpnStep" :open="!!validationErrors.dqpnStep">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv6QpData.dqpnStep"
                                         :status="validationErrors.dqpnStep ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                     </nn-row>
                 </div>
@@ -87,32 +87,32 @@
                     <div class="section-title">BSID</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="8">
-                            <a-form-item label="BSID模式" name="bsidMode">
+                            <nn-form-item label="BSID模式" name="bsidMode">
                                 <nn-radio-group v-model:value="ipv6QpData.bsidMode">
                                     <nn-radio :value="BGP_QP_BSID_MODE.FIXED">固定</nn-radio>
                                     <nn-radio :value="BGP_QP_BSID_MODE.CONTINUOUS">连续</nn-radio>
                                 </nn-radio-group>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="8">
-                            <a-form-item label="BSID" name="bsid">
+                            <nn-form-item label="BSID" name="bsid">
                                 <nn-tooltip :title="validationErrors.bsid" :open="!!validationErrors.bsid">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv6QpData.bsid"
                                         :status="validationErrors.bsid ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col v-if="ipv6QpData.bsidMode === BGP_QP_BSID_MODE.CONTINUOUS" :xs="24" :md="8">
-                            <a-form-item label="BSID Step" name="bsidStep">
+                            <nn-form-item label="BSID Step" name="bsidStep">
                                 <nn-tooltip :title="validationErrors.bsidStep" :open="!!validationErrors.bsidStep">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv6QpData.bsidStep"
                                         :status="validationErrors.bsidStep ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                     </nn-row>
                 </div>
@@ -131,7 +131,7 @@
                         生成IPv6-QP路由
                     </nn-button>
                 </div>
-            </a-form>
+            </nn-form>
         </nn-card>
 
         <nn-card title="已生成IPv6-QP路由列表" class="qp-route-list-card">
@@ -149,7 +149,7 @@
                 </nn-button>
             </template>
 
-            <a-table
+            <nn-table
                 :data-source="sentRoutes"
                 :columns="routeColumns"
                 :pagination="pagination"
@@ -176,7 +176,7 @@
                         <div>{{ record.ip }}/{{ record.mask }}</div>
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </nn-card>
 
         <CustomPktDrawer
@@ -561,19 +561,19 @@
     }
 
     .bgp-route-table,
-    .bgp-route-table :deep(.ant-spin-nested-loading),
-    .bgp-route-table :deep(.ant-spin-container) {
+    .bgp-route-table :deep(.nn-spin-nested-loading),
+    .bgp-route-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .bgp-route-table :deep(.ant-spin-container) {
+    .bgp-route-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .bgp-route-table :deep(.ant-table) {
+    .bgp-route-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -581,20 +581,20 @@
         overflow: hidden;
     }
 
-    .bgp-route-table :deep(.ant-table-container),
-    .bgp-route-table :deep(.ant-table-content) {
+    .bgp-route-table :deep(.nn-table-container),
+    .bgp-route-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .bgp-route-table :deep(.ant-table-header) {
+    .bgp-route-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .bgp-route-table :deep(.ant-table-body) {
+    .bgp-route-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -602,34 +602,34 @@
         overflow-y: auto !important;
     }
 
-    .bgp-route-table :deep(.ant-pagination) {
+    .bgp-route-table :deep(.nn-pagination) {
         flex: 0 0 auto;
     }
 
-    .bgp-route-table :deep(.ant-table-thead > tr > th) {
+    .bgp-route-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;
     }
 
-    :deep(.ant-table-thead > tr > th),
-    :deep(.ant-table-tbody > tr > td) {
+    :deep(.nn-table-thead > tr > th),
+    :deep(.nn-table-tbody > tr > td) {
         padding: 4px 8px !important;
     }
 
-    :deep(.ant-table-wrapper .ant-table-pagination.ant-pagination) {
+    :deep(.nn-table-wrapper .nn-table-pagination.nn-pagination) {
         margin: 8px 0 0;
     }
 
-    :deep(.qp-config-form .ant-form-item) {
+    :deep(.qp-config-form .nn-form-item) {
         margin-bottom: 8px;
     }
 
-    :deep(.qp-config-form .ant-form-item-label) {
+    :deep(.qp-config-form .nn-form-item-label) {
         padding-bottom: 0;
     }
 
-    :deep(.qp-config-form .ant-input) {
+    :deep(.qp-config-form .nn-input) {
         height: 28px;
     }
 

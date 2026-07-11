@@ -1,4 +1,5 @@
 import { createApp, nextTick } from 'vue';
+import './assets/styles/reset.css';
 import './assets/styles/theme.css';
 import './assets/styles/ui-services.css';
 import './assets/styles/common.css';

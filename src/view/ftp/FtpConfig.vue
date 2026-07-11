@@ -3,23 +3,23 @@
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="FTP服务器配置">
-                    <a-form :model="ftpConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
+                    <nn-form :model="ftpConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="服务器端口" name="port">
+                                <nn-form-item label="服务器端口" name="port">
                                     <nn-tooltip
                                         :title="validationFtpConfigErrors.port"
                                         :open="!!validationFtpConfigErrors.port"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ftpConfig.port"
                                             :status="validationFtpConfigErrors.port ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                        <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
                             <nn-space>
                                 <nn-button
                                     type="primary"
@@ -33,8 +33,8 @@
                                     停止服务器
                                 </nn-button>
                             </nn-space>
-                        </a-form-item>
-                    </a-form>
+                        </nn-form-item>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>
@@ -43,16 +43,16 @@
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="用户配置">
-                    <a-form :model="ftpUserConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
+                    <nn-form :model="ftpUserConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
                         <nn-row>
                             <nn-col :span="8">
-                                <a-form-item label="根目录" name="rootDir">
+                                <nn-form-item label="根目录" name="rootDir">
                                     <nn-tooltip
                                         :title="validationFtpUserErrors.rootDir"
                                         :open="!!validationFtpUserErrors.rootDir"
                                     >
-                                        <a-input-group compact>
-                                            <a-input
+                                        <nn-input-group compact>
+                                            <nn-input
                                                 v-model:value="ftpUserConfig.rootDir"
                                                 :status="validationFtpUserErrors.rootDir ? 'error' : ''"
                                                 style="width: calc(100% - 40px)"
@@ -61,44 +61,44 @@
                                             <nn-button type="primary" @click="selectDirectory">
                                                 <folder-outlined />
                                             </nn-button>
-                                        </a-input-group>
+                                        </nn-input-group>
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="用户名" name="username">
+                                <nn-form-item label="用户名" name="username">
                                     <nn-tooltip
                                         :title="validationFtpUserErrors.username"
                                         :open="!!validationFtpUserErrors.username"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ftpUserConfig.username"
                                             :status="validationFtpUserErrors.username ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="密码" name="password">
+                                <nn-form-item label="密码" name="password">
                                     <nn-tooltip
                                         :title="validationFtpUserErrors.password"
                                         :open="!!validationFtpUserErrors.password"
                                     >
-                                        <a-input-password
+                                        <nn-input-password
                                             v-model:value="ftpUserConfig.password"
                                             :status="validationFtpUserErrors.password ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                        <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
                             <nn-space>
                                 <nn-button type="primary" @click="addUser">添加用户</nn-button>
                                 <nn-button type="default" @click="showUserList">用户列表</nn-button>
                             </nn-space>
-                        </a-form-item>
-                    </a-form>
+                        </nn-form-item>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>
@@ -108,7 +108,7 @@
             <nn-col :span="24">
                 <nn-card title="FTP客户端列表" class="adaptive-list-card">
                     <div>
-                        <a-table
+                        <nn-table
                             :columns="clientColumns"
                             :data-source="clientList"
                             :row-key="record => `${record.remoteIp}|${record.remotePort}`"
@@ -127,14 +127,14 @@
                                     <nn-button type="link" @click="viewClientDetails(record)">详情</nn-button>
                                 </template>
                             </template>
-                        </a-table>
+                        </nn-table>
                     </div>
                 </nn-card>
             </nn-col>
         </nn-row>
 
         <!-- 用户列表弹窗 -->
-        <a-modal
+        <nn-modal
             v-model:open="userListModalVisible"
             title="用户列表"
             :mask-closable="false"
@@ -142,7 +142,7 @@
             @cancel="closeUserListModal"
         >
             <div>
-                <a-table
+                <nn-table
                     :columns="userListColumns"
                     :data-source="userList"
                     :pagination="{
@@ -168,12 +168,12 @@
                             <nn-button type="link" danger @click="deleteUser(record)">删除</nn-button>
                         </template>
                     </template>
-                </a-table>
+                </nn-table>
             </div>
             <template #footer>
                 <nn-button type="primary" @click="closeUserListModal">关闭</nn-button>
             </template>
-        </a-modal>
+        </nn-modal>
     </div>
 </template>
 
@@ -552,19 +552,19 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -572,20 +572,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -593,12 +593,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

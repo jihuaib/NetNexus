@@ -1,5 +1,5 @@
 <template>
-    <a-modal
+    <nn-modal
         v-model:open="open"
         title="导入 ROA JSON 文件"
         :confirm-loading="importing"
@@ -27,24 +27,24 @@
             </div>
 
             <div class="import-options">
-                <a-form layout="vertical">
-                    <a-form-item label="导入方式">
+                <nn-form layout="vertical">
+                    <nn-form-item label="导入方式">
                         <nn-radio-group v-model:value="importMode" button-style="solid">
                             <nn-radio-button value="limited">限制条数</nn-radio-button>
                             <nn-radio-button value="all">全量导入</nn-radio-button>
                         </nn-radio-group>
-                    </a-form-item>
-                    <a-form-item v-if="importMode === 'limited'" label="导入数量限制">
+                    </nn-form-item>
+                    <nn-form-item v-if="importMode === 'limited'" label="导入数量限制">
                         <nn-input-number v-model:value="importLimit" :min="1" :max="1000000" style="width: 100%" />
-                    </a-form-item>
+                    </nn-form-item>
                     <div v-if="importing" class="importing-feedback">
                         <nn-spin size="small" />
                         <span class="status-text">导入中...</span>
                     </div>
-                </a-form>
+                </nn-form>
             </div>
         </div>
-    </a-modal>
+    </nn-modal>
 </template>
 
 <script setup>

@@ -2,19 +2,19 @@
     <div class="mt-container port-monitor-page">
         <!-- 配置面板 -->
         <nn-card title="端口监听配置" class="port-config-card">
-            <a-form :label-col="labelCol" :wrapper-col="wrapperCol">
-                <a-form-item label="刷新间隔">
+            <nn-form :label-col="labelCol" :wrapper-col="wrapperCol">
+                <nn-form-item label="刷新间隔">
                     <nn-space>
                         <nn-switch v-model:checked="autoRefresh" @change="handleAutoRefreshChange" />
-                        <a-select v-model:value="refreshInterval" :disabled="!autoRefresh" style="width: 120px">
-                            <a-select-option :value="3000">3 秒</a-select-option>
-                            <a-select-option :value="5000">5 秒</a-select-option>
-                            <a-select-option :value="10000">10 秒</a-select-option>
-                            <a-select-option :value="30000">30 秒</a-select-option>
-                        </a-select>
+                        <nn-select v-model:value="refreshInterval" :disabled="!autoRefresh" style="width: 120px">
+                            <nn-select-option :value="3000">3 秒</nn-select-option>
+                            <nn-select-option :value="5000">5 秒</nn-select-option>
+                            <nn-select-option :value="10000">10 秒</nn-select-option>
+                            <nn-select-option :value="30000">30 秒</nn-select-option>
+                        </nn-select>
                     </nn-space>
-                </a-form-item>
-                <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                </nn-form-item>
+                <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
                     <nn-space>
                         <nn-button type="primary" :loading="isLoading" @click="loadPorts">
                             <template #icon>
@@ -24,15 +24,15 @@
                         </nn-button>
                         <nn-button @click="clearFilter">清空筛选</nn-button>
                     </nn-space>
-                </a-form-item>
-            </a-form>
+                </nn-form-item>
+            </nn-form>
         </nn-card>
 
         <!-- 端口列表 -->
         <nn-card title="端口连接列表" class="port-list-card">
             <template #extra>
                 <nn-space>
-                    <a-input-search
+                    <nn-input-search
                         v-model:value="searchText"
                         placeholder="搜索端口、地址、进程名或PID"
                         style="width: 250px"
@@ -42,7 +42,7 @@
                 </nn-space>
             </template>
 
-            <a-table
+            <nn-table
                 :columns="columns"
                 :data-source="filteredPorts"
                 :scroll="{ y: '100%' }"
@@ -91,7 +91,7 @@
                         </nn-button>
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </nn-card>
     </div>
 </template>
@@ -371,19 +371,19 @@
     }
 
     .port-table,
-    .port-table :deep(.ant-spin-nested-loading),
-    .port-table :deep(.ant-spin-container) {
+    .port-table :deep(.nn-spin-nested-loading),
+    .port-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .port-table :deep(.ant-spin-container) {
+    .port-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .port-table :deep(.ant-table) {
+    .port-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -391,20 +391,20 @@
         overflow: hidden;
     }
 
-    .port-table :deep(.ant-table-container),
-    .port-table :deep(.ant-table-content) {
+    .port-table :deep(.nn-table-container),
+    .port-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .port-table :deep(.ant-table-header) {
+    .port-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .port-table :deep(.ant-table-body) {
+    .port-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -412,12 +412,12 @@
         overflow-y: auto !important;
     }
 
-    .port-table :deep(.ant-pagination) {
+    .port-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .port-table :deep(.ant-table-thead > tr > th) {
+    .port-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

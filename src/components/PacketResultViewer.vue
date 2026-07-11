@@ -1,5 +1,5 @@
 <template>
-    <a-modal
+    <nn-modal
         v-model:open="modalVisible"
         title="报文解析结果"
         :mask-closable="false"
@@ -44,7 +44,7 @@
                         ref="treeScrollRef"
                         class="packet-tree-scroll"
                     >
-                        <a-tree
+                        <nn-tree
                             ref="treeRef"
                             v-model:selected-keys="treeSelectedKeys"
                             v-model:expanded-keys="treeExpandedKeys"
@@ -101,7 +101,7 @@
                 </section>
             </div>
         </div>
-    </a-modal>
+    </nn-modal>
 </template>
 
 <script setup>
@@ -501,10 +501,10 @@
 
     const scrollSelectedTreeNodeIntoView = () => {
         const scrollEl = treeScrollRef.value;
-        const selectedEl = scrollEl?.querySelector?.('.ant-tree-node-selected');
+        const selectedEl = scrollEl?.querySelector?.('.nn-tree-node-selected');
         if (!scrollEl || !selectedEl) return;
 
-        const selectedNodeEl = selectedEl.closest('.ant-tree-treenode') || selectedEl;
+        const selectedNodeEl = selectedEl.closest('.nn-tree-treenode') || selectedEl;
         const scrollRect = scrollEl.getBoundingClientRect();
         const selectedRect = selectedNodeEl.getBoundingClientRect();
         const selectedTop = selectedRect.top - scrollRect.top + scrollEl.scrollTop;
@@ -564,7 +564,7 @@
         overflow: hidden;
     }
 
-    :global(.packet-result-modal.ant-modal) {
+    :global(.packet-result-modal.nn-modal) {
         --packet-result-modal-margin-y: clamp(32px, 10vh, 64px);
         --packet-result-modal-max-height: calc(
             100vh - var(--packet-result-modal-margin-y) - var(--packet-result-modal-margin-y)
@@ -574,13 +574,13 @@
         padding-bottom: 0;
     }
 
-    :global(.packet-result-modal .ant-modal-content) {
+    :global(.packet-result-modal .nn-modal-content) {
         height: min(720px, var(--packet-result-modal-max-height));
         max-height: var(--packet-result-modal-max-height) !important;
         overflow: hidden !important;
     }
 
-    :global(.packet-result-modal .ant-modal-body) {
+    :global(.packet-result-modal .nn-modal-body) {
         flex: 1 1 0 !important;
         min-height: 0 !important;
         max-height: none !important;
@@ -786,18 +786,18 @@
         background: var(--nn-color-bg-surface);
     }
 
-    .packet-tree :deep(.ant-tree-node-content-wrapper) {
+    .packet-tree :deep(.nn-tree-node-content-wrapper) {
         max-width: calc(100% - 24px);
         padding: 0 4px;
         line-height: 22px;
         border-radius: 2px;
     }
 
-    .packet-tree :deep(.ant-tree-node-content-wrapper:hover) {
+    .packet-tree :deep(.nn-tree-node-content-wrapper:hover) {
         background: var(--nn-color-bg-hover);
     }
 
-    .packet-tree :deep(.ant-tree-title) {
+    .packet-tree :deep(.nn-tree-title) {
         display: block;
         max-width: 100%;
     }
@@ -812,15 +812,15 @@
     }
 
     /* 设置树节点选中的颜色 */
-    :deep(.ant-tree-node-selected) {
+    :deep(.nn-tree-node-selected) {
         background-color: var(--nn-color-bg-danger-subtle) !important;
     }
 
-    :deep(.ant-tree-node-content-wrapper.ant-tree-node-selected) {
+    :deep(.nn-tree-node-content-wrapper.nn-tree-node-selected) {
         background-color: var(--nn-color-bg-danger-subtle) !important;
     }
 
-    :deep(.ant-tree-node-content-wrapper.ant-tree-node-selected .ant-tree-title) {
+    :deep(.nn-tree-node-content-wrapper.nn-tree-node-selected .nn-tree-title) {
         color: var(--nn-color-error);
     }
 

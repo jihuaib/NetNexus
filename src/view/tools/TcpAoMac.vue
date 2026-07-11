@@ -1,25 +1,25 @@
 <template>
     <div class="mt-container tcpao-page">
         <nn-card title="TCP-AO MAC 计算器" class="tcpao-card">
-            <a-form :model="formState" layout="vertical" class="tcpao-form" @finish="handleCalculate">
+            <nn-form :model="formState" layout="vertical" class="tcpao-form" @finish="handleCalculate">
                 <div class="tcpao-layout">
                     <div class="tcpao-main">
                         <div class="panel-block">
                             <div class="panel-title">输入上下文</div>
                             <nn-row :gutter="12">
                                 <nn-col :xs="24" :lg="12">
-                                    <a-form-item label="密钥 (Key)" name="key" class="compact-item">
+                                    <nn-form-item label="密钥 (Key)" name="key" class="compact-item">
                                         <nn-tooltip :title="validationErrors.key" :open="!!validationErrors.key">
-                                            <a-input
+                                            <nn-input
                                                 v-model:value="formState.key"
                                                 placeholder="如: mypassword"
                                                 :status="validationErrors.key ? 'error' : ''"
                                             />
                                         </nn-tooltip>
-                                    </a-form-item>
+                                    </nn-form-item>
                                 </nn-col>
                                 <nn-col :xs="24" :lg="12">
-                                    <a-form-item label="SNE（可选）" name="sne" class="compact-item">
+                                    <nn-form-item label="SNE（可选）" name="sne" class="compact-item">
                                         <nn-tooltip :title="validationErrors.sne" :open="!!validationErrors.sne">
                                             <ScrollTextarea
                                                 v-model:model-value="formState.sne"
@@ -28,32 +28,32 @@
                                                 :status="validationErrors.sne ? 'error' : ''"
                                             />
                                         </nn-tooltip>
-                                    </a-form-item>
+                                    </nn-form-item>
                                 </nn-col>
                             </nn-row>
 
                             <nn-row v-if="showKdfIsnInputs" :gutter="12">
                                 <nn-col :xs="24" :md="12">
-                                    <a-form-item label="ISN A（可选）" name="isnA" class="compact-item">
+                                    <nn-form-item label="ISN A（可选）" name="isnA" class="compact-item">
                                         <nn-tooltip :title="validationErrors.isnA" :open="!!validationErrors.isnA">
-                                            <a-input
+                                            <nn-input
                                                 v-model:value="formState.isnA"
                                                 placeholder="留空取报文 Seq"
                                                 :status="validationErrors.isnA ? 'error' : ''"
                                             />
                                         </nn-tooltip>
-                                    </a-form-item>
+                                    </nn-form-item>
                                 </nn-col>
                                 <nn-col :xs="24" :md="12">
-                                    <a-form-item label="ISN B（可选）" name="isnB" class="compact-item">
+                                    <nn-form-item label="ISN B（可选）" name="isnB" class="compact-item">
                                         <nn-tooltip :title="validationErrors.isnB" :open="!!validationErrors.isnB">
-                                            <a-input
+                                            <nn-input
                                                 v-model:value="formState.isnB"
                                                 placeholder="留空取报文 Ack"
                                                 :status="validationErrors.isnB ? 'error' : ''"
                                             />
                                         </nn-tooltip>
-                                    </a-form-item>
+                                    </nn-form-item>
                                 </nn-col>
                             </nn-row>
                             <div v-if="showKdfIsnInputs" class="field-hint">
@@ -63,7 +63,7 @@
 
                         <div class="panel-block panel-block-grow packet-panel">
                             <div class="panel-title">报文输入</div>
-                            <a-form-item
+                            <nn-form-item
                                 label="IP 报文"
                                 name="ipPacket"
                                 class="compact-item packet-item"
@@ -78,14 +78,14 @@
                                         :status="validationErrors.ipPacket ? 'error' : ''"
                                     />
                                 </div>
-                            </a-form-item>
+                            </nn-form-item>
                         </div>
                     </div>
 
                     <div class="tcpao-side">
                         <div class="panel-block">
                             <div class="panel-title">算法</div>
-                            <a-form-item label="MAC 算法" class="compact-item">
+                            <nn-form-item label="MAC 算法" class="compact-item">
                                 <nn-radio-group v-model:value="algorithm" class="choice-grid algo-grid">
                                     <nn-radio value="hmac-md5">HMAC-MD5</nn-radio>
                                     <nn-radio value="hmac-sha1">HMAC-SHA1-12</nn-radio>
@@ -100,7 +100,7 @@
                                     <nn-radio value="sha256">SHA-256</nn-radio>
                                     <nn-radio value="sm3">SM3</nn-radio>
                                 </nn-radio-group>
-                            </a-form-item>
+                            </nn-form-item>
                         </div>
 
                         <div class="panel-block">
@@ -118,16 +118,16 @@
                                 </nn-tooltip>
                             </div>
 
-                            <a-form-item v-if="isKdfAlgo" class="compact-item compact-flag">
+                            <nn-form-item v-if="isKdfAlgo" class="compact-item compact-flag">
                                 <nn-checkbox v-model:checked="skipKdf">跳过 KDF（直接用 master key）</nn-checkbox>
-                            </a-form-item>
+                            </nn-form-item>
 
-                            <a-form-item label="TCP 选项" class="compact-item">
+                            <nn-form-item label="TCP 选项" class="compact-item">
                                 <div class="stacked-checks">
                                     <nn-checkbox v-model:checked="includeOtherOptions">包含其他 TCP 选项</nn-checkbox>
                                     <nn-checkbox v-model:checked="includePseudoHeader">包含 IP 伪头部</nn-checkbox>
                                 </div>
-                            </a-form-item>
+                            </nn-form-item>
                         </div>
 
                         <div class="action-bar">
@@ -136,11 +136,11 @@
                         </div>
                     </div>
                 </div>
-            </a-form>
+            </nn-form>
         </nn-card>
 
         <!-- 计算结果弹出框 -->
-        <a-modal v-model:open="showResultModal" title="MAC 计算结果" :footer="null" width="680px">
+        <nn-modal v-model:open="showResultModal" title="MAC 计算结果" :footer="null" width="680px">
             <template v-if="result">
                 <nn-descriptions :column="1" bordered size="small">
                     <nn-descriptions-item :label="pseudoHeaderLabel">
@@ -186,7 +186,7 @@
                     </nn-descriptions-item>
                 </nn-descriptions>
             </template>
-        </a-modal>
+        </nn-modal>
     </div>
 </template>
 
@@ -363,7 +363,7 @@
         overflow: hidden;
     }
 
-    .tcpao-form :deep(.ant-form-item) {
+    .tcpao-form :deep(.nn-form-item) {
         margin-bottom: 10px;
     }
 
@@ -419,25 +419,25 @@
         flex-direction: column;
     }
 
-    .packet-item :deep(.ant-form-item-row),
-    .packet-item :deep(.ant-form-item-control),
-    .packet-item :deep(.ant-form-item-control-input),
-    .packet-item :deep(.ant-form-item-control-input-content) {
+    .packet-item :deep(.nn-form-item-row),
+    .packet-item :deep(.nn-form-item-control),
+    .packet-item :deep(.nn-form-item-control-input),
+    .packet-item :deep(.nn-form-item-control-input-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .packet-item :deep(.ant-form-item-label) {
+    .packet-item :deep(.nn-form-item-label) {
         flex: 0 0 auto;
     }
 
-    .packet-item :deep(.ant-form-item-control-input) {
+    .packet-item :deep(.nn-form-item-control-input) {
         align-items: stretch;
     }
 
-    .packet-item :deep(.ant-form-item-explain) {
+    .packet-item :deep(.nn-form-item-explain) {
         flex: 0 0 auto;
     }
 
@@ -449,7 +449,7 @@
         flex-direction: column;
     }
 
-    .packet-textarea-wrap :deep(textarea.ant-input) {
+    .packet-textarea-wrap :deep(textarea.nn-input) {
         flex: 1 1 0;
         min-height: 0;
         width: 100%;

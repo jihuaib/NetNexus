@@ -1,10 +1,10 @@
 <template>
-    <a-drawer :open="open" title="BGP路由详情" width="640px" placement="right" @close="close">
+    <nn-drawer :open="open" title="BGP路由详情" width="640px" placement="right" @close="close">
         <nn-spin :spinning="loading">
             <nn-empty v-if="!route" description="暂无详情" />
             <pre v-else class="json-detail">{{ routeJson }}</pre>
         </nn-spin>
-    </a-drawer>
+    </nn-drawer>
 </template>
 
 <script setup>

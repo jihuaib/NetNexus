@@ -3,7 +3,7 @@
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="RPKI ROA配置">
-                    <a-form
+                    <nn-form
                         :model="roaConfig"
                         :label-col="labelCol"
                         :wrapper-col="wrapperCol"
@@ -11,61 +11,64 @@
                     >
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="IP类型" name="ipType">
+                                <nn-form-item label="IP类型" name="ipType">
                                     <nn-radio-group v-model:value="roaConfig.ipType">
                                         <nn-radio :value="IP_TYPE.IPV4">IPv4</nn-radio>
                                         <nn-radio :value="IP_TYPE.IPV6">IPv6</nn-radio>
                                     </nn-radio-group>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="12">
-                                <a-form-item label="IP" name="ip">
+                                <nn-form-item label="IP" name="ip">
                                     <nn-tooltip :title="validationErrors.ip" :open="!!validationErrors.ip">
-                                        <a-input
+                                        <nn-input
                                             v-model:value="roaConfig.ip"
                                             :status="validationErrors.ip ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="12">
-                                <a-form-item label="mask" name="mask">
+                                <nn-form-item label="mask" name="mask">
                                     <nn-tooltip :title="validationErrors.mask" :open="!!validationErrors.mask">
-                                        <a-input
+                                        <nn-input
                                             v-model:value="roaConfig.mask"
                                             :status="validationErrors.mask ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="ASN" name="asn">
+                                <nn-form-item label="ASN" name="asn">
                                     <nn-tooltip :title="validationErrors.asn" :open="!!validationErrors.asn">
-                                        <a-input
+                                        <nn-input
                                             v-model:value="roaConfig.asn"
                                             :status="validationErrors.asn ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="最大前缀长度" name="maxLength">
-                                    <nn-tooltip :title="validationErrors.maxLength" :open="!!validationErrors.maxLength">
-                                        <a-input
+                                <nn-form-item label="最大前缀长度" name="maxLength">
+                                    <nn-tooltip
+                                        :title="validationErrors.maxLength"
+                                        :open="!!validationErrors.maxLength"
+                                    >
+                                        <nn-input
                                             v-model:value="roaConfig.maxLength"
                                             :status="validationErrors.maxLength ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <a-form-item class="rpki-form-actions" :wrapper-col="{ span: 24 }">
+                        <nn-form-item class="rpki-form-actions" :wrapper-col="{ span: 24 }">
                             <nn-space>
                                 <nn-button type="primary" html-type="submit" :loading="submitLoading">
                                     添加ROA
@@ -76,8 +79,8 @@
                                 </nn-button>
                                 <nn-button @click="resetForm">重置</nn-button>
                             </nn-space>
-                        </a-form-item>
-                    </a-form>
+                        </nn-form-item>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>
@@ -105,14 +108,14 @@
                                     <nn-radio-button :value="String(IP_TYPE.IPV4)">IPv4</nn-radio-button>
                                     <nn-radio-button :value="String(IP_TYPE.IPV6)">IPv6</nn-radio-button>
                                 </nn-radio-group>
-                                <a-input
+                                <nn-input
                                     v-model:value="roaQuery.prefixFilter"
                                     allow-clear
                                     placeholder="Prefix 或 Prefix/Mask"
                                     class="roa-query-input"
                                     @press-enter="searchRoaList"
                                 />
-                                <a-input
+                                <nn-input
                                     v-model:value="roaQuery.asn"
                                     allow-clear
                                     placeholder="ASN"
@@ -123,7 +126,7 @@
                                 <nn-button @click="resetRoaQuery">重置</nn-button>
                             </nn-space>
                         </div>
-                        <a-table
+                        <nn-table
                             class="roa-table adaptive-table"
                             :columns="roaColumns"
                             :data-source="roaList"
@@ -145,7 +148,7 @@
                                     <span>{{ record.ipType === IP_TYPE.IPV4 ? 'IPv4' : 'IPv6' }}</span>
                                 </template>
                             </template>
-                        </a-table>
+                        </nn-table>
                     </div>
                 </nn-card>
             </nn-col>
@@ -507,7 +510,7 @@
         flex-direction: column;
     }
 
-    .rpki-form-actions :deep(.ant-form-item-control-input-content) {
+    .rpki-form-actions :deep(.nn-form-item-control-input-content) {
         display: flex;
         justify-content: center;
     }
@@ -549,19 +552,19 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -569,20 +572,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -590,12 +593,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

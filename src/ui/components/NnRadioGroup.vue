@@ -52,6 +52,7 @@
     const currentValue = computed(() => props.value);
     const isDisabled = computed(() => props.disabled);
     const groupSize = computed(() => props.size);
+    const groupButtonStyle = computed(() => props.buttonStyle);
 
     const normalizedOptions = computed(() =>
         props.options.map(option => {
@@ -90,6 +91,7 @@
         value: currentValue,
         disabled: isDisabled,
         size: groupSize,
+        buttonStyle: groupButtonStyle,
         setValue
     });
 </script>

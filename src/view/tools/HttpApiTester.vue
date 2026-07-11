@@ -44,31 +44,31 @@
                                 {{ api.name || '未命名API' }}
                             </div>
                             <template #overlay>
-                                <a-menu>
-                                    <a-menu-item key="rename" @click="renameApiConnection(api)">
+                                <nn-menu>
+                                    <nn-menu-item key="rename" @click="renameApiConnection(api)">
                                         <nn-space>
                                             <EditOutlined />
                                             <span>修改名称</span>
                                         </nn-space>
-                                    </a-menu-item>
-                                    <a-menu-item key="copy" @click="copyApiConnection(api)">
+                                    </nn-menu-item>
+                                    <nn-menu-item key="copy" @click="copyApiConnection(api)">
                                         <nn-space>
                                             <CopyOutlined />
                                             <span>复制</span>
                                         </nn-space>
-                                    </a-menu-item>
-                                    <a-menu-item key="delete" @click="deleteApiConnection(api)">
+                                    </nn-menu-item>
+                                    <nn-menu-item key="delete" @click="deleteApiConnection(api)">
                                         <nn-space class="danger-menu-item">
                                             <DeleteOutlined />
                                             <span>删除</span>
                                         </nn-space>
-                                    </a-menu-item>
-                                </a-menu>
+                                    </nn-menu-item>
+                                </nn-menu>
                             </template>
                         </nn-dropdown>
                     </div>
                     <div class="api-content">
-                        <a-form
+                        <nn-form
                             v-if="activeApi"
                             :model="activeApi"
                             class="api-editor"
@@ -79,32 +79,32 @@
                             <div class="request-panel">
                                 <nn-row :gutter="8" class="request-basic-row">
                                     <nn-col :span="7">
-                                        <a-form-item label="方法">
-                                            <a-select v-model:value="activeApi.method">
-                                                <a-select-option
+                                        <nn-form-item label="方法">
+                                            <nn-select v-model:value="activeApi.method">
+                                                <nn-select-option
                                                     v-for="method in httpMethods"
                                                     :key="method"
                                                     :value="method"
                                                 >
                                                     {{ method }}
-                                                </a-select-option>
-                                            </a-select>
-                                        </a-form-item>
+                                                </nn-select-option>
+                                            </nn-select>
+                                        </nn-form-item>
                                     </nn-col>
                                     <nn-col :span="17">
-                                        <a-form-item label="URL">
-                                            <a-input
+                                        <nn-form-item label="URL">
+                                            <nn-input
                                                 v-model:value="activeApi.url"
                                                 placeholder="http://127.0.0.1:18080/api/v1/status"
                                                 @press-enter="sendRequest(activeApi)"
                                             />
-                                        </a-form-item>
+                                        </nn-form-item>
                                     </nn-col>
                                 </nn-row>
 
                                 <nn-row :gutter="8" class="request-action-row">
                                     <nn-col :span="6">
-                                        <a-form-item label="超时(ms)">
+                                        <nn-form-item label="超时(ms)">
                                             <nn-input-number
                                                 v-model:value="activeApi.timeout"
                                                 :min="1000"
@@ -112,10 +112,10 @@
                                                 :step="1000"
                                                 style="width: 100%"
                                             />
-                                        </a-form-item>
+                                        </nn-form-item>
                                     </nn-col>
                                     <nn-col :span="18">
-                                        <a-form-item label="操作">
+                                        <nn-form-item label="操作">
                                             <nn-space class="request-actions">
                                                 <nn-button
                                                     type="primary"
@@ -129,7 +129,7 @@
                                                 </nn-button>
                                                 <nn-button @click="formatRequestBody(activeApi)">格式化JSON</nn-button>
                                             </nn-space>
-                                        </a-form-item>
+                                        </nn-form-item>
                                     </nn-col>
                                 </nn-row>
 
@@ -150,8 +150,8 @@
                                                 class="header-row"
                                             >
                                                 <nn-checkbox v-model:checked="header.enabled" />
-                                                <a-input v-model:value="header.key" placeholder="Header" />
-                                                <a-input v-model:value="header.value" placeholder="Value" />
+                                                <nn-input v-model:value="header.key" placeholder="Header" />
+                                                <nn-input v-model:value="header.value" placeholder="Value" />
                                                 <div class="header-row-actions">
                                                     <nn-button type="text" @click="addHeader(activeApi)">
                                                         <template #icon>
@@ -208,7 +208,7 @@
                                     </nn-tab-pane>
                                 </nn-tabs>
                             </div>
-                        </a-form>
+                        </nn-form>
                     </div>
                 </div>
             </div>
@@ -637,20 +637,20 @@
         overflow: hidden;
     }
 
-    .api-editor :deep(.ant-form-item) {
+    .api-editor :deep(.nn-form-item) {
         margin-bottom: 8px !important;
     }
 
-    .api-editor :deep(.ant-form-item-control) {
+    .api-editor :deep(.nn-form-item-control) {
         min-width: 0;
     }
 
-    .api-editor :deep(.ant-form-item-label) {
+    .api-editor :deep(.nn-form-item-label) {
         overflow: visible;
         text-align: right;
     }
 
-    .api-editor :deep(.ant-form-item-label > label) {
+    .api-editor :deep(.nn-form-item-label > label) {
         height: 32px;
         font-size: 12px;
         white-space: nowrap;
@@ -736,13 +736,13 @@
         overflow: hidden;
     }
 
-    .request-body-pane :deep(textarea.ant-input) {
+    .request-body-pane :deep(textarea.nn-input) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
     }
 
-    .response-tabs :deep(textarea.ant-input) {
+    .response-tabs :deep(textarea.nn-input) {
         height: 100% !important;
         min-height: 0;
     }

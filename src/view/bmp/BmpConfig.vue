@@ -3,31 +3,31 @@
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="BMP服务器配置">
-                    <a-form :model="bmpConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBmp">
+                    <nn-form :model="bmpConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBmp">
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="服务端端口" name="port">
+                                <nn-form-item label="服务端端口" name="port">
                                     <nn-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
-                                        <a-input
+                                        <nn-input
                                             v-model:value="bmpConfig.port"
                                             data-testid="bmp-port-input"
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row :gutter="12">
                             <nn-col :span="12">
-                                <a-form-item label="v4 TLV格式" name="bmpV4TlvDraft">
+                                <nn-form-item label="v4 TLV格式" name="bmpV4TlvDraft">
                                     <nn-radio-group v-model:value="bmpConfig.bmpV4TlvDraft" button-style="solid">
                                         <nn-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_20">draft-20</nn-radio-button>
                                         <nn-radio-button :value="BMP_V4_TLV_DRAFT.DRAFT_19">draft-19</nn-radio-button>
                                     </nn-radio-group>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="12">
-                                <a-form-item label="Path TLV类型" name="pathMarkingTlvType">
+                                <nn-form-item label="Path TLV类型" name="pathMarkingTlvType">
                                     <nn-tooltip
                                         :title="validationErrors.pathMarkingTlvType"
                                         :open="!!validationErrors.pathMarkingTlvType"
@@ -41,54 +41,54 @@
                                             :status="validationErrors.pathMarkingTlvType ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="启用认证" name="enableAuth">
+                                <nn-form-item label="启用认证" name="enableAuth">
                                     <nn-checkbox v-model:checked="bmpConfig.enableAuth" />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
                         <!-- 认证配置 -->
                         <nn-row :gutter="12">
                             <nn-col :span="8">
-                                <a-form-item label="本地监听端口" name="localPort">
+                                <nn-form-item label="本地监听端口" name="localPort">
                                     <nn-tooltip
                                         :title="validationErrors.localPort"
                                         :open="bmpConfig.enableAuth && !!validationErrors.localPort"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="bmpConfig.localPort"
                                             :disabled="!bmpConfig.enableAuth"
                                             :status="bmpConfig.enableAuth && validationErrors.localPort ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="路由器IP" name="peerIP">
+                                <nn-form-item label="路由器IP" name="peerIP">
                                     <nn-tooltip
                                         :title="validationErrors.peerIP"
                                         :open="bmpConfig.enableAuth && !!validationErrors.peerIP"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="bmpConfig.peerIP"
                                             :disabled="!bmpConfig.enableAuth"
                                             :status="bmpConfig.enableAuth && validationErrors.peerIP ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="MD5密钥" name="md5Password">
+                                <nn-form-item label="MD5密钥" name="md5Password">
                                     <nn-tooltip
                                         :title="validationErrors.md5Password"
                                         :open="bmpConfig.enableAuth && !!validationErrors.md5Password"
                                     >
-                                        <a-input-password
+                                        <nn-input-password
                                             v-model:value="bmpConfig.md5Password"
                                             :disabled="!bmpConfig.enableAuth"
                                             :status="
@@ -96,11 +96,11 @@
                                             "
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
-                        <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                        <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
                             <nn-space>
                                 <nn-button
                                     type="primary"
@@ -121,8 +121,8 @@
                                     停止服务器
                                 </nn-button>
                             </nn-space>
-                        </a-form-item>
-                    </a-form>
+                        </nn-form-item>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>
@@ -132,7 +132,7 @@
             <nn-col :span="24">
                 <nn-card title="BMP客户端列表" class="adaptive-list-card">
                     <div>
-                        <a-table
+                        <nn-table
                             class="adaptive-table"
                             data-testid="bmp-client-table"
                             :columns="clientColumns"
@@ -172,13 +172,13 @@
                                     </nn-button>
                                 </template>
                             </template>
-                        </a-table>
+                        </nn-table>
                     </div>
                 </nn-card>
             </nn-col>
         </nn-row>
 
-        <a-drawer
+        <nn-drawer
             v-model:open="detailsDrawerVisible"
             :title="detailsDrawerTitle"
             placement="right"
@@ -186,7 +186,7 @@
             @close="closeDetailsDrawer"
         >
             <pre v-if="currentDetails">{{ JSON.stringify(currentDetails, null, 2) }}</pre>
-        </a-drawer>
+        </nn-drawer>
     </div>
 </template>
 
@@ -534,20 +534,20 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         min-width: 0;
@@ -556,8 +556,8 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         min-width: 0;
@@ -565,12 +565,12 @@
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -578,12 +578,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

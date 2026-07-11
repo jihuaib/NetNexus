@@ -45,7 +45,7 @@
                 </div>
 
                 <div class="mib-query-row">
-                    <a-input
+                    <nn-input
                         v-model:value="oidQuery"
                         placeholder="输入OID，例如 1.3.6.1.2.1.1.3.0"
                         allow-clear
@@ -61,7 +61,7 @@
                             <span class="mib-panel-meta">{{ mibStatus.totalObjects }} 个对象</span>
                         </div>
                         <div ref="treeScrollRef" class="mib-tree-scroll">
-                            <a-tree
+                            <nn-tree
                                 v-if="mibStatus.oidTree.length > 0"
                                 ref="treeRef"
                                 v-model:expanded-keys="treeExpandedKeys"
@@ -91,7 +91,7 @@
                                         <span v-if="moduleName" class="mib-node-module">{{ moduleName }}</span>
                                     </span>
                                 </template>
-                            </a-tree>
+                            </nn-tree>
                             <nn-empty v-else description="暂无MIB树" />
                         </div>
                     </section>
@@ -178,7 +178,7 @@
             </div>
         </nn-card>
 
-        <a-modal v-model:open="oidResultModalOpen" title="OID解析结果" :footer="null" width="640px">
+        <nn-modal v-model:open="oidResultModalOpen" title="OID解析结果" :footer="null" width="640px">
             <nn-alert
                 v-if="oidResult"
                 :type="oidResult.matched ? 'success' : 'warning'"
@@ -224,9 +224,9 @@
                     {{ oidResult.status || '-' }}
                 </nn-descriptions-item>
             </nn-descriptions>
-        </a-modal>
+        </nn-modal>
 
-        <a-modal
+        <nn-modal
             v-model:open="projectSaveOpen"
             title="保存MIB工程"
             ok-text="保存"
@@ -235,32 +235,32 @@
             width="520px"
             @ok="saveMibProject"
         >
-            <a-form :model="projectForm" :label-col="{ style: { width: '72px' } }">
-                <a-form-item label="工程名">
-                    <a-input
+            <nn-form :model="projectForm" :label-col="{ style: { width: '72px' } }">
+                <nn-form-item label="工程名">
+                    <nn-input
                         v-model:value="projectForm.name"
                         :maxlength="80"
                         placeholder="请输入工程名"
                         @press-enter="saveMibProject"
                     />
-                </a-form-item>
-                <a-form-item label="内容">
+                </nn-form-item>
+                <nn-form-item label="内容">
                     <div class="mib-project-meta">
                         文件 {{ mibStatus.expandedFileCount }} / 模块 {{ mibStatus.modules.length }} / OID
                         {{ mibStatus.totalObjects }}
                     </div>
-                </a-form-item>
-            </a-form>
-        </a-modal>
+                </nn-form-item>
+            </nn-form>
+        </nn-modal>
 
-        <a-modal v-model:open="projectImportOpen" title="导入MIB工程" :footer="null" width="760px">
+        <nn-modal v-model:open="projectImportOpen" title="导入MIB工程" :footer="null" width="760px">
             <div class="mib-project-header">
                 <nn-tooltip :title="projectRootDir">
                     <span class="mib-project-root">{{ projectRootDir || 'userData/snmp-mib-projects' }}</span>
                 </nn-tooltip>
                 <nn-button size="small" :loading="projectLoading" @click="loadMibProjects">刷新</nn-button>
             </div>
-            <a-table
+            <nn-table
                 :columns="projectColumns"
                 :data-source="mibProjects"
                 :loading="projectLoading"
@@ -289,10 +289,10 @@
                         </nn-button>
                     </template>
                 </template>
-            </a-table>
-        </a-modal>
+            </nn-table>
+        </nn-modal>
 
-        <a-modal
+        <nn-modal
             v-model:open="getModalOpen"
             :title="getModalTitle"
             :ok-text="getModalOkText"
@@ -302,14 +302,14 @@
             width="680px"
             @ok="sendGetRequest"
         >
-            <a-form :model="getForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
-                <a-form-item label="目标">
+            <nn-form :model="getForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
+                <nn-form-item label="目标">
                     <div class="mib-request-readonly">{{ getRequestTargetText(getForm) }}</div>
-                </a-form-item>
-                <a-form-item label="版本">
+                </nn-form-item>
+                <nn-form-item label="版本">
                     <div class="mib-request-readonly">{{ getRequestAuthText(getForm) }}</div>
-                </a-form-item>
-                <a-form-item label="对象">
+                </nn-form-item>
+                <nn-form-item label="对象">
                     <div class="mib-request-object">
                         <div class="mib-request-object-title">
                             {{ getRequestObjectName(getTargetNode, getForm.oid) }}
@@ -318,10 +318,10 @@
                             {{ getRequestObjectPath(getTargetNode, getForm.oid) }}
                         </div>
                     </div>
-                </a-form-item>
-                <a-form-item label="实际OID">
+                </nn-form-item>
+                <nn-form-item label="实际OID">
                     <div class="mib-oid-input-row">
-                        <a-input v-model:value="getForm.oid" />
+                        <nn-input v-model:value="getForm.oid" />
                         <nn-button
                             v-if="getTargetNode?.isTableColumn && !isGetNextMode"
                             :loading="instanceLoading && instanceTargetForm === 'get'"
@@ -330,8 +330,8 @@
                             选择实例
                         </nn-button>
                     </div>
-                </a-form-item>
-            </a-form>
+                </nn-form-item>
+            </nn-form>
 
             <nn-descriptions v-if="getResult" :column="1" bordered size="small" class="mib-request-result">
                 <nn-descriptions-item label="对象">
@@ -356,9 +356,9 @@
                     </nn-typography-text>
                 </nn-descriptions-item>
             </nn-descriptions>
-        </a-modal>
+        </nn-modal>
 
-        <a-modal
+        <nn-modal
             v-model:open="setModalOpen"
             title="SNMP SET"
             ok-text="发送 SET"
@@ -368,14 +368,14 @@
             width="680px"
             @ok="sendSetRequest"
         >
-            <a-form :model="setForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
-                <a-form-item label="目标">
+            <nn-form :model="setForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
+                <nn-form-item label="目标">
                     <div class="mib-request-readonly">{{ getRequestTargetText(setForm) }}</div>
-                </a-form-item>
-                <a-form-item label="版本">
+                </nn-form-item>
+                <nn-form-item label="版本">
                     <div class="mib-request-readonly">{{ getRequestAuthText(setForm) }}</div>
-                </a-form-item>
-                <a-form-item label="对象">
+                </nn-form-item>
+                <nn-form-item label="对象">
                     <div class="mib-request-object">
                         <div class="mib-request-object-title">
                             {{ getRequestObjectName(setTargetNode, setForm.oid) }}
@@ -384,10 +384,10 @@
                             {{ getRequestObjectPath(setTargetNode, setForm.oid) }}
                         </div>
                     </div>
-                </a-form-item>
-                <a-form-item label="实际OID">
+                </nn-form-item>
+                <nn-form-item label="实际OID">
                     <div class="mib-oid-input-row">
-                        <a-input v-model:value="setForm.oid" />
+                        <nn-input v-model:value="setForm.oid" />
                         <nn-button
                             v-if="setTargetNode?.isTableColumn"
                             :loading="instanceLoading && instanceTargetForm === 'set'"
@@ -396,31 +396,31 @@
                             选择实例
                         </nn-button>
                     </div>
-                </a-form-item>
+                </nn-form-item>
                 <nn-row :gutter="12">
                     <nn-col :span="12">
-                        <a-form-item label="类型">
-                            <a-select v-model:value="setForm.type">
-                                <a-select-option
+                        <nn-form-item label="类型">
+                            <nn-select v-model:value="setForm.type">
+                                <nn-select-option
                                     v-for="option in setTypeOptions"
                                     :key="option.value"
                                     :value="option.value"
                                 >
                                     {{ option.label }}
-                                </a-select-option>
-                            </a-select>
-                        </a-form-item>
+                                </nn-select-option>
+                            </nn-select>
+                        </nn-form-item>
                     </nn-col>
                     <nn-col :span="12">
-                        <a-form-item label="值">
-                            <a-input v-model:value="setForm.value" placeholder="请输入SET值" />
-                        </a-form-item>
+                        <nn-form-item label="值">
+                            <nn-input v-model:value="setForm.value" placeholder="请输入SET值" />
+                        </nn-form-item>
                     </nn-col>
                 </nn-row>
-            </a-form>
-        </a-modal>
+            </nn-form>
+        </nn-modal>
 
-        <a-modal
+        <nn-modal
             v-model:open="instanceModalOpen"
             title="选择实例"
             :footer="null"
@@ -443,7 +443,7 @@
                 description="设备未返回当前字段前缀下的实例，或当前字段没有可访问行。"
                 class="mib-request-alert"
             />
-            <a-table
+            <nn-table
                 :columns="instanceColumns"
                 :data-source="instanceRows"
                 :loading="instanceLoading"
@@ -472,10 +472,10 @@
                         <nn-button type="link" size="small" @click="selectInstance(record)">选择</nn-button>
                     </template>
                 </template>
-            </a-table>
-        </a-modal>
+            </nn-table>
+        </nn-modal>
 
-        <a-modal
+        <nn-modal
             v-model:open="walkModalOpen"
             title="SNMP WALK"
             ok-text="开始 WALK"
@@ -488,20 +488,20 @@
             @ok="sendWalkRequest"
         >
             <div class="walk-modal-body">
-                <a-form :model="walkForm" :label-col="{ style: { width: '92px' } }" class="mib-request-form walk-form">
+                <nn-form :model="walkForm" :label-col="{ style: { width: '92px' } }" class="mib-request-form walk-form">
                     <nn-row :gutter="12">
                         <nn-col :xs="24" :sm="12">
-                            <a-form-item label="目标">
+                            <nn-form-item label="目标">
                                 <div class="mib-request-readonly">{{ getRequestTargetText(walkForm) }}</div>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :sm="12">
-                            <a-form-item label="版本">
+                            <nn-form-item label="版本">
                                 <div class="mib-request-readonly">{{ getRequestAuthText(walkForm) }}</div>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                     </nn-row>
-                    <a-form-item label="起始对象">
+                    <nn-form-item label="起始对象">
                         <div class="mib-request-object">
                             <div class="mib-request-object-title">
                                 {{ getRequestObjectName(walkTargetNode, walkForm.oid) }}
@@ -510,25 +510,25 @@
                                 {{ getRequestObjectPath(walkTargetNode, walkForm.oid) }}
                             </div>
                         </div>
-                    </a-form-item>
+                    </nn-form-item>
                     <nn-row :gutter="12">
                         <nn-col :xs="24" :md="12">
-                            <a-form-item label="起始OID">
-                                <a-input v-model:value="walkForm.oid" />
-                            </a-form-item>
+                            <nn-form-item label="起始OID">
+                                <nn-input v-model:value="walkForm.oid" />
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="12" :md="6">
-                            <a-form-item label="上限">
+                            <nn-form-item label="上限">
                                 <nn-input-number
                                     v-model:value="walkForm.limit"
                                     :min="1"
                                     :max="1000"
                                     style="width: 100%"
                                 />
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="12" :md="6">
-                            <a-form-item label="批量数">
+                            <nn-form-item label="批量数">
                                 <nn-input-number
                                     v-model:value="walkForm.maxRepetitions"
                                     :min="1"
@@ -536,10 +536,10 @@
                                     style="width: 100%"
                                     :disabled="walkForm.version !== 'v2c'"
                                 />
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                     </nn-row>
-                </a-form>
+                </nn-form>
 
                 <div v-if="walkMeta" class="walk-summary">
                     <nn-space>
@@ -558,7 +558,7 @@
                     <div v-if="walkLoading" class="walk-output-loading">WALK 查询中...</div>
                 </div>
             </div>
-        </a-modal>
+        </nn-modal>
 
         <div
             v-if="contextMenu.visible"
@@ -569,37 +569,37 @@
             <div class="mib-context-menu-title">
                 {{ contextMenu.node?.moduleQualifiedName || contextMenu.node?.objectName || 'OID节点' }}
             </div>
-            <a-menu class="mib-context-menu-list" :selectable="false" @click="handleContextMenuClick">
-                <a-menu-item key="copy">
+            <nn-menu class="mib-context-menu-list" :selectable="false" @click="handleContextMenuClick">
+                <nn-menu-item key="copy">
                     <template #icon><CopyOutlined /></template>
                     复制OID
-                </a-menu-item>
-                <a-menu-item key="parse">
+                </nn-menu-item>
+                <nn-menu-item key="parse">
                     <template #icon><SearchOutlined /></template>
                     解析OID
-                </a-menu-item>
-                <a-menu-divider />
-                <a-menu-item key="get" :disabled="!canGetNode(contextMenu.node)">
+                </nn-menu-item>
+                <nn-menu-divider />
+                <nn-menu-item key="get" :disabled="!canGetNode(contextMenu.node)">
                     <template #icon><ApiOutlined /></template>
                     GET 查询
-                </a-menu-item>
-                <a-menu-item key="getNext" :disabled="!contextMenu.node?.oid">
+                </nn-menu-item>
+                <nn-menu-item key="getNext" :disabled="!contextMenu.node?.oid">
                     <template #icon><StepForwardOutlined /></template>
                     GET-NEXT 查询
-                </a-menu-item>
-                <a-menu-item key="walk" :disabled="!contextMenu.node?.oid">
+                </nn-menu-item>
+                <nn-menu-item key="walk" :disabled="!contextMenu.node?.oid">
                     <template #icon><FileSearchOutlined /></template>
                     WALK 查询
-                </a-menu-item>
-                <a-menu-item key="set" :disabled="!canSetNode(contextMenu.node)">
+                </nn-menu-item>
+                <nn-menu-item key="set" :disabled="!canSetNode(contextMenu.node)">
                     <template #icon><EditOutlined /></template>
                     SET 设置
-                </a-menu-item>
-                <a-menu-item key="notify" :disabled="!isNotifyNode(contextMenu.node)">
+                </nn-menu-item>
+                <nn-menu-item key="notify" :disabled="!isNotifyNode(contextMenu.node)">
                     <template #icon><BellOutlined /></template>
                     Trap变量
-                </a-menu-item>
-            </a-menu>
+                </nn-menu-item>
+            </nn-menu>
             <div class="mib-context-menu-hint">
                 {{ getNodeAbilityText(contextMenu.node) }}
             </div>
@@ -2010,12 +2010,12 @@
         padding: 6px 4px 6px 0;
     }
 
-    .mib-tree-scroll :deep(.ant-tree) {
+    .mib-tree-scroll :deep(.nn-tree) {
         display: inline-block;
         min-width: 100%;
     }
 
-    .mib-tree-scroll :deep(.ant-tree-node-content-wrapper) {
+    .mib-tree-scroll :deep(.nn-tree-node-content-wrapper) {
         min-width: 0;
     }
 
@@ -2160,7 +2160,7 @@
         font-size: 12px;
     }
 
-    .mib-project-table :deep(.ant-table-cell) {
+    .mib-project-table :deep(.nn-table-cell) {
         min-width: 0;
     }
 
@@ -2223,7 +2223,7 @@
         min-width: 0;
     }
 
-    .mib-oid-input-row :deep(.ant-input) {
+    .mib-oid-input-row :deep(.nn-input) {
         min-width: 0;
     }
 
@@ -2231,13 +2231,13 @@
         flex-shrink: 0;
     }
 
-    .mib-request-form :deep(.ant-form-item) {
+    .mib-request-form :deep(.nn-form-item) {
         margin-bottom: 10px;
     }
 
-    .mib-request-form :deep(.ant-form-item-control),
-    .mib-request-form :deep(.ant-form-item-control-input),
-    .mib-request-form :deep(.ant-form-item-control-input-content) {
+    .mib-request-form :deep(.nn-form-item-control),
+    .mib-request-form :deep(.nn-form-item-control-input),
+    .mib-request-form :deep(.nn-form-item-control-input-content) {
         min-width: 0;
     }
 
@@ -2277,7 +2277,7 @@
         flex-shrink: 0;
     }
 
-    .walk-form :deep(.ant-form-item) {
+    .walk-form :deep(.nn-form-item) {
         margin-bottom: 8px;
     }
 
@@ -2324,20 +2324,20 @@
         overflow: hidden;
     }
 
-    :global(.walk-modal-wrap .ant-modal) {
+    :global(.walk-modal-wrap .nn-modal) {
         top: 24px;
         max-width: calc(100vw - 32px);
         padding-bottom: 0;
     }
 
-    :global(.walk-modal-wrap .ant-modal-content) {
+    :global(.walk-modal-wrap .nn-modal-content) {
         display: flex;
         flex-direction: column;
         max-height: calc(100vh - 48px);
         overflow: hidden;
     }
 
-    :global(.walk-modal-wrap .ant-modal-body) {
+    :global(.walk-modal-wrap .nn-modal-body) {
         display: flex;
         flex: 1;
         flex-direction: column;
@@ -2345,7 +2345,7 @@
         overflow: hidden;
     }
 
-    :global(.walk-modal-wrap .ant-modal-footer) {
+    :global(.walk-modal-wrap .nn-modal-footer) {
         flex-shrink: 0;
     }
 
@@ -2410,14 +2410,14 @@
         border-inline-end: 0;
     }
 
-    .mib-context-menu-list :deep(.ant-menu-item) {
+    .mib-context-menu-list :deep(.nn-menu-item) {
         height: 30px;
         margin: 2px 4px;
         line-height: 30px;
         border-radius: 4px;
     }
 
-    .mib-context-menu-list :deep(.ant-menu-item-divider) {
+    .mib-context-menu-list :deep(.nn-menu-item-divider) {
         margin: 4px 0;
     }
 

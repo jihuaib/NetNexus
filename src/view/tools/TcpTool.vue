@@ -5,17 +5,17 @@
             <template #extra>
                 <nn-tag :color="stateColor">{{ stateName }}</nn-tag>
             </template>
-            <a-form layout="inline" :model="connectForm" class="tcp-config-form">
-                <a-form-item label="目标地址">
-                    <a-input
+            <nn-form layout="inline" :model="connectForm" class="tcp-config-form">
+                <nn-form-item label="目标地址">
+                    <nn-input
                         v-model:value="connectForm.host"
                         placeholder="127.0.0.1"
                         :disabled="isConnected"
                         style="width: 160px"
                         @press-enter="connect"
                     />
-                </a-form-item>
-                <a-form-item label="端口">
+                </nn-form-item>
+                <nn-form-item label="端口">
                     <nn-input-number
                         v-model:value="connectForm.port"
                         :min="1"
@@ -24,8 +24,8 @@
                         placeholder="179"
                         style="width: 110px"
                     />
-                </a-form-item>
-                <a-form-item label="超时(ms)">
+                </nn-form-item>
+                <nn-form-item label="超时(ms)">
                     <nn-input-number
                         v-model:value="connectForm.timeout"
                         :min="1000"
@@ -34,14 +34,14 @@
                         :disabled="isConnected"
                         style="width: 120px"
                     />
-                </a-form-item>
-                <a-form-item>
+                </nn-form-item>
+                <nn-form-item>
                     <nn-button v-if="!isConnected" type="primary" :loading="connecting" @click="connect">
                         建立连接
                     </nn-button>
                     <nn-button v-else danger @click="disconnect">结束连接</nn-button>
-                </a-form-item>
-            </a-form>
+                </nn-form-item>
+            </nn-form>
         </nn-card>
 
         <!-- 发送报文 -->
@@ -54,7 +54,12 @@
                     <nn-radio-button :value="TCP_TOOL_ENCODING.BASE64">Base64</nn-radio-button>
                 </nn-radio-group>
             </div>
-            <a-textarea v-model:value="sendForm.data" :rows="3" :placeholder="sendPlaceholder" class="tcp-send-input" />
+            <nn-textarea
+                v-model:value="sendForm.data"
+                :rows="3"
+                :placeholder="sendPlaceholder"
+                class="tcp-send-input"
+            />
             <div class="tcp-send-actions">
                 <span v-if="conn" class="tcp-traffic-info">
                     发送 {{ conn.bytesSent }} B / 接收 {{ conn.bytesReceived }} B
@@ -327,7 +332,7 @@
         border-color: var(--nn-color-primary-hover);
     }
 
-    .tcp-config-form :deep(.ant-form-item) {
+    .tcp-config-form :deep(.nn-form-item) {
         margin-bottom: 0;
     }
 

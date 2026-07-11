@@ -1,10 +1,4 @@
 <template>
-    <UiProvider>
-        <!--路由内容-->
-        <router-view />
-    </UiProvider>
+    <!--路由内容-->
+    <router-view />
 </template>
-
-<script setup>
-    import UiProvider from './ui/UiProvider.vue';
-</script>

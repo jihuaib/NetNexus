@@ -3,10 +3,10 @@
         <nn-row class="adaptive-config-row">
             <nn-col :span="24">
                 <nn-card title="Syslog服务器配置">
-                    <a-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
+                    <nn-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
                         <nn-row :gutter="24">
                             <nn-col :span="8">
-                                <a-form-item label="监听端口">
+                                <nn-form-item label="监听端口">
                                     <nn-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
                                         <nn-input-number
                                             v-model:value="formData.port"
@@ -16,10 +16,10 @@
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="最大消息长度">
+                                <nn-form-item label="最大消息长度">
                                     <nn-tooltip
                                         :title="validationErrors.maxMessageLength"
                                         :open="!!validationErrors.maxMessageLength"
@@ -33,10 +33,10 @@
                                             :status="validationErrors.maxMessageLength ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="传输协议">
+                                <nn-form-item label="传输协议">
                                     <nn-tooltip :title="validationErrors.protocol" :open="!!validationErrors.protocol">
                                         <nn-space>
                                             <span>UDP</span>
@@ -45,7 +45,7 @@
                                             <nn-switch v-model:checked="formData.enableTcp" />
                                         </nn-space>
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
@@ -69,7 +69,7 @@
                                 </nn-button>
                             </nn-space>
                         </div>
-                    </a-form>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>

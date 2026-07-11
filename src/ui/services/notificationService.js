@@ -56,6 +56,9 @@ function showToast(type, content, duration = DEFAULT_DURATION_SECONDS, onClose) 
     const node = document.createElement('div');
     node.className = `nn-toast nn-toast-${type}`;
     node.dataset.toastId = id;
+    node.setAttribute('role', type === 'error' || type === 'warning' ? 'alert' : 'status');
+    node.setAttribute('aria-live', type === 'error' || type === 'warning' ? 'assertive' : 'polite');
+    node.setAttribute('aria-atomic', 'true');
     node.innerHTML = `
         <span class="nn-toast-icon" aria-hidden="true">${getIcon(type)}</span>
         <span class="nn-toast-content"></span>
@@ -87,6 +90,8 @@ function showToast(type, content, duration = DEFAULT_DURATION_SECONDS, onClose) 
     node.querySelector('.nn-toast-close').addEventListener('click', close);
     host.appendChild(node);
     activeToasts.set(id, close);
+    close.id = id;
+    close.key = id;
 
     const durationSeconds = Number(duration);
     if (durationSeconds > 0) {

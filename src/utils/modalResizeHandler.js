@@ -9,6 +9,9 @@ class ModalResizeHandler {
         this.resizeTimer = null;
         this.zoomLevel = 1;
         this.callbacks = [];
+        this.boundHandleResize = this.handleResize.bind(this);
+        this.boundHandleWheel = this.handleWheel.bind(this);
+        this.boundHandleKeydown = this.handleKeydown.bind(this);
     }
 
     /**
@@ -21,13 +24,13 @@ class ModalResizeHandler {
         this.updateZoomLevel();
 
         // 监听窗口大小变化
-        window.addEventListener('resize', this.handleResize.bind(this));
+        window.addEventListener('resize', this.boundHandleResize);
 
         // 监听页面缩放变化
-        window.addEventListener('wheel', this.handleWheel.bind(this), { passive: true });
+        window.addEventListener('wheel', this.boundHandleWheel, { passive: true });
 
         // 监听键盘缩放快捷键
-        window.addEventListener('keydown', this.handleKeydown.bind(this));
+        window.addEventListener('keydown', this.boundHandleKeydown);
     }
 
     /**
@@ -37,9 +40,9 @@ class ModalResizeHandler {
         if (!this.isListening) return;
 
         this.isListening = false;
-        window.removeEventListener('resize', this.handleResize.bind(this));
-        window.removeEventListener('wheel', this.handleWheel.bind(this));
-        window.removeEventListener('keydown', this.handleKeydown.bind(this));
+        window.removeEventListener('resize', this.boundHandleResize);
+        window.removeEventListener('wheel', this.boundHandleWheel);
+        window.removeEventListener('keydown', this.boundHandleKeydown);
     }
 
     /**
@@ -107,7 +110,7 @@ class ModalResizeHandler {
      * 调整弹出框大小
      */
     adjustModalSizes() {
-        const modals = document.querySelectorAll('.ant-modal');
+        const modals = document.querySelectorAll('.nn-modal');
 
         modals.forEach(modal => {
             // 获取弹出框类型
@@ -156,7 +159,7 @@ class ModalResizeHandler {
         modal.style.fontSize = `${fontSize}px`;
 
         // 调整内容区域的最小高度
-        const modalBody = modal.querySelector('.ant-modal-body');
+        const modalBody = modal.querySelector('.nn-modal-body');
         if (modalBody) {
             const minHeight = Math.max(150, 200 * zoomFactor);
             modalBody.style.minHeight = `${minHeight}px`;

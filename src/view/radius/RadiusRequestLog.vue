@@ -8,7 +8,7 @@
                 </nn-space>
             </template>
 
-            <a-table
+            <nn-table
                 :columns="columns"
                 :data-source="requestList"
                 :loading="loading"
@@ -46,10 +46,10 @@
                         <nn-button type="link" size="small" @click="showDetail(record)">详情</nn-button>
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </nn-card>
 
-        <a-drawer
+        <nn-drawer
             v-model:open="detailDrawerVisible"
             :title="detailDrawerTitle"
             width="720px"
@@ -80,7 +80,9 @@
                         </nn-tag>
                     </nn-descriptions-item>
                     <nn-descriptions-item label="用户">{{ selectedRequest.userName || '-' }}</nn-descriptions-item>
-                    <nn-descriptions-item label="认证方式">{{ selectedRequest.authMethod || '-' }}</nn-descriptions-item>
+                    <nn-descriptions-item label="认证方式">
+                        {{ selectedRequest.authMethod || '-' }}
+                    </nn-descriptions-item>
                     <nn-descriptions-item label="Identifier">{{ selectedRequest.identifier }}</nn-descriptions-item>
                     <nn-descriptions-item label="报文长度">
                         {{ selectedRequest.packetLength || '-' }}
@@ -93,7 +95,7 @@
 
                 <div class="detail-section">
                     <div class="detail-section-title">属性</div>
-                    <a-table
+                    <nn-table
                         :columns="attributeColumns"
                         :data-source="selectedRequest.attributes || []"
                         :pagination="false"
@@ -103,7 +105,7 @@
                     />
                 </div>
             </template>
-        </a-drawer>
+        </nn-drawer>
     </div>
 </template>
 
@@ -285,20 +287,20 @@
     }
 
     .radius-table,
-    .radius-table :deep(.ant-spin-nested-loading),
-    .radius-table :deep(.ant-spin-container) {
+    .radius-table :deep(.nn-spin-nested-loading),
+    .radius-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .radius-table :deep(.ant-spin-container) {
+    .radius-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .radius-table :deep(.ant-table) {
+    .radius-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -306,15 +308,15 @@
         overflow: hidden;
     }
 
-    .radius-table :deep(.ant-table-container),
-    .radius-table :deep(.ant-table-content) {
+    .radius-table :deep(.nn-table-container),
+    .radius-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .radius-table :deep(.ant-table-body) {
+    .radius-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -322,7 +324,7 @@
         overflow-y: auto !important;
     }
 
-    .radius-table :deep(.ant-pagination) {
+    .radius-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
@@ -346,12 +348,12 @@
         margin-top: 12px;
     }
 
-    .detail-attribute-table :deep(.ant-table-body),
-    .detail-attribute-table :deep(.ant-table-content) {
+    .detail-attribute-table :deep(.nn-table-body),
+    .detail-attribute-table :deep(.nn-table-content) {
         overflow: auto !important;
     }
 
-    .detail-attribute-table :deep(.ant-table-cell) {
+    .detail-attribute-table :deep(.nn-table-cell) {
         white-space: normal !important;
     }
 </style>

@@ -1,5 +1,5 @@
 <template>
-    <a-modal
+    <nn-modal
         v-model:open="open"
         title="导入 BGP MRT 路由文件"
         :confirm-loading="importing"
@@ -33,25 +33,25 @@
             </nn-alert>
 
             <!-- 文件来源选择 -->
-            <a-form layout="vertical" style="margin-top: 16px">
+            <nn-form layout="vertical" style="margin-top: 16px">
                 <nn-radio-group v-model:value="fileSource" button-style="solid">
                     <nn-radio-button value="default">默认文件</nn-radio-button>
                     <nn-radio-button value="custom">自定义文件</nn-radio-button>
                 </nn-radio-group>
-            </a-form>
+            </nn-form>
 
             <!-- 默认文件选择 -->
             <div v-if="fileSource === 'default'" class="file-selector">
-                <a-select
+                <nn-select
                     v-model:value="selectedDefaultFile"
                     placeholder="选择预置的 MRT 文件"
                     style="width: 100%"
                     :loading="loadingDefaultFiles"
                 >
-                    <a-select-option v-for="file in defaultFiles" :key="file.path" :value="file.path">
+                    <nn-select-option v-for="file in defaultFiles" :key="file.path" :value="file.path">
                         {{ file.name }} ({{ formatFileSize(file.size) }})
-                    </a-select-option>
-                </a-select>
+                    </nn-select-option>
+                </nn-select>
                 <div v-if="!selectedDefaultFile" class="empty-selection" style="margin-top: 12px">
                     请选择一个预置的 MRT 文件
                 </div>
@@ -76,18 +76,18 @@
             </div>
 
             <div class="import-options" style="margin-top: 20px">
-                <a-form layout="vertical">
-                    <a-form-item label="导入数量限制 (建议 10,000 - 100,000)">
+                <nn-form layout="vertical">
+                    <nn-form-item label="导入数量限制 (建议 10,000 - 100,000)">
                         <nn-input-number v-model:value="importLimit" :min="1" :max="1000000" style="width: 100%" />
-                    </a-form-item>
+                    </nn-form-item>
                     <div v-if="importing" class="importing-feedback">
                         <nn-spin size="small" />
                         <span class="status-text">{{ importingStatus }}</span>
                     </div>
-                </a-form>
+                </nn-form>
             </div>
         </div>
-    </a-modal>
+    </nn-modal>
 </template>
 
 <script setup>

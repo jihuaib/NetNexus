@@ -24,7 +24,7 @@
                                             :key="getSessionKey(session)"
                                             :tab="formatSessionTab(session)"
                                         >
-                                            <a-table
+                                            <nn-table
                                                 class="detail-table"
                                                 data-testid="bmp-session-table"
                                                 :columns="bgpSessionColumns"
@@ -81,27 +81,27 @@
                                                         </nn-button>
                                                     </template>
                                                 </template>
-                                            </a-table>
+                                            </nn-table>
                                             <div class="route-toolbar">
                                                 <div class="route-toolbar-query">
-                                                    <a-select v-model:value="activeLocRibAf" style="width: 200px">
-                                                        <a-select-option
+                                                    <nn-select v-model:value="activeLocRibAf" style="width: 200px">
+                                                        <nn-select-option
                                                             v-for="af in session.enabledAddrFamilyTypes"
                                                             :key="af"
                                                             :value="af"
                                                         >
                                                             {{ ADDRESS_FAMILY_NAME[af] || af }}
-                                                        </a-select-option>
-                                                    </a-select>
-                                                    <a-select v-model:value="activeLocRibType" style="width: 200px">
-                                                        <a-select-option
+                                                        </nn-select-option>
+                                                    </nn-select>
+                                                    <nn-select v-model:value="activeLocRibType" style="width: 200px">
+                                                        <nn-select-option
                                                             v-for="rt in session.ribTypes"
                                                             :key="rt"
                                                             :value="rt"
                                                         >
                                                             {{ BMP_BGP_RIB_TYPE_NAME[rt] }}
-                                                        </a-select-option>
-                                                    </a-select>
+                                                        </nn-select-option>
+                                                    </nn-select>
                                                     <nn-radio-group v-model:value="routeStateFilter" size="small">
                                                         <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
                                                             当前
@@ -113,7 +113,7 @@
                                                             过期
                                                         </nn-radio-button>
                                                     </nn-radio-group>
-                                                    <a-input
+                                                    <nn-input
                                                         v-model:value="routePrefixFilter"
                                                         allow-clear
                                                         placeholder="Prefix 或 Prefix/Mask"
@@ -134,7 +134,7 @@
                                                     </nn-button>
                                                 </div>
                                             </div>
-                                            <a-table
+                                            <nn-table
                                                 class="route-table"
                                                 data-testid="bmp-session-route-table"
                                                 :columns="bgpRouteColumns"
@@ -171,7 +171,7 @@
                                                         </nn-tag>
                                                     </template>
                                                 </template>
-                                            </a-table>
+                                            </nn-table>
                                         </nn-tab-pane>
                                     </nn-tabs>
                                 </div>
@@ -186,7 +186,7 @@
             </nn-col>
         </nn-row>
 
-        <a-drawer
+        <nn-drawer
             v-model:open="detailsDrawerVisible"
             :title="detailsDrawerTitle"
             placement="right"
@@ -196,7 +196,7 @@
             <template v-if="currentDetails">
                 <pre>{{ JSON.stringify(currentDetails, null, 2) }}</pre>
             </template>
-        </a-drawer>
+        </nn-drawer>
     </div>
 </template>
 
@@ -1080,20 +1080,20 @@
     }
 
     .route-table,
-    .route-table :deep(.ant-spin-nested-loading),
-    .route-table :deep(.ant-spin-container) {
+    .route-table :deep(.nn-spin-nested-loading),
+    .route-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .route-table :deep(.ant-spin-container) {
+    .route-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .route-table :deep(.ant-table) {
+    .route-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -1101,20 +1101,20 @@
         overflow: hidden;
     }
 
-    .route-table :deep(.ant-table-container),
-    .route-table :deep(.ant-table-content) {
+    .route-table :deep(.nn-table-container),
+    .route-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .route-table :deep(.ant-table-header) {
+    .route-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .route-table :deep(.ant-table-body) {
+    .route-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -1122,12 +1122,12 @@
         overflow-y: auto !important;
     }
 
-    .route-table :deep(.ant-pagination) {
+    .route-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .route-table :deep(.ant-table-thead > tr > th) {
+    .route-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

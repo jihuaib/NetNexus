@@ -3,55 +3,55 @@
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="RPKI Router Key 配置 (协议 v1+)">
-                    <a-form :model="rkConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="submitRk">
+                    <nn-form :model="rkConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="submitRk">
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="SKI" name="ski">
+                                <nn-form-item label="SKI" name="ski">
                                     <nn-tooltip :title="validationErrors.ski" :open="!!validationErrors.ski">
-                                        <a-input
+                                        <nn-input
                                             v-model:value="rkConfig.ski"
                                             placeholder="20 字节 hex (40 字符)"
                                             :status="validationErrors.ski ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="ASN" name="asn">
+                                <nn-form-item label="ASN" name="asn">
                                     <nn-tooltip :title="validationErrors.asn" :open="!!validationErrors.asn">
-                                        <a-input
+                                        <nn-input
                                             v-model:value="rkConfig.asn"
                                             :status="validationErrors.asn ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="SPKI" name="spki">
+                                <nn-form-item label="SPKI" name="spki">
                                     <nn-tooltip :title="validationErrors.spki" :open="!!validationErrors.spki">
-                                        <a-textarea
+                                        <nn-textarea
                                             v-model:value="rkConfig.spki"
                                             placeholder="Subject Public Key Info, DER 编码 hex"
                                             :rows="3"
                                             :status="validationErrors.spki ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                        <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
                             <nn-space>
                                 <nn-button type="primary" html-type="submit" :loading="submitLoading">
                                     添加 Router Key
                                 </nn-button>
                                 <nn-button @click="resetForm">重置</nn-button>
                             </nn-space>
-                        </a-form-item>
-                    </a-form>
+                        </nn-form-item>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>
@@ -59,7 +59,7 @@
         <nn-row class="adaptive-list-row">
             <nn-col :span="24">
                 <nn-card title="Router Key 列表" class="adaptive-list-card">
-                    <a-table
+                    <nn-table
                         :columns="rkColumns"
                         :data-source="rkList"
                         :row-key="record => `${record.ski}-${record.asn}`"
@@ -78,7 +78,7 @@
                                 <nn-button type="link" danger @click="deleteRk(record)">删除</nn-button>
                             </template>
                         </template>
-                    </a-table>
+                    </nn-table>
                 </nn-card>
             </nn-col>
         </nn-row>
@@ -220,19 +220,19 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -240,20 +240,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -261,12 +261,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

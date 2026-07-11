@@ -1,7 +1,7 @@
 const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { BmpE2eController, getBrowserMockScript } = require('../../scripts/e2e-support');
 
-const MOCK_BASE_ROUTE_COUNT = 12;
+const MOCK_BASE_ROUTE_COUNT = 26;
 const EXPECTED_PUBLIC_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT + 3;
 const EXPECTED_LOC_RIB_ROUTE_COUNT = Math.max(8, Math.min(25, MOCK_BASE_ROUTE_COUNT)) + 2;
 const EXPECTED_MOCK_READY_ROUTE_COUNT = EXPECTED_LOC_RIB_ROUTE_COUNT;
@@ -153,6 +153,29 @@ test.describe('BMP pages', () => {
                     expect(route.routeState).toBe('active');
                 });
             }
+
+            const pagination = sessionRouteTable.getByRole('navigation', { name: '表格分页' });
+            const secondPageButton = pagination.getByRole('button', { name: '2', exact: true });
+            await expect(secondPageButton).toBeVisible();
+            await secondPageButton.click();
+
+            await expect(secondPageButton).toHaveAttribute('aria-current', 'page');
+            await expect(sessionRouteTable).toContainText('10.10.25.0', { timeout: 10000 });
+            await expect(sessionRouteTable).not.toContainText('10.10.0.0');
+            await expect
+                .poll(
+                    () =>
+                        controller.timeline.some(
+                            item =>
+                                item.message === 'worker query: getBgpRoutes' &&
+                                item.data?.request?.page === 2 &&
+                                item.data?.request?.pageSize === 25
+                        ),
+                    { timeout: 10000 }
+                )
+                .toBe(true);
+
+            await recordStep('Output: Adj-RIB pagination onChange queried worker page=2 and rendered 10.10.25.0');
         });
 
         await test.step('Verify BGP Loc-RIB page and Loc-RIB routes', async () => {
@@ -187,6 +210,29 @@ test.describe('BMP pages', () => {
                     expect(route.routeState).toBe('active');
                 });
             }
+
+            const pagination = locRibRouteTable.getByRole('navigation', { name: '表格分页' });
+            const secondPageButton = pagination.getByRole('button', { name: '2', exact: true });
+            await expect(secondPageButton).toBeVisible();
+            await secondPageButton.click();
+
+            await expect(secondPageButton).toHaveAttribute('aria-current', 'page');
+            await expect(locRibRouteTable).toContainText('10.30.23.0', { timeout: 10000 });
+            await expect(locRibRouteTable).not.toContainText('10.30.0.0');
+            await expect
+                .poll(
+                    () =>
+                        controller.timeline.some(
+                            item =>
+                                item.message === 'worker query: getBgpInstanceRoutes' &&
+                                item.data?.request?.page === 2 &&
+                                item.data?.request?.pageSize === 25
+                        ),
+                    { timeout: 10000 }
+                )
+                .toBe(true);
+
+            await recordStep('Output: Loc-RIB pagination onChange queried worker page=2 and rendered second page');
         });
 
         await test.step('Verify lazy-created Loc-RIB address-family tab appears after route update', async () => {

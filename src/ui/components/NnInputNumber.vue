@@ -3,7 +3,7 @@
         <input
             class="nn-input-number-input"
             type="number"
-            :value="displayValue"
+            :value="draftValue"
             :min="min"
             :max="max"
             :step="step"
@@ -11,14 +11,14 @@
             :placeholder="placeholder"
             @input="handleInput"
             @blur="handleBlur"
-            @keydown.enter="emit('pressEnter', $event)"
+            @keydown.enter="handleEnter"
         />
         <span v-if="addonAfter" class="nn-input-number-addon">{{ addonAfter }}</span>
     </span>
 </template>
 
 <script setup>
-    import { computed } from 'vue';
+    import { computed, ref, watch } from 'vue';
 
     const props = defineProps({
         value: {
@@ -61,7 +61,8 @@
 
     const emit = defineEmits(['update:value', 'change', 'pressEnter']);
 
-    const displayValue = computed(() => (props.value === null || props.value === undefined ? '' : props.value));
+    const toDraftValue = value => (value === null || value === undefined ? '' : String(value));
+    const draftValue = ref(toDraftValue(props.value));
 
     const inputNumberClass = computed(() => ({
         'nn-input-number-disabled': props.disabled,
@@ -69,14 +70,21 @@
         'nn-input-number-with-addon': Boolean(props.addonAfter)
     }));
 
-    const toFiniteNumber = value => {
+    const toFiniteNumber = (value, clamp = false) => {
         if (value === '' || value === null || value === undefined) {
             return null;
         }
 
-        const numberValue = Number(value);
+        let numberValue = Number(value);
         if (!Number.isFinite(numberValue)) {
             return null;
+        }
+
+        if (clamp) {
+            const min = Number(props.min);
+            const max = Number(props.max);
+            if (props.min !== undefined && Number.isFinite(min)) numberValue = Math.max(min, numberValue);
+            if (props.max !== undefined && Number.isFinite(max)) numberValue = Math.min(max, numberValue);
         }
 
         const precision = Number(props.precision);
@@ -88,18 +96,60 @@
     };
 
     const handleInput = event => {
-        const nextValue = toFiniteNumber(event.target.value);
+        const rawValue = event.target.value;
+        draftValue.value = rawValue;
+
+        if (rawValue === '') {
+            emit('update:value', null);
+            emit('change', null);
+            return;
+        }
+
+        if (!/^-?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?$/i.test(rawValue)) {
+            return;
+        }
+
+        const nextValue = toFiniteNumber(rawValue);
         emit('update:value', nextValue);
         emit('change', nextValue);
     };
 
-    const handleBlur = event => {
-        const nextValue = toFiniteNumber(event.target.value);
+    const commitDraft = () => {
+        if (draftValue.value === '') {
+            return;
+        }
+
+        const nextValue = toFiniteNumber(draftValue.value, true);
+        if (nextValue === null) {
+            draftValue.value = toDraftValue(props.value);
+            return;
+        }
+
+        draftValue.value = toDraftValue(nextValue);
         if (nextValue !== props.value) {
             emit('update:value', nextValue);
             emit('change', nextValue);
         }
     };
+
+    const handleBlur = () => {
+        commitDraft();
+    };
+
+    const handleEnter = event => {
+        commitDraft();
+        emit('pressEnter', event);
+    };
+
+    watch(
+        () => props.value,
+        value => {
+            const normalizedValue = toDraftValue(value);
+            if (toFiniteNumber(draftValue.value) !== value || draftValue.value === '') {
+                draftValue.value = normalizedValue;
+            }
+        }
+    );
 </script>
 
 <style scoped>

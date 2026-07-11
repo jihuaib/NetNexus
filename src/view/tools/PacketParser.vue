@@ -1,54 +1,54 @@
 <template>
     <div class="mt-container packet-parser-page">
         <nn-card title="报文解析器" class="packet-parser-card">
-            <a-form :model="formState" layout="vertical" class="packet-parser-form" @finish="handleParsePacket">
+            <nn-form :model="formState" layout="vertical" class="packet-parser-form" @finish="handleParsePacket">
                 <div class="packet-config-grid">
-                    <a-form-item label="解析起始层" name="startLayer" class="packet-config-item">
-                        <a-select v-model:value="formState.startLayer">
-                            <a-select-option :value="START_LAYER.L2">数据链路层</a-select-option>
-                            <a-select-option :value="START_LAYER.L3">网络层</a-select-option>
-                            <a-select-option :value="START_LAYER.L4">传输层</a-select-option>
-                            <a-select-option :value="START_LAYER.L5">应用层</a-select-option>
-                        </a-select>
-                    </a-form-item>
+                    <nn-form-item label="解析起始层" name="startLayer" class="packet-config-item">
+                        <nn-select v-model:value="formState.startLayer">
+                            <nn-select-option :value="START_LAYER.L2">数据链路层</nn-select-option>
+                            <nn-select-option :value="START_LAYER.L3">网络层</nn-select-option>
+                            <nn-select-option :value="START_LAYER.L4">传输层</nn-select-option>
+                            <nn-select-option :value="START_LAYER.L5">应用层</nn-select-option>
+                        </nn-select>
+                    </nn-form-item>
 
-                    <a-form-item
+                    <nn-form-item
                         v-if="formState.startLayer === START_LAYER.L4"
                         label="传输协议"
                         name="transportProtocol"
                         class="packet-config-item packet-config-item-narrow"
                     >
-                        <a-select v-model:value="formState.transportProtocol">
-                            <a-select-option :value="TRANSPORT_PROTOCOL.TCP">TCP</a-select-option>
-                            <a-select-option :value="TRANSPORT_PROTOCOL.UDP">UDP</a-select-option>
-                        </a-select>
-                    </a-form-item>
+                        <nn-select v-model:value="formState.transportProtocol">
+                            <nn-select-option :value="TRANSPORT_PROTOCOL.TCP">TCP</nn-select-option>
+                            <nn-select-option :value="TRANSPORT_PROTOCOL.UDP">UDP</nn-select-option>
+                        </nn-select>
+                    </nn-form-item>
 
-                    <a-form-item label="应用协议类型" name="protocolType" class="packet-config-item">
-                        <a-select v-model:value="formState.protocolType">
-                            <a-select-option :value="PROTOCOL_TYPE.AUTO">自动识别</a-select-option>
-                            <a-select-option :value="PROTOCOL_TYPE.BGP">BGP</a-select-option>
-                            <a-select-option :value="PROTOCOL_TYPE.BMP">BMP</a-select-option>
-                        </a-select>
-                    </a-form-item>
+                    <nn-form-item label="应用协议类型" name="protocolType" class="packet-config-item">
+                        <nn-select v-model:value="formState.protocolType">
+                            <nn-select-option :value="PROTOCOL_TYPE.AUTO">自动识别</nn-select-option>
+                            <nn-select-option :value="PROTOCOL_TYPE.BGP">BGP</nn-select-option>
+                            <nn-select-option :value="PROTOCOL_TYPE.BMP">BMP</nn-select-option>
+                        </nn-select>
+                    </nn-form-item>
 
-                    <a-form-item
+                    <nn-form-item
                         label="应用协议端口"
                         name="protocolPort"
                         class="packet-config-item packet-config-item-narrow"
                     >
                         <nn-tooltip :title="validationErrors.protocolPort" :open="!!validationErrors.protocolPort">
-                            <a-input
+                            <nn-input
                                 v-model:value="formState.protocolPort"
                                 placeholder="可选"
                                 :status="validationErrors.protocolPort ? 'error' : ''"
                             />
                         </nn-tooltip>
-                    </a-form-item>
+                    </nn-form-item>
                 </div>
 
                 <!-- 报文输入框 -->
-                <a-form-item
+                <nn-form-item
                     label="报文数据"
                     name="packetData"
                     class="packet-data-item"
@@ -63,7 +63,7 @@
                             :status="validationErrors.packetData ? 'error' : ''"
                         />
                     </div>
-                </a-form-item>
+                </nn-form-item>
                 <!-- 操作按钮 -->
                 <div class="packet-action-bar">
                     <nn-space>
@@ -71,7 +71,7 @@
                         <nn-button type="default" @click="showParseHistory">识别历史</nn-button>
                     </nn-space>
                 </div>
-            </a-form>
+            </nn-form>
         </nn-card>
     </div>
 
@@ -83,7 +83,7 @@
     />
 
     <!-- 解析历史弹窗 -->
-    <a-modal
+    <nn-modal
         v-model:open="historyModalVisible"
         title="报文解析历史"
         :mask-closable="false"
@@ -91,7 +91,7 @@
         @cancel="closeHistoryModal"
     >
         <div>
-            <a-table
+            <nn-table
                 :columns="historyColumns"
                 :data-source="parseHistory"
                 :pagination="{
@@ -111,13 +111,13 @@
                         <div>{{ truncateString(record.packetData, 40) }}</div>
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </div>
         <template #footer>
             <nn-button type="primary" @click="closeHistoryModal">关闭</nn-button>
             <nn-button v-if="parseHistory.length > 0" danger @click="clearHistory">清空历史</nn-button>
         </template>
-    </a-modal>
+    </nn-modal>
 </template>
 
 <script setup>
@@ -352,7 +352,7 @@
         overflow: hidden;
     }
 
-    .packet-parser-form :deep(.ant-form-item) {
+    .packet-parser-form :deep(.nn-form-item) {
         flex: 0 0 auto;
     }
 
@@ -372,12 +372,12 @@
         min-width: 140px;
     }
 
-    .packet-config-item :deep(.ant-form-item-label) {
+    .packet-config-item :deep(.nn-form-item-label) {
         padding-bottom: 4px;
     }
 
-    .packet-config-item :deep(.ant-select),
-    .packet-config-item :deep(.ant-input) {
+    .packet-config-item :deep(.nn-select),
+    .packet-config-item :deep(.nn-input) {
         width: 100%;
     }
 
@@ -388,25 +388,25 @@
         flex-direction: column;
     }
 
-    .packet-data-item :deep(.ant-form-item-row),
-    .packet-data-item :deep(.ant-form-item-control),
-    .packet-data-item :deep(.ant-form-item-control-input),
-    .packet-data-item :deep(.ant-form-item-control-input-content) {
+    .packet-data-item :deep(.nn-form-item-row),
+    .packet-data-item :deep(.nn-form-item-control),
+    .packet-data-item :deep(.nn-form-item-control-input),
+    .packet-data-item :deep(.nn-form-item-control-input-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .packet-data-item :deep(.ant-form-item-label) {
+    .packet-data-item :deep(.nn-form-item-label) {
         flex: 0 0 auto;
     }
 
-    .packet-data-item :deep(.ant-form-item-control-input) {
+    .packet-data-item :deep(.nn-form-item-control-input) {
         align-items: stretch;
     }
 
-    .packet-data-item :deep(.ant-form-item-explain) {
+    .packet-data-item :deep(.nn-form-item-explain) {
         flex: 0 0 auto;
     }
 
@@ -418,7 +418,7 @@
         flex-direction: column;
     }
 
-    .packet-data-textarea-wrap :deep(textarea.ant-input) {
+    .packet-data-textarea-wrap :deep(textarea.nn-input) {
         flex: 1 1 0;
         min-height: 0;
         width: 100%;
@@ -447,7 +447,7 @@
         }
     }
 
-    :deep(.ant-table-body) {
+    :deep(.nn-table-body) {
         height: 200px !important;
         overflow-y: auto !important;
     }

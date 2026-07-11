@@ -96,10 +96,7 @@
 
     @media (min-width: 992px) {
         .nn-col {
-            max-width: var(
-                --nn-col-lg,
-                var(--nn-col-md, var(--nn-col-sm, var(--nn-col-xs, var(--nn-col-base, 100%))))
-            );
+            max-width: var(--nn-col-lg, var(--nn-col-md, var(--nn-col-sm, var(--nn-col-xs, var(--nn-col-base, 100%)))));
             flex-basis: var(
                 --nn-col-lg,
                 var(--nn-col-md, var(--nn-col-sm, var(--nn-col-xs, var(--nn-col-base, 100%))))

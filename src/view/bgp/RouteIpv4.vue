@@ -1,58 +1,61 @@
 <template>
     <div class="mt-container bgp-route-page" data-testid="bgp-route-ipv4-page">
         <nn-card :title="routeCardTitle" class="bgp-route-card">
-            <a-form :model="ipv4Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
+            <nn-form :model="ipv4Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <div class="config-section">
                     <div class="section-title">基础配置</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="地址族" name="addressFamily">
-                                <a-select
+                            <nn-form-item label="地址族" name="addressFamily">
+                                <nn-select
                                     v-model:value="ipv4Data.addressFamily"
                                     style="width: 100%"
                                     :options="addressFamilyOptions"
                                 />
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="Prefix" name="prefix">
+                            <nn-form-item label="Prefix" name="prefix">
                                 <nn-tooltip :title="validationErrors.prefix" :open="!!validationErrors.prefix">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv4Data.prefix"
                                         data-testid="bgp-ipv4-route-prefix-input"
                                         :status="validationErrors.prefix ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="Mask" name="mask">
+                            <nn-form-item label="Mask" name="mask">
                                 <nn-tooltip :title="validationErrors.mask" :open="!!validationErrors.mask">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv4Data.mask"
                                         data-testid="bgp-ipv4-route-mask-input"
                                         :status="validationErrors.mask ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="Count" name="count">
+                            <nn-form-item label="Count" name="count">
                                 <nn-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv4Data.count"
                                         data-testid="bgp-ipv4-route-count-input"
                                         :status="validationErrors.count ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="RT" name="rt">
+                            <nn-form-item label="RT" name="rt">
                                 <nn-tooltip :title="validationErrors.rt" :open="!!validationErrors.rt">
-                                    <a-input v-model:value="ipv4Data.rt" :status="validationErrors.rt ? 'error' : ''" />
+                                    <nn-input
+                                        v-model:value="ipv4Data.rt"
+                                        :status="validationErrors.rt ? 'error' : ''"
+                                    />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                     </nn-row>
                 </div>
@@ -61,23 +64,23 @@
                     <div class="section-title">ADD-PATH</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="生成" name="addPathEnabled">
+                            <nn-form-item label="生成" name="addPathEnabled">
                                 <nn-switch v-model:checked="ipv4Data.addPathEnabled" />
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="Path Count" name="addPathCount">
+                            <nn-form-item label="Path Count" name="addPathCount">
                                 <nn-tooltip
                                     :title="validationErrors.addPathCount"
                                     :open="!!validationErrors.addPathCount"
                                 >
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv4Data.addPathCount"
                                         :disabled="!ipv4Data.addPathEnabled"
                                         :status="validationErrors.addPathCount ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                     </nn-row>
                 </div>
@@ -86,34 +89,34 @@
                     <div class="section-title">MPLS Label</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="8">
-                            <a-form-item label="标签模式" name="labelMode">
+                            <nn-form-item label="标签模式" name="labelMode">
                                 <nn-tooltip :title="validationErrors.labelMode" :open="!!validationErrors.labelMode">
                                     <nn-radio-group v-model:value="ipv4Data.labelMode" button-style="solid">
                                         <nn-radio-button :value="BGP_LABEL_MODE.FIXED">固定</nn-radio-button>
                                         <nn-radio-button :value="BGP_LABEL_MODE.INCREMENT">递增</nn-radio-button>
                                     </nn-radio-group>
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="8">
-                            <a-form-item label="Label" name="labelStart">
+                            <nn-form-item label="Label" name="labelStart">
                                 <nn-tooltip :title="validationErrors.labelStart" :open="!!validationErrors.labelStart">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv4Data.labelStart"
                                         :status="validationErrors.labelStart ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col v-if="ipv4Data.labelMode === BGP_LABEL_MODE.INCREMENT" :xs="24" :md="8">
-                            <a-form-item label="Step" name="labelStep">
+                            <nn-form-item label="Step" name="labelStep">
                                 <nn-tooltip :title="validationErrors.labelStep" :open="!!validationErrors.labelStep">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv4Data.labelStep"
                                         :status="validationErrors.labelStep ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                     </nn-row>
                 </div>
@@ -122,13 +125,16 @@
                     <div class="section-title">SRv6</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="发送SID" name="srv6Enabled">
+                            <nn-form-item label="发送SID" name="srv6Enabled">
                                 <nn-switch v-model:checked="ipv4Data.srv6Enabled" />
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="SID模式" name="srv6SidMode">
-                                <nn-tooltip :title="validationErrors.srv6SidMode" :open="!!validationErrors.srv6SidMode">
+                            <nn-form-item label="SID模式" name="srv6SidMode">
+                                <nn-tooltip
+                                    :title="validationErrors.srv6SidMode"
+                                    :open="!!validationErrors.srv6SidMode"
+                                >
                                     <nn-radio-group
                                         v-model:value="ipv4Data.srv6SidMode"
                                         class="inline-radio-group"
@@ -138,23 +144,26 @@
                                         <nn-radio :value="BGP_SRV6_SID_MODE.INCREMENT">递增</nn-radio>
                                     </nn-radio-group>
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="8">
-                            <a-form-item label="SID" name="srv6Sid">
+                            <nn-form-item label="SID" name="srv6Sid">
                                 <nn-tooltip :title="validationErrors.srv6Sid" :open="!!validationErrors.srv6Sid">
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv4Data.srv6Sid"
                                         :disabled="!ipv4Data.srv6Enabled"
                                         :status="validationErrors.srv6Sid ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="SID Step" name="srv6SidStep">
-                                <nn-tooltip :title="validationErrors.srv6SidStep" :open="!!validationErrors.srv6SidStep">
-                                    <a-input
+                            <nn-form-item label="SID Step" name="srv6SidStep">
+                                <nn-tooltip
+                                    :title="validationErrors.srv6SidStep"
+                                    :open="!!validationErrors.srv6SidStep"
+                                >
+                                    <nn-input
                                         v-model:value="ipv4Data.srv6SidStep"
                                         :disabled="
                                             !ipv4Data.srv6Enabled ||
@@ -163,22 +172,22 @@
                                         :status="validationErrors.srv6SidStep ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                         <nn-col :xs="24" :md="6">
-                            <a-form-item label="Endpoint" name="srv6EndpointBehavior">
+                            <nn-form-item label="Endpoint" name="srv6EndpointBehavior">
                                 <nn-tooltip
                                     :title="validationErrors.srv6EndpointBehavior"
                                     :open="!!validationErrors.srv6EndpointBehavior"
                                 >
-                                    <a-select
+                                    <nn-select
                                         v-model:value="ipv4Data.srv6EndpointBehavior"
                                         :options="srv6EndpointBehaviorOptions"
                                         :disabled="!ipv4Data.srv6Enabled"
                                         :status="validationErrors.srv6EndpointBehavior ? 'error' : ''"
                                     />
                                 </nn-tooltip>
-                            </a-form-item>
+                            </nn-form-item>
                         </nn-col>
                     </nn-row>
                 </div>
@@ -198,7 +207,7 @@
                         生成IPv4路由
                     </nn-button>
                 </div>
-            </a-form>
+            </nn-form>
         </nn-card>
 
         <nn-card :title="`已生成${displayRouteTitle}路由列表`" class="bgp-route-list-card">
@@ -233,7 +242,7 @@
                 </nn-radio-group>
             </div>
 
-            <a-table
+            <nn-table
                 data-testid="bgp-ipv4-route-table"
                 :data-source="sentRoutes"
                 :columns="routeColumns"
@@ -261,7 +270,7 @@
                         <div>{{ record.ip }}/{{ record.mask }}</div>
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </nn-card>
 
         <CustomPktDrawer
@@ -716,25 +725,25 @@
         overflow: visible;
     }
 
-    .bgp-route-form :deep(.ant-form-item) {
+    .bgp-route-form :deep(.nn-form-item) {
         flex: 0 0 auto;
         margin-bottom: 8px;
     }
 
-    .bgp-route-form :deep(.ant-form-item-label) {
+    .bgp-route-form :deep(.nn-form-item-label) {
         padding-bottom: 0;
     }
 
-    .bgp-route-form :deep(.ant-input) {
+    .bgp-route-form :deep(.nn-input) {
         height: 28px;
     }
 
-    .bgp-route-form :deep(.ant-select-selector) {
+    .bgp-route-form :deep(.nn-select-selector) {
         min-height: 28px !important;
         height: 28px !important;
     }
 
-    .bgp-route-form :deep(.ant-select-selection-item) {
+    .bgp-route-form :deep(.nn-select-selection-item) {
         line-height: 26px !important;
     }
 
@@ -814,19 +823,19 @@
     }
 
     .bgp-route-table,
-    .bgp-route-table :deep(.ant-spin-nested-loading),
-    .bgp-route-table :deep(.ant-spin-container) {
+    .bgp-route-table :deep(.nn-spin-nested-loading),
+    .bgp-route-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .bgp-route-table :deep(.ant-spin-container) {
+    .bgp-route-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .bgp-route-table :deep(.ant-table) {
+    .bgp-route-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -834,20 +843,20 @@
         overflow: hidden;
     }
 
-    .bgp-route-table :deep(.ant-table-container),
-    .bgp-route-table :deep(.ant-table-content) {
+    .bgp-route-table :deep(.nn-table-container),
+    .bgp-route-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .bgp-route-table :deep(.ant-table-header) {
+    .bgp-route-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .bgp-route-table :deep(.ant-table-body) {
+    .bgp-route-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -855,12 +864,12 @@
         overflow-y: auto !important;
     }
 
-    .bgp-route-table :deep(.ant-pagination) {
+    .bgp-route-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .bgp-route-table :deep(.ant-table-thead > tr > th) {
+    .bgp-route-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

@@ -7,7 +7,7 @@
                     <nn-tab-pane key="interfaces" tab="接口信息">
                         <div class="network-pane">
                             <div class="network-toolbar">
-                                <a-select
+                                <nn-select
                                     v-model:value="selectedInterfaceName"
                                     placeholder="选择网络接口"
                                     class="network-interface-select"
@@ -23,7 +23,7 @@
                             </div>
 
                             <div class="network-table-wrap">
-                                <a-table
+                                <nn-table
                                     :columns="columns"
                                     :data-source="filteredInterfaces"
                                     :pagination="{
@@ -123,7 +123,7 @@
                                             </div>
                                         </template>
                                     </template>
-                                </a-table>
+                                </nn-table>
                             </div>
                         </div>
                     </nn-tab-pane>
@@ -154,7 +154,7 @@
                             </div>
 
                             <div class="network-table-wrap">
-                                <a-table
+                                <nn-table
                                     :columns="routeColumns"
                                     :data-source="filteredRoutes"
                                     :pagination="{
@@ -197,7 +197,7 @@
                                             </nn-popconfirm>
                                         </template>
                                     </template>
-                                </a-table>
+                                </nn-table>
                             </div>
                         </div>
                     </nn-tab-pane>
@@ -206,137 +206,140 @@
         </nn-card>
 
         <!-- 添加 IPv6 弹窗 -->
-        <a-modal v-model:open="isAddModalVisible" title="添加 IPv6 地址" :confirm-loading="isAdding" @ok="handleAddOk">
-            <a-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
-                <a-form-item label="接口名称">
+        <nn-modal v-model:open="isAddModalVisible" title="添加 IPv6 地址" :confirm-loading="isAdding" @ok="handleAddOk">
+            <nn-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
+                <nn-form-item label="接口名称">
                     <span>{{ currentInterface?.displayName || currentInterface?.name }}</span>
-                </a-form-item>
+                </nn-form-item>
 
-                <a-form-item label="IPv6 地址" required>
+                <nn-form-item label="IPv6 地址" required>
                     <nn-tooltip :title="addValidationErrors.ip" :open="!!addValidationErrors.ip">
-                        <a-input
+                        <nn-input
                             v-model:value="addForm.ip"
                             placeholder="例如: 2001:db8::1"
                             :status="addValidationErrors.ip ? 'error' : ''"
                         />
                     </nn-tooltip>
-                </a-form-item>
-                <a-form-item label="前缀长度" required>
+                </nn-form-item>
+                <nn-form-item label="前缀长度" required>
                     <nn-tooltip :title="addValidationErrors.mask" :open="!!addValidationErrors.mask">
-                        <a-input
+                        <nn-input
                             v-model:value="addForm.mask"
                             placeholder="例如: 64"
                             :status="addValidationErrors.mask ? 'error' : ''"
                         />
                     </nn-tooltip>
-                </a-form-item>
-                <a-form-item label="默认网关">
+                </nn-form-item>
+                <nn-form-item label="默认网关">
                     <nn-tooltip :title="addValidationErrors.gateway" :open="!!addValidationErrors.gateway">
-                        <a-input
+                        <nn-input
                             v-model:value="addForm.gateway"
                             placeholder="可选"
                             :status="addValidationErrors.gateway ? 'error' : ''"
                         />
                     </nn-tooltip>
-                </a-form-item>
-            </a-form>
-        </a-modal>
+                </nn-form-item>
+            </nn-form>
+        </nn-modal>
 
         <!-- 修改 IP 弹窗 -->
-        <a-modal
+        <nn-modal
             v-model:open="isEditModalVisible"
             title="修改 IP 地址"
             :confirm-loading="isUpdating"
             @ok="handleEditOk"
         >
-            <a-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
-                <a-form-item label="接口名称">
+            <nn-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
+                <nn-form-item label="接口名称">
                     <span>{{ currentEditInterfaceName }}</span>
-                </a-form-item>
+                </nn-form-item>
 
-                <a-form-item :label="editForm.family === 'ipv6' ? 'IPv6 地址' : 'IP 地址'" required>
+                <nn-form-item :label="editForm.family === 'ipv6' ? 'IPv6 地址' : 'IP 地址'" required>
                     <nn-tooltip :title="editValidationErrors.ip" :open="!!editValidationErrors.ip">
-                        <a-input v-model:value="editForm.ip" :status="editValidationErrors.ip ? 'error' : ''" />
+                        <nn-input v-model:value="editForm.ip" :status="editValidationErrors.ip ? 'error' : ''" />
                     </nn-tooltip>
-                </a-form-item>
+                </nn-form-item>
 
-                <a-form-item :label="editForm.family === 'ipv6' ? '前缀长度' : '子网掩码'" required>
+                <nn-form-item :label="editForm.family === 'ipv6' ? '前缀长度' : '子网掩码'" required>
                     <nn-tooltip :title="editValidationErrors.mask" :open="!!editValidationErrors.mask">
-                        <a-input v-model:value="editForm.mask" :status="editValidationErrors.mask ? 'error' : ''" />
+                        <nn-input v-model:value="editForm.mask" :status="editValidationErrors.mask ? 'error' : ''" />
                     </nn-tooltip>
-                </a-form-item>
+                </nn-form-item>
 
-                <a-form-item label="默认网关">
+                <nn-form-item label="默认网关">
                     <nn-tooltip :title="editValidationErrors.gateway" :open="!!editValidationErrors.gateway">
-                        <a-input
+                        <nn-input
                             v-model:value="editForm.gateway"
                             placeholder="可选"
                             :status="editValidationErrors.gateway ? 'error' : ''"
                         />
                     </nn-tooltip>
-                </a-form-item>
-            </a-form>
-        </a-modal>
+                </nn-form-item>
+            </nn-form>
+        </nn-modal>
 
-        <a-modal
+        <nn-modal
             v-model:open="isAddRouteModalVisible"
             title="添加本地路由"
             :confirm-loading="isRouteAdding"
             @ok="handleAddRouteOk"
         >
-            <a-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
-                <a-form-item label="地址族" required>
+            <nn-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
+                <nn-form-item label="地址族" required>
                     <nn-radio-group v-model:value="routeForm.family">
                         <nn-radio-button value="ipv4">IPv4</nn-radio-button>
                         <nn-radio-button value="ipv6">IPv6</nn-radio-button>
                     </nn-radio-group>
-                </a-form-item>
-                <a-form-item label="目标地址" required>
+                </nn-form-item>
+                <nn-form-item label="目标地址" required>
                     <nn-tooltip :title="routeValidationErrors.destination" :open="!!routeValidationErrors.destination">
-                        <a-input
+                        <nn-input
                             v-model:value="routeForm.destination"
                             :placeholder="routeForm.family === 'ipv6' ? '例如: 2001:db8::' : '例如: 192.0.2.0'"
                             :status="routeValidationErrors.destination ? 'error' : ''"
                         />
                     </nn-tooltip>
-                </a-form-item>
-                <a-form-item label="前缀长度" required>
-                    <nn-tooltip :title="routeValidationErrors.prefixLength" :open="!!routeValidationErrors.prefixLength">
-                        <a-input
+                </nn-form-item>
+                <nn-form-item label="前缀长度" required>
+                    <nn-tooltip
+                        :title="routeValidationErrors.prefixLength"
+                        :open="!!routeValidationErrors.prefixLength"
+                    >
+                        <nn-input
                             v-model:value="routeForm.prefixLength"
                             :placeholder="routeForm.family === 'ipv6' ? '例如: 64' : '例如: 24'"
                             :status="routeValidationErrors.prefixLength ? 'error' : ''"
                         />
                     </nn-tooltip>
-                </a-form-item>
-                <a-form-item label="下一跳" required>
+                </nn-form-item>
+                <nn-form-item label="下一跳" required>
                     <nn-tooltip :title="routeValidationErrors.gateway" :open="!!routeValidationErrors.gateway">
-                        <a-input
+                        <nn-input
                             v-model:value="routeForm.gateway"
                             :placeholder="routeForm.family === 'ipv6' ? '例如: fe80::1' : '例如: 192.0.2.1'"
                             :status="routeValidationErrors.gateway ? 'error' : ''"
                         />
                     </nn-tooltip>
-                </a-form-item>
-                <a-form-item label="接口">
-                    <a-select
+                </nn-form-item>
+                <nn-form-item label="接口">
+                    <nn-select
                         v-model:value="routeForm.interfaceName"
                         allow-clear
                         placeholder="可选"
                         :options="interfaceOptions"
                     />
-                </a-form-item>
-                <a-form-item label="Metric">
+                </nn-form-item>
+                <nn-form-item label="Metric">
                     <nn-tooltip :title="routeValidationErrors.metric" :open="!!routeValidationErrors.metric">
-                        <a-input
+                        <nn-input
                             v-model:value="routeForm.metric"
                             placeholder="可选"
                             :status="routeValidationErrors.metric ? 'error' : ''"
                         />
                     </nn-tooltip>
-                </a-form-item>
-            </a-form>
-        </a-modal>
+                </nn-form-item>
+            </nn-form>
+        </nn-modal>
     </div>
 </template>
 
@@ -951,39 +954,39 @@
     }
 
     .network-info-table,
-    .network-info-table :deep(.ant-spin-nested-loading),
-    .network-info-table :deep(.ant-spin-container) {
+    .network-info-table :deep(.nn-spin-nested-loading),
+    .network-info-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .network-info-table :deep(.ant-spin-container) {
+    .network-info-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .network-info-table :deep(.ant-table) {
+    .network-info-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         overflow: auto;
     }
 
-    .network-info-table :deep(.ant-table-cell) {
+    .network-info-table :deep(.nn-table-cell) {
         white-space: nowrap;
     }
 
-    .network-info-table :deep(.ant-table-container),
-    .network-info-table :deep(.ant-table-content) {
+    .network-info-table :deep(.nn-table-container),
+    .network-info-table :deep(.nn-table-content) {
         min-height: 0;
     }
 
-    .network-info-table :deep(.ant-pagination) {
+    .network-info-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .network-info-table :deep(.ant-table-thead > tr > th) {
+    .network-info-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

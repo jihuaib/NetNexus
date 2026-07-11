@@ -1,33 +1,37 @@
 <template>
     <div class="general-settings">
         <nn-card title="通用设置" class="settings-card">
-            <a-form :model="settingsForm" layout="vertical">
-                <a-form-item label="主题" name="themePreset">
-                    <a-select
+            <nn-form :model="settingsForm" layout="vertical">
+                <nn-form-item label="主题" name="themePreset">
+                    <nn-select
                         v-model:value="settingsForm.themePreset"
                         style="width: 100%"
                         @change="handleThemePresetChange"
                     >
-                        <a-select-option v-for="option in themePresetOptions" :key="option.value" :value="option.value">
+                        <nn-select-option
+                            v-for="option in themePresetOptions"
+                            :key="option.value"
+                            :value="option.value"
+                        >
                             {{ option.label }}
-                        </a-select-option>
-                    </a-select>
-                </a-form-item>
+                        </nn-select-option>
+                    </nn-select>
+                </nn-form-item>
 
-                <a-form-item label="日志级别" name="logLevel">
-                    <a-select v-model:value="settingsForm.logLevel" style="width: 100%">
-                        <a-select-option value="off">关闭</a-select-option>
-                        <a-select-option value="debug">debug</a-select-option>
-                        <a-select-option value="info">info</a-select-option>
-                        <a-select-option value="warn">warn</a-select-option>
-                        <a-select-option value="error">error</a-select-option>
-                    </a-select>
-                </a-form-item>
+                <nn-form-item label="日志级别" name="logLevel">
+                    <nn-select v-model:value="settingsForm.logLevel" style="width: 100%">
+                        <nn-select-option value="off">关闭</nn-select-option>
+                        <nn-select-option value="debug">debug</nn-select-option>
+                        <nn-select-option value="info">info</nn-select-option>
+                        <nn-select-option value="warn">warn</nn-select-option>
+                        <nn-select-option value="error">error</nn-select-option>
+                    </nn-select>
+                </nn-form-item>
 
-                <a-form-item>
+                <nn-form-item>
                     <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
-                </a-form-item>
-            </a-form>
+                </nn-form-item>
+            </nn-form>
         </nn-card>
     </div>
 </template>
@@ -94,7 +98,7 @@
         max-width: 100%;
     }
 
-    :deep(.ant-form-item-label > label) {
+    :deep(.nn-form-item-label > label) {
         font-size: 12px;
     }
 </style>

@@ -5,7 +5,8 @@
         class="nn-tabs-tabpane"
         :class="{ 'nn-tabs-tabpane-active': active }"
         role="tabpanel"
-        :aria-label="String(tab)"
+        :aria-labelledby="ariaLabelledby || undefined"
+        :aria-label="ariaLabelledby ? undefined : String(tab)"
     >
         <slot v-if="shouldRender" />
     </section>
@@ -32,6 +33,10 @@
             default: false
         },
         panelId: {
+            type: String,
+            default: ''
+        },
+        ariaLabelledby: {
             type: String,
             default: ''
         }

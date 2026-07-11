@@ -3,10 +3,10 @@
         <nn-row class="radius-config-row" :gutter="10">
             <nn-col :span="24">
                 <nn-card title="RADIUS服务器配置">
-                    <a-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
+                    <nn-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
                         <nn-row :gutter="24">
                             <nn-col :span="8">
-                                <a-form-item label="认证端口">
+                                <nn-form-item label="认证端口">
                                     <nn-tooltip :title="validationErrors.authPort" :open="!!validationErrors.authPort">
                                         <nn-input-number
                                             v-model:value="formData.authPort"
@@ -17,10 +17,10 @@
                                             :status="validationErrors.authPort ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="计费端口">
+                                <nn-form-item label="计费端口">
                                     <nn-tooltip
                                         :title="validationErrors.accountingPort"
                                         :open="!!validationErrors.accountingPort"
@@ -34,10 +34,10 @@
                                             :status="validationErrors.accountingPort ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="动态授权端口">
+                                <nn-form-item label="动态授权端口">
                                     <nn-tooltip :title="validationErrors.coaPort" :open="!!validationErrors.coaPort">
                                         <nn-input-number
                                             v-model:value="formData.coaPort"
@@ -48,59 +48,59 @@
                                             :status="validationErrors.coaPort ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
                         <nn-row :gutter="24">
                             <nn-col :span="8">
-                                <a-form-item label="认证服务">
+                                <nn-form-item label="认证服务">
                                     <nn-switch v-model:checked="formData.enableAuth" />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="计费服务">
+                                <nn-form-item label="计费服务">
                                     <nn-switch v-model:checked="formData.enableAccounting" />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="动态授权">
+                                <nn-form-item label="动态授权">
                                     <nn-switch v-model:checked="formData.enableDynamicAuth" />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
                         <nn-row :gutter="24">
                             <nn-col :span="8">
-                                <a-form-item label="默认共享密钥">
+                                <nn-form-item label="默认共享密钥">
                                     <nn-tooltip
                                         :title="validationErrors.sharedSecret"
                                         :open="!!validationErrors.sharedSecret"
                                     >
-                                        <a-input-password
+                                        <nn-input-password
                                             v-model:value="formData.sharedSecret"
                                             :status="validationErrors.sharedSecret ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="强制消息认证">
+                                <nn-form-item label="强制消息认证">
                                     <nn-switch v-model:checked="formData.requireMessageAuthenticator" />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="拒绝未知客户端">
+                                <nn-form-item label="拒绝未知客户端">
                                     <nn-switch v-model:checked="formData.rejectUnknownClients" />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
                         <nn-row :gutter="24">
                             <nn-col :span="24">
-                                <a-form-item label="配置文件">
-                                    <a-input v-model:value="formData.configFilePath" readonly />
-                                </a-form-item>
+                                <nn-form-item label="配置文件">
+                                    <nn-input v-model:value="formData.configFilePath" readonly />
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
@@ -119,7 +119,7 @@
                                 </nn-button>
                             </nn-space>
                         </div>
-                    </a-form>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>

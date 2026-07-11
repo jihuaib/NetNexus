@@ -27,23 +27,23 @@
     background: transparent !important;
 }
 
-.main-menu .ant-menu-item {
+.main-menu .nn-menu-item {
     color: var(--nn-color-text-sider) !important;
     font-weight: 500 !important;
 }
 
-.main-menu .ant-menu-item-selected {
+.main-menu .nn-menu-item-selected {
     background: var(--nn-color-bg-sider-active) !important;
     color: var(--nn-color-text-inverse) !important;
 }
 
-.main-menu .ant-menu-item:hover {
+.main-menu .nn-menu-item:hover {
     background: var(--nn-color-bg-sider-hover) !important;
     color: var(--nn-color-text-inverse) !important;
 }
 
 /* 选中状态的菜单项 hover 时保持不变 */
-.main-menu .ant-menu-item-selected:hover {
+.main-menu .nn-menu-item-selected:hover {
     background: var(--nn-color-bg-sider-active) !important;
     color: var(--nn-color-text-inverse) !important;
 }
@@ -69,11 +69,11 @@
     color: var(--nn-color-text-sider) !important;
 }
 
-.main-menu .ant-menu-item-selected .nn-icon {
+.main-menu .nn-menu-item-selected .nn-icon {
     color: var(--nn-color-text-inverse) !important;
 }
 
-.main-menu .ant-menu-item:hover .nn-icon {
+.main-menu .nn-menu-item:hover .nn-icon {
     color: var(--nn-color-text-inverse) !important;
 }
 
@@ -188,53 +188,61 @@
     font-size: 14px !important;
 }
 
+.nn-card.nn-card-small .nn-card-head {
+    min-height: 36px !important;
+}
+
+.nn-card.nn-card-small .nn-card-body {
+    padding: 8px !important;
+}
+
 /* 输入框错误样式 */
-.ant-input-status-error {
+.nn-input-status-error {
     border-color: var(--nn-color-error) !important;
 }
 
-.ant-input-status-error:hover {
+.nn-input-status-error:hover {
     border-color: var(--nn-color-error);
 }
 
-.ant-input-status-error:focus {
+.nn-input-status-error:focus {
     border-color: var(--nn-color-error) !important;
     box-shadow: var(--nn-focus-shadow-error) !important;
 }
 
 /* 表格样式 */
-.ant-table-tbody > tr > td {
+.nn-table-tbody > tr > td {
     height: 15px !important;
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
 }
 
-.ant-table-cell {
+.nn-table-cell {
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
 }
 
-.ant-table-small {
+.nn-table-small {
     font-size: 13px !important;
 }
 
-.ant-table-row {
+.nn-table-row {
     cursor: pointer !important;
 }
 
-.ant-table-row:hover {
+.nn-table-row:hover {
     background-color: var(--nn-color-bg-hover) !important;
 }
 
 /* 表单样式 */
-.ant-input[disabled] {
+.nn-input[disabled] {
     background-color: var(--nn-color-bg-disabled) !important;
     color: var(--nn-color-text-disabled) !important;
 }
 
-.ant-select-disabled .ant-select-selector {
+.nn-select-disabled .nn-select-selection {
     background-color: var(--nn-color-bg-disabled) !important;
     color: var(--nn-color-text-disabled) !important;
 }
@@ -248,7 +256,7 @@
     background-color: var(--nn-color-bg-disabled) !important;
 }
 
-.ant-form-item {
+.nn-form-item {
     margin-bottom: 8px !important;
 }
 
@@ -262,19 +270,19 @@
    ========================== */
 
 /* 通用弹出框样式 */
-.ant-modal {
+.nn-modal {
     max-width: 95vw !important;
     max-height: 92vh !important;
     margin: 0 auto !important;
     transform-origin: center center !important;
 }
 
-.ant-modal-wrap {
+.nn-modal-wrap {
     padding: 8px !important;
 }
 
 /* 弹出框主体样式 */
-.ant-modal-content {
+.nn-modal-content {
     background: var(--nn-color-bg-elevated) !important;
     color: var(--nn-color-text) !important;
     max-height: 92vh !important;
@@ -284,7 +292,7 @@
     padding: 8px 8px !important;
 }
 
-.ant-modal-body {
+.nn-modal-body {
     flex: 1 !important;
     overflow: auto !important;
     max-height: calc(92vh - 140px) !important;
@@ -292,7 +300,7 @@
     padding: 8px 8px !important;
 }
 
-.ant-modal-header {
+.nn-modal-header {
     background: var(--nn-color-bg-elevated) !important;
     padding: 8px 8px !important;
     flex-shrink: 0 !important;
@@ -302,7 +310,7 @@
     margin-bottom: 0px !important;
 }
 
-.ant-modal-footer {
+.nn-modal-footer {
     background: var(--nn-color-bg-elevated) !important;
     border-top-color: var(--nn-color-border-light) !important;
     padding: 8px 8px !important;
@@ -338,31 +346,31 @@
 }
 
 /* 弹出框内容样式 */
-.ant-modal-body .ant-table-wrapper {
+.nn-modal-body .nn-table-wrapper {
     max-width: 100% !important;
     overflow-x: auto !important;
     font-size: 13px !important;
 }
 
-.ant-modal-body .ant-form {
+.nn-modal-body .nn-form {
     max-width: 100% !important;
     font-size: 14px !important;
 }
 
-.ant-modal-body .nn-card {
+.nn-modal-body .nn-card {
     margin-bottom: 0 !important;
 }
 
-.ant-modal-body .nn-card .nn-card-body {
+.nn-modal-body .nn-card .nn-card-body {
     padding: 10px !important;
 }
 
-.ant-modal-body .ant-table-body {
+.nn-modal-body .nn-table-body {
     overflow-x: auto !important;
     min-height: 150px !important;
 }
 
-.ant-modal-body .nn-button {
+.nn-modal-body .nn-button {
     font-size: 13px !important;
     padding: 4px 12px !important;
     height: 28px !important;
@@ -370,17 +378,17 @@
     line-height: 1.4 !important;
 }
 
-.ant-modal-body .ant-input,
-.ant-modal-body .ant-textarea {
+.nn-modal-body .nn-input,
+.nn-modal-body .nn-textarea {
     font-size: 13px !important;
     padding: 4px 8px !important;
 }
 
-.ant-modal-body * {
+.nn-modal-body * {
     box-sizing: border-box !important;
 }
 
-.ant-modal-title {
+.nn-modal-title {
     color: var(--nn-color-text) !important;
     font-size: 16px !important;
 }

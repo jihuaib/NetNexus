@@ -1,32 +1,32 @@
 <template>
     <div class="api-settings">
         <nn-card title="外部接入" class="settings-card">
-            <a-form :model="settingsForm" layout="vertical">
-                <a-form-item label="接入方式" name="mode">
+            <nn-form :model="settingsForm" layout="vertical">
+                <nn-form-item label="接入方式" name="mode">
                     <nn-radio-group v-model:value="settingsForm.mode" button-style="solid">
                         <nn-radio-button :value="API_ACCESS_MODE.NONE">关闭</nn-radio-button>
                         <nn-radio-button :value="API_ACCESS_MODE.HTTP">HTTP API</nn-radio-button>
                         <nn-radio-button :value="API_ACCESS_MODE.CLI">Telnet CLI</nn-radio-button>
                     </nn-radio-group>
-                </a-form-item>
+                </nn-form-item>
 
                 <template v-if="settingsForm.mode === API_ACCESS_MODE.HTTP">
-                    <a-form-item label="HTTP监听端口" name="port">
+                    <nn-form-item label="HTTP监听端口" name="port">
                         <nn-input-number v-model:value="settingsForm.port" :min="1" :max="65535" style="width: 100%" />
-                    </a-form-item>
+                    </nn-form-item>
 
-                    <a-form-item label="分页最大条数" name="maxPageSize">
+                    <nn-form-item label="分页最大条数" name="maxPageSize">
                         <nn-input-number
                             v-model:value="settingsForm.maxPageSize"
                             :min="1"
                             :max="10000"
                             style="width: 100%"
                         />
-                    </a-form-item>
+                    </nn-form-item>
                 </template>
 
                 <template v-if="settingsForm.mode === API_ACCESS_MODE.CLI">
-                    <a-form-item label="Telnet监听端口" name="cliPort">
+                    <nn-form-item label="Telnet监听端口" name="cliPort">
                         <nn-input-number
                             v-model:value="settingsForm.cliPort"
                             :min="1"
@@ -34,19 +34,19 @@
                             :disabled="true"
                             style="width: 100%"
                         />
-                    </a-form-item>
+                    </nn-form-item>
 
-                    <a-form-item label="最大会话数" name="cliMaxSessions">
+                    <nn-form-item label="最大会话数" name="cliMaxSessions">
                         <nn-input-number
                             v-model:value="settingsForm.cliMaxSessions"
                             :min="1"
                             :max="100"
                             style="width: 100%"
                         />
-                    </a-form-item>
+                    </nn-form-item>
                 </template>
 
-                <a-form-item label="运行状态">
+                <nn-form-item label="运行状态">
                     <nn-space direction="vertical" size="small">
                         <nn-space>
                             <nn-tag :color="apiStatus.running ? 'green' : 'default'">
@@ -63,15 +63,15 @@
                             <span>{{ apiStatus.cli.host }}:{{ apiStatus.cli.port }}</span>
                         </nn-space>
                     </nn-space>
-                </a-form-item>
+                </nn-form-item>
 
-                <a-form-item>
+                <nn-form-item>
                     <nn-space>
                         <nn-button type="primary" @click="saveSettings">保存并应用</nn-button>
                         <nn-button @click="refreshStatus">刷新状态</nn-button>
                     </nn-space>
-                </a-form-item>
-            </a-form>
+                </nn-form-item>
+            </nn-form>
         </nn-card>
     </div>
 </template>
@@ -235,7 +235,7 @@
         max-width: 100%;
     }
 
-    :deep(.ant-form-item-label > label) {
+    :deep(.nn-form-item-label > label) {
         font-size: 12px;
     }
 </style>

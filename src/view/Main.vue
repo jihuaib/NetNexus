@@ -10,7 +10,7 @@
                     </template>
                 </nn-button>
             </div>
-            <a-menu
+            <nn-menu
                 v-model:selected-keys="current"
                 mode="inline"
                 :items="items"
@@ -28,26 +28,26 @@
                         <span v-if="!isCollapsed">更多选项</span>
                     </nn-button>
                     <template #overlay>
-                        <a-menu>
-                            <a-menu-item key="settings" @click="handleBottomMenuClick('settings')">
+                        <nn-menu>
+                            <nn-menu-item key="settings" @click="handleBottomMenuClick('settings')">
                                 <nn-space>
                                     <SettingOutlined />
                                     <span>设置</span>
                                 </nn-space>
-                            </a-menu-item>
-                            <a-menu-item key="developer" @click="handleBottomMenuClick('developer')">
+                            </nn-menu-item>
+                            <nn-menu-item key="developer" @click="handleBottomMenuClick('developer')">
                                 <nn-space>
                                     <ToolOutlined />
                                     <span>开发人员选项</span>
                                 </nn-space>
-                            </a-menu-item>
-                            <a-menu-item key="about" @click="handleBottomMenuClick('about')">
+                            </nn-menu-item>
+                            <nn-menu-item key="about" @click="handleBottomMenuClick('about')">
                                 <nn-space>
                                     <InfoCircleOutlined />
                                     <span>关于</span>
                                 </nn-space>
-                            </a-menu-item>
-                        </a-menu>
+                            </nn-menu-item>
+                        </nn-menu>
                     </template>
                 </nn-dropdown>
             </div>
@@ -349,13 +349,13 @@
     }
 
     /* 菜单图标样式 */
-    :deep(.ant-menu-item) {
+    :deep(.nn-menu-item) {
         display: flex;
         align-items: center;
     }
 
-    :deep(.ant-menu-inline-collapsed .ant-menu-item),
-    :deep(.ant-menu-inline-collapsed .ant-menu-submenu-title) {
+    :deep(.nn-menu-inline-collapsed .nn-menu-item),
+    :deep(.nn-menu-inline-collapsed .nn-menu-submenu-title) {
         padding: 0 calc(30% - 16px / 2) !important;
     }
 </style>

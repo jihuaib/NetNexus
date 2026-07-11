@@ -31,9 +31,11 @@
     const checked = computed(() => (group ? group.value.value === props.value : false));
     const isDisabled = computed(() => props.disabled || Boolean(group?.disabled.value));
     const isSmall = computed(() => group?.size.value === 'small');
+    const isSolid = computed(() => group?.buttonStyle.value === 'solid');
 
     const buttonClass = computed(() => ({
         'nn-radio-button-checked': checked.value,
+        'nn-radio-button-solid': isSolid.value,
         'nn-radio-button-disabled': isDisabled.value,
         'nn-radio-button-small': isSmall.value
     }));
@@ -88,11 +90,23 @@
     .nn-radio-button-checked {
         z-index: 1;
         border-color: var(--nn-color-primary);
+        background: var(--nn-color-bg-surface);
+        color: var(--nn-color-primary);
+    }
+
+    .nn-radio-button-checked:hover:not(.nn-radio-button-disabled) {
+        border-color: var(--nn-color-primary-hover);
+        background: var(--nn-color-bg-surface);
+        color: var(--nn-color-primary-hover);
+    }
+
+    .nn-radio-button-solid.nn-radio-button-checked {
+        border-color: var(--nn-color-primary);
         background: var(--nn-color-primary);
         color: var(--nn-color-text-inverse);
     }
 
-    .nn-radio-button-checked:hover:not(.nn-radio-button-disabled) {
+    .nn-radio-button-solid.nn-radio-button-checked:hover:not(.nn-radio-button-disabled) {
         border-color: var(--nn-color-primary-hover);
         background: var(--nn-color-primary-hover);
         color: var(--nn-color-text-inverse);

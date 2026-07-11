@@ -1,9 +1,5 @@
 <template>
-    <div
-        class="download-stats"
-        :title="tooltipText"
-        aria-live="polite"
-    >
+    <div class="download-stats" :title="tooltipText" aria-live="polite">
         <span class="stats-icon" aria-hidden="true">
             <svg
                 xmlns="http://www.w3.org/2000/svg"

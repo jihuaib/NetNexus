@@ -1,67 +1,70 @@
 <template>
     <div class="mt-container bgp-config-page" data-testid="bgp-config-page">
         <!-- BGP 配置 Card -->
-        <a-form :model="bgpConfigData" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBgp">
+        <nn-form :model="bgpConfigData" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBgp">
             <nn-card title="BGP配置" class="bgp-config-card">
                 <nn-row>
                     <nn-col :span="8">
-                        <a-form-item label="Local AS" name="localAs">
+                        <nn-form-item label="Local AS" name="localAs">
                             <nn-tooltip
                                 :title="bgpConfigvalidationErrors.localAs"
                                 :open="!!bgpConfigvalidationErrors.localAs"
                             >
-                                <a-input
+                                <nn-input
                                     v-model:value="bgpConfigData.localAs"
                                     data-testid="bgp-local-as-input"
                                     :disabled="bgpRunning"
                                     :status="bgpConfigvalidationErrors.localAs ? 'error' : ''"
                                 />
                             </nn-tooltip>
-                        </a-form-item>
+                        </nn-form-item>
                     </nn-col>
                     <nn-col :span="8">
-                        <a-form-item label="Router ID" name="routerId">
+                        <nn-form-item label="Router ID" name="routerId">
                             <nn-tooltip
                                 :title="bgpConfigvalidationErrors.routerId"
                                 :open="!!bgpConfigvalidationErrors.routerId"
                             >
-                                <a-input
+                                <nn-input
                                     v-model:value="bgpConfigData.routerId"
                                     data-testid="bgp-router-id-input"
                                     :disabled="bgpRunning"
                                     :status="bgpConfigvalidationErrors.routerId ? 'error' : ''"
                                 />
                             </nn-tooltip>
-                        </a-form-item>
+                        </nn-form-item>
                     </nn-col>
                     <nn-col :span="8">
-                        <a-form-item label="监听端口" name="port">
-                            <nn-tooltip :title="bgpConfigvalidationErrors.port" :open="!!bgpConfigvalidationErrors.port">
-                                <a-input
+                        <nn-form-item label="监听端口" name="port">
+                            <nn-tooltip
+                                :title="bgpConfigvalidationErrors.port"
+                                :open="!!bgpConfigvalidationErrors.port"
+                            >
+                                <nn-input
                                     v-model:value="bgpConfigData.port"
                                     data-testid="bgp-port-input"
                                     :disabled="bgpRunning"
                                     :status="bgpConfigvalidationErrors.port ? 'error' : ''"
                                 />
                             </nn-tooltip>
-                        </a-form-item>
+                        </nn-form-item>
                     </nn-col>
                 </nn-row>
                 <nn-row>
                     <nn-col :span="12">
-                        <a-form-item label="地址族" name="addressFamily">
-                            <a-select
+                        <nn-form-item label="地址族" name="addressFamily">
+                            <nn-select
                                 v-model:value="bgpConfigData.addressFamily"
                                 :disabled="bgpRunning"
                                 mode="multiple"
                                 style="width: 100%"
                                 :options="bgpAddressFamilyOptions"
                             />
-                        </a-form-item>
+                        </nn-form-item>
                     </nn-col>
                 </nn-row>
 
-                <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
                     <nn-space size="middle">
                         <nn-button
                             data-testid="bgp-start-button"
@@ -82,13 +85,13 @@
                             停止BGP
                         </nn-button>
                     </nn-space>
-                </a-form-item>
+                </nn-form-item>
             </nn-card>
-        </a-form>
+        </nn-form>
 
         <!-- BGP 状态信息 Card -->
         <nn-card title="BGP 状态信息" class="status-card">
-            <a-table
+            <nn-table
                 data-testid="bgp-instance-table"
                 :columns="instanceColumns"
                 :data-source="instanceInfoList"
@@ -115,7 +118,7 @@
                         />
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </nn-card>
     </div>
 </template>
@@ -273,7 +276,7 @@
         overflow: hidden;
     }
 
-    .bgp-config-page > .ant-form {
+    .bgp-config-page > .nn-form {
         flex: 0 0 auto;
     }
 
@@ -319,19 +322,19 @@
     }
 
     .instance-table,
-    .instance-table :deep(.ant-spin-nested-loading),
-    .instance-table :deep(.ant-spin-container) {
+    .instance-table :deep(.nn-spin-nested-loading),
+    .instance-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .instance-table :deep(.ant-spin-container) {
+    .instance-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .instance-table :deep(.ant-table) {
+    .instance-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -339,20 +342,20 @@
         overflow: hidden;
     }
 
-    .instance-table :deep(.ant-table-container),
-    .instance-table :deep(.ant-table-content) {
+    .instance-table :deep(.nn-table-container),
+    .instance-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .instance-table :deep(.ant-table-header) {
+    .instance-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .instance-table :deep(.ant-table-body) {
+    .instance-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -360,12 +363,12 @@
         overflow-y: auto !important;
     }
 
-    .instance-table :deep(.ant-pagination) {
+    .instance-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .instance-table :deep(.ant-table-thead > tr > th) {
+    .instance-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

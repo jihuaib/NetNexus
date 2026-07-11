@@ -1,5 +1,5 @@
 <template>
-    <a-modal
+    <nn-modal
         v-model:open="isOpen"
         title="设置"
         :footer="null"
@@ -11,32 +11,32 @@
         <div class="settings-layout">
             <!-- 左侧分类菜单 -->
             <div class="settings-sidebar">
-                <a-menu v-model:selected-keys="selectedCategory" mode="inline" class="settings-menu">
-                    <a-menu-item key="general">
+                <nn-menu v-model:selected-keys="selectedCategory" mode="inline" class="settings-menu">
+                    <nn-menu-item key="general">
                         <template #icon><SettingOutlined /></template>
                         <span>通用设置</span>
-                    </a-menu-item>
-                    <a-menu-item key="tools">
+                    </nn-menu-item>
+                    <nn-menu-item key="tools">
                         <template #icon><CodeOutlined /></template>
                         <span>工具集合</span>
-                    </a-menu-item>
-                    <a-menu-item key="ftp">
+                    </nn-menu-item>
+                    <nn-menu-item key="ftp">
                         <template #icon><DownloadOutlined /></template>
                         <span>FTP服务器</span>
-                    </a-menu-item>
-                    <a-menu-item key="api">
+                    </nn-menu-item>
+                    <nn-menu-item key="api">
                         <template #icon><ApiOutlined /></template>
                         <span>外部API</span>
-                    </a-menu-item>
-                    <a-menu-item key="server-deployment">
+                    </nn-menu-item>
+                    <nn-menu-item key="server-deployment">
                         <template #icon><CloudServerOutlined /></template>
                         <span>服务器部署</span>
-                    </a-menu-item>
-                    <a-menu-item key="update">
+                    </nn-menu-item>
+                    <nn-menu-item key="update">
                         <template #icon><CloudDownloadOutlined /></template>
                         <span>应用更新</span>
-                    </a-menu-item>
-                </a-menu>
+                    </nn-menu-item>
+                </nn-menu>
             </div>
 
             <!-- 右侧设置内容区域 -->
@@ -46,7 +46,7 @@
                 </keep-alive>
             </div>
         </div>
-    </a-modal>
+    </nn-modal>
 </template>
 
 <script setup>
@@ -144,12 +144,12 @@
         padding-bottom: 0 !important;
     }
 
-    :global(.settings-dialog-modal .ant-modal-content) {
+    :global(.settings-dialog-modal .nn-modal-content) {
         height: min(760px, calc(100vh - 32px)) !important;
         max-height: calc(100vh - 32px) !important;
     }
 
-    :global(.settings-dialog-modal .ant-modal-body) {
+    :global(.settings-dialog-modal .nn-modal-body) {
         flex: 1 !important;
         min-height: 0 !important;
         max-height: none !important;
@@ -177,7 +177,7 @@
         font-size: 13px;
     }
 
-    .settings-menu :deep(.ant-menu-item) {
+    .settings-menu :deep(.nn-menu-item) {
         font-size: 13px;
     }
 

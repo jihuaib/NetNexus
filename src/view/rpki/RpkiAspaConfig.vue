@@ -3,50 +3,50 @@
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="RPKI ASPA 配置 (协议 v2)">
-                    <a-form :model="aspaConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="submitAspa">
+                    <nn-form :model="aspaConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="submitAspa">
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="Customer ASN" name="customerAsn">
+                                <nn-form-item label="Customer ASN" name="customerAsn">
                                     <nn-tooltip
                                         :title="validationErrors.customerAsn"
                                         :open="!!validationErrors.customerAsn"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="aspaConfig.customerAsn"
                                             :status="validationErrors.customerAsn ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="Provider ASNs" name="providerAsnsRaw">
+                                <nn-form-item label="Provider ASNs" name="providerAsnsRaw">
                                     <nn-tooltip
                                         :title="validationErrors.providerAsnsRaw"
                                         :open="!!validationErrors.providerAsnsRaw"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="aspaConfig.providerAsnsRaw"
                                             placeholder="逗号分隔，如 65001,65002"
                                             :status="validationErrors.providerAsnsRaw ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="24">
-                                <a-form-item label="AFI Flags" name="afiFlags">
+                                <nn-form-item label="AFI Flags" name="afiFlags">
                                     <nn-radio-group v-model:value="aspaConfig.afiFlags">
                                         <nn-radio :value="RPKI_ASPA_AFI_FLAGS.IPV4">IPv4</nn-radio>
                                         <nn-radio :value="RPKI_ASPA_AFI_FLAGS.IPV6">IPv6</nn-radio>
                                         <nn-radio :value="RPKI_ASPA_AFI_FLAGS.BOTH">Both</nn-radio>
                                     </nn-radio-group>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <a-form-item class="rpki-form-actions" :wrapper-col="{ span: 24 }">
+                        <nn-form-item class="rpki-form-actions" :wrapper-col="{ span: 24 }">
                             <nn-space>
                                 <nn-button type="primary" html-type="submit" :loading="submitLoading">
                                     添加 ASPA
@@ -57,8 +57,8 @@
                                 </nn-button>
                                 <nn-button @click="resetForm">重置</nn-button>
                             </nn-space>
-                        </a-form-item>
-                    </a-form>
+                        </nn-form-item>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>
@@ -77,7 +77,7 @@
                             批量删除
                         </nn-button>
                     </template>
-                    <a-table
+                    <nn-table
                         :columns="aspaColumns"
                         :data-source="aspaList"
                         :row-key="record => `${record.customerAsn}`"
@@ -103,7 +103,7 @@
                                 <nn-button type="link" danger @click="deleteAspa(record)">删除</nn-button>
                             </template>
                         </template>
-                    </a-table>
+                    </nn-table>
                 </nn-card>
             </nn-col>
         </nn-row>
@@ -368,7 +368,7 @@
         flex-direction: column;
     }
 
-    .rpki-form-actions :deep(.ant-form-item-control-input-content) {
+    .rpki-form-actions :deep(.nn-form-item-control-input-content) {
         display: flex;
         justify-content: center;
     }
@@ -399,19 +399,19 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -419,20 +419,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -440,12 +440,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

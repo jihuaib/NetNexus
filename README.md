@@ -2,10 +2,10 @@
 
 [![Vue.js](https://img.shields.io/badge/Vue.js-3.x-4FC08D?style=flat-square&logo=vue.js)](https://vuejs.org/)
 [![Electron](https://img.shields.io/badge/Electron-15+-47848F?style=flat-square&logo=electron)](https://electronjs.org/)
-[![Ant Design Vue](https://img.shields.io/badge/Ant%20Design%20Vue-4.x-1890FF?style=flat-square&logo=ant-design)](https://antdv.com/)
+[![NetNexus UI](https://img.shields.io/badge/UI-NetNexus-FF7A1A?style=flat-square)](src/ui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
-NetNexus 是一个基于 Vue 3、Ant Design Vue 和 Electron 的本地网络工具集。项目当前重点是协议联调、报文解析、轻量服务器和本机调试工具。
+NetNexus 是一个基于 Vue 3、自研 NetNexus UI 和 Electron 的本地网络工具集。项目当前重点是协议联调、报文解析、轻量服务器和本机调试工具。
 
 ## 当前功能
 
@@ -59,7 +59,7 @@ npm run docs:pdf
 - Vue 3
 - Vue Router 4
 - Vuex 4
-- Ant Design Vue 4
+- NetNexus UI（项目内自研组件库）
 - Electron 15
 - Vite
 - Node.js worker_threads

@@ -38,7 +38,7 @@
                                                     </nn-button>
                                                 </nn-space>
                                             </div>
-                                            <a-table
+                                            <nn-table
                                                 class="report-table"
                                                 :columns="columns"
                                                 :data-source="report.statistics"
@@ -63,7 +63,7 @@
                                                         {{ record.value }}
                                                     </template>
                                                 </template>
-                                            </a-table>
+                                            </nn-table>
                                         </nn-tab-pane>
                                     </nn-tabs>
                                 </div>
@@ -81,7 +81,7 @@
             </nn-col>
         </nn-row>
 
-        <a-drawer
+        <nn-drawer
             v-model:open="detailsDrawerVisible"
             :title="detailsDrawerTitle"
             placement="right"
@@ -89,7 +89,7 @@
             @close="closeDetailsDrawer"
         >
             <pre v-if="currentDetails">{{ JSON.stringify(currentDetails, null, 2) }}</pre>
-        </a-drawer>
+        </nn-drawer>
     </div>
 </template>
 
@@ -411,20 +411,20 @@
     }
 
     .report-table,
-    .report-table :deep(.ant-spin-nested-loading),
-    .report-table :deep(.ant-spin-container) {
+    .report-table :deep(.nn-spin-nested-loading),
+    .report-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .report-table :deep(.ant-spin-container) {
+    .report-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .report-table :deep(.ant-table) {
+    .report-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         min-width: 0;
@@ -433,8 +433,8 @@
         overflow: hidden;
     }
 
-    .report-table :deep(.ant-table-container),
-    .report-table :deep(.ant-table-content) {
+    .report-table :deep(.nn-table-container),
+    .report-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         min-width: 0;
@@ -442,12 +442,12 @@
         flex-direction: column;
     }
 
-    .report-table :deep(.ant-table-header) {
+    .report-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .report-table :deep(.ant-table-body) {
+    .report-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -455,12 +455,12 @@
         overflow-y: auto !important;
     }
 
-    .report-table :deep(.ant-pagination) {
+    .report-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .report-table :deep(.ant-table-thead > tr > th) {
+    .report-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

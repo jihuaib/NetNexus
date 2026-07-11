@@ -5,17 +5,17 @@
             <template #extra>
                 <nn-tag :color="stateColor">{{ stateName }}</nn-tag>
             </template>
-            <a-form layout="inline" :model="socketForm" class="udp-config-form">
-                <a-form-item label="目标地址">
-                    <a-input
+            <nn-form layout="inline" :model="socketForm" class="udp-config-form">
+                <nn-form-item label="目标地址">
+                    <nn-input
                         v-model:value="socketForm.host"
                         placeholder="127.0.0.1"
                         :disabled="isActive"
                         style="width: 160px"
                         @press-enter="open"
                     />
-                </a-form-item>
-                <a-form-item label="目标端口">
+                </nn-form-item>
+                <nn-form-item label="目标端口">
                     <nn-input-number
                         v-model:value="socketForm.port"
                         :min="1"
@@ -24,8 +24,8 @@
                         placeholder="9000"
                         style="width: 110px"
                     />
-                </a-form-item>
-                <a-form-item label="本地端口">
+                </nn-form-item>
+                <nn-form-item label="本地端口">
                     <nn-input-number
                         v-model:value="socketForm.localPort"
                         :min="0"
@@ -34,12 +34,12 @@
                         placeholder="0=随机"
                         style="width: 120px"
                     />
-                </a-form-item>
-                <a-form-item>
+                </nn-form-item>
+                <nn-form-item>
                     <nn-button v-if="!isActive" type="primary" :loading="opening" @click="open">打开</nn-button>
                     <nn-button v-else danger @click="closeSocket">关闭</nn-button>
-                </a-form-item>
-            </a-form>
+                </nn-form-item>
+            </nn-form>
         </nn-card>
 
         <!-- 发送报文 -->
@@ -52,7 +52,12 @@
                     <nn-radio-button :value="UDP_TOOL_ENCODING.BASE64">Base64</nn-radio-button>
                 </nn-radio-group>
             </div>
-            <a-textarea v-model:value="sendForm.data" :rows="3" :placeholder="sendPlaceholder" class="udp-send-input" />
+            <nn-textarea
+                v-model:value="sendForm.data"
+                :rows="3"
+                :placeholder="sendPlaceholder"
+                class="udp-send-input"
+            />
             <div class="udp-send-actions">
                 <span v-if="conn" class="udp-traffic-info">
                     发送 {{ conn.bytesSent }} B / 接收 {{ conn.bytesReceived }} B
@@ -329,7 +334,7 @@
         border-color: var(--nn-color-primary-hover);
     }
 
-    .udp-config-form :deep(.ant-form-item) {
+    .udp-config-form :deep(.nn-form-item) {
         margin-bottom: 0;
     }
 

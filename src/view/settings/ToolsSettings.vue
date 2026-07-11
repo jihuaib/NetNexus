@@ -1,26 +1,26 @@
 <template>
     <div class="tools-settings">
         <nn-card title="Tools设置" class="settings-card">
-            <a-form :model="settingsForm" layout="vertical">
+            <nn-form :model="settingsForm" layout="vertical">
                 <nn-divider>字符串生成</nn-divider>
-                <a-form-item label="字符串生成历史记录最大存储条数" name="maxStringHistory">
+                <nn-form-item label="字符串生成历史记录最大存储条数" name="maxStringHistory">
                     <nn-input-number
                         v-model:value="settingsForm.stringGenerator.maxStringHistory"
                         :min="10"
                         :max="1000"
                         style="width: 100%"
                     />
-                </a-form-item>
+                </nn-form-item>
 
                 <nn-divider>报文解析</nn-divider>
-                <a-form-item label="报文解析历史记录最大存储条数" name="maxMessageHistory">
+                <nn-form-item label="报文解析历史记录最大存储条数" name="maxMessageHistory">
                     <nn-input-number
                         v-model:value="settingsForm.packetParser.maxMessageHistory"
                         :min="10"
                         :max="1000"
                         style="width: 100%"
                     />
-                </a-form-item>
+                </nn-form-item>
 
                 <nn-divider>Wireshark</nn-divider>
                 <div class="wireshark-plugin-panel">
@@ -57,10 +57,10 @@
                         </nn-button>
                     </nn-space>
                 </div>
-                <a-form-item>
+                <nn-form-item>
                     <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
-                </a-form-item>
-            </a-form>
+                </nn-form-item>
+            </nn-form>
         </nn-card>
     </div>
 </template>
@@ -227,7 +227,7 @@
         max-width: 100%;
     }
 
-    :deep(.ant-form-item-label > label) {
+    :deep(.nn-form-item-label > label) {
         font-size: 12px;
     }
 

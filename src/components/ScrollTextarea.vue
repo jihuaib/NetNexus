@@ -1,5 +1,5 @@
 <template>
-    <a-textarea
+    <nn-textarea
         ref="textareaRef"
         v-bind="$attrs"
         :value="modelValue"

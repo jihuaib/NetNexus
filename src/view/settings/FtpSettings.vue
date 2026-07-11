@@ -1,15 +1,20 @@
 <template>
     <div class="ftp-settings">
         <nn-card title="FTP设置" class="settings-card">
-            <a-form :model="settingsForm" layout="vertical">
-                <a-form-item label="FTP用户最大存储条数" name="maxFtpUser">
-                    <nn-input-number v-model:value="settingsForm.maxFtpUser" :min="10" :max="1000" style="width: 100%" />
-                </a-form-item>
+            <nn-form :model="settingsForm" layout="vertical">
+                <nn-form-item label="FTP用户最大存储条数" name="maxFtpUser">
+                    <nn-input-number
+                        v-model:value="settingsForm.maxFtpUser"
+                        :min="10"
+                        :max="1000"
+                        style="width: 100%"
+                    />
+                </nn-form-item>
 
-                <a-form-item>
+                <nn-form-item>
                     <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
-                </a-form-item>
-            </a-form>
+                </nn-form-item>
+            </nn-form>
         </nn-card>
     </div>
 </template>
@@ -60,7 +65,7 @@
         max-width: 100%;
     }
 
-    :deep(.ant-form-item-label > label) {
+    :deep(.nn-form-item-label > label) {
         font-size: 12px;
     }
 </style>

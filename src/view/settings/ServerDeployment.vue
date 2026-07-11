@@ -11,20 +11,20 @@
             />
 
             <!-- 部署配置表单 -->
-            <a-form :model="deployConfig" :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
-                <a-form-item label="Linux 服务器地址" required>
-                    <a-input v-model:value="deployConfig.serverAddress" placeholder="例如: 192.168.1.100" />
-                </a-form-item>
+            <nn-form :model="deployConfig" :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
+                <nn-form-item label="Linux 服务器地址" required>
+                    <nn-input v-model:value="deployConfig.serverAddress" placeholder="例如: 192.168.1.100" />
+                </nn-form-item>
 
-                <a-form-item label="SSH 用户名" required>
-                    <a-input v-model:value="deployConfig.sshUsername" placeholder="root" />
-                </a-form-item>
+                <nn-form-item label="SSH 用户名" required>
+                    <nn-input v-model:value="deployConfig.sshUsername" placeholder="root" />
+                </nn-form-item>
 
-                <a-form-item label="SSH 密码" required>
-                    <a-input-password v-model:value="deployConfig.sshPassword" />
-                </a-form-item>
+                <nn-form-item label="SSH 密码" required>
+                    <nn-input-password v-model:value="deployConfig.sshPassword" />
+                </nn-form-item>
 
-                <a-form-item :wrapper-col="{ offset: 6, span: 18 }">
+                <nn-form-item :wrapper-col="{ offset: 6, span: 18 }">
                     <nn-space>
                         <nn-button type="primary" :loading="deploying" @click="deployToServer">
                             <template #icon>
@@ -39,8 +39,8 @@
                             测试连接
                         </nn-button>
                     </nn-space>
-                </a-form-item>
-            </a-form>
+                </nn-form-item>
+            </nn-form>
 
             <!-- 部署状态 -->
             <nn-card v-if="deploymentStatus" title="部署状态" style="margin-top: 24px">

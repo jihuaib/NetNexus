@@ -8,7 +8,7 @@
                 </nn-space>
             </template>
 
-            <a-table
+            <nn-table
                 :columns="columns"
                 :data-source="messageList"
                 :loading="loading"
@@ -55,10 +55,10 @@
                         <nn-button type="link" @click="showDetail(record)">详情</nn-button>
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </nn-card>
 
-        <a-drawer
+        <nn-drawer
             v-model:open="detailDrawerVisible"
             :title="detailDrawerTitle"
             width="720px"
@@ -78,7 +78,9 @@
                         <nn-descriptions-item label="传输协议">
                             {{ selectedMessage.transport || '-' }}
                         </nn-descriptions-item>
-                        <nn-descriptions-item label="IP版本">{{ selectedMessage.ipVersion || '-' }}</nn-descriptions-item>
+                        <nn-descriptions-item label="IP版本">
+                            {{ selectedMessage.ipVersion || '-' }}
+                        </nn-descriptions-item>
                         <nn-descriptions-item label="字节长度">
                             {{ selectedMessage.byteLength ?? '-' }}
                         </nn-descriptions-item>
@@ -105,7 +107,9 @@
                         <nn-descriptions-item label="报文时间">
                             {{ selectedMessage.syslogTimestamp || '-' }}
                         </nn-descriptions-item>
-                        <nn-descriptions-item label="主机名">{{ selectedMessage.hostname || '-' }}</nn-descriptions-item>
+                        <nn-descriptions-item label="主机名">
+                            {{ selectedMessage.hostname || '-' }}
+                        </nn-descriptions-item>
                         <nn-descriptions-item label="应用">{{ selectedMessage.appName || '-' }}</nn-descriptions-item>
                         <nn-descriptions-item label="进程ID">{{ selectedMessage.procId || '-' }}</nn-descriptions-item>
                         <nn-descriptions-item label="MsgID">{{ selectedMessage.msgId || '-' }}</nn-descriptions-item>
@@ -129,7 +133,7 @@
                     </div>
                 </template>
             </nn-spin>
-        </a-drawer>
+        </nn-drawer>
     </div>
 </template>
 
@@ -372,20 +376,20 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -393,20 +397,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -414,12 +418,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

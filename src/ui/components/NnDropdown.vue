@@ -1,16 +1,31 @@
 <template>
-    <span ref="rootRef" class="nn-dropdown" :class="dropdownClass">
-        <span class="nn-dropdown-trigger" @click="handleClick" @contextmenu.prevent="handleContextMenu">
+    <span ref="rootRef" class="nn-dropdown" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave">
+        <span
+            class="nn-dropdown-trigger"
+            :aria-expanded="open ? 'true' : 'false'"
+            @click="handleClick"
+            @contextmenu.prevent="handleContextMenu"
+        >
             <slot />
         </span>
-        <span v-if="open" class="nn-dropdown-popup" @click="handleOverlayClick">
-            <slot name="overlay" />
-        </span>
+        <Teleport to="body">
+            <span
+                v-if="open"
+                ref="popupRef"
+                class="nn-dropdown-popup"
+                :style="popupStyle"
+                @click="handleOverlayClick"
+                @mouseenter="cancelHoverClose"
+                @mouseleave="handleMouseLeave"
+            >
+                <slot name="overlay" />
+            </span>
+        </Teleport>
     </span>
 </template>
 
 <script setup>
-    import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+    import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 
     const props = defineProps({
         trigger: {
@@ -26,18 +41,65 @@
     const emit = defineEmits(['openChange']);
 
     const rootRef = ref(null);
+    const popupRef = ref(null);
     const open = ref(false);
+    const popupPosition = ref({ top: 0, left: 0, minWidth: 120 });
+    let hoverCloseTimer = null;
+    let contextMenuPoint = null;
 
     const normalizedTriggers = computed(() => new Set(props.trigger));
 
-    const dropdownClass = computed(() => ({
-        'nn-dropdown-top-right': props.placement === 'topRight',
-        'nn-dropdown-bottom-right': props.placement === 'bottomRight'
+    const popupStyle = computed(() => ({
+        top: `${popupPosition.value.top}px`,
+        left: `${popupPosition.value.left}px`,
+        minWidth: `${popupPosition.value.minWidth}px`
     }));
+
+    const updatePopupPosition = async () => {
+        await nextTick();
+        const root = rootRef.value;
+        const popup = popupRef.value;
+        if (!root || !popup) return;
+
+        const rootRect = root.getBoundingClientRect();
+        const popupRect = popup.getBoundingClientRect();
+        const viewportMargin = 8;
+        let top;
+        let left;
+
+        if (contextMenuPoint) {
+            top = contextMenuPoint.y;
+            left = contextMenuPoint.x;
+        } else {
+            const placeAbove = props.placement.startsWith('top');
+            const alignRight = props.placement.endsWith('Right');
+            top = placeAbove ? rootRect.top - popupRect.height - 6 : rootRect.bottom + 6;
+            left = alignRight ? rootRect.right - popupRect.width : rootRect.left;
+        }
+
+        if (top + popupRect.height > window.innerHeight - viewportMargin) {
+            top = Math.max(viewportMargin, rootRect.top - popupRect.height - 6);
+        }
+        if (top < viewportMargin) {
+            top = Math.min(window.innerHeight - popupRect.height - viewportMargin, rootRect.bottom + 6);
+        }
+        left = Math.min(
+            Math.max(viewportMargin, left),
+            Math.max(viewportMargin, window.innerWidth - popupRect.width - viewportMargin)
+        );
+
+        popupPosition.value = {
+            top: Math.round(top),
+            left: Math.round(left),
+            minWidth: Math.max(120, Math.round(rootRect.width))
+        };
+    };
 
     const setOpen = nextOpen => {
         open.value = nextOpen;
         emit('openChange', nextOpen);
+        if (nextOpen) updatePopupPosition();
+        else contextMenuPoint = null;
     };
 
     const handleClick = () => {
@@ -46,10 +108,29 @@
         }
     };
 
-    const handleContextMenu = () => {
+    const handleContextMenu = event => {
         if (normalizedTriggers.value.has('contextmenu')) {
+            contextMenuPoint = { x: event.clientX, y: event.clientY };
             setOpen(true);
         }
+    };
+
+    const cancelHoverClose = () => {
+        if (hoverCloseTimer) {
+            clearTimeout(hoverCloseTimer);
+            hoverCloseTimer = null;
+        }
+    };
+
+    const handleMouseEnter = () => {
+        cancelHoverClose();
+        if (normalizedTriggers.value.has('hover')) setOpen(true);
+    };
+
+    const handleMouseLeave = () => {
+        if (!normalizedTriggers.value.has('hover')) return;
+        cancelHoverClose();
+        hoverCloseTimer = setTimeout(() => setOpen(false), 120);
     };
 
     const handleOverlayClick = () => {
@@ -57,17 +138,36 @@
     };
 
     const handleDocumentClick = event => {
-        if (open.value && rootRef.value && !rootRef.value.contains(event.target)) {
+        if (
+            open.value &&
+            rootRef.value &&
+            !rootRef.value.contains(event.target) &&
+            !popupRef.value?.contains(event.target)
+        ) {
+            setOpen(false);
+        }
+    };
+
+    const handleDocumentKeydown = event => {
+        if (open.value && event.key === 'Escape') {
+            event.preventDefault();
             setOpen(false);
         }
     };
 
     onMounted(() => {
         document.addEventListener('click', handleDocumentClick);
+        document.addEventListener('keydown', handleDocumentKeydown);
+        window.addEventListener('resize', updatePopupPosition);
+        window.addEventListener('scroll', updatePopupPosition, true);
     });
 
     onBeforeUnmount(() => {
         document.removeEventListener('click', handleDocumentClick);
+        document.removeEventListener('keydown', handleDocumentKeydown);
+        window.removeEventListener('resize', updatePopupPosition);
+        window.removeEventListener('scroll', updatePopupPosition, true);
+        cancelHoverClose();
     });
 </script>
 
@@ -85,9 +185,7 @@
     }
 
     .nn-dropdown-popup {
-        position: absolute;
-        top: calc(100% + 6px);
-        left: 0;
+        position: fixed;
         z-index: 1050;
         min-width: 120px;
         overflow: hidden;
@@ -97,19 +195,7 @@
         box-shadow: var(--nn-shadow-floating);
     }
 
-    .nn-dropdown-top-right .nn-dropdown-popup {
-        top: auto;
-        right: 0;
-        bottom: calc(100% + 6px);
-        left: auto;
-    }
-
-    .nn-dropdown-bottom-right .nn-dropdown-popup {
-        right: 0;
-        left: auto;
-    }
-
-    .nn-dropdown-popup :deep(.ant-menu) {
+    .nn-dropdown-popup :deep(.nn-menu) {
         min-width: 100%;
         border: 0;
         background: transparent;

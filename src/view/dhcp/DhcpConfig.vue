@@ -4,15 +4,15 @@
         <nn-row class="adaptive-config-row">
             <nn-col :span="24">
                 <nn-card title="DHCP服务器配置">
-                    <a-form :model="dhcpConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
+                    <nn-form :model="dhcpConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
                         <nn-row>
                             <nn-col :span="6">
-                                <a-form-item label="服务器IP">
-                                    <a-input v-model:value="dhcpConfig.serverIp" placeholder="留空自动探测" />
-                                </a-form-item>
+                                <nn-form-item label="服务器IP">
+                                    <nn-input v-model:value="dhcpConfig.serverIp" placeholder="留空自动探测" />
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="6">
-                                <a-form-item label="监听端口">
+                                <nn-form-item label="监听端口">
                                     <nn-tooltip
                                         :title="validationErrors.serverPort"
                                         :open="!!validationErrors.serverPort"
@@ -25,54 +25,60 @@
                                             :status="validationErrors.serverPort ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="6">
-                                <a-form-item label="子网掩码">
+                                <nn-form-item label="子网掩码">
                                     <nn-tooltip
                                         :title="validationErrors.subnetMask"
                                         :open="!!validationErrors.subnetMask"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="dhcpConfig.subnetMask"
                                             placeholder="255.255.255.0"
                                             :status="validationErrors.subnetMask ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="6">
-                                <a-form-item label="网关">
-                                    <a-input v-model:value="dhcpConfig.gateway" placeholder="192.168.1.1" />
-                                </a-form-item>
+                                <nn-form-item label="网关">
+                                    <nn-input v-model:value="dhcpConfig.gateway" placeholder="192.168.1.1" />
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="8">
-                                <a-form-item label="IP池起始">
-                                    <nn-tooltip :title="validationErrors.poolStart" :open="!!validationErrors.poolStart">
-                                        <a-input
+                                <nn-form-item label="IP池起始">
+                                    <nn-tooltip
+                                        :title="validationErrors.poolStart"
+                                        :open="!!validationErrors.poolStart"
+                                    >
+                                        <nn-input
                                             v-model:value="dhcpConfig.poolStart"
                                             placeholder="192.168.1.100"
                                             :status="validationErrors.poolStart ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="IP池结束">
+                                <nn-form-item label="IP池结束">
                                     <nn-tooltip :title="validationErrors.poolEnd" :open="!!validationErrors.poolEnd">
-                                        <a-input
+                                        <nn-input
                                             v-model:value="dhcpConfig.poolEnd"
                                             placeholder="192.168.1.200"
                                             :status="validationErrors.poolEnd ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="租约时间(秒)">
-                                    <nn-tooltip :title="validationErrors.leaseTime" :open="!!validationErrors.leaseTime">
+                                <nn-form-item label="租约时间(秒)">
+                                    <nn-tooltip
+                                        :title="validationErrors.leaseTime"
+                                        :open="!!validationErrors.leaseTime"
+                                    >
                                         <nn-input-number
                                             v-model:value="dhcpConfig.leaseTime"
                                             :min="60"
@@ -81,22 +87,22 @@
                                             :status="validationErrors.leaseTime ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="8">
-                                <a-form-item label="DNS服务器1">
-                                    <a-input v-model:value="dhcpConfig.dns1" placeholder="8.8.8.8" />
-                                </a-form-item>
+                                <nn-form-item label="DNS服务器1">
+                                    <nn-input v-model:value="dhcpConfig.dns1" placeholder="8.8.8.8" />
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="DNS服务器2">
-                                    <a-input v-model:value="dhcpConfig.dns2" placeholder="8.8.4.4" />
-                                </a-form-item>
+                                <nn-form-item label="DNS服务器2">
+                                    <nn-input v-model:value="dhcpConfig.dns2" placeholder="8.8.4.4" />
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
-                    </a-form>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>
@@ -105,20 +111,20 @@
         <nn-row class="adaptive-config-fill-row">
             <nn-col :span="24">
                 <nn-card title="DHCPv6配置" class="adaptive-config-fill-card">
-                    <a-form :model="dhcp6Config" :label-col="labelCol" :wrapper-col="wrapperCol">
+                    <nn-form :model="dhcp6Config" :label-col="labelCol" :wrapper-col="wrapperCol">
                         <nn-row>
                             <nn-col :span="6">
-                                <a-form-item label="IPv6池起始">
-                                    <a-input v-model:value="dhcp6Config.poolStart" placeholder="2001:db8::100" />
-                                </a-form-item>
+                                <nn-form-item label="IPv6池起始">
+                                    <nn-input v-model:value="dhcp6Config.poolStart" placeholder="2001:db8::100" />
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="6">
-                                <a-form-item label="IPv6池结束">
-                                    <a-input v-model:value="dhcp6Config.poolEnd" placeholder="2001:db8::1ff" />
-                                </a-form-item>
+                                <nn-form-item label="IPv6池结束">
+                                    <nn-input v-model:value="dhcp6Config.poolEnd" placeholder="2001:db8::1ff" />
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="6">
-                                <a-form-item label="监听端口">
+                                <nn-form-item label="监听端口">
                                     <nn-tooltip
                                         :title="validationErrors.v6ServerPort"
                                         :open="!!validationErrors.v6ServerPort"
@@ -131,39 +137,39 @@
                                             :status="validationErrors.v6ServerPort ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="6">
-                                <a-form-item label="首选生命周期">
+                                <nn-form-item label="首选生命周期">
                                     <nn-input-number
                                         v-model:value="dhcp6Config.preferredLifetime"
                                         :min="60"
                                         style="width: 100%"
                                         addon-after="秒"
                                     />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <nn-row>
                             <nn-col :span="8">
-                                <a-form-item label="有效生命周期">
+                                <nn-form-item label="有效生命周期">
                                     <nn-input-number
                                         v-model:value="dhcp6Config.validLifetime"
                                         :min="60"
                                         style="width: 100%"
                                         addon-after="秒"
                                     />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="DNS服务器1">
-                                    <a-input v-model:value="dhcp6Config.dns1" placeholder="2001:4860:4860::8888" />
-                                </a-form-item>
+                                <nn-form-item label="DNS服务器1">
+                                    <nn-input v-model:value="dhcp6Config.dns1" placeholder="2001:4860:4860::8888" />
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="DNS服务器2">
-                                    <a-input v-model:value="dhcp6Config.dns2" placeholder="2001:4860:4860::8844" />
-                                </a-form-item>
+                                <nn-form-item label="DNS服务器2">
+                                    <nn-input v-model:value="dhcp6Config.dns2" placeholder="2001:4860:4860::8844" />
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
                         <div style="margin-top: 8px; color: var(--nn-color-text-muted)">
@@ -184,7 +190,7 @@
                                 </nn-button>
                             </nn-space>
                         </div>
-                    </a-form>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>

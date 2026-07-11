@@ -29,20 +29,20 @@
             <!-- 筛选器 -->
             <nn-row :gutter="16" class="filter-row">
                 <nn-col :span="6">
-                    <a-select
+                    <nn-select
                         v-model:value="filters.version"
                         placeholder="选择SNMP版本"
                         allow-clear
                         style="width: 100%"
                         @change="handleFilterChange"
                     >
-                        <a-select-option value="v1">SNMPv1</a-select-option>
-                        <a-select-option value="v2c">SNMPv2c</a-select-option>
-                        <a-select-option value="v3">SNMPv3</a-select-option>
-                    </a-select>
+                        <nn-select-option value="v1">SNMPv1</nn-select-option>
+                        <nn-select-option value="v2c">SNMPv2c</nn-select-option>
+                        <nn-select-option value="v3">SNMPv3</nn-select-option>
+                    </nn-select>
                 </nn-col>
                 <nn-col :span="6">
-                    <a-input
+                    <nn-input
                         v-model:value="filters.sourceIp"
                         placeholder="源IP地址"
                         allow-clear
@@ -50,7 +50,7 @@
                     />
                 </nn-col>
                 <nn-col :span="6">
-                    <a-input
+                    <nn-input
                         v-model:value="filters.community"
                         placeholder="Community"
                         allow-clear
@@ -58,7 +58,7 @@
                     />
                 </nn-col>
                 <nn-col :span="6">
-                    <a-range-picker
+                    <nn-range-picker
                         v-model:value="filters.timeRange"
                         show-time
                         format="YYYY-MM-DD HH:mm:ss"
@@ -69,7 +69,7 @@
             </nn-row>
 
             <!-- Trap列表表格 -->
-            <a-table
+            <nn-table
                 :columns="columns"
                 :data-source="traps"
                 :loading="loading"
@@ -102,11 +102,11 @@
                         </nn-space>
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </nn-card>
 
         <!-- Trap详情模态框 -->
-        <a-modal
+        <nn-modal
             v-model:open="detailModalVisible"
             title="Trap 详情"
             :footer="null"
@@ -163,7 +163,7 @@
 
                 <!-- 变量绑定 -->
                 <div class="trap-detail-section-title">变量绑定 (Variable Bindings)</div>
-                <a-table
+                <nn-table
                     :columns="varbindColumns"
                     :data-source="selectedTrap.varbinds || []"
                     size="small"
@@ -182,9 +182,9 @@
                             </div>
                         </template>
                     </template>
-                </a-table>
+                </nn-table>
             </div>
-        </a-modal>
+        </nn-modal>
     </div>
 </template>
 
@@ -660,21 +660,21 @@
         overflow: hidden;
     }
 
-    .trap-list-table :deep(.ant-spin-nested-loading),
-    .trap-list-table :deep(.ant-spin-container) {
+    .trap-list-table :deep(.nn-spin-nested-loading),
+    .trap-list-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
         height: 100%;
         min-height: 0;
     }
 
-    .trap-list-table :deep(.ant-table) {
+    .trap-list-table :deep(.nn-table) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
     }
 
-    .trap-list-table :deep(.ant-table-body) {
+    .trap-list-table :deep(.nn-table-body) {
         height: calc(100vh - 350px) !important;
         overflow-y: auto !important;
     }
@@ -715,17 +715,17 @@
         min-height: 0;
     }
 
-    .varbind-detail-table :deep(.ant-table-body) {
+    .varbind-detail-table :deep(.nn-table-body) {
         height: 180px !important;
         overflow-y: auto !important;
     }
 
     @media (max-height: 760px) {
-        .trap-list-table :deep(.ant-table-body) {
+        .trap-list-table :deep(.nn-table-body) {
             height: calc(100vh - 365px) !important;
         }
 
-        .varbind-detail-table :deep(.ant-table-body) {
+        .varbind-detail-table :deep(.nn-table-body) {
             height: 150px !important;
         }
     }

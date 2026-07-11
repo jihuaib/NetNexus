@@ -2,6 +2,7 @@
     <div class="nn-tabs" :class="tabsClass">
         <div
             class="nn-tabs-nav"
+            :style="tabBarStyle"
             role="tablist"
             :aria-orientation="tabPosition === 'left' ? 'vertical' : 'horizontal'"
         >
@@ -10,6 +11,7 @@
                     <button
                         v-for="tabPane in panes"
                         :key="String(tabPane.key)"
+                        :id="tabPane.buttonId"
                         type="button"
                         class="nn-tabs-tab"
                         :class="{ 'nn-tabs-tab-active': isPaneActive(tabPane) }"
@@ -18,6 +20,7 @@
                         :aria-selected="isPaneActive(tabPane) ? 'true' : 'false'"
                         :aria-controls="tabPane.panelId"
                         @click="selectPane(tabPane)"
+                        @keydown="handleTabKeydown($event, tabPane)"
                     >
                         <span class="nn-tabs-tab-button">{{ tabPane.tab }}</span>
                     </button>
@@ -58,6 +61,10 @@
         type: {
             type: String,
             default: 'line'
+        },
+        tabBarStyle: {
+            type: [Object, String],
+            default: undefined
         }
     });
 
@@ -65,12 +72,8 @@
 
     const slots = useSlots();
     const internalActiveKey = ref(undefined);
-    const hasControlledActiveKey = computed(
-        () => props.activeKey !== undefined && props.activeKey !== null
-    );
-    const currentActiveKey = computed(() =>
-        hasControlledActiveKey.value ? props.activeKey : internalActiveKey.value
-    );
+    const hasControlledActiveKey = computed(() => props.activeKey !== undefined && props.activeKey !== null);
+    const currentActiveKey = computed(() => (hasControlledActiveKey.value ? props.activeKey : internalActiveKey.value));
 
     const tabsClass = computed(() => ({
         'nn-tabs-small': props.size === 'small',
@@ -95,6 +98,7 @@
                 key,
                 tab: vnode.props?.tab ?? '',
                 disabled: Boolean(vnode.props?.disabled),
+                buttonId: `nn-tab-button-${String(key)}-${index}`,
                 panelId: `nn-tab-panel-${String(key)}-${index}`,
                 vnode
             };
@@ -111,6 +115,29 @@
         internalActiveKey.value = pane.key;
         emit('update:activeKey', pane.key);
         emit('change', pane.key);
+    };
+
+    const handleTabKeydown = (event, pane) => {
+        const enabledPanes = panes.value.filter(item => !item.disabled);
+        const currentIndex = enabledPanes.findIndex(item => item.key === pane.key);
+        if (currentIndex < 0) {
+            return;
+        }
+
+        const previousKey = props.tabPosition === 'left' ? 'ArrowUp' : 'ArrowLeft';
+        const nextKey = props.tabPosition === 'left' ? 'ArrowDown' : 'ArrowRight';
+        let nextIndex = currentIndex;
+
+        if (event.key === previousKey) nextIndex = (currentIndex - 1 + enabledPanes.length) % enabledPanes.length;
+        else if (event.key === nextKey) nextIndex = (currentIndex + 1) % enabledPanes.length;
+        else if (event.key === 'Home') nextIndex = 0;
+        else if (event.key === 'End') nextIndex = enabledPanes.length - 1;
+        else return;
+
+        event.preventDefault();
+        const nextPane = enabledPanes[nextIndex];
+        selectPane(nextPane);
+        document.getElementById(nextPane.buttonId)?.focus();
     };
 
     const ensureActivePane = nextPanes => {
@@ -152,7 +179,8 @@
             return () =>
                 cloneVNode(rendererProps.pane.vnode, {
                     active: rendererProps.active,
-                    panelId: rendererProps.pane.panelId
+                    panelId: rendererProps.pane.panelId,
+                    ariaLabelledby: rendererProps.pane.buttonId
                 });
         }
     });

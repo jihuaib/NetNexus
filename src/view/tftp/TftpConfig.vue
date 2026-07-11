@@ -3,10 +3,10 @@
         <nn-row class="adaptive-config-row">
             <nn-col :span="24">
                 <nn-card title="TFTP服务器配置">
-                    <a-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
+                    <nn-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
                         <nn-row :gutter="24">
                             <nn-col :span="8">
-                                <a-form-item label="监听端口">
+                                <nn-form-item label="监听端口">
                                     <nn-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
                                         <nn-input-number
                                             v-model:value="formData.port"
@@ -16,13 +16,13 @@
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="16">
-                                <a-form-item label="根目录">
+                                <nn-form-item label="根目录">
                                     <nn-tooltip :title="validationErrors.rootDir" :open="!!validationErrors.rootDir">
-                                        <a-input-group compact>
-                                            <a-input
+                                        <nn-input-group compact>
+                                            <nn-input
                                                 v-model:value="formData.rootDir"
                                                 :status="validationErrors.rootDir ? 'error' : ''"
                                                 style="width: calc(100% - 40px)"
@@ -32,16 +32,19 @@
                                             <nn-button type="primary" @click="selectDirectory">
                                                 <folder-outlined />
                                             </nn-button>
-                                        </a-input-group>
+                                        </nn-input-group>
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
                         <nn-row :gutter="24">
                             <nn-col :span="8">
-                                <a-form-item label="块大小">
-                                    <nn-tooltip :title="validationErrors.blockSize" :open="!!validationErrors.blockSize">
+                                <nn-form-item label="块大小">
+                                    <nn-tooltip
+                                        :title="validationErrors.blockSize"
+                                        :open="!!validationErrors.blockSize"
+                                    >
                                         <nn-input-number
                                             v-model:value="formData.blockSize"
                                             :min="8"
@@ -51,10 +54,10 @@
                                             :status="validationErrors.blockSize ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="超时时间">
+                                <nn-form-item label="超时时间">
                                     <nn-tooltip :title="validationErrors.timeout" :open="!!validationErrors.timeout">
                                         <nn-input-number
                                             v-model:value="formData.timeout"
@@ -65,10 +68,10 @@
                                             :status="validationErrors.timeout ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="重传次数">
+                                <nn-form-item label="重传次数">
                                     <nn-tooltip :title="validationErrors.retries" :open="!!validationErrors.retries">
                                         <nn-input-number
                                             v-model:value="formData.retries"
@@ -78,20 +81,20 @@
                                             :status="validationErrors.retries ? 'error' : ''"
                                         />
                                     </nn-tooltip>
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
                         <nn-row :gutter="24">
                             <nn-col :span="8">
-                                <a-form-item label="允许读取(下载)">
+                                <nn-form-item label="允许读取(下载)">
                                     <nn-switch v-model:checked="formData.allowRead" />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                             <nn-col :span="8">
-                                <a-form-item label="允许写入(上传)">
+                                <nn-form-item label="允许写入(上传)">
                                     <nn-switch v-model:checked="formData.allowWrite" />
-                                </a-form-item>
+                                </nn-form-item>
                             </nn-col>
                         </nn-row>
 
@@ -115,7 +118,7 @@
                                 </nn-button>
                             </nn-space>
                         </div>
-                    </a-form>
+                    </nn-form>
                 </nn-card>
             </nn-col>
         </nn-row>

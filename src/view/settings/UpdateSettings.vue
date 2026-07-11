@@ -31,19 +31,19 @@
             <!-- 自动更新设置 -->
             <nn-divider>自动更新设置</nn-divider>
             <div class="auto-update-settings">
-                <a-form layout="vertical">
-                    <a-form-item label="启动时检查更新">
+                <nn-form layout="vertical">
+                    <nn-form-item label="启动时检查更新">
                         <nn-switch
                             v-model:checked="updateSettings.autoCheckOnStartup"
                             @change="saveAutoUpdateSettings"
                         />
                         <div class="setting-description">启用后，应用启动时会自动检查更新</div>
-                    </a-form-item>
-                    <a-form-item label="自动下载更新">
+                    </nn-form-item>
+                    <nn-form-item label="自动下载更新">
                         <nn-switch v-model:checked="updateSettings.autoDownload" @change="saveAutoUpdateSettings" />
                         <div class="setting-description">启用后，发现更新时会自动下载（仍需手动安装）</div>
-                    </a-form-item>
-                </a-form>
+                    </nn-form-item>
+                </nn-form>
             </div>
         </nn-card>
     </div>
@@ -288,7 +288,7 @@
         font-weight: 500;
     }
 
-    :deep(.ant-form-item-label > label) {
+    :deep(.nn-form-item-label > label) {
         font-size: 12px;
     }
 </style>
