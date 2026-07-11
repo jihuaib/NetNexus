@@ -175,7 +175,9 @@
                     <template #bodyCell="{ column, record }">
                         <template v-if="column.key === 'value'">
                             <div class="varbind-value">
-                                <a-typography-text copyable>{{ record.value }}</a-typography-text>
+                                <a-typography-text copyable>
+                                    {{ record.displayValue ?? record.value }}
+                                </a-typography-text>
                                 <div v-if="record.valueName" class="varbind-value-name">
                                     {{ record.valueName }}
                                 </div>

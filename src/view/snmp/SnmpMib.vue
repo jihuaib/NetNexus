@@ -349,7 +349,7 @@
                 </a-descriptions-item>
                 <a-descriptions-item label="值">
                     <a-typography-text copyable>
-                        {{ getResult.value }}
+                        {{ getResult.displayValue ?? getResult.value }}
                     </a-typography-text>
                 </a-descriptions-item>
             </a-descriptions>
@@ -461,8 +461,8 @@
                         </div>
                     </template>
                     <template v-else-if="column.key === 'value'">
-                        <a-tooltip :title="record.value">
-                            <span class="instance-value">{{ record.value || '-' }}</span>
+                        <a-tooltip :title="getVarbindDisplayValue(record)">
+                            <span class="instance-value">{{ getVarbindDisplayValue(record) }}</span>
                         </a-tooltip>
                     </template>
                     <template v-else-if="column.key === 'action'">
@@ -1100,6 +1100,26 @@
         return appendInstanceSuffix(getNodeDisplayName(node), suffix);
     };
 
+    const getVarbindDisplayValue = varbind => {
+        const value = varbind?.displayValue ?? varbind?.value;
+        return value === undefined || value === null || value === '' ? '-' : value;
+    };
+
+    const getEnumerationPresentation = (value, enumValues = {}) => {
+        if (value === undefined || value === null || !enumValues || typeof enumValues !== 'object') {
+            return {};
+        }
+
+        const rawValue = String(value).trim();
+        const enumName = Object.prototype.hasOwnProperty.call(enumValues, rawValue) ? enumValues[rawValue] : '';
+        return enumName
+            ? {
+                  enumName,
+                  displayValue: `${enumName} (${rawValue})`
+              }
+            : {};
+    };
+
     const getWalkRowObjectName = record => getVarbindObjectName(record);
 
     const formatWalkTextValue = value => {
@@ -1116,7 +1136,7 @@
                     `#${row.index || index + 1} ${getWalkRowObjectName(row)}`,
                     `OID   : ${row.oid || '-'}`,
                     `TYPE  : ${row.type || '-'}`,
-                    `VALUE : ${formatWalkTextValue(row.value)}`
+                    `VALUE : ${formatWalkTextValue(row.displayValue ?? row.value)}`
                 ].join('\n')
             )
             .join('\n\n')
@@ -1140,7 +1160,8 @@
                 oidObject: info.objectName || '',
                 oidPath: info.pathName || '',
                 oidInstance: info.instanceSuffix || '',
-                oidMatched: Boolean(info.matched)
+                oidMatched: Boolean(info.matched),
+                ...getEnumerationPresentation(varbind.value, info.enumValues)
             };
         } catch (error) {
             return varbind;
@@ -1674,7 +1695,8 @@
             }
 
             const rows = Array.isArray(result.data?.rows) ? result.data.rows : [];
-            instanceRows.value = rows.map(row => ({
+            const enrichedRows = await enrichResultRows(rows);
+            instanceRows.value = enrichedRows.map(row => ({
                 ...row,
                 value: row.value === undefined || row.value === null ? '' : String(row.value)
             }));
@@ -1817,8 +1839,10 @@
             if (result.status === 'success') {
                 setModalOpen.value = false;
                 const varbind = result.data?.varbinds?.[0];
+                const enrichedVarbind = await enrichResultVarbind(varbind);
                 const objectText = getRequestObjectName(setTargetNode.value, setForm.oid);
-                message.success(`SET成功: ${objectText}${varbind?.value !== undefined ? ` = ${varbind.value}` : ''}`);
+                const value = enrichedVarbind?.displayValue ?? enrichedVarbind?.value;
+                message.success(`SET成功: ${objectText}${value !== undefined ? ` = ${value}` : ''}`);
                 return;
             }
 
