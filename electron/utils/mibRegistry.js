@@ -5,7 +5,7 @@ const logger = require('../log/logger');
 const { formatSnmpValue } = require('./snmpValueFormatter');
 
 const MIB_FILE_EXTENSIONS = new Set(['.mib', '.txt', '.my', '']);
-const MIB_CACHE_SCHEMA_VERSION = 1;
+const MIB_CACHE_SCHEMA_VERSION = 2;
 
 class MibRegistry {
     constructor() {
@@ -22,6 +22,7 @@ class MibRegistry {
         this.cachedModuleNames = null;
         this.cachedBaseModuleNames = null;
         this.cacheHit = false;
+        this.activeSourceState = null;
         this.rebuildOidIndex();
     }
 
@@ -32,18 +33,81 @@ class MibRegistry {
             return this.getSummary();
         }
 
-        if (!options.force && options.cacheFilePath && this.loadCacheIfValid(requestedPaths, options.cacheFilePath)) {
+        const sourceState = options.force ? null : this.captureMibSourceState(requestedPaths, options.cacheFilePath);
+        if (!options.force && sourceState && this.isActiveSourceState(sourceState)) {
             return this.getSummary();
         }
 
+        if (
+            !options.force &&
+            options.cacheFilePath &&
+            this.loadCacheIfValid(requestedPaths, options.cacheFilePath, sourceState)
+        ) {
+            const restoredSourceState = this.captureMibSourceState(requestedPaths, options.cacheFilePath);
+            if (this.areMibSourceStatesEqual(sourceState, restoredSourceState)) {
+                this.activeSourceState = restoredSourceState;
+                return this.getSummary();
+            }
+        }
+
         const summary = this.compileMibFiles(requestedPaths);
+        const compiledSourceState = this.captureMibSourceState(requestedPaths, options.cacheFilePath);
         if (options.cacheFilePath) {
-            this.saveCache(options.cacheFilePath, requestedPaths);
+            this.saveCache(options.cacheFilePath, requestedPaths, compiledSourceState);
+        }
+        const activeSourceState = this.captureMibSourceState(requestedPaths, options.cacheFilePath);
+        if (activeSourceState) {
+            this.activeSourceState = activeSourceState;
         }
         return summary;
     }
 
     compileMibFiles(filePaths = []) {
+        const requestedPaths = this.normalizeFilePaths(filePaths);
+
+        try {
+            return this.compileMibFilesInBatch(requestedPaths);
+        } catch (error) {
+            logger.warn('MIB批量编译失败，回退逐文件编译:', error.message);
+            return this.compileMibFilesSequential(requestedPaths);
+        }
+    }
+
+    compileMibFilesInBatch(filePaths = []) {
+        const requestedPaths = this.normalizeFilePaths(filePaths);
+        this.reset();
+        this.compiledFiles = requestedPaths;
+
+        if (requestedPaths.length === 0) {
+            return this.getSummary();
+        }
+
+        const expansion = this.expandInputPaths(requestedPaths);
+        const metadata = this.buildFileMetadata(expansion.files);
+        if (!this.canBatchLoadMibFiles(expansion.files, metadata)) {
+            return this.compileMibFilesSequential(requestedPaths);
+        }
+
+        const plan = this.createMibLoadPlan(expansion, metadata);
+        if (plan.loadOrder.length > 0) {
+            this.loadFromFilesInBatch(plan.loadOrder);
+        }
+
+        this.loadedFiles = plan.loadOrder;
+        this.failedFiles = [
+            ...plan.failed,
+            ...plan.pending.map(filePath => ({
+                filePath,
+                fileName: path.basename(filePath),
+                msg: this.getWaitingDependencyMessage(metadata.get(filePath), plan.loadedModuleNames)
+            }))
+        ];
+
+        this.rebuildOidIndex();
+        return this.getSummary();
+    }
+
+    compileMibFilesSequential(filePaths = []) {
         const requestedPaths = this.normalizeFilePaths(filePaths);
         this.reset();
         this.compiledFiles = requestedPaths;
@@ -134,7 +198,57 @@ class MibRegistry {
         return this.getSummary();
     }
 
-    loadCacheIfValid(requestedPaths, cacheFilePath) {
+    createMibLoadPlan(expansion, metadata) {
+        const knownModules = this.getKnownModuleNames(metadata);
+        const baseModules = new Set(this.getModuleNames(true));
+        const loadedModuleNames = new Set(baseModules);
+        const pending = [...expansion.files];
+        const loadOrder = [];
+        const failed = [...expansion.failedPaths];
+        let progressed = true;
+
+        while (pending.length > 0 && progressed) {
+            progressed = false;
+
+            for (let i = pending.length - 1; i >= 0; i--) {
+                const filePath = pending[i];
+                const fileMeta = metadata.get(filePath);
+                const unknownImports = fileMeta.imports.filter(
+                    moduleName => !baseModules.has(moduleName) && !knownModules.has(moduleName)
+                );
+                if (unknownImports.length > 0) {
+                    failed.push({
+                        filePath,
+                        fileName: path.basename(filePath),
+                        msg: `缺少依赖MIB: ${unknownImports.join(', ')}`
+                    });
+                    pending.splice(i, 1);
+                    continue;
+                }
+
+                const waitingImports = fileMeta.imports.filter(moduleName => !loadedModuleNames.has(moduleName));
+                if (waitingImports.length > 0) {
+                    continue;
+                }
+
+                loadOrder.push(filePath);
+                if (fileMeta.moduleName) {
+                    loadedModuleNames.add(fileMeta.moduleName);
+                }
+                pending.splice(i, 1);
+                progressed = true;
+            }
+        }
+
+        return {
+            loadOrder,
+            failed,
+            pending,
+            loadedModuleNames
+        };
+    }
+
+    loadCacheIfValid(requestedPaths, cacheFilePath, sourceState = null) {
         try {
             if (!cacheFilePath || !fs.existsSync(cacheFilePath)) {
                 return false;
@@ -149,13 +263,12 @@ class MibRegistry {
                 return false;
             }
 
-            const expansion = this.expandInputPaths(requestedPaths);
-            if (expansion.failedPaths.length > 0) {
+            const currentSourceState = sourceState || this.captureMibSourceState(requestedPaths, cacheFilePath);
+            if (!currentSourceState) {
                 return false;
             }
 
-            const currentSignatures = this.getFileSignatures(expansion.files);
-            if (!this.areFileSignaturesEqual(currentSignatures, cache.fileSignatures || [])) {
+            if (!this.areFileSignaturesEqual(currentSourceState.fileSignatures, cache.fileSignatures || [])) {
                 return false;
             }
 
@@ -168,14 +281,14 @@ class MibRegistry {
         }
     }
 
-    saveCache(cacheFilePath, requestedPaths) {
+    saveCache(cacheFilePath, requestedPaths, sourceState = null) {
         try {
-            const expansion = this.expandInputPaths(requestedPaths);
+            const expansion = sourceState ? null : this.expandInputPaths(requestedPaths);
             const cache = {
                 version: MIB_CACHE_SCHEMA_VERSION,
                 createdAt: new Date().toISOString(),
                 requestedFiles: requestedPaths,
-                fileSignatures: this.getFileSignatures(expansion.files),
+                fileSignatures: sourceState ? sourceState.fileSignatures : this.getFileSignatures(expansion.files),
                 snapshot: this.buildSnapshot()
             };
 
@@ -238,6 +351,57 @@ class MibRegistry {
         } catch (error) {
             return null;
         }
+    }
+
+    captureMibSourceState(requestedPaths, cacheFilePath = '') {
+        const expansion = this.expandInputPaths(requestedPaths);
+        if (expansion.failedPaths.length > 0) {
+            return null;
+        }
+
+        const fileSignatures = this.getFileSignatures(expansion.files);
+        if (fileSignatures.length !== expansion.files.length) {
+            return null;
+        }
+
+        return {
+            requestedPaths: [...requestedPaths],
+            fileSignatures,
+            cacheFilePath,
+            cacheFileSignature: cacheFilePath ? this.getFileSignature(cacheFilePath) : null
+        };
+    }
+
+    isActiveSourceState(sourceState) {
+        return this.areMibSourceStatesEqual(this.activeSourceState, sourceState);
+    }
+
+    areMibSourceStatesEqual(left, right) {
+        if (!left || !right) {
+            return false;
+        }
+
+        if (left.cacheFilePath !== right.cacheFilePath) {
+            return false;
+        }
+
+        if (!this.areFileListsEqual(left.requestedPaths, right.requestedPaths)) {
+            return false;
+        }
+
+        if (!this.areFileSignaturesEqual(left.fileSignatures, right.fileSignatures)) {
+            return false;
+        }
+
+        return this.areOptionalFileSignaturesEqual(left.cacheFileSignature, right.cacheFileSignature);
+    }
+
+    areOptionalFileSignaturesEqual(left, right) {
+        if (!left || !right) {
+            return left === right;
+        }
+
+        return left.filePath === right.filePath && left.size === right.size && left.mtimeMs === right.mtimeMs;
     }
 
     areFileSignaturesEqual(left = [], right = []) {
@@ -339,6 +503,51 @@ class MibRegistry {
             }
         }
         return names;
+    }
+
+    canBatchLoadMibFiles(filePaths, metadata) {
+        const parser = this.store?.parser;
+        if (
+            !parser ||
+            typeof parser.Import !== 'function' ||
+            typeof parser.Serialize !== 'function' ||
+            typeof this.store.addTranslationsForModule !== 'function'
+        ) {
+            return false;
+        }
+
+        const moduleNames = new Set(this.getModuleNames(true));
+        const parserFileNames = new Set();
+        return filePaths.every(filePath => {
+            const fileMeta = metadata.get(filePath);
+            const moduleName = fileMeta?.moduleName;
+            const parserFileName = path.basename(filePath, path.extname(filePath));
+            if (
+                !moduleName ||
+                fileMeta.parseError ||
+                moduleNames.has(moduleName) ||
+                parserFileNames.has(parserFileName)
+            ) {
+                return false;
+            }
+
+            moduleNames.add(moduleName);
+            parserFileNames.add(parserFileName);
+            return true;
+        });
+    }
+
+    loadFromFilesInBatch(filePaths) {
+        const modulesBeforeLoad = new Set(this.getModuleNames(true));
+        return this.withSuppressedConsole(() => {
+            filePaths.forEach(filePath => this.store.parser.Import(filePath));
+            this.store.parser.Serialize();
+            this.getModuleNames(true).forEach(moduleName => {
+                if (!modulesBeforeLoad.has(moduleName)) {
+                    this.store.addTranslationsForModule(moduleName);
+                }
+            });
+        });
     }
 
     loadFromFile(filePath) {
@@ -462,16 +671,19 @@ class MibRegistry {
         this.oidIndex.clear();
 
         const modules = this.getModules(true);
+        const syntaxTypes = this.getSyntaxTypes();
         Object.entries(modules).forEach(([moduleName, module]) => {
             Object.entries(module || {}).forEach(([objectName, definition]) => {
                 if (!definition || typeof definition !== 'object' || !definition.OID) {
                     return;
                 }
 
+                const enumValues = this.getEnumerationValues(definition.SYNTAX, syntaxTypes);
                 this.oidIndex.set(definition.OID, {
                     ...definition,
                     ModuleName: definition.ModuleName || moduleName,
-                    ObjectName: definition.ObjectName || objectName
+                    ObjectName: definition.ObjectName || objectName,
+                    ...(Object.keys(enumValues).length > 0 ? { EnumValues: enumValues } : {})
                 });
             });
         });
@@ -503,6 +715,60 @@ class MibRegistry {
             logger.error('获取MIB模块失败:', error);
             return {};
         }
+    }
+
+    getSyntaxTypes() {
+        try {
+            return this.store.getSyntaxTypes() || {};
+        } catch (error) {
+            logger.warn('获取MIB语法类型失败:', error.message);
+            return {};
+        }
+    }
+
+    getEnumerationValues(syntax, syntaxTypes = {}, visitedTypes = new Set()) {
+        if (typeof syntax === 'string') {
+            if (visitedTypes.has(syntax) || !syntaxTypes[syntax]) {
+                return {};
+            }
+
+            visitedTypes.add(syntax);
+            return this.getEnumerationValues(syntaxTypes[syntax], syntaxTypes, visitedTypes);
+        }
+
+        if (!syntax || typeof syntax !== 'object' || Array.isArray(syntax)) {
+            return {};
+        }
+
+        for (const integerSyntax of ['INTEGER', 'Integer32']) {
+            const enumValues = this.normalizeEnumerationValues(syntax[integerSyntax]);
+            if (Object.keys(enumValues).length > 0) {
+                return enumValues;
+            }
+        }
+
+        return this.normalizeEnumerationValues(syntax);
+    }
+
+    normalizeEnumerationValues(values) {
+        if (!values || typeof values !== 'object' || Array.isArray(values)) {
+            return {};
+        }
+
+        return Object.fromEntries(
+            Object.entries(values)
+                .filter(([value, name]) => /^-?\d+$/.test(value) && typeof name === 'string' && name.length > 0)
+                .map(([value, name]) => [value, name])
+        );
+    }
+
+    getEnumerationName(enumValues, value) {
+        if (!enumValues || value === null || value === undefined) {
+            return '';
+        }
+
+        const normalizedValue = String(value).trim();
+        return Object.prototype.hasOwnProperty.call(enumValues, normalizedValue) ? enumValues[normalizedValue] : '';
     }
 
     getModuleNames(includeBase = false) {
@@ -803,6 +1069,7 @@ class MibRegistry {
             pathName,
             macro: match.definition.MACRO || null,
             syntax: this.formatSyntax(match.definition.SYNTAX),
+            enumValues: match.definition.EnumValues || {},
             maxAccess: match.definition['MAX-ACCESS'] || match.definition.ACCESS || null,
             status: match.definition.STATUS || null,
             description: match.definition.DESCRIPTION || null,
@@ -819,6 +1086,7 @@ class MibRegistry {
         const formattedValue = formatSnmpValue(varbind.value);
         const value = formattedValue.value;
         const valueInfo = this.shouldTranslateValue(rawType, value) ? this.translateOid(value) : null;
+        const enumName = this.getEnumerationName(oidInfo.enumValues, value);
 
         return {
             ...varbind,
@@ -835,7 +1103,13 @@ class MibRegistry {
             oidInstance: oidInfo.instanceSuffix || '',
             oidMatched: oidInfo.matched,
             valueName: valueInfo?.moduleQualifiedName || '',
-            valuePath: valueInfo?.pathName || ''
+            valuePath: valueInfo?.pathName || '',
+            ...(enumName
+                ? {
+                      enumName,
+                      displayValue: `${enumName} (${value})`
+                  }
+                : {})
         };
     }
 
