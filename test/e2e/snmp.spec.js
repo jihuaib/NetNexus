@@ -47,4 +47,55 @@ test.describe('SNMP pages', () => {
         await page.getByRole('tab', { name: 'Trap监控', exact: true }).click();
         await expect(page).toHaveURL(/#\/snmp\/snmp-trap$/u);
     });
+
+    test('keeps disabled MIB context actions visible and the menu inside the viewport', async ({ page }) => {
+        await page.setViewportSize({ width: 900, height: 520 });
+        await page.goto('/#/snmp/snmp-mib');
+
+        const treeNode = page.locator('.mib-tree-scroll .nn-tree-node').filter({ hasText: 'sysDescr' });
+        await expect(treeNode).toBeVisible();
+        await treeNode.evaluate(element => {
+            element.dispatchEvent(
+                new MouseEvent('contextmenu', {
+                    clientX: 896,
+                    clientY: 516,
+                    button: 2,
+                    buttons: 2,
+                    bubbles: true,
+                    cancelable: true
+                })
+            );
+        });
+
+        const contextMenu = page.locator('.mib-context-menu');
+        await expect(contextMenu).toBeVisible();
+        await expect(contextMenu.getByRole('menuitem')).toHaveCount(7);
+        await expect(contextMenu.getByRole('menuitem')).toHaveText([
+            '复制OID',
+            '解析OID',
+            'GET 查询',
+            'GET-NEXT 查询',
+            'WALK 查询',
+            'SET 设置',
+            'Trap变量'
+        ]);
+
+        const getItem = contextMenu.getByRole('menuitem', { name: 'GET 查询', exact: true });
+        const setItem = contextMenu.getByRole('menuitem', { name: 'SET 设置', exact: true });
+        const trapItem = contextMenu.getByRole('menuitem', { name: 'Trap变量', exact: true });
+        await expect(getItem).not.toHaveAttribute('aria-disabled', 'true');
+        await expect(setItem).toHaveAttribute('aria-disabled', 'true');
+        await expect(trapItem).toHaveAttribute('aria-disabled', 'true');
+        await expect(setItem).toHaveCSS('color', 'rgb(140, 140, 140)');
+
+        await expect
+            .poll(async () => {
+                const box = await contextMenu.boundingBox();
+                if (!box) {
+                    return Number.POSITIVE_INFINITY;
+                }
+                return Math.max(8 - box.x, 8 - box.y, box.x + box.width - 892, box.y + box.height - 512);
+            })
+            .toBeLessThanOrEqual(1);
+    });
 });

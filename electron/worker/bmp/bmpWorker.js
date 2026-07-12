@@ -10,6 +10,7 @@ const BmpBgpRoute = require('./bmpBgpRoute');
 const BmpConst = require('../../const/bmpConst');
 const { buildRoutePrefixQuery, routeMatchesPrefixQuery } = require('../../utils/routePrefixUtils');
 const RouteUpdateAggregator = require('../../utils/routeUpdateAggregator');
+const { buildBmpRouteLens } = require('../../utils/bmpRouteLens');
 
 class BmpWorker {
     constructor() {
@@ -64,6 +65,7 @@ class BmpWorker {
             BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_STATISTICS_REPORTS,
             this.getBgpInstanceStatisticsReports.bind(this)
         );
+        this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_ROUTE_LENS, this.getRouteLens.bind(this));
     }
 
     createBmpSession(socket, clientAddress, clientPort) {
@@ -404,6 +406,16 @@ class BmpWorker {
             clientList.push(clientInfo);
         });
         this.messageHandler.sendSuccessResponse(messageId, clientList, '获取客户端列表成功');
+    }
+
+    getRouteLens(messageId, data = {}) {
+        try {
+            const result = buildBmpRouteLens(this.bmpSessionMap, data);
+            this.messageHandler.sendSuccessResponse(messageId, result, '路由追踪查询成功');
+        } catch (error) {
+            logger.error(`Error getting Route Lens: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
     }
 
     getBgpSessions(messageId, client) {

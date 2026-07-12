@@ -5,6 +5,7 @@
             <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
                 <nn-tab-pane key="bmp-config" tab="BMP配置" />
                 <nn-tab-pane key="bgp-session" tab="BGP会话" />
+                <nn-tab-pane key="route-lens" tab="Route Lens" />
                 <nn-tab-pane key="bgp-loc-rib" tab="BGP Loc-RIB" />
                 <nn-tab-pane key="bgp-session-statis-report" tab="BGP会话统计" />
                 <nn-tab-pane key="bgp-loc-rib-statis-report" tab="BGP Loc-RIB统计" />
@@ -38,6 +39,7 @@
     const tabKeys = new Set([
         'bmp-config',
         'bgp-session',
+        'route-lens',
         'bgp-loc-rib',
         'bgp-session-statis-report',
         'bgp-loc-rib-statis-report'

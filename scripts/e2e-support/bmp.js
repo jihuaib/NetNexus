@@ -67,6 +67,7 @@ const bmpBrowserMockScript = `
                 instance,
                 routeKey
             }),
+        getRouteLens: (query, routeState = 'active') => window.__bmpE2eCall('getRouteLens', query, routeState),
         purgeStaleBgpRoutes: (client, session, af, ribType) =>
             window.__bmpE2eCall('purgeStaleBgpRoutes', {
                 client,
@@ -392,8 +393,14 @@ const BmpE2eController = (() => {
                 return null;
             }
 
+            const routeIdentity = route.ip === null || route.ip === undefined ? '' : String(route.ip);
+            const prefix =
+                net.isIP(routeIdentity) && route.mask !== null && route.mask !== undefined
+                    ? `${routeIdentity}/${route.mask}`
+                    : routeIdentity;
+
             return {
-                prefix: `${route.ip}/${route.mask}`,
+                prefix,
                 ip: route.ip,
                 mask: route.mask,
                 rd: route.rd,
@@ -403,6 +410,8 @@ const BmpE2eController = (() => {
                 med: route.med,
                 localPref: route.localPref,
                 labels: route.labels,
+                routeType: route.routeType,
+                nlriIdentity: route.nlriDetail?.prefix,
                 addrFamilyType: route.addrFamilyType,
                 routeState: route.routeState,
                 pathStatusText: route.pathStatusText,
@@ -462,6 +471,11 @@ const BmpE2eController = (() => {
                         routeKey: data.routeKey,
                         route: this.summarizeRoute(data.route)
                     };
+                case 'getRouteLens':
+                    return {
+                        query: data.query,
+                        routeState: data.routeState
+                    };
                 case 'getBgpSessions':
                 case 'getBgpInstances':
                 case 'purgeStaleBgpRoutes':
@@ -509,6 +523,35 @@ const BmpE2eController = (() => {
                     msg: response.msg || '',
                     route: this.summarizeRoute(data),
                     communities: data?.communities
+                };
+            }
+            if (methodName === 'getRouteLens') {
+                const stageCounts = Object.fromEntries(
+                    Object.entries(data?.stages || {}).map(([stage, routes]) => [
+                        stage,
+                        Array.isArray(routes) ? routes.length : 0
+                    ])
+                );
+                const routeSamples = Object.fromEntries(
+                    Object.entries(data?.stages || {}).map(([stage, routes]) => [
+                        stage,
+                        (Array.isArray(routes) ? routes : [])
+                            .slice(0, 3)
+                            .map(entry => this.summarizeRoute(entry?.route || entry))
+                    ])
+                );
+
+                return {
+                    status: response.status,
+                    query: data?.query,
+                    summary: data?.summary,
+                    stageCounts,
+                    routeSamples,
+                    policyDiffs: {
+                        inbound: data?.policyDiffs?.inbound?.length || 0,
+                        outbound: data?.policyDiffs?.outbound?.length || 0
+                    },
+                    insights: data?.insights?.length || 0
                 };
             }
             return {
@@ -577,6 +620,11 @@ const BmpE2eController = (() => {
                     return this.invokeWorker('getBgpInstanceRoutes', args[0]);
                 case 'getBgpInstanceRouteDetail':
                     return this.invokeWorker('getBgpInstanceRouteDetail', args[0]);
+                case 'getRouteLens':
+                    return this.invokeWorker('getRouteLens', {
+                        query: args[0],
+                        routeState: args[1]
+                    });
                 case 'purgeStaleBgpRoutes':
                     return this.invokeWorker('purgeStaleBgpRoutes', args[0]);
                 case 'purgeStaleBgpInstanceRoutes':

@@ -135,6 +135,30 @@ function asPathAttr(asns = [65000, 65100]) {
     );
 }
 
+function standardCommunitiesAttr(communities = []) {
+    const value = Buffer.concat(
+        communities.map(community => {
+            const [asn, assigned] = String(community).split(':').map(Number);
+            if (
+                !Number.isInteger(asn) ||
+                asn < 0 ||
+                asn > 0xffff ||
+                !Number.isInteger(assigned) ||
+                assigned < 0 ||
+                assigned > 0xffff
+            ) {
+                throw new Error(`Invalid standard BGP community: ${community}`);
+            }
+            return Buffer.concat([u16(asn), u16(assigned)]);
+        })
+    );
+    return pathAttr(
+        BgpConst.BGP_PATH_ATTR.COMMUNITY,
+        value,
+        BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+    );
+}
+
 function ipv4Nlri(prefix, pathId = null) {
     const nlri = Buffer.concat([Buffer.from([24]), ip(prefix).subarray(0, 3)]);
     if (pathId === null || pathId === undefined) {
@@ -145,14 +169,25 @@ function ipv4Nlri(prefix, pathId = null) {
 
 function ipv4Update(
     prefixes,
-    { nextHop = '192.0.2.254', asns = [65000, 65100], addPath = false, pathIdStart = 1000 } = {}
+    {
+        nextHop = '192.0.2.254',
+        asns = [65000, 65100],
+        localPref = 100,
+        communities = [],
+        addPath = false,
+        pathIdStart = 1000
+    } = {}
 ) {
-    const attrs = Buffer.concat([
+    const attrList = [
         pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
         asPathAttr(asns),
         pathAttr(BgpConst.BGP_PATH_ATTR.NEXT_HOP, ip(nextHop)),
-        pathAttr(BgpConst.BGP_PATH_ATTR.LOCAL_PREF, u32(100), BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE)
-    ]);
+        pathAttr(BgpConst.BGP_PATH_ATTR.LOCAL_PREF, u32(localPref), BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE)
+    ];
+    if (communities.length > 0) {
+        attrList.push(standardCommunitiesAttr(communities));
+    }
+    const attrs = Buffer.concat(attrList);
     const nlris = Buffer.concat(
         prefixes.map((prefix, index) => ipv4Nlri(prefix, addPath ? pathIdStart + index : null))
     );
@@ -234,6 +269,37 @@ function sixPeLabeledUnicastUpdate(
         nextHopBytes,
         Buffer.from([0]),
         ipv6LabeledUnicastNlri(prefix, { label, pathId, prefixLength })
+    ]);
+    const attrs = Buffer.concat([
+        pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+        pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, mpReachValue, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL)
+    ]);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrs.length), attrs]));
+}
+
+function bgpLsTlv(type, value) {
+    return Buffer.concat([u16(type), u16(value.length), value]);
+}
+
+function bgpLsNodeDescriptor(type, asn, routerId) {
+    return bgpLsTlv(type, Buffer.concat([bgpLsTlv(512, u32(asn)), bgpLsTlv(515, ip(routerId))]));
+}
+
+function bgpLsLinkUpdate() {
+    const nlriBody = Buffer.concat([
+        Buffer.from([3]),
+        u32(0),
+        u32(20001),
+        bgpLsNodeDescriptor(256, 65009, '10.100.0.1'),
+        bgpLsNodeDescriptor(257, 65109, '10.200.0.1'),
+        bgpLsTlv(259, ip('10.10.0.1')),
+        bgpLsTlv(260, ip('10.10.0.2'))
+    ]);
+    const nlri = Buffer.concat([u16(2), u16(nlriBody.length), nlriBody]);
+    const mpReachValue = Buffer.concat([
+        u16(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS),
+        Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS, 0, 0]),
+        nlri
     ]);
     const attrs = Buffer.concat([
         pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
@@ -595,6 +661,24 @@ function buildScenario(options) {
         peerAs: 65007,
         routerId: '192.0.2.9'
     };
+    const routeLensRd = rd(65000, 120);
+    const routeLensPeer = {
+        peerType: BmpConst.BMP_PEER_TYPE.L3VPN,
+        rd: routeLensRd,
+        peerAddress: '192.0.2.10',
+        peerAs: 65008,
+        routerId: '192.0.2.10'
+    };
+    const routeLensLocRibPeer = {
+        flags: BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
+        peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        rd: routeLensRd
+    };
+    const bgpLsPeer = {
+        peerAddress: '192.0.2.11',
+        peerAs: 65009,
+        routerId: '192.0.2.11'
+    };
     const privateRibInRd = rd(65000, 200);
     const privateRibInPeer = {
         peerType: BmpConst.BMP_PEER_TYPE.L3VPN,
@@ -708,6 +792,12 @@ function buildScenario(options) {
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
         }
     ];
+    const bgpLsFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_BGP_LS,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS
+        }
+    ];
 
     const ipv4Prefixes = makePrefixes(options.routes, 10);
     const addPathPrefixes = makePrefixes(Math.max(5, Math.min(10, options.routes)), 20);
@@ -716,6 +806,7 @@ function buildScenario(options) {
     const ribInPostPolicyExtendedFlagsPrefix = '203.0.126.0';
     const ribInAllTlvsPrefix = '203.0.128.0';
     const ribOutPostPolicyExtendedFlagsPrefix = '203.0.127.0';
+    const routeLensLifecyclePrefix = '203.0.120.0';
     const ribInIsolationPrivatePrefix = '10.200.0.0';
     const ribInLabelUnicastPlainPrefix = '10.201.1.0';
     const ribInLabelUnicastLabeledPrefix = '10.201.2.0';
@@ -805,6 +896,87 @@ function buildScenario(options) {
             )
         },
         {
+            name: 'peer-up-route-lens-lifecycle',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...routeLensPeer,
+                    localAddress: '192.0.2.210',
+                    vrfName: 'route-lens-lab'
+                })
+            )
+        },
+        {
+            name: 'route-lens-lifecycle-pre-in',
+            data: routeMonitoringMessage(
+                routeLensPeer,
+                ipv4Update([routeLensLifecyclePrefix], {
+                    nextHop: '192.0.2.210',
+                    asns: [65008, 65108],
+                    localPref: 100,
+                    communities: ['65000:100', '65000:120']
+                }),
+                { vrfName: 'route-lens-lab' }
+            )
+        },
+        {
+            name: 'route-lens-lifecycle-post-in',
+            data: routeMonitoringMessage(
+                {
+                    ...routeLensPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([routeLensLifecyclePrefix], {
+                    nextHop: '192.0.2.210',
+                    asns: [65008, 65108],
+                    localPref: 220,
+                    communities: ['65000:120', '65000:220']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.POST_POLICY
+                }
+            )
+        },
+        {
+            name: 'route-lens-lifecycle-pre-out',
+            data: routeMonitoringMessage(
+                {
+                    ...routeLensPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([routeLensLifecyclePrefix], {
+                    nextHop: '192.0.2.210',
+                    asns: [65008, 65108],
+                    localPref: 220,
+                    communities: ['65000:120', '65000:220']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT
+                }
+            )
+        },
+        {
+            name: 'route-lens-lifecycle-post-out',
+            data: routeMonitoringMessage(
+                {
+                    ...routeLensPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([routeLensLifecyclePrefix], {
+                    nextHop: '192.0.2.1',
+                    asns: [65008, 65108],
+                    localPref: 220,
+                    communities: ['65000:220', '65000:999']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT | BmpConst.BMP_SESSION_FLAGS.POST_POLICY
+                }
+            )
+        },
+        {
             name: 'peer-up-6pe-ipv6-label',
             data: bmpMessage(
                 BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
@@ -830,6 +1002,23 @@ function buildScenario(options) {
                     }
                 }
             )
+        },
+        {
+            name: 'peer-up-bgp-ls',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...bgpLsPeer,
+                    localAddress: '192.0.2.211',
+                    recvAddressFamilies: bgpLsFamilies,
+                    sendAddressFamilies: bgpLsFamilies,
+                    vrfName: 'link-state'
+                })
+            )
+        },
+        {
+            name: 'bgp-ls-link-route',
+            data: routeMonitoringMessage(bgpLsPeer, bgpLsLinkUpdate(), { vrfName: 'link-state' })
         },
         {
             name: 'peer-up-add-path',
@@ -1057,6 +1246,34 @@ function buildScenario(options) {
         {
             name: 'peer-up-loc-rib',
             data: bmpMessage(BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, locRibPeerUpPayload())
+        },
+        {
+            name: 'peer-up-route-lens-lifecycle-loc-rib',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                locRibPeerUpPayload({
+                    rd: routeLensRd,
+                    vrfName: 'route-lens-lab'
+                })
+            )
+        },
+        {
+            name: 'route-lens-lifecycle-loc-rib',
+            data: routeMonitoringMessage(
+                routeLensLocRibPeer,
+                ipv4Update([routeLensLifecyclePrefix], {
+                    nextHop: '192.0.2.210',
+                    asns: [65008, 65108],
+                    localPref: 220,
+                    communities: ['65000:120', '65000:220']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.BEST | BmpConst.BMP_PATH_STATUS.PRIMARY
+                    }
+                }
+            )
         },
         {
             name: 'peer-up-loc-rib-evpn-add-path-default-rd',

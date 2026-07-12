@@ -562,6 +562,7 @@
 
         <div
             v-if="contextMenu.visible"
+            ref="contextMenuRef"
             class="mib-context-menu"
             :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
             @click.stop
@@ -663,6 +664,7 @@
     const mibFiles = ref([]);
     const treeRef = ref(null);
     const treeScrollRef = ref(null);
+    const contextMenuRef = ref(null);
     const treeExpandedKeys = ref([]);
     const treeSelectedKeys = ref([]);
     const selectedOidNode = ref(null);
@@ -670,6 +672,7 @@
     const pendingTreeReleaseTimers = new Map();
     let mibStatusLoaded = false;
     let mibStatusLoadPromise = null;
+    let contextMenuOpenRequest = 0;
     const contextMenu = reactive({
         visible: false,
         x: 0,
@@ -679,8 +682,6 @@
     const projectForm = reactive({
         name: ''
     });
-    const CONTEXT_MENU_WIDTH = 196;
-    const CONTEXT_MENU_HEIGHT = 310;
     const CONTEXT_MENU_MARGIN = 8;
     const TREE_RELEASE_DELAY_MS = 300;
     const REQUEST_MODAL_Z_INDEX = 1000;
@@ -1531,21 +1532,22 @@
         selectedOidNode.value = selectedKeys.length > 0 ? findTreeNode(mibStatus.value.oidTree, selectedKeys[0]) : null;
     };
 
-    const getContextMenuPosition = event => {
+    const getContextMenuPosition = (anchor, menuRect) => {
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-        const maxX = Math.max(CONTEXT_MENU_MARGIN, viewportWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_MARGIN);
-        const maxY = Math.max(CONTEXT_MENU_MARGIN, viewportHeight - CONTEXT_MENU_HEIGHT - CONTEXT_MENU_MARGIN);
+        const maxX = Math.max(CONTEXT_MENU_MARGIN, viewportWidth - menuRect.width - CONTEXT_MENU_MARGIN);
+        const maxY = Math.max(CONTEXT_MENU_MARGIN, viewportHeight - menuRect.height - CONTEXT_MENU_MARGIN);
 
         return {
-            x: Math.min(Math.max(CONTEXT_MENU_MARGIN, event.clientX), maxX),
-            y: Math.min(Math.max(CONTEXT_MENU_MARGIN, event.clientY), maxY)
+            x: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientX), maxX),
+            y: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientY), maxY)
         };
     };
 
-    const handleTreeRightClick = ({ event, node }) => {
+    const handleTreeRightClick = async ({ event, node }) => {
         event.preventDefault();
         event.stopPropagation();
+        const openRequest = ++contextMenuOpenRequest;
         const key = node?.key || node?.eventKey || node?.dataRef?.key;
         const matchedNode = findTreeNode(mibStatus.value.oidTree, key) || node?.dataRef || node;
         if (!matchedNode?.key) {
@@ -1555,13 +1557,30 @@
         treeSelectedKeys.value = [matchedNode.key];
         selectedOidNode.value = matchedNode;
         contextMenu.node = matchedNode;
-        const position = getContextMenuPosition(event);
-        contextMenu.x = position.x;
-        contextMenu.y = position.y;
+        const anchor = {
+            clientX: Number.isFinite(event.clientX) ? event.clientX : CONTEXT_MENU_MARGIN,
+            clientY: Number.isFinite(event.clientY) ? event.clientY : CONTEXT_MENU_MARGIN
+        };
+        contextMenu.x = Math.max(CONTEXT_MENU_MARGIN, anchor.clientX);
+        contextMenu.y = Math.max(CONTEXT_MENU_MARGIN, anchor.clientY);
         contextMenu.visible = true;
+
+        await nextTick();
+        if (!contextMenuRef.value) {
+            await new Promise(resolve => window.requestAnimationFrame(resolve));
+        }
+        if (!contextMenu.visible || openRequest !== contextMenuOpenRequest || !contextMenuRef.value) {
+            return;
+        }
+
+        const menuRect = contextMenuRef.value.getBoundingClientRect();
+        const measuredPosition = getContextMenuPosition(anchor, menuRect);
+        contextMenu.x = measuredPosition.x;
+        contextMenu.y = measuredPosition.y;
     };
 
     const hideContextMenu = () => {
+        contextMenuOpenRequest += 1;
         contextMenu.visible = false;
     };
 
@@ -2417,6 +2436,7 @@
         position: fixed;
         z-index: 1200;
         width: 196px;
+        max-width: calc(100vw - 16px);
         max-height: calc(100vh - 16px);
         padding: 4px 0;
         overflow-y: auto;
@@ -2444,12 +2464,14 @@
 
     .mib-context-menu-list :deep(.nn-menu-item) {
         height: 30px;
+        min-height: 30px;
         margin: 2px 4px;
-        line-height: 30px;
+        padding-block: 3px;
+        line-height: 24px;
         border-radius: 4px;
     }
 
-    .mib-context-menu-list :deep(.nn-menu-item-divider) {
+    .mib-context-menu-list :deep(.nn-menu-divider) {
         margin: 4px 0;
     }
 

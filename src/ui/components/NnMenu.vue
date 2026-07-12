@@ -274,7 +274,7 @@
     }
 
     .nn-menu :deep(.nn-menu-submenu-disabled > .nn-menu-submenu-title) {
-        color: var(--nn-color-text-disabled);
+        color: var(--nn-color-text-muted);
         cursor: not-allowed;
     }
 

@@ -169,6 +169,9 @@ async function expectBmpRouteLayout(page, pageTestId, detailTableTestId, routeTa
 
     const detailScrollbar = pageRoot.locator(`[data-testid="${detailTableTestId}"]:visible .nn-table-content`).first();
     const tabsScrollbar = pageRoot.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first();
+    // Keep the pointer away from both scrollbars: the thumb hover rule is intentionally
+    // visible even while the auto-hide state itself is inactive.
+    await page.mouse.move(0, 0);
     await Promise.all([expectAutoHidingScrollbar(detailScrollbar), expectAutoHidingScrollbar(tabsScrollbar)]);
 }
 
@@ -305,6 +308,237 @@ test.describe('BMP pages', () => {
                 .toBe(true);
 
             await recordStep('Output: Adj-RIB pagination onChange queried worker page=2 and rendered 10.10.25.0');
+        });
+
+        await test.step('Trace a prefix across the Route Lens pipeline', async () => {
+            await recordStep(
+                'Input: route=/#/bmp/route-lens, query=203.0.126.1 (IP longest-prefix lookup), then query=10.10.0.1 (Path Marking evidence)'
+            );
+
+            await page.goto('/#/bmp/route-lens');
+            const routeLensPage = page.getByTestId('bmp-route-lens-page');
+            await expect(routeLensPage).toBeVisible();
+            await expect(page.getByRole('tab', { name: 'Route Lens', exact: true })).toHaveAttribute(
+                'aria-selected',
+                'true'
+            );
+
+            const queryInput = page.getByTestId('route-lens-query');
+            const searchButton = page.getByTestId('route-lens-search');
+            await queryInput.fill('203.0.126.1');
+            await searchButton.click();
+
+            const flow = page.getByTestId('route-lens-flow');
+            await expect(flow).toBeVisible({ timeout: 10000 });
+            const stageTestIds = [
+                'route-lens-stage-preIn',
+                'route-lens-stage-postIn',
+                'route-lens-stage-locRib',
+                'route-lens-stage-preOut',
+                'route-lens-stage-postOut'
+            ];
+            for (const testId of stageTestIds) {
+                await expect(page.getByTestId(testId)).toHaveCount(1);
+            }
+
+            const preInStage = page.getByTestId('route-lens-stage-preIn');
+            const postInStage = page.getByTestId('route-lens-stage-postIn');
+            await expect(preInStage).toContainText('203.0.126.0/24');
+            await expect(postInStage).toContainText('203.0.126.0/24');
+            await expect(routeLensPage.getByText('设备上报', { exact: true }).first()).toBeVisible();
+            await expect(routeLensPage.getByText('观测事实', { exact: true }).first()).toBeVisible();
+            await expect(routeLensPage.getByText('推测关联', { exact: true }).first()).toBeVisible();
+            await expect(routeLensPage.getByText('未上报 Path Marking', { exact: true }).first()).toBeVisible();
+
+            await expect
+                .poll(
+                    () =>
+                        controller.timeline.some(
+                            item =>
+                                item.message === 'worker query: getRouteLens' &&
+                                item.data?.request?.query === '203.0.126.1'
+                        ),
+                    { timeout: 10000 }
+                )
+                .toBe(true);
+
+            await queryInput.fill('10.10.0.1');
+            await searchButton.click();
+            await expect(preInStage).toContainText('10.10.0.0/24');
+            await expect(preInStage).toContainText('Best');
+            await expect(preInStage).toContainText('设备上报');
+            await expect(preInStage).not.toContainText('未上报 Path Marking');
+
+            await page.getByRole('radio', { name: 'Stale', exact: true }).click();
+            await expect(routeLensPage).toContainText('未观测到与 10.10.0.1 匹配的路由');
+            await page.getByRole('radio', { name: 'Current', exact: true }).click();
+            await expect(preInStage).toContainText('10.10.0.0/24');
+
+            const routeLensCallsBeforeRefresh = controller.timeline.filter(
+                item => item.message === 'worker query: getRouteLens'
+            ).length;
+            await page.evaluate(() => {
+                window.__bmpE2eEmit?.('bmp:routeUpdate', {
+                    status: 'success',
+                    data: { changedCount: 1 }
+                });
+            });
+            await expect
+                .poll(() => controller.timeline.filter(item => item.message === 'worker query: getRouteLens').length, {
+                    timeout: 5000
+                })
+                .toBeGreaterThan(routeLensCallsBeforeRefresh);
+
+            await queryInput.fill('203.0.120.1');
+            await searchButton.click();
+            const lifecyclePrefix = '203.0.120.0/24';
+            const lifecycleStageIds = [
+                'route-lens-stage-preIn',
+                'route-lens-stage-postIn',
+                'route-lens-stage-locRib',
+                'route-lens-stage-preOut',
+                'route-lens-stage-postOut'
+            ];
+            for (const stageTestId of lifecycleStageIds) {
+                const stage = page.getByTestId(stageTestId);
+                const routeCard = stage.getByTestId('route-lens-route-card').filter({ hasText: lifecyclePrefix });
+                await expect(routeCard).toHaveCount(1);
+                await expect(routeCard).toContainText('route-lens-lab');
+            }
+
+            const locRibStage = page.getByTestId('route-lens-stage-locRib');
+            const reportedLocRibCard = locRibStage
+                .getByTestId('route-lens-route-card')
+                .filter({ hasText: lifecyclePrefix });
+            await expect(reportedLocRibCard).toContainText('Best');
+            await expect(reportedLocRibCard).toContainText('Primary');
+            await expect(reportedLocRibCard).toContainText('设备上报');
+
+            const inboundDiff = routeLensPage
+                .locator('.analysis-panel')
+                .filter({ hasText: 'Inbound 属性差异' })
+                .locator('.diff-card')
+                .filter({ hasText: lifecyclePrefix });
+            await expect(inboundDiff).toHaveCount(1);
+            await expect(inboundDiff).toContainText('属性变化');
+            await expect(inboundDiff).toContainText('观测事实 · 关联需核验');
+            await expect(inboundDiff).toContainText('Local Pref');
+            await expect(inboundDiff).toContainText('100');
+            await expect(inboundDiff).toContainText('220');
+            await expect(inboundDiff).toContainText('Communities');
+            await expect(inboundDiff).toContainText('65000:100 65000:120');
+            await expect(inboundDiff).toContainText('65000:120 65000:220');
+
+            const outboundDiff = routeLensPage
+                .locator('.analysis-panel')
+                .filter({ hasText: 'Outbound 属性差异' })
+                .locator('.diff-card')
+                .filter({ hasText: lifecyclePrefix });
+            await expect(outboundDiff).toHaveCount(1);
+            await expect(outboundDiff).toContainText('属性变化');
+            await expect(outboundDiff).toContainText('观测事实 · 关联需核验');
+            await expect(outboundDiff).toContainText('Next Hop');
+            await expect(outboundDiff).toContainText('192.0.2.210');
+            await expect(outboundDiff).toContainText('192.0.2.1');
+            await expect(outboundDiff).toContainText('Communities');
+            await expect(outboundDiff).toContainText('65000:120 65000:220');
+            await expect(outboundDiff).toContainText('65000:220 65000:999');
+
+            const evpnIdentity = 'evpn:mac-ip:65000:1:tag=101:mac=aa:bb:cc:dd:ee:01:ip=192.0.2.11';
+            await queryInput.fill(evpnIdentity);
+            await searchButton.click();
+            const evpnCard = preInStage.getByTestId('route-lens-route-card').filter({ hasText: evpnIdentity });
+            await expect(evpnCard).toHaveCount(1);
+            await expect(evpnCard).toContainText('NLRI 精确匹配');
+            await evpnCard.click();
+
+            const evpnDrawer = page.getByRole('dialog', { name: `${evpnIdentity} · Pre Adj-RIB-In` });
+            await expect(evpnDrawer).toBeVisible();
+            await expect(evpnDrawer).toContainText('L2VPN EVPN');
+            await expect(evpnDrawer).toContainText('MAC/IP Advertisement');
+            await expect(evpnDrawer).toContainText('VNI 10000');
+            await expect(evpnDrawer).toContainText('"matchType": "text-exact"');
+            await expect(evpnDrawer).toContainText('"matchedField": "ip"');
+            await evpnDrawer.getByRole('button', { name: '关闭' }).click();
+
+            await queryInput.fill('AA:BB:CC:DD:EE:01');
+            await searchButton.click();
+            const evpnContainsCard = preInStage.getByTestId('route-lens-route-card').filter({ hasText: evpnIdentity });
+            await expect(evpnContainsCard).toHaveCount(1);
+            await expect(evpnContainsCard).toContainText('NLRI 文本包含');
+
+            const bgpLsIdentity = 'bgp-ls:Link:10.10.0.1->10.10.0.2';
+            await queryInput.fill(bgpLsIdentity);
+            await searchButton.click();
+            const bgpLsCard = preInStage.getByTestId('route-lens-route-card').filter({ hasText: bgpLsIdentity });
+            await expect(bgpLsCard).toHaveCount(1);
+            await expect(bgpLsCard).toContainText('NLRI 精确匹配');
+            await expect(bgpLsCard).not.toContainText('/520');
+            await bgpLsCard.click();
+
+            const bgpLsDrawer = page.getByRole('dialog', { name: `${bgpLsIdentity} · Pre Adj-RIB-In` });
+            await expect(bgpLsDrawer).toBeVisible();
+            await expect(bgpLsDrawer).toContainText('Link-State');
+            await expect(bgpLsDrawer).toContainText('OSPFv2');
+            await expect(bgpLsDrawer).toContainText('Local Node Descriptors');
+            await expect(bgpLsDrawer).toContainText('65009');
+            await expect(bgpLsDrawer).toContainText('"matchType": "text-exact"');
+            await bgpLsDrawer.getByRole('button', { name: '关闭' }).click();
+
+            await queryInput.fill('BGP-LS:LINK');
+            await searchButton.click();
+            const bgpLsContainsCard = preInStage
+                .getByTestId('route-lens-route-card')
+                .filter({ hasText: bgpLsIdentity });
+            await expect(bgpLsContainsCard).toHaveCount(1);
+            await expect(bgpLsContainsCard).toContainText('NLRI 文本包含');
+
+            const measureRouteLensLayout = () =>
+                routeLensPage.evaluate(root => {
+                    const queryPanel = root.querySelector('.query-panel');
+                    const result = root.querySelector('.lens-result');
+                    const queryRect = queryPanel?.getBoundingClientRect();
+                    const resultRect = result?.getBoundingClientRect();
+                    return {
+                        queryTop: queryRect?.top || 0,
+                        queryBottom: queryRect?.bottom || 0,
+                        queryHeight: queryRect?.height || 0,
+                        resultTop: resultRect?.top || 0
+                    };
+                });
+            const expectStableRouteLensLayout = (before, after) => {
+                expect(Math.abs(after.queryTop - before.queryTop)).toBeLessThanOrEqual(1);
+                expect(Math.abs(after.queryBottom - before.queryBottom)).toBeLessThanOrEqual(1);
+                expect(Math.abs(after.queryHeight - before.queryHeight)).toBeLessThanOrEqual(1);
+                expect(Math.abs(after.resultTop - before.resultTop)).toBeLessThanOrEqual(1);
+            };
+            const successfulLayout = await measureRouteLensLayout();
+
+            await queryInput.fill('10.10.0.0/99');
+            await searchButton.click();
+            const malformedCidrToast = page
+                .getByRole('alert')
+                .filter({ hasText: 'Route Lens 查询失败：CIDR 前缀格式无效' });
+            await expect(malformedCidrToast).toBeVisible();
+            await expect(bgpLsContainsCard).toBeVisible();
+            await expect(routeLensPage.locator('[role="alert"]')).toHaveCount(0);
+            expectStableRouteLensLayout(successfulLayout, await measureRouteLensLayout());
+            await malformedCidrToast.getByRole('button', { name: '关闭' }).click();
+
+            await queryInput.fill('');
+            await searchButton.click();
+            const emptyQueryToast = page
+                .getByRole('alert')
+                .filter({ hasText: 'Route Lens 查询失败：请输入 Prefix、IP 或 NLRI 标识' });
+            await expect(emptyQueryToast).toBeVisible();
+            await expect(bgpLsContainsCard).toBeVisible();
+            await expect(routeLensPage.locator('[role="alert"]')).toHaveCount(0);
+            expectStableRouteLensLayout(successfulLayout, await measureRouteLensLayout());
+            await emptyQueryToast.getByRole('button', { name: '关闭' }).click();
+
+            await recordStep(
+                'Output: five-stage IPv4 lifecycle rendered with policy diffs and reported Best/Primary; EVPN and BGP-LS exact/substring NLRI queries rendered correctly; malformed CIDR and empty input used alert toasts without shifting the result layout'
+            );
         });
 
         await test.step('Verify BGP Loc-RIB page and Loc-RIB routes', async () => {

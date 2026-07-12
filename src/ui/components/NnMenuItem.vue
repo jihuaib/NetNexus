@@ -144,7 +144,7 @@
     }
 
     .nn-menu-item-disabled {
-        color: var(--nn-color-text-disabled);
+        color: var(--nn-color-text-muted);
         cursor: not-allowed;
     }
 

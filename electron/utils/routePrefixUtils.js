@@ -28,6 +28,22 @@ function addRoutePrefixIndexKey(keys, key) {
     }
 }
 
+function addNormalizedCidrIndexKey(keys, prefix, mask) {
+    if (!ipaddr.isValid(prefix) || !/^\d+$/.test(mask)) {
+        return;
+    }
+
+    const address = ipaddr.parse(prefix);
+    const prefixLength = Number(mask);
+    const maxPrefixLength = address.kind() === 'ipv4' ? 32 : 128;
+    if (prefixLength < 0 || prefixLength > maxPrefixLength) {
+        return;
+    }
+
+    const network = address.constructor.networkAddressFromCIDR(`${address.toString()}/${prefixLength}`).toString();
+    addRoutePrefixIndexKey(keys, `cidr:${network.toLowerCase()}/${prefixLength}`);
+}
+
 function getRoutePrefixIndexKeys(route) {
     const prefix = normalizeRoutePrefixPart(route?.ip);
     if (!prefix) {
@@ -38,6 +54,7 @@ function getRoutePrefixIndexKeys(route) {
     const mask = normalizeRouteMask(route?.mask);
     if (mask) {
         keys.push(`cidr:${prefix}/${mask}`);
+        addNormalizedCidrIndexKey(keys, prefix, mask);
     }
 
     const nlriDetail = route?.nlriDetail || {};
@@ -47,6 +64,7 @@ function getRoutePrefixIndexKeys(route) {
         addRoutePrefixIndexKey(keys, `prefix:${nlriIpPrefix}`);
         if (nlriPrefixLength) {
             addRoutePrefixIndexKey(keys, `cidr:${nlriIpPrefix}/${nlriPrefixLength}`);
+            addNormalizedCidrIndexKey(keys, nlriIpPrefix, nlriPrefixLength);
         }
     }
 
