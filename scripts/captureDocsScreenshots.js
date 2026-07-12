@@ -39,6 +39,12 @@ const screenshots = [
     ['/bgp/route-ipv4', 'docs/images/bgp/bgp-route.png'],
     {
         route: '/bgp/route-ipv4',
+        outputPath: 'docs/images/bgp/bgp-route-advanced-config.png',
+        prepare: 'open-route-advanced-config',
+        cleanup: 'close-overlay'
+    },
+    {
+        route: '/bgp/route-ipv4',
         outputPath: 'docs/images/bgp/bgp-route-detail.png',
         prepare: 'open-text-detail-0',
         cleanup: 'close-overlay'
@@ -58,6 +64,12 @@ const screenshots = [
         cleanup: 'close-overlay'
     },
     ['/bgp/route-ipv4-qp', 'docs/images/bgp/bgp-route-ipv4-qp.png'],
+    {
+        route: '/bgp/route-ipv4-qp',
+        outputPath: 'docs/images/bgp/bgp-route-ipv4-qp-advanced-config.png',
+        prepare: 'open-route-advanced-config',
+        cleanup: 'close-overlay'
+    },
     {
         route: '/bgp/route-ipv4-qp',
         outputPath: 'docs/images/bgp/bgp-route-ipv4-qp-detail.png',
@@ -606,6 +618,24 @@ async function openFtpUsersModal(win, label) {
     await waitForOpenOverlay(win, label, '用户列表');
 }
 
+async function openRouteAdvancedConfig(win, label) {
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const button = Array.from(document.querySelectorAll('button'))
+                .find(item => item.textContent.trim().includes('高级配置'));
+            if (!button || button.disabled) {
+                return { clicked: false };
+            }
+            button.click();
+            return { clicked: true };
+        })()
+    `);
+    if (!result?.clicked) {
+        throw new Error(`route advanced config button not found for ${label}`);
+    }
+    await waitForOpenOverlay(win, label, '高级配置');
+}
+
 screenshotPreparers.set('open-text-detail-0', (win, label) => openDetailButtonByText(win, 0, label));
 screenshotPreparers.set('open-bmp-session-route-detail', (win, label) =>
     openDetailButtonBySelector(win, '[data-testid="bmp-session-route-table"] .nn-table-tbody button', label)
@@ -617,6 +647,7 @@ screenshotPreparers.set('open-tcp-ao-result', openTcpAoResult);
 screenshotPreparers.set('open-snmp-mib-context-menu', openSnmpMibContextMenu);
 screenshotPreparers.set('open-snmp-mib-walk', openSnmpMibWalkModal);
 screenshotPreparers.set('open-ftp-users', openFtpUsersModal);
+screenshotPreparers.set('open-route-advanced-config', openRouteAdvancedConfig);
 screenshotCleanups.set('close-overlay', closeOpenOverlay);
 screenshotCleanups.set('close-snmp-context-menu', closeSnmpMibContextMenu);
 
@@ -673,6 +704,17 @@ async function captureSettingsScreenshots(win) {
     await openSettingsDialog(win);
     await selectSettingsCategory(win, '通用设置');
     await capturePage(win, 'settings/general', 'docs/images/setting/setting.png');
+    await win.webContents.executeJavaScript(`
+        (() => {
+            const option = document.querySelector('.theme-preset-option-dark');
+            if (!option) throw new Error('dark theme option not found');
+            option.click();
+        })()
+    `);
+    await wait(500);
+    await capturePage(win, 'settings/theme-dark', 'docs/images/setting/setting-theme-dark.png');
+    await win.webContents.executeJavaScript(`document.querySelector('.theme-preset-option-blue')?.click()`);
+    await wait(300);
     await selectSettingsCategory(win, '工具集合');
     await capturePage(win, 'settings/tools', 'docs/images/setting/setting-tools.png');
     await selectSettingsCategory(win, 'FTP服务器');

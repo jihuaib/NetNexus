@@ -5,7 +5,7 @@
                 <div class="config-section">
                     <div class="section-title">生成范围</div>
                     <nn-row :gutter="[16, 0]">
-                        <nn-col :xs="24" :xl="24">
+                        <nn-col v-if="false" :xs="24" :xl="24">
                             <nn-form-item label="增长模式" name="routeGrowthMode">
                                 <nn-radio-group v-model:value="ipv4QpData.routeGrowthMode">
                                     <nn-radio :value="BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN">IP + DQPN</nn-radio>
@@ -44,7 +44,7 @@
                                 </nn-tooltip>
                             </nn-form-item>
                         </nn-col>
-                        <nn-col v-if="routeGrowthIncludesIp" :xs="24" :md="6">
+                        <nn-col v-if="false" :xs="24" :md="6">
                             <nn-form-item label="IP Step" name="ipStep">
                                 <nn-tooltip :title="validationErrors.ipStep" :open="!!validationErrors.ipStep">
                                     <nn-input
@@ -57,7 +57,7 @@
                     </nn-row>
                 </div>
 
-                <div class="config-section">
+                <div v-if="false" class="config-section">
                     <div class="section-title">DQPN</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="8">
@@ -118,10 +118,16 @@
                 </div>
 
                 <div class="action-row">
-                    <nn-button class="custom-attr-button" type="link" @click="showCustomRouteAttr">
-                        <template #icon><SettingOutlined /></template>
-                        配置自定义路由属性
-                    </nn-button>
+                    <div class="route-secondary-actions">
+                        <nn-button class="custom-attr-button" type="link" @click="showCustomRouteAttr">
+                            <template #icon><SettingOutlined /></template>
+                            配置自定义路由属性
+                        </nn-button>
+                        <nn-button class="advanced-config-button" type="link" @click="advancedConfigVisible = true">
+                            <template #icon><SettingOutlined /></template>
+                            高级配置
+                        </nn-button>
+                    </div>
                     <nn-button
                         class="generate-route-button"
                         type="primary"
@@ -185,6 +191,15 @@
             @submit="handleCustomRouteAttrSubmit"
         />
 
+        <BgpIpv4AdvancedRouteModal
+            v-model:open="advancedConfigVisible"
+            :config="ipv4QpData"
+            :validation-errors="validationErrors"
+            title="IPv4 QP 路由高级配置"
+            show-qp
+            @apply="config => Object.assign(ipv4QpData, config)"
+        />
+
         <BgpRouteDetailDrawer v-model:open="routeDetailVisible" :loading="routeDetailLoading" :route="routeDetail" />
     </div>
 </template>
@@ -193,6 +208,7 @@
     import { onMounted, ref, computed, onActivated, nextTick } from 'vue';
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
+    import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
     import { notify } from '../../utils/notify';
     import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from '../../ui/icons';
 
@@ -207,6 +223,11 @@
     const wrapperCol = { span: 40 };
 
     const ipv4QpData = ref({
+        randomAsPathEnabled: false,
+        asMin: 64512,
+        asMax: 65534,
+        asPathMinLength: 1,
+        asPathMaxLength: 5,
         prefix: '1.1.1.1',
         mask: '32',
         count: '10',
@@ -247,11 +268,6 @@
     const hasRoutes = computed(() => pagination.value.total > 0);
     const routesGenerating = ref(false);
     const deleteAllLoading = ref(false);
-    const routeGrowthIncludesIp = computed(
-        () =>
-            ipv4QpData.value.routeGrowthMode === BGP_QP_ROUTE_GROWTH_MODE.IP ||
-            ipv4QpData.value.routeGrowthMode === BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN
-    );
     const routeGrowthIncludesDqpn = computed(
         () =>
             ipv4QpData.value.routeGrowthMode === BGP_QP_ROUTE_GROWTH_MODE.DQPN ||
@@ -259,6 +275,7 @@
     );
 
     const customRouteAttrVisible = ref(false);
+    const advancedConfigVisible = ref(false);
     const routeDetailVisible = ref(false);
     const routeDetailLoading = ref(false);
     const routeDetail = ref(null);
@@ -307,11 +324,11 @@
 
     const pagination = ref({
         current: 1,
-        pageSize: 20,
+        pageSize: 25,
         total: 0,
         showSizeChanger: false,
         position: ['bottomCenter'],
-        showTotal: total => `共 ${total} 条，每页 20 条`
+        showTotal: total => `共 ${total} 条，每页 25 条`
     });
 
     onMounted(async () => {
@@ -354,6 +371,9 @@
         try {
             const hasErrors = validator.validate(ipv4QpData.value);
             if (hasErrors) {
+                if (['ipStep', 'startDqpn', 'dqpnStep'].some(field => validationErrors.value[field])) {
+                    advancedConfigVisible.value = true;
+                }
                 notify.error('请检查IPv4-QP路由配置信息是否正确');
                 return;
             }
@@ -539,6 +559,12 @@
     .custom-attr-button {
         justify-self: start;
         padding-left: 0;
+    }
+
+    .route-secondary-actions {
+        display: flex;
+        align-items: center;
+        justify-self: start;
     }
 
     .generate-route-button {

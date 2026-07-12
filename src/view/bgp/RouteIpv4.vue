@@ -60,7 +60,7 @@
                     </nn-row>
                 </div>
 
-                <div v-if="!isLabelRoute" class="config-section">
+                <div v-if="false" class="config-section">
                     <div class="section-title">ADD-PATH</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="6">
@@ -85,7 +85,7 @@
                     </nn-row>
                 </div>
 
-                <div v-if="isLabelRoute" class="config-section">
+                <div v-if="false" class="config-section">
                     <div class="section-title">MPLS Label</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="8">
@@ -121,7 +121,7 @@
                     </nn-row>
                 </div>
 
-                <div v-if="!isLabelRoute" class="config-section">
+                <div v-if="false" class="config-section">
                     <div class="section-title">SRv6</div>
                     <nn-row :gutter="[16, 0]">
                         <nn-col :xs="24" :md="6">
@@ -193,10 +193,16 @@
                 </div>
 
                 <div class="action-row">
-                    <nn-button class="custom-attr-button" type="link" @click="showCustomRouteAttr">
-                        <template #icon><SettingOutlined /></template>
-                        配置自定义路由属性
-                    </nn-button>
+                    <div class="route-secondary-actions">
+                        <nn-button class="custom-attr-button" type="link" @click="showCustomRouteAttr">
+                            <template #icon><SettingOutlined /></template>
+                            配置自定义路由属性
+                        </nn-button>
+                        <nn-button class="advanced-config-button" type="link" @click="advancedConfigVisible = true">
+                            <template #icon><SettingOutlined /></template>
+                            高级配置
+                        </nn-button>
+                    </div>
                     <nn-button
                         class="generate-route-button"
                         data-testid="bgp-generate-ipv4-routes-button"
@@ -279,6 +285,19 @@
             @submit="handleCustomRouteAttrSubmit"
         />
 
+        <BgpIpv4AdvancedRouteModal
+            v-model:open="advancedConfigVisible"
+            :config="ipv4Data"
+            :is-label-route="isLabelRoute"
+            :endpoint-options="srv6EndpointBehaviorOptions"
+            :validation-errors="validationErrors"
+            title="IPv4 路由高级配置"
+            show-add-path
+            show-srv6
+            show-label
+            @apply="config => Object.assign(ipv4Data, config)"
+        />
+
         <RouteViewsImportModal
             v-model:open="routeViewsImportVisible"
             :address-family="BGP_ADDR_FAMILY.IPV4_UNC"
@@ -294,6 +313,7 @@
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import RouteViewsImportModal from '../../components/RouteViewsImportModal.vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
+    import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
     import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from '../../ui/icons';
@@ -327,6 +347,11 @@
         prefix: DEFAULT_VALUES.IPV4_PREFIX,
         mask: DEFAULT_VALUES.IPV4_MASK,
         count: DEFAULT_VALUES.IPV4_COUNT,
+        randomAsPathEnabled: false,
+        asMin: 64512,
+        asMax: 65534,
+        asPathMinLength: 1,
+        asPathMaxLength: 5,
         addPathEnabled: DEFAULT_VALUES.IPV4_ADD_PATH_ENABLED,
         addPathCount: DEFAULT_VALUES.IPV4_ADD_PATH_COUNT,
         customAttr: '',
@@ -380,6 +405,7 @@
     const displayRouteTitle = computed(() => (isDisplayLabelRoute.value ? 'IPv4 Label' : 'IPv4-UNC'));
 
     const customRouteAttrVisible = ref(false);
+    const advancedConfigVisible = ref(false);
 
     const showCustomRouteAttr = () => {
         customRouteAttrVisible.value = true;
@@ -476,11 +502,11 @@
 
     const pagination = ref({
         current: 1,
-        pageSize: 20,
+        pageSize: 25,
         total: 0,
         showSizeChanger: false,
         position: ['bottomCenter'],
-        showTotal: total => `共 ${total} 条，每页 20 条`
+        showTotal: total => `共 ${total} 条，每页 25 条`
     });
 
     onMounted(async () => {
@@ -547,6 +573,12 @@
         try {
             const hasErrors = validator.validate(ipv4Data.value);
             if (hasErrors) {
+                if (
+                    isLabelRoute.value &&
+                    ['labelMode', 'labelStart', 'labelStep'].some(field => validationErrors.value[field])
+                ) {
+                    advancedConfigVisible.value = true;
+                }
                 notify.error('请检查IPv4路由配置信息是否正确');
                 return;
             }
@@ -763,6 +795,12 @@
     .custom-attr-button {
         justify-self: start;
         padding-left: 0;
+    }
+
+    .route-secondary-actions {
+        display: flex;
+        align-items: center;
+        justify-self: start;
     }
 
     .generate-route-button {

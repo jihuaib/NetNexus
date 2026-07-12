@@ -64,6 +64,10 @@ IPv4 单播路由：
 
 ![BGP 路由信息](images/bgp/bgp-route.png)
 
+高级配置弹窗：
+
+![BGP IPv4 路由高级配置](images/bgp/bgp-route-advanced-config.png)
+
 按钮说明：
 
 | 按钮 | 功能 |
@@ -76,6 +80,8 @@ IPv4 单播路由：
 
 IPv4 单播路由支持：
 
+- 随机 AS Path：可设置起始/结束 AS，以及最少/最多 AS 个数；每条路由会同时随机路径长度和路径中的 AS。IPv4/IPv6 单播、Label、MVPN 和 QP 路由统一支持。
+- IPv4 高级配置：ADD-PATH、SRv6 和随机 AS Path 收纳到高级配置弹层，主页面保留常用基础字段，为路由表释放更多显示空间。
 - Add-Path 批量生成：开启后按 `Add-Path数量` 为同一前缀生成多条路径，列表通过 `pathId` 区分。
 - SRv6 SID：可选择固定或递增 SID，并设置 End.DT4、End.DX4、End.DT46 Endpoint 行为。
 - Label Unicast：切换到 IPv4 Label 地址族后可配置标签起始值和步长。
@@ -128,6 +134,10 @@ IPv4 QP 路由：
 
 ![BGP IPv4 QP 路由信息](images/bgp/bgp-route-ipv4-qp.png)
 
+QP 高级配置弹窗：
+
+![BGP IPv4 QP 路由高级配置](images/bgp/bgp-route-ipv4-qp-advanced-config.png)
+
 按钮说明：
 
 | 按钮 | 功能 |
@@ -140,6 +150,8 @@ IPv4 QP 路由：
 IPv4 QP 路由详情：
 
 ![BGP IPv4 QP 路由详情](images/bgp/bgp-route-ipv4-qp-detail.png)
+
+QP 主界面保留 Prefix、Mask、Count、RT、Next Hop 和 BSID 等常用字段；AS Path 随机生成、IP/DQPN 增长策略等低频参数统一在高级配置弹窗中设置。弹窗中的配置只属于当前路由页面，不受主界面生成模式联动影响。
 
 IPv6 QP 路由：
 

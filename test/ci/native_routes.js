@@ -27,6 +27,10 @@ const nativeApp = new NativeApp({
     handle() {}
 });
 
+assert.equal(nativeApp.supportsWindowsGetNetRoute('6.1.7601'), false, 'Windows 7 must skip Get-NetRoute');
+assert.equal(nativeApp.supportsWindowsGetNetRoute('6.2.9200'), true, 'Windows 8 supports Get-NetRoute');
+assert.equal(nativeApp.supportsWindowsGetNetRoute('10.0.19045'), true, 'Windows 10 supports Get-NetRoute');
+
 const getRouteScript = nativeApp.buildWindowsGetRouteScript();
 assert.match(getRouteScript, /Get-NetRoute \| Select-Object/u);
 assert.doesNotMatch(getRouteScript, /;\s*\|/u);

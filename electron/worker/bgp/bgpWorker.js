@@ -15,7 +15,9 @@ const {
     buildSrv6SidGenerationContext,
     getGeneratedSrv6Sid,
     forEachQpGeneratedRoute,
-    getGeneratedUnicastPathIds
+    getGeneratedUnicastPathIds,
+    buildRandomAsPathGenerationContext,
+    getGeneratedRandomAsPath
 } = require('../../utils/bgpRouteGenerator');
 
 function makeRouteLookupKey(addressFamily, route) {
@@ -738,6 +740,7 @@ class BgpWorker {
         const labelContext = isLabelUnicast ? buildLabelGenerationContext(config) : null;
         const generatedUnicastPathIds = isSrv6CapableUnicast ? getGeneratedUnicastPathIds(config) : [null];
         const routeCount = Number(config.count);
+        const randomAsPathContext = buildRandomAsPathGenerationContext(config);
         const srv6Context = isSrv6CapableUnicast
             ? buildSrv6SidGenerationContext(
                   {
@@ -808,7 +811,13 @@ class BgpWorker {
             const label = route.label !== undefined && route.label !== null ? route.label : null;
             const attrOverrides = {
                 customAttr: instance.customAttr,
-                rt: instance.rt
+                rt: instance.rt,
+                asPath:
+                    route.asPath !== undefined
+                        ? route.asPath
+                        : randomAsPathContext.enabled
+                          ? getGeneratedRandomAsPath(randomAsPathContext)
+                          : undefined
             };
 
             if (srv6Context) {
@@ -983,6 +992,7 @@ class BgpWorker {
             }
 
             const nextCustomAttr = config.customAttr || '';
+            const randomAsPathContext = buildRandomAsPathGenerationContext(config);
             const hasAttrChanged = instance.customAttr !== nextCustomAttr;
             if (hasAttrChanged) {
                 instance.customAttr = nextCustomAttr;
@@ -996,6 +1006,9 @@ class BgpWorker {
             let hasRouteChanged = false;
             const generatedCount = forEachQpGeneratedRoute(config, ipType, route => {
                 const key = BgpRoute.makeQpKey(route.dqpn, route.ip, route.mask);
+                const generatedAsPath = randomAsPathContext.enabled
+                    ? getGeneratedRandomAsPath(randomAsPathContext)
+                    : undefined;
                 if (!instance.routeMap.has(key)) {
                     const bgpRoute = new BgpRoute(instance);
                     bgpRoute.ip = route.ip;
@@ -1004,14 +1017,24 @@ class BgpWorker {
                     instance.setRoute(
                         key,
                         bgpRoute,
-                        instance.makeRouteAttr(bgpRoute, { nextHop: route.bsid, customAttr: instance.customAttr })
+                        instance.makeRouteAttr(bgpRoute, {
+                            nextHop: route.bsid,
+                            customAttr: instance.customAttr,
+                            asPath: generatedAsPath
+                        })
                     );
                     hasRouteChanged = true;
                 } else {
                     const bgpRoute = instance.routeMap.get(key);
                     const routeAttr = instance.getRouteAttr(bgpRoute);
-                    if (routeAttr.nextHop !== route.bsid) {
-                        instance.assignRouteAttr(key, instance.makeRouteAttr(bgpRoute, { nextHop: route.bsid }));
+                    if (
+                        routeAttr.nextHop !== route.bsid ||
+                        (generatedAsPath !== undefined && routeAttr.asPath !== generatedAsPath)
+                    ) {
+                        instance.assignRouteAttr(
+                            key,
+                            instance.makeRouteAttr(bgpRoute, { nextHop: route.bsid, asPath: generatedAsPath })
+                        );
                         hasRouteChanged = true;
                     }
                 }
@@ -1255,6 +1278,7 @@ class BgpWorker {
         }
 
         let hasRouteChanged = false;
+        const randomAsPathContext = buildRandomAsPathGenerationContext(config);
         const nextRt = config.rt || '';
         const hasAttrChanged = instance.rt !== nextRt;
         if (hasAttrChanged) {
@@ -1320,7 +1344,21 @@ class BgpWorker {
                         break;
                 }
 
-                instance.setRoute(routeKey, bgpRoute, instance.makeRouteAttr(bgpRoute, { rt: instance.rt }));
+                instance.setRoute(
+                    routeKey,
+                    bgpRoute,
+                    instance.makeRouteAttr(bgpRoute, {
+                        rt: instance.rt,
+                        asPath: randomAsPathContext.enabled ? getGeneratedRandomAsPath(randomAsPathContext) : undefined
+                    })
+                );
+                hasRouteChanged = true;
+            } else if (randomAsPathContext.enabled) {
+                const bgpRoute = instance.routeMap.get(routeKey);
+                instance.assignRouteAttr(
+                    routeKey,
+                    instance.makeRouteAttr(bgpRoute, { asPath: getGeneratedRandomAsPath(randomAsPathContext) })
+                );
                 hasRouteChanged = true;
             }
         });

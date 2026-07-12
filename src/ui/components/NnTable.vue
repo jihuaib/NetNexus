@@ -146,6 +146,7 @@
                     aria-label="表格分页"
                 >
                     <span v-if="paginationTotalText" class="nn-pagination-total">{{ paginationTotalText }}</span>
+                    <span class="nn-pagination-page-count">第 {{ currentPage }} / {{ totalPages }} 页</span>
                     <button
                         type="button"
                         class="nn-pagination-button"
@@ -186,7 +187,7 @@
                             {{ sizeOption }} 条/页
                         </option>
                     </select>
-                    <label v-if="paginationConfig.showQuickJumper" class="nn-pagination-jumper">
+                    <label v-if="paginationConfig.showQuickJumper !== false" class="nn-pagination-jumper">
                         <span>跳至</span>
                         <input
                             v-model="quickPageInput"
@@ -912,6 +913,11 @@
 
     .nn-pagination-total {
         margin-right: 4px;
+    }
+
+    .nn-pagination-page-count {
+        margin-right: 4px;
+        white-space: nowrap;
     }
 
     .nn-pagination-button {

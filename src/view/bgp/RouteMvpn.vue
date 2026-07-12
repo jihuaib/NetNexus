@@ -166,11 +166,20 @@
                     </nn-col>
                 </nn-row>
 
-                <nn-form-item :wrapper-col="{ offset: 8, span: 16 }">
-                    <nn-button type="primary" :loading="routesGenerating" @click="generateRoutes">
+                <div class="action-row">
+                    <nn-button class="advanced-config-button" type="link" @click="advancedConfigVisible = true">
+                        <template #icon><SettingOutlined /></template>
+                        高级配置
+                    </nn-button>
+                    <nn-button
+                        class="generate-route-button"
+                        type="primary"
+                        :loading="routesGenerating"
+                        @click="generateRoutes"
+                    >
                         生成MVPN路由
                     </nn-button>
-                </nn-form-item>
+                </div>
             </nn-form>
         </nn-card>
 
@@ -242,6 +251,12 @@
             </nn-tabs>
         </nn-card>
 
+        <BgpIpv4AdvancedRouteModal
+            v-model:open="advancedConfigVisible"
+            :config="ipv4MvpnData"
+            title="MVPN 路由高级配置"
+            @apply="config => Object.assign(ipv4MvpnData, config)"
+        />
         <BgpRouteDetailDrawer v-model:open="routeDetailVisible" :loading="routeDetailLoading" :route="routeDetail" />
     </div>
 </template>
@@ -249,9 +264,10 @@
 <script setup>
     import { onMounted, ref, computed, watch, onActivated, nextTick } from 'vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
+    import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { DeleteOutlined, FileSearchOutlined } from '../../ui/icons';
+    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from '../../ui/icons';
 
     import { BGP_ADDR_FAMILY, DEFAULT_VALUES, BGP_MVPN_ROUTE_TYPE } from '../../const/bgpConst';
     import { FormValidator, createBgpMvpnRouteConfigValidationRules } from '../../utils/validationCommon';
@@ -272,17 +288,23 @@
         originatingRouterIp: DEFAULT_VALUES.ROUTER_ID,
         sourceAs: DEFAULT_VALUES.LOCAL_AS,
         count: '1',
+        randomAsPathEnabled: false,
+        asMin: 64512,
+        asMax: 65534,
+        asPathMinLength: 1,
+        asPathMaxLength: 5,
         addressFamily: BGP_ADDR_FAMILY.IPV4_MVPN
     });
 
     const pagination = ref({
         current: 1,
-        pageSize: 20,
+        pageSize: 25,
         total: 0,
         showSizeChanger: false,
         position: ['bottomCenter'],
-        showTotal: total => `共 ${total} 条，每页 20 条`
+        showTotal: total => `共 ${total} 条，每页 25 条`
     });
+    const advancedConfigVisible = ref(false);
 
     const validationErrors = ref({
         rd: '',
@@ -466,6 +488,7 @@
             let config;
             if (ipv4MvpnData.value.routeType === BGP_MVPN_ROUTE_TYPE.INTRA_AS_I_PMSI_AD) {
                 config = {
+                    ...ipv4MvpnData.value,
                     rd: ipv4MvpnData.value.rd,
                     routeType: ipv4MvpnData.value.routeType,
                     originatingRouterIp: ipv4MvpnData.value.originatingRouterIp,
@@ -475,6 +498,7 @@
                 };
             } else if (ipv4MvpnData.value.routeType === BGP_MVPN_ROUTE_TYPE.INTER_AS_I_PMSI_AD) {
                 config = {
+                    ...ipv4MvpnData.value,
                     rd: ipv4MvpnData.value.rd,
                     routeType: ipv4MvpnData.value.routeType,
                     sourceAs: ipv4MvpnData.value.sourceAs,
@@ -656,6 +680,25 @@
 
     .bgp-route-form :deep(.nn-form-item) {
         flex: 0 0 auto;
+    }
+
+    .action-row {
+        border-top: 1px solid var(--nn-color-border-light);
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        gap: 12px;
+        align-items: center;
+        padding: 8px 0;
+    }
+
+    .advanced-config-button {
+        justify-self: start;
+        padding-left: 0;
+    }
+
+    .generate-route-button {
+        grid-column: 2;
+        justify-self: center;
     }
 
     .mvpn-route-tabs {

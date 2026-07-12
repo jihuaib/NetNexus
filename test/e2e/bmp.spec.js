@@ -167,9 +167,7 @@ async function expectBmpRouteLayout(page, pageTestId, detailTableTestId, routeTa
     expect(layout.routeRowHeights.length).toBeGreaterThan(1);
     expect(layout.routeRowHeights.every(height => height >= 24)).toBe(true);
 
-    const detailScrollbar = pageRoot
-        .locator(`[data-testid="${detailTableTestId}"]:visible .nn-table-content`)
-        .first();
+    const detailScrollbar = pageRoot.locator(`[data-testid="${detailTableTestId}"]:visible .nn-table-content`).first();
     const tabsScrollbar = pageRoot.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first();
     await Promise.all([expectAutoHidingScrollbar(detailScrollbar), expectAutoHidingScrollbar(tabsScrollbar)]);
 }
@@ -268,12 +266,7 @@ test.describe('BMP pages', () => {
             await expect(sessionRouteTable).toContainText('192.0.2.254');
             await expect(sessionRouteTable).toContainText('65000 65100');
             await expect(page.getByText(`当前 ${EXPECTED_PUBLIC_ROUTE_COUNT}`)).toBeVisible();
-            await expectBmpRouteLayout(
-                page,
-                'bmp-session-page',
-                'bmp-session-table',
-                'bmp-session-route-table'
-            );
+            await expectBmpRouteLayout(page, 'bmp-session-page', 'bmp-session-table', 'bmp-session-route-table');
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
             expect(snapshot.adjRib.total).toBe(EXPECTED_PUBLIC_ROUTE_COUNT);

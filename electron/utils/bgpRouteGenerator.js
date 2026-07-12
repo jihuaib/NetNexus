@@ -10,6 +10,8 @@ const DEFAULT_PUBLIC_RD = '0:0';
 const DEFAULT_GENERATED_PATH_ID = 0;
 const MAX_PATH_ID = 0xffffffff;
 const MAX_ADD_PATH_GENERATION_COUNT = 255;
+const MAX_ASN = 0xffffffff;
+const DEFAULT_RANDOM_AS_PATH_LENGTH = 1;
 
 function normalizePositiveInteger(value, fallback = 0) {
     const number = Number(value);
@@ -77,6 +79,46 @@ function getGeneratedUnicastPathIds(config = {}) {
         return [DEFAULT_GENERATED_PATH_ID];
     }
     return Array.from({ length: addPathCount }, (_, index) => index);
+}
+
+function isRandomAsPathEnabled(config = {}) {
+    return config.randomAsPathEnabled === true || config.randomAsPathEnabled === 'true';
+}
+
+function buildRandomAsPathGenerationContext(config = {}, random = Math.random) {
+    if (!isRandomAsPathEnabled(config)) return { enabled: false };
+
+    const asMin = Number(config.asMin);
+    const asMax = Number(config.asMax);
+    const legacyLength = normalizePositiveInteger(config.asPathLength, DEFAULT_RANDOM_AS_PATH_LENGTH);
+    const minLength = normalizePositiveInteger(config.asPathMinLength, legacyLength);
+    const maxLength = normalizePositiveInteger(config.asPathMaxLength, legacyLength);
+    if (!Number.isInteger(asMin) || asMin < 1 || asMin > MAX_ASN) {
+        throw new Error(`起始AS范围为 1 ~ ${MAX_ASN}`);
+    }
+    if (!Number.isInteger(asMax) || asMax < asMin || asMax > MAX_ASN) {
+        throw new Error(`结束AS范围为 ${asMin} ~ ${MAX_ASN}`);
+    }
+    if (!Number.isInteger(minLength) || minLength < 1 || minLength > 255) {
+        throw new Error('AS Path最少AS个数范围为 1 ~ 255');
+    }
+    if (!Number.isInteger(maxLength) || maxLength < minLength || maxLength > 255) {
+        throw new Error(`AS Path最多AS个数范围为 ${minLength} ~ 255`);
+    }
+
+    return { enabled: true, asMin, asMax, minLength, maxLength, random };
+}
+
+function getGeneratedRandomAsPath(context) {
+    if (!context?.enabled) return '';
+    const range = context.asMax - context.asMin + 1;
+    const lengthRange = context.maxLength - context.minLength + 1;
+    const lengthSample = Math.min(Math.max(Number(context.random()), 0), 1 - Number.EPSILON);
+    const length = context.minLength + Math.floor(lengthSample * lengthRange);
+    return Array.from({ length }, () => {
+        const sample = Math.min(Math.max(Number(context.random()), 0), 1 - Number.EPSILON);
+        return context.asMin + Math.floor(sample * range);
+    }).join(' ');
 }
 
 function normalizeQpRouteGrowthMode(mode) {
@@ -537,6 +579,8 @@ module.exports = {
     collectBgpGeneratedRoutes,
     getAddPathGenerationCount,
     getGeneratedUnicastPathIds,
+    buildRandomAsPathGenerationContext,
+    getGeneratedRandomAsPath,
     forEachMvpnGeneratedRoute,
     forEachQpGeneratedRoute,
     buildLabelGenerationContext,

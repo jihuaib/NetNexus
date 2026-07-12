@@ -843,17 +843,17 @@
         overflow: auto;
     }
 
-    .route-table :deep(.route-stale-row) {
+    .route-table :deep(.route-stale-row > .nn-table-cell) {
         color: var(--nn-color-text-stale);
-        background-color: var(--nn-color-bg-stale);
+        background-color: var(--nn-color-bg-stale) !important;
     }
 
-    .route-table :deep(.route-parse-warning-row) {
-        background-color: var(--nn-color-bg-warning-subtle);
+    .route-table :deep(.route-parse-warning-row > .nn-table-cell) {
+        background-color: var(--nn-color-bg-warning-subtle) !important;
     }
 
-    .route-table :deep(.route-parse-error-row) {
-        background-color: var(--nn-color-bg-danger-subtle);
+    .route-table :deep(.route-parse-error-row > .nn-table-cell) {
+        background-color: var(--nn-color-bg-danger-subtle) !important;
     }
 
     .detail-table {

@@ -117,7 +117,6 @@
 
     .nn-button-disabled {
         cursor: not-allowed;
-        opacity: 0.65;
     }
 
     .nn-button-small {
@@ -210,6 +209,25 @@
     .nn-button-link.nn-button-danger,
     .nn-button-text.nn-button-danger {
         color: var(--nn-color-error);
+    }
+
+    .nn-button-default.nn-button-disabled,
+    .nn-button-dashed.nn-button-disabled,
+    .nn-button-primary.nn-button-disabled {
+        border-color: var(--nn-color-border);
+        background: var(--nn-color-bg-disabled);
+        color: var(--nn-color-text-disabled);
+        filter: none;
+        opacity: 1;
+    }
+
+    .nn-button-link.nn-button-disabled,
+    .nn-button-text.nn-button-disabled {
+        border-color: transparent;
+        background: transparent;
+        color: var(--nn-color-text-disabled);
+        filter: none;
+        opacity: 1;
     }
 
     .nn-button-icon,

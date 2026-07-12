@@ -630,30 +630,38 @@ class NativeApp {
         const execFileAsync = promisify(execFile);
         let getNetRouteError = null;
 
-        try {
-            const script = this.buildWindowsGetRouteScript();
-            const { stdout } = await execFileAsync(
-                'powershell.exe',
-                ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
-                {
-                    encoding: 'buffer',
-                    maxBuffer: 10 * 1024 * 1024
+        if (this.supportsWindowsGetNetRoute()) {
+            try {
+                const script = this.buildWindowsGetRouteScript();
+                const { stdout } = await execFileAsync(
+                    'powershell.exe',
+                    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+                    {
+                        encoding: 'buffer',
+                        maxBuffer: 10 * 1024 * 1024,
+                        timeout: 10000,
+                        windowsHide: true
+                    }
+                );
+                const routes = this.parseWindowsRouteJson(this.decodeCommandOutput(stdout, 'utf8'));
+                if (routes.length > 0) {
+                    return routes;
                 }
-            );
-            const routes = this.parseWindowsRouteJson(this.decodeCommandOutput(stdout, 'utf8'));
-            if (routes.length > 0) {
-                return routes;
+                logger.warn('Get-NetRoute 未返回可用路由，尝试 route print 兜底');
+            } catch (err) {
+                getNetRouteError = err;
+                logger.warn(`Get-NetRoute 获取本地路由失败，尝试 route print 兜底: ${err.message}`);
             }
-            logger.warn('Get-NetRoute 未返回可用路由，尝试 route print 兜底');
-        } catch (err) {
-            getNetRouteError = err;
-            logger.warn(`Get-NetRoute 获取本地路由失败，尝试 route print 兜底: ${err.message}`);
+        } else {
+            logger.info(`Windows ${os.release()} 不支持 Get-NetRoute，直接使用 route print`);
         }
 
         try {
             const { stdout } = await execFileAsync('route.exe', ['print'], {
                 encoding: 'buffer',
-                maxBuffer: 10 * 1024 * 1024
+                maxBuffer: 10 * 1024 * 1024,
+                timeout: 10000,
+                windowsHide: true
             });
             return this.parseWindowsRoutePrintOutput(this.decodeCommandOutput(stdout, 'cp936'));
         } catch (err) {
@@ -662,6 +670,13 @@ class NativeApp {
             }
             throw err;
         }
+    }
+
+    supportsWindowsGetNetRoute(release = os.release()) {
+        const [major = 0, minor = 0] = String(release)
+            .split('.')
+            .map(value => Number.parseInt(value, 10) || 0);
+        return major > 6 || (major === 6 && minor >= 2);
     }
 
     buildWindowsGetRouteScript() {
