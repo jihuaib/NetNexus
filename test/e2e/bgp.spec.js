@@ -195,7 +195,7 @@ test.describe('BGP pages', () => {
 
             const routeTable = page.getByTestId('bgp-ipv4-route-table');
             await expect(routeTable).toContainText('10.20.0.0/24', { timeout: 10000 });
-            await expect(page.getByText(`共 ${EXPECTED_ROUTE_COUNT} 条，每页 20 条`)).toBeVisible();
+            await expect(page.getByText(`共 ${EXPECTED_ROUTE_COUNT} 条，每页 25 条`)).toBeVisible();
 
             routeSnapshot = await controller.waitForRoutes(1, EXPECTED_ROUTE_COUNT);
             await recordStep(
@@ -266,7 +266,7 @@ test.describe('BGP pages', () => {
             await page.getByTestId('bgp-ipv4-route-count-input').fill(String(LARGE_ROUTE_COUNT));
             await page.getByTestId('bgp-generate-ipv4-routes-button').click();
 
-            await expect(page.getByText(`共 ${LARGE_ROUTE_COUNT} 条，每页 20 条`)).toBeVisible({ timeout: 20000 });
+            await expect(page.getByText(`共 ${LARGE_ROUTE_COUNT} 条，每页 25 条`)).toBeVisible({ timeout: 20000 });
             const routeSnapshot = await controller.waitForRoutes(1, LARGE_ROUTE_COUNT, 20000);
             await recordStep(
                 `Output: workerRoutes=${routeSnapshot.total}, firstRoute=${routeSnapshot.list[0].ip}/${routeSnapshot.list[0].mask}`
@@ -613,7 +613,7 @@ test.describe('BGP pages', () => {
 
             await page.goto('/#/bgp/route-ipv4-qp');
             await expect(page.getByText('IPv4-QP路由配置')).toBeVisible();
-            await expect(page.getByText(`共 ${LARGE_ROUTE_COUNT} 条，每页 20 条`)).toBeVisible({ timeout: 20000 });
+            await expect(page.getByText(`共 ${LARGE_ROUTE_COUNT} 条，每页 25 条`)).toBeVisible({ timeout: 20000 });
             await recordStep(
                 `Output: port=${bgpPort}, seededRoutes=${seedResult.routeCount}, attrCount=${seedResult.attrCount}, attrGroups=${seedResult.attrGroupCount}`
             );

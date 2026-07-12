@@ -18,6 +18,11 @@ export function useAutoHideScrollbar(hideDelay = DEFAULT_HIDE_DELAY) {
         scrollbarActive.value = false;
     };
 
+    const pinScrollbar = () => {
+        clearHideTimer();
+        scrollbarActive.value = true;
+    };
+
     const showScrollbar = () => {
         scrollbarActive.value = true;
         clearHideTimer();
@@ -31,6 +36,7 @@ export function useAutoHideScrollbar(hideDelay = DEFAULT_HIDE_DELAY) {
 
     return {
         scrollbarActive,
+        pinScrollbar,
         showScrollbar,
         hideScrollbar
     };

@@ -14,8 +14,8 @@
                             class="nn-table-content"
                             :class="{ 'nn-scrollbar-active': scrollbarActive }"
                             :style="contentStyle"
-                            @pointerenter="showScrollbar"
-                            @pointermove="showScrollbar"
+                            @pointerenter="pinScrollbar"
+                            @pointermove="pinScrollbar"
                             @pointerleave="hideScrollbar"
                             @scroll.passive="showScrollbar"
                         >
@@ -257,7 +257,7 @@
 
     const emit = defineEmits(['change']);
     const slots = useSlots();
-    const { scrollbarActive, showScrollbar, hideScrollbar } = useAutoHideScrollbar();
+    const { scrollbarActive, pinScrollbar, showScrollbar, hideScrollbar } = useAutoHideScrollbar();
     const contentRef = ref(null);
     const localCurrentPage = ref(1);
     const localPageSize = ref(10);
