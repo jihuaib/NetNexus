@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container adaptive-table-page">
+    <div class="nn-container adaptive-table-page">
         <nn-card title="Syslog消息日志" class="adaptive-table-card">
             <template #extra>
                 <nn-space>
@@ -354,7 +354,7 @@
 
 <style scoped>
     .adaptive-table-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -450,13 +450,5 @@
 
     .detail-pre {
         max-height: 260px;
-        margin: 0;
-        padding: 8px;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-        background: var(--nn-color-bg-muted);
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 4px;
     }
 </style>

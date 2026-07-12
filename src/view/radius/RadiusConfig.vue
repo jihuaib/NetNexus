@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container radius-config-page">
+    <div class="nn-container radius-config-page">
         <nn-row class="radius-config-row" :gutter="10">
             <nn-col :span="24">
                 <nn-card title="RADIUS服务器配置">
@@ -349,7 +349,7 @@
 
 <style scoped>
     .radius-config-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;

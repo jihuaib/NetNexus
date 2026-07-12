@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container adaptive-list-page" data-testid="bmp-config-page">
+    <div class="nn-container adaptive-list-page" data-testid="bmp-config-page">
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="BMP服务器配置">
@@ -474,18 +474,20 @@
     onMounted(async () => {
         // 加载BMP配置
         const savedConfig = await window.bmpApi.loadBmpConfig();
-        if (savedConfig.status === 'success' && savedConfig.data) {
-            bmpConfig.value.port = savedConfig.data.port || DEFAULT_VALUES.DEFAULT_BMP_PORT;
-            const savedDraft = normalizeBmpV4TlvDraft(savedConfig.data.bmpV4TlvDraft);
-            bmpConfig.value.bmpV4TlvDraft = savedDraft;
-            bmpConfig.value.pathMarkingTlvType = normalizePathMarkingTlvType(
-                savedConfig.data.pathMarkingTlvType,
-                savedDraft
-            );
-            bmpConfig.value.enableAuth = savedConfig.data.enableAuth || false;
-            bmpConfig.value.localPort = savedConfig.data.localPort;
-            bmpConfig.value.peerIP = savedConfig.data.peerIP || '';
-            bmpConfig.value.md5Password = savedConfig.data.md5Password || '';
+        if (savedConfig.status === 'success') {
+            if (savedConfig.data) {
+                bmpConfig.value.port = savedConfig.data.port || DEFAULT_VALUES.DEFAULT_BMP_PORT;
+                const savedDraft = normalizeBmpV4TlvDraft(savedConfig.data.bmpV4TlvDraft);
+                bmpConfig.value.bmpV4TlvDraft = savedDraft;
+                bmpConfig.value.pathMarkingTlvType = normalizePathMarkingTlvType(
+                    savedConfig.data.pathMarkingTlvType,
+                    savedDraft
+                );
+                bmpConfig.value.enableAuth = savedConfig.data.enableAuth || false;
+                bmpConfig.value.localPort = savedConfig.data.localPort;
+                bmpConfig.value.peerIP = savedConfig.data.peerIP || '';
+                bmpConfig.value.md5Password = savedConfig.data.md5Password || '';
+            }
         } else {
             console.error('配置文件加载失败', savedConfig.msg);
         }
@@ -494,7 +496,7 @@
 
 <style scoped>
     .adaptive-list-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;

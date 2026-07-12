@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bmp-full-page" data-testid="bmp-loc-rib-page">
+    <div class="nn-container bmp-full-page" data-testid="bmp-loc-rib-page">
         <nn-row class="bmp-full-row">
             <nn-col :span="24">
                 <nn-card title="BGP Loc-RIB" class="bmp-full-card">
@@ -33,7 +33,7 @@
                                                 size="small"
                                                 style="margin-bottom: 8px"
                                                 row-key="peerIp"
-                                                :scroll="{ x: 1290 }"
+                                                :scroll="{ x: 1162 }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'addPath'">
@@ -117,7 +117,7 @@
                                                             : '')
                                                 "
                                                 size="small"
-                                                :scroll="{ x: 1490, y: '100%' }"
+                                                :scroll="{ x: 1546, y: '100%' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
@@ -320,7 +320,8 @@
             title: '操作',
             key: 'action',
             fixed: 'right',
-            width: 200
+            width: 72,
+            align: 'center'
         }
     ];
 
@@ -697,7 +698,7 @@
 
 <style scoped>
     .bmp-full-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -751,12 +752,12 @@
         overflow: hidden;
     }
 
-    .client-tabs :deep(.nn-tabs-content-holder),
-    .client-tabs :deep(.nn-tabs-content),
-    .client-tabs :deep(.nn-tabs-tabpane),
-    .bmp-inner-tabs :deep(.nn-tabs-content-holder),
-    .bmp-inner-tabs :deep(.nn-tabs-content),
-    .bmp-inner-tabs :deep(.nn-tabs-tabpane) {
+    .client-tabs > :deep(.nn-tabs-content-holder),
+    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
+    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
@@ -766,22 +767,22 @@
         overflow: hidden;
     }
 
-    .bmp-inner-tabs :deep(.nn-tabs-nav) {
+    .bmp-inner-tabs > :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin-bottom: 8px;
     }
 
-    .bmp-inner-tabs :deep(.nn-tabs-tab) {
+    .bmp-inner-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
         padding: 8px 0 !important;
     }
 
-    .client-tabs :deep(.nn-tabs-tab) {
-        justify-content: flex-start;
+    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
+        justify-content: center;
         padding: 8px;
-        text-align: left;
+        text-align: center;
     }
 
-    .client-tabs :deep(.nn-tabs-tab-button) {
+    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab > .nn-tabs-tab-button) {
         width: 100%;
     }
 
@@ -842,16 +843,16 @@
         overflow: auto;
     }
 
-    :deep(.route-stale-row) {
+    .route-table :deep(.route-stale-row) {
         color: var(--nn-color-text-stale);
         background-color: var(--nn-color-bg-stale);
     }
 
-    :deep(.route-parse-warning-row) {
+    .route-table :deep(.route-parse-warning-row) {
         background-color: var(--nn-color-bg-warning-subtle);
     }
 
-    :deep(.route-parse-error-row) {
+    .route-table :deep(.route-parse-error-row) {
         background-color: var(--nn-color-bg-danger-subtle);
     }
 
@@ -882,25 +883,20 @@
         overflow: hidden;
     }
 
-    .route-table :deep(.nn-table-container),
-    .route-table :deep(.nn-table-content) {
+    .route-table :deep(.nn-table-container) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
+        overflow: hidden;
     }
 
-    .route-table :deep(.nn-table-header) {
-        flex: 0 0 auto;
-        overflow: hidden !important;
-    }
-
-    .route-table :deep(.nn-table-body) {
+    .route-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
         max-height: none !important;
-        overflow-y: auto !important;
+        overflow: auto !important;
     }
 
     .route-table :deep(.nn-pagination) {

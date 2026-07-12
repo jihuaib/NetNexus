@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container adaptive-table-page">
+    <div class="nn-container adaptive-table-page">
         <nn-card title="NTP请求日志" class="adaptive-table-card">
             <template #extra>
                 <nn-space>
@@ -148,7 +148,7 @@
 
 <style scoped>
     .adaptive-table-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }

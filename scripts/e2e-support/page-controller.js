@@ -5,6 +5,7 @@ const dhcp = require('./dhcp');
 const ftp = require('./ftp');
 const native = require('./native');
 const ntp = require('./ntp');
+const radius = require('./radius');
 const rpki = require('./rpki');
 const snmp = require('./snmp');
 const syslog = require('./syslog');
@@ -20,6 +21,7 @@ const featureHandlers = {
     ftp,
     native,
     ntp,
+    radius,
     rpki,
     snmp,
     syslog,
@@ -44,6 +46,7 @@ class FeaturePageE2eController {
             dhcp: dhcp.createDhcpPageState(now),
             ftp: ftp.createFtpPageState(this.protocolRoot),
             ntp: ntp.createNtpPageState(now),
+            radius: radius.createRadiusPageState(now, this.protocolRoot),
             rpki: rpki.createRpkiPageState(),
             snmp: snmp.createSnmpPageState(),
             syslog: syslog.createSyslogPageState(now),

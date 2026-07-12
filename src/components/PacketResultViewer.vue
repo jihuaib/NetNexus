@@ -55,7 +55,7 @@
                             @select="onTreeNodeSelect"
                         />
                     </div>
-                    <div v-else class="no-data-message">暂无解析数据</div>
+                    <nn-empty v-else class="no-data-message" description="暂无解析数据" />
                 </section>
 
                 <!-- 十六进制视图 -->
@@ -569,7 +569,6 @@
         --packet-result-modal-max-height: calc(
             100vh - var(--packet-result-modal-margin-y) - var(--packet-result-modal-margin-y)
         );
-        top: var(--packet-result-modal-margin-y);
         max-height: var(--packet-result-modal-max-height) !important;
         padding-bottom: 0;
     }
@@ -761,12 +760,10 @@
     }
 
     .no-data-message {
-        display: flex;
-        justify-content: center;
-        align-items: center;
+        flex: 1 1 0;
+        min-height: 0;
         height: 100%;
         width: 100%;
-        color: var(--nn-color-text-placeholder);
     }
 
     /* 树结构区域字体样式 */

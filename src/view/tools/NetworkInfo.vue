@@ -1,12 +1,12 @@
 <template>
-    <div class="mt-container network-info-page">
+    <div class="nn-container network-info-page">
         <!-- 面板头部 -->
         <nn-card title="网络信息" class="network-info-card">
             <div class="network-info-content">
                 <nn-tabs v-model:active-key="activePanelKey" size="small" class="network-tabs">
                     <nn-tab-pane key="interfaces" tab="接口信息">
                         <div class="network-pane">
-                            <div class="network-toolbar">
+                            <div class="network-toolbar network-interface-toolbar">
                                 <nn-select
                                     v-model:value="selectedInterfaceName"
                                     placeholder="选择网络接口"
@@ -46,7 +46,8 @@
                                             <nn-tag color="blue">{{ record.family }}</nn-tag>
                                         </template>
                                         <template v-else-if="column.key === 'mac'">
-                                            <nn-tag color="green">{{ record.mac }}</nn-tag>
+                                            <nn-tag v-if="record.mac" color="green">{{ record.mac }}</nn-tag>
+                                            <span v-else class="network-empty-value">-</span>
                                         </template>
                                         <template v-else-if="column.key === 'addresses'">
                                             <div class="ip-address-list">
@@ -880,7 +881,7 @@
 
 <style scoped>
     .network-info-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -943,6 +944,25 @@
 
     .network-interface-select {
         min-width: 280px;
+    }
+
+    .network-interface-toolbar {
+        flex-wrap: nowrap;
+    }
+
+    .network-interface-toolbar .network-interface-select {
+        width: 320px;
+        min-width: 0;
+        max-width: 100%;
+        flex: 0 1 320px;
+    }
+
+    .network-interface-toolbar :deep(.nn-button) {
+        flex: 0 0 auto;
+    }
+
+    .network-empty-value {
+        color: var(--nn-color-text-muted);
     }
 
     .network-table-wrap {

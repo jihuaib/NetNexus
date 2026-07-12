@@ -1,9 +1,13 @@
 <template>
     <Teleport to="body">
-        <Transition name="nn-modal-fade">
-            <div v-if="hasOpened" v-show="open" class="nn-modal-root">
-                <div class="nn-modal-mask" :style="layerStyle" aria-hidden="true" />
-                <div class="nn-modal-wrap" :class="wrapClassName" :style="layerStyle" @click.self="handleMaskClick">
+        <Transition name="nn-modal-fade" @after-leave="handleAfterLeave" @leave-cancelled="handleLeaveCancelled">
+            <div v-if="hasOpened" v-show="open" class="nn-modal-root" :style="layerStyle">
+                <div class="nn-modal-mask" aria-hidden="true" />
+                <div
+                    class="nn-modal-wrap"
+                    :class="[wrapClassName, { 'nn-modal-wrap-top': !centered }]"
+                    @click.self="handleMaskClick"
+                >
                     <div
                         class="nn-modal-positioner"
                         :class="{ 'nn-modal-positioner-dragging': dragging }"
@@ -125,6 +129,10 @@
             default: true
         },
         closable: {
+            type: Boolean,
+            default: true
+        },
+        centered: {
             type: Boolean,
             default: true
         },
@@ -445,6 +453,22 @@
         }
     };
 
+    const finishOverlayClose = () => {
+        if (!props.open && deactivateOverlay()) {
+            restoreFocus();
+        }
+    };
+
+    const handleAfterLeave = () => {
+        finishOverlayClose();
+    };
+
+    const handleLeaveCancelled = () => {
+        if (props.open) {
+            activateOverlay();
+        }
+    };
+
     watch(
         () => props.open,
         open => {
@@ -455,9 +479,6 @@
                 focusDialog();
             } else {
                 stopDrag();
-                if (deactivateOverlay()) {
-                    restoreFocus();
-                }
             }
         },
         { immediate: true }
@@ -479,21 +500,34 @@
 </script>
 
 <style scoped>
-    .nn-modal-mask {
+    .nn-modal-root {
         position: fixed;
         inset: 0;
+        pointer-events: none;
+    }
+
+    .nn-modal-mask {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
         background: rgba(15, 23, 42, 0.48);
-        backdrop-filter: blur(1px);
+        pointer-events: auto;
     }
 
     .nn-modal-wrap {
-        position: fixed;
+        position: absolute;
         inset: 0;
+        z-index: 1;
         display: flex;
-        align-items: flex-start;
+        align-items: center;
         justify-content: center;
         overflow: auto;
-        padding: clamp(24px, 10vh, 80px) 16px 24px;
+        padding: 16px;
+        pointer-events: auto;
+    }
+
+    .nn-modal-wrap-top {
+        align-items: flex-start;
     }
 
     .nn-modal-positioner {
@@ -614,26 +648,14 @@
         transition: opacity 0.16s ease;
     }
 
-    .nn-modal-fade-enter-active .nn-modal,
-    .nn-modal-fade-leave-active .nn-modal {
-        transition: transform 0.16s ease;
-    }
-
     .nn-modal-fade-enter-from,
     .nn-modal-fade-leave-to {
         opacity: 0;
     }
 
-    .nn-modal-fade-enter-from .nn-modal,
-    .nn-modal-fade-leave-to .nn-modal {
-        transform: translateY(-8px) scale(0.98);
-    }
-
     @media (prefers-reduced-motion: reduce) {
         .nn-modal-fade-enter-active,
-        .nn-modal-fade-leave-active,
-        .nn-modal-fade-enter-active .nn-modal,
-        .nn-modal-fade-leave-active .nn-modal {
+        .nn-modal-fade-leave-active {
             transition: none;
         }
     }

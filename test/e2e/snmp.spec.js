@@ -1,4 +1,4 @@
-const { test } = require('../../scripts/e2e-support/electron-test');
+const { expect, test } = require('../../scripts/e2e-support/electron-test');
 const { setupFeaturePagesE2e, verifyPage } = require('../../scripts/e2e-support');
 
 const pageCases = [
@@ -24,5 +24,27 @@ test.describe('SNMP pages', () => {
         for (const pageCase of pageCases) {
             await verifyPage(test, page, pageCase);
         }
+    });
+
+    test('recompiles stored MIB files with an IPC-cloneable payload', async ({ page }) => {
+        await page.goto('/#/snmp/snmp-mib');
+
+        const recompileButton = page.getByRole('button', { name: '重新编译' });
+        await expect(recompileButton).toBeEnabled();
+        await recompileButton.click();
+
+        const toast = page.locator('.nn-toast').filter({ hasText: 'MIB编译完成' });
+        const fixedTabs = page.locator('.nn-main-container > .fixed-tabs');
+        await expect(toast).toBeVisible();
+        await expect(toast).toHaveCSS('pointer-events', 'none');
+        await expect(toast.getByRole('button', { name: '关闭' })).toHaveCSS('pointer-events', 'auto');
+
+        const [toastBox, tabsBox] = await Promise.all([toast.boundingBox(), fixedTabs.boundingBox()]);
+        expect(toastBox).not.toBeNull();
+        expect(tabsBox).not.toBeNull();
+        expect(toastBox.y).toBeGreaterThanOrEqual(tabsBox.y + tabsBox.height + 7);
+
+        await page.getByRole('tab', { name: 'Trap监控', exact: true }).click();
+        await expect(page).toHaveURL(/#\/snmp\/snmp-trap$/u);
     });
 });

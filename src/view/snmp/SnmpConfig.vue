@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container snmp-config-page">
+    <div class="nn-container snmp-config-page">
         <div class="snmp-config-layout">
             <nn-card title="SNMP 配置" class="snmp-config-card">
                 <nn-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol" class="snmp-config-form">
@@ -453,7 +453,7 @@
 
 <style scoped>
     .snmp-config-page {
-        height: calc(100vh - 68px);
+        height: 100%;
         overflow: hidden;
     }
 

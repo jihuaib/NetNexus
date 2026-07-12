@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container tcpao-page">
+    <div class="nn-container tcpao-page">
         <nn-card title="TCP-AO MAC 计算器" class="tcpao-card">
             <nn-form :model="formState" layout="vertical" class="tcpao-form" @finish="handleCalculate">
                 <div class="tcpao-layout">
@@ -326,6 +326,7 @@
 
 <style scoped>
     .tcpao-page {
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -333,16 +334,8 @@
     .tcpao-card {
         display: flex;
         flex-direction: column;
-        height: calc(100vh - 70px);
+        height: 100%;
         overflow: hidden;
-    }
-
-    .tcpao-card :deep(.nn-card-head) {
-        min-height: 38px !important;
-    }
-
-    .tcpao-card :deep(.nn-card-head-title) {
-        padding: 8px 0 !important;
     }
 
     .tcpao-card :deep(.nn-card-body) {

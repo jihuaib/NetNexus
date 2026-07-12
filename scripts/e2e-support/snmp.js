@@ -1,7 +1,7 @@
 const { successResponse } = require('./common');
 
 const snmpPageApiScript =
-    "    window.snmpApi = {\n        saveSnmpConfig: config => call('snmp.saveSnmpConfig', config),\n        getSnmpConfig: () => call('snmp.getSnmpConfig'),\n        startSnmp: config => call('snmp.startSnmp', config),\n        stopSnmp: () => call('snmp.stopSnmp'),\n        getTrapList: query => call('snmp.getTrapList', query),\n        clearTrapHistory: () => call('snmp.clearTrapHistory'),\n        selectMibFiles: () => call('snmp.selectMibFiles'),\n        selectMibDirectory: () => call('snmp.selectMibDirectory'),\n        compileMibs: filePaths => call('snmp.compileMibs', filePaths),\n        getMibStatus: () => call('snmp.getMibStatus'),\n        getMibTreeChildren: oid => call('snmp.getMibTreeChildren', oid),\n        saveMibProject: payload => call('snmp.saveMibProject', payload),\n        listMibProjects: () => call('snmp.listMibProjects'),\n        importMibProject: payload => call('snmp.importMibProject', payload),\n        clearMibs: () => call('snmp.clearMibs'),\n        translateOid: oid => call('snmp.translateOid', oid),\n        sendGetRequest: request => call('snmp.sendGetRequest', request),\n        sendGetNextRequest: request => call('snmp.sendGetNextRequest', request),\n        sendWalkRequest: request => call('snmp.sendWalkRequest', request),\n        sendSetRequest: request => call('snmp.sendSetRequest', request),\n        listOidInstances: request => call('snmp.listOidInstances', request)\n    };";
+    "    window.snmpApi = {\n        saveSnmpConfig: config => call('snmp.saveSnmpConfig', config),\n        getSnmpConfig: () => call('snmp.getSnmpConfig'),\n        startSnmp: config => call('snmp.startSnmp', config),\n        stopSnmp: () => call('snmp.stopSnmp'),\n        getTrapList: query => call('snmp.getTrapList', query),\n        clearTrapHistory: () => call('snmp.clearTrapHistory'),\n        selectMibFiles: () => call('snmp.selectMibFiles'),\n        selectMibDirectory: () => call('snmp.selectMibDirectory'),\n        compileMibs: filePaths => {\n            const cloneProbe = new MessageChannel();\n            try {\n                cloneProbe.port1.postMessage(filePaths);\n            } finally {\n                cloneProbe.port1.close();\n                cloneProbe.port2.close();\n            }\n            return call('snmp.compileMibs', [...filePaths]);\n        },\n        getMibStatus: () => call('snmp.getMibStatus'),\n        getMibTreeChildren: oid => call('snmp.getMibTreeChildren', oid),\n        saveMibProject: payload => call('snmp.saveMibProject', payload),\n        listMibProjects: () => call('snmp.listMibProjects'),\n        importMibProject: payload => call('snmp.importMibProject', payload),\n        clearMibs: () => call('snmp.clearMibs'),\n        translateOid: oid => call('snmp.translateOid', oid),\n        sendGetRequest: request => call('snmp.sendGetRequest', request),\n        sendGetNextRequest: request => call('snmp.sendGetNextRequest', request),\n        sendWalkRequest: request => call('snmp.sendWalkRequest', request),\n        sendSetRequest: request => call('snmp.sendSetRequest', request),\n        listOidInstances: request => call('snmp.listOidInstances', request)\n    };";
 
 function createSnmpPageState() {
     return {
@@ -44,13 +44,15 @@ function createSnmpPageState() {
                     nodeRole: 'scalar'
                 }
             ],
-            files: [
+            loadedFiles: [
                 {
                     fileName: 'NETNEXUS-DEMO-MIB.mib',
                     filePath: 'scripts/manual/snmp/mibs/NETNEXUS-DEMO-MIB.mib',
                     status: 'compiled'
                 }
-            ]
+            ],
+            failedFiles: [],
+            requestedFiles: ['scripts/manual/snmp/mibs/NETNEXUS-DEMO-MIB.mib']
         }
     };
 }

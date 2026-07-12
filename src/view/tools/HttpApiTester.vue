@@ -1,9 +1,9 @@
 <template>
-    <div class="mt-container http-api-page">
+    <div class="nn-container http-api-page">
         <nn-card title="HTTP API测试" class="http-api-card">
             <template #extra>
                 <nn-space>
-                    <nn-tag v-if="pageLoading" color="processing">加载中</nn-tag>
+                    <nn-tag v-if="pageLoading" color="processing" role="status" aria-live="polite">加载中</nn-tag>
                     <nn-button type="primary" size="small" @click="createApiConnection">
                         <template #icon>
                             <PlusOutlined />
@@ -541,10 +541,16 @@
 </script>
 
 <style scoped>
+    .http-api-page {
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+    }
+
     .http-api-card {
         display: flex;
         flex-direction: column;
-        height: calc(100vh - 70px);
+        height: 100%;
         overflow: hidden;
     }
 
@@ -582,12 +588,20 @@
         padding: 0 0 8px;
     }
 
+    .api-sidebar :deep(.nn-dropdown),
+    .api-sidebar :deep(.nn-dropdown-trigger) {
+        display: flex;
+        width: 100%;
+        min-width: 0;
+    }
+
     .api-list-item {
         position: relative;
         width: 100%;
         min-height: 42px;
         padding: 10px 20px;
-        line-height: 1.35;
+        font-size: 13px;
+        line-height: 1.4;
         text-align: left;
         color: var(--nn-color-text);
         word-break: break-all;

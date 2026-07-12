@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bmp-full-page">
+    <div class="nn-container bmp-full-page">
         <nn-row class="bmp-full-row">
             <nn-col :span="24">
                 <nn-card title="BGP会话统计" class="bmp-full-card">
@@ -339,7 +339,7 @@
 
 <style scoped>
     .bmp-full-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -385,12 +385,12 @@
         overflow: hidden;
     }
 
-    .client-tabs :deep(.nn-tabs-content-holder),
-    .client-tabs :deep(.nn-tabs-content),
-    .client-tabs :deep(.nn-tabs-tabpane),
-    .bmp-inner-tabs :deep(.nn-tabs-content-holder),
-    .bmp-inner-tabs :deep(.nn-tabs-content),
-    .bmp-inner-tabs :deep(.nn-tabs-tabpane) {
+    .client-tabs > :deep(.nn-tabs-content-holder),
+    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
+    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
@@ -400,7 +400,7 @@
         overflow: hidden;
     }
 
-    .bmp-inner-tabs :deep(.nn-tabs-nav) {
+    .bmp-inner-tabs > :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin-bottom: 8px;
     }
@@ -433,26 +433,21 @@
         overflow: hidden;
     }
 
-    .report-table :deep(.nn-table-container),
-    .report-table :deep(.nn-table-content) {
+    .report-table :deep(.nn-table-container) {
         flex: 1 1 0;
         min-height: 0;
         min-width: 0;
         display: flex;
         flex-direction: column;
+        overflow: hidden;
     }
 
-    .report-table :deep(.nn-table-header) {
-        flex: 0 0 auto;
-        overflow: hidden !important;
-    }
-
-    .report-table :deep(.nn-table-body) {
+    .report-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
         max-height: none !important;
-        overflow-y: auto !important;
+        overflow: auto !important;
     }
 
     .report-table :deep(.nn-pagination) {
@@ -474,13 +469,13 @@
         white-space: nowrap;
     }
 
-    .client-tabs :deep(.nn-tabs-tab) {
-        justify-content: flex-start;
+    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
+        justify-content: center;
         padding: 8px;
-        text-align: left;
+        text-align: center;
     }
 
-    .client-tabs :deep(.nn-tabs-tab-button) {
+    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab > .nn-tabs-tab-button) {
         width: 100%;
     }
 

@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container adaptive-list-page" data-testid="rpki-config-page">
+    <div class="nn-container adaptive-list-page" data-testid="rpki-config-page">
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="RPKI服务器配置">
@@ -399,16 +399,18 @@
         try {
             // 加载配置
             const result = await window.rpkiApi.loadRpkiConfig();
-            if (result.status === 'success' && result.data) {
-                rpkiConfig.value.port = result.data.port;
-                rpkiConfig.value.enableAuth = result.data.enableAuth || false;
-                rpkiConfig.value.localPort = result.data.localPort;
-                rpkiConfig.value.peerIP = result.data.peerIP || '';
-                rpkiConfig.value.md5Password = result.data.md5Password || '';
-                rpkiConfig.value.maxProtocolVersion = normalizeMaxProtocolVersion(
-                    result.data.maxProtocolVersion ?? DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION
-                );
-                rpkiConfig.value.aspaFormat = result.data.aspaFormat || RPKI_ASPA_FORMAT.LATEST;
+            if (result.status === 'success') {
+                if (result.data) {
+                    rpkiConfig.value.port = result.data.port;
+                    rpkiConfig.value.enableAuth = result.data.enableAuth || false;
+                    rpkiConfig.value.localPort = result.data.localPort;
+                    rpkiConfig.value.peerIP = result.data.peerIP || '';
+                    rpkiConfig.value.md5Password = result.data.md5Password || '';
+                    rpkiConfig.value.maxProtocolVersion = normalizeMaxProtocolVersion(
+                        result.data.maxProtocolVersion ?? DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION
+                    );
+                    rpkiConfig.value.aspaFormat = result.data.aspaFormat || RPKI_ASPA_FORMAT.LATEST;
+                }
             } else {
                 console.error('配置文件加载失败', result.msg);
             }
@@ -420,7 +422,7 @@
 
 <style scoped>
     .adaptive-list-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;

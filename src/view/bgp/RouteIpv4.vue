@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bgp-route-page" data-testid="bgp-route-ipv4-page">
+    <div class="nn-container bgp-route-page" data-testid="bgp-route-ipv4-page">
         <nn-card :title="routeCardTitle" class="bgp-route-card">
             <nn-form :model="ipv4Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <div class="config-section">
@@ -486,8 +486,10 @@
     onMounted(async () => {
         // 加载保存的配置
         const savedConfig = await window.bgpApi.loadIpv4UNCRouteConfig();
-        if (savedConfig.status === 'success' && savedConfig.data) {
-            Object.assign(ipv4Data.value, savedConfig.data);
+        if (savedConfig.status === 'success') {
+            if (savedConfig.data) {
+                Object.assign(ipv4Data.value, savedConfig.data);
+            }
         } else {
             console.error('IPv4-UNC路由配置文件加载失败', savedConfig.msg);
         }
@@ -663,7 +665,7 @@
 
 <style scoped>
     .bgp-route-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
         display: flex;
@@ -684,21 +686,6 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
-    }
-
-    .bgp-route-card :deep(.nn-card-head),
-    .bgp-route-list-card :deep(.nn-card-head) {
-        flex: 0 0 auto;
-        min-height: 36px !important;
-    }
-
-    .bgp-route-card :deep(.nn-card-head-title),
-    .bgp-route-list-card :deep(.nn-card-head-title) {
-        padding: 8px 0 !important;
-    }
-
-    .bgp-route-list-card :deep(.nn-card-extra) {
-        padding: 6px 0 !important;
     }
 
     .bgp-route-card :deep(.nn-card-body) {

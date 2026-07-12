@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-main-container">
+    <div class="nn-main-container">
         <div class="fixed-tabs">
             <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
                 <nn-tab-pane key="ntp-config" tab="NTP配置" />

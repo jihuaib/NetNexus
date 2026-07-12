@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container snmp-mib-page" @click="hideContextMenu">
+    <div class="nn-container snmp-mib-page" @click="hideContextMenu">
         <nn-card title="MIB 管理" class="mib-card">
             <div class="mib-workspace">
                 <div class="mib-toolbar">
@@ -1279,7 +1279,9 @@
     const compileMibFiles = async filePaths => {
         try {
             mibCompileLoading.value = true;
-            const result = await window.snmpApi.compileMibs(filePaths);
+            // Electron IPC cannot structured-clone Vue's reactive array Proxy.
+            const plainFilePaths = [...filePaths];
+            const result = await window.snmpApi.compileMibs(plainFilePaths);
             if (result.status === 'success') {
                 setMibStatus(result.data);
                 if (result.data?.failedFiles?.length > 0) {
@@ -1880,7 +1882,7 @@
 
 <style scoped>
     .snmp-mib-page {
-        height: calc(100vh - 68px);
+        height: 100%;
         overflow: hidden;
     }
 
@@ -1987,6 +1989,11 @@
         color: var(--nn-color-text-strong);
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .mib-file-block .mib-panel-title {
+        font-size: 13px;
+        line-height: 1.4;
     }
 
     .mib-panel-meta {
@@ -2108,6 +2115,8 @@
         flex: 1;
         min-width: 0;
         overflow: hidden;
+        font-size: 13px;
+        line-height: 1.4;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
@@ -2325,7 +2334,6 @@
     }
 
     :global(.walk-modal-wrap .nn-modal) {
-        top: 24px;
         max-width: calc(100vw - 32px);
         padding-bottom: 0;
     }

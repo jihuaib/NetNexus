@@ -1,9 +1,9 @@
 <template>
-    <div class="mt-container tcp-tool-page">
+    <div class="nn-container tcp-tool-page">
         <!-- 连接配置 -->
         <nn-card title="连接配置" class="tcp-config-card" size="small">
             <template #extra>
-                <nn-tag :color="stateColor">{{ stateName }}</nn-tag>
+                <nn-tag :color="stateColor" role="status" aria-live="polite">{{ stateName }}</nn-tag>
             </template>
             <nn-form layout="inline" :model="connectForm" class="tcp-config-form">
                 <nn-form-item label="目标地址">
@@ -70,12 +70,21 @@
 
         <!-- 收包窗口 -->
         <nn-card title="收包窗口" class="tcp-recv-card" size="small">
-            <div ref="logContainer" class="tcp-log-list">
-                <nn-empty v-if="logs.length === 0" description="暂无收包数据" class="tcp-log-empty" />
-                <div v-for="(log, index) in logs" :key="index" class="tcp-log-item" :class="`tcp-log-${log.type}`">
-                    <span class="tcp-log-time">{{ log.time }}</span>
-                    <span class="tcp-log-tag">{{ log.tag }}</span>
-                    <span class="tcp-log-text">{{ log.text }}</span>
+            <div ref="logContainer" class="tcp-log-list nn-packet-log">
+                <nn-empty
+                    v-if="logs.length === 0"
+                    description="暂无收包数据"
+                    class="tcp-log-empty nn-packet-log-empty"
+                />
+                <div
+                    v-for="(log, index) in logs"
+                    :key="index"
+                    class="tcp-log-item nn-packet-log-item"
+                    :class="[`tcp-log-${log.type}`, `nn-packet-log-${log.type}`]"
+                >
+                    <span class="tcp-log-time nn-packet-log-time">{{ log.time }}</span>
+                    <span class="tcp-log-tag nn-packet-log-tag">{{ log.tag }}</span>
+                    <span class="tcp-log-text nn-packet-log-text">{{ log.text }}</span>
                 </div>
             </div>
             <div class="tcp-recv-toolbar">
@@ -290,7 +299,7 @@
 
 <style scoped>
     .tcp-tool-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -389,85 +398,5 @@
         justify-content: flex-end;
         gap: 12px;
         margin-top: 8px;
-    }
-
-    .tcp-log-list {
-        flex: 1 1 0;
-        min-height: 0;
-        overflow-y: auto;
-        font-family: 'Courier New', Courier, monospace;
-        font-size: 12px;
-        line-height: 1.7;
-        background: var(--nn-color-bg-console);
-        color: var(--nn-color-text-console);
-        border-radius: 4px;
-        padding: 8px 10px;
-    }
-
-    .tcp-log-empty {
-        height: 100%;
-        min-height: 110px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-family:
-            -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
-        color: var(--nn-color-text-console-muted);
-    }
-
-    .tcp-log-empty :deep(.nn-empty-normal) {
-        margin: 0;
-    }
-
-    .tcp-log-empty :deep(.nn-empty-description) {
-        color: var(--nn-color-text-console-muted);
-        font-size: 12px;
-    }
-
-    .tcp-log-item {
-        white-space: pre-wrap;
-        word-break: break-all;
-    }
-
-    .tcp-log-time {
-        color: var(--nn-color-text-console-success);
-        margin-right: 8px;
-    }
-
-    .tcp-log-tag {
-        display: inline-block;
-        width: 42px;
-        margin-right: 8px;
-        text-align: center;
-        border-radius: 2px;
-        background: var(--nn-color-bg-console-muted);
-        color: var(--nn-color-text-console-label);
-    }
-
-    .tcp-log-recv .tcp-log-tag {
-        background: var(--nn-color-bg-console-success);
-        color: var(--nn-color-text-console-success-strong);
-    }
-
-    .tcp-log-send .tcp-log-tag {
-        background: var(--nn-color-bg-console-info);
-        color: var(--nn-color-text-console-info-strong);
-    }
-
-    .tcp-log-error .tcp-log-tag {
-        background: var(--nn-color-bg-console-error);
-        color: var(--nn-color-text-console-error-strong);
-    }
-
-    .tcp-log-recv .tcp-log-text {
-        color: var(--nn-color-text-console-success);
-    }
-
-    .tcp-log-send .tcp-log-text {
-        color: var(--nn-color-text-console-info);
-    }
-
-    .tcp-log-error .tcp-log-text {
-        color: var(--nn-color-text-console-error);
     }
 </style>

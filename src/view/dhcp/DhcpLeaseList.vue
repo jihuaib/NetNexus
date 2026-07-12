@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container adaptive-table-page">
+    <div class="nn-container adaptive-table-page">
         <nn-row class="adaptive-table-row">
             <nn-col :span="24">
                 <nn-card title="租约列表" class="adaptive-table-card">
@@ -144,7 +144,7 @@
 
 <style scoped>
     .adaptive-table-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }

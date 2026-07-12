@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container qp-page">
+    <div class="nn-container qp-page">
         <nn-card class="qp-card" title="IPv4-QP路由配置">
             <nn-form class="qp-config-form" :model="ipv4QpData" :label-col="labelCol" :wrapper-col="wrapperCol">
                 <div class="config-section">
@@ -459,7 +459,7 @@
 <style scoped>
     .qp-page {
         margin-top: 4px;
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
         display: flex;
@@ -481,20 +481,6 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
-    }
-
-    .qp-card :deep(.nn-card-head),
-    .qp-route-list-card :deep(.nn-card-head) {
-        min-height: 36px !important;
-    }
-
-    .qp-card :deep(.nn-card-head-title),
-    .qp-route-list-card :deep(.nn-card-head-title) {
-        padding: 8px 0 !important;
-    }
-
-    .qp-route-list-card :deep(.nn-card-extra) {
-        padding: 6px 0 !important;
     }
 
     .qp-card :deep(.nn-card-body) {

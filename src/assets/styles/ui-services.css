@@ -1,14 +1,13 @@
 .nn-toast-host {
     position: fixed;
-    top: 18px;
-    left: 50%;
+    top: 48px;
+    right: 16px;
     z-index: 3000;
     display: flex;
-    width: min(520px, calc(100vw - 32px));
+    width: min(420px, calc(100vw - 32px));
     flex-direction: column;
     gap: 8px;
     pointer-events: none;
-    transform: translateX(-50%);
 }
 
 .nn-toast {
@@ -23,7 +22,7 @@
     border: 1px solid var(--nn-color-border-light);
     border-radius: 6px;
     box-shadow: var(--nn-shadow-floating);
-    pointer-events: auto;
+    pointer-events: none;
     transform: translateY(0);
     transition:
         opacity 0.16s ease,
@@ -88,6 +87,10 @@
     cursor: pointer;
     font-size: 18px;
     line-height: 24px;
+}
+
+.nn-toast-close {
+    pointer-events: auto;
 }
 
 .nn-toast-close:hover,

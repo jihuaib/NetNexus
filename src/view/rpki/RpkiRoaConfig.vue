@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container adaptive-list-page">
+    <div class="nn-container adaptive-list-page">
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="RPKI ROA配置">
@@ -472,7 +472,7 @@
 
 <style scoped>
     .adaptive-list-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;

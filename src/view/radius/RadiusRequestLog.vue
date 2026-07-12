@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container radius-table-page">
+    <div class="nn-container radius-table-page">
         <nn-card title="RADIUS请求日志" class="radius-table-card">
             <template #extra>
                 <nn-space>
@@ -265,7 +265,7 @@
 
 <style scoped>
     .radius-table-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }

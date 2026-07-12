@@ -1,8 +1,35 @@
 const base = require('@playwright/test');
 
+function observePageDiagnostics(page) {
+    const pageErrors = [];
+    const consoleErrors = [];
+
+    page.on('pageerror', error => {
+        pageErrors.push(error.message);
+    });
+    page.on('console', message => {
+        if (message.type() === 'error') {
+            consoleErrors.push(message.text());
+        }
+    });
+
+    return () => {
+        base.expect(pageErrors, 'uncaught page errors').toEqual([]);
+        base.expect(consoleErrors, 'browser console errors').toEqual([]);
+    };
+}
+
 if (process.env.E2E_TARGET === 'browser') {
+    const test = base.test.extend({
+        page: async ({ page }, use) => {
+            const assertClean = observePageDiagnostics(page);
+            await use(page);
+            assertClean();
+        }
+    });
+
     module.exports = {
-        test: base.test,
+        test,
         expect: base.expect
     };
 } else {
@@ -80,10 +107,12 @@ if (process.env.E2E_TARGET === 'browser') {
 
         page: async ({ electronApp }, use) => {
             const page = await waitForMainWindow(electronApp);
+            const assertClean = observePageDiagnostics(page);
             const appBaseUrl = page.url().split('#')[0];
             patchGoto(page, appBaseUrl);
             await page.goto('about:blank');
             await use(page);
+            assertClean();
         }
     });
 

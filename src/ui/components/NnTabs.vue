@@ -6,7 +6,14 @@
             role="tablist"
             :aria-orientation="tabPosition === 'left' ? 'vertical' : 'horizontal'"
         >
-            <div class="nn-tabs-nav-wrap">
+            <div
+                class="nn-tabs-nav-wrap"
+                :class="{ 'nn-scrollbar-active': scrollbarActive }"
+                @pointerenter="showScrollbar"
+                @pointermove="showScrollbar"
+                @pointerleave="hideScrollbar"
+                @scroll.passive="showScrollbar"
+            >
                 <div class="nn-tabs-nav-list">
                     <button
                         v-for="tabPane in panes"
@@ -22,7 +29,9 @@
                         @click="selectPane(tabPane)"
                         @keydown="handleTabKeydown($event, tabPane)"
                     >
-                        <span class="nn-tabs-tab-button">{{ tabPane.tab }}</span>
+                        <span class="nn-tabs-tab-button">
+                            <NnRenderContent :content="tabPane.tab" />
+                        </span>
                     </button>
                 </div>
             </div>
@@ -43,6 +52,8 @@
 
 <script setup>
     import { cloneVNode, computed, defineComponent, Fragment, ref, useSlots, watch } from 'vue';
+    import { useAutoHideScrollbar } from '../useAutoHideScrollbar';
+    import NnRenderContent from './NnRenderContent';
     import NnTabPane from './NnTabPane.vue';
 
     const props = defineProps({
@@ -71,6 +82,7 @@
     const emit = defineEmits(['update:activeKey', 'change']);
 
     const slots = useSlots();
+    const { scrollbarActive, showScrollbar, hideScrollbar } = useAutoHideScrollbar();
     const internalActiveKey = ref(undefined);
     const hasControlledActiveKey = computed(() => props.activeKey !== undefined && props.activeKey !== null);
     const currentActiveKey = computed(() => (hasControlledActiveKey.value ? props.activeKey : internalActiveKey.value));
@@ -93,10 +105,11 @@
     const panes = computed(() =>
         flattenPanes(slots.default?.() ?? []).map((vnode, index) => {
             const key = vnode.key ?? `nn-tab-${index}`;
+            const tabSlot = typeof vnode.children === 'object' ? vnode.children?.tab : undefined;
 
             return {
                 key,
-                tab: vnode.props?.tab ?? '',
+                tab: tabSlot ?? vnode.props?.tab ?? '',
                 disabled: Boolean(vnode.props?.disabled),
                 buttonId: `nn-tab-button-${String(key)}-${index}`,
                 panelId: `nn-tab-panel-${String(key)}-${index}`,
@@ -206,7 +219,36 @@
         display: flex;
         align-items: stretch;
         overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-color: transparent transparent;
         scrollbar-width: thin;
+    }
+
+    .nn-tabs-nav-wrap::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+
+    .nn-tabs-nav-wrap::-webkit-scrollbar-track,
+    .nn-tabs-nav-wrap::-webkit-scrollbar-corner {
+        background: transparent;
+    }
+
+    .nn-tabs-nav-wrap::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: transparent;
+    }
+
+    .nn-tabs-nav-wrap.nn-scrollbar-active {
+        scrollbar-color: var(--nn-color-text-placeholder) transparent;
+    }
+
+    .nn-tabs-nav-wrap.nn-scrollbar-active::-webkit-scrollbar-thumb {
+        background: var(--nn-color-text-placeholder);
+    }
+
+    .nn-tabs-nav-wrap::-webkit-scrollbar-thumb:hover {
+        background: var(--nn-color-text-muted);
     }
 
     .nn-tabs-nav-list {
@@ -270,30 +312,30 @@
         min-width: 0;
     }
 
-    .nn-tabs-small .nn-tabs-nav {
+    .nn-tabs-small > .nn-tabs-nav {
         margin-bottom: 8px;
     }
 
-    .nn-tabs-small .nn-tabs-tab {
+    .nn-tabs-small > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab {
         min-height: 32px;
         padding: 5px 0;
         font-size: 13px;
         line-height: 20px;
     }
 
-    .nn-tabs-small .nn-tabs-nav-list {
+    .nn-tabs-small > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list {
         gap: 12px;
     }
 
-    .nn-tabs-card .nn-tabs-nav {
+    .nn-tabs-card > .nn-tabs-nav {
         border-bottom: 0;
     }
 
-    .nn-tabs-card .nn-tabs-nav-list {
+    .nn-tabs-card > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list {
         gap: 4px;
     }
 
-    .nn-tabs-card .nn-tabs-tab {
+    .nn-tabs-card > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab {
         min-height: 34px;
         margin: 0;
         padding: 5px 14px;
@@ -302,12 +344,12 @@
         background: var(--nn-color-bg-muted);
     }
 
-    .nn-tabs-card .nn-tabs-tab-active {
+    .nn-tabs-card > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab-active {
         border-color: var(--nn-color-primary);
         background: var(--nn-color-bg-surface);
     }
 
-    .nn-tabs-card .nn-tabs-tab-active::after {
+    .nn-tabs-card > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab-active::after {
         display: none;
     }
 
@@ -316,32 +358,35 @@
         align-items: stretch;
     }
 
-    .nn-tabs-left .nn-tabs-nav {
+    .nn-tabs-left > .nn-tabs-nav {
         flex: 0 0 auto;
         margin: 0 16px 0 0;
         border-right: 1px solid var(--nn-color-border);
         border-bottom: 0;
     }
 
-    .nn-tabs-left .nn-tabs-nav-wrap {
-        overflow-x: visible;
+    .nn-tabs-left > .nn-tabs-nav > .nn-tabs-nav-wrap {
+        overflow-x: hidden;
         overflow-y: auto;
     }
 
-    .nn-tabs-left .nn-tabs-nav-list {
+    .nn-tabs-left > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list {
+        width: 100%;
+        min-width: 0;
         flex-direction: column;
         align-items: stretch;
         gap: 0;
     }
 
-    .nn-tabs-left .nn-tabs-tab {
+    .nn-tabs-left > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab {
+        width: 100%;
         justify-content: flex-start;
         margin: 0;
         padding: 8px 20px 8px 0;
         text-align: left;
     }
 
-    .nn-tabs-left .nn-tabs-tab-active::after {
+    .nn-tabs-left > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab-active::after {
         top: 0;
         right: -1px;
         bottom: 0;
@@ -350,7 +395,7 @@
         height: auto;
     }
 
-    .nn-tabs-left .nn-tabs-content-holder {
+    .nn-tabs-left > .nn-tabs-content-holder {
         flex: 1 1 0;
         min-width: 0;
     }

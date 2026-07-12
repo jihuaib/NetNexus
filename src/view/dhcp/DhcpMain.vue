@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-main-container">
+    <div class="nn-main-container">
         <!-- 固定 Tabs -->
         <div class="fixed-tabs">
             <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">

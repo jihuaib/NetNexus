@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container port-monitor-page">
+    <div class="nn-container port-monitor-page">
         <!-- 配置面板 -->
         <nn-card title="端口监听配置" class="port-config-card">
             <nn-form :label-col="labelCol" :wrapper-col="wrapperCol">
@@ -34,6 +34,7 @@
                 <nn-space>
                     <nn-input-search
                         v-model:value="searchText"
+                        size="small"
                         placeholder="搜索端口、地址、进程名或PID"
                         style="width: 250px"
                         @search="handleSearch"
@@ -45,7 +46,7 @@
             <nn-table
                 :columns="columns"
                 :data-source="filteredPorts"
-                :scroll="{ y: '100%' }"
+                :scroll="{ x: 1060, y: '100%' }"
                 :pagination="{
                     pageSize: 20,
                     showSizeChanger: false,
@@ -181,6 +182,7 @@
             title: '进程名',
             dataIndex: 'process',
             key: 'process',
+            width: 180,
             ellipsis: true
         },
         {
@@ -342,7 +344,7 @@
 
 <style scoped>
     .port-monitor-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;

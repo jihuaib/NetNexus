@@ -13,27 +13,27 @@
             <div class="settings-sidebar">
                 <nn-menu v-model:selected-keys="selectedCategory" mode="inline" class="settings-menu">
                     <nn-menu-item key="general">
-                        <template #icon><SettingOutlined /></template>
+                        <template #icon><component :is="settingsNavigationIcons.general" /></template>
                         <span>通用设置</span>
                     </nn-menu-item>
                     <nn-menu-item key="tools">
-                        <template #icon><CodeOutlined /></template>
+                        <template #icon><component :is="settingsNavigationIcons.tools" /></template>
                         <span>工具集合</span>
                     </nn-menu-item>
                     <nn-menu-item key="ftp">
-                        <template #icon><DownloadOutlined /></template>
+                        <template #icon><component :is="settingsNavigationIcons.ftp" /></template>
                         <span>FTP服务器</span>
                     </nn-menu-item>
                     <nn-menu-item key="api">
-                        <template #icon><ApiOutlined /></template>
+                        <template #icon><component :is="settingsNavigationIcons.externalApi" /></template>
                         <span>外部API</span>
                     </nn-menu-item>
                     <nn-menu-item key="server-deployment">
-                        <template #icon><CloudServerOutlined /></template>
+                        <template #icon><component :is="settingsNavigationIcons.serverDeployment" /></template>
                         <span>服务器部署</span>
                     </nn-menu-item>
                     <nn-menu-item key="update">
-                        <template #icon><CloudDownloadOutlined /></template>
+                        <template #icon><component :is="settingsNavigationIcons.update" /></template>
                         <span>应用更新</span>
                     </nn-menu-item>
                 </nn-menu>
@@ -51,14 +51,7 @@
 
 <script setup>
     import { ref, computed, watch } from 'vue';
-    import {
-        ApiOutlined,
-        CloudDownloadOutlined,
-        CloudServerOutlined,
-        CodeOutlined,
-        DownloadOutlined,
-        SettingOutlined
-    } from '../ui/icons';
+    import { settingsNavigationIcons } from '../ui/navigationIcons';
 
     import GeneralSettings from '../view/settings/GeneralSettings.vue';
     import ToolsSettings from '../view/settings/ToolsSettings.vue';
@@ -139,8 +132,7 @@
     }
 
     :global(.settings-dialog-modal) {
-        top: 8px !important;
-        max-height: calc(100vh - 16px) !important;
+        max-height: calc(100vh - 32px) !important;
         padding-bottom: 0 !important;
     }
 

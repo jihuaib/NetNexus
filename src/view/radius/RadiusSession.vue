@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container radius-table-page">
+    <div class="nn-container radius-table-page">
         <nn-card title="RADIUS会话状态" class="radius-table-card">
             <template #extra>
                 <nn-button :loading="loading" @click="loadSessionList">刷新</nn-button>
@@ -218,7 +218,7 @@
 
 <style scoped>
     .radius-table-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }

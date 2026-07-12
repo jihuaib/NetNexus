@@ -182,8 +182,14 @@
         max-width: 100%;
         min-height: 32px;
         color: var(--nn-color-text);
+        font-size: 13px;
         line-height: 1.5715;
         white-space: normal;
+    }
+
+    .nn-form-item-horizontal .nn-form-item-label > label,
+    .nn-form-item-inline .nn-form-item-label > label {
+        white-space: nowrap;
     }
 
     .nn-form-item-label-required::before {

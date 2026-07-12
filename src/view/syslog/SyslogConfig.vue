@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container adaptive-config-page">
+    <div class="nn-container adaptive-config-page">
         <nn-row class="adaptive-config-row">
             <nn-col :span="24">
                 <nn-card title="Syslog服务器配置">
@@ -291,7 +291,7 @@
 
 <style scoped>
     .adaptive-config-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;

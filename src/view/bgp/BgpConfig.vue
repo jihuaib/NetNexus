@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bgp-config-page" data-testid="bgp-config-page">
+    <div class="nn-container bgp-config-page" data-testid="bgp-config-page">
         <!-- BGP 配置 Card -->
         <nn-form :model="bgpConfigData" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBgp">
             <nn-card title="BGP配置" class="bgp-config-card">
@@ -196,13 +196,15 @@
     onMounted(async () => {
         // 加载Bgp保存的配置
         const savedBgpConfig = await window.bgpApi.loadBgpConfig();
-        if (savedBgpConfig.status === 'success' && savedBgpConfig.data) {
-            bgpConfigData.value.localAs = savedBgpConfig.data.localAs;
-            bgpConfigData.value.routerId = savedBgpConfig.data.routerId;
-            bgpConfigData.value.port = savedBgpConfig.data.port || DEFAULT_VALUES.BGP_PORT;
-            bgpConfigData.value.addressFamily = Array.isArray(savedBgpConfig.data.addressFamily)
-                ? [...savedBgpConfig.data.addressFamily]
-                : [BGP_ADDR_FAMILY.IPV4_UNC];
+        if (savedBgpConfig.status === 'success') {
+            if (savedBgpConfig.data) {
+                bgpConfigData.value.localAs = savedBgpConfig.data.localAs;
+                bgpConfigData.value.routerId = savedBgpConfig.data.routerId;
+                bgpConfigData.value.port = savedBgpConfig.data.port || DEFAULT_VALUES.BGP_PORT;
+                bgpConfigData.value.addressFamily = Array.isArray(savedBgpConfig.data.addressFamily)
+                    ? [...savedBgpConfig.data.addressFamily]
+                    : [BGP_ADDR_FAMILY.IPV4_UNC];
+            }
         } else {
             console.error('BGP 配置文件加载失败', savedBgpConfig.msg);
         }
@@ -268,7 +270,7 @@
 
 <style scoped>
     .bgp-config-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;

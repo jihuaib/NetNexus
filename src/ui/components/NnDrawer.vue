@@ -341,6 +341,8 @@
 
 <style scoped>
     .nn-drawer {
+        --nn-drawer-panel-bg: var(--nn-color-bg-elevated);
+
         position: fixed;
         inset: 0;
         pointer-events: none;
@@ -395,7 +397,7 @@
         flex-direction: column;
         overflow: hidden;
         border: 1px solid var(--nn-color-border-light);
-        background: var(--nn-color-bg-elevated);
+        background: var(--nn-drawer-panel-bg);
         color: var(--nn-color-text);
         box-shadow: var(--nn-shadow-floating);
         outline: none;
@@ -410,7 +412,7 @@
         gap: 12px;
         padding: 12px 16px;
         border-bottom: 1px solid var(--nn-color-border-light);
-        background: var(--nn-color-bg-elevated);
+        background: var(--nn-drawer-panel-bg);
     }
 
     .nn-drawer-title {
@@ -458,7 +460,25 @@
         flex: 1 1 auto;
         overflow: auto;
         padding: 16px;
-        background: var(--nn-color-bg-elevated);
+        background: var(--nn-drawer-panel-bg);
+    }
+
+    .nn-drawer-body :deep(pre) {
+        box-sizing: border-box;
+        display: block;
+        max-width: 100%;
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+        background: var(--nn-color-bg-code);
+        color: var(--nn-color-text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+        font-size: 12px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
     }
 
     .nn-drawer-footer {
@@ -470,7 +490,7 @@
         gap: 8px;
         padding: 10px 16px;
         border-top: 1px solid var(--nn-color-border-light);
-        background: var(--nn-color-bg-elevated);
+        background: var(--nn-drawer-panel-bg);
     }
 
     .nn-drawer-motion-enter-active,

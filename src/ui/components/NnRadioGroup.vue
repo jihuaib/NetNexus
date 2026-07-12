@@ -109,4 +109,8 @@
     .nn-radio-group-small {
         gap: 4px;
     }
+
+    .nn-radio-group-solid {
+        gap: 0;
+    }
 </style>

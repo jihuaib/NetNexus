@@ -1,9 +1,9 @@
 <template>
-    <div class="mt-container udp-tool-page">
+    <div class="nn-container udp-tool-page">
         <!-- Socket 配置 -->
         <nn-card title="UDP 配置" class="udp-config-card" size="small">
             <template #extra>
-                <nn-tag :color="stateColor">{{ stateName }}</nn-tag>
+                <nn-tag :color="stateColor" role="status" aria-live="polite">{{ stateName }}</nn-tag>
             </template>
             <nn-form layout="inline" :model="socketForm" class="udp-config-form">
                 <nn-form-item label="目标地址">
@@ -68,12 +68,21 @@
 
         <!-- 收包窗口 -->
         <nn-card title="收包窗口" class="udp-recv-card" size="small">
-            <div ref="logContainer" class="udp-log-list">
-                <nn-empty v-if="logs.length === 0" description="暂无收包数据" class="udp-log-empty" />
-                <div v-for="(log, index) in logs" :key="index" class="udp-log-item" :class="`udp-log-${log.type}`">
-                    <span class="udp-log-time">{{ log.time }}</span>
-                    <span class="udp-log-tag">{{ log.tag }}</span>
-                    <span class="udp-log-text">{{ log.text }}</span>
+            <div ref="logContainer" class="udp-log-list nn-packet-log">
+                <nn-empty
+                    v-if="logs.length === 0"
+                    description="暂无收包数据"
+                    class="udp-log-empty nn-packet-log-empty"
+                />
+                <div
+                    v-for="(log, index) in logs"
+                    :key="index"
+                    class="udp-log-item nn-packet-log-item"
+                    :class="[`udp-log-${log.type}`, `nn-packet-log-${log.type}`]"
+                >
+                    <span class="udp-log-time nn-packet-log-time">{{ log.time }}</span>
+                    <span class="udp-log-tag nn-packet-log-tag">{{ log.tag }}</span>
+                    <span class="udp-log-text nn-packet-log-text">{{ log.text }}</span>
                 </div>
             </div>
             <div class="udp-recv-toolbar">
@@ -292,7 +301,7 @@
 
 <style scoped>
     .udp-tool-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -391,85 +400,5 @@
         justify-content: flex-end;
         gap: 12px;
         margin-top: 8px;
-    }
-
-    .udp-log-list {
-        flex: 1 1 0;
-        min-height: 0;
-        overflow-y: auto;
-        font-family: 'Courier New', Courier, monospace;
-        font-size: 12px;
-        line-height: 1.7;
-        background: var(--nn-color-bg-console);
-        color: var(--nn-color-text-console);
-        border-radius: 4px;
-        padding: 8px 10px;
-    }
-
-    .udp-log-empty {
-        height: 100%;
-        min-height: 110px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-family:
-            -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
-        color: var(--nn-color-text-console-muted);
-    }
-
-    .udp-log-empty :deep(.nn-empty-normal) {
-        margin: 0;
-    }
-
-    .udp-log-empty :deep(.nn-empty-description) {
-        color: var(--nn-color-text-console-muted);
-        font-size: 12px;
-    }
-
-    .udp-log-item {
-        white-space: pre-wrap;
-        word-break: break-all;
-    }
-
-    .udp-log-time {
-        color: var(--nn-color-text-console-success);
-        margin-right: 8px;
-    }
-
-    .udp-log-tag {
-        display: inline-block;
-        width: 42px;
-        margin-right: 8px;
-        text-align: center;
-        border-radius: 2px;
-        background: var(--nn-color-bg-console-muted);
-        color: var(--nn-color-text-console-label);
-    }
-
-    .udp-log-recv .udp-log-tag {
-        background: var(--nn-color-bg-console-success);
-        color: var(--nn-color-text-console-success-strong);
-    }
-
-    .udp-log-send .udp-log-tag {
-        background: var(--nn-color-bg-console-info);
-        color: var(--nn-color-text-console-info-strong);
-    }
-
-    .udp-log-error .udp-log-tag {
-        background: var(--nn-color-bg-console-error);
-        color: var(--nn-color-text-console-error-strong);
-    }
-
-    .udp-log-recv .udp-log-text {
-        color: var(--nn-color-text-console-success);
-    }
-
-    .udp-log-send .udp-log-text {
-        color: var(--nn-color-text-console-info);
-    }
-
-    .udp-log-error .udp-log-text {
-        color: var(--nn-color-text-console-error);
     }
 </style>

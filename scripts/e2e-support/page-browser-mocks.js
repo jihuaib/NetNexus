@@ -4,6 +4,7 @@ const { dhcpPageApiScript } = require('./dhcp');
 const { ftpPageApiScript } = require('./ftp');
 const { nativePageApiScript } = require('./native');
 const { ntpPageApiScript } = require('./ntp');
+const { radiusPageApiScript } = require('./radius');
 const { rpkiPageApiScript } = require('./rpki');
 const { snmpPageApiScript } = require('./snmp');
 const { syslogPageApiScript } = require('./syslog');
@@ -18,6 +19,7 @@ const featurePageBrowserMockScript = buildFeaturePageBrowserMockScript([
     dhcpPageApiScript,
     snmpPageApiScript,
     ntpPageApiScript,
+    radiusPageApiScript,
     tftpPageApiScript,
     syslogPageApiScript,
     bgpPageApiScript

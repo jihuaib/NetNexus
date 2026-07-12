@@ -9,7 +9,16 @@
             <div class="nn-spin-container" :class="{ 'nn-spin-container-loading': isLoading }">
                 <div class="nn-table">
                     <div class="nn-table-container">
-                        <div ref="contentRef" class="nn-table-content" :style="contentStyle">
+                        <div
+                            ref="contentRef"
+                            class="nn-table-content"
+                            :class="{ 'nn-scrollbar-active': scrollbarActive }"
+                            :style="contentStyle"
+                            @pointerenter="showScrollbar"
+                            @pointermove="showScrollbar"
+                            @pointerleave="hideScrollbar"
+                            @scroll.passive="showScrollbar"
+                        >
                             <table :style="tableStyle">
                                 <colgroup>
                                     <col
@@ -120,10 +129,7 @@
                                     <tr v-if="displayedRows.length === 0" class="nn-table-placeholder">
                                         <td :colspan="Math.max(normalizedColumns.length, 1)">
                                             <slot name="emptyText">
-                                                <div class="nn-table-empty">
-                                                    <span class="nn-table-empty-icon" aria-hidden="true">◇</span>
-                                                    <span>暂无数据</span>
-                                                </div>
+                                                <NnEmpty class="nn-table-empty" description="暂无数据" />
                                             </slot>
                                         </td>
                                     </tr>
@@ -201,6 +207,8 @@
 
 <script setup>
     import { Comment, computed, onBeforeUnmount, onMounted, ref, Text, useSlots, watch } from 'vue';
+    import { useAutoHideScrollbar } from '../useAutoHideScrollbar';
+    import NnEmpty from './NnEmpty.vue';
     import NnRenderContent from './NnRenderContent';
 
     const props = defineProps({
@@ -248,6 +256,7 @@
 
     const emit = defineEmits(['change']);
     const slots = useSlots();
+    const { scrollbarActive, showScrollbar, hideScrollbar } = useAutoHideScrollbar();
     const contentRef = ref(null);
     const localCurrentPage = ref(1);
     const localPageSize = ref(10);
@@ -686,7 +695,35 @@
         border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
         background: var(--nn-color-bg-surface);
+        scrollbar-color: transparent transparent;
         scrollbar-width: thin;
+    }
+
+    .nn-table-content::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+
+    .nn-table-content::-webkit-scrollbar-track,
+    .nn-table-content::-webkit-scrollbar-corner {
+        background: transparent;
+    }
+
+    .nn-table-content::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: transparent;
+    }
+
+    .nn-table-content.nn-scrollbar-active {
+        scrollbar-color: var(--nn-color-text-placeholder) transparent;
+    }
+
+    .nn-table-content.nn-scrollbar-active::-webkit-scrollbar-thumb {
+        background: var(--nn-color-text-placeholder);
+    }
+
+    .nn-table-content::-webkit-scrollbar-thumb:hover {
+        background: var(--nn-color-text-muted);
     }
 
     table {
@@ -855,22 +892,7 @@
     }
 
     .nn-table-placeholder td {
-        padding: 30px 12px;
-    }
-
-    .nn-table-empty {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 6px;
-        color: var(--nn-color-text-muted);
-        font-size: 13px;
-    }
-
-    .nn-table-empty-icon {
-        font-size: 28px;
-        line-height: 1;
-        opacity: 0.65;
+        padding: 12px;
     }
 
     .nn-pagination {

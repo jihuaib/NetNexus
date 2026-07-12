@@ -36,6 +36,14 @@ html[data-theme='light'] {
     --nn-color-bg-sider-active: #f97316;
     --nn-color-bg-card-head: #f97316;
     --nn-color-bg-card-head-hover: rgba(255, 255, 255, 0.2);
+    --nn-color-bg-card-head-control: var(--nn-color-bg-surface);
+    --nn-color-bg-card-head-control-hover: var(--nn-color-bg-hover);
+    --nn-color-text-card-head-control: var(--nn-color-text);
+    --nn-color-border-card-head-control: var(--nn-color-text);
+    --nn-color-bg-card-head-ghost: rgba(255, 255, 255, 0.16);
+    --nn-color-bg-card-head-ghost-hover: rgba(255, 255, 255, 0.28);
+    --nn-color-text-card-head-ghost: #1f2937;
+    --nn-color-border-card-head-ghost: rgba(31, 41, 55, 0.78);
     --nn-color-text: #1f2937;
     --nn-color-text-strong: #262626;
     --nn-color-text-secondary: rgba(31, 41, 55, 0.72);
@@ -68,6 +76,7 @@ html[data-theme='light'] {
     --nn-shadow-elevated: 0 6px 16px rgba(15, 23, 42, 0.12);
     --nn-shadow-floating: 0 4px 20px rgba(15, 23, 42, 0.15);
     --nn-shadow-floating-hover: 0 6px 25px rgba(15, 23, 42, 0.2);
+    --nn-shadow-card-head-control: 0 1px 3px rgba(15, 23, 42, 0.28);
     --nn-focus-shadow-error: 0 0 0 2px rgba(255, 77, 79, 0.2);
     --nn-focus-shadow-primary: 0 0 0 2px rgba(249, 115, 22, 0.14);
     --nn-gradient-panel: linear-gradient(180deg, #fcfdff 0%, #f7f9fc 100%);
@@ -85,6 +94,10 @@ html[data-theme-preset='blue'] {
     --nn-color-bg-info-subtle: #e6f4ff;
     --nn-color-bg-sider-active: #1677ff;
     --nn-color-bg-card-head: #1677ff;
+    --nn-color-bg-card-head-ghost: rgba(0, 0, 0, 0.1);
+    --nn-color-bg-card-head-ghost-hover: rgba(0, 0, 0, 0.18);
+    --nn-color-text-card-head-ghost: #ffffff;
+    --nn-color-border-card-head-ghost: rgba(255, 255, 255, 0.78);
     --nn-color-text-info: #0958d9;
     --nn-color-border-info: #91caff;
     --nn-focus-shadow-primary: 0 0 0 2px rgba(22, 119, 255, 0.08);
@@ -127,6 +140,10 @@ html[data-theme-preset='dark'] {
     --nn-color-bg-sider-active: #2563eb;
     --nn-color-bg-card-head: #2563eb;
     --nn-color-bg-card-head-hover: rgba(248, 250, 252, 0.16);
+    --nn-color-bg-card-head-ghost: rgba(0, 0, 0, 0.1);
+    --nn-color-bg-card-head-ghost-hover: rgba(0, 0, 0, 0.18);
+    --nn-color-text-card-head-ghost: #f8fafc;
+    --nn-color-border-card-head-ghost: rgba(248, 250, 252, 0.78);
     --nn-color-text: #e5e7eb;
     --nn-color-text-strong: #f8fafc;
     --nn-color-text-secondary: rgba(229, 231, 235, 0.72);

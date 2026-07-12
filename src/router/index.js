@@ -66,11 +66,8 @@ const routes = [
                 component: ToolMain,
                 name: 'ToolMain',
                 meta: { keepAlive: true },
+                redirect: '/tools/string-generator',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/tools/string-generator'
-                    },
                     {
                         path: 'string-generator',
                         name: 'StringGenerator',
@@ -126,11 +123,8 @@ const routes = [
                 component: BgpMain,
                 name: 'BgpMain',
                 meta: { keepAlive: true },
+                redirect: '/bgp/bgp-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/bgp/bgp-config'
-                    },
                     {
                         path: 'bgp-config',
                         name: 'BgpConfig',
@@ -180,11 +174,8 @@ const routes = [
                 name: 'BmpMain',
                 component: BmpMain,
                 meta: { keepAlive: true },
+                redirect: '/bmp/bmp-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/bmp/bmp-config'
-                    },
                     {
                         path: 'bmp-config',
                         name: 'BmpConfig',
@@ -222,11 +213,8 @@ const routes = [
                 name: 'RpkiMain',
                 component: RpkiMain,
                 meta: { keepAlive: true },
+                redirect: '/rpki/rpki-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/rpki/rpki-config'
-                    },
                     {
                         path: 'rpki-config',
                         name: 'RpkiConfig',
@@ -258,11 +246,8 @@ const routes = [
                 name: 'FtpMain',
                 component: FtpMain,
                 meta: { keepAlive: true },
+                redirect: '/ftp/ftp-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/ftp/ftp-config'
-                    },
                     {
                         path: 'ftp-config',
                         name: 'FtpConfig',
@@ -276,11 +261,8 @@ const routes = [
                 name: 'SnmpMain',
                 component: SnmpMain,
                 meta: { keepAlive: true },
+                redirect: '/snmp/snmp-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/snmp/snmp-config'
-                    },
                     {
                         path: 'snmp-config',
                         name: 'SnmpConfig',
@@ -306,11 +288,8 @@ const routes = [
                 name: 'DhcpMain',
                 component: DhcpMain,
                 meta: { keepAlive: true },
+                redirect: '/dhcp/dhcp-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/dhcp/dhcp-config'
-                    },
                     {
                         path: 'dhcp-config',
                         name: 'DhcpConfig',
@@ -330,11 +309,8 @@ const routes = [
                 name: 'NtpMain',
                 component: NtpMain,
                 meta: { keepAlive: true },
+                redirect: '/ntp/ntp-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/ntp/ntp-config'
-                    },
                     {
                         path: 'ntp-config',
                         name: 'NtpConfig',
@@ -354,11 +330,8 @@ const routes = [
                 name: 'RadiusMain',
                 component: RadiusMain,
                 meta: { keepAlive: true },
+                redirect: '/radius/radius-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/radius/radius-config'
-                    },
                     {
                         path: 'radius-config',
                         name: 'RadiusConfig',
@@ -384,11 +357,8 @@ const routes = [
                 name: 'TftpMain',
                 component: TftpMain,
                 meta: { keepAlive: true },
+                redirect: '/tftp/tftp-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/tftp/tftp-config'
-                    },
                     {
                         path: 'tftp-config',
                         name: 'TftpConfig',
@@ -408,11 +378,8 @@ const routes = [
                 name: 'SyslogMain',
                 component: SyslogMain,
                 meta: { keepAlive: true },
+                redirect: '/syslog/syslog-config',
                 children: [
-                    {
-                        path: '/',
-                        redirect: '/syslog/syslog-config'
-                    },
                     {
                         path: 'syslog-config',
                         name: 'SyslogConfig',

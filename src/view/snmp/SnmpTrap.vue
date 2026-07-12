@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container snmp-trap-page">
+    <div class="nn-container snmp-trap-page">
         <nn-card title="SNMP Trap 监控" class="trap-card">
             <template #extra>
                 <nn-space>
@@ -76,7 +76,7 @@
                 :pagination="pagination"
                 :scroll="{ x: 1200, y: 'calc(100vh - 350px)' }"
                 row-key="id"
-                class="mt-margin-top-10 trap-list-table"
+                class="nn-margin-top-10 trap-list-table"
                 @change="handleTableChange"
             >
                 <template #bodyCell="{ column, record }">
@@ -605,7 +605,7 @@
 
 <style scoped>
     .snmp-trap-page {
-        height: calc(100vh - 68px);
+        height: 100%;
         overflow: hidden;
     }
 

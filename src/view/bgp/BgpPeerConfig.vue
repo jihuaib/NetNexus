@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bgp-peer-page" data-testid="bgp-peer-page">
+    <div class="nn-container bgp-peer-page" data-testid="bgp-peer-page">
         <!-- 邻居配置 Card -->
         <nn-card title="邻居配置" class="bgp-peer-config-card">
             <nn-tabs v-model:active-key="activeConfigTabKey">
@@ -1188,7 +1188,7 @@
 
 <style scoped>
     .bgp-peer-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;

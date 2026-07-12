@@ -1,35 +1,12 @@
-/* Card 头部样式 */
-.nn-card-head {
-    background: var(--nn-color-bg-card-head) !important;
-    border-bottom: none !important;
-}
-
-.nn-card-head-title {
-    color: var(--nn-color-text-inverse) !important;
-    font-weight: 600 !important;
-}
-
-.nn-card-extra {
-    color: var(--nn-color-text-inverse) !important;
-}
-
-/* Card 头部的按钮样式调整 */
-.nn-card-head .nn-button-text {
-    color: var(--nn-color-text-inverse) !important;
-}
-
-.nn-card-head .nn-button-text:hover {
-    background: var(--nn-color-bg-card-head-hover) !important;
-}
-
 /* 侧边栏菜单样式 */
 .main-menu {
     background: transparent !important;
+    font-size: 13px !important;
 }
 
 .main-menu .nn-menu-item {
     color: var(--nn-color-text-sider) !important;
-    font-weight: 500 !important;
+    font-weight: 400 !important;
 }
 
 .main-menu .nn-menu-item-selected {
@@ -118,7 +95,7 @@
 }
 
 /* 主页面样式 */
-.mt-main-container {
+.nn-main-container {
     display: flex;
     flex-direction: column;
     height: 100vh;
@@ -126,70 +103,127 @@
     overflow: hidden;
 }
 
-.mt-main-container .fixed-tabs {
+.nn-main-container .fixed-tabs {
     height: 40px;
     flex-shrink: 0;
     background-color: var(--nn-color-bg-surface);
     z-index: 10;
-    margin-left: 8px;
+    padding: 0 8px;
 }
 
-.mt-main-container .fixed-tabs .nn-tabs {
+.nn-main-container .fixed-tabs .nn-tabs {
     height: 100%;
 }
 
-.mt-main-container .fixed-tabs .nn-tabs-nav {
+.nn-main-container .fixed-tabs .nn-tabs-nav {
     height: 40px;
     margin: 0 !important;
 }
 
-.mt-main-container .fixed-tabs .nn-tabs-nav-wrap {
+.nn-main-container .fixed-tabs .nn-tabs-nav-wrap {
     align-items: center;
 }
 
-.mt-main-container .fixed-tabs .nn-tabs-tab {
+.nn-main-container .fixed-tabs .nn-tabs-tab {
     padding: 8px 0 !important;
     font-size: 14px;
 }
 
-.mt-main-container .fixed-tabs .nn-tabs-tab-active::after {
+.nn-main-container .fixed-tabs .nn-tabs-tab-active::after {
     height: 2px;
 }
 
-.mt-main-container .content-container {
+.nn-main-container > .content-container {
     flex: 1;
     overflow-y: auto;
     min-height: 0;
+    padding: 6px 8px;
 }
 
-.mt-container {
-    margin-top: 6px;
-    margin-left: 8px;
-    width: 99%;
+.nn-main-container > .content-container > .nn-container {
+    width: 100%;
+    min-height: 0;
+    margin: 0;
 }
 
 /* 通用样式 */
-.mt-margin-top-10 {
+.nn-margin-top-10 {
     margin-top: 10px;
+}
+
+/* TCP/UDP 等协议工具共用的收发日志面板 */
+.nn-packet-log {
+    box-sizing: border-box;
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 8px 10px;
+    overflow-y: auto;
+    border: 1px solid var(--nn-color-border-light);
+    border-radius: 6px;
+    background: var(--nn-color-bg-code);
+    color: var(--nn-color-text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+.nn-packet-log-empty {
+    height: 100%;
+    min-height: 110px;
+    color: var(--nn-color-text-muted);
+    font-family: var(--nn-font-family);
+}
+
+.nn-packet-log-item {
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.nn-packet-log-time {
+    margin-right: 8px;
+    color: var(--nn-color-text-muted);
+}
+
+.nn-packet-log-tag {
+    display: inline-block;
+    width: 42px;
+    margin-right: 8px;
+    border-radius: 3px;
+    background: var(--nn-color-bg-muted);
+    color: var(--nn-color-text-secondary);
+    text-align: center;
+}
+
+.nn-packet-log-recv .nn-packet-log-tag {
+    background: var(--nn-color-bg-success-subtle);
+    color: var(--nn-color-text-success);
+}
+
+.nn-packet-log-send .nn-packet-log-tag {
+    background: var(--nn-color-bg-info-subtle);
+    color: var(--nn-color-text-info);
+}
+
+.nn-packet-log-error .nn-packet-log-tag {
+    background: var(--nn-color-bg-danger-subtle);
+    color: var(--nn-color-error);
+}
+
+.nn-packet-log-recv .nn-packet-log-text {
+    color: var(--nn-color-text-success);
+}
+
+.nn-packet-log-send .nn-packet-log-text {
+    color: var(--nn-color-text-info);
+}
+
+.nn-packet-log-error .nn-packet-log-text {
+    color: var(--nn-color-error);
 }
 
 /* 卡片样式 - 增加优先级 */
 .nn-card .nn-card-body {
     padding: 10px !important;
-}
-
-.nn-card .nn-card-head {
-    padding: 0 10px !important;
-    min-height: 40px !important;
-}
-
-.nn-card .nn-card-head-title {
-    padding: 10px 0 !important;
-    font-size: 14px !important;
-}
-
-.nn-card.nn-card-small .nn-card-head {
-    min-height: 36px !important;
 }
 
 .nn-card.nn-card-small .nn-card-body {
@@ -275,10 +309,6 @@
     max-height: 92vh !important;
     margin: 0 auto !important;
     transform-origin: center center !important;
-}
-
-.nn-modal-wrap {
-    padding: 8px !important;
 }
 
 /* 弹出框主体样式 */

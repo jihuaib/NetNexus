@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container string-generator-page" data-testid="string-generator-page">
+    <div class="nn-container string-generator-page" data-testid="string-generator-page">
         <nn-card title="字符串生成配置" class="string-generator-card" data-testid="string-generator-card">
             <nn-form
                 :model="formState"
@@ -285,7 +285,7 @@
 
 <style scoped>
     .string-generator-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }

@@ -23,7 +23,7 @@
             <!-- 底部菜单按钮 -->
             <div class="bottom-menu-btn">
                 <nn-dropdown :trigger="['click']" placement="topRight">
-                    <nn-button type="text">
+                    <nn-button type="text" aria-label="更多选项">
                         <template #icon><SettingOutlined /></template>
                         <span v-if="!isCollapsed">更多选项</span>
                     </nn-button>
@@ -76,23 +76,13 @@
     import { useRouter, useRoute } from 'vue-router';
     import { useStore } from 'vuex';
     import {
-        ApiOutlined,
-        AppstoreOutlined,
-        ClockCircleOutlined,
-        ClusterOutlined,
-        CodeOutlined,
-        FileTextOutlined,
-        FolderOutlined,
         InfoCircleOutlined,
-        KeyOutlined,
         MenuFoldOutlined,
         MenuUnfoldOutlined,
-        SafetyOutlined,
         SettingOutlined,
-        SwapOutlined,
-        ToolOutlined,
-        WifiOutlined
+        ToolOutlined
     } from '../ui/icons';
+    import { moduleNavigationIcons } from '../ui/navigationIcons';
 
     import SettingsDialog from '../components/SettingsDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
@@ -110,77 +100,77 @@
     const items = ref([
         {
             key: '工具集合',
-            icon: h(AppstoreOutlined),
+            icon: h(moduleNavigationIcons.tools),
             label: '工具集合',
             title: '工具集合',
             route: '/tools'
         },
         {
             key: 'BGP模拟器',
-            icon: h(ApiOutlined),
+            icon: h(moduleNavigationIcons.bgp),
             label: 'BGP模拟器',
             title: 'BGP模拟器',
             route: '/bgp'
         },
         {
             key: 'BMP服务器',
-            icon: h(ClusterOutlined),
+            icon: h(moduleNavigationIcons.bmp),
             label: 'BMP服务器',
             title: 'BMP服务器',
             route: '/bmp'
         },
         {
             key: 'RPKI服务器',
-            icon: h(SafetyOutlined),
+            icon: h(moduleNavigationIcons.rpki),
             label: 'RPKI服务器',
             title: 'RPKI服务器',
             route: '/rpki'
         },
         {
             key: 'FTP服务器',
-            icon: h(FolderOutlined),
+            icon: h(moduleNavigationIcons.ftp),
             label: 'FTP服务器',
             title: 'FTP服务器',
             route: '/ftp'
         },
         {
             key: 'SNMP服务器',
-            icon: h(CodeOutlined),
+            icon: h(moduleNavigationIcons.snmp),
             label: 'SNMP服务器',
             title: 'SNMP服务器',
             route: '/snmp'
         },
         {
             key: 'DHCP服务器',
-            icon: h(WifiOutlined),
+            icon: h(moduleNavigationIcons.dhcp),
             label: 'DHCP服务器',
             title: 'DHCP服务器',
             route: '/dhcp'
         },
         {
             key: 'NTP服务器',
-            icon: h(ClockCircleOutlined),
+            icon: h(moduleNavigationIcons.ntp),
             label: 'NTP服务器',
             title: 'NTP服务器',
             route: '/ntp'
         },
         {
             key: 'RADIUS服务器',
-            icon: h(KeyOutlined),
+            icon: h(moduleNavigationIcons.radius),
             label: 'RADIUS服务器',
             title: 'RADIUS服务器',
             route: '/radius'
         },
         {
             key: 'TFTP服务器',
-            icon: h(SwapOutlined),
+            icon: h(moduleNavigationIcons.tftp),
             label: 'TFTP服务器',
             title: 'TFTP服务器',
             route: '/tftp'
         },
         {
             key: 'Syslog服务器',
-            icon: h(FileTextOutlined),
+            icon: h(moduleNavigationIcons.syslog),
             label: 'Syslog服务器',
             title: 'Syslog服务器',
             route: '/syslog'
@@ -191,6 +181,12 @@
     const handleSelect = ({ key }) => {
         const selectedItem = items.value.find(item => item.key === key);
         if (selectedItem) {
+            const isCurrentSection =
+                route.path === selectedItem.route || route.path.startsWith(`${selectedItem.route}/`);
+            if (isCurrentSection) {
+                return;
+            }
+
             // 在导航前确保当前路由已被添加到缓存视图中
             const targetRoute = router.resolve(selectedItem.route);
             if (targetRoute.name) {
@@ -328,16 +324,15 @@
     }
 
     .content-container {
-        margin-left: 165px;
+        margin-left: 160px;
         transition: all 0.2s;
-        width: calc(100% - 165px);
+        width: calc(100% - 160px);
         display: flex;
-        padding-right: 20px;
     }
 
     .content-container.content-expanded {
-        margin-left: 65px;
-        width: calc(100% - 65px);
+        margin-left: 60px;
+        width: calc(100% - 60px);
     }
 
     .content-area {

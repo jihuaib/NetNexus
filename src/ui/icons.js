@@ -2,6 +2,7 @@ import { h } from 'vue';
 import {
     AppWindow,
     Bell,
+    ChartNetwork,
     CheckCircle,
     CircleAlert,
     Clock,
@@ -27,10 +28,12 @@ import {
     Plus,
     RefreshCw,
     Repeat,
+    Route,
     Save,
     Search,
     Send,
     Server,
+    Settings,
     Shield,
     setLucideProps,
     StepForward,
@@ -70,7 +73,7 @@ export const ClockCircleOutlined = createIcon(Clock);
 export const CloudDownloadOutlined = createIcon(CloudDownload);
 export const CloudServerOutlined = createIcon(Server);
 export const CloudUploadOutlined = createIcon(UploadCloud);
-export const ClusterOutlined = createIcon(Network);
+export const ClusterOutlined = createIcon(ChartNetwork);
 export const CodeOutlined = createIcon(Code);
 export const CopyOutlined = createIcon(Copy);
 export const DeleteOutlined = createIcon(Trash2);
@@ -91,11 +94,12 @@ export const MenuUnfoldOutlined = createIcon(PanelLeftOpen);
 export const PlusOutlined = createIcon(Plus);
 export const ProfileOutlined = createIcon(FileText);
 export const ReloadOutlined = createIcon(RefreshCw);
+export const RouteOutlined = createIcon(Route);
 export const SafetyOutlined = createIcon(Shield);
 export const SaveOutlined = createIcon(Save);
 export const SearchOutlined = createIcon(Search);
 export const SendOutlined = createIcon(Send);
-export const SettingOutlined = createIcon(Wrench);
+export const SettingOutlined = createIcon(Settings);
 export const StepForwardOutlined = createIcon(StepForward);
 export const SwapOutlined = createIcon(Repeat);
 export const ToolOutlined = createIcon(Wrench);

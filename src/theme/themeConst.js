@@ -9,18 +9,18 @@ export const APP_THEME_PRESET = {
     DARK: 'dark'
 };
 
-export const DEFAULT_THEME_PRESET = APP_THEME_PRESET.ORANGE;
+export const DEFAULT_THEME_PRESET = APP_THEME_PRESET.BLUE;
 
 export const THEME_PRESET_STORAGE_KEY = 'netnexus.themePreset';
 
 export const APP_THEME_PRESET_OPTIONS = [
     {
-        label: '橙色',
-        value: APP_THEME_PRESET.ORANGE
-    },
-    {
         label: '蓝色',
         value: APP_THEME_PRESET.BLUE
+    },
+    {
+        label: '橙色',
+        value: APP_THEME_PRESET.ORANGE
     },
     {
         label: '深色',

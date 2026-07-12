@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container bgp-route-page">
+    <div class="nn-container bgp-route-page">
         <nn-card title="IPv4-MVPN路由配置" class="bgp-route-card">
             <nn-form :model="ipv4MvpnData" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <nn-row>
@@ -604,7 +604,7 @@
 
 <style scoped>
     .bgp-route-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
         display: flex;
@@ -626,20 +626,6 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
-    }
-
-    .bgp-route-card :deep(.nn-card-head),
-    .bgp-route-list-card :deep(.nn-card-head) {
-        min-height: 36px !important;
-    }
-
-    .bgp-route-card :deep(.nn-card-head-title),
-    .bgp-route-list-card :deep(.nn-card-head-title) {
-        padding: 8px 0 !important;
-    }
-
-    .bgp-route-list-card :deep(.nn-card-extra) {
-        padding: 6px 0 !important;
     }
 
     .bgp-route-card :deep(.nn-card-body) {

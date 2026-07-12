@@ -47,20 +47,3 @@
         emit('update:open', false);
     };
 </script>
-
-<style scoped>
-    .json-detail {
-        background: var(--nn-color-bg-console);
-        border-radius: 6px;
-        color: var(--nn-color-text-console);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-        font-size: 12px;
-        line-height: 1.6;
-        margin: 0;
-        max-height: calc(100vh - 116px);
-        overflow: auto;
-        padding: 12px;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-</style>

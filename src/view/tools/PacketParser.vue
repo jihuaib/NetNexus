@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-container packet-parser-page">
+    <div class="nn-container packet-parser-page">
         <nn-card title="报文解析器" class="packet-parser-card">
             <nn-form :model="formState" layout="vertical" class="packet-parser-form" @finish="handleParsePacket">
                 <div class="packet-config-grid">
@@ -324,7 +324,7 @@
 
 <style scoped>
     .packet-parser-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
