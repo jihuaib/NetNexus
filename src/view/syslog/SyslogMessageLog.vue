@@ -1,14 +1,14 @@
 <template>
-    <div class="mt-container adaptive-table-page">
-        <a-card title="Syslog消息日志" class="adaptive-table-card">
+    <div class="nn-container adaptive-table-page">
+        <nn-card title="Syslog消息日志" class="adaptive-table-card">
             <template #extra>
-                <a-space>
-                    <a-button :loading="loading" @click="() => loadMessageList()">刷新</a-button>
-                    <a-button danger :loading="clearLoading" @click="clearHistory">清空历史</a-button>
-                </a-space>
+                <nn-space>
+                    <nn-button :loading="loading" @click="() => loadMessageList()">刷新</nn-button>
+                    <nn-button danger :loading="clearLoading" @click="clearHistory">清空历史</nn-button>
+                </nn-space>
             </template>
 
-            <a-table
+            <nn-table
                 :columns="columns"
                 :data-source="messageList"
                 :loading="loading"
@@ -21,102 +21,106 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'status'">
-                        <a-tag :color="statusColor(record.status)">
+                        <nn-tag :color="statusColor(record.status)">
                             {{ statusText(record.status) }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                     <template v-else-if="column.key === 'severityName'">
-                        <a-tag :color="severityColor(record.severityName)">
+                        <nn-tag :color="severityColor(record.severityName)">
                             {{ record.severityName || '-' }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                     <template v-else-if="column.key === 'format'">
-                        <a-tag :color="record.format === 'RAW' ? 'default' : 'blue'">
+                        <nn-tag :color="record.format === 'RAW' ? 'default' : 'blue'">
                             {{ record.format || '-' }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                     <template v-else-if="column.key === 'transportFormat'">
-                        <a-space>
-                            <a-tag>{{ record.transport || '-' }}</a-tag>
-                            <a-tag :color="record.format === 'RAW' ? 'default' : 'blue'">
+                        <nn-space>
+                            <nn-tag>{{ record.transport || '-' }}</nn-tag>
+                            <nn-tag :color="record.format === 'RAW' ? 'default' : 'blue'">
                                 {{ record.format || '-' }}
-                            </a-tag>
-                        </a-space>
+                            </nn-tag>
+                        </nn-space>
                     </template>
                     <template v-else-if="column.key === 'client'">
                         {{ record.clientAddress }}:{{ record.clientPort }}
                     </template>
                     <template v-else-if="column.key === 'summary'">
-                        <a-tooltip :title="record.summary">
+                        <nn-tooltip :title="record.summary">
                             <span class="message-cell">{{ record.summary || '-' }}</span>
-                        </a-tooltip>
+                        </nn-tooltip>
                     </template>
                     <template v-else-if="column.key === 'action'">
-                        <a-button type="link" @click="showDetail(record)">详情</a-button>
+                        <nn-button type="link" @click="showDetail(record)">详情</nn-button>
                     </template>
                 </template>
-            </a-table>
-        </a-card>
+            </nn-table>
+        </nn-card>
 
-        <a-drawer
+        <nn-drawer
             v-model:open="detailDrawerVisible"
             :title="detailDrawerTitle"
             width="720px"
             placement="right"
             @close="closeDetailDrawer"
         >
-            <a-spin :spinning="detailLoading">
-                <a-empty v-if="!selectedMessage" description="暂无详情" />
+            <nn-spin :spinning="detailLoading">
+                <nn-empty v-if="!selectedMessage" description="暂无详情" />
                 <template v-else>
-                    <a-descriptions title="接收摘要" :column="1" bordered size="small">
-                        <a-descriptions-item label="接收时间">
+                    <nn-descriptions title="接收摘要" :column="1" bordered size="small">
+                        <nn-descriptions-item label="接收时间">
                             {{ selectedMessage.timestamp || '-' }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="客户端">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="客户端">
                             {{ selectedMessage.clientAddress || '-' }}:{{ selectedMessage.clientPort || '-' }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="传输协议">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="传输协议">
                             {{ selectedMessage.transport || '-' }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="IP版本">{{ selectedMessage.ipVersion || '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="字节长度">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="IP版本">
+                            {{ selectedMessage.ipVersion || '-' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="字节长度">
                             {{ selectedMessage.byteLength ?? '-' }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="状态">
-                            <a-tag :color="statusColor(selectedMessage.status)">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="状态">
+                            <nn-tag :color="statusColor(selectedMessage.status)">
                                 {{ statusText(selectedMessage.status) }}
-                            </a-tag>
-                        </a-descriptions-item>
-                        <a-descriptions-item label="解析说明">{{ selectedMessage.note || '-' }}</a-descriptions-item>
-                    </a-descriptions>
+                            </nn-tag>
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="解析说明">{{ selectedMessage.note || '-' }}</nn-descriptions-item>
+                    </nn-descriptions>
 
-                    <a-descriptions title="Syslog字段" :column="1" bordered size="small" class="detail-section">
-                        <a-descriptions-item label="格式">{{ selectedMessage.format || '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="PRI">{{ selectedMessage.priority ?? '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="Facility">
+                    <nn-descriptions title="Syslog字段" :column="1" bordered size="small" class="detail-section">
+                        <nn-descriptions-item label="格式">{{ selectedMessage.format || '-' }}</nn-descriptions-item>
+                        <nn-descriptions-item label="PRI">{{ selectedMessage.priority ?? '-' }}</nn-descriptions-item>
+                        <nn-descriptions-item label="Facility">
                             {{ selectedMessage.facilityName || '-' }} ({{ selectedMessage.facilityCode ?? '-' }})
-                        </a-descriptions-item>
-                        <a-descriptions-item label="Severity">
-                            <a-tag :color="severityColor(selectedMessage.severityName)">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="Severity">
+                            <nn-tag :color="severityColor(selectedMessage.severityName)">
                                 {{ selectedMessage.severityName || '-' }}
-                            </a-tag>
+                            </nn-tag>
                             <span>({{ selectedMessage.severityCode ?? '-' }})</span>
-                        </a-descriptions-item>
-                        <a-descriptions-item label="报文时间">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="报文时间">
                             {{ selectedMessage.syslogTimestamp || '-' }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="主机名">{{ selectedMessage.hostname || '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="应用">{{ selectedMessage.appName || '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="进程ID">{{ selectedMessage.procId || '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="MsgID">{{ selectedMessage.msgId || '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="Tag">{{ selectedMessage.tag || '-' }}</a-descriptions-item>
-                        <a-descriptions-item label="结构化数据">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="主机名">
+                            {{ selectedMessage.hostname || '-' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="应用">{{ selectedMessage.appName || '-' }}</nn-descriptions-item>
+                        <nn-descriptions-item label="进程ID">{{ selectedMessage.procId || '-' }}</nn-descriptions-item>
+                        <nn-descriptions-item label="MsgID">{{ selectedMessage.msgId || '-' }}</nn-descriptions-item>
+                        <nn-descriptions-item label="Tag">{{ selectedMessage.tag || '-' }}</nn-descriptions-item>
+                        <nn-descriptions-item label="结构化数据">
                             <pre class="detail-pre">{{ selectedMessage.structuredData || '-' }}</pre>
-                        </a-descriptions-item>
-                        <a-descriptions-item label="解析错误">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="解析错误">
                             {{ selectedMessage.parseError || '-' }}
-                        </a-descriptions-item>
-                    </a-descriptions>
+                        </nn-descriptions-item>
+                    </nn-descriptions>
 
                     <div class="detail-section">
                         <div class="detail-title">消息内容</div>
@@ -128,14 +132,14 @@
                         <pre class="detail-pre">{{ selectedMessage.rawMessage || '-' }}</pre>
                     </div>
                 </template>
-            </a-spin>
-        </a-drawer>
+            </nn-spin>
+        </nn-drawer>
     </div>
 </template>
 
 <script setup>
     import { computed, ref, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import {
         SYSLOG_SUB_EVT_TYPES,
         SYSLOG_EVENT_PAGE_ID,
@@ -245,10 +249,10 @@
                     total: payload.total || 0
                 };
             } else {
-                message.error(result.msg || '获取Syslog消息日志失败');
+                notify.error(result.msg || '获取Syslog消息日志失败');
             }
         } catch (error) {
-            message.error('获取Syslog消息日志失败: ' + error.message);
+            notify.error('获取Syslog消息日志失败: ' + error.message);
         } finally {
             loading.value = false;
         }
@@ -270,12 +274,12 @@
                     total: 0
                 };
                 closeDetailDrawer();
-                message.success(result.msg || 'Syslog消息日志已清空');
+                notify.success(result.msg || 'Syslog消息日志已清空');
             } else {
-                message.error(result.msg || '清空Syslog消息日志失败');
+                notify.error(result.msg || '清空Syslog消息日志失败');
             }
         } catch (error) {
-            message.error('清空Syslog消息日志失败: ' + error.message);
+            notify.error('清空Syslog消息日志失败: ' + error.message);
         } finally {
             clearLoading.value = false;
         }
@@ -291,10 +295,10 @@
             if (result.status === 'success') {
                 selectedMessage.value = result.data;
             } else {
-                message.error(result.msg || '获取Syslog消息详情失败');
+                notify.error(result.msg || '获取Syslog消息详情失败');
             }
         } catch (error) {
-            message.error('获取Syslog消息详情失败: ' + error.message);
+            notify.error('获取Syslog消息详情失败: ' + error.message);
         } finally {
             detailLoading.value = false;
         }
@@ -350,7 +354,7 @@
 
 <style scoped>
     .adaptive-table-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -362,7 +366,7 @@
         overflow: hidden;
     }
 
-    .adaptive-table-card :deep(.ant-card-body) {
+    .adaptive-table-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         min-width: 0;
@@ -372,20 +376,20 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -393,20 +397,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -414,12 +418,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;
@@ -441,18 +445,10 @@
     .detail-title {
         margin-bottom: 8px;
         font-weight: 600;
-        color: rgba(0, 0, 0, 0.45);
+        color: var(--nn-color-text-muted);
     }
 
     .detail-pre {
         max-height: 260px;
-        margin: 0;
-        padding: 8px;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-        background: #f5f5f5;
-        border: 1px solid #f0f0f0;
-        border-radius: 4px;
     }
 </style>

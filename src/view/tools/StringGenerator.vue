@@ -1,7 +1,7 @@
 <template>
-    <div class="mt-container string-generator-page" data-testid="string-generator-page">
-        <a-card title="字符串生成配置" class="string-generator-card" data-testid="string-generator-card">
-            <a-form
+    <div class="nn-container string-generator-page" data-testid="string-generator-page">
+        <nn-card title="字符串生成配置" class="string-generator-card" data-testid="string-generator-card">
+            <nn-form
                 :model="formState"
                 :label-col="labelCol"
                 :wrapper-col="wrapperCol"
@@ -9,68 +9,68 @@
                 @finish="handleFinish"
             >
                 <!-- 字符串模板输入 -->
-                <a-form-item label="字符串模板" name="template">
-                    <a-tooltip :title="validationErrors.template" :open="!!validationErrors.template">
+                <nn-form-item label="字符串模板" name="template">
+                    <nn-tooltip :title="validationErrors.template" :open="!!validationErrors.template">
                         <ScrollTextarea
                             v-model:model-value="formState.template"
                             data-testid="string-template-input"
                             :height="120"
                             :status="validationErrors.template ? 'error' : ''"
                         />
-                    </a-tooltip>
-                </a-form-item>
+                    </nn-tooltip>
+                </nn-form-item>
 
                 <!-- 参数配置行 -->
-                <a-row>
-                    <a-col :span="8">
-                        <a-form-item label="占位符" name="placeholder">
-                            <a-tooltip :title="validationErrors.placeholder" :open="!!validationErrors.placeholder">
-                                <a-input
+                <nn-row>
+                    <nn-col :span="8">
+                        <nn-form-item label="占位符" name="placeholder">
+                            <nn-tooltip :title="validationErrors.placeholder" :open="!!validationErrors.placeholder">
+                                <nn-input
                                     v-model:value="formState.placeholder"
                                     data-testid="string-placeholder-input"
                                     :status="validationErrors.placeholder ? 'error' : ''"
                                 />
-                            </a-tooltip>
-                        </a-form-item>
-                    </a-col>
-                    <a-col :span="8">
-                        <a-form-item label="开始" name="start">
-                            <a-tooltip :title="validationErrors.start" :open="!!validationErrors.start">
-                                <a-input
+                            </nn-tooltip>
+                        </nn-form-item>
+                    </nn-col>
+                    <nn-col :span="8">
+                        <nn-form-item label="开始" name="start">
+                            <nn-tooltip :title="validationErrors.start" :open="!!validationErrors.start">
+                                <nn-input
                                     v-model:value="formState.start"
                                     data-testid="string-start-input"
                                     :status="validationErrors.start ? 'error' : ''"
                                 />
-                            </a-tooltip>
-                        </a-form-item>
-                    </a-col>
-                    <a-col :span="8">
-                        <a-form-item label="结束" name="end">
-                            <a-tooltip :title="validationErrors.end" :open="!!validationErrors.end">
-                                <a-input
+                            </nn-tooltip>
+                        </nn-form-item>
+                    </nn-col>
+                    <nn-col :span="8">
+                        <nn-form-item label="结束" name="end">
+                            <nn-tooltip :title="validationErrors.end" :open="!!validationErrors.end">
+                                <nn-input
                                     v-model:value="formState.end"
                                     data-testid="string-end-input"
                                     :status="validationErrors.end ? 'error' : ''"
                                 />
-                            </a-tooltip>
-                        </a-form-item>
-                    </a-col>
-                </a-row>
+                            </nn-tooltip>
+                        </nn-form-item>
+                    </nn-col>
+                </nn-row>
 
                 <!-- 操作按钮 -->
-                <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                    <a-space>
-                        <a-button type="primary" html-type="submit" data-testid="string-generate-button">
+                <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                    <nn-space>
+                        <nn-button type="primary" html-type="submit" data-testid="string-generate-button">
                             立即生成
-                        </a-button>
-                        <a-button type="default" data-testid="string-history-button" @click="showGenerateHistory">
+                        </nn-button>
+                        <nn-button type="default" data-testid="string-history-button" @click="showGenerateHistory">
                             生成历史
-                        </a-button>
-                    </a-space>
-                </a-form-item>
+                        </nn-button>
+                    </nn-space>
+                </nn-form-item>
 
                 <!-- 结果显示 -->
-                <a-form-item label="生成结果" class="generator-result-item">
+                <nn-form-item label="生成结果" class="generator-result-item">
                     <div class="generator-result-textarea-wrap">
                         <ScrollTextarea
                             v-model:model-value="result"
@@ -78,13 +78,13 @@
                             height="100%"
                         />
                     </div>
-                </a-form-item>
-            </a-form>
-        </a-card>
+                </nn-form-item>
+            </nn-form>
+        </nn-card>
     </div>
 
     <!-- 生成历史弹窗 -->
-    <a-modal
+    <nn-modal
         v-model:open="generateHistoryModalVisible"
         title="生成历史"
         :mask-closable="false"
@@ -92,7 +92,7 @@
         @cancel="closeHistoryModal"
     >
         <div data-testid="string-history-modal">
-            <a-table
+            <nn-table
                 :columns="historyColumns"
                 :data-source="generateHistory"
                 data-testid="string-history-table"
@@ -107,36 +107,36 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'action'">
-                        <a-button type="link" data-testid="string-history-use-button" @click="loadHistoryItem(record)">
+                        <nn-button type="link" data-testid="string-history-use-button" @click="loadHistoryItem(record)">
                             使用
-                        </a-button>
+                        </nn-button>
                     </template>
                     <template v-else-if="column.key === 'template'">
                         <div>{{ truncateString(record.template, 40) }}</div>
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </div>
         <template #footer>
-            <a-button type="primary" data-testid="string-history-close-button" @click="closeHistoryModal">
+            <nn-button type="primary" data-testid="string-history-close-button" @click="closeHistoryModal">
                 关闭
-            </a-button>
-            <a-button
+            </nn-button>
+            <nn-button
                 v-if="generateHistory.length > 0"
                 danger
                 data-testid="string-history-clear-button"
                 @click="clearHistory"
             >
                 清空历史
-            </a-button>
+            </nn-button>
         </template>
-    </a-modal>
+    </nn-modal>
 </template>
 
 <script setup>
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
     import { ref, toRaw } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { FormValidator, createStringGeneratorValidationRules } from '../../utils/validationCommon';
 
     defineOptions({
@@ -181,7 +181,7 @@
         try {
             const hasError = validator.validate(formState.value);
             if (hasError) {
-                message.error('请检查配置信息是否正确');
+                notify.error('请检查配置信息是否正确');
                 return;
             }
 
@@ -191,10 +191,10 @@
             if (resp.status === 'success') {
                 result.value = resp.data.join('\r\n');
             } else {
-                message.error(resp.msg || '生成失败');
+                notify.error(resp.msg || '生成失败');
             }
         } catch (e) {
-            message.error(e.message || String(e));
+            notify.error(e.message || String(e));
             console.error('生成错误:', e);
         }
     };
@@ -236,10 +236,10 @@
                 generateHistory.value = resp.data || [];
                 generateHistoryModalVisible.value = true;
             } else {
-                message.error(resp.msg || '获取历史记录失败');
+                notify.error(resp.msg || '获取历史记录失败');
             }
         } catch (e) {
-            message.error(e.message || String(e));
+            notify.error(e.message || String(e));
             console.error('获取历史记录错误:', e);
         }
     };
@@ -285,7 +285,7 @@
 
 <style scoped>
     .string-generator-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -297,7 +297,7 @@
         overflow: hidden;
     }
 
-    .string-generator-card :deep(.ant-card-body) {
+    .string-generator-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -313,7 +313,7 @@
         overflow: hidden;
     }
 
-    .string-generator-form :deep(.ant-form-item) {
+    .string-generator-form :deep(.nn-form-item) {
         flex: 0 0 auto;
     }
 
@@ -324,21 +324,21 @@
         flex-direction: column;
     }
 
-    .generator-result-item :deep(.ant-form-item-row),
-    .generator-result-item :deep(.ant-form-item-control),
-    .generator-result-item :deep(.ant-form-item-control-input),
-    .generator-result-item :deep(.ant-form-item-control-input-content) {
+    .generator-result-item :deep(.nn-form-item-row),
+    .generator-result-item :deep(.nn-form-item-control),
+    .generator-result-item :deep(.nn-form-item-control-input),
+    .generator-result-item :deep(.nn-form-item-control-input-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .generator-result-item :deep(.ant-form-item-label) {
+    .generator-result-item :deep(.nn-form-item-label) {
         flex: 0 0 auto;
     }
 
-    .generator-result-item :deep(.ant-form-item-control-input) {
+    .generator-result-item :deep(.nn-form-item-control-input) {
         align-items: stretch;
     }
 
@@ -350,14 +350,14 @@
         flex-direction: column;
     }
 
-    .generator-result-textarea-wrap :deep(textarea.ant-input) {
+    .generator-result-textarea-wrap :deep(textarea.nn-input) {
         flex: 1 1 0;
         min-height: 0;
         width: 100%;
         height: auto !important;
     }
 
-    :deep(.ant-table-body) {
+    :deep(.nn-table-body) {
         height: 200px !important;
         overflow-y: auto !important;
     }

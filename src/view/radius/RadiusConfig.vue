@@ -1,14 +1,14 @@
 <template>
-    <div class="mt-container radius-config-page">
-        <a-row class="radius-config-row" :gutter="10">
-            <a-col :span="24">
-                <a-card title="RADIUS服务器配置">
-                    <a-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
-                        <a-row :gutter="24">
-                            <a-col :span="8">
-                                <a-form-item label="认证端口">
-                                    <a-tooltip :title="validationErrors.authPort" :open="!!validationErrors.authPort">
-                                        <a-input-number
+    <div class="nn-container radius-config-page">
+        <nn-row class="radius-config-row" :gutter="10">
+            <nn-col :span="24">
+                <nn-card title="RADIUS服务器配置">
+                    <nn-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
+                        <nn-row :gutter="24">
+                            <nn-col :span="8">
+                                <nn-form-item label="认证端口">
+                                    <nn-tooltip :title="validationErrors.authPort" :open="!!validationErrors.authPort">
+                                        <nn-input-number
                                             v-model:value="formData.authPort"
                                             :min="1"
                                             :max="65535"
@@ -16,16 +16,16 @@
                                             :disabled="!formData.enableAuth"
                                             :status="validationErrors.authPort ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="计费端口">
-                                    <a-tooltip
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="计费端口">
+                                    <nn-tooltip
                                         :title="validationErrors.accountingPort"
                                         :open="!!validationErrors.accountingPort"
                                     >
-                                        <a-input-number
+                                        <nn-input-number
                                             v-model:value="formData.accountingPort"
                                             :min="1"
                                             :max="65535"
@@ -33,13 +33,13 @@
                                             :disabled="!formData.enableAccounting"
                                             :status="validationErrors.accountingPort ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="动态授权端口">
-                                    <a-tooltip :title="validationErrors.coaPort" :open="!!validationErrors.coaPort">
-                                        <a-input-number
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="动态授权端口">
+                                    <nn-tooltip :title="validationErrors.coaPort" :open="!!validationErrors.coaPort">
+                                        <nn-input-number
                                             v-model:value="formData.coaPort"
                                             :min="1"
                                             :max="65535"
@@ -47,124 +47,124 @@
                                             :disabled="!formData.enableDynamicAuth"
                                             :status="validationErrors.coaPort ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row :gutter="24">
-                            <a-col :span="8">
-                                <a-form-item label="认证服务">
-                                    <a-switch v-model:checked="formData.enableAuth" />
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="计费服务">
-                                    <a-switch v-model:checked="formData.enableAccounting" />
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="动态授权">
-                                    <a-switch v-model:checked="formData.enableDynamicAuth" />
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                        <nn-row :gutter="24">
+                            <nn-col :span="8">
+                                <nn-form-item label="认证服务">
+                                    <nn-switch v-model:checked="formData.enableAuth" />
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="计费服务">
+                                    <nn-switch v-model:checked="formData.enableAccounting" />
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="动态授权">
+                                    <nn-switch v-model:checked="formData.enableDynamicAuth" />
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row :gutter="24">
-                            <a-col :span="8">
-                                <a-form-item label="默认共享密钥">
-                                    <a-tooltip
+                        <nn-row :gutter="24">
+                            <nn-col :span="8">
+                                <nn-form-item label="默认共享密钥">
+                                    <nn-tooltip
                                         :title="validationErrors.sharedSecret"
                                         :open="!!validationErrors.sharedSecret"
                                     >
-                                        <a-input-password
+                                        <nn-input-password
                                             v-model:value="formData.sharedSecret"
                                             :status="validationErrors.sharedSecret ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="强制消息认证">
-                                    <a-switch v-model:checked="formData.requireMessageAuthenticator" />
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="拒绝未知客户端">
-                                    <a-switch v-model:checked="formData.rejectUnknownClients" />
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="强制消息认证">
+                                    <nn-switch v-model:checked="formData.requireMessageAuthenticator" />
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="拒绝未知客户端">
+                                    <nn-switch v-model:checked="formData.rejectUnknownClients" />
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row :gutter="24">
-                            <a-col :span="24">
-                                <a-form-item label="配置文件">
-                                    <a-input v-model:value="formData.configFilePath" readonly />
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                        <nn-row :gutter="24">
+                            <nn-col :span="24">
+                                <nn-form-item label="配置文件">
+                                    <nn-input v-model:value="formData.configFilePath" readonly />
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
                         <div class="actions">
-                            <a-space>
-                                <a-button
+                            <nn-space>
+                                <nn-button
                                     type="primary"
                                     :loading="serverLoading"
                                     :disabled="isServerRunning"
                                     @click="startRadius"
                                 >
                                     启动服务器
-                                </a-button>
-                                <a-button type="primary" danger :disabled="!isServerRunning" @click="stopRadius">
+                                </nn-button>
+                                <nn-button type="primary" danger :disabled="!isServerRunning" @click="stopRadius">
                                     停止服务器
-                                </a-button>
-                            </a-space>
+                                </nn-button>
+                            </nn-space>
                         </div>
-                    </a-form>
-                </a-card>
-            </a-col>
-        </a-row>
+                    </nn-form>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
-        <a-row class="radius-fill-row">
-            <a-col :span="24">
-                <a-card title="服务状态" class="radius-fill-card">
-                    <a-descriptions :column="2" bordered>
-                        <a-descriptions-item label="服务状态">
-                            <a-tag :color="isServerRunning ? 'green' : 'red'">
+        <nn-row class="radius-fill-row">
+            <nn-col :span="24">
+                <nn-card title="服务状态" class="radius-fill-card">
+                    <nn-descriptions :column="2" bordered>
+                        <nn-descriptions-item label="服务状态">
+                            <nn-tag :color="isServerRunning ? 'green' : 'red'">
                                 {{ isServerRunning ? '运行中' : '已停止' }}
-                            </a-tag>
-                        </a-descriptions-item>
-                        <a-descriptions-item label="认证端口">
+                            </nn-tag>
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="认证端口">
                             {{ displayedStatus.authPort || formData.authPort }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="计费端口">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="计费端口">
                             {{ displayedStatus.accountingPort || formData.accountingPort }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="动态授权端口">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="动态授权端口">
                             {{ displayedStatus.coaPort || formData.coaPort }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="IPv6认证端口">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="IPv6认证端口">
                             {{ displayedStatus.authPort6 || '-' }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="IPv6计费端口">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="IPv6计费端口">
                             {{ displayedStatus.accountingPort6 || '-' }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="IPv6动态授权端口">
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="IPv6动态授权端口">
                             {{ displayedStatus.coaPort6 || '-' }}
-                        </a-descriptions-item>
-                        <a-descriptions-item label="请求日志">{{ requestCount }}</a-descriptions-item>
-                        <a-descriptions-item label="活动会话">{{ sessionCount }}</a-descriptions-item>
-                        <a-descriptions-item label="最近请求时间">{{ lastRequestAt }}</a-descriptions-item>
-                        <a-descriptions-item label="最近客户端">{{ lastClient }}</a-descriptions-item>
-                    </a-descriptions>
-                </a-card>
-            </a-col>
-        </a-row>
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="请求日志">{{ requestCount }}</nn-descriptions-item>
+                        <nn-descriptions-item label="活动会话">{{ sessionCount }}</nn-descriptions-item>
+                        <nn-descriptions-item label="最近请求时间">{{ lastRequestAt }}</nn-descriptions-item>
+                        <nn-descriptions-item label="最近客户端">{{ lastClient }}</nn-descriptions-item>
+                    </nn-descriptions>
+                </nn-card>
+            </nn-col>
+        </nn-row>
     </div>
 </template>
 
 <script setup>
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { DEFAULT_VALUES, RADIUS_EVENT_PAGE_ID, RADIUS_SUB_EVT_TYPES } from '../../const/radiusConst';
     import EventBus from '../../utils/eventBus';
 
@@ -254,13 +254,13 @@
                 };
             }
         } catch (error) {
-            message.error('加载RADIUS配置失败: ' + error.message);
+            notify.error('加载RADIUS配置失败: ' + error.message);
         }
     };
 
     const startRadius = async () => {
         if (!validateConfig()) {
-            message.error('请检查输入的数据');
+            notify.error('请检查输入的数据');
             return;
         }
 
@@ -268,7 +268,7 @@
             const payload = buildPayload();
             const saveResult = await window.radiusApi.saveRadiusConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
@@ -277,12 +277,12 @@
             if (startResult.status === 'success') {
                 isServerRunning.value = true;
                 displayedStatus.value = startResult.data || {};
-                message.success(startResult.msg || 'RADIUS服务启动成功');
+                notify.success(startResult.msg || 'RADIUS服务启动成功');
             } else {
-                message.error(startResult.msg || 'RADIUS服务启动失败');
+                notify.error(startResult.msg || 'RADIUS服务启动失败');
             }
         } catch (error) {
-            message.error('RADIUS服务启动失败: ' + error.message);
+            notify.error('RADIUS服务启动失败: ' + error.message);
         } finally {
             serverLoading.value = false;
         }
@@ -292,17 +292,17 @@
         try {
             const result = await window.radiusApi.stopRadius();
             if (result.status === 'success') {
-                message.success(result.msg || 'RADIUS服务已停止');
+                notify.success(result.msg || 'RADIUS服务已停止');
                 isServerRunning.value = false;
                 requestCount.value = 0;
                 sessionCount.value = 0;
                 lastRequestAt.value = '-';
                 lastClient.value = '-';
             } else {
-                message.error(result.msg || 'RADIUS服务停止失败');
+                notify.error(result.msg || 'RADIUS服务停止失败');
             }
         } catch (error) {
-            message.error('RADIUS服务停止失败: ' + error.message);
+            notify.error('RADIUS服务停止失败: ' + error.message);
         }
     };
 
@@ -349,7 +349,7 @@
 
 <style scoped>
     .radius-config-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -366,7 +366,7 @@
         min-height: 0;
     }
 
-    .radius-fill-row :deep(.ant-col) {
+    .radius-fill-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -378,7 +378,7 @@
         overflow: hidden;
     }
 
-    .radius-fill-card :deep(.ant-card-body) {
+    .radius-fill-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: auto;

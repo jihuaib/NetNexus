@@ -1,0 +1,402 @@
+<template>
+    <div class="nn-tabs" :class="tabsClass">
+        <div
+            class="nn-tabs-nav"
+            :style="tabBarStyle"
+            role="tablist"
+            :aria-orientation="tabPosition === 'left' ? 'vertical' : 'horizontal'"
+        >
+            <div
+                class="nn-tabs-nav-wrap"
+                :class="{ 'nn-scrollbar-active': scrollbarActive }"
+                @pointerenter="showScrollbar"
+                @pointermove="showScrollbar"
+                @pointerleave="hideScrollbar"
+                @scroll.passive="showScrollbar"
+            >
+                <div class="nn-tabs-nav-list">
+                    <button
+                        v-for="tabPane in panes"
+                        :key="String(tabPane.key)"
+                        :id="tabPane.buttonId"
+                        type="button"
+                        class="nn-tabs-tab"
+                        :class="{ 'nn-tabs-tab-active': isPaneActive(tabPane) }"
+                        :disabled="tabPane.disabled"
+                        role="tab"
+                        :aria-selected="isPaneActive(tabPane) ? 'true' : 'false'"
+                        :aria-controls="tabPane.panelId"
+                        @click="selectPane(tabPane)"
+                        @keydown="handleTabKeydown($event, tabPane)"
+                    >
+                        <span class="nn-tabs-tab-button">
+                            <NnRenderContent :content="tabPane.tab" />
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="nn-tabs-content-holder">
+            <div class="nn-tabs-content">
+                <NnTabPaneRenderer
+                    v-for="tabPane in panes"
+                    :key="String(tabPane.key)"
+                    :pane="tabPane"
+                    :active="isPaneActive(tabPane)"
+                />
+            </div>
+        </div>
+    </div>
+</template>
+
+<script setup>
+    import { cloneVNode, computed, defineComponent, Fragment, ref, useSlots, watch } from 'vue';
+    import { useAutoHideScrollbar } from '../useAutoHideScrollbar';
+    import NnRenderContent from './NnRenderContent';
+    import NnTabPane from './NnTabPane.vue';
+
+    const props = defineProps({
+        activeKey: {
+            type: [String, Number],
+            default: undefined
+        },
+        size: {
+            type: String,
+            default: 'default'
+        },
+        tabPosition: {
+            type: String,
+            default: 'top'
+        },
+        type: {
+            type: String,
+            default: 'line'
+        },
+        tabBarStyle: {
+            type: [Object, String],
+            default: undefined
+        }
+    });
+
+    const emit = defineEmits(['update:activeKey', 'change']);
+
+    const slots = useSlots();
+    const { scrollbarActive, showScrollbar, hideScrollbar } = useAutoHideScrollbar();
+    const internalActiveKey = ref(undefined);
+    const hasControlledActiveKey = computed(() => props.activeKey !== undefined && props.activeKey !== null);
+    const currentActiveKey = computed(() => (hasControlledActiveKey.value ? props.activeKey : internalActiveKey.value));
+
+    const tabsClass = computed(() => ({
+        'nn-tabs-small': props.size === 'small',
+        'nn-tabs-card': props.type === 'card',
+        'nn-tabs-left': props.tabPosition === 'left'
+    }));
+
+    const flattenPanes = nodes =>
+        nodes.flatMap(node => {
+            if (node.type === Fragment && Array.isArray(node.children)) {
+                return flattenPanes(node.children);
+            }
+
+            return node.type === NnTabPane ? [node] : [];
+        });
+
+    const panes = computed(() =>
+        flattenPanes(slots.default?.() ?? []).map((vnode, index) => {
+            const key = vnode.key ?? `nn-tab-${index}`;
+            const tabSlot = typeof vnode.children === 'object' ? vnode.children?.tab : undefined;
+
+            return {
+                key,
+                tab: tabSlot ?? vnode.props?.tab ?? '',
+                disabled: Boolean(vnode.props?.disabled),
+                buttonId: `nn-tab-button-${String(key)}-${index}`,
+                panelId: `nn-tab-panel-${String(key)}-${index}`,
+                vnode
+            };
+        })
+    );
+
+    const isPaneActive = pane => pane.key === currentActiveKey.value;
+
+    const selectPane = pane => {
+        if (pane.disabled || isPaneActive(pane)) {
+            return;
+        }
+
+        internalActiveKey.value = pane.key;
+        emit('update:activeKey', pane.key);
+        emit('change', pane.key);
+    };
+
+    const handleTabKeydown = (event, pane) => {
+        const enabledPanes = panes.value.filter(item => !item.disabled);
+        const currentIndex = enabledPanes.findIndex(item => item.key === pane.key);
+        if (currentIndex < 0) {
+            return;
+        }
+
+        const previousKey = props.tabPosition === 'left' ? 'ArrowUp' : 'ArrowLeft';
+        const nextKey = props.tabPosition === 'left' ? 'ArrowDown' : 'ArrowRight';
+        let nextIndex = currentIndex;
+
+        if (event.key === previousKey) nextIndex = (currentIndex - 1 + enabledPanes.length) % enabledPanes.length;
+        else if (event.key === nextKey) nextIndex = (currentIndex + 1) % enabledPanes.length;
+        else if (event.key === 'Home') nextIndex = 0;
+        else if (event.key === 'End') nextIndex = enabledPanes.length - 1;
+        else return;
+
+        event.preventDefault();
+        const nextPane = enabledPanes[nextIndex];
+        selectPane(nextPane);
+        document.getElementById(nextPane.buttonId)?.focus();
+    };
+
+    const ensureActivePane = nextPanes => {
+        if (nextPanes.some(isPaneActive)) {
+            return;
+        }
+
+        const firstPane = nextPanes.find(pane => !pane.disabled);
+        if (firstPane) {
+            internalActiveKey.value = firstPane.key;
+
+            if (hasControlledActiveKey.value) {
+                emit('update:activeKey', firstPane.key);
+            }
+        }
+    };
+
+    watch(
+        panes,
+        nextPanes => {
+            ensureActivePane(nextPanes);
+        },
+        { immediate: true }
+    );
+
+    const NnTabPaneRenderer = defineComponent({
+        name: 'NnTabPaneRenderer',
+        props: {
+            pane: {
+                type: Object,
+                required: true
+            },
+            active: {
+                type: Boolean,
+                default: false
+            }
+        },
+        setup(rendererProps) {
+            return () =>
+                cloneVNode(rendererProps.pane.vnode, {
+                    active: rendererProps.active,
+                    panelId: rendererProps.pane.panelId,
+                    ariaLabelledby: rendererProps.pane.buttonId
+                });
+        }
+    });
+</script>
+
+<style scoped>
+    .nn-tabs {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        max-width: 100%;
+        color: var(--nn-color-text);
+    }
+
+    .nn-tabs-nav {
+        flex: 0 0 auto;
+        min-width: 0;
+        margin: 0 0 16px;
+        border-bottom: 1px solid var(--nn-color-border);
+    }
+
+    .nn-tabs-nav-wrap {
+        display: flex;
+        align-items: stretch;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-color: transparent transparent;
+        scrollbar-width: thin;
+    }
+
+    .nn-tabs-nav-wrap::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+
+    .nn-tabs-nav-wrap::-webkit-scrollbar-track,
+    .nn-tabs-nav-wrap::-webkit-scrollbar-corner {
+        background: transparent;
+    }
+
+    .nn-tabs-nav-wrap::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: transparent;
+    }
+
+    .nn-tabs-nav-wrap.nn-scrollbar-active {
+        scrollbar-color: var(--nn-color-text-placeholder) transparent;
+    }
+
+    .nn-tabs-nav-wrap.nn-scrollbar-active::-webkit-scrollbar-thumb {
+        background: var(--nn-color-text-placeholder);
+    }
+
+    .nn-tabs-nav-wrap::-webkit-scrollbar-thumb:hover {
+        background: var(--nn-color-text-muted);
+    }
+
+    .nn-tabs-nav-list {
+        display: flex;
+        align-items: stretch;
+        gap: 16px;
+        min-width: max-content;
+    }
+
+    .nn-tabs-tab {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 40px;
+        margin: 0;
+        padding: 8px 0;
+        border: 0;
+        background: transparent;
+        color: var(--nn-color-text-secondary);
+        cursor: pointer;
+        font: inherit;
+        font-size: 14px;
+        line-height: 22px;
+        outline: none;
+        white-space: nowrap;
+        transition:
+            color 0.2s,
+            background-color 0.2s,
+            border-color 0.2s,
+            box-shadow 0.2s;
+    }
+
+    .nn-tabs-tab:hover:not(:disabled),
+    .nn-tabs-tab-active {
+        color: var(--nn-color-primary);
+    }
+
+    .nn-tabs-tab:focus-visible {
+        box-shadow: var(--nn-focus-shadow-primary);
+    }
+
+    .nn-tabs-tab-active::after {
+        position: absolute;
+        right: 0;
+        bottom: -1px;
+        left: 0;
+        height: 2px;
+        background: var(--nn-color-primary);
+        content: '';
+    }
+
+    .nn-tabs-tab:disabled {
+        color: var(--nn-color-text-disabled);
+        cursor: not-allowed;
+    }
+
+    .nn-tabs-content-holder,
+    .nn-tabs-content,
+    :deep(.nn-tabs-tabpane) {
+        min-width: 0;
+    }
+
+    .nn-tabs-small > .nn-tabs-nav {
+        margin-bottom: 8px;
+    }
+
+    .nn-tabs-small > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab {
+        min-height: 32px;
+        padding: 5px 0;
+        font-size: 13px;
+        line-height: 20px;
+    }
+
+    .nn-tabs-small > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list {
+        gap: 12px;
+    }
+
+    .nn-tabs-card > .nn-tabs-nav {
+        border-bottom: 0;
+    }
+
+    .nn-tabs-card > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list {
+        gap: 4px;
+    }
+
+    .nn-tabs-card > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab {
+        min-height: 34px;
+        margin: 0;
+        padding: 5px 14px;
+        border: 1px solid var(--nn-color-border);
+        border-radius: 4px;
+        background: var(--nn-color-bg-muted);
+    }
+
+    .nn-tabs-card > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab-active {
+        border-color: var(--nn-color-primary);
+        background: var(--nn-color-bg-surface);
+    }
+
+    .nn-tabs-card > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab-active::after {
+        display: none;
+    }
+
+    .nn-tabs-left {
+        flex-direction: row;
+        align-items: stretch;
+    }
+
+    .nn-tabs-left > .nn-tabs-nav {
+        flex: 0 0 auto;
+        margin: 0 16px 0 0;
+        border-right: 1px solid var(--nn-color-border);
+        border-bottom: 0;
+    }
+
+    .nn-tabs-left > .nn-tabs-nav > .nn-tabs-nav-wrap {
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    .nn-tabs-left > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list {
+        width: 100%;
+        min-width: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+    }
+
+    .nn-tabs-left > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab {
+        width: 100%;
+        justify-content: flex-start;
+        margin: 0;
+        padding: 8px 20px 8px 0;
+        text-align: left;
+    }
+
+    .nn-tabs-left > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab-active::after {
+        top: 0;
+        right: -1px;
+        bottom: 0;
+        left: auto;
+        width: 2px;
+        height: auto;
+    }
+
+    .nn-tabs-left > .nn-tabs-content-holder {
+        flex: 1 1 0;
+        min-width: 0;
+    }
+</style>

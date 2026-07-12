@@ -1,160 +1,169 @@
 <template>
-    <div class="mt-container bgp-route-page" data-testid="bgp-route-ipv4-page">
-        <a-card :title="routeCardTitle" class="bgp-route-card">
-            <a-form :model="ipv4Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
+    <div class="nn-container bgp-route-page" data-testid="bgp-route-ipv4-page">
+        <nn-card :title="routeCardTitle" class="bgp-route-card">
+            <nn-form :model="ipv4Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <div class="config-section">
                     <div class="section-title">基础配置</div>
-                    <a-row :gutter="[16, 0]">
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="地址族" name="addressFamily">
-                                <a-select
+                    <nn-row :gutter="[16, 0]">
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="地址族" name="addressFamily">
+                                <nn-select
                                     v-model:value="ipv4Data.addressFamily"
                                     style="width: 100%"
                                     :options="addressFamilyOptions"
                                 />
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="Prefix" name="prefix">
-                                <a-tooltip :title="validationErrors.prefix" :open="!!validationErrors.prefix">
-                                    <a-input
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="Prefix" name="prefix">
+                                <nn-tooltip :title="validationErrors.prefix" :open="!!validationErrors.prefix">
+                                    <nn-input
                                         v-model:value="ipv4Data.prefix"
                                         data-testid="bgp-ipv4-route-prefix-input"
                                         :status="validationErrors.prefix ? 'error' : ''"
                                     />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="Mask" name="mask">
-                                <a-tooltip :title="validationErrors.mask" :open="!!validationErrors.mask">
-                                    <a-input
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="Mask" name="mask">
+                                <nn-tooltip :title="validationErrors.mask" :open="!!validationErrors.mask">
+                                    <nn-input
                                         v-model:value="ipv4Data.mask"
                                         data-testid="bgp-ipv4-route-mask-input"
                                         :status="validationErrors.mask ? 'error' : ''"
                                     />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="Count" name="count">
-                                <a-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
-                                    <a-input
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="Count" name="count">
+                                <nn-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
+                                    <nn-input
                                         v-model:value="ipv4Data.count"
                                         data-testid="bgp-ipv4-route-count-input"
                                         :status="validationErrors.count ? 'error' : ''"
                                     />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="RT" name="rt">
-                                <a-tooltip :title="validationErrors.rt" :open="!!validationErrors.rt">
-                                    <a-input v-model:value="ipv4Data.rt" :status="validationErrors.rt ? 'error' : ''" />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                    </a-row>
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="RT" name="rt">
+                                <nn-tooltip :title="validationErrors.rt" :open="!!validationErrors.rt">
+                                    <nn-input
+                                        v-model:value="ipv4Data.rt"
+                                        :status="validationErrors.rt ? 'error' : ''"
+                                    />
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                    </nn-row>
                 </div>
 
                 <div v-if="!isLabelRoute" class="config-section">
                     <div class="section-title">ADD-PATH</div>
-                    <a-row :gutter="[16, 0]">
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="生成" name="addPathEnabled">
-                                <a-switch v-model:checked="ipv4Data.addPathEnabled" />
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="Path Count" name="addPathCount">
-                                <a-tooltip
+                    <nn-row :gutter="[16, 0]">
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="生成" name="addPathEnabled">
+                                <nn-switch v-model:checked="ipv4Data.addPathEnabled" />
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="Path Count" name="addPathCount">
+                                <nn-tooltip
                                     :title="validationErrors.addPathCount"
                                     :open="!!validationErrors.addPathCount"
                                 >
-                                    <a-input
+                                    <nn-input
                                         v-model:value="ipv4Data.addPathCount"
                                         :disabled="!ipv4Data.addPathEnabled"
                                         :status="validationErrors.addPathCount ? 'error' : ''"
                                     />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                    </a-row>
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                    </nn-row>
                 </div>
 
                 <div v-if="isLabelRoute" class="config-section">
                     <div class="section-title">MPLS Label</div>
-                    <a-row :gutter="[16, 0]">
-                        <a-col :xs="24" :md="8">
-                            <a-form-item label="标签模式" name="labelMode">
-                                <a-tooltip :title="validationErrors.labelMode" :open="!!validationErrors.labelMode">
-                                    <a-radio-group v-model:value="ipv4Data.labelMode" button-style="solid">
-                                        <a-radio-button :value="BGP_LABEL_MODE.FIXED">固定</a-radio-button>
-                                        <a-radio-button :value="BGP_LABEL_MODE.INCREMENT">递增</a-radio-button>
-                                    </a-radio-group>
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="8">
-                            <a-form-item label="Label" name="labelStart">
-                                <a-tooltip :title="validationErrors.labelStart" :open="!!validationErrors.labelStart">
-                                    <a-input
+                    <nn-row :gutter="[16, 0]">
+                        <nn-col :xs="24" :md="8">
+                            <nn-form-item label="标签模式" name="labelMode">
+                                <nn-tooltip :title="validationErrors.labelMode" :open="!!validationErrors.labelMode">
+                                    <nn-radio-group v-model:value="ipv4Data.labelMode" button-style="solid">
+                                        <nn-radio-button :value="BGP_LABEL_MODE.FIXED">固定</nn-radio-button>
+                                        <nn-radio-button :value="BGP_LABEL_MODE.INCREMENT">递增</nn-radio-button>
+                                    </nn-radio-group>
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="8">
+                            <nn-form-item label="Label" name="labelStart">
+                                <nn-tooltip :title="validationErrors.labelStart" :open="!!validationErrors.labelStart">
+                                    <nn-input
                                         v-model:value="ipv4Data.labelStart"
                                         :status="validationErrors.labelStart ? 'error' : ''"
                                     />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                        <a-col v-if="ipv4Data.labelMode === BGP_LABEL_MODE.INCREMENT" :xs="24" :md="8">
-                            <a-form-item label="Step" name="labelStep">
-                                <a-tooltip :title="validationErrors.labelStep" :open="!!validationErrors.labelStep">
-                                    <a-input
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col v-if="ipv4Data.labelMode === BGP_LABEL_MODE.INCREMENT" :xs="24" :md="8">
+                            <nn-form-item label="Step" name="labelStep">
+                                <nn-tooltip :title="validationErrors.labelStep" :open="!!validationErrors.labelStep">
+                                    <nn-input
                                         v-model:value="ipv4Data.labelStep"
                                         :status="validationErrors.labelStep ? 'error' : ''"
                                     />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                    </a-row>
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                    </nn-row>
                 </div>
 
                 <div v-if="!isLabelRoute" class="config-section">
                     <div class="section-title">SRv6</div>
-                    <a-row :gutter="[16, 0]">
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="发送SID" name="srv6Enabled">
-                                <a-switch v-model:checked="ipv4Data.srv6Enabled" />
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="SID模式" name="srv6SidMode">
-                                <a-tooltip :title="validationErrors.srv6SidMode" :open="!!validationErrors.srv6SidMode">
-                                    <a-radio-group
+                    <nn-row :gutter="[16, 0]">
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="发送SID" name="srv6Enabled">
+                                <nn-switch v-model:checked="ipv4Data.srv6Enabled" />
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="SID模式" name="srv6SidMode">
+                                <nn-tooltip
+                                    :title="validationErrors.srv6SidMode"
+                                    :open="!!validationErrors.srv6SidMode"
+                                >
+                                    <nn-radio-group
                                         v-model:value="ipv4Data.srv6SidMode"
                                         class="inline-radio-group"
                                         :disabled="!ipv4Data.srv6Enabled"
                                     >
-                                        <a-radio :value="BGP_SRV6_SID_MODE.FIXED">固定</a-radio>
-                                        <a-radio :value="BGP_SRV6_SID_MODE.INCREMENT">递增</a-radio>
-                                    </a-radio-group>
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="8">
-                            <a-form-item label="SID" name="srv6Sid">
-                                <a-tooltip :title="validationErrors.srv6Sid" :open="!!validationErrors.srv6Sid">
-                                    <a-input
+                                        <nn-radio :value="BGP_SRV6_SID_MODE.FIXED">固定</nn-radio>
+                                        <nn-radio :value="BGP_SRV6_SID_MODE.INCREMENT">递增</nn-radio>
+                                    </nn-radio-group>
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="8">
+                            <nn-form-item label="SID" name="srv6Sid">
+                                <nn-tooltip :title="validationErrors.srv6Sid" :open="!!validationErrors.srv6Sid">
+                                    <nn-input
                                         v-model:value="ipv4Data.srv6Sid"
                                         :disabled="!ipv4Data.srv6Enabled"
                                         :status="validationErrors.srv6Sid ? 'error' : ''"
                                     />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="SID Step" name="srv6SidStep">
-                                <a-tooltip :title="validationErrors.srv6SidStep" :open="!!validationErrors.srv6SidStep">
-                                    <a-input
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="SID Step" name="srv6SidStep">
+                                <nn-tooltip
+                                    :title="validationErrors.srv6SidStep"
+                                    :open="!!validationErrors.srv6SidStep"
+                                >
+                                    <nn-input
                                         v-model:value="ipv4Data.srv6SidStep"
                                         :disabled="
                                             !ipv4Data.srv6Enabled ||
@@ -162,33 +171,33 @@
                                         "
                                         :status="validationErrors.srv6SidStep ? 'error' : ''"
                                     />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                        <a-col :xs="24" :md="6">
-                            <a-form-item label="Endpoint" name="srv6EndpointBehavior">
-                                <a-tooltip
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                        <nn-col :xs="24" :md="6">
+                            <nn-form-item label="Endpoint" name="srv6EndpointBehavior">
+                                <nn-tooltip
                                     :title="validationErrors.srv6EndpointBehavior"
                                     :open="!!validationErrors.srv6EndpointBehavior"
                                 >
-                                    <a-select
+                                    <nn-select
                                         v-model:value="ipv4Data.srv6EndpointBehavior"
                                         :options="srv6EndpointBehaviorOptions"
                                         :disabled="!ipv4Data.srv6Enabled"
                                         :status="validationErrors.srv6EndpointBehavior ? 'error' : ''"
                                     />
-                                </a-tooltip>
-                            </a-form-item>
-                        </a-col>
-                    </a-row>
+                                </nn-tooltip>
+                            </nn-form-item>
+                        </nn-col>
+                    </nn-row>
                 </div>
 
                 <div class="action-row">
-                    <a-button class="custom-attr-button" type="link" @click="showCustomRouteAttr">
+                    <nn-button class="custom-attr-button" type="link" @click="showCustomRouteAttr">
                         <template #icon><SettingOutlined /></template>
                         配置自定义路由属性
-                    </a-button>
-                    <a-button
+                    </nn-button>
+                    <nn-button
                         class="generate-route-button"
                         data-testid="bgp-generate-ipv4-routes-button"
                         type="primary"
@@ -196,18 +205,18 @@
                         @click="generateRoutes"
                     >
                         生成IPv4路由
-                    </a-button>
+                    </nn-button>
                 </div>
-            </a-form>
-        </a-card>
+            </nn-form>
+        </nn-card>
 
-        <a-card :title="`已生成${displayRouteTitle}路由列表`" class="bgp-route-list-card">
+        <nn-card :title="`已生成${displayRouteTitle}路由列表`" class="bgp-route-list-card">
             <template #extra>
-                <a-space class="route-list-actions">
-                    <a-button v-if="!isDisplayLabelRoute" size="small" @click="showRouteViewsImport">
+                <nn-space class="route-list-actions">
+                    <nn-button v-if="!isDisplayLabelRoute" size="small" @click="showRouteViewsImport">
                         从 RouteViews 导入
-                    </a-button>
-                    <a-button
+                    </nn-button>
+                    <nn-button
                         class="route-delete-all-button"
                         :disabled="!hasRoutes || deleteAllLoading"
                         :loading="deleteAllLoading"
@@ -217,23 +226,23 @@
                     >
                         <template #icon><DeleteOutlined /></template>
                         删除所有
-                    </a-button>
-                </a-space>
+                    </nn-button>
+                </nn-space>
             </template>
 
             <div class="route-display-toolbar">
-                <a-radio-group
+                <nn-radio-group
                     v-model:value="displayAddressFamily"
                     button-style="solid"
                     size="small"
                     class="route-display-switch"
                 >
-                    <a-radio-button :value="BGP_ADDR_FAMILY.IPV4_UNC">IPv4-UNC</a-radio-button>
-                    <a-radio-button :value="BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST">IPv4 Label</a-radio-button>
-                </a-radio-group>
+                    <nn-radio-button :value="BGP_ADDR_FAMILY.IPV4_UNC">IPv4-UNC</nn-radio-button>
+                    <nn-radio-button :value="BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST">IPv4 Label</nn-radio-button>
+                </nn-radio-group>
             </div>
 
-            <a-table
+            <nn-table
                 data-testid="bgp-ipv4-route-table"
                 :data-source="sentRoutes"
                 :columns="routeColumns"
@@ -246,23 +255,23 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'action'">
-                        <a-space>
-                            <a-button size="small" @click="showRouteDetail(record)">
+                        <nn-space>
+                            <nn-button size="small" @click="showRouteDetail(record)">
                                 <template #icon><FileSearchOutlined /></template>
                                 详情
-                            </a-button>
-                            <a-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
+                            </nn-button>
+                            <nn-button type="primary" danger size="small" @click="deleteSingleRoute(record)">
                                 <template #icon><DeleteOutlined /></template>
                                 删除
-                            </a-button>
-                        </a-space>
+                            </nn-button>
+                        </nn-space>
                     </template>
                     <template v-else-if="column.key === 'ip'">
                         <div>{{ record.ip }}/{{ record.mask }}</div>
                     </template>
                 </template>
-            </a-table>
-        </a-card>
+            </nn-table>
+        </nn-card>
 
         <CustomPktDrawer
             v-model:open="customRouteAttrVisible"
@@ -285,10 +294,10 @@
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import RouteViewsImportModal from '../../components/RouteViewsImportModal.vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
-    import { message, Modal } from 'ant-design-vue';
-    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
-    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
-    import FileSearchOutlined from '@ant-design/icons-vue/es/icons/FileSearchOutlined';
+    import { dialog } from '../../utils/dialog';
+    import { notify } from '../../utils/notify';
+    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from '../../ui/icons';
+
     import {
         BGP_ADDR_FAMILY,
         BGP_LABEL_MODE,
@@ -477,8 +486,10 @@
     onMounted(async () => {
         // 加载保存的配置
         const savedConfig = await window.bgpApi.loadIpv4UNCRouteConfig();
-        if (savedConfig.status === 'success' && savedConfig.data) {
-            Object.assign(ipv4Data.value, savedConfig.data);
+        if (savedConfig.status === 'success') {
+            if (savedConfig.data) {
+                Object.assign(ipv4Data.value, savedConfig.data);
+            }
         } else {
             console.error('IPv4-UNC路由配置文件加载失败', savedConfig.msg);
         }
@@ -536,7 +547,7 @@
         try {
             const hasErrors = validator.validate(ipv4Data.value);
             if (hasErrors) {
-                message.error('请检查IPv4路由配置信息是否正确');
+                notify.error('请检查IPv4路由配置信息是否正确');
                 return;
             }
 
@@ -546,20 +557,20 @@
             const payload = JSON.parse(JSON.stringify(ipv4Data.value));
             const saveResult = await window.bgpApi.saveIpv4UNCRouteConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
             const result = await window.bgpApi.generateIpv4Routes(payload);
             if (result.status === 'success') {
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
                 pagination.value.current = 1;
                 await refreshRoutes();
             } else {
-                message.error(`${result.msg}`);
+                notify.error(`${result.msg}`);
             }
         } catch (e) {
-            message.error(`IPv4路由生成失败: ${e.message}`);
+            notify.error(`IPv4路由生成失败: ${e.message}`);
         } finally {
             routesGenerating.value = false;
         }
@@ -581,11 +592,11 @@
                 routeDetail.value = result.data;
             } else {
                 routeDetailVisible.value = false;
-                message.error(`路由详情查询失败: ${result.msg}`);
+                notify.error(`路由详情查询失败: ${result.msg}`);
             }
         } catch (e) {
             routeDetailVisible.value = false;
-            message.error(`路由详情查询失败: ${e.message}`);
+            notify.error(`路由详情查询失败: ${e.message}`);
         } finally {
             routeDetailLoading.value = false;
         }
@@ -606,20 +617,20 @@
             const result = await window.bgpApi.deleteIpv4Routes(config);
 
             if (result.status === 'success') {
-                message.success(`${result.msg}`);
+                notify.success(`${result.msg}`);
                 await refreshRoutes();
             } else {
-                message.error(`路由删除失败: ${result.msg}`);
+                notify.error(`路由删除失败: ${result.msg}`);
             }
         } catch (e) {
-            message.error(`路由删除失败: ${e.message}`);
+            notify.error(`路由删除失败: ${e.message}`);
         }
     };
 
     const deleteAllRoutes = async () => {
         try {
             // 显示确认对话框
-            Modal.confirm({
+            dialog.confirm({
                 title: '确认删除',
                 content: `确定要删除所有 ${pagination.value.total} 条${displayRouteTitle.value}路由吗？此操作不可恢复。`,
                 okText: '确定',
@@ -632,29 +643,29 @@
                         const result = await window.bgpApi.deleteAllRoutesByFamily(displayAddressFamily.value);
 
                         if (result.status === 'success') {
-                            message.success(result.msg || '成功删除所有路由');
+                            notify.success(result.msg || '成功删除所有路由');
                             // 刷新路由列表
                             pagination.value.current = 1;
                             await refreshRoutes();
                         } else {
-                            message.error(`删除失败: ${result.msg}`);
+                            notify.error(`删除失败: ${result.msg}`);
                         }
                     } catch (e) {
-                        message.error(`批量删除失败: ${e.message}`);
+                        notify.error(`批量删除失败: ${e.message}`);
                     } finally {
                         deleteAllLoading.value = false;
                     }
                 }
             });
         } catch (e) {
-            message.error(`批量删除失败: ${e.message}`);
+            notify.error(`批量删除失败: ${e.message}`);
         }
     };
 </script>
 
 <style scoped>
     .bgp-route-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
         display: flex;
@@ -677,22 +688,7 @@
         overflow: hidden;
     }
 
-    .bgp-route-card :deep(.ant-card-head),
-    .bgp-route-list-card :deep(.ant-card-head) {
-        flex: 0 0 auto;
-        min-height: 36px !important;
-    }
-
-    .bgp-route-card :deep(.ant-card-head-title),
-    .bgp-route-list-card :deep(.ant-card-head-title) {
-        padding: 8px 0 !important;
-    }
-
-    .bgp-route-list-card :deep(.ant-card-extra) {
-        padding: 6px 0 !important;
-    }
-
-    .bgp-route-card :deep(.ant-card-body) {
+    .bgp-route-card :deep(.nn-card-body) {
         min-height: 0;
         overflow: visible;
         display: flex;
@@ -700,7 +696,7 @@
         padding: 8px 10px !important;
     }
 
-    .bgp-route-list-card :deep(.ant-card-body) {
+    .bgp-route-list-card :deep(.nn-card-body) {
         flex: 1 1 0;
         min-height: 0;
         overflow: hidden;
@@ -716,30 +712,30 @@
         overflow: visible;
     }
 
-    .bgp-route-form :deep(.ant-form-item) {
+    .bgp-route-form :deep(.nn-form-item) {
         flex: 0 0 auto;
         margin-bottom: 8px;
     }
 
-    .bgp-route-form :deep(.ant-form-item-label) {
+    .bgp-route-form :deep(.nn-form-item-label) {
         padding-bottom: 0;
     }
 
-    .bgp-route-form :deep(.ant-input) {
+    .bgp-route-form :deep(.nn-input) {
         height: 28px;
     }
 
-    .bgp-route-form :deep(.ant-select-selector) {
+    .bgp-route-form :deep(.nn-select-selector) {
         min-height: 28px !important;
         height: 28px !important;
     }
 
-    .bgp-route-form :deep(.ant-select-selection-item) {
+    .bgp-route-form :deep(.nn-select-selection-item) {
         line-height: 26px !important;
     }
 
     .config-section {
-        border-top: 1px solid #f0f0f0;
+        border-top: 1px solid var(--nn-color-border-light);
         padding: 8px 0 0;
     }
 
@@ -750,13 +746,13 @@
 
     .section-title {
         margin-bottom: 6px;
-        color: rgba(0, 0, 0, 0.65);
+        color: var(--nn-color-text-secondary);
         font-size: 12px;
         font-weight: 600;
     }
 
     .action-row {
-        border-top: 1px solid #f0f0f0;
+        border-top: 1px solid var(--nn-color-border-light);
         display: grid;
         grid-template-columns: 1fr auto 1fr;
         gap: 12px;
@@ -784,20 +780,20 @@
     }
 
     .route-delete-all-button:disabled,
-    .route-delete-all-button.ant-btn-disabled {
-        color: #8c8c8c !important;
-        background: #f0f0f0 !important;
-        border-color: #bfbfbf !important;
+    .route-delete-all-button.nn-button-disabled {
+        color: var(--nn-color-text-muted) !important;
+        background: var(--nn-color-bg-disabled) !important;
+        border-color: var(--nn-color-border) !important;
         opacity: 1 !important;
     }
 
     .route-delete-all-button:disabled:hover,
-    .route-delete-all-button.ant-btn-disabled:hover,
+    .route-delete-all-button.nn-button-disabled:hover,
     .route-delete-all-button:disabled:focus,
-    .route-delete-all-button.ant-btn-disabled:focus {
-        color: #8c8c8c !important;
-        background: #f0f0f0 !important;
-        border-color: #bfbfbf !important;
+    .route-delete-all-button.nn-button-disabled:focus {
+        color: var(--nn-color-text-muted) !important;
+        background: var(--nn-color-bg-disabled) !important;
+        border-color: var(--nn-color-border) !important;
     }
 
     .route-display-switch {
@@ -808,25 +804,25 @@
         white-space: nowrap;
     }
 
-    .route-display-switch :deep(.ant-radio-button-wrapper) {
+    .route-display-switch :deep(.nn-radio-button) {
         min-width: 104px;
         text-align: center;
     }
 
     .bgp-route-table,
-    .bgp-route-table :deep(.ant-spin-nested-loading),
-    .bgp-route-table :deep(.ant-spin-container) {
+    .bgp-route-table :deep(.nn-spin-nested-loading),
+    .bgp-route-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .bgp-route-table :deep(.ant-spin-container) {
+    .bgp-route-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .bgp-route-table :deep(.ant-table) {
+    .bgp-route-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -834,20 +830,20 @@
         overflow: hidden;
     }
 
-    .bgp-route-table :deep(.ant-table-container),
-    .bgp-route-table :deep(.ant-table-content) {
+    .bgp-route-table :deep(.nn-table-container),
+    .bgp-route-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .bgp-route-table :deep(.ant-table-header) {
+    .bgp-route-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .bgp-route-table :deep(.ant-table-body) {
+    .bgp-route-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -855,12 +851,12 @@
         overflow-y: auto !important;
     }
 
-    .bgp-route-table :deep(.ant-pagination) {
+    .bgp-route-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .bgp-route-table :deep(.ant-table-thead > tr > th) {
+    .bgp-route-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

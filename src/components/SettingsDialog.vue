@@ -1,5 +1,5 @@
 <template>
-    <a-modal
+    <nn-modal
         v-model:open="isOpen"
         title="设置"
         :footer="null"
@@ -11,32 +11,32 @@
         <div class="settings-layout">
             <!-- 左侧分类菜单 -->
             <div class="settings-sidebar">
-                <a-menu v-model:selected-keys="selectedCategory" mode="inline" class="settings-menu">
-                    <a-menu-item key="general">
-                        <template #icon><SettingOutlined /></template>
+                <nn-menu v-model:selected-keys="selectedCategory" mode="inline" class="settings-menu">
+                    <nn-menu-item key="general">
+                        <template #icon><component :is="settingsNavigationIcons.general" /></template>
                         <span>通用设置</span>
-                    </a-menu-item>
-                    <a-menu-item key="tools">
-                        <template #icon><CodeOutlined /></template>
+                    </nn-menu-item>
+                    <nn-menu-item key="tools">
+                        <template #icon><component :is="settingsNavigationIcons.tools" /></template>
                         <span>工具集合</span>
-                    </a-menu-item>
-                    <a-menu-item key="ftp">
-                        <template #icon><DownloadOutlined /></template>
+                    </nn-menu-item>
+                    <nn-menu-item key="ftp">
+                        <template #icon><component :is="settingsNavigationIcons.ftp" /></template>
                         <span>FTP服务器</span>
-                    </a-menu-item>
-                    <a-menu-item key="api">
-                        <template #icon><ApiOutlined /></template>
+                    </nn-menu-item>
+                    <nn-menu-item key="api">
+                        <template #icon><component :is="settingsNavigationIcons.externalApi" /></template>
                         <span>外部API</span>
-                    </a-menu-item>
-                    <a-menu-item key="server-deployment">
-                        <template #icon><CloudServerOutlined /></template>
+                    </nn-menu-item>
+                    <nn-menu-item key="server-deployment">
+                        <template #icon><component :is="settingsNavigationIcons.serverDeployment" /></template>
                         <span>服务器部署</span>
-                    </a-menu-item>
-                    <a-menu-item key="update">
-                        <template #icon><CloudDownloadOutlined /></template>
+                    </nn-menu-item>
+                    <nn-menu-item key="update">
+                        <template #icon><component :is="settingsNavigationIcons.update" /></template>
                         <span>应用更新</span>
-                    </a-menu-item>
-                </a-menu>
+                    </nn-menu-item>
+                </nn-menu>
             </div>
 
             <!-- 右侧设置内容区域 -->
@@ -46,17 +46,13 @@
                 </keep-alive>
             </div>
         </div>
-    </a-modal>
+    </nn-modal>
 </template>
 
 <script setup>
     import { ref, computed, watch } from 'vue';
-    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
-    import CodeOutlined from '@ant-design/icons-vue/es/icons/CodeOutlined';
-    import CloudDownloadOutlined from '@ant-design/icons-vue/es/icons/CloudDownloadOutlined';
-    import DownloadOutlined from '@ant-design/icons-vue/es/icons/DownloadOutlined';
-    import CloudServerOutlined from '@ant-design/icons-vue/es/icons/CloudServerOutlined';
-    import ApiOutlined from '@ant-design/icons-vue/es/icons/ApiOutlined';
+    import { settingsNavigationIcons } from '../ui/navigationIcons';
+
     import GeneralSettings from '../view/settings/GeneralSettings.vue';
     import ToolsSettings from '../view/settings/ToolsSettings.vue';
     import UpdateSettings from '../view/settings/UpdateSettings.vue';
@@ -136,17 +132,16 @@
     }
 
     :global(.settings-dialog-modal) {
-        top: 8px !important;
-        max-height: calc(100vh - 16px) !important;
+        max-height: calc(100vh - 32px) !important;
         padding-bottom: 0 !important;
     }
 
-    :global(.settings-dialog-modal .ant-modal-content) {
+    :global(.settings-dialog-modal .nn-modal-content) {
         height: min(760px, calc(100vh - 32px)) !important;
         max-height: calc(100vh - 32px) !important;
     }
 
-    :global(.settings-dialog-modal .ant-modal-body) {
+    :global(.settings-dialog-modal .nn-modal-body) {
         flex: 1 !important;
         min-height: 0 !important;
         max-height: none !important;
@@ -164,7 +159,7 @@
     .settings-sidebar {
         flex: 0 0 140px;
         min-height: 0;
-        border-right: 1px solid #f0f0f0;
+        border-right: 1px solid var(--nn-color-border-light);
         overflow: auto;
     }
 
@@ -174,7 +169,7 @@
         font-size: 13px;
     }
 
-    .settings-menu :deep(.ant-menu-item) {
+    .settings-menu :deep(.nn-menu-item) {
         font-size: 13px;
     }
 
@@ -212,7 +207,7 @@
         overflow: hidden;
     }
 
-    .settings-content :deep(.settings-card > .ant-card-body) {
+    .settings-content :deep(.settings-card > .nn-card-body) {
         flex: 1 1 0;
         min-height: 0;
         overflow: auto;

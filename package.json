@@ -3,11 +3,11 @@
     "private": true,
     "version": "4.1.0",
     "main": "electron/main.js",
-    "description": "一个基于 Vue3 + Ant Design Vue + Electron 开发的网络和开发辅助工具集，包含BGP模拟器、BMP监控器、RPKI验证器、报文解析器、字符串生成器等多种网络工具",
+    "description": "一个基于 Vue3 + 自研 NetNexus UI + Electron 开发的网络和开发辅助工具集，包含BGP模拟器、BMP监控器、RPKI验证器、报文解析器、字符串生成器等多种网络工具",
     "keywords": [
         "vue3",
         "electron",
-        "ant-design-vue",
+        "netnexus-ui",
         "bgp-simulator",
         "bmp-monitor",
         "rpki-validator",
@@ -202,9 +202,9 @@
     "devDependencies": {
         "@babel/eslint-parser": "^7.23.10",
         "@babel/preset-env": "^7.27.1",
+        "@lucide/vue": "^1.24.0",
         "@playwright/test": "1.44.1",
         "@vitejs/plugin-vue": "^4.2.3",
-        "ant-design-vue": "^4.2.6",
         "concurrently": "^7.6.0",
         "cross-env": "^7.0.3",
         "electron": "^15.5.7",
@@ -215,7 +215,6 @@
         "eslint-config-prettier": "^9.1.0",
         "eslint-plugin-import": "^2.29.1",
         "eslint-plugin-vue": "^9.22.0",
-        "lodash-es": "^4.17.21",
         "prettier": "^3.5.3",
         "vite": "^4.4.0",
         "vue": "^3.5.13",
@@ -224,6 +223,7 @@
         "wait-port": "^1.1.0"
     },
     "dependencies": {
+        "dayjs": "^1.11.13",
         "electron-log": "^5.3.3",
         "electron-store": "^8.2.0",
         "electron-updater": "^6.1.7",

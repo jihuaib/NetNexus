@@ -1,13 +1,13 @@
 <template>
-    <div class="mt-main-container">
+    <div class="nn-main-container">
         <!-- 固定 Tabs -->
         <div class="fixed-tabs">
-            <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <a-tab-pane key="rpki-config" tab="RPKI配置" />
-                <a-tab-pane key="rpki-roa-config" tab="RPKI ROA配置" />
-                <a-tab-pane key="rpki-router-key-config" tab="Router Key (v1+)" />
-                <a-tab-pane key="rpki-aspa-config" tab="ASPA (v2)" />
-            </a-tabs>
+            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+                <nn-tab-pane key="rpki-config" tab="RPKI配置" />
+                <nn-tab-pane key="rpki-roa-config" tab="RPKI ROA配置" />
+                <nn-tab-pane key="rpki-router-key-config" tab="Router Key (v1+)" />
+                <nn-tab-pane key="rpki-aspa-config" tab="ASPA (v2)" />
+            </nn-tabs>
         </div>
 
         <!-- 可滚动内容区域 -->

@@ -1,10 +1,10 @@
 <template>
-    <div class="mt-main-container">
+    <div class="nn-main-container">
         <!-- 固定 Tabs -->
         <div class="fixed-tabs">
-            <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <a-tab-pane key="ftp-config" tab="FTP配置" />
-            </a-tabs>
+            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+                <nn-tab-pane key="ftp-config" tab="FTP配置" />
+            </nn-tabs>
         </div>
 
         <!-- 可滚动内容区域 -->

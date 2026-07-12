@@ -1,69 +1,72 @@
 <template>
-    <div class="mt-container bgp-config-page" data-testid="bgp-config-page">
+    <div class="nn-container bgp-config-page" data-testid="bgp-config-page">
         <!-- BGP 配置 Card -->
-        <a-form :model="bgpConfigData" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBgp">
-            <a-card title="BGP配置" class="bgp-config-card">
-                <a-row>
-                    <a-col :span="8">
-                        <a-form-item label="Local AS" name="localAs">
-                            <a-tooltip
+        <nn-form :model="bgpConfigData" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startBgp">
+            <nn-card title="BGP配置" class="bgp-config-card">
+                <nn-row>
+                    <nn-col :span="8">
+                        <nn-form-item label="Local AS" name="localAs">
+                            <nn-tooltip
                                 :title="bgpConfigvalidationErrors.localAs"
                                 :open="!!bgpConfigvalidationErrors.localAs"
                             >
-                                <a-input
+                                <nn-input
                                     v-model:value="bgpConfigData.localAs"
                                     data-testid="bgp-local-as-input"
                                     :disabled="bgpRunning"
                                     :status="bgpConfigvalidationErrors.localAs ? 'error' : ''"
                                 />
-                            </a-tooltip>
-                        </a-form-item>
-                    </a-col>
-                    <a-col :span="8">
-                        <a-form-item label="Router ID" name="routerId">
-                            <a-tooltip
+                            </nn-tooltip>
+                        </nn-form-item>
+                    </nn-col>
+                    <nn-col :span="8">
+                        <nn-form-item label="Router ID" name="routerId">
+                            <nn-tooltip
                                 :title="bgpConfigvalidationErrors.routerId"
                                 :open="!!bgpConfigvalidationErrors.routerId"
                             >
-                                <a-input
+                                <nn-input
                                     v-model:value="bgpConfigData.routerId"
                                     data-testid="bgp-router-id-input"
                                     :disabled="bgpRunning"
                                     :status="bgpConfigvalidationErrors.routerId ? 'error' : ''"
                                 />
-                            </a-tooltip>
-                        </a-form-item>
-                    </a-col>
-                    <a-col :span="8">
-                        <a-form-item label="监听端口" name="port">
-                            <a-tooltip :title="bgpConfigvalidationErrors.port" :open="!!bgpConfigvalidationErrors.port">
-                                <a-input
+                            </nn-tooltip>
+                        </nn-form-item>
+                    </nn-col>
+                    <nn-col :span="8">
+                        <nn-form-item label="监听端口" name="port">
+                            <nn-tooltip
+                                :title="bgpConfigvalidationErrors.port"
+                                :open="!!bgpConfigvalidationErrors.port"
+                            >
+                                <nn-input
                                     v-model:value="bgpConfigData.port"
                                     data-testid="bgp-port-input"
                                     :disabled="bgpRunning"
                                     :status="bgpConfigvalidationErrors.port ? 'error' : ''"
                                 />
-                            </a-tooltip>
-                        </a-form-item>
-                    </a-col>
-                </a-row>
-                <a-row>
-                    <a-col :span="12">
-                        <a-form-item label="地址族" name="addressFamily">
-                            <a-select
+                            </nn-tooltip>
+                        </nn-form-item>
+                    </nn-col>
+                </nn-row>
+                <nn-row>
+                    <nn-col :span="12">
+                        <nn-form-item label="地址族" name="addressFamily">
+                            <nn-select
                                 v-model:value="bgpConfigData.addressFamily"
                                 :disabled="bgpRunning"
                                 mode="multiple"
                                 style="width: 100%"
                                 :options="bgpAddressFamilyOptions"
                             />
-                        </a-form-item>
-                    </a-col>
-                </a-row>
+                        </nn-form-item>
+                    </nn-col>
+                </nn-row>
 
-                <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                    <a-space size="middle">
-                        <a-button
+                <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                    <nn-space size="middle">
+                        <nn-button
                             data-testid="bgp-start-button"
                             type="primary"
                             html-type="submit"
@@ -71,8 +74,8 @@
                             :disabled="bgpRunning"
                         >
                             启动BGP
-                        </a-button>
-                        <a-button
+                        </nn-button>
+                        <nn-button
                             data-testid="bgp-stop-button"
                             type="primary"
                             danger
@@ -80,15 +83,15 @@
                             @click="stopBgp"
                         >
                             停止BGP
-                        </a-button>
-                    </a-space>
-                </a-form-item>
-            </a-card>
-        </a-form>
+                        </nn-button>
+                    </nn-space>
+                </nn-form-item>
+            </nn-card>
+        </nn-form>
 
         <!-- BGP 状态信息 Card -->
-        <a-card title="BGP 状态信息" class="status-card">
-            <a-table
+        <nn-card title="BGP 状态信息" class="status-card">
+            <nn-table
                 data-testid="bgp-instance-table"
                 :columns="instanceColumns"
                 :data-source="instanceInfoList"
@@ -104,25 +107,25 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'addressFamily'">
-                        <a-tag color="blue">{{ getAddressFamilyLabel(record.addressFamily) }}</a-tag>
+                        <nn-tag color="blue">{{ getAddressFamilyLabel(record.addressFamily) }}</nn-tag>
                     </template>
                     <template v-else-if="column.key === 'routeCount'">
-                        <a-badge
+                        <nn-badge
                             :count="record.routeCount"
                             :overflow-count="999999"
-                            :number-style="{ backgroundColor: '#52c41a' }"
+                            :number-style="{ backgroundColor: 'var(--nn-color-success)' }"
                             show-zero
                         />
                     </template>
                 </template>
-            </a-table>
-        </a-card>
+            </nn-table>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { onMounted, onActivated, ref } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { BGP_ADDR_FAMILY, DEFAULT_VALUES } from '../../const/bgpConst';
     import { FormValidator, createBgpConfigValidationRules } from '../../utils/validationCommon';
 
@@ -193,13 +196,15 @@
     onMounted(async () => {
         // 加载Bgp保存的配置
         const savedBgpConfig = await window.bgpApi.loadBgpConfig();
-        if (savedBgpConfig.status === 'success' && savedBgpConfig.data) {
-            bgpConfigData.value.localAs = savedBgpConfig.data.localAs;
-            bgpConfigData.value.routerId = savedBgpConfig.data.routerId;
-            bgpConfigData.value.port = savedBgpConfig.data.port || DEFAULT_VALUES.BGP_PORT;
-            bgpConfigData.value.addressFamily = Array.isArray(savedBgpConfig.data.addressFamily)
-                ? [...savedBgpConfig.data.addressFamily]
-                : [BGP_ADDR_FAMILY.IPV4_UNC];
+        if (savedBgpConfig.status === 'success') {
+            if (savedBgpConfig.data) {
+                bgpConfigData.value.localAs = savedBgpConfig.data.localAs;
+                bgpConfigData.value.routerId = savedBgpConfig.data.routerId;
+                bgpConfigData.value.port = savedBgpConfig.data.port || DEFAULT_VALUES.BGP_PORT;
+                bgpConfigData.value.addressFamily = Array.isArray(savedBgpConfig.data.addressFamily)
+                    ? [...savedBgpConfig.data.addressFamily]
+                    : [BGP_ADDR_FAMILY.IPV4_UNC];
+            }
         } else {
             console.error('BGP 配置文件加载失败', savedBgpConfig.msg);
         }
@@ -214,7 +219,7 @@
     const startBgp = async () => {
         const hasErrors = bgpValidator.validate(bgpConfigData.value);
         if (hasErrors) {
-            message.error('请检查BGP配置信息是否正确');
+            notify.error('请检查BGP配置信息是否正确');
             return;
         }
 
@@ -222,7 +227,7 @@
             const payload = JSON.parse(JSON.stringify(bgpConfigData.value));
             const saveResult = await window.bgpApi.saveBgpConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
@@ -233,26 +238,26 @@
             if (result.status === 'success') {
                 bgpLoading.value = false;
                 bgpRunning.value = true;
-                message.success('BGP 启动成功');
+                notify.success('BGP 启动成功');
                 fetchInstanceInfo();
             } else {
                 bgpLoading.value = false;
-                message.error(result.msg || 'BGP启动失败');
+                notify.error(result.msg || 'BGP启动失败');
             }
         } catch (e) {
             bgpLoading.value = false;
-            message.error(e);
+            notify.error(e);
         }
     };
 
     const stopBgp = async () => {
         const result = await window.bgpApi.stopBgp();
         if (result.status === 'success') {
-            message.success(result.msg);
+            notify.success(result.msg);
             bgpRunning.value = false;
             instanceInfoList.value = [];
         } else {
-            message.error(result.msg || 'BGP停止失败');
+            notify.error(result.msg || 'BGP停止失败');
         }
     };
 
@@ -265,7 +270,7 @@
 
 <style scoped>
     .bgp-config-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -273,7 +278,7 @@
         overflow: hidden;
     }
 
-    .bgp-config-page > .ant-form {
+    .bgp-config-page > .nn-form {
         flex: 0 0 auto;
     }
 
@@ -290,7 +295,7 @@
         margin-top: 0;
     }
 
-    .status-card :deep(.ant-card-body) {
+    .status-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -304,14 +309,14 @@
 
     .status-label {
         font-size: 12px;
-        color: #8c8c8c;
+        color: var(--nn-color-text-muted);
         margin-bottom: 8px;
     }
 
     .status-value {
         font-size: 14px;
         font-weight: 500;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         min-height: 24px;
         display: flex;
         align-items: center;
@@ -319,19 +324,19 @@
     }
 
     .instance-table,
-    .instance-table :deep(.ant-spin-nested-loading),
-    .instance-table :deep(.ant-spin-container) {
+    .instance-table :deep(.nn-spin-nested-loading),
+    .instance-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .instance-table :deep(.ant-spin-container) {
+    .instance-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .instance-table :deep(.ant-table) {
+    .instance-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -339,20 +344,20 @@
         overflow: hidden;
     }
 
-    .instance-table :deep(.ant-table-container),
-    .instance-table :deep(.ant-table-content) {
+    .instance-table :deep(.nn-table-container),
+    .instance-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .instance-table :deep(.ant-table-header) {
+    .instance-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .instance-table :deep(.ant-table-body) {
+    .instance-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -360,12 +365,12 @@
         overflow-y: auto !important;
     }
 
-    .instance-table :deep(.ant-pagination) {
+    .instance-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .instance-table :deep(.ant-table-thead > tr > th) {
+    .instance-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

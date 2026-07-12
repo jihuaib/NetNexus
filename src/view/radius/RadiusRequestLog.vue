@@ -1,14 +1,14 @@
 <template>
-    <div class="mt-container radius-table-page">
-        <a-card title="RADIUS请求日志" class="radius-table-card">
+    <div class="nn-container radius-table-page">
+        <nn-card title="RADIUS请求日志" class="radius-table-card">
             <template #extra>
-                <a-space>
-                    <a-button :loading="loading" @click="loadRequestList">刷新</a-button>
-                    <a-button danger :loading="clearLoading" @click="clearHistory">清空历史</a-button>
-                </a-space>
+                <nn-space>
+                    <nn-button :loading="loading" @click="loadRequestList">刷新</nn-button>
+                    <nn-button danger :loading="clearLoading" @click="clearHistory">清空历史</nn-button>
+                </nn-space>
             </template>
 
-            <a-table
+            <nn-table
                 :columns="columns"
                 :data-source="requestList"
                 :loading="loading"
@@ -25,9 +25,9 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'status'">
-                        <a-tag :color="statusColor(record.status)">
+                        <nn-tag :color="statusColor(record.status)">
                             {{ statusText(record.status) }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                     <template v-else-if="column.key === 'codeName'">{{ record.codeName }}({{ record.code }})</template>
                     <template v-else-if="column.key === 'responseCodeName'">
@@ -43,57 +43,59 @@
                         <span class="single-line-text" :title="record.message">{{ record.message || '-' }}</span>
                     </template>
                     <template v-else-if="column.key === 'action'">
-                        <a-button type="link" size="small" @click="showDetail(record)">详情</a-button>
+                        <nn-button type="link" size="small" @click="showDetail(record)">详情</nn-button>
                     </template>
                 </template>
-            </a-table>
-        </a-card>
+            </nn-table>
+        </nn-card>
 
-        <a-drawer
+        <nn-drawer
             v-model:open="detailDrawerVisible"
             :title="detailDrawerTitle"
             width="720px"
             placement="right"
             @close="closeDetailDrawer"
         >
-            <a-empty v-if="!selectedRequest" description="暂无详情" />
+            <nn-empty v-if="!selectedRequest" description="暂无详情" />
             <template v-else>
-                <a-descriptions title="请求摘要" size="small" bordered :column="1">
-                    <a-descriptions-item label="ID">{{ selectedRequest.id }}</a-descriptions-item>
-                    <a-descriptions-item label="接收时间">{{ selectedRequest.timestamp || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="服务">{{ selectedRequest.service || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="客户端">
+                <nn-descriptions title="请求摘要" size="small" bordered :column="1">
+                    <nn-descriptions-item label="ID">{{ selectedRequest.id }}</nn-descriptions-item>
+                    <nn-descriptions-item label="接收时间">{{ selectedRequest.timestamp || '-' }}</nn-descriptions-item>
+                    <nn-descriptions-item label="服务">{{ selectedRequest.service || '-' }}</nn-descriptions-item>
+                    <nn-descriptions-item label="客户端">
                         {{ selectedRequest.clientAddress || '-' }}:{{ selectedRequest.clientPort || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="请求Code">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="请求Code">
                         {{ selectedRequest.codeName || '-' }}({{ selectedRequest.code || '-' }})
-                    </a-descriptions-item>
-                    <a-descriptions-item label="响应Code">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="响应Code">
                         <span v-if="selectedRequest.responseCodeName">
                             {{ selectedRequest.responseCodeName }}({{ selectedRequest.responseCode }})
                         </span>
                         <span v-else>-</span>
-                    </a-descriptions-item>
-                    <a-descriptions-item label="状态">
-                        <a-tag :color="statusColor(selectedRequest.status)">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="状态">
+                        <nn-tag :color="statusColor(selectedRequest.status)">
                             {{ statusText(selectedRequest.status) }}
-                        </a-tag>
-                    </a-descriptions-item>
-                    <a-descriptions-item label="用户">{{ selectedRequest.userName || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="认证方式">{{ selectedRequest.authMethod || '-' }}</a-descriptions-item>
-                    <a-descriptions-item label="Identifier">{{ selectedRequest.identifier }}</a-descriptions-item>
-                    <a-descriptions-item label="报文长度">
+                        </nn-tag>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="用户">{{ selectedRequest.userName || '-' }}</nn-descriptions-item>
+                    <nn-descriptions-item label="认证方式">
+                        {{ selectedRequest.authMethod || '-' }}
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Identifier">{{ selectedRequest.identifier }}</nn-descriptions-item>
+                    <nn-descriptions-item label="报文长度">
                         {{ selectedRequest.packetLength || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Session Key">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Session Key">
                         {{ selectedRequest.sessionKey || '-' }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="说明">{{ selectedRequest.message || '-' }}</a-descriptions-item>
-                </a-descriptions>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="说明">{{ selectedRequest.message || '-' }}</nn-descriptions-item>
+                </nn-descriptions>
 
                 <div class="detail-section">
                     <div class="detail-section-title">属性</div>
-                    <a-table
+                    <nn-table
                         :columns="attributeColumns"
                         :data-source="selectedRequest.attributes || []"
                         :pagination="false"
@@ -103,13 +105,13 @@
                     />
                 </div>
             </template>
-        </a-drawer>
+        </nn-drawer>
     </div>
 </template>
 
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { RADIUS_EVENT_PAGE_ID, RADIUS_REQUEST_STATUS, RADIUS_SUB_EVT_TYPES } from '../../const/radiusConst';
     import EventBus from '../../utils/eventBus';
 
@@ -209,10 +211,10 @@
             if (result.status === 'success') {
                 requestList.value = result.data || [];
             } else {
-                message.error(result.msg || '获取RADIUS请求日志失败');
+                notify.error(result.msg || '获取RADIUS请求日志失败');
             }
         } catch (error) {
-            message.error('获取RADIUS请求日志失败: ' + error.message);
+            notify.error('获取RADIUS请求日志失败: ' + error.message);
         } finally {
             loading.value = false;
         }
@@ -224,12 +226,12 @@
             const result = await window.radiusApi.clearRequestHistory();
             if (result.status === 'success') {
                 requestList.value = [];
-                message.success(result.msg || 'RADIUS请求日志已清空');
+                notify.success(result.msg || 'RADIUS请求日志已清空');
             } else {
-                message.error(result.msg || '清空RADIUS请求日志失败');
+                notify.error(result.msg || '清空RADIUS请求日志失败');
             }
         } catch (error) {
-            message.error('清空RADIUS请求日志失败: ' + error.message);
+            notify.error('清空RADIUS请求日志失败: ' + error.message);
         } finally {
             clearLoading.value = false;
         }
@@ -263,7 +265,7 @@
 
 <style scoped>
     .radius-table-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -275,7 +277,7 @@
         overflow: hidden;
     }
 
-    .radius-table-card :deep(.ant-card-body) {
+    .radius-table-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         min-width: 0;
@@ -285,20 +287,20 @@
     }
 
     .radius-table,
-    .radius-table :deep(.ant-spin-nested-loading),
-    .radius-table :deep(.ant-spin-container) {
+    .radius-table :deep(.nn-spin-nested-loading),
+    .radius-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .radius-table :deep(.ant-spin-container) {
+    .radius-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .radius-table :deep(.ant-table) {
+    .radius-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -306,15 +308,15 @@
         overflow: hidden;
     }
 
-    .radius-table :deep(.ant-table-container),
-    .radius-table :deep(.ant-table-content) {
+    .radius-table :deep(.nn-table-container),
+    .radius-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .radius-table :deep(.ant-table-body) {
+    .radius-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -322,7 +324,7 @@
         overflow-y: auto !important;
     }
 
-    .radius-table :deep(.ant-pagination) {
+    .radius-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
@@ -338,7 +340,7 @@
 
     .detail-section-title {
         margin: 10px 0 6px;
-        color: rgba(0, 0, 0, 0.65);
+        color: var(--nn-color-text-secondary);
         font-weight: 600;
     }
 
@@ -346,12 +348,12 @@
         margin-top: 12px;
     }
 
-    .detail-attribute-table :deep(.ant-table-body),
-    .detail-attribute-table :deep(.ant-table-content) {
+    .detail-attribute-table :deep(.nn-table-body),
+    .detail-attribute-table :deep(.nn-table-content) {
         overflow: auto !important;
     }
 
-    .detail-attribute-table :deep(.ant-table-cell) {
+    .detail-attribute-table :deep(.nn-table-cell) {
         white-space: normal !important;
     }
 </style>

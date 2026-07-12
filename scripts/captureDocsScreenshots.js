@@ -309,10 +309,10 @@ async function capturePage(win, label, outputPath) {
                 style.id = 'docs-screenshot-hide-overlays';
                 document.head.appendChild(style);
             }
-            style.textContent = '.update-notification { display: none !important; }';
+            style.textContent = '.nn-toast-host, .update-notification { display: none !important; }';
         })();
         document.querySelectorAll(
-            '.ant-message, .ant-notification, .ant-notification-notice, .update-notification, [class*="update-notification"]'
+            '.nn-toast, .update-notification, [class*="update-notification"]'
         ).forEach(element => {
             element.remove();
         });
@@ -336,14 +336,14 @@ async function waitForOpenOverlay(win, label, expectedText = '') {
                 const style = window.getComputedStyle(element);
                 return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
             };
-            const overlays = Array.from(document.querySelectorAll('.ant-drawer-open, .ant-modal'))
+            const overlays = Array.from(document.querySelectorAll('.nn-drawer-content, .nn-modal'))
                 .filter(isVisible);
             const matchingOverlays = expectedText
                 ? overlays.filter(item => item.textContent.includes(expectedText))
                 : overlays;
             const overlay = matchingOverlays[matchingOverlays.length - 1];
             const text = overlay?.textContent?.trim() || '';
-            const spinning = Boolean(overlay?.querySelector('.ant-spin-spinning'));
+            const spinning = Boolean(overlay?.querySelector('.nn-spin-overlay, .nn-spin, .nn-table-loading-mask'));
             const hasEmptyDetail = text.includes('暂无详情');
             return {
                 ready:
@@ -410,7 +410,7 @@ async function openDetailButtonBySelector(win, selector, label) {
 async function closeOpenOverlay(win) {
     await win.webContents.executeJavaScript(`
         (() => {
-            const buttons = Array.from(document.querySelectorAll('.ant-drawer .ant-drawer-close, .ant-modal .ant-modal-close'));
+            const buttons = Array.from(document.querySelectorAll('.nn-drawer .nn-drawer-close, .nn-modal .nn-modal-close'));
             buttons.reverse().forEach(button => button.click());
         })()
     `);
@@ -533,7 +533,7 @@ async function openSnmpMibWalkModal(win, label) {
     await openSnmpMibContextMenuAtOid(win, label, '1.3.6.1.4.1.55555.1.1');
     const clicked = await win.webContents.executeJavaScript(`
         (() => {
-            const items = Array.from(document.querySelectorAll('.mib-context-menu .ant-menu-item'));
+            const items = Array.from(document.querySelectorAll('.mib-context-menu .nn-menu-item'));
             const item = items.find(node => node.textContent.includes('WALK 查询'));
             if (!item) {
                 return { clicked: false, reason: 'walk menu item not found' };
@@ -549,7 +549,7 @@ async function openSnmpMibWalkModal(win, label) {
     await waitForOpenOverlay(win, label, 'SNMP WALK');
     const started = await win.webContents.executeJavaScript(`
         (() => {
-            const button = Array.from(document.querySelectorAll('.walk-modal-wrap .ant-modal-footer button'))
+            const button = Array.from(document.querySelectorAll('.walk-modal-wrap .nn-modal-footer button'))
                 .find(item => item.textContent.includes('开始 WALK'));
             if (!button) {
                 return { started: false, reason: 'start button not found' };
@@ -608,10 +608,10 @@ async function openFtpUsersModal(win, label) {
 
 screenshotPreparers.set('open-text-detail-0', (win, label) => openDetailButtonByText(win, 0, label));
 screenshotPreparers.set('open-bmp-session-route-detail', (win, label) =>
-    openDetailButtonBySelector(win, '[data-testid="bmp-session-route-table"] .ant-table-tbody button', label)
+    openDetailButtonBySelector(win, '[data-testid="bmp-session-route-table"] .nn-table-tbody button', label)
 );
 screenshotPreparers.set('open-bmp-loc-rib-route-detail', (win, label) =>
-    openDetailButtonBySelector(win, '[data-testid="bmp-loc-rib-route-table"] .ant-table-tbody button', label)
+    openDetailButtonBySelector(win, '[data-testid="bmp-loc-rib-route-table"] .nn-table-tbody button', label)
 );
 screenshotPreparers.set('open-tcp-ao-result', openTcpAoResult);
 screenshotPreparers.set('open-snmp-mib-context-menu', openSnmpMibContextMenu);
@@ -624,7 +624,7 @@ async function selectSettingsCategory(win, categoryText) {
     await win.webContents.executeJavaScript(`
         (() => {
             const categoryText = ${JSON.stringify(categoryText)};
-            const items = Array.from(document.querySelectorAll('.settings-dialog-modal .ant-menu-item'));
+            const items = Array.from(document.querySelectorAll('.settings-dialog-modal .nn-menu-item'));
             const item = items.find(element => element.textContent.includes(categoryText));
             if (!item) {
                 throw new Error('settings category not found: ' + categoryText);
@@ -648,7 +648,7 @@ async function openSettingsDialog(win) {
     await wait(300);
     await win.webContents.executeJavaScript(`
         (() => {
-            const items = Array.from(document.querySelectorAll('.ant-dropdown .ant-dropdown-menu-item'));
+            const items = Array.from(document.querySelectorAll('.nn-dropdown-popup .nn-menu-item'));
             const item = items.find(element => element.textContent.includes('设置'));
             if (!item) {
                 throw new Error('settings menu item not found');
@@ -661,7 +661,7 @@ async function openSettingsDialog(win) {
 
 async function closeSettingsDialog(win) {
     await win.webContents.executeJavaScript(`
-        document.querySelector('.settings-dialog-modal .ant-modal-close')?.click();
+        document.querySelector('.settings-dialog-modal .nn-modal-close')?.click();
     `);
     await wait(300);
 }
@@ -1669,7 +1669,7 @@ async function injectToolLogFallback(win, tool, payload, stateText, recvText) {
             const page = document.querySelector('.' + tool + '-tool-page');
             if (!page) return false;
 
-            const tag = page.querySelector('.ant-tag');
+            const tag = page.querySelector('.nn-tag');
             if (tag) {
                 tag.textContent = stateText;
             }
@@ -1694,20 +1694,20 @@ async function injectToolLogFallback(win, tool, payload, stateText, recvText) {
             );
             if (controlButton) {
                 controlButton.disabled = false;
-                controlButton.classList.remove('ant-btn-primary');
-                controlButton.classList.add('ant-btn-dangerous');
+                controlButton.classList.remove('nn-button-primary');
+                controlButton.classList.add('nn-button-default', 'nn-button-danger');
                 controlButton.textContent = tool === 'tcp' ? '结束连接' : '关闭';
             }
 
             const sendButton = page.querySelector('.' + tool + '-send-actions button');
             if (sendButton) {
                 sendButton.disabled = false;
-                sendButton.classList.remove('ant-btn-disabled');
+                sendButton.classList.remove('nn-button-disabled');
             }
 
             const logList = page.querySelector('.' + tool + '-log-list');
             if (!logList) return false;
-            logList.querySelectorAll('.ant-empty, .' + tool + '-log-empty').forEach(element => element.remove());
+            logList.querySelectorAll('.nn-empty, .' + tool + '-log-empty').forEach(element => element.remove());
 
             const now = new Date();
             const time =
@@ -1773,31 +1773,36 @@ async function prepareBgpConfigPage(win) {
                 const page = document.querySelector('[data-testid="bgp-config-page"]');
                 if (!page) return false;
 
-                page.querySelectorAll('input, .ant-select-selector').forEach(element => {
+                page.querySelectorAll('input').forEach(element => {
                     element.setAttribute('disabled', 'disabled');
-                    element.classList.add('ant-input-disabled');
+                });
+                page.querySelectorAll('.nn-select').forEach(element => {
+                    element.setAttribute('aria-disabled', 'true');
+                    element.setAttribute('tabindex', '-1');
+                    element.classList.add('nn-select-disabled');
                 });
 
                 const startButton = page.querySelector('[data-testid="bgp-start-button"]');
                 if (startButton) {
                     startButton.disabled = true;
-                    startButton.classList.add('ant-btn-disabled');
+                    startButton.classList.add('nn-button-disabled');
                     startButton.textContent = 'BGP已启动';
                 }
 
                 const stopButton = page.querySelector('[data-testid="bgp-stop-button"]');
                 if (stopButton) {
                     stopButton.disabled = false;
-                    stopButton.classList.remove('ant-btn-disabled');
+                    stopButton.classList.remove('nn-button-disabled');
                 }
 
                 const table = page.querySelector('[data-testid="bgp-instance-table"]');
-                const tbody = table?.querySelector('.ant-table-tbody');
+                const tbody = table?.querySelector('.nn-table-tbody');
                 if (!tbody) return false;
                 tbody.innerHTML = '';
 
                 const makeCell = (content, align = 'left') => {
                     const td = document.createElement('td');
+                    td.className = 'nn-table-cell';
                     td.style.cssText =
                         'padding:16px;border-bottom:1px solid #f0f0f0;text-align:' + align + ';vertical-align:middle;';
                     if (typeof content === 'string') {
@@ -1810,15 +1815,15 @@ async function prepareBgpConfigPage(win) {
 
                 instances.forEach(instance => {
                     const row = document.createElement('tr');
-                    row.className = 'ant-table-row ant-table-row-level-0';
+                    row.className = 'nn-table-row';
                     const familyTag = document.createElement('span');
-                    familyTag.className = 'ant-tag ant-tag-blue';
+                    familyTag.className = 'nn-tag nn-tag-blue';
                     familyTag.textContent = familyLabels[instance.addressFamily] || String(instance.addressFamily);
                     familyTag.style.cssText =
                         'box-sizing:border-box;margin-inline-end:8px;padding-inline:7px;color:#1677ff;background:#e6f4ff;border:1px solid #91caff;border-radius:4px;';
 
                     const routeBadge = document.createElement('span');
-                    routeBadge.className = 'ant-badge-count';
+                    routeBadge.className = 'nn-badge';
                     routeBadge.textContent = String(instance.routeCount ?? 0);
                     routeBadge.style.cssText =
                         'display:inline-block;min-width:20px;height:20px;line-height:20px;padding:0 6px;border-radius:10px;color:#fff;background:#52c41a;font-size:12px;';
@@ -1841,7 +1846,7 @@ async function prepareBgpConfigPage(win) {
 async function prepareBgpMvpnPage(win) {
     await win.webContents.executeJavaScript(`
         (() => {
-            const tab = Array.from(document.querySelectorAll('.mvpn-route-tabs .ant-tabs-tab'))
+            const tab = Array.from(document.querySelectorAll('.mvpn-route-tabs .nn-tabs-tab'))
                 .find(element => element.textContent.includes('S-PMSI A-D'));
             if (tab) {
                 tab.click();

@@ -1,11 +1,11 @@
 <template>
-    <div class="mt-main-container">
+    <div class="nn-main-container">
         <div class="fixed-tabs">
-            <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <a-tab-pane key="radius-config" tab="RADIUS配置" />
-                <a-tab-pane key="radius-request-log" tab="请求日志" />
-                <a-tab-pane key="radius-session" tab="会话状态" />
-            </a-tabs>
+            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+                <nn-tab-pane key="radius-config" tab="RADIUS配置" />
+                <nn-tab-pane key="radius-request-log" tab="请求日志" />
+                <nn-tab-pane key="radius-session" tab="会话状态" />
+            </nn-tabs>
         </div>
 
         <div class="content-container">

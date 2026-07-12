@@ -1,16 +1,16 @@
 <template>
-    <div class="mt-container bmp-full-page" data-testid="bmp-session-page">
-        <a-row class="bmp-full-row">
-            <a-col :span="24">
-                <a-card title="BGP会话" class="bmp-full-card">
+    <div class="nn-container bmp-full-page" data-testid="bmp-session-page">
+        <nn-row class="bmp-full-row">
+            <nn-col :span="24">
+                <nn-card title="BGP会话" class="bmp-full-card">
                     <div v-if="clientList.length > 0" class="bmp-tabs-shell">
-                        <a-tabs
+                        <nn-tabs
                             v-model:active-key="activeClientKey"
                             tab-position="left"
                             class="client-tabs"
                             :tab-bar-style="clientTabBarStyle"
                         >
-                            <a-tab-pane
+                            <nn-tab-pane
                                 v-for="client in clientList"
                                 :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
                             >
@@ -18,13 +18,13 @@
                                     <span class="client-tab-label">{{ formatClientTab(client) }}</span>
                                 </template>
                                 <div v-if="bgpSessionList.length > 0" class="bmp-inner-tabs-shell">
-                                    <a-tabs v-model:active-key="activeBgpSessionKey" class="bmp-inner-tabs">
-                                        <a-tab-pane
+                                    <nn-tabs v-model:active-key="activeBgpSessionKey" class="bmp-inner-tabs">
+                                        <nn-tab-pane
                                             v-for="session in bgpSessionList"
                                             :key="getSessionKey(session)"
                                             :tab="formatSessionTab(session)"
                                         >
-                                            <a-table
+                                            <nn-table
                                                 class="detail-table"
                                                 data-testid="bmp-session-table"
                                                 :columns="bgpSessionColumns"
@@ -33,11 +33,11 @@
                                                 size="small"
                                                 style="margin-bottom: 8px"
                                                 row-key="peerIp"
-                                                :scroll="{ x: 1330 }"
+                                                :scroll="{ x: 1242 }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'addPathMap'">
-                                                        <a-tooltip
+                                                        <nn-tooltip
                                                             v-if="
                                                                 record.addPathMap &&
                                                                 Object.values(record.addPathMap).some(v => v)
@@ -53,14 +53,14 @@
                                                                     </span>
                                                                 </div>
                                                             </template>
-                                                            <a-tag color="green">Yes</a-tag>
-                                                        </a-tooltip>
-                                                        <a-tag v-else color="red">No</a-tag>
+                                                            <nn-tag color="green">Yes</nn-tag>
+                                                        </nn-tooltip>
+                                                        <nn-tag v-else color="red">No</nn-tag>
                                                     </template>
                                                     <template v-else-if="column.key === 'sessionFlags'">
-                                                        <a-tooltip :title="getBmpFlagsName(record.sessionFlags)">
+                                                        <nn-tooltip :title="getBmpFlagsName(record.sessionFlags)">
                                                             <span>{{ getBmpFlagsName(record.sessionFlags) }}</span>
-                                                        </a-tooltip>
+                                                        </nn-tooltip>
                                                     </template>
                                                     <template v-else-if="column.key === 'rawSessionFlags'">
                                                         <span>{{ formatRawFlags(record.rawSessionFlags) }}</span>
@@ -72,69 +72,69 @@
                                                         <span>{{ getSessionTlvCount(record) }}</span>
                                                     </template>
                                                     <template v-else-if="column.key === 'action'">
-                                                        <a-button
+                                                        <nn-button
                                                             type="link"
                                                             size="small"
                                                             @click="viewSessionDetails(record)"
                                                         >
                                                             详情
-                                                        </a-button>
+                                                        </nn-button>
                                                     </template>
                                                 </template>
-                                            </a-table>
+                                            </nn-table>
                                             <div class="route-toolbar">
                                                 <div class="route-toolbar-query">
-                                                    <a-select v-model:value="activeLocRibAf" style="width: 200px">
-                                                        <a-select-option
+                                                    <nn-select v-model:value="activeLocRibAf" style="width: 200px">
+                                                        <nn-select-option
                                                             v-for="af in session.enabledAddrFamilyTypes"
                                                             :key="af"
                                                             :value="af"
                                                         >
                                                             {{ ADDRESS_FAMILY_NAME[af] || af }}
-                                                        </a-select-option>
-                                                    </a-select>
-                                                    <a-select v-model:value="activeLocRibType" style="width: 200px">
-                                                        <a-select-option
+                                                        </nn-select-option>
+                                                    </nn-select>
+                                                    <nn-select v-model:value="activeLocRibType" style="width: 200px">
+                                                        <nn-select-option
                                                             v-for="rt in session.ribTypes"
                                                             :key="rt"
                                                             :value="rt"
                                                         >
                                                             {{ BMP_BGP_RIB_TYPE_NAME[rt] }}
-                                                        </a-select-option>
-                                                    </a-select>
-                                                    <a-radio-group v-model:value="routeStateFilter" size="small">
-                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
+                                                        </nn-select-option>
+                                                    </nn-select>
+                                                    <nn-radio-group v-model:value="routeStateFilter" size="small">
+                                                        <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
                                                             当前
-                                                        </a-radio-button>
-                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
+                                                        </nn-radio-button>
+                                                        <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
                                                             全部
-                                                        </a-radio-button>
-                                                        <a-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
+                                                        </nn-radio-button>
+                                                        <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
                                                             过期
-                                                        </a-radio-button>
-                                                    </a-radio-group>
-                                                    <a-input
+                                                        </nn-radio-button>
+                                                    </nn-radio-group>
+                                                    <nn-input
                                                         v-model:value="routePrefixFilter"
                                                         allow-clear
                                                         placeholder="Prefix 或 Prefix/Mask"
                                                         style="width: 220px"
                                                         @press-enter="searchBgpRoutes"
                                                     />
-                                                    <a-button type="primary" @click="searchBgpRoutes">查询</a-button>
+                                                    <nn-button type="primary" @click="searchBgpRoutes">查询</nn-button>
                                                 </div>
                                                 <div class="route-toolbar-status">
-                                                    <a-tag color="green">当前 {{ routeSummary.active }}</a-tag>
-                                                    <a-tag color="orange">过期 {{ routeSummary.stale }}</a-tag>
-                                                    <a-button
+                                                    <nn-tag color="green">当前 {{ routeSummary.active }}</nn-tag>
+                                                    <nn-tag color="orange">过期 {{ routeSummary.stale }}</nn-tag>
+                                                    <nn-button
                                                         danger
                                                         :disabled="routeSummary.stale === 0"
                                                         @click="purgeStaleRoutes"
                                                     >
                                                         清理过期
-                                                    </a-button>
+                                                    </nn-button>
                                                 </div>
                                             </div>
-                                            <a-table
+                                            <nn-table
                                                 class="route-table"
                                                 data-testid="bmp-session-route-table"
                                                 :columns="bgpRouteColumns"
@@ -149,44 +149,44 @@
                                                             : '')
                                                 "
                                                 size="small"
-                                                :scroll="{ x: 1490, y: '100%' }"
+                                                :scroll="{ x: 1546, y: '100%' }"
                                             >
                                                 <template #bodyCell="{ column, record }">
                                                     <template v-if="column.key === 'routeAction'">
-                                                        <a-space size="small">
-                                                            <a-tooltip title="查询路由detail">
-                                                                <a-button
+                                                        <nn-space size="small">
+                                                            <nn-tooltip title="查询路由detail">
+                                                                <nn-button
                                                                     type="text"
                                                                     size="small"
                                                                     @click="viewRouteDetailJson(record)"
                                                                 >
                                                                     <template #icon><ProfileOutlined /></template>
-                                                                </a-button>
-                                                            </a-tooltip>
-                                                        </a-space>
+                                                                </nn-button>
+                                                            </nn-tooltip>
+                                                        </nn-space>
                                                     </template>
                                                     <template v-else-if="column.key === 'parseStatus'">
-                                                        <a-tag :color="getRouteParseStatusColor(record.parseStatus)">
+                                                        <nn-tag :color="getRouteParseStatusColor(record.parseStatus)">
                                                             {{ getRouteParseStatusText(record.parseStatus) }}
-                                                        </a-tag>
+                                                        </nn-tag>
                                                     </template>
                                                 </template>
-                                            </a-table>
-                                        </a-tab-pane>
-                                    </a-tabs>
+                                            </nn-table>
+                                        </nn-tab-pane>
+                                    </nn-tabs>
                                 </div>
-                            </a-tab-pane>
-                        </a-tabs>
+                            </nn-tab-pane>
+                        </nn-tabs>
                     </div>
 
                     <div v-else class="no-result-message">
-                        <a-empty description="暂无数据" />
+                        <nn-empty description="暂无数据" />
                     </div>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
-        <a-drawer
+        <nn-drawer
             v-model:open="detailsDrawerVisible"
             :title="detailsDrawerTitle"
             placement="right"
@@ -196,14 +196,14 @@
             <template v-if="currentDetails">
                 <pre>{{ JSON.stringify(currentDetails, null, 2) }}</pre>
             </template>
-        </a-drawer>
+        </nn-drawer>
     </div>
 </template>
 
 <script setup>
     import { ref, watch, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
-    import ProfileOutlined from '@ant-design/icons-vue/es/icons/ProfileOutlined';
+    import { notify } from '../../utils/notify';
+    import { ProfileOutlined } from '../../ui/icons';
     import {
         BMP_SESSION_TYPE_NAME,
         BMP_SESSION_STATE_NAME,
@@ -321,7 +321,8 @@
             title: '操作',
             key: 'action',
             fixed: 'right',
-            width: 200
+            width: 72,
+            align: 'center'
         }
     ];
 
@@ -392,12 +393,12 @@
                 currentDetails.value = res.data;
             } else {
                 currentDetails.value = record;
-                message.error('查询路由detail失败');
+                notify.error('查询路由detail失败');
             }
         } catch (error) {
             console.error(error);
             currentDetails.value = record;
-            message.error('查询路由detail失败');
+            notify.error('查询路由detail失败');
         }
     };
 
@@ -534,7 +535,7 @@
                 activeClientKey.value = getClientKey(clientList.value[0]);
             }
         } else {
-            message.error('客户端列表获取失败');
+            notify.error('客户端列表获取失败');
         }
     };
 
@@ -551,7 +552,7 @@
             }
         } catch (error) {
             console.error(error);
-            message.error('加载数据失败');
+            notify.error('加载数据失败');
         }
     };
 
@@ -692,7 +693,7 @@
             } else {
                 bgpSessionList.value = [];
                 resetSessionAndRouteSelection();
-                message.error('获取BGP邻居列表失败');
+                notify.error('获取BGP邻居列表失败');
             }
         } catch (error) {
             if (requestId !== sessionListRequestId || requestClientKey !== activeClientKey.value) {
@@ -701,7 +702,7 @@
             console.error(error);
             bgpSessionList.value = [];
             resetSessionAndRouteSelection();
-            message.error('获取BGP邻居列表失败');
+            notify.error('获取BGP邻居列表失败');
         }
     };
 
@@ -847,7 +848,7 @@
             }
             resetRouteData();
             console.error(e);
-            message.error('Load routes failed');
+            notify.error('Load routes failed');
         }
     };
 
@@ -877,15 +878,15 @@
                 activeLocRibType.value
             );
             if (res.status === 'success') {
-                message.success(`已清理 ${res.data?.deleted || 0} 条过期路由`);
+                notify.success(`已清理 ${res.data?.deleted || 0} 条过期路由`);
                 bgpRoutePagination.value.current = 1;
                 loadBgpRoutes();
             } else {
-                message.error('清理过期路由失败');
+                notify.error('清理过期路由失败');
             }
         } catch (e) {
             console.error(e);
-            message.error('清理过期路由失败');
+            notify.error('清理过期路由失败');
         }
     };
 
@@ -916,13 +917,13 @@
 
 <style scoped>
     .bmp-full-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
 
     .bmp-full-row,
-    .bmp-full-row :deep(.ant-col) {
+    .bmp-full-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -934,7 +935,7 @@
         overflow: hidden;
     }
 
-    .bmp-full-card :deep(.ant-card-body) {
+    .bmp-full-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         min-width: 0;
@@ -970,12 +971,12 @@
         overflow: hidden;
     }
 
-    .client-tabs :deep(.ant-tabs-content-holder),
-    .client-tabs :deep(.ant-tabs-content),
-    .client-tabs :deep(.ant-tabs-tabpane),
-    .bmp-inner-tabs :deep(.ant-tabs-content-holder),
-    .bmp-inner-tabs :deep(.ant-tabs-content),
-    .bmp-inner-tabs :deep(.ant-tabs-tabpane) {
+    .client-tabs > :deep(.nn-tabs-content-holder),
+    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
+    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
@@ -985,26 +986,22 @@
         overflow: hidden;
     }
 
-    .bmp-inner-tabs :deep(.ant-tabs-nav) {
+    .bmp-inner-tabs > :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin-bottom: 8px;
     }
 
-    .bmp-inner-tabs :deep(.ant-tabs-tab) {
+    .bmp-inner-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
         padding: 8px 0 !important;
     }
 
-    .bmp-inner-tabs :deep(.ant-tabs-tab + .ant-tabs-tab) {
-        margin-left: 16px !important;
-    }
-
-    .client-tabs :deep(.ant-tabs-tab) {
-        justify-content: flex-start;
+    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
+        justify-content: center;
         padding: 8px;
-        text-align: left;
+        text-align: center;
     }
 
-    .client-tabs :deep(.ant-tabs-tab-btn) {
+    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab > .nn-tabs-tab-button) {
         width: 100%;
     }
 
@@ -1014,7 +1011,7 @@
         gap: 8px;
         margin-bottom: 8px;
         padding: 8px;
-        background-color: #f5f5f5;
+        background-color: var(--nn-color-bg-muted);
         border-radius: 4px;
     }
 
@@ -1051,7 +1048,7 @@
         margin-left: auto;
     }
 
-    .route-toolbar-status :deep(.ant-tag) {
+    .route-toolbar-status :deep(.nn-tag) {
         margin-inline-end: 0;
     }
 
@@ -1061,21 +1058,21 @@
         align-items: center;
         height: 100%;
         width: 100%;
-        color: #999;
+        color: var(--nn-color-text-muted);
         overflow: auto;
     }
 
-    :deep(.route-stale-row) {
-        color: #8c6d1f;
-        background-color: #fffbe6;
+    .route-table :deep(.route-stale-row) {
+        color: var(--nn-color-text-stale);
+        background-color: var(--nn-color-bg-stale);
     }
 
-    :deep(.route-parse-warning-row) {
-        background-color: #fff7e6;
+    .route-table :deep(.route-parse-warning-row) {
+        background-color: var(--nn-color-bg-warning-subtle);
     }
 
-    :deep(.route-parse-error-row) {
-        background-color: #fff1f0;
+    .route-table :deep(.route-parse-error-row) {
+        background-color: var(--nn-color-bg-danger-subtle);
     }
 
     .detail-table {
@@ -1084,20 +1081,20 @@
     }
 
     .route-table,
-    .route-table :deep(.ant-spin-nested-loading),
-    .route-table :deep(.ant-spin-container) {
+    .route-table :deep(.nn-spin-nested-loading),
+    .route-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .route-table :deep(.ant-spin-container) {
+    .route-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .route-table :deep(.ant-table) {
+    .route-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -1105,33 +1102,28 @@
         overflow: hidden;
     }
 
-    .route-table :deep(.ant-table-container),
-    .route-table :deep(.ant-table-content) {
+    .route-table :deep(.nn-table-container) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
+        overflow: hidden;
     }
 
-    .route-table :deep(.ant-table-header) {
-        flex: 0 0 auto;
-        overflow: hidden !important;
-    }
-
-    .route-table :deep(.ant-table-body) {
+    .route-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
         max-height: none !important;
-        overflow-y: auto !important;
+        overflow: auto !important;
     }
 
-    .route-table :deep(.ant-pagination) {
+    .route-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .route-table :deep(.ant-table-thead > tr > th) {
+    .route-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

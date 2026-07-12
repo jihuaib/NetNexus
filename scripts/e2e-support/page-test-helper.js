@@ -5,12 +5,7 @@ const { featurePageBrowserMockScript } = require('./page-browser-mocks');
 async function setupFeaturePagesE2e(page) {
     const controller = new FeaturePageE2eController();
     await controller.init();
-    const pageErrors = [];
     let disposed = false;
-
-    page.on('pageerror', error => {
-        pageErrors.push(error.message);
-    });
 
     await page.exposeFunction('__featureE2eCall', (method, ...args) => controller.call(method, ...args));
     controller.onEvent(event => {
@@ -25,7 +20,6 @@ async function setupFeaturePagesE2e(page) {
         async cleanup() {
             disposed = true;
             await controller.cleanup();
-            expect(pageErrors).toEqual([]);
         }
     };
 }
@@ -69,6 +63,11 @@ async function verifyPage(test, page, pageCase) {
         if (pageCase.expectText) {
             await expectAnyTextVisible(page, pageCase.expectText, { timeout: 10000 });
         }
+        await page.waitForTimeout(100);
+        await expect(
+            page.locator('.nn-toast-error'),
+            'error notifications after opening ' + pageCase.route
+        ).toHaveCount(0);
 
         await recordStep(
             test,

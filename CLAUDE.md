@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-NetNexus 是一个基于 Vue 3、Ant Design Vue 和 Electron 构建的本地网络和开发工具集。它提供 BGP、BMP、RPKI、SNMP、FTP、DHCP、NTP、TFTP 等协议工具，以及报文解析器、字符串生成器、端口监控、网络信息、HTTP API 测试、TCP-AO MAC 等开发辅助工具。
+NetNexus 是一个基于 Vue 3、自研 NetNexus UI 和 Electron 构建的本地网络和开发工具集。它提供 BGP、BMP、RPKI、SNMP、FTP、DHCP、NTP、TFTP 等协议工具，以及报文解析器、字符串生成器、端口监控、网络信息、HTTP API 测试、TCP-AO MAC 等开发辅助工具。
 本项目需要同时兼容 Windows 和 Linux。
 开发环境可能运行在 WSL，但代码必须能在原生 Windows 上正常运行。
 项目包含 Electron、Node.js 以及 native 模块。

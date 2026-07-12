@@ -1,65 +1,65 @@
 <template>
-    <div class="mt-container adaptive-list-page">
-        <a-row class="adaptive-form-row">
-            <a-col :span="24">
-                <a-card title="RPKI Router Key 配置 (协议 v1+)">
-                    <a-form :model="rkConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="submitRk">
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item label="SKI" name="ski">
-                                    <a-tooltip :title="validationErrors.ski" :open="!!validationErrors.ski">
-                                        <a-input
+    <div class="nn-container adaptive-list-page">
+        <nn-row class="adaptive-form-row">
+            <nn-col :span="24">
+                <nn-card title="RPKI Router Key 配置 (协议 v1+)">
+                    <nn-form :model="rkConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="submitRk">
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="SKI" name="ski">
+                                    <nn-tooltip :title="validationErrors.ski" :open="!!validationErrors.ski">
+                                        <nn-input
                                             v-model:value="rkConfig.ski"
                                             placeholder="20 字节 hex (40 字符)"
                                             :status="validationErrors.ski ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item label="ASN" name="asn">
-                                    <a-tooltip :title="validationErrors.asn" :open="!!validationErrors.asn">
-                                        <a-input
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="ASN" name="asn">
+                                    <nn-tooltip :title="validationErrors.asn" :open="!!validationErrors.asn">
+                                        <nn-input
                                             v-model:value="rkConfig.asn"
                                             :status="validationErrors.asn ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item label="SPKI" name="spki">
-                                    <a-tooltip :title="validationErrors.spki" :open="!!validationErrors.spki">
-                                        <a-textarea
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="SPKI" name="spki">
+                                    <nn-tooltip :title="validationErrors.spki" :open="!!validationErrors.spki">
+                                        <nn-textarea
                                             v-model:value="rkConfig.spki"
                                             placeholder="Subject Public Key Info, DER 编码 hex"
                                             :rows="3"
                                             :status="validationErrors.spki ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                            <a-space>
-                                <a-button type="primary" html-type="submit" :loading="submitLoading">
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                            <nn-space>
+                                <nn-button type="primary" html-type="submit" :loading="submitLoading">
                                     添加 Router Key
-                                </a-button>
-                                <a-button @click="resetForm">重置</a-button>
-                            </a-space>
-                        </a-form-item>
-                    </a-form>
-                </a-card>
-            </a-col>
-        </a-row>
+                                </nn-button>
+                                <nn-button @click="resetForm">重置</nn-button>
+                            </nn-space>
+                        </nn-form-item>
+                    </nn-form>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
-        <a-row class="adaptive-list-row">
-            <a-col :span="24">
-                <a-card title="Router Key 列表" class="adaptive-list-card">
-                    <a-table
+        <nn-row class="adaptive-list-row">
+            <nn-col :span="24">
+                <nn-card title="Router Key 列表" class="adaptive-list-card">
+                    <nn-table
                         :columns="rkColumns"
                         :data-source="rkList"
                         :row-key="record => `${record.ski}-${record.asn}`"
@@ -75,19 +75,19 @@
                     >
                         <template #bodyCell="{ column, record }">
                             <template v-if="column.key === 'action'">
-                                <a-button type="link" danger @click="deleteRk(record)">删除</a-button>
+                                <nn-button type="link" danger @click="deleteRk(record)">删除</nn-button>
                             </template>
                         </template>
-                    </a-table>
-                </a-card>
-            </a-col>
-        </a-row>
+                    </nn-table>
+                </nn-card>
+            </nn-col>
+        </nn-row>
     </div>
 </template>
 
 <script setup>
     import { ref, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { FormValidator, createRpkiRouterKeyValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES } from '../../const/rpkiConst';
 
@@ -122,7 +122,7 @@
     const submitRk = async () => {
         const hasErrors = validator.validate(rkConfig.value);
         if (hasErrors) {
-            message.error('请检查 Router Key 配置');
+            notify.error('请检查 Router Key 配置');
             return;
         }
         submitLoading.value = true;
@@ -130,13 +130,13 @@
             const payload = JSON.parse(JSON.stringify(rkConfig.value));
             const result = await window.rpkiApi.addRouterKey(payload);
             if (result.status === 'success') {
-                message.success('Router Key 添加成功');
+                notify.success('Router Key 添加成功');
                 fetchList();
             } else {
-                message.error(result.msg || '添加失败');
+                notify.error(result.msg || '添加失败');
             }
         } catch (e) {
-            message.error(`添加出错: ${e.message}`);
+            notify.error(`添加出错: ${e.message}`);
         } finally {
             submitLoading.value = false;
         }
@@ -154,13 +154,13 @@
         try {
             const result = await window.rpkiApi.deleteRouterKey({ ski: record.ski, asn: record.asn });
             if (result.status === 'success') {
-                message.success('删除成功');
+                notify.success('删除成功');
                 fetchList();
             } else {
-                message.error(result.msg || '删除失败');
+                notify.error(result.msg || '删除失败');
             }
         } catch (e) {
-            message.error(`删除出错: ${e.message}`);
+            notify.error(`删除出错: ${e.message}`);
         }
     };
 
@@ -182,7 +182,7 @@
 
 <style scoped>
     .adaptive-list-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -199,7 +199,7 @@
         min-height: 0;
     }
 
-    .adaptive-list-row :deep(.ant-col) {
+    .adaptive-list-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -211,7 +211,7 @@
         overflow: hidden;
     }
 
-    .adaptive-list-card :deep(.ant-card-body) {
+    .adaptive-list-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -220,19 +220,19 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -240,20 +240,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -261,12 +261,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

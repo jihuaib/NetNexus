@@ -1,10 +1,10 @@
 <template>
-    <a-drawer :open="open" title="BGP路由详情" width="640px" placement="right" @close="close">
-        <a-spin :spinning="loading">
-            <a-empty v-if="!route" description="暂无详情" />
+    <nn-drawer :open="open" title="BGP路由详情" width="640px" placement="right" @close="close">
+        <nn-spin :spinning="loading">
+            <nn-empty v-if="!route" description="暂无详情" />
             <pre v-else class="json-detail">{{ routeJson }}</pre>
-        </a-spin>
-    </a-drawer>
+        </nn-spin>
+    </nn-drawer>
 </template>
 
 <script setup>
@@ -47,20 +47,3 @@
         emit('update:open', false);
     };
 </script>
-
-<style scoped>
-    .json-detail {
-        background: #0f172a;
-        border-radius: 6px;
-        color: #e5e7eb;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-        font-size: 12px;
-        line-height: 1.6;
-        margin: 0;
-        max-height: calc(100vh - 116px);
-        overflow: auto;
-        padding: 12px;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-</style>

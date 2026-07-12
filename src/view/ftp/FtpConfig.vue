@@ -1,114 +1,114 @@
 <template>
-    <div class="mt-container adaptive-list-page">
-        <a-row class="adaptive-form-row">
-            <a-col :span="24">
-                <a-card title="FTP服务器配置">
-                    <a-form :model="ftpConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item label="服务器端口" name="port">
-                                    <a-tooltip
+    <div class="nn-container adaptive-list-page">
+        <nn-row class="adaptive-form-row">
+            <nn-col :span="24">
+                <nn-card title="FTP服务器配置">
+                    <nn-form :model="ftpConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="服务器端口" name="port">
+                                    <nn-tooltip
                                         :title="validationFtpConfigErrors.port"
                                         :open="!!validationFtpConfigErrors.port"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ftpConfig.port"
                                             :status="validationFtpConfigErrors.port ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                            <a-space>
-                                <a-button
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                            <nn-space>
+                                <nn-button
                                     type="primary"
                                     :loading="serverLoading"
                                     :disabled="serverRunning"
                                     @click="startFtp"
                                 >
                                     启动服务器
-                                </a-button>
-                                <a-button type="primary" danger :disabled="!serverRunning" @click="stopFtp">
+                                </nn-button>
+                                <nn-button type="primary" danger :disabled="!serverRunning" @click="stopFtp">
                                     停止服务器
-                                </a-button>
-                            </a-space>
-                        </a-form-item>
-                    </a-form>
-                </a-card>
-            </a-col>
-        </a-row>
+                                </nn-button>
+                            </nn-space>
+                        </nn-form-item>
+                    </nn-form>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <!-- 用户配置 -->
-        <a-row class="adaptive-form-row">
-            <a-col :span="24">
-                <a-card title="用户配置">
-                    <a-form :model="ftpUserConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
-                        <a-row>
-                            <a-col :span="8">
-                                <a-form-item label="根目录" name="rootDir">
-                                    <a-tooltip
+        <nn-row class="adaptive-form-row">
+            <nn-col :span="24">
+                <nn-card title="用户配置">
+                    <nn-form :model="ftpUserConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
+                        <nn-row>
+                            <nn-col :span="8">
+                                <nn-form-item label="根目录" name="rootDir">
+                                    <nn-tooltip
                                         :title="validationFtpUserErrors.rootDir"
                                         :open="!!validationFtpUserErrors.rootDir"
                                     >
-                                        <a-input-group compact>
-                                            <a-input
+                                        <nn-input-group compact>
+                                            <nn-input
                                                 v-model:value="ftpUserConfig.rootDir"
                                                 :status="validationFtpUserErrors.rootDir ? 'error' : ''"
                                                 style="width: calc(100% - 40px)"
                                                 readonly
                                             />
-                                            <a-button type="primary" @click="selectDirectory">
+                                            <nn-button type="primary" @click="selectDirectory">
                                                 <folder-outlined />
-                                            </a-button>
-                                        </a-input-group>
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="用户名" name="username">
-                                    <a-tooltip
+                                            </nn-button>
+                                        </nn-input-group>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="用户名" name="username">
+                                    <nn-tooltip
                                         :title="validationFtpUserErrors.username"
                                         :open="!!validationFtpUserErrors.username"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ftpUserConfig.username"
                                             :status="validationFtpUserErrors.username ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="密码" name="password">
-                                    <a-tooltip
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="密码" name="password">
+                                    <nn-tooltip
                                         :title="validationFtpUserErrors.password"
                                         :open="!!validationFtpUserErrors.password"
                                     >
-                                        <a-input-password
+                                        <nn-input-password
                                             v-model:value="ftpUserConfig.password"
                                             :status="validationFtpUserErrors.password ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                            <a-space>
-                                <a-button type="primary" @click="addUser">添加用户</a-button>
-                                <a-button type="default" @click="showUserList">用户列表</a-button>
-                            </a-space>
-                        </a-form-item>
-                    </a-form>
-                </a-card>
-            </a-col>
-        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                            <nn-space>
+                                <nn-button type="primary" @click="addUser">添加用户</nn-button>
+                                <nn-button type="default" @click="showUserList">用户列表</nn-button>
+                            </nn-space>
+                        </nn-form-item>
+                    </nn-form>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <!-- FTP客户端列表 -->
-        <a-row class="adaptive-list-row">
-            <a-col :span="24">
-                <a-card title="FTP客户端列表" class="adaptive-list-card">
+        <nn-row class="adaptive-list-row">
+            <nn-col :span="24">
+                <nn-card title="FTP客户端列表" class="adaptive-list-card">
                     <div>
-                        <a-table
+                        <nn-table
                             :columns="clientColumns"
                             :data-source="clientList"
                             :row-key="record => `${record.remoteIp}|${record.remotePort}`"
@@ -124,17 +124,17 @@
                         >
                             <template #bodyCell="{ column, record }">
                                 <template v-if="column.key === 'action'">
-                                    <a-button type="link" @click="viewClientDetails(record)">详情</a-button>
+                                    <nn-button type="link" @click="viewClientDetails(record)">详情</nn-button>
                                 </template>
                             </template>
-                        </a-table>
+                        </nn-table>
                     </div>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <!-- 用户列表弹窗 -->
-        <a-modal
+        <nn-modal
             v-model:open="userListModalVisible"
             title="用户列表"
             :mask-closable="false"
@@ -142,7 +142,7 @@
             @cancel="closeUserListModal"
         >
             <div>
-                <a-table
+                <nn-table
                     :columns="userListColumns"
                     :data-source="userList"
                     :pagination="{
@@ -164,23 +164,23 @@
                             </span>
                         </template>
                         <template v-if="column.key === 'action'">
-                            <a-button type="link" @click="loadUserItem(record)">使用</a-button>
-                            <a-button type="link" danger @click="deleteUser(record)">删除</a-button>
+                            <nn-button type="link" @click="loadUserItem(record)">使用</nn-button>
+                            <nn-button type="link" danger @click="deleteUser(record)">删除</nn-button>
                         </template>
                     </template>
-                </a-table>
+                </nn-table>
             </div>
             <template #footer>
-                <a-button type="primary" @click="closeUserListModal">关闭</a-button>
+                <nn-button type="primary" @click="closeUserListModal">关闭</nn-button>
             </template>
-        </a-modal>
+        </nn-modal>
     </div>
 </template>
 
 <script setup>
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
-    import FolderOutlined from '@ant-design/icons-vue/es/icons/FolderOutlined';
+    import { notify } from '../../utils/notify';
+    import { FolderOutlined } from '../../ui/icons';
     import {
         FormValidator,
         createFtpConfigValidationRules,
@@ -267,13 +267,13 @@
     const startFtp = async () => {
         let hasErrors = validatorFtpConfig.validate(ftpConfig.value);
         if (hasErrors) {
-            message.error('请检查配置信息是否正确');
+            notify.error('请检查配置信息是否正确');
             return;
         }
 
         hasErrors = validatorFtpUser.validate(ftpUserConfig.value);
         if (hasErrors) {
-            message.error('请检查配置信息是否正确');
+            notify.error('请检查配置信息是否正确');
             return;
         }
 
@@ -281,7 +281,7 @@
             const ftpConfigPayload = JSON.parse(JSON.stringify(ftpConfig.value));
             const saveResult = await window.ftpApi.saveFtpConfig(ftpConfigPayload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
@@ -291,13 +291,13 @@
             const result = await window.ftpApi.startFtp(ftpConfigPayload, ftpUserConfigPayload);
 
             if (result.status === 'success') {
-                message.success('FTP服务器启动成功');
+                notify.success('FTP服务器启动成功');
                 serverRunning.value = true;
             } else {
-                message.error(result.msg || 'FTP服务器启动失败');
+                notify.error(result.msg || 'FTP服务器启动失败');
             }
         } catch (error) {
-            message.error(`FTP服务器启动出错: ${error.message}`);
+            notify.error(`FTP服务器启动出错: ${error.message}`);
         } finally {
             serverLoading.value = false;
         }
@@ -320,14 +320,14 @@
             const result = await window.ftpApi.stopFtp();
 
             if (result.status === 'success') {
-                message.success('FTP服务器停止成功');
+                notify.success('FTP服务器停止成功');
                 serverRunning.value = false;
                 clientList.value = [];
             } else {
-                message.error(result.msg || 'FTP服务器停止失败');
+                notify.error(result.msg || 'FTP服务器停止失败');
             }
         } catch (error) {
-            message.error(`FTP服务器停止出错: ${error.message}`);
+            notify.error(`FTP服务器停止出错: ${error.message}`);
         }
     };
 
@@ -369,7 +369,7 @@
                 }
             }
         } catch (error) {
-            message.error(`选择目录失败: ${error.message}`);
+            notify.error(`选择目录失败: ${error.message}`);
         }
     };
 
@@ -381,7 +381,7 @@
             }
         } catch (error) {
             console.error(error);
-            message.error('加载数据失败');
+            notify.error('加载数据失败');
         }
     };
 
@@ -414,15 +414,15 @@
     const addUser = async () => {
         let hasErrors = validatorFtpUser.validate(ftpUserConfig.value);
         if (hasErrors) {
-            message.error('请检查配置信息是否正确');
+            notify.error('请检查配置信息是否正确');
             return;
         }
         const payload = JSON.parse(JSON.stringify(ftpUserConfig.value));
         const result = await window.ftpApi.addFtpUser(payload);
         if (result.status === 'success') {
-            message.success(result.msg || '用户添加成功');
+            notify.success(result.msg || '用户添加成功');
         } else {
-            message.error(result.msg || '用户添加失败');
+            notify.error(result.msg || '用户添加失败');
         }
     };
 
@@ -434,7 +434,7 @@
             passwordVisibility.value = new Array(userList.value.length).fill(false);
             userListModalVisible.value = true;
         } else {
-            message.error(result.msg || '用户列表获取失败');
+            notify.error(result.msg || '用户列表获取失败');
         }
     };
 
@@ -493,7 +493,7 @@
         const payload = JSON.parse(JSON.stringify(record));
         const result = await window.ftpApi.deleteFtpUser(payload);
         if (result.status === 'success') {
-            message.success(result.msg || '用户删除成功');
+            notify.success(result.msg || '用户删除成功');
             // 删除用户后，更新用户列表
             const deletedIndex = userList.value.findIndex(item => item.username === record.username);
             userList.value = userList.value.filter(item => item.username !== record.username);
@@ -502,7 +502,7 @@
                 passwordVisibility.value.splice(deletedIndex, 1);
             }
         } else {
-            message.error(result.msg || '用户删除失败');
+            notify.error(result.msg || '用户删除失败');
         }
     };
 
@@ -513,7 +513,7 @@
 
 <style scoped>
     .adaptive-list-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -530,7 +530,7 @@
         min-height: 0;
     }
 
-    .adaptive-list-row :deep(.ant-col) {
+    .adaptive-list-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -542,8 +542,8 @@
         overflow: hidden;
     }
 
-    .adaptive-list-card :deep(.ant-card-body),
-    .adaptive-list-card :deep(.ant-card-body > div) {
+    .adaptive-list-card :deep(.nn-card-body),
+    .adaptive-list-card :deep(.nn-card-body > div) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -552,19 +552,19 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -572,20 +572,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -593,12 +593,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

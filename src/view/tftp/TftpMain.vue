@@ -1,10 +1,10 @@
 <template>
-    <div class="mt-main-container">
+    <div class="nn-main-container">
         <div class="fixed-tabs">
-            <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <a-tab-pane key="tftp-config" tab="TFTP配置" />
-                <a-tab-pane key="tftp-transfer-log" tab="传输日志" />
-            </a-tabs>
+            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+                <nn-tab-pane key="tftp-config" tab="TFTP配置" />
+                <nn-tab-pane key="tftp-transfer-log" tab="传输日志" />
+            </nn-tabs>
         </div>
 
         <div class="content-container">

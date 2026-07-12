@@ -1,22 +1,27 @@
 <template>
     <div class="ftp-settings">
-        <a-card title="FTP设置" class="settings-card">
-            <a-form :model="settingsForm" layout="vertical">
-                <a-form-item label="FTP用户最大存储条数" name="maxFtpUser">
-                    <a-input-number v-model:value="settingsForm.maxFtpUser" :min="10" :max="1000" style="width: 100%" />
-                </a-form-item>
+        <nn-card title="FTP设置" class="settings-card">
+            <nn-form :model="settingsForm" layout="vertical">
+                <nn-form-item label="FTP用户最大存储条数" name="maxFtpUser">
+                    <nn-input-number
+                        v-model:value="settingsForm.maxFtpUser"
+                        :min="10"
+                        :max="1000"
+                        style="width: 100%"
+                    />
+                </nn-form-item>
 
-                <a-form-item>
-                    <a-button type="primary" @click="saveSettings">保存设置</a-button>
-                </a-form-item>
-            </a-form>
-        </a-card>
+                <nn-form-item>
+                    <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
+                </nn-form-item>
+            </nn-form>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { ref, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { DEFAULT_FTP_SETTINGS } from '../../const/ftpConst';
 
     // 工具设置组件
@@ -43,10 +48,10 @@
         try {
             const payload = JSON.parse(JSON.stringify(settingsForm.value));
             await window.commonApi.saveFtpSettings(payload);
-            message.success('设置已保存');
+            notify.success('设置已保存');
         } catch (error) {
             console.error('保存设置失败', error);
-            message.error('保存设置失败');
+            notify.error('保存设置失败');
         }
     };
 
@@ -60,7 +65,7 @@
         max-width: 100%;
     }
 
-    :deep(.ant-form-item-label > label) {
+    :deep(.nn-form-item-label > label) {
         font-size: 12px;
     }
 </style>

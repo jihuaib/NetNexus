@@ -1,16 +1,16 @@
 <template>
-    <div class="mt-container bmp-full-page">
-        <a-row class="bmp-full-row">
-            <a-col :span="24">
-                <a-card title="BGP会话统计" class="bmp-full-card">
+    <div class="nn-container bmp-full-page">
+        <nn-row class="bmp-full-row">
+            <nn-col :span="24">
+                <nn-card title="BGP会话统计" class="bmp-full-card">
                     <div v-if="clientList.length > 0" class="bmp-tabs-shell">
-                        <a-tabs
+                        <nn-tabs
                             v-model:active-key="activeClientKey"
                             tab-position="left"
                             class="client-tabs"
                             :tab-bar-style="clientTabBarStyle"
                         >
-                            <a-tab-pane
+                            <nn-tab-pane
                                 v-for="client in clientList"
                                 :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
                             >
@@ -18,27 +18,27 @@
                                     <span class="client-tab-label">{{ formatClientTab(client) }}</span>
                                 </template>
                                 <div v-if="getClientReports(client).length > 0" class="bmp-inner-tabs-shell">
-                                    <a-tabs class="bmp-inner-tabs">
-                                        <a-tab-pane
+                                    <nn-tabs class="bmp-inner-tabs">
+                                        <nn-tab-pane
                                             v-for="report in getClientReports(client)"
                                             :key="report.key"
                                             :tab="formatSessionTab(report)"
                                         >
                                             <div class="report-header">
-                                                <a-space>
-                                                    <a-tag color="blue">{{ report.session.sessionIp }}</a-tag>
-                                                    <a-tag>AS {{ report.session.sessionAs }}</a-tag>
-                                                    <a-tag>TLV {{ getReportTlvCount(report) }}</a-tag>
-                                                    <a-button
+                                                <nn-space>
+                                                    <nn-tag color="blue">{{ report.session.sessionIp }}</nn-tag>
+                                                    <nn-tag>AS {{ report.session.sessionAs }}</nn-tag>
+                                                    <nn-tag>TLV {{ getReportTlvCount(report) }}</nn-tag>
+                                                    <nn-button
                                                         type="link"
                                                         size="small"
                                                         @click="viewReportDetails(report)"
                                                     >
                                                         详情
-                                                    </a-button>
-                                                </a-space>
+                                                    </nn-button>
+                                                </nn-space>
                                             </div>
-                                            <a-table
+                                            <nn-table
                                                 class="report-table"
                                                 :columns="columns"
                                                 :data-source="report.statistics"
@@ -63,25 +63,25 @@
                                                         {{ record.value }}
                                                     </template>
                                                 </template>
-                                            </a-table>
-                                        </a-tab-pane>
-                                    </a-tabs>
+                                            </nn-table>
+                                        </nn-tab-pane>
+                                    </nn-tabs>
                                 </div>
                                 <div v-else class="no-result-message">
-                                    <a-empty description="暂无统计数据" />
+                                    <nn-empty description="暂无统计数据" />
                                 </div>
-                            </a-tab-pane>
-                        </a-tabs>
+                            </nn-tab-pane>
+                        </nn-tabs>
                     </div>
 
                     <div v-else class="no-result-message">
-                        <a-empty description="暂无数据" />
+                        <nn-empty description="暂无数据" />
                     </div>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
-        <a-drawer
+        <nn-drawer
             v-model:open="detailsDrawerVisible"
             :title="detailsDrawerTitle"
             placement="right"
@@ -89,13 +89,13 @@
             @close="closeDetailsDrawer"
         >
             <pre v-if="currentDetails">{{ JSON.stringify(currentDetails, null, 2) }}</pre>
-        </a-drawer>
+        </nn-drawer>
     </div>
 </template>
 
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import EventBus from '../../utils/eventBus';
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME, getAddrFamilyType } from '../../const/bgpConst';
@@ -277,7 +277,7 @@
                 activeClientKey.value = getClientKey(clientList.value[0]);
             }
         } else {
-            message.error('客户端列表获取失败');
+            notify.error('客户端列表获取失败');
         }
     };
 
@@ -300,7 +300,7 @@
             }
         } catch (error) {
             console.error(error);
-            message.error('加载数据失败');
+            notify.error('加载数据失败');
         }
     };
 
@@ -314,7 +314,7 @@
             }
         } catch (error) {
             console.error(error);
-            message.error('加载统计数据失败');
+            notify.error('加载统计数据失败');
         }
     };
 
@@ -339,13 +339,13 @@
 
 <style scoped>
     .bmp-full-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
 
     .bmp-full-row,
-    .bmp-full-row :deep(.ant-col) {
+    .bmp-full-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -357,7 +357,7 @@
         overflow: hidden;
     }
 
-    .bmp-full-card :deep(.ant-card-body) {
+    .bmp-full-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         min-width: 0;
@@ -385,12 +385,12 @@
         overflow: hidden;
     }
 
-    .client-tabs :deep(.ant-tabs-content-holder),
-    .client-tabs :deep(.ant-tabs-content),
-    .client-tabs :deep(.ant-tabs-tabpane),
-    .bmp-inner-tabs :deep(.ant-tabs-content-holder),
-    .bmp-inner-tabs :deep(.ant-tabs-content),
-    .bmp-inner-tabs :deep(.ant-tabs-tabpane) {
+    .client-tabs > :deep(.nn-tabs-content-holder),
+    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
+    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
+    .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
@@ -400,7 +400,7 @@
         overflow: hidden;
     }
 
-    .bmp-inner-tabs :deep(.ant-tabs-nav) {
+    .bmp-inner-tabs > :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin-bottom: 8px;
     }
@@ -411,20 +411,20 @@
     }
 
     .report-table,
-    .report-table :deep(.ant-spin-nested-loading),
-    .report-table :deep(.ant-spin-container) {
+    .report-table :deep(.nn-spin-nested-loading),
+    .report-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .report-table :deep(.ant-spin-container) {
+    .report-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .report-table :deep(.ant-table) {
+    .report-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         min-width: 0;
@@ -433,34 +433,29 @@
         overflow: hidden;
     }
 
-    .report-table :deep(.ant-table-container),
-    .report-table :deep(.ant-table-content) {
+    .report-table :deep(.nn-table-container) {
         flex: 1 1 0;
         min-height: 0;
         min-width: 0;
         display: flex;
         flex-direction: column;
+        overflow: hidden;
     }
 
-    .report-table :deep(.ant-table-header) {
-        flex: 0 0 auto;
-        overflow: hidden !important;
-    }
-
-    .report-table :deep(.ant-table-body) {
+    .report-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
         max-height: none !important;
-        overflow-y: auto !important;
+        overflow: auto !important;
     }
 
-    .report-table :deep(.ant-pagination) {
+    .report-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .report-table :deep(.ant-table-thead > tr > th) {
+    .report-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;
@@ -474,13 +469,13 @@
         white-space: nowrap;
     }
 
-    .client-tabs :deep(.ant-tabs-tab) {
-        justify-content: flex-start;
+    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
+        justify-content: center;
         padding: 8px;
-        text-align: left;
+        text-align: center;
     }
 
-    .client-tabs :deep(.ant-tabs-tab-btn) {
+    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab > .nn-tabs-tab-button) {
         width: 100%;
     }
 
@@ -490,7 +485,7 @@
         align-items: center;
         height: 100%;
         width: 100%;
-        color: #999;
+        color: var(--nn-color-text-muted);
         overflow: auto;
     }
 </style>

@@ -1,17 +1,17 @@
 <template>
-    <a-drawer :title="title" placement="right" :open="open" width="500" @close="onClose">
-        <a-form layout="vertical">
-            <a-form-item :label="inputLabel" :validate-status="validateStatus" :help="validateMessage">
-                <a-textarea v-model:value="localInputValue" :rows="rows" :placeholder="placeholder" />
-            </a-form-item>
-        </a-form>
+    <nn-drawer :title="title" placement="right" :open="open" width="500" @close="onClose">
+        <nn-form layout="vertical">
+            <nn-form-item :label="inputLabel" :validate-status="validateStatus" :help="validateMessage">
+                <nn-textarea v-model:value="localInputValue" :rows="rows" :placeholder="placeholder" />
+            </nn-form-item>
+        </nn-form>
         <template #footer>
-            <a-space>
-                <a-button @click="onClose">取消</a-button>
-                <a-button type="primary" @click="onSubmit">确定</a-button>
-            </a-space>
+            <nn-space>
+                <nn-button @click="onClose">取消</nn-button>
+                <nn-button type="primary" @click="onSubmit">确定</nn-button>
+            </nn-space>
         </template>
-    </a-drawer>
+    </nn-drawer>
 </template>
 
 <script setup>

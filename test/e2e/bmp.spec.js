@@ -1,7 +1,7 @@
 const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { BmpE2eController, getBrowserMockScript } = require('../../scripts/e2e-support');
 
-const MOCK_BASE_ROUTE_COUNT = 12;
+const MOCK_BASE_ROUTE_COUNT = 26;
 const EXPECTED_PUBLIC_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT + 3;
 const EXPECTED_LOC_RIB_ROUTE_COUNT = Math.max(8, Math.min(25, MOCK_BASE_ROUTE_COUNT)) + 2;
 const EXPECTED_MOCK_READY_ROUTE_COUNT = EXPECTED_LOC_RIB_ROUTE_COUNT;
@@ -41,6 +41,137 @@ function expectPublicLocRibRoute(route) {
         route.ip.startsWith('10.30.') || route.ip === '198.51.101.0' || route.ip === '198.51.102.0',
         `unexpected Loc-RIB route prefix ${route.prefix}`
     ).toBe(true);
+}
+
+async function expectAutoHidingScrollbar(locator) {
+    const isActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-active'));
+    const thumbColor = () =>
+        locator.evaluate(element => getComputedStyle(element, '::-webkit-scrollbar-thumb').backgroundColor);
+
+    await expect.poll(isActive, { timeout: 2500 }).toBe(false);
+    await expect.poll(thumbColor).toBe('rgba(0, 0, 0, 0)');
+
+    await locator.dispatchEvent('scroll');
+    await expect.poll(isActive).toBe(true);
+    await expect.poll(thumbColor).not.toBe('rgba(0, 0, 0, 0)');
+
+    await expect.poll(isActive, { timeout: 2500 }).toBe(false);
+    await expect.poll(thumbColor).toBe('rgba(0, 0, 0, 0)');
+}
+
+async function expectBmpRouteLayout(page, pageTestId, detailTableTestId, routeTableTestId) {
+    const pageRoot = page.getByTestId(pageTestId);
+    await expect(pageRoot.locator('.client-tab-label').first()).toHaveText(/\S/);
+
+    const layout = await pageRoot.evaluate(
+        (root, testIds) => {
+            const clientTabs = root.querySelector('.client-tabs');
+            const clientNav = clientTabs?.querySelector(':scope > .nn-tabs-nav');
+            const clientNavWrap = clientNav?.querySelector('.nn-tabs-nav-wrap');
+            const activeClientTab = clientNav?.querySelector('.nn-tabs-tab-active');
+            const activeClientLabel = activeClientTab?.querySelector('.client-tab-label');
+            const activeClientPane = clientTabs?.querySelector(
+                ':scope > .nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane-active'
+            );
+            const innerTabs = activeClientPane?.querySelector('.bmp-inner-tabs');
+            const nav = innerTabs?.querySelector(':scope > .nn-tabs-nav');
+            const navWrap = nav?.querySelector('.nn-tabs-nav-wrap');
+            const navList = nav?.querySelector('.nn-tabs-nav-list');
+            const tabs = [...(navList?.querySelectorAll(':scope > .nn-tabs-tab') || [])];
+            const activeInnerPane = innerTabs?.querySelector(
+                ':scope > .nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane-active'
+            );
+            const detailTable = activeInnerPane?.querySelector(`[data-testid="${testIds.detailTableTestId}"]`);
+            const routeTable = activeInnerPane?.querySelector(`[data-testid="${testIds.routeTableTestId}"]`);
+            const detailContent = detailTable?.querySelector('.nn-table-content');
+            const detailLastRow = detailTable?.querySelector('.nn-table-tbody > tr:last-child');
+            const detailActionButton = detailTable?.querySelector('.nn-button-link');
+            const detailActionCell = detailActionButton?.closest('td');
+            const routeContent = routeTable?.querySelector('.nn-table-content');
+            const routeRows = [...(routeTable?.querySelectorAll('.nn-table-tbody > .nn-table-row') || [])];
+            const contentContainer = root.parentElement;
+            const rootRect = root.getBoundingClientRect();
+            const contentRect = contentContainer?.getBoundingClientRect();
+            const clientNavRect = clientNav?.getBoundingClientRect();
+            const activeClientTabRect = activeClientTab?.getBoundingClientRect();
+            const activeClientLabelRect = activeClientLabel?.getBoundingClientRect();
+            const navRect = nav?.getBoundingClientRect();
+            const detailRect = detailTable?.getBoundingClientRect();
+            const detailContentRect = detailContent?.getBoundingClientRect();
+            const detailLastRowRect = detailLastRow?.getBoundingClientRect();
+
+            return {
+                innerTabsDirection: innerTabs ? getComputedStyle(innerTabs).flexDirection : '',
+                navListDirection: navList ? getComputedStyle(navList).flexDirection : '',
+                clientNavOverflowX: clientNavWrap ? getComputedStyle(clientNavWrap).overflowX : '',
+                clientNavOverflowY: clientNavWrap ? getComputedStyle(clientNavWrap).overflowY : '',
+                innerNavOverflowX: navWrap ? getComputedStyle(navWrap).overflowX : '',
+                innerNavOverflowY: navWrap ? getComputedStyle(navWrap).overflowY : '',
+                clientTabRightGap:
+                    clientNavRect && activeClientTabRect
+                        ? clientNavRect.right - activeClientTabRect.right
+                        : Number.POSITIVE_INFINITY,
+                clientLabelCenterGap:
+                    clientNavRect && activeClientLabelRect
+                        ? (activeClientLabelRect.left + activeClientLabelRect.right) / 2 -
+                          (clientNavRect.left + clientNavRect.right) / 2
+                        : Number.POSITIVE_INFINITY,
+                tabTops: tabs.map(tab => tab.getBoundingClientRect().top),
+                detailGap: navRect && detailRect ? detailRect.top - navRect.bottom : Number.POSITIVE_INFINITY,
+                detailActionButtonWidth: detailActionButton?.getBoundingClientRect().width || 0,
+                detailActionCellWidth: detailActionCell?.getBoundingClientRect().width || 0,
+                detailHasHorizontalOverflow: Boolean(
+                    detailContent && detailContent.scrollWidth > detailContent.clientWidth
+                ),
+                detailScrollbarHeight: detailContent
+                    ? Number.parseFloat(getComputedStyle(detailContent, '::-webkit-scrollbar').height)
+                    : Number.POSITIVE_INFINITY,
+                tabsScrollbarHeight: navWrap
+                    ? Number.parseFloat(getComputedStyle(navWrap, '::-webkit-scrollbar').height)
+                    : Number.POSITIVE_INFINITY,
+                detailLastRowBottomOverflow:
+                    detailContent && detailContentRect && detailLastRowRect
+                        ? detailLastRowRect.bottom - (detailContentRect.top + detailContent.clientHeight)
+                        : Number.POSITIVE_INFINITY,
+                pageTopGap: contentRect ? rootRect.top - contentRect.top : Number.POSITIVE_INFINITY,
+                pageBottomGap: contentRect ? contentRect.bottom - rootRect.bottom : Number.POSITIVE_INFINITY,
+                routeContentHeight: routeContent?.getBoundingClientRect().height || 0,
+                routeRowHeights: routeRows.map(row => row.getBoundingClientRect().height)
+            };
+        },
+        { detailTableTestId, routeTableTestId }
+    );
+
+    expect(layout.innerTabsDirection).toBe('column');
+    expect(layout.navListDirection).toBe('row');
+    expect(layout.clientNavOverflowX).toBe('hidden');
+    expect(layout.clientNavOverflowY).toBe('auto');
+    expect(layout.innerNavOverflowX).toBe('auto');
+    expect(layout.innerNavOverflowY).toBe('hidden');
+    expect(Math.abs(layout.clientTabRightGap)).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.clientLabelCenterGap)).toBeLessThanOrEqual(1);
+    expect(layout.tabTops.length).toBeGreaterThan(1);
+    expect(Math.max(...layout.tabTops) - Math.min(...layout.tabTops)).toBeLessThanOrEqual(1);
+    expect(layout.detailGap).toBeGreaterThanOrEqual(0);
+    expect(layout.detailGap).toBeLessThanOrEqual(16);
+    expect(layout.detailActionButtonWidth).toBeGreaterThanOrEqual(24);
+    expect(layout.detailActionButtonWidth).toBeLessThanOrEqual(40);
+    expect(layout.detailActionCellWidth).toBeGreaterThanOrEqual(64);
+    expect(layout.detailActionCellWidth).toBeLessThanOrEqual(80);
+    expect(layout.detailHasHorizontalOverflow).toBe(true);
+    expect(layout.detailScrollbarHeight).toBe(6);
+    expect(layout.tabsScrollbarHeight).toBe(6);
+    expect(layout.detailLastRowBottomOverflow).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.pageTopGap - layout.pageBottomGap)).toBeLessThanOrEqual(1);
+    expect(layout.routeContentHeight).toBeGreaterThan(200);
+    expect(layout.routeRowHeights.length).toBeGreaterThan(1);
+    expect(layout.routeRowHeights.every(height => height >= 24)).toBe(true);
+
+    const detailScrollbar = pageRoot
+        .locator(`[data-testid="${detailTableTestId}"]:visible .nn-table-content`)
+        .first();
+    const tabsScrollbar = pageRoot.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first();
+    await Promise.all([expectAutoHidingScrollbar(detailScrollbar), expectAutoHidingScrollbar(tabsScrollbar)]);
 }
 
 test.describe('BMP pages', () => {
@@ -137,7 +268,12 @@ test.describe('BMP pages', () => {
             await expect(sessionRouteTable).toContainText('192.0.2.254');
             await expect(sessionRouteTable).toContainText('65000 65100');
             await expect(page.getByText(`当前 ${EXPECTED_PUBLIC_ROUTE_COUNT}`)).toBeVisible();
-
+            await expectBmpRouteLayout(
+                page,
+                'bmp-session-page',
+                'bmp-session-table',
+                'bmp-session-route-table'
+            );
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
             expect(snapshot.adjRib.total).toBe(EXPECTED_PUBLIC_ROUTE_COUNT);
@@ -153,6 +289,29 @@ test.describe('BMP pages', () => {
                     expect(route.routeState).toBe('active');
                 });
             }
+
+            const pagination = sessionRouteTable.getByRole('navigation', { name: '表格分页' });
+            const secondPageButton = pagination.getByRole('button', { name: '2', exact: true });
+            await expect(secondPageButton).toBeVisible();
+            await secondPageButton.click();
+
+            await expect(secondPageButton).toHaveAttribute('aria-current', 'page');
+            await expect(sessionRouteTable).toContainText('10.10.25.0', { timeout: 10000 });
+            await expect(sessionRouteTable).not.toContainText('10.10.0.0');
+            await expect
+                .poll(
+                    () =>
+                        controller.timeline.some(
+                            item =>
+                                item.message === 'worker query: getBgpRoutes' &&
+                                item.data?.request?.page === 2 &&
+                                item.data?.request?.pageSize === 25
+                        ),
+                    { timeout: 10000 }
+                )
+                .toBe(true);
+
+            await recordStep('Output: Adj-RIB pagination onChange queried worker page=2 and rendered 10.10.25.0');
         });
 
         await test.step('Verify BGP Loc-RIB page and Loc-RIB routes', async () => {
@@ -171,7 +330,12 @@ test.describe('BMP pages', () => {
             await expect(locRibRouteTable).toContainText('10.30.0.0', { timeout: 10000 });
             await expect(locRibRouteTable).toContainText('0.0.0.0');
             await expect(page.getByText(`当前 ${EXPECTED_LOC_RIB_ROUTE_COUNT}`)).toBeVisible();
-
+            await expectBmpRouteLayout(
+                page,
+                'bmp-loc-rib-page',
+                'bmp-loc-rib-instance-table',
+                'bmp-loc-rib-route-table'
+            );
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
             expect(snapshot.locRib.total).toBe(EXPECTED_LOC_RIB_ROUTE_COUNT);
@@ -187,6 +351,29 @@ test.describe('BMP pages', () => {
                     expect(route.routeState).toBe('active');
                 });
             }
+
+            const pagination = locRibRouteTable.getByRole('navigation', { name: '表格分页' });
+            const secondPageButton = pagination.getByRole('button', { name: '2', exact: true });
+            await expect(secondPageButton).toBeVisible();
+            await secondPageButton.click();
+
+            await expect(secondPageButton).toHaveAttribute('aria-current', 'page');
+            await expect(locRibRouteTable).toContainText('10.30.23.0', { timeout: 10000 });
+            await expect(locRibRouteTable).not.toContainText('10.30.0.0');
+            await expect
+                .poll(
+                    () =>
+                        controller.timeline.some(
+                            item =>
+                                item.message === 'worker query: getBgpInstanceRoutes' &&
+                                item.data?.request?.page === 2 &&
+                                item.data?.request?.pageSize === 25
+                        ),
+                    { timeout: 10000 }
+                )
+                .toBe(true);
+
+            await recordStep('Output: Loc-RIB pagination onChange queried worker page=2 and rendered second page');
         });
 
         await test.step('Verify lazy-created Loc-RIB address-family tab appears after route update', async () => {

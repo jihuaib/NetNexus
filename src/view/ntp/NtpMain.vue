@@ -1,10 +1,10 @@
 <template>
-    <div class="mt-main-container">
+    <div class="nn-main-container">
         <div class="fixed-tabs">
-            <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <a-tab-pane key="ntp-config" tab="NTP配置" />
-                <a-tab-pane key="ntp-request-log" tab="请求日志" />
-            </a-tabs>
+            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+                <nn-tab-pane key="ntp-config" tab="NTP配置" />
+                <nn-tab-pane key="ntp-request-log" tab="请求日志" />
+            </nn-tabs>
         </div>
 
         <div class="content-container">

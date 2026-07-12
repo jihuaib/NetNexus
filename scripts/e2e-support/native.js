@@ -29,6 +29,13 @@ function handlePageCall(_controller, method) {
                     { family: 'IPv4', address: '10.0.0.10', netmask: '255.255.255.0' },
                     { family: 'IPv6', address: '2001:db8::10', prefixLength: 64 }
                 ]
+            },
+            {
+                name: 'e2e1',
+                displayName: 'No MAC Interface',
+                isUp: true,
+                mac: '',
+                addresses: []
             }
         ]);
     }

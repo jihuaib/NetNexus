@@ -1,54 +1,54 @@
 <template>
-    <div class="mt-container packet-parser-page">
-        <a-card title="报文解析器" class="packet-parser-card">
-            <a-form :model="formState" layout="vertical" class="packet-parser-form" @finish="handleParsePacket">
+    <div class="nn-container packet-parser-page">
+        <nn-card title="报文解析器" class="packet-parser-card">
+            <nn-form :model="formState" layout="vertical" class="packet-parser-form" @finish="handleParsePacket">
                 <div class="packet-config-grid">
-                    <a-form-item label="解析起始层" name="startLayer" class="packet-config-item">
-                        <a-select v-model:value="formState.startLayer">
-                            <a-select-option :value="START_LAYER.L2">数据链路层</a-select-option>
-                            <a-select-option :value="START_LAYER.L3">网络层</a-select-option>
-                            <a-select-option :value="START_LAYER.L4">传输层</a-select-option>
-                            <a-select-option :value="START_LAYER.L5">应用层</a-select-option>
-                        </a-select>
-                    </a-form-item>
+                    <nn-form-item label="解析起始层" name="startLayer" class="packet-config-item">
+                        <nn-select v-model:value="formState.startLayer">
+                            <nn-select-option :value="START_LAYER.L2">数据链路层</nn-select-option>
+                            <nn-select-option :value="START_LAYER.L3">网络层</nn-select-option>
+                            <nn-select-option :value="START_LAYER.L4">传输层</nn-select-option>
+                            <nn-select-option :value="START_LAYER.L5">应用层</nn-select-option>
+                        </nn-select>
+                    </nn-form-item>
 
-                    <a-form-item
+                    <nn-form-item
                         v-if="formState.startLayer === START_LAYER.L4"
                         label="传输协议"
                         name="transportProtocol"
                         class="packet-config-item packet-config-item-narrow"
                     >
-                        <a-select v-model:value="formState.transportProtocol">
-                            <a-select-option :value="TRANSPORT_PROTOCOL.TCP">TCP</a-select-option>
-                            <a-select-option :value="TRANSPORT_PROTOCOL.UDP">UDP</a-select-option>
-                        </a-select>
-                    </a-form-item>
+                        <nn-select v-model:value="formState.transportProtocol">
+                            <nn-select-option :value="TRANSPORT_PROTOCOL.TCP">TCP</nn-select-option>
+                            <nn-select-option :value="TRANSPORT_PROTOCOL.UDP">UDP</nn-select-option>
+                        </nn-select>
+                    </nn-form-item>
 
-                    <a-form-item label="应用协议类型" name="protocolType" class="packet-config-item">
-                        <a-select v-model:value="formState.protocolType">
-                            <a-select-option :value="PROTOCOL_TYPE.AUTO">自动识别</a-select-option>
-                            <a-select-option :value="PROTOCOL_TYPE.BGP">BGP</a-select-option>
-                            <a-select-option :value="PROTOCOL_TYPE.BMP">BMP</a-select-option>
-                        </a-select>
-                    </a-form-item>
+                    <nn-form-item label="应用协议类型" name="protocolType" class="packet-config-item">
+                        <nn-select v-model:value="formState.protocolType">
+                            <nn-select-option :value="PROTOCOL_TYPE.AUTO">自动识别</nn-select-option>
+                            <nn-select-option :value="PROTOCOL_TYPE.BGP">BGP</nn-select-option>
+                            <nn-select-option :value="PROTOCOL_TYPE.BMP">BMP</nn-select-option>
+                        </nn-select>
+                    </nn-form-item>
 
-                    <a-form-item
+                    <nn-form-item
                         label="应用协议端口"
                         name="protocolPort"
                         class="packet-config-item packet-config-item-narrow"
                     >
-                        <a-tooltip :title="validationErrors.protocolPort" :open="!!validationErrors.protocolPort">
-                            <a-input
+                        <nn-tooltip :title="validationErrors.protocolPort" :open="!!validationErrors.protocolPort">
+                            <nn-input
                                 v-model:value="formState.protocolPort"
                                 placeholder="可选"
                                 :status="validationErrors.protocolPort ? 'error' : ''"
                             />
-                        </a-tooltip>
-                    </a-form-item>
+                        </nn-tooltip>
+                    </nn-form-item>
                 </div>
 
                 <!-- 报文输入框 -->
-                <a-form-item
+                <nn-form-item
                     label="报文数据"
                     name="packetData"
                     class="packet-data-item"
@@ -63,16 +63,16 @@
                             :status="validationErrors.packetData ? 'error' : ''"
                         />
                     </div>
-                </a-form-item>
+                </nn-form-item>
                 <!-- 操作按钮 -->
                 <div class="packet-action-bar">
-                    <a-space>
-                        <a-button type="primary" html-type="submit">解析报文</a-button>
-                        <a-button type="default" @click="showParseHistory">识别历史</a-button>
-                    </a-space>
+                    <nn-space>
+                        <nn-button type="primary" html-type="submit">解析报文</nn-button>
+                        <nn-button type="default" @click="showParseHistory">识别历史</nn-button>
+                    </nn-space>
                 </div>
-            </a-form>
-        </a-card>
+            </nn-form>
+        </nn-card>
     </div>
 
     <!-- 报文结果查看器弹窗 -->
@@ -83,7 +83,7 @@
     />
 
     <!-- 解析历史弹窗 -->
-    <a-modal
+    <nn-modal
         v-model:open="historyModalVisible"
         title="报文解析历史"
         :mask-closable="false"
@@ -91,7 +91,7 @@
         @cancel="closeHistoryModal"
     >
         <div>
-            <a-table
+            <nn-table
                 :columns="historyColumns"
                 :data-source="parseHistory"
                 :pagination="{
@@ -105,26 +105,26 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'action'">
-                        <a-button type="link" @click="loadHistoryItem(record)">使用</a-button>
+                        <nn-button type="link" @click="loadHistoryItem(record)">使用</nn-button>
                     </template>
                     <template v-else-if="column.key === 'packetData'">
                         <div>{{ truncateString(record.packetData, 40) }}</div>
                     </template>
                 </template>
-            </a-table>
+            </nn-table>
         </div>
         <template #footer>
-            <a-button type="primary" @click="closeHistoryModal">关闭</a-button>
-            <a-button v-if="parseHistory.length > 0" danger @click="clearHistory">清空历史</a-button>
+            <nn-button type="primary" @click="closeHistoryModal">关闭</nn-button>
+            <nn-button v-if="parseHistory.length > 0" danger @click="clearHistory">清空历史</nn-button>
         </template>
-    </a-modal>
+    </nn-modal>
 </template>
 
 <script setup>
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
     import PacketResultViewer from '../../components/PacketResultViewer.vue';
     import { ref, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { FormValidator, createPacketDataValidationRules } from '../../utils/validationCommon';
     import {
         PROTOCOL_TYPE,
@@ -219,10 +219,10 @@
                 parseHistory.value = resp.data || [];
                 historyModalVisible.value = true;
             } else {
-                message.error(resp.msg || '获取历史记录失败');
+                notify.error(resp.msg || '获取历史记录失败');
             }
         } catch (e) {
-            message.error(e.message || String(e));
+            notify.error(e.message || String(e));
             console.error('获取历史记录错误:', e);
         }
     };
@@ -260,12 +260,12 @@
             const resp = await window.toolsApi.clearPacketParserHistory();
             if (resp.status === 'success') {
                 parseHistory.value = [];
-                message.success('历史记录已清空');
+                notify.success('历史记录已清空');
             } else {
-                message.error(resp.msg || '清空历史记录失败');
+                notify.error(resp.msg || '清空历史记录失败');
             }
         } catch (e) {
-            message.error(e.message || String(e));
+            notify.error(e.message || String(e));
             console.error('清空历史记录错误:', e);
         }
     };
@@ -278,7 +278,7 @@
         try {
             const hasError = validator.validate(formState.value);
             if (hasError) {
-                message.error('请检查配置信息是否正确');
+                notify.error('请检查配置信息是否正确');
                 return;
             }
 
@@ -297,14 +297,14 @@
 
             if (resp.status === 'success') {
                 rawParseResult.value = resp.data;
-                message.success('报文解析成功');
+                notify.success('报文解析成功');
                 showResultViewer();
             } else {
-                message.error(resp.msg || '解析失败');
+                notify.error(resp.msg || '解析失败');
                 rawParseResult.value = null;
             }
         } catch (e) {
-            message.error(e.message || String(e));
+            notify.error(e.message || String(e));
             console.error('解析错误:', e);
             rawParseResult.value = null;
         }
@@ -324,7 +324,7 @@
 
 <style scoped>
     .packet-parser-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -336,7 +336,7 @@
         overflow: hidden;
     }
 
-    .packet-parser-card :deep(.ant-card-body) {
+    .packet-parser-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -352,7 +352,7 @@
         overflow: hidden;
     }
 
-    .packet-parser-form :deep(.ant-form-item) {
+    .packet-parser-form :deep(.nn-form-item) {
         flex: 0 0 auto;
     }
 
@@ -372,12 +372,12 @@
         min-width: 140px;
     }
 
-    .packet-config-item :deep(.ant-form-item-label) {
+    .packet-config-item :deep(.nn-form-item-label) {
         padding-bottom: 4px;
     }
 
-    .packet-config-item :deep(.ant-select),
-    .packet-config-item :deep(.ant-input) {
+    .packet-config-item :deep(.nn-select),
+    .packet-config-item :deep(.nn-input) {
         width: 100%;
     }
 
@@ -388,25 +388,25 @@
         flex-direction: column;
     }
 
-    .packet-data-item :deep(.ant-form-item-row),
-    .packet-data-item :deep(.ant-form-item-control),
-    .packet-data-item :deep(.ant-form-item-control-input),
-    .packet-data-item :deep(.ant-form-item-control-input-content) {
+    .packet-data-item :deep(.nn-form-item-row),
+    .packet-data-item :deep(.nn-form-item-control),
+    .packet-data-item :deep(.nn-form-item-control-input),
+    .packet-data-item :deep(.nn-form-item-control-input-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .packet-data-item :deep(.ant-form-item-label) {
+    .packet-data-item :deep(.nn-form-item-label) {
         flex: 0 0 auto;
     }
 
-    .packet-data-item :deep(.ant-form-item-control-input) {
+    .packet-data-item :deep(.nn-form-item-control-input) {
         align-items: stretch;
     }
 
-    .packet-data-item :deep(.ant-form-item-explain) {
+    .packet-data-item :deep(.nn-form-item-explain) {
         flex: 0 0 auto;
     }
 
@@ -418,7 +418,7 @@
         flex-direction: column;
     }
 
-    .packet-data-textarea-wrap :deep(textarea.ant-input) {
+    .packet-data-textarea-wrap :deep(textarea.nn-input) {
         flex: 1 1 0;
         min-height: 0;
         width: 100%;
@@ -441,13 +441,13 @@
             justify-content: stretch;
         }
 
-        .packet-action-bar :deep(.ant-space),
-        .packet-action-bar :deep(.ant-btn) {
+        .packet-action-bar :deep(.nn-space),
+        .packet-action-bar :deep(.nn-button) {
             width: 100%;
         }
     }
 
-    :deep(.ant-table-body) {
+    :deep(.nn-table-body) {
         height: 200px !important;
         overflow-y: auto !important;
     }

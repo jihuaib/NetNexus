@@ -3,14 +3,14 @@
         <!-- 侧边菜单导航 -->
         <div class="sider" :class="{ collapsed: isCollapsed }">
             <div class="toggle-btn" @click="toggleCollapse">
-                <a-button type="text">
+                <nn-button type="text">
                     <template #icon>
                         <MenuFoldOutlined v-if="!isCollapsed" />
                         <MenuUnfoldOutlined v-else />
                     </template>
-                </a-button>
+                </nn-button>
             </div>
-            <a-menu
+            <nn-menu
                 v-model:selected-keys="current"
                 mode="inline"
                 :items="items"
@@ -22,34 +22,34 @@
             />
             <!-- 底部菜单按钮 -->
             <div class="bottom-menu-btn">
-                <a-dropdown :trigger="['click']" placement="topRight">
-                    <a-button type="text">
+                <nn-dropdown :trigger="['click']" placement="topRight">
+                    <nn-button type="text" aria-label="更多选项">
                         <template #icon><SettingOutlined /></template>
                         <span v-if="!isCollapsed">更多选项</span>
-                    </a-button>
+                    </nn-button>
                     <template #overlay>
-                        <a-menu>
-                            <a-menu-item key="settings" @click="handleBottomMenuClick('settings')">
-                                <a-space>
+                        <nn-menu>
+                            <nn-menu-item key="settings" @click="handleBottomMenuClick('settings')">
+                                <nn-space>
                                     <SettingOutlined />
                                     <span>设置</span>
-                                </a-space>
-                            </a-menu-item>
-                            <a-menu-item key="developer" @click="handleBottomMenuClick('developer')">
-                                <a-space>
+                                </nn-space>
+                            </nn-menu-item>
+                            <nn-menu-item key="developer" @click="handleBottomMenuClick('developer')">
+                                <nn-space>
                                     <ToolOutlined />
                                     <span>开发人员选项</span>
-                                </a-space>
-                            </a-menu-item>
-                            <a-menu-item key="about" @click="handleBottomMenuClick('about')">
-                                <a-space>
+                                </nn-space>
+                            </nn-menu-item>
+                            <nn-menu-item key="about" @click="handleBottomMenuClick('about')">
+                                <nn-space>
                                     <InfoCircleOutlined />
                                     <span>关于</span>
-                                </a-space>
-                            </a-menu-item>
-                        </a-menu>
+                                </nn-space>
+                            </nn-menu-item>
+                        </nn-menu>
                     </template>
-                </a-dropdown>
+                </nn-dropdown>
             </div>
         </div>
         <!-- 内容区域 -->
@@ -75,22 +75,15 @@
     import { ref, watch, h, onMounted, onUnmounted } from 'vue';
     import { useRouter, useRoute } from 'vue-router';
     import { useStore } from 'vuex';
-    import MenuFoldOutlined from '@ant-design/icons-vue/es/icons/MenuFoldOutlined';
-    import MenuUnfoldOutlined from '@ant-design/icons-vue/es/icons/MenuUnfoldOutlined';
-    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
-    import ToolOutlined from '@ant-design/icons-vue/es/icons/ToolOutlined';
-    import InfoCircleOutlined from '@ant-design/icons-vue/es/icons/InfoCircleOutlined';
-    import AppstoreOutlined from '@ant-design/icons-vue/es/icons/AppstoreOutlined';
-    import ApiOutlined from '@ant-design/icons-vue/es/icons/ApiOutlined';
-    import ClusterOutlined from '@ant-design/icons-vue/es/icons/ClusterOutlined';
-    import SafetyOutlined from '@ant-design/icons-vue/es/icons/SafetyOutlined';
-    import FolderOutlined from '@ant-design/icons-vue/es/icons/FolderOutlined';
-    import CodeOutlined from '@ant-design/icons-vue/es/icons/CodeOutlined';
-    import WifiOutlined from '@ant-design/icons-vue/es/icons/WifiOutlined';
-    import ClockCircleOutlined from '@ant-design/icons-vue/es/icons/ClockCircleOutlined';
-    import KeyOutlined from '@ant-design/icons-vue/es/icons/KeyOutlined';
-    import SwapOutlined from '@ant-design/icons-vue/es/icons/SwapOutlined';
-    import FileTextOutlined from '@ant-design/icons-vue/es/icons/FileTextOutlined';
+    import {
+        InfoCircleOutlined,
+        MenuFoldOutlined,
+        MenuUnfoldOutlined,
+        SettingOutlined,
+        ToolOutlined
+    } from '../ui/icons';
+    import { moduleNavigationIcons } from '../ui/navigationIcons';
+
     import SettingsDialog from '../components/SettingsDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
     import modalResizeHandler from '../utils/modalResizeHandler';
@@ -107,77 +100,77 @@
     const items = ref([
         {
             key: '工具集合',
-            icon: h(AppstoreOutlined),
+            icon: h(moduleNavigationIcons.tools),
             label: '工具集合',
             title: '工具集合',
             route: '/tools'
         },
         {
             key: 'BGP模拟器',
-            icon: h(ApiOutlined),
+            icon: h(moduleNavigationIcons.bgp),
             label: 'BGP模拟器',
             title: 'BGP模拟器',
             route: '/bgp'
         },
         {
             key: 'BMP服务器',
-            icon: h(ClusterOutlined),
+            icon: h(moduleNavigationIcons.bmp),
             label: 'BMP服务器',
             title: 'BMP服务器',
             route: '/bmp'
         },
         {
             key: 'RPKI服务器',
-            icon: h(SafetyOutlined),
+            icon: h(moduleNavigationIcons.rpki),
             label: 'RPKI服务器',
             title: 'RPKI服务器',
             route: '/rpki'
         },
         {
             key: 'FTP服务器',
-            icon: h(FolderOutlined),
+            icon: h(moduleNavigationIcons.ftp),
             label: 'FTP服务器',
             title: 'FTP服务器',
             route: '/ftp'
         },
         {
             key: 'SNMP服务器',
-            icon: h(CodeOutlined),
+            icon: h(moduleNavigationIcons.snmp),
             label: 'SNMP服务器',
             title: 'SNMP服务器',
             route: '/snmp'
         },
         {
             key: 'DHCP服务器',
-            icon: h(WifiOutlined),
+            icon: h(moduleNavigationIcons.dhcp),
             label: 'DHCP服务器',
             title: 'DHCP服务器',
             route: '/dhcp'
         },
         {
             key: 'NTP服务器',
-            icon: h(ClockCircleOutlined),
+            icon: h(moduleNavigationIcons.ntp),
             label: 'NTP服务器',
             title: 'NTP服务器',
             route: '/ntp'
         },
         {
             key: 'RADIUS服务器',
-            icon: h(KeyOutlined),
+            icon: h(moduleNavigationIcons.radius),
             label: 'RADIUS服务器',
             title: 'RADIUS服务器',
             route: '/radius'
         },
         {
             key: 'TFTP服务器',
-            icon: h(SwapOutlined),
+            icon: h(moduleNavigationIcons.tftp),
             label: 'TFTP服务器',
             title: 'TFTP服务器',
             route: '/tftp'
         },
         {
             key: 'Syslog服务器',
-            icon: h(FileTextOutlined),
+            icon: h(moduleNavigationIcons.syslog),
             label: 'Syslog服务器',
             title: 'Syslog服务器',
             route: '/syslog'
@@ -188,6 +181,12 @@
     const handleSelect = ({ key }) => {
         const selectedItem = items.value.find(item => item.key === key);
         if (selectedItem) {
+            const isCurrentSection =
+                route.path === selectedItem.route || route.path.startsWith(`${selectedItem.route}/`);
+            if (isCurrentSection) {
+                return;
+            }
+
             // 在导航前确保当前路由已被添加到缓存视图中
             const targetRoute = router.resolve(selectedItem.route);
             if (targetRoute.name) {
@@ -284,6 +283,8 @@
         min-height: 100vh;
         display: flex;
         flex-direction: row;
+        background: var(--nn-color-bg-layout);
+        color: var(--nn-color-text);
     }
 
     .sider {
@@ -292,8 +293,8 @@
         left: 0;
         top: 0;
         z-index: 1000;
-        background-color: #2c3e50;
-        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+        background-color: var(--nn-color-bg-sider);
+        box-shadow: var(--nn-shadow-sider);
         transition: all 0.2s;
         width: 160px;
         overflow: hidden;
@@ -317,22 +318,21 @@
     }
 
     .bottom-menu-btn {
-        border-top: 1px solid #f0f0f0;
+        border-top: 1px solid var(--nn-color-border-sider);
         padding: 16px;
         text-align: center;
     }
 
     .content-container {
-        margin-left: 165px;
+        margin-left: 160px;
         transition: all 0.2s;
-        width: calc(100% - 165px);
+        width: calc(100% - 160px);
         display: flex;
-        padding-right: 20px;
     }
 
     .content-container.content-expanded {
-        margin-left: 65px;
-        width: calc(100% - 65px);
+        margin-left: 60px;
+        width: calc(100% - 60px);
     }
 
     .content-area {
@@ -340,16 +340,17 @@
         flex-direction: column;
         width: 100%;
         box-sizing: border-box;
+        background: var(--nn-color-bg-layout);
     }
 
     /* 菜单图标样式 */
-    :deep(.ant-menu-item) {
+    :deep(.nn-menu-item) {
         display: flex;
         align-items: center;
     }
 
-    :deep(.ant-menu-inline-collapsed .ant-menu-item),
-    :deep(.ant-menu-inline-collapsed .ant-menu-submenu-title) {
+    :deep(.nn-menu-inline-collapsed .nn-menu-item),
+    :deep(.nn-menu-inline-collapsed .nn-menu-submenu-title) {
         padding: 0 calc(30% - 16px / 2) !important;
     }
 </style>

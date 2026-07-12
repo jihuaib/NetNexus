@@ -1,75 +1,75 @@
 <template>
-    <div class="mt-container snmp-config-page">
+    <div class="nn-container snmp-config-page">
         <div class="snmp-config-layout">
-            <a-card title="SNMP 配置" class="snmp-config-card">
-                <a-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol" class="snmp-config-form">
+            <nn-card title="SNMP 配置" class="snmp-config-card">
+                <nn-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol" class="snmp-config-form">
                     <div class="config-section">
                         <div class="config-section-title">查询目标</div>
-                        <a-row :gutter="12">
-                            <a-col :span="12">
-                                <a-form-item label="目标地址" name="targetHost">
-                                    <a-tooltip
+                        <nn-row :gutter="12">
+                            <nn-col :span="12">
+                                <nn-form-item label="目标地址" name="targetHost">
+                                    <nn-tooltip
                                         :title="validationSnmpConfigErrors.targetHost"
                                         :open="!!validationSnmpConfigErrors.targetHost"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="formData.targetHost"
                                             placeholder="例如 127.0.0.1"
                                             allow-clear
                                             :status="validationSnmpConfigErrors.targetHost ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="12">
-                                <a-form-item label="查询端口" name="queryPort">
-                                    <a-tooltip
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="12">
+                                <nn-form-item label="查询端口" name="queryPort">
+                                    <nn-tooltip
                                         :title="validationSnmpConfigErrors.queryPort"
                                         :open="!!validationSnmpConfigErrors.queryPort"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="formData.queryPort"
                                             placeholder="请输入查询端口"
                                             :status="validationSnmpConfigErrors.queryPort ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
                     </div>
 
                     <div class="config-section">
                         <div class="config-section-title">Trap服务</div>
-                        <a-row :gutter="12">
-                            <a-col :span="8">
-                                <a-form-item label="Trap端口" name="port">
-                                    <a-tooltip
+                        <nn-row :gutter="12">
+                            <nn-col :span="8">
+                                <nn-form-item label="Trap端口" name="port">
+                                    <nn-tooltip
                                         :title="validationSnmpConfigErrors.port"
                                         :open="!!validationSnmpConfigErrors.port"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="formData.port"
                                             placeholder="请输入Trap端口"
                                             :status="validationSnmpConfigErrors.port ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="16">
-                                <a-form-item label="SNMP版本" name="supportedVersions">
-                                    <a-tooltip
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="16">
+                                <nn-form-item label="SNMP版本" name="supportedVersions">
+                                    <nn-tooltip
                                         :title="validationSnmpConfigErrors.supportedVersions"
                                         :open="!!validationSnmpConfigErrors.supportedVersions"
                                     >
-                                        <a-radio-group v-model:value="selectedSnmpVersion" class="version-radio-group">
-                                            <a-radio value="v1">SNMPv1</a-radio>
-                                            <a-radio value="v2c">SNMPv2c</a-radio>
-                                            <a-radio value="v3">SNMPv3</a-radio>
-                                        </a-radio-group>
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                        <nn-radio-group v-model:value="selectedSnmpVersion" class="version-radio-group">
+                                            <nn-radio value="v1">SNMPv1</nn-radio>
+                                            <nn-radio value="v2c">SNMPv2c</nn-radio>
+                                            <nn-radio value="v3">SNMPv3</nn-radio>
+                                        </nn-radio-group>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
                     </div>
 
                     <div
@@ -77,164 +77,164 @@
                         class="config-section"
                     >
                         <div class="config-section-title">SNMPv1/v2c</div>
-                        <a-row :gutter="12">
-                            <a-col :span="24">
-                                <a-form-item label="Community" name="community">
-                                    <a-tooltip
+                        <nn-row :gutter="12">
+                            <nn-col :span="24">
+                                <nn-form-item label="Community" name="community">
+                                    <nn-tooltip
                                         :title="validationSnmpConfigErrors.community"
                                         :open="!!validationSnmpConfigErrors.community"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="formData.community"
                                             placeholder="请输入Community字符串"
                                             allow-clear
                                             :status="validationSnmpConfigErrors.community ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
                     </div>
 
                     <div v-if="formData.supportedVersions.includes('v3')" class="config-section">
                         <div class="config-section-title">SNMPv3</div>
-                        <a-row :gutter="12">
-                            <a-col :span="10">
-                                <a-form-item label="用户名" name="v3Username">
-                                    <a-tooltip
+                        <nn-row :gutter="12">
+                            <nn-col :span="10">
+                                <nn-form-item label="用户名" name="v3Username">
+                                    <nn-tooltip
                                         :title="validationSnmpConfigErrors.v3Username"
                                         :open="!!validationSnmpConfigErrors.v3Username"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="formData.v3Username"
                                             placeholder="请输入SNMPv3用户名"
                                             allow-clear
                                             :status="validationSnmpConfigErrors.v3Username ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="14">
-                                <a-form-item label="安全级别" name="securityLevel">
-                                    <a-radio-group v-model:value="formData.securityLevel" class="security-radio-group">
-                                        <a-radio value="noAuthNoPriv">无认证无加密</a-radio>
-                                        <a-radio value="authNoPriv">认证无加密</a-radio>
-                                        <a-radio value="authPriv">认证加密</a-radio>
-                                    </a-radio-group>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="14">
+                                <nn-form-item label="安全级别" name="securityLevel">
+                                    <nn-radio-group v-model:value="formData.securityLevel" class="security-radio-group">
+                                        <nn-radio value="noAuthNoPriv">无认证无加密</nn-radio>
+                                        <nn-radio value="authNoPriv">认证无加密</nn-radio>
+                                        <nn-radio value="authPriv">认证加密</nn-radio>
+                                    </nn-radio-group>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row v-if="formData.securityLevel !== 'noAuthNoPriv'" :gutter="12">
-                            <a-col :span="8">
-                                <a-form-item label="认证协议" name="authProtocol">
-                                    <a-select v-model:value="formData.authProtocol" placeholder="请选择认证协议">
-                                        <a-select-option value="MD5">MD5</a-select-option>
-                                        <a-select-option value="SHA">SHA</a-select-option>
-                                        <a-select-option value="SHA224">SHA224</a-select-option>
-                                        <a-select-option value="SHA256">SHA256</a-select-option>
-                                        <a-select-option value="SHA384">SHA384</a-select-option>
-                                        <a-select-option value="SHA512">SHA512</a-select-option>
-                                    </a-select>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="16">
-                                <a-form-item label="认证密码" name="authPassword">
-                                    <a-tooltip
+                        <nn-row v-if="formData.securityLevel !== 'noAuthNoPriv'" :gutter="12">
+                            <nn-col :span="8">
+                                <nn-form-item label="认证协议" name="authProtocol">
+                                    <nn-select v-model:value="formData.authProtocol" placeholder="请选择认证协议">
+                                        <nn-select-option value="MD5">MD5</nn-select-option>
+                                        <nn-select-option value="SHA">SHA</nn-select-option>
+                                        <nn-select-option value="SHA224">SHA224</nn-select-option>
+                                        <nn-select-option value="SHA256">SHA256</nn-select-option>
+                                        <nn-select-option value="SHA384">SHA384</nn-select-option>
+                                        <nn-select-option value="SHA512">SHA512</nn-select-option>
+                                    </nn-select>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="16">
+                                <nn-form-item label="认证密码" name="authPassword">
+                                    <nn-tooltip
                                         :title="validationSnmpConfigErrors.authPassword"
                                         :open="!!validationSnmpConfigErrors.authPassword"
                                     >
-                                        <a-input-password
+                                        <nn-input-password
                                             v-model:value="formData.authPassword"
                                             placeholder="请输入认证密码"
                                             allow-clear
                                             :status="validationSnmpConfigErrors.authPassword ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row v-if="formData.securityLevel === 'authPriv'" :gutter="12">
-                            <a-col :span="8">
-                                <a-form-item label="加密协议" name="privProtocol">
-                                    <a-select v-model:value="formData.privProtocol" placeholder="请选择加密协议">
-                                        <a-select-option value="DES">DES</a-select-option>
-                                        <a-select-option value="AES">AES</a-select-option>
-                                        <a-select-option value="AES192">AES192</a-select-option>
-                                        <a-select-option value="AES256">AES256</a-select-option>
-                                    </a-select>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="16">
-                                <a-form-item label="加密密码" name="privPassword">
-                                    <a-tooltip
+                        <nn-row v-if="formData.securityLevel === 'authPriv'" :gutter="12">
+                            <nn-col :span="8">
+                                <nn-form-item label="加密协议" name="privProtocol">
+                                    <nn-select v-model:value="formData.privProtocol" placeholder="请选择加密协议">
+                                        <nn-select-option value="DES">DES</nn-select-option>
+                                        <nn-select-option value="AES">AES</nn-select-option>
+                                        <nn-select-option value="AES192">AES192</nn-select-option>
+                                        <nn-select-option value="AES256">AES256</nn-select-option>
+                                    </nn-select>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="16">
+                                <nn-form-item label="加密密码" name="privPassword">
+                                    <nn-tooltip
                                         :title="validationSnmpConfigErrors.privPassword"
                                         :open="!!validationSnmpConfigErrors.privPassword"
                                     >
-                                        <a-input-password
+                                        <nn-input-password
                                             v-model:value="formData.privPassword"
                                             placeholder="请输入加密密码"
                                             allow-clear
                                             :status="validationSnmpConfigErrors.privPassword ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
                     </div>
 
                     <div class="snmp-config-actions">
-                        <a-space>
-                            <a-button :loading="saveLoading" @click="saveConfig()">保存配置</a-button>
-                            <a-button
+                        <nn-space>
+                            <nn-button :loading="saveLoading" @click="saveConfig()">保存配置</nn-button>
+                            <nn-button
                                 type="primary"
                                 :loading="serverLoading"
                                 :disabled="isServerRunning"
                                 @click="startSnmp"
                             >
                                 启动Trap服务
-                            </a-button>
-                            <a-button type="primary" danger :disabled="!isServerRunning" @click="stopSnmp">
+                            </nn-button>
+                            <nn-button type="primary" danger :disabled="!isServerRunning" @click="stopSnmp">
                                 停止Trap服务
-                            </a-button>
-                        </a-space>
+                            </nn-button>
+                        </nn-space>
                     </div>
-                </a-form>
-            </a-card>
+                </nn-form>
+            </nn-card>
 
-            <a-card title="运行状态" class="snmp-status-card">
-                <a-descriptions :column="1" bordered size="small" class="snmp-status-descriptions">
-                    <a-descriptions-item label="Trap服务">
-                        <a-tag :color="isServerRunning ? 'green' : 'red'">
+            <nn-card title="运行状态" class="snmp-status-card">
+                <nn-descriptions :column="1" bordered size="small" class="snmp-status-descriptions">
+                    <nn-descriptions-item label="Trap服务">
+                        <nn-tag :color="isServerRunning ? 'green' : 'red'">
                             {{ isServerRunning ? '运行中' : '已停止' }}
-                        </a-tag>
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Trap端口">
+                        </nn-tag>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Trap端口">
                         {{ formData.port }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="查询目标">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="查询目标">
                         {{ formData.targetHost }}:{{ formData.queryPort }}
-                    </a-descriptions-item>
-                    <a-descriptions-item label="支持版本">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="支持版本">
                         <div class="status-version-tags">
-                            <a-tag v-for="version in formData.supportedVersions" :key="version" color="blue">
+                            <nn-tag v-for="version in formData.supportedVersions" :key="version" color="blue">
                                 {{ version.toUpperCase() }}
-                            </a-tag>
+                            </nn-tag>
                         </div>
-                    </a-descriptions-item>
-                    <a-descriptions-item label="Trap数量">
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Trap数量">
                         {{ trapCount }}
-                    </a-descriptions-item>
-                </a-descriptions>
-            </a-card>
+                    </nn-descriptions-item>
+                </nn-descriptions>
+            </nn-card>
         </div>
     </div>
 </template>
 
 <script setup>
     import { computed, ref, onMounted, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { DEFAULT_VALUES, SNMP_SECURITY_LEVEL, SNMP_SUB_EVT_TYPES, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
     import { FormValidator, createSnmpConfigValidationRules } from '../../utils/validationCommon';
     import EventBus from '../../utils/eventBus';
@@ -318,7 +318,7 @@
                 };
             }
         } catch (error) {
-            message.error('加载配置失败: ' + error.message);
+            notify.error('加载配置失败: ' + error.message);
         }
     };
 
@@ -352,7 +352,7 @@
         try {
             const hasErrors = validatorSnmpConfig.validate(formData.value);
             if (hasErrors) {
-                message.error('请检查输入的数据');
+                notify.error('请检查输入的数据');
                 return false;
             }
 
@@ -360,16 +360,16 @@
             const payload = buildConfigPayload();
             const result = await window.snmpApi.saveSnmpConfig(payload);
             if (result.status !== 'success') {
-                message.error(result.msg || '配置文件保存失败');
+                notify.error(result.msg || '配置文件保存失败');
                 return false;
             }
 
             if (!options.silent) {
-                message.success(result.msg || '配置保存成功');
+                notify.success(result.msg || '配置保存成功');
             }
             return payload;
         } catch (error) {
-            message.error('配置保存失败: ' + error.message);
+            notify.error('配置保存失败: ' + error.message);
             return false;
         } finally {
             saveLoading.value = false;
@@ -389,12 +389,12 @@
             if (startResult.status === 'success') {
                 isServerRunning.value = true;
                 trapCount.value = 0;
-                message.success('Trap服务启动成功');
+                notify.success('Trap服务启动成功');
             } else {
-                message.error(startResult.msg || 'Trap服务启动失败');
+                notify.error(startResult.msg || 'Trap服务启动失败');
             }
         } catch (error) {
-            message.error('Trap服务启动失败: ' + error.message);
+            notify.error('Trap服务启动失败: ' + error.message);
         } finally {
             serverLoading.value = false;
         }
@@ -405,14 +405,14 @@
             const result = await window.snmpApi.stopSnmp();
 
             if (result.status === 'success') {
-                message.success('Trap服务停止成功');
+                notify.success('Trap服务停止成功');
                 isServerRunning.value = false;
                 trapCount.value = 0;
             } else {
-                message.error(result.msg || 'Trap服务停止失败');
+                notify.error(result.msg || 'Trap服务停止失败');
             }
         } catch (error) {
-            message.error(`Trap服务停止出错: ${error.message}`);
+            notify.error(`Trap服务停止出错: ${error.message}`);
         }
     };
 
@@ -453,7 +453,7 @@
 
 <style scoped>
     .snmp-config-page {
-        height: calc(100vh - 68px);
+        height: 100%;
         overflow: hidden;
     }
 
@@ -475,8 +475,8 @@
         overflow: hidden;
     }
 
-    .snmp-config-card :deep(.ant-card-body),
-    .snmp-status-card :deep(.ant-card-body) {
+    .snmp-config-card :deep(.nn-card-body),
+    .snmp-status-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -491,20 +491,20 @@
         overflow: hidden;
     }
 
-    .snmp-config-form :deep(.ant-form-item) {
+    .snmp-config-form :deep(.nn-form-item) {
         margin-bottom: 8px;
     }
 
-    .snmp-config-form :deep(.ant-form-item-label) {
+    .snmp-config-form :deep(.nn-form-item-label) {
         padding-bottom: 0;
     }
 
-    .snmp-config-form :deep(.ant-form-item-label > label) {
+    .snmp-config-form :deep(.nn-form-item-label > label) {
         height: 32px;
     }
 
-    .snmp-config-form :deep(.ant-radio-wrapper),
-    .snmp-config-form :deep(.ant-checkbox-wrapper) {
+    .snmp-config-form :deep(.nn-radio-wrapper),
+    .snmp-config-form :deep(.nn-checkbox-wrapper) {
         margin-inline-end: 12px;
         white-space: nowrap;
     }
@@ -513,13 +513,13 @@
         flex-shrink: 0;
         min-width: 0;
         padding: 8px 10px 0;
-        border: 1px solid #f0f0f0;
+        border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
     }
 
     .config-section-title {
         margin-bottom: 6px;
-        color: #262626;
+        color: var(--nn-color-text-strong);
         font-weight: 600;
         line-height: 20px;
     }
@@ -541,7 +541,7 @@
         padding: 0 10px;
     }
 
-    .snmp-status-descriptions :deep(.ant-descriptions-item-label) {
+    .snmp-status-descriptions :deep(.nn-descriptions-item-label) {
         width: 92px;
     }
 
@@ -551,7 +551,7 @@
         gap: 4px;
     }
 
-    .status-version-tags :deep(.ant-tag) {
+    .status-version-tags :deep(.nn-tag) {
         margin-inline-end: 0;
     }
 
@@ -560,8 +560,8 @@
             grid-template-columns: minmax(0, 1fr) 280px;
         }
 
-        .snmp-config-form :deep(.ant-radio-wrapper),
-        .snmp-config-form :deep(.ant-checkbox-wrapper) {
+        .snmp-config-form :deep(.nn-radio-wrapper),
+        .snmp-config-form :deep(.nn-checkbox-wrapper) {
             margin-inline-end: 8px;
         }
     }

@@ -1,14 +1,14 @@
 <template>
-    <div class="mt-main-container">
+    <div class="nn-main-container">
         <!-- 固定 Tabs -->
         <div class="fixed-tabs">
-            <a-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <a-tab-pane key="bmp-config" tab="BMP配置" />
-                <a-tab-pane key="bgp-session" tab="BGP会话" />
-                <a-tab-pane key="bgp-loc-rib" tab="BGP Loc-RIB" />
-                <a-tab-pane key="bgp-session-statis-report" tab="BGP会话统计" />
-                <a-tab-pane key="bgp-loc-rib-statis-report" tab="BGP Loc-RIB统计" />
-            </a-tabs>
+            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+                <nn-tab-pane key="bmp-config" tab="BMP配置" />
+                <nn-tab-pane key="bgp-session" tab="BGP会话" />
+                <nn-tab-pane key="bgp-loc-rib" tab="BGP Loc-RIB" />
+                <nn-tab-pane key="bgp-session-statis-report" tab="BGP会话统计" />
+                <nn-tab-pane key="bgp-loc-rib-statis-report" tab="BGP Loc-RIB统计" />
+            </nn-tabs>
         </div>
 
         <!-- 可滚动内容区域 -->

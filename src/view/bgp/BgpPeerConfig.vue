@@ -1,105 +1,105 @@
 <template>
-    <div class="mt-container bgp-peer-page" data-testid="bgp-peer-page">
+    <div class="nn-container bgp-peer-page" data-testid="bgp-peer-page">
         <!-- 邻居配置 Card -->
-        <a-card title="邻居配置" class="bgp-peer-config-card">
-            <a-tabs v-model:active-key="activeConfigTabKey">
-                <a-tab-pane :key="IP_TYPE.IPV4" tab="IPv4邻居">
-                    <a-form
+        <nn-card title="邻居配置" class="bgp-peer-config-card">
+            <nn-tabs v-model:active-key="activeConfigTabKey">
+                <nn-tab-pane :key="IP_TYPE.IPV4" tab="IPv4邻居">
+                    <nn-form
                         :model="ipv4PeerConfigData"
                         :label-col="labelCol"
                         :wrapper-col="wrapperCol"
                         @finish="configIpv4Peer"
                     >
-                        <a-row>
-                            <a-col :span="8">
-                                <a-form-item label="Peer IP" name="peerIp">
-                                    <a-tooltip
+                        <nn-row>
+                            <nn-col :span="8">
+                                <nn-form-item label="Peer IP" name="peerIp">
+                                    <nn-tooltip
                                         :title="ipv4PeerConfigvalidationErrors.peerIp"
                                         :open="!!ipv4PeerConfigvalidationErrors.peerIp"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ipv4PeerConfigData.peerIp"
                                             data-testid="bgp-ipv4-peer-ip-input"
                                             :status="ipv4PeerConfigvalidationErrors.peerIp ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="Peer AS" name="peerAs">
-                                    <a-tooltip
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="Peer AS" name="peerAs">
+                                    <nn-tooltip
                                         :title="ipv4PeerConfigvalidationErrors.peerAs"
                                         :open="!!ipv4PeerConfigvalidationErrors.peerAs"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ipv4PeerConfigData.peerAs"
                                             data-testid="bgp-ipv4-peer-as-input"
                                             :status="ipv4PeerConfigvalidationErrors.peerAs ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="Hold Time" name="holdTime">
-                                    <a-tooltip
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="Hold Time" name="holdTime">
+                                    <nn-tooltip
                                         :title="ipv4PeerConfigvalidationErrors.holdTime"
                                         :open="!!ipv4PeerConfigvalidationErrors.holdTime"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ipv4PeerConfigData.holdTime"
                                             data-testid="bgp-ipv4-peer-hold-time-input"
                                             :status="ipv4PeerConfigvalidationErrors.holdTime ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item label="Open Cap" name="openCap">
-                                    <a-space>
-                                        <a-checkbox-group
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="Open Cap" name="openCap">
+                                    <nn-space>
+                                        <nn-checkbox-group
                                             v-model:value="ipv4PeerConfigData.openCap"
                                             :options="ipv4OpenCapOptions"
                                         />
-                                        <a-button type="link" @click="showCustomOpenCap">
+                                        <nn-button type="link" @click="showCustomOpenCap">
                                             <template #icon><SettingOutlined /></template>
                                             配置自定义能力
-                                        </a-button>
-                                    </a-space>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                        </nn-button>
+                                    </nn-space>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row>
-                            <a-col :span="12">
-                                <a-form-item label="Addr Family" name="addressFamily">
-                                    <a-select
+                        <nn-row>
+                            <nn-col :span="12">
+                                <nn-form-item label="Addr Family" name="addressFamily">
+                                    <nn-select
                                         v-model:value="ipv4PeerConfigData.addressFamily"
                                         mode="multiple"
                                         style="width: 100%"
                                         :options="addressFamilyOptions"
                                     />
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="12">
-                                <a-form-item label="Role" name="role">
-                                    <a-select
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="12">
+                                <nn-form-item label="Role" name="role">
+                                    <nn-select
                                         v-model:value="ipv4PeerConfigData.role"
                                         style="width: 100%"
                                         :options="roleOptions"
                                         :disabled="!ipv4PeerConfigData.openCap.includes(BGP_OPEN_CAP_CODE.BGP_ROLE)"
                                     />
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item label="ADD-PATH" name="ipv4AddPathConfig">
-                                    <a-form-item-rest>
-                                        <a-space size="middle">
-                                            <a-checkbox
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="ADD-PATH" name="ipv4AddPathConfig">
+                                    <nn-form-item-rest>
+                                        <nn-space size="middle">
+                                            <nn-checkbox
                                                 v-for="addressFamily in UNICAST_ADD_PATH_ADDRESS_FAMILIES"
                                                 :key="`ipv4-add-path-${addressFamily}`"
                                                 v-model:checked="
@@ -108,123 +108,123 @@
                                                 :disabled="!canSelectIpv4PeerAddPathFamily(addressFamily)"
                                             >
                                                 {{ getAddressFamilyLabel(addressFamily) }}
-                                            </a-checkbox>
-                                        </a-space>
-                                    </a-form-item-rest>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                                    <a-space size="middle">
-                                        <a-button
+                                            </nn-checkbox>
+                                        </nn-space>
+                                    </nn-form-item-rest>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                                    <nn-space size="middle">
+                                        <nn-button
                                             data-testid="bgp-config-ipv4-peer-button"
                                             type="primary"
                                             html-type="submit"
                                         >
                                             配置IPv4邻居
-                                        </a-button>
-                                    </a-space>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                    </a-form>
-                </a-tab-pane>
-                <a-tab-pane :key="IP_TYPE.IPV6" tab="IPv6邻居">
-                    <a-form
+                                        </nn-button>
+                                    </nn-space>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                    </nn-form>
+                </nn-tab-pane>
+                <nn-tab-pane :key="IP_TYPE.IPV6" tab="IPv6邻居">
+                    <nn-form
                         :model="ipv6PeerConfigData"
                         :label-col="labelCol"
                         :wrapper-col="wrapperCol"
                         @finish="configIpv6Peer"
                     >
-                        <a-row>
-                            <a-col :span="8">
-                                <a-form-item label="Peer IPv6" name="peerIpv6">
-                                    <a-tooltip
+                        <nn-row>
+                            <nn-col :span="8">
+                                <nn-form-item label="Peer IPv6" name="peerIpv6">
+                                    <nn-tooltip
                                         :title="ipv6PeerConfigvalidationErrors.peerIpv6"
                                         :open="!!ipv6PeerConfigvalidationErrors.peerIpv6"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ipv6PeerConfigData.peerIpv6"
                                             :status="ipv6PeerConfigvalidationErrors.peerIpv6 ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="Peer AS" name="peerIpv6As">
-                                    <a-tooltip
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="Peer AS" name="peerIpv6As">
+                                    <nn-tooltip
                                         :title="ipv6PeerConfigvalidationErrors.peerIpv6As"
                                         :open="!!ipv6PeerConfigvalidationErrors.peerIpv6As"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ipv6PeerConfigData.peerIpv6As"
                                             :status="ipv6PeerConfigvalidationErrors.peerIpv6As ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="Hold Time" name="holdTimeIpv6">
-                                    <a-tooltip
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="Hold Time" name="holdTimeIpv6">
+                                    <nn-tooltip
                                         :title="ipv6PeerConfigvalidationErrors.holdTimeIpv6"
                                         :open="!!ipv6PeerConfigvalidationErrors.holdTimeIpv6"
                                     >
-                                        <a-input
+                                        <nn-input
                                             v-model:value="ipv6PeerConfigData.holdTimeIpv6"
                                             :status="ipv6PeerConfigvalidationErrors.holdTimeIpv6 ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item label="Open Cap" name="openCapIpv6">
-                                    <a-space>
-                                        <a-checkbox-group
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="Open Cap" name="openCapIpv6">
+                                    <nn-space>
+                                        <nn-checkbox-group
                                             v-model:value="ipv6PeerConfigData.openCapIpv6"
                                             :options="ipv6OpenCapOptions"
                                         />
-                                        <a-button type="link" @click="showCustomOpenCapIpv6">
+                                        <nn-button type="link" @click="showCustomOpenCapIpv6">
                                             <template #icon><SettingOutlined /></template>
                                             配置自定义能力
-                                        </a-button>
-                                    </a-space>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                        </nn-button>
+                                    </nn-space>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row>
-                            <a-col :span="12">
-                                <a-form-item label="Addr Family" name="addressFamilyIpv6">
-                                    <a-select
+                        <nn-row>
+                            <nn-col :span="12">
+                                <nn-form-item label="Addr Family" name="addressFamilyIpv6">
+                                    <nn-select
                                         v-model:value="ipv6PeerConfigData.addressFamilyIpv6"
                                         mode="multiple"
                                         style="width: 100%"
                                         :options="addressFamilyOptionsIpv6"
                                     />
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="12">
-                                <a-form-item label="Role" name="roleIpv6">
-                                    <a-select
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="12">
+                                <nn-form-item label="Role" name="roleIpv6">
+                                    <nn-select
                                         v-model:value="ipv6PeerConfigData.roleIpv6"
                                         style="width: 100%"
                                         :options="roleOptions"
                                         :disabled="!ipv6PeerConfigData.openCapIpv6.includes(BGP_OPEN_CAP_CODE.BGP_ROLE)"
                                     />
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item label="ADD-PATH" name="ipv6AddPathConfig">
-                                    <a-form-item-rest>
-                                        <a-space size="middle">
-                                            <a-checkbox
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="ADD-PATH" name="ipv6AddPathConfig">
+                                    <nn-form-item-rest>
+                                        <nn-space size="middle">
+                                            <nn-checkbox
                                                 v-for="addressFamily in UNICAST_ADD_PATH_ADDRESS_FAMILIES"
                                                 :key="`ipv6-add-path-${addressFamily}`"
                                                 v-model:checked="
@@ -233,18 +233,18 @@
                                                 :disabled="!canSelectIpv6PeerAddPathFamily(addressFamily)"
                                             >
                                                 {{ getAddressFamilyLabel(addressFamily) }}
-                                            </a-checkbox>
-                                        </a-space>
-                                    </a-form-item-rest>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item label="SRv6 SID" name="ipv6Srv6Config">
-                                    <a-form-item-rest>
-                                        <a-space size="middle">
-                                            <a-checkbox
+                                            </nn-checkbox>
+                                        </nn-space>
+                                    </nn-form-item-rest>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="SRv6 SID" name="ipv6Srv6Config">
+                                    <nn-form-item-rest>
+                                        <nn-space size="middle">
+                                            <nn-checkbox
                                                 v-for="addressFamily in SRV6_PREFIX_SID_ADDRESS_FAMILIES"
                                                 :key="`ipv6-srv6-${addressFamily}`"
                                                 v-model:checked="
@@ -254,42 +254,42 @@
                                                 :disabled="!canSelectIpv6PeerSrv6Family(addressFamily)"
                                             >
                                                 {{ getAddressFamilyLabel(addressFamily) }}
-                                            </a-checkbox>
-                                        </a-space>
-                                    </a-form-item-rest>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                            </nn-checkbox>
+                                        </nn-space>
+                                    </nn-form-item-rest>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <a-row>
-                            <a-col :span="24">
-                                <a-form-item :wrapper-col="{ offset: 10, span: 20 }">
-                                    <a-space size="middle">
-                                        <a-button type="primary" html-type="submit">配置IPv6邻居</a-button>
-                                    </a-space>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
-                    </a-form>
-                </a-tab-pane>
-            </a-tabs>
-        </a-card>
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
+                                    <nn-space size="middle">
+                                        <nn-button type="primary" html-type="submit">配置IPv6邻居</nn-button>
+                                    </nn-space>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                    </nn-form>
+                </nn-tab-pane>
+            </nn-tabs>
+        </nn-card>
 
         <!-- 邻居信息 Card -->
-        <a-row class="bgp-peer-info-row">
-            <a-col :span="24">
-                <a-card title="邻居信息" class="bgp-peer-info-card">
+        <nn-row class="bgp-peer-info-row">
+            <nn-col :span="24">
+                <nn-card title="邻居信息" class="bgp-peer-info-card">
                     <div class="bgp-peer-info-content">
-                        <a-tabs v-model:active-key="activePeerInfoTabKey" class="bgp-peer-info-tabs">
-                            <a-tab-pane :key="BGP_ADDR_FAMILY.IPV4_UNC" tab="IPv4-UNC邻居">
+                        <nn-tabs v-model:active-key="activePeerInfoTabKey" class="bgp-peer-info-tabs">
+                            <nn-tab-pane :key="BGP_ADDR_FAMILY.IPV4_UNC" tab="IPv4-UNC邻居">
                                 <div class="bgp-peer-info-header">
                                     <UnorderedListOutlined />
                                     <span class="bgp-peer-info-header-text">IPv4-UNC邻居列表</span>
-                                    <a-tag v-if="ipv4UncPeerList.length > 0" color="blue">
+                                    <nn-tag v-if="ipv4UncPeerList.length > 0" color="blue">
                                         {{ ipv4UncPeerList.length }}
-                                    </a-tag>
+                                    </nn-tag>
                                 </div>
-                                <a-table
+                                <nn-table
                                     data-testid="bgp-ipv4-unc-peer-table"
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv4UncPeerList"
@@ -309,23 +309,23 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <a-button type="primary" danger size="small" @click="deletePeer(record)">
+                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
                                                 <template #icon><DeleteOutlined /></template>
                                                 删除
-                                            </a-button>
+                                            </nn-button>
                                         </template>
                                     </template>
-                                </a-table>
-                            </a-tab-pane>
-                            <a-tab-pane :key="BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST" tab="IPv4 Label邻居">
+                                </nn-table>
+                            </nn-tab-pane>
+                            <nn-tab-pane :key="BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST" tab="IPv4 Label邻居">
                                 <div class="bgp-peer-info-header">
                                     <UnorderedListOutlined />
                                     <span class="bgp-peer-info-header-text">IPv4 Label邻居列表</span>
-                                    <a-tag v-if="ipv4LabelPeerList.length > 0" color="blue">
+                                    <nn-tag v-if="ipv4LabelPeerList.length > 0" color="blue">
                                         {{ ipv4LabelPeerList.length }}
-                                    </a-tag>
+                                    </nn-tag>
                                 </div>
-                                <a-table
+                                <nn-table
                                     data-testid="bgp-ipv4-label-peer-table"
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv4LabelPeerList"
@@ -345,23 +345,23 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <a-button type="primary" danger size="small" @click="deletePeer(record)">
+                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
                                                 <template #icon><DeleteOutlined /></template>
                                                 删除
-                                            </a-button>
+                                            </nn-button>
                                         </template>
                                     </template>
-                                </a-table>
-                            </a-tab-pane>
-                            <a-tab-pane :key="BGP_ADDR_FAMILY.IPV6_UNC" tab="IPv6-UNC邻居">
+                                </nn-table>
+                            </nn-tab-pane>
+                            <nn-tab-pane :key="BGP_ADDR_FAMILY.IPV6_UNC" tab="IPv6-UNC邻居">
                                 <div class="bgp-peer-info-header">
                                     <UnorderedListOutlined />
                                     <span class="bgp-peer-info-header-text">IPv6-UNC邻居列表</span>
-                                    <a-tag v-if="ipv6UncPeerList.length > 0" color="blue">
+                                    <nn-tag v-if="ipv6UncPeerList.length > 0" color="blue">
                                         {{ ipv6UncPeerList.length }}
-                                    </a-tag>
+                                    </nn-tag>
                                 </div>
-                                <a-table
+                                <nn-table
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv6UncPeerList"
                                     :row-key="
@@ -380,23 +380,23 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <a-button type="primary" danger size="small" @click="deletePeer(record)">
+                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
                                                 <template #icon><DeleteOutlined /></template>
                                                 删除
-                                            </a-button>
+                                            </nn-button>
                                         </template>
                                     </template>
-                                </a-table>
-                            </a-tab-pane>
-                            <a-tab-pane :key="BGP_ADDR_FAMILY.IPV4_MVPN" tab="IPv4-MVPN邻居">
+                                </nn-table>
+                            </nn-tab-pane>
+                            <nn-tab-pane :key="BGP_ADDR_FAMILY.IPV4_MVPN" tab="IPv4-MVPN邻居">
                                 <div class="bgp-peer-info-header">
                                     <UnorderedListOutlined />
                                     <span class="bgp-peer-info-header-text">IPv4-MVPN邻居列表</span>
-                                    <a-tag v-if="ipv4MvpnPeerList.length > 0" color="blue">
+                                    <nn-tag v-if="ipv4MvpnPeerList.length > 0" color="blue">
                                         {{ ipv4MvpnPeerList.length }}
-                                    </a-tag>
+                                    </nn-tag>
                                 </div>
-                                <a-table
+                                <nn-table
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv4MvpnPeerList"
                                     :row-key="
@@ -415,23 +415,23 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <a-button type="primary" danger size="small" @click="deletePeer(record)">
+                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
                                                 <template #icon><DeleteOutlined /></template>
                                                 删除
-                                            </a-button>
+                                            </nn-button>
                                         </template>
                                     </template>
-                                </a-table>
-                            </a-tab-pane>
-                            <a-tab-pane :key="BGP_ADDR_FAMILY.IPV6_MVPN" tab="IPv6-MVPN邻居">
+                                </nn-table>
+                            </nn-tab-pane>
+                            <nn-tab-pane :key="BGP_ADDR_FAMILY.IPV6_MVPN" tab="IPv6-MVPN邻居">
                                 <div class="bgp-peer-info-header">
                                     <UnorderedListOutlined />
                                     <span class="bgp-peer-info-header-text">IPv6-MVPN邻居列表</span>
-                                    <a-tag v-if="ipv6MvpnPeerList.length > 0" color="blue">
+                                    <nn-tag v-if="ipv6MvpnPeerList.length > 0" color="blue">
                                         {{ ipv6MvpnPeerList.length }}
-                                    </a-tag>
+                                    </nn-tag>
                                 </div>
-                                <a-table
+                                <nn-table
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv6MvpnPeerList"
                                     :row-key="
@@ -450,23 +450,23 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <a-button type="primary" danger size="small" @click="deletePeer(record)">
+                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
                                                 <template #icon><DeleteOutlined /></template>
                                                 删除
-                                            </a-button>
+                                            </nn-button>
                                         </template>
                                     </template>
-                                </a-table>
-                            </a-tab-pane>
-                            <a-tab-pane :key="BGP_ADDR_FAMILY.IPV4_QP" tab="IPv4-QP邻居">
+                                </nn-table>
+                            </nn-tab-pane>
+                            <nn-tab-pane :key="BGP_ADDR_FAMILY.IPV4_QP" tab="IPv4-QP邻居">
                                 <div class="bgp-peer-info-header">
                                     <UnorderedListOutlined />
                                     <span class="bgp-peer-info-header-text">IPv4-QP邻居列表</span>
-                                    <a-tag v-if="ipv4QpPeerList.length > 0" color="blue">
+                                    <nn-tag v-if="ipv4QpPeerList.length > 0" color="blue">
                                         {{ ipv4QpPeerList.length }}
-                                    </a-tag>
+                                    </nn-tag>
                                 </div>
-                                <a-table
+                                <nn-table
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv4QpPeerList"
                                     :row-key="
@@ -485,23 +485,23 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <a-button type="primary" danger size="small" @click="deletePeer(record)">
+                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
                                                 <template #icon><DeleteOutlined /></template>
                                                 删除
-                                            </a-button>
+                                            </nn-button>
                                         </template>
                                     </template>
-                                </a-table>
-                            </a-tab-pane>
-                            <a-tab-pane :key="BGP_ADDR_FAMILY.IPV6_QP" tab="IPv6-QP邻居">
+                                </nn-table>
+                            </nn-tab-pane>
+                            <nn-tab-pane :key="BGP_ADDR_FAMILY.IPV6_QP" tab="IPv6-QP邻居">
                                 <div class="bgp-peer-info-header">
                                     <UnorderedListOutlined />
                                     <span class="bgp-peer-info-header-text">IPv6-QP邻居列表</span>
-                                    <a-tag v-if="ipv6QpPeerList.length > 0" color="blue">
+                                    <nn-tag v-if="ipv6QpPeerList.length > 0" color="blue">
                                         {{ ipv6QpPeerList.length }}
-                                    </a-tag>
+                                    </nn-tag>
                                 </div>
-                                <a-table
+                                <nn-table
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv6QpPeerList"
                                     :row-key="
@@ -520,19 +520,19 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <a-button type="primary" danger size="small" @click="deletePeer(record)">
+                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
                                                 <template #icon><DeleteOutlined /></template>
                                                 删除
-                                            </a-button>
+                                            </nn-button>
                                         </template>
                                     </template>
-                                </a-table>
-                            </a-tab-pane>
-                        </a-tabs>
+                                </nn-table>
+                            </nn-tab-pane>
+                        </nn-tabs>
                     </div>
-                </a-card>
-            </a-col>
-        </a-row>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
         <!-- Custom Open Cap Drawers -->
         <CustomPktDrawer
@@ -550,7 +550,7 @@
 
 <script setup>
     import { computed, onActivated, ref, onDeactivated, watch, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import {
         BGP_ADDR_FAMILY,
         BGP_PEER_TYPE,
@@ -560,9 +560,8 @@
         DEFAULT_VALUES,
         IP_TYPE
     } from '../../const/bgpConst';
-    import UnorderedListOutlined from '@ant-design/icons-vue/es/icons/UnorderedListOutlined';
-    import DeleteOutlined from '@ant-design/icons-vue/es/icons/DeleteOutlined';
-    import SettingOutlined from '@ant-design/icons-vue/es/icons/SettingOutlined';
+    import { DeleteOutlined, SettingOutlined, UnorderedListOutlined } from '../../ui/icons';
+
     import EventBus from '../../utils/eventBus';
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import {
@@ -852,7 +851,7 @@
     const configIpv4Peer = async () => {
         const hasErrors = ipv4PeerValidator.validate(ipv4PeerConfigData.value);
         if (hasErrors) {
-            message.error('请检查IPv4 Peer配置信息是否正确');
+            notify.error('请检查IPv4 Peer配置信息是否正确');
             return;
         }
 
@@ -866,26 +865,26 @@
             );
             const saveResult = await window.bgpApi.saveIpv4PeerConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
             const result = await window.bgpApi.configIpv4Peer(payload);
             if (result.status === 'success') {
-                message.success(result.msg);
+                notify.success(result.msg);
                 await refreshPeerInfo();
             } else {
-                message.error(result.msg || 'IPv4 Peer配置失败');
+                notify.error(result.msg || 'IPv4 Peer配置失败');
             }
         } catch (e) {
-            message.error(e);
+            notify.error(e);
         }
     };
 
     const configIpv6Peer = async () => {
         const hasErrors = ipv6PeerValidator.validate(ipv6PeerConfigData.value);
         if (hasErrors) {
-            message.error('请检查IPv6 Peer配置信息是否正确');
+            notify.error('请检查IPv6 Peer配置信息是否正确');
             return;
         }
 
@@ -899,19 +898,19 @@
             );
             const saveResult = await window.bgpApi.saveIpv6PeerConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
             const result = await window.bgpApi.configIpv6Peer(payload);
             if (result.status === 'success') {
-                message.success(result.msg);
+                notify.success(result.msg);
                 await refreshPeerInfo();
             } else {
-                message.error(result.msg || 'IPv6 Peer配置失败');
+                notify.error(result.msg || 'IPv6 Peer配置失败');
             }
         } catch (e) {
-            message.error(e);
+            notify.error(e);
         }
     };
 
@@ -1062,7 +1061,7 @@
                 }
             }
         } else {
-            message.error(data.msg);
+            notify.error(data.msg);
         }
     };
 
@@ -1119,10 +1118,10 @@
         const payload = JSON.parse(JSON.stringify(record));
         const result = await window.bgpApi.deletePeer(payload);
         if (result.status === 'success') {
-            message.success(result.msg);
+            notify.success(result.msg);
             await refreshPeerInfo();
         } else {
-            message.error(result.msg || '删除Peer失败');
+            notify.error(result.msg || '删除Peer失败');
         }
     };
 
@@ -1189,7 +1188,7 @@
 
 <style scoped>
     .bgp-peer-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -1207,7 +1206,7 @@
         margin-top: 0;
     }
 
-    .bgp-peer-info-row :deep(.ant-col) {
+    .bgp-peer-info-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -1220,7 +1219,7 @@
         overflow: hidden;
     }
 
-    .bgp-peer-info-card :deep(.ant-card-body) {
+    .bgp-peer-info-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -1237,14 +1236,14 @@
         overflow: hidden;
     }
 
-    .bgp-peer-info-tabs :deep(.ant-tabs-nav) {
+    .bgp-peer-info-tabs :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin-bottom: 8px;
     }
 
-    .bgp-peer-info-tabs :deep(.ant-tabs-content-holder),
-    .bgp-peer-info-tabs :deep(.ant-tabs-content),
-    .bgp-peer-info-tabs :deep(.ant-tabs-tabpane) {
+    .bgp-peer-info-tabs :deep(.nn-tabs-content-holder),
+    .bgp-peer-info-tabs :deep(.nn-tabs-content),
+    .bgp-peer-info-tabs :deep(.nn-tabs-tabpane) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
@@ -1260,7 +1259,7 @@
         gap: 8px;
         margin-bottom: 8px;
         padding: 8px;
-        background-color: #f5f5f5;
+        background-color: var(--nn-color-bg-muted);
         border-radius: 4px;
     }
 
@@ -1270,19 +1269,19 @@
     }
 
     .bgp-peer-table,
-    .bgp-peer-table :deep(.ant-spin-nested-loading),
-    .bgp-peer-table :deep(.ant-spin-container) {
+    .bgp-peer-table :deep(.nn-spin-nested-loading),
+    .bgp-peer-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .bgp-peer-table :deep(.ant-spin-container) {
+    .bgp-peer-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .bgp-peer-table :deep(.ant-table) {
+    .bgp-peer-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -1290,20 +1289,20 @@
         overflow: hidden;
     }
 
-    .bgp-peer-table :deep(.ant-table-container),
-    .bgp-peer-table :deep(.ant-table-content) {
+    .bgp-peer-table :deep(.nn-table-container),
+    .bgp-peer-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .bgp-peer-table :deep(.ant-table-header) {
+    .bgp-peer-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .bgp-peer-table :deep(.ant-table-body) {
+    .bgp-peer-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -1311,12 +1310,12 @@
         overflow-y: auto !important;
     }
 
-    .bgp-peer-table :deep(.ant-pagination) {
+    .bgp-peer-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .bgp-peer-table :deep(.ant-table-thead > tr > th) {
+    .bgp-peer-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

@@ -1,73 +1,73 @@
 <template>
     <div class="tools-settings">
-        <a-card title="Tools设置" class="settings-card">
-            <a-form :model="settingsForm" layout="vertical">
-                <a-divider>字符串生成</a-divider>
-                <a-form-item label="字符串生成历史记录最大存储条数" name="maxStringHistory">
-                    <a-input-number
+        <nn-card title="Tools设置" class="settings-card">
+            <nn-form :model="settingsForm" layout="vertical">
+                <nn-divider>字符串生成</nn-divider>
+                <nn-form-item label="字符串生成历史记录最大存储条数" name="maxStringHistory">
+                    <nn-input-number
                         v-model:value="settingsForm.stringGenerator.maxStringHistory"
                         :min="10"
                         :max="1000"
                         style="width: 100%"
                     />
-                </a-form-item>
+                </nn-form-item>
 
-                <a-divider>报文解析</a-divider>
-                <a-form-item label="报文解析历史记录最大存储条数" name="maxMessageHistory">
-                    <a-input-number
+                <nn-divider>报文解析</nn-divider>
+                <nn-form-item label="报文解析历史记录最大存储条数" name="maxMessageHistory">
+                    <nn-input-number
                         v-model:value="settingsForm.packetParser.maxMessageHistory"
                         :min="10"
                         :max="1000"
                         style="width: 100%"
                     />
-                </a-form-item>
+                </nn-form-item>
 
-                <a-divider>Wireshark</a-divider>
+                <nn-divider>Wireshark</nn-divider>
                 <div class="wireshark-plugin-panel">
-                    <a-descriptions size="small" :column="1" bordered>
-                        <a-descriptions-item label="BMP draft-20 Lua插件">
-                            <a-space wrap>
-                                <a-tag :color="wiresharkPluginTag.color">{{ wiresharkPluginTag.text }}</a-tag>
+                    <nn-descriptions size="small" :column="1" bordered>
+                        <nn-descriptions-item label="BMP draft-20 Lua插件">
+                            <nn-space wrap>
+                                <nn-tag :color="wiresharkPluginTag.color">{{ wiresharkPluginTag.text }}</nn-tag>
                                 <span class="plugin-path">{{ wiresharkPluginStatus.installedPath || '-' }}</span>
-                            </a-space>
-                        </a-descriptions-item>
-                        <a-descriptions-item label="TShark">
+                            </nn-space>
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="TShark">
                             <span class="plugin-path">
                                 {{ wiresharkPluginStatus.tsharkPath || '未检测到，使用默认插件目录' }}
                             </span>
-                        </a-descriptions-item>
-                    </a-descriptions>
-                    <a-space wrap class="plugin-actions">
-                        <a-button type="primary" :loading="wiresharkPluginLoading" @click="installWiresharkBmpPlugin">
+                        </nn-descriptions-item>
+                    </nn-descriptions>
+                    <nn-space wrap class="plugin-actions">
+                        <nn-button type="primary" :loading="wiresharkPluginLoading" @click="installWiresharkBmpPlugin">
                             安装/更新插件
-                        </a-button>
-                        <a-button
+                        </nn-button>
+                        <nn-button
                             danger
                             :loading="wiresharkPluginUninstalling"
                             :disabled="!wiresharkPluginStatus.installed"
                             @click="uninstallWiresharkBmpPlugin"
                         >
                             卸载插件
-                        </a-button>
-                        <a-button :loading="wiresharkPluginOpening" @click="openWiresharkPluginDirectory">
+                        </nn-button>
+                        <nn-button :loading="wiresharkPluginOpening" @click="openWiresharkPluginDirectory">
                             打开插件目录
-                        </a-button>
-                        <a-button :loading="wiresharkPluginRefreshing" @click="refreshWiresharkBmpPluginStatus">
+                        </nn-button>
+                        <nn-button :loading="wiresharkPluginRefreshing" @click="refreshWiresharkBmpPluginStatus">
                             刷新状态
-                        </a-button>
-                    </a-space>
+                        </nn-button>
+                    </nn-space>
                 </div>
-                <a-form-item>
-                    <a-button type="primary" @click="saveSettings">保存设置</a-button>
-                </a-form-item>
-            </a-form>
-        </a-card>
+                <nn-form-item>
+                    <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
+                </nn-form-item>
+            </nn-form>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { computed, ref, onMounted } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { DEFAULT_TOOLS_SETTINGS } from '../../const/toolsConst';
 
     // 工具设置组件
@@ -139,10 +139,10 @@
         try {
             const payload = JSON.parse(JSON.stringify(settingsForm.value));
             await window.commonApi.saveToolsSettings(payload);
-            message.success('设置已保存');
+            notify.success('设置已保存');
         } catch (error) {
             console.error('保存设置失败', error);
-            message.error('保存设置失败');
+            notify.error('保存设置失败');
         }
     };
 
@@ -153,11 +153,11 @@
             if (resp.status === 'success') {
                 wiresharkPluginStatus.value = resp.data || {};
             } else {
-                message.error(resp.msg || '获取Wireshark插件状态失败');
+                notify.error(resp.msg || '获取Wireshark插件状态失败');
             }
         } catch (error) {
             console.error('获取Wireshark插件状态失败', error);
-            message.error('获取Wireshark插件状态失败');
+            notify.error('获取Wireshark插件状态失败');
         } finally {
             wiresharkPluginRefreshing.value = false;
         }
@@ -169,13 +169,13 @@
             const resp = await window.commonApi.installWiresharkBmpPlugin();
             if (resp.status === 'success') {
                 wiresharkPluginStatus.value = resp.data || {};
-                message.success('插件已安装，重启Wireshark后生效');
+                notify.success('插件已安装，重启Wireshark后生效');
             } else {
-                message.error(resp.msg || '安装Wireshark插件失败');
+                notify.error(resp.msg || '安装Wireshark插件失败');
             }
         } catch (error) {
             console.error('安装Wireshark插件失败', error);
-            message.error('安装Wireshark插件失败');
+            notify.error('安装Wireshark插件失败');
         } finally {
             wiresharkPluginLoading.value = false;
         }
@@ -188,11 +188,11 @@
             if (resp.status === 'success') {
                 wiresharkPluginStatus.value = resp.data || {};
             } else {
-                message.error(resp.msg || '打开Wireshark插件目录失败');
+                notify.error(resp.msg || '打开Wireshark插件目录失败');
             }
         } catch (error) {
             console.error('打开Wireshark插件目录失败', error);
-            message.error('打开Wireshark插件目录失败');
+            notify.error('打开Wireshark插件目录失败');
         } finally {
             wiresharkPluginOpening.value = false;
         }
@@ -204,13 +204,13 @@
             const resp = await window.commonApi.uninstallWiresharkBmpPlugin();
             if (resp.status === 'success') {
                 wiresharkPluginStatus.value = resp.data || {};
-                message.success('插件已卸载，重启Wireshark后生效');
+                notify.success('插件已卸载，重启Wireshark后生效');
             } else {
-                message.error(resp.msg || '卸载Wireshark插件失败');
+                notify.error(resp.msg || '卸载Wireshark插件失败');
             }
         } catch (error) {
             console.error('卸载Wireshark插件失败', error);
-            message.error('卸载Wireshark插件失败');
+            notify.error('卸载Wireshark插件失败');
         } finally {
             wiresharkPluginUninstalling.value = false;
         }
@@ -227,7 +227,7 @@
         max-width: 100%;
     }
 
-    :deep(.ant-form-item-label > label) {
+    :deep(.nn-form-item-label > label) {
         font-size: 12px;
     }
 
@@ -242,7 +242,7 @@
     .plugin-path {
         max-width: 720px;
         word-break: break-all;
-        color: #606266;
+        color: var(--nn-color-text-secondary);
         font-size: 12px;
     }
 </style>

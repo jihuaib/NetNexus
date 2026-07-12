@@ -1,12 +1,12 @@
 <template>
-    <div class="mt-container adaptive-table-page">
-        <a-row class="adaptive-table-row">
-            <a-col :span="24">
-                <a-card title="租约列表" class="adaptive-table-card">
+    <div class="nn-container adaptive-table-page">
+        <nn-row class="adaptive-table-row">
+            <nn-col :span="24">
+                <nn-card title="租约列表" class="adaptive-table-card">
                     <template #extra>
-                        <a-button size="small" @click="loadLeaseList">刷新</a-button>
+                        <nn-button size="small" @click="loadLeaseList">刷新</nn-button>
                     </template>
-                    <a-table
+                    <nn-table
                         :columns="columns"
                         :data-source="leaseList"
                         :row-key="record => `${record.version}-${record.id}`"
@@ -22,36 +22,36 @@
                     >
                         <template #bodyCell="{ column, record }">
                             <template v-if="column.key === 'version'">
-                                <a-tag :color="record.version === 6 ? 'blue' : 'green'">
+                                <nn-tag :color="record.version === 6 ? 'blue' : 'green'">
                                     {{ record.version === 6 ? 'IPv6' : 'IPv4' }}
-                                </a-tag>
+                                </nn-tag>
                             </template>
                             <template v-if="column.key === 'status'">
-                                <a-tag :color="record.status === 'active' ? 'success' : 'default'">
+                                <nn-tag :color="record.status === 'active' ? 'success' : 'default'">
                                     {{ record.status === 'active' ? '有效' : '已过期' }}
-                                </a-tag>
+                                </nn-tag>
                             </template>
                             <template v-if="column.key === 'action'">
-                                <a-popconfirm
+                                <nn-popconfirm
                                     title="确认释放此租约？"
                                     ok-text="确认"
                                     cancel-text="取消"
                                     @confirm="releaseLease(record)"
                                 >
-                                    <a-button type="link" danger size="small">释放</a-button>
-                                </a-popconfirm>
+                                    <nn-button type="link" danger size="small">释放</nn-button>
+                                </nn-popconfirm>
                             </template>
                         </template>
-                    </a-table>
-                </a-card>
-            </a-col>
-        </a-row>
+                    </nn-table>
+                </nn-card>
+            </nn-col>
+        </nn-row>
     </div>
 </template>
 
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { DHCP_SUB_EVT_TYPES, DHCP_EVENT_PAGE_ID } from '../../const/dhcpConst';
     import EventBus from '../../utils/eventBus';
 
@@ -101,12 +101,12 @@
                 result = await window.dhcpApi.releaseLease(record.macAddr);
             }
             if (result.status === 'success') {
-                message.success(`租约 ${record.id} 已释放`);
+                notify.success(`租约 ${record.id} 已释放`);
             } else {
-                message.error(result.msg || '租约释放失败');
+                notify.error(result.msg || '租约释放失败');
             }
         } catch (error) {
-            message.error(`租约释放出错: ${error.message}`);
+            notify.error(`租约释放出错: ${error.message}`);
         }
     };
 
@@ -144,13 +144,13 @@
 
 <style scoped>
     .adaptive-table-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
 
     .adaptive-table-row,
-    .adaptive-table-row :deep(.ant-col) {
+    .adaptive-table-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -162,7 +162,7 @@
         overflow: hidden;
     }
 
-    .adaptive-table-card :deep(.ant-card-body) {
+    .adaptive-table-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -171,19 +171,19 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -191,20 +191,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -212,12 +212,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

@@ -1,22 +1,22 @@
 <template>
-    <div class="mt-container udp-tool-page">
+    <div class="nn-container udp-tool-page">
         <!-- Socket 配置 -->
-        <a-card title="UDP 配置" class="udp-config-card" size="small">
+        <nn-card title="UDP 配置" class="udp-config-card" size="small">
             <template #extra>
-                <a-tag :color="stateColor">{{ stateName }}</a-tag>
+                <nn-tag :color="stateColor" role="status" aria-live="polite">{{ stateName }}</nn-tag>
             </template>
-            <a-form layout="inline" :model="socketForm" class="udp-config-form">
-                <a-form-item label="目标地址">
-                    <a-input
+            <nn-form layout="inline" :model="socketForm" class="udp-config-form">
+                <nn-form-item label="目标地址">
+                    <nn-input
                         v-model:value="socketForm.host"
                         placeholder="127.0.0.1"
                         :disabled="isActive"
                         style="width: 160px"
                         @press-enter="open"
                     />
-                </a-form-item>
-                <a-form-item label="目标端口">
-                    <a-input-number
+                </nn-form-item>
+                <nn-form-item label="目标端口">
+                    <nn-input-number
                         v-model:value="socketForm.port"
                         :min="1"
                         :max="65535"
@@ -24,9 +24,9 @@
                         placeholder="9000"
                         style="width: 110px"
                     />
-                </a-form-item>
-                <a-form-item label="本地端口">
-                    <a-input-number
+                </nn-form-item>
+                <nn-form-item label="本地端口">
+                    <nn-input-number
                         v-model:value="socketForm.localPort"
                         :min="0"
                         :max="65535"
@@ -34,55 +34,69 @@
                         placeholder="0=随机"
                         style="width: 120px"
                     />
-                </a-form-item>
-                <a-form-item>
-                    <a-button v-if="!isActive" type="primary" :loading="opening" @click="open">打开</a-button>
-                    <a-button v-else danger @click="closeSocket">关闭</a-button>
-                </a-form-item>
-            </a-form>
-        </a-card>
+                </nn-form-item>
+                <nn-form-item>
+                    <nn-button v-if="!isActive" type="primary" :loading="opening" @click="open">打开</nn-button>
+                    <nn-button v-else danger @click="closeSocket">关闭</nn-button>
+                </nn-form-item>
+            </nn-form>
+        </nn-card>
 
         <!-- 发送报文 -->
-        <a-card title="发送报文" class="udp-send-card" size="small">
+        <nn-card title="发送报文" class="udp-send-card" size="small">
             <div class="udp-encoding-row">
                 <span class="udp-encoding-label">编码方式</span>
-                <a-radio-group v-model:value="sendForm.encoding" button-style="solid">
-                    <a-radio-button :value="UDP_TOOL_ENCODING.UTF8">文本</a-radio-button>
-                    <a-radio-button :value="UDP_TOOL_ENCODING.HEX">十六进制</a-radio-button>
-                    <a-radio-button :value="UDP_TOOL_ENCODING.BASE64">Base64</a-radio-button>
-                </a-radio-group>
+                <nn-radio-group v-model:value="sendForm.encoding" button-style="solid">
+                    <nn-radio-button :value="UDP_TOOL_ENCODING.UTF8">文本</nn-radio-button>
+                    <nn-radio-button :value="UDP_TOOL_ENCODING.HEX">十六进制</nn-radio-button>
+                    <nn-radio-button :value="UDP_TOOL_ENCODING.BASE64">Base64</nn-radio-button>
+                </nn-radio-group>
             </div>
-            <a-textarea v-model:value="sendForm.data" :rows="3" :placeholder="sendPlaceholder" class="udp-send-input" />
+            <nn-textarea
+                v-model:value="sendForm.data"
+                :rows="3"
+                :placeholder="sendPlaceholder"
+                class="udp-send-input"
+            />
             <div class="udp-send-actions">
                 <span v-if="conn" class="udp-traffic-info">
                     发送 {{ conn.bytesSent }} B / 接收 {{ conn.bytesReceived }} B
                 </span>
-                <a-button type="primary" :loading="sending" :disabled="!isActive" @click="send">发送</a-button>
+                <nn-button type="primary" :loading="sending" :disabled="!isActive" @click="send">发送</nn-button>
             </div>
-        </a-card>
+        </nn-card>
 
         <!-- 收包窗口 -->
-        <a-card title="收包窗口" class="udp-recv-card" size="small">
-            <div ref="logContainer" class="udp-log-list">
-                <a-empty v-if="logs.length === 0" description="暂无收包数据" class="udp-log-empty" />
-                <div v-for="(log, index) in logs" :key="index" class="udp-log-item" :class="`udp-log-${log.type}`">
-                    <span class="udp-log-time">{{ log.time }}</span>
-                    <span class="udp-log-tag">{{ log.tag }}</span>
-                    <span class="udp-log-text">{{ log.text }}</span>
+        <nn-card title="收包窗口" class="udp-recv-card" size="small">
+            <div ref="logContainer" class="udp-log-list nn-packet-log">
+                <nn-empty
+                    v-if="logs.length === 0"
+                    description="暂无收包数据"
+                    class="udp-log-empty nn-packet-log-empty"
+                />
+                <div
+                    v-for="(log, index) in logs"
+                    :key="index"
+                    class="udp-log-item nn-packet-log-item"
+                    :class="[`udp-log-${log.type}`, `nn-packet-log-${log.type}`]"
+                >
+                    <span class="udp-log-time nn-packet-log-time">{{ log.time }}</span>
+                    <span class="udp-log-tag nn-packet-log-tag">{{ log.tag }}</span>
+                    <span class="udp-log-text nn-packet-log-text">{{ log.text }}</span>
                 </div>
             </div>
             <div class="udp-recv-toolbar">
-                <a-checkbox v-model:checked="autoScroll">自动滚动</a-checkbox>
-                <a-checkbox v-model:checked="showText">显示文本</a-checkbox>
-                <a-button size="small" @click="clearLogs">清空</a-button>
+                <nn-checkbox v-model:checked="autoScroll">自动滚动</nn-checkbox>
+                <nn-checkbox v-model:checked="showText">显示文本</nn-checkbox>
+                <nn-button size="small" @click="clearLogs">清空</nn-button>
             </div>
-        </a-card>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { ref, reactive, computed, nextTick, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import EventBus from '../../utils/eventBus';
     import { UDP_TOOL_STATE, UDP_TOOL_STATE_NAME, UDP_TOOL_EVT_TYPES, UDP_TOOL_ENCODING } from '../../const/toolsConst';
 
@@ -174,7 +188,7 @@
                 localPort: socketForm.localPort
             });
             if (result.status !== 'success') {
-                message.error(result.msg || '打开失败');
+                notify.error(result.msg || '打开失败');
                 return;
             }
             const { id, host, port } = result.data;
@@ -189,7 +203,7 @@
             };
             addLog('info', '打开', `目标 ${host}:${port}`);
         } catch (error) {
-            message.error('打开失败: ' + error.message);
+            notify.error('打开失败: ' + error.message);
         } finally {
             opening.value = false;
         }
@@ -197,7 +211,7 @@
 
     const send = async () => {
         if (!isActive.value) {
-            message.warning('请先打开 socket');
+            notify.warning('请先打开 socket');
             return;
         }
         sending.value = true;
@@ -208,13 +222,13 @@
                 encoding: sendForm.encoding
             });
             if (result.status !== 'success') {
-                message.error(result.msg || '发送失败');
+                notify.error(result.msg || '发送失败');
                 return;
             }
             conn.value.bytesSent += result.data.length;
             addLog('send', '发送', formatSent(result.data.length));
         } catch (error) {
-            message.error('发送失败: ' + error.message);
+            notify.error('发送失败: ' + error.message);
         } finally {
             sending.value = false;
         }
@@ -235,7 +249,7 @@
         try {
             await window.toolsApi.udpClose({ id: conn.value.id });
         } catch (error) {
-            message.error('关闭失败: ' + error.message);
+            notify.error('关闭失败: ' + error.message);
         }
     };
 
@@ -287,7 +301,7 @@
 
 <style scoped>
     .udp-tool-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -300,36 +314,36 @@
         flex: 0 0 auto;
     }
 
-    .udp-config-card :deep(.ant-tag) {
+    .udp-config-card :deep(.nn-tag) {
         min-width: 64px;
         margin-inline-end: 0;
         text-align: center;
         font-weight: 500;
     }
 
-    /* 主按钮（打开/发送）对齐项目主色调 #1890ff，有效态醒目、禁用态保留默认灰 */
-    .udp-tool-page :deep(.ant-btn-primary:not(:disabled)) {
-        background-color: #1890ff;
-        border-color: #1890ff;
+    /* 主按钮（打开/发送）对齐项目主色调，有效态醒目、禁用态保留默认灰 */
+    .udp-tool-page :deep(.nn-button-primary:not(:disabled)) {
+        background-color: var(--nn-color-primary);
+        border-color: var(--nn-color-primary);
     }
 
-    .udp-tool-page :deep(.ant-btn-primary:not(:disabled):hover) {
-        background-color: #40a9ff;
-        border-color: #40a9ff;
+    .udp-tool-page :deep(.nn-button-primary:not(:disabled):hover) {
+        background-color: var(--nn-color-primary-hover);
+        border-color: var(--nn-color-primary-hover);
     }
 
     /* 编码切换：选中态使用主色实心填充 */
-    .udp-tool-page :deep(.ant-radio-button-wrapper-checked) {
-        background-color: #1890ff;
-        border-color: #1890ff;
+    .udp-tool-page :deep(.nn-radio-button-checked) {
+        background-color: var(--nn-color-primary);
+        border-color: var(--nn-color-primary);
     }
 
-    .udp-tool-page :deep(.ant-radio-button-wrapper-checked:hover) {
-        background-color: #40a9ff;
-        border-color: #40a9ff;
+    .udp-tool-page :deep(.nn-radio-button-checked:hover) {
+        background-color: var(--nn-color-primary-hover);
+        border-color: var(--nn-color-primary-hover);
     }
 
-    .udp-config-form :deep(.ant-form-item) {
+    .udp-config-form :deep(.nn-form-item) {
         margin-bottom: 0;
     }
 
@@ -341,7 +355,7 @@
     }
 
     .udp-encoding-label {
-        color: rgba(0, 0, 0, 0.85);
+        color: var(--nn-color-text);
         font-size: 14px;
     }
 
@@ -358,7 +372,7 @@
     }
 
     .udp-traffic-info {
-        color: #888;
+        color: var(--nn-color-text-muted);
         font-size: 12px;
     }
 
@@ -370,7 +384,7 @@
         overflow: hidden;
     }
 
-    .udp-recv-card :deep(.ant-card-body) {
+    .udp-recv-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: hidden;
@@ -386,85 +400,5 @@
         justify-content: flex-end;
         gap: 12px;
         margin-top: 8px;
-    }
-
-    .udp-log-list {
-        flex: 1 1 0;
-        min-height: 0;
-        overflow-y: auto;
-        font-family: 'Courier New', Courier, monospace;
-        font-size: 12px;
-        line-height: 1.7;
-        background: #1e1e1e;
-        color: #d4d4d4;
-        border-radius: 4px;
-        padding: 8px 10px;
-    }
-
-    .udp-log-empty {
-        height: 100%;
-        min-height: 110px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-family:
-            -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
-        color: rgba(255, 255, 255, 0.55);
-    }
-
-    .udp-log-empty :deep(.ant-empty-normal) {
-        margin: 0;
-    }
-
-    .udp-log-empty :deep(.ant-empty-description) {
-        color: rgba(255, 255, 255, 0.55);
-        font-size: 12px;
-    }
-
-    .udp-log-item {
-        white-space: pre-wrap;
-        word-break: break-all;
-    }
-
-    .udp-log-time {
-        color: #6a9955;
-        margin-right: 8px;
-    }
-
-    .udp-log-tag {
-        display: inline-block;
-        width: 42px;
-        margin-right: 8px;
-        text-align: center;
-        border-radius: 2px;
-        background: #333;
-        color: #ccc;
-    }
-
-    .udp-log-recv .udp-log-tag {
-        background: #2d5a2d;
-        color: #b5f5b5;
-    }
-
-    .udp-log-send .udp-log-tag {
-        background: #1f4e7a;
-        color: #a6d8ff;
-    }
-
-    .udp-log-error .udp-log-tag {
-        background: #6b2222;
-        color: #ffb3b3;
-    }
-
-    .udp-log-recv .udp-log-text {
-        color: #9cdc9c;
-    }
-
-    .udp-log-send .udp-log-text {
-        color: #9cd2ff;
-    }
-
-    .udp-log-error .udp-log-text {
-        color: #ff9c9c;
     }
 </style>

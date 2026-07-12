@@ -1,14 +1,14 @@
 <template>
-    <div class="mt-container adaptive-table-page">
-        <a-card title="NTP请求日志" class="adaptive-table-card">
+    <div class="nn-container adaptive-table-page">
+        <nn-card title="NTP请求日志" class="adaptive-table-card">
             <template #extra>
-                <a-space>
-                    <a-button :loading="loading" @click="loadRequestList">刷新</a-button>
-                    <a-button danger :loading="clearLoading" @click="clearHistory">清空历史</a-button>
-                </a-space>
+                <nn-space>
+                    <nn-button :loading="loading" @click="loadRequestList">刷新</nn-button>
+                    <nn-button danger :loading="clearLoading" @click="clearHistory">清空历史</nn-button>
+                </nn-space>
             </template>
 
-            <a-table
+            <nn-table
                 :columns="columns"
                 :data-source="requestList"
                 :loading="loading"
@@ -25,19 +25,19 @@
             >
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'status'">
-                        <a-tag :color="statusColor(record.status)">
+                        <nn-tag :color="statusColor(record.status)">
                             {{ statusText(record.status) }}
-                        </a-tag>
+                        </nn-tag>
                     </template>
                 </template>
-            </a-table>
-        </a-card>
+            </nn-table>
+        </nn-card>
     </div>
 </template>
 
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { NTP_SUB_EVT_TYPES, NTP_EVENT_PAGE_ID, NTP_REQUEST_STATUS } from '../../const/ntpConst';
     import EventBus from '../../utils/eventBus';
 
@@ -95,10 +95,10 @@
             if (result.status === 'success') {
                 requestList.value = result.data || [];
             } else {
-                message.error(result.msg || '获取NTP请求日志失败');
+                notify.error(result.msg || '获取NTP请求日志失败');
             }
         } catch (error) {
-            message.error('获取NTP请求日志失败: ' + error.message);
+            notify.error('获取NTP请求日志失败: ' + error.message);
         } finally {
             loading.value = false;
         }
@@ -110,12 +110,12 @@
             const result = await window.ntpApi.clearRequestHistory();
             if (result.status === 'success') {
                 requestList.value = [];
-                message.success(result.msg || 'NTP请求日志已清空');
+                notify.success(result.msg || 'NTP请求日志已清空');
             } else {
-                message.error(result.msg || '清空NTP请求日志失败');
+                notify.error(result.msg || '清空NTP请求日志失败');
             }
         } catch (error) {
-            message.error('清空NTP请求日志失败: ' + error.message);
+            notify.error('清空NTP请求日志失败: ' + error.message);
         } finally {
             clearLoading.value = false;
         }
@@ -148,7 +148,7 @@
 
 <style scoped>
     .adaptive-table-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         overflow: hidden;
     }
@@ -160,7 +160,7 @@
         overflow: hidden;
     }
 
-    .adaptive-table-card :deep(.ant-card-body) {
+    .adaptive-table-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         min-width: 0;
@@ -170,20 +170,20 @@
     }
 
     .adaptive-table,
-    .adaptive-table :deep(.ant-spin-nested-loading),
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-nested-loading),
+    .adaptive-table :deep(.nn-spin-container) {
         flex: 1 1 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
     }
 
-    .adaptive-table :deep(.ant-spin-container) {
+    .adaptive-table :deep(.nn-spin-container) {
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table) {
+    .adaptive-table :deep(.nn-table) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
@@ -191,20 +191,20 @@
         overflow: hidden;
     }
 
-    .adaptive-table :deep(.ant-table-container),
-    .adaptive-table :deep(.ant-table-content) {
+    .adaptive-table :deep(.nn-table-container),
+    .adaptive-table :deep(.nn-table-content) {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
     }
 
-    .adaptive-table :deep(.ant-table-header) {
+    .adaptive-table :deep(.nn-table-header) {
         flex: 0 0 auto;
         overflow: hidden !important;
     }
 
-    .adaptive-table :deep(.ant-table-body) {
+    .adaptive-table :deep(.nn-table-body) {
         flex: 1 1 0;
         min-height: 0;
         height: auto !important;
@@ -212,12 +212,12 @@
         overflow-y: auto !important;
     }
 
-    .adaptive-table :deep(.ant-pagination) {
+    .adaptive-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
     }
 
-    .adaptive-table :deep(.ant-table-thead > tr > th) {
+    .adaptive-table :deep(.nn-table-thead > tr > th) {
         position: sticky;
         top: 0;
         z-index: 1;

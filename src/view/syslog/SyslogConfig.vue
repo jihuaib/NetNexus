@@ -1,30 +1,30 @@
 <template>
-    <div class="mt-container adaptive-config-page">
-        <a-row class="adaptive-config-row">
-            <a-col :span="24">
-                <a-card title="Syslog服务器配置">
-                    <a-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
-                        <a-row :gutter="24">
-                            <a-col :span="8">
-                                <a-form-item label="监听端口">
-                                    <a-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
-                                        <a-input-number
+    <div class="nn-container adaptive-config-page">
+        <nn-row class="adaptive-config-row">
+            <nn-col :span="24">
+                <nn-card title="Syslog服务器配置">
+                    <nn-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol">
+                        <nn-row :gutter="24">
+                            <nn-col :span="8">
+                                <nn-form-item label="监听端口">
+                                    <nn-tooltip :title="validationErrors.port" :open="!!validationErrors.port">
+                                        <nn-input-number
                                             v-model:value="formData.port"
                                             :min="1"
                                             :max="65535"
                                             style="width: 100%"
                                             :status="validationErrors.port ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="最大消息长度">
-                                    <a-tooltip
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="最大消息长度">
+                                    <nn-tooltip
                                         :title="validationErrors.maxMessageLength"
                                         :open="!!validationErrors.maxMessageLength"
                                     >
-                                        <a-input-number
+                                        <nn-input-number
                                             v-model:value="formData.maxMessageLength"
                                             :min="128"
                                             :max="65535"
@@ -32,78 +32,78 @@
                                             style="width: 100%"
                                             :status="validationErrors.maxMessageLength ? 'error' : ''"
                                         />
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                            <a-col :span="8">
-                                <a-form-item label="传输协议">
-                                    <a-tooltip :title="validationErrors.protocol" :open="!!validationErrors.protocol">
-                                        <a-space>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="8">
+                                <nn-form-item label="传输协议">
+                                    <nn-tooltip :title="validationErrors.protocol" :open="!!validationErrors.protocol">
+                                        <nn-space>
                                             <span>UDP</span>
-                                            <a-switch v-model:checked="formData.enableUdp" />
+                                            <nn-switch v-model:checked="formData.enableUdp" />
                                             <span>TCP</span>
-                                            <a-switch v-model:checked="formData.enableTcp" />
-                                        </a-space>
-                                    </a-tooltip>
-                                </a-form-item>
-                            </a-col>
-                        </a-row>
+                                            <nn-switch v-model:checked="formData.enableTcp" />
+                                        </nn-space>
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
-                        <div style="margin-top: 8px; color: rgba(0, 0, 0, 0.45)">
+                        <div style="margin-top: 8px; color: var(--nn-color-text-muted)">
                             默认端口为 514（绑定该端口通常需要管理员/root 权限）。TCP 同时支持 RFC 6587 octet-counting
                             和换行分帧。
                         </div>
 
                         <div style="margin-top: 12px; display: flex; justify-content: center">
-                            <a-space>
-                                <a-button
+                            <nn-space>
+                                <nn-button
                                     type="primary"
                                     :loading="serverLoading"
                                     :disabled="isServerRunning"
                                     @click="startSyslog"
                                 >
                                     启动服务器
-                                </a-button>
-                                <a-button type="primary" danger :disabled="!isServerRunning" @click="stopSyslog">
+                                </nn-button>
+                                <nn-button type="primary" danger :disabled="!isServerRunning" @click="stopSyslog">
                                     停止服务器
-                                </a-button>
-                            </a-space>
+                                </nn-button>
+                            </nn-space>
                         </div>
-                    </a-form>
-                </a-card>
-            </a-col>
-        </a-row>
+                    </nn-form>
+                </nn-card>
+            </nn-col>
+        </nn-row>
 
-        <a-row class="adaptive-config-fill-row">
-            <a-col :span="24">
-                <a-card title="服务状态" class="adaptive-config-fill-card">
-                    <a-descriptions :column="2" bordered>
-                        <a-descriptions-item label="服务状态">
-                            <a-tag :color="isServerRunning ? 'green' : 'red'">
+        <nn-row class="adaptive-config-fill-row">
+            <nn-col :span="24">
+                <nn-card title="服务状态" class="adaptive-config-fill-card">
+                    <nn-descriptions :column="2" bordered>
+                        <nn-descriptions-item label="服务状态">
+                            <nn-tag :color="isServerRunning ? 'green' : 'red'">
                                 {{ isServerRunning ? '运行中' : '已停止' }}
-                            </a-tag>
-                        </a-descriptions-item>
-                        <a-descriptions-item label="监听端口">{{ formData.port }}</a-descriptions-item>
-                        <a-descriptions-item label="传输协议">{{ protocolText }}</a-descriptions-item>
-                        <a-descriptions-item label="最大消息长度">
+                            </nn-tag>
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="监听端口">{{ formData.port }}</nn-descriptions-item>
+                        <nn-descriptions-item label="传输协议">{{ protocolText }}</nn-descriptions-item>
+                        <nn-descriptions-item label="最大消息长度">
                             {{ formData.maxMessageLength }} 字节
-                        </a-descriptions-item>
-                        <a-descriptions-item label="已记录消息">{{ messageCount }}</a-descriptions-item>
-                        <a-descriptions-item label="累计接收消息">{{ totalReceived }}</a-descriptions-item>
-                        <a-descriptions-item label="最近接收时间">{{ lastMessageAt }}</a-descriptions-item>
-                        <a-descriptions-item label="最近客户端">{{ lastClient }}</a-descriptions-item>
-                        <a-descriptions-item label="最近Facility">{{ lastFacility }}</a-descriptions-item>
-                        <a-descriptions-item label="最近Severity">{{ lastSeverity }}</a-descriptions-item>
-                    </a-descriptions>
-                </a-card>
-            </a-col>
-        </a-row>
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="已记录消息">{{ messageCount }}</nn-descriptions-item>
+                        <nn-descriptions-item label="累计接收消息">{{ totalReceived }}</nn-descriptions-item>
+                        <nn-descriptions-item label="最近接收时间">{{ lastMessageAt }}</nn-descriptions-item>
+                        <nn-descriptions-item label="最近客户端">{{ lastClient }}</nn-descriptions-item>
+                        <nn-descriptions-item label="最近Facility">{{ lastFacility }}</nn-descriptions-item>
+                        <nn-descriptions-item label="最近Severity">{{ lastSeverity }}</nn-descriptions-item>
+                    </nn-descriptions>
+                </nn-card>
+            </nn-col>
+        </nn-row>
     </div>
 </template>
 
 <script setup>
     import { ref, computed, onMounted, onActivated, onDeactivated } from 'vue';
-    import { message } from 'ant-design-vue';
+    import { notify } from '../../utils/notify';
     import { DEFAULT_VALUES, SYSLOG_SUB_EVT_TYPES, SYSLOG_EVENT_PAGE_ID } from '../../const/syslogConst';
     import EventBus from '../../utils/eventBus';
 
@@ -175,13 +175,13 @@
                 };
             }
         } catch (error) {
-            message.error('加载配置失败: ' + error.message);
+            notify.error('加载配置失败: ' + error.message);
         }
     };
 
     const startSyslog = async () => {
         if (!validateConfig()) {
-            message.error('请检查输入的数据');
+            notify.error('请检查输入的数据');
             return;
         }
 
@@ -189,7 +189,7 @@
             const payload = JSON.parse(JSON.stringify(formData.value));
             const saveResult = await window.syslogApi.saveSyslogConfig(payload);
             if (saveResult.status !== 'success') {
-                message.error(saveResult.msg || '配置文件保存失败');
+                notify.error(saveResult.msg || '配置文件保存失败');
                 return;
             }
 
@@ -199,12 +199,12 @@
                 isServerRunning.value = true;
                 messageCount.value = startResult.data?.messageCount || 0;
                 totalReceived.value = startResult.data?.totalReceived || 0;
-                message.success(startResult.msg || 'Syslog服务启动成功');
+                notify.success(startResult.msg || 'Syslog服务启动成功');
             } else {
-                message.error(startResult.msg || 'Syslog服务启动失败');
+                notify.error(startResult.msg || 'Syslog服务启动失败');
             }
         } catch (error) {
-            message.error('Syslog服务启动失败: ' + error.message);
+            notify.error('Syslog服务启动失败: ' + error.message);
         } finally {
             serverLoading.value = false;
         }
@@ -214,7 +214,7 @@
         try {
             const result = await window.syslogApi.stopSyslog();
             if (result.status === 'success') {
-                message.success(result.msg || 'Syslog服务已停止');
+                notify.success(result.msg || 'Syslog服务已停止');
                 isServerRunning.value = false;
                 messageCount.value = 0;
                 lastMessageAt.value = '-';
@@ -222,10 +222,10 @@
                 lastFacility.value = '-';
                 lastSeverity.value = '-';
             } else {
-                message.error(result.msg || 'Syslog服务停止失败');
+                notify.error(result.msg || 'Syslog服务停止失败');
             }
         } catch (error) {
-            message.error('Syslog服务停止失败: ' + error.message);
+            notify.error('Syslog服务停止失败: ' + error.message);
         }
     };
 
@@ -291,7 +291,7 @@
 
 <style scoped>
     .adaptive-config-page {
-        height: calc(100vh - 70px);
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -308,7 +308,7 @@
         min-height: 0;
     }
 
-    .adaptive-config-fill-row :deep(.ant-col) {
+    .adaptive-config-fill-row :deep(.nn-col) {
         height: 100%;
         min-height: 0;
     }
@@ -320,7 +320,7 @@
         overflow: hidden;
     }
 
-    .adaptive-config-fill-card :deep(.ant-card-body) {
+    .adaptive-config-fill-card :deep(.nn-card-body) {
         flex: 1;
         min-height: 0;
         overflow: auto;
