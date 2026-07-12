@@ -2,8 +2,12 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const projectRoot = path.resolve(__dirname, '..', '..');
+const projectRoot = process.env.NETNEXUS_SOURCE_PROJECT_ROOT
+    ? path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT)
+    : path.resolve(__dirname, '..', '..');
 const sourceRoot = path.join(projectRoot, 'src');
+
+assert(fs.existsSync(sourceRoot), `UI source root does not exist: ${sourceRoot}`);
 
 function collectFiles(directory, extensions) {
     const files = [];

@@ -51,7 +51,8 @@ async function main() {
         env: {
             ...process.env,
             NODE_ENV: 'test',
-            NETNEXUS_MINIFIED_CI: '1'
+            NETNEXUS_MINIFIED_CI: '1',
+            NETNEXUS_SOURCE_PROJECT_ROOT: projectRoot
         }
     });
 
