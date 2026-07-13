@@ -33,6 +33,7 @@ class BmpApp {
         this.ipcMain.handle('bmp:stopBmp', this.handleStopBmp.bind(this));
         this.ipcMain.handle('bmp:getClientList', this.handleGetClientList.bind(this));
         this.ipcMain.handle('bmp:getRouteLens', this.handleGetRouteLens.bind(this));
+        this.ipcMain.handle('bmp:getRouteAssurance', this.handleGetRouteAssurance.bind(this));
         this.ipcMain.handle('bmp:getBgpSessions', this.handleGetBgpSessions.bind(this));
         this.ipcMain.handle('bmp:getBgpRoutes', this.handleGetBgpRoutes.bind(this));
         this.ipcMain.handle('bmp:getBgpRouteDetail', this.handleGetBgpRouteDetail.bind(this));
@@ -93,6 +94,13 @@ class BmpApp {
             return errorResponse('BMP未启动');
         }
         return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_ROUTE_LENS, { query, routeState });
+    }
+
+    async queryRouteAssurance(filters = {}) {
+        if (this.worker === null) {
+            return errorResponse('BMP未启动');
+        }
+        return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_ROUTE_ASSURANCE, filters);
     }
 
     async queryBgpSessions(client) {
@@ -313,6 +321,15 @@ class BmpApp {
             return await this.queryRouteLens(query, routeState);
         } catch (error) {
             logger.error('Error getting Route Lens:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetRouteAssurance(event, filters = {}) {
+        try {
+            return await this.queryRouteAssurance(filters);
+        } catch (error) {
+            logger.error('Error getting Route Assurance:', error.message);
             return errorResponse(error.message);
         }
     }

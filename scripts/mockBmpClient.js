@@ -676,6 +676,13 @@ function buildScenario(options) {
         peerAs: 65010,
         routerId: '192.0.2.12'
     };
+    const routeAssuranceEgressPeer = {
+        peerType: BmpConst.BMP_PEER_TYPE.L3VPN,
+        rd: routeLensRd,
+        peerAddress: '192.0.2.13',
+        peerAs: 65011,
+        routerId: '192.0.2.13'
+    };
     const routeLensLocRibPeer = {
         flags: BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
         peerType: BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
@@ -814,6 +821,11 @@ function buildScenario(options) {
     const ribInAllTlvsPrefix = '203.0.128.0';
     const ribOutPostPolicyExtendedFlagsPrefix = '203.0.127.0';
     const routeLensLifecyclePrefix = '203.0.120.0';
+    const routeAssuranceInboundGapPrefix = '203.0.121.0';
+    const routeAssuranceNotSelectedPrefix = '203.0.122.0';
+    const routeAssuranceNotExportedPrefix = '203.0.123.0';
+    const routeAssuranceOutboundGapPrefix = '203.0.124.0';
+    const routeAssuranceMultiEgressPrefix = '203.0.125.0';
     const ribInIsolationPrivatePrefix = '10.200.0.0';
     const ribInLabelUnicastPlainPrefix = '10.201.1.0';
     const ribInLabelUnicastLabeledPrefix = '10.201.2.0';
@@ -946,12 +958,89 @@ function buildScenario(options) {
             )
         },
         {
+            name: 'route-assurance-inbound-filtered-pre-in',
+            data: routeMonitoringMessage(
+                routeLensIngressPeer,
+                ipv4Update([routeAssuranceInboundGapPrefix], {
+                    nextHop: '192.0.2.210',
+                    asns: [65008, 65108],
+                    localPref: 100,
+                    communities: ['65000:121']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.FILTERED_IN_INBOUND_POLICY
+                    }
+                }
+            )
+        },
+        {
+            name: 'route-assurance-pre-in-candidates',
+            data: routeMonitoringMessage(
+                routeLensIngressPeer,
+                ipv4Update(
+                    [
+                        routeAssuranceNotSelectedPrefix,
+                        routeAssuranceNotExportedPrefix,
+                        routeAssuranceOutboundGapPrefix,
+                        routeAssuranceMultiEgressPrefix
+                    ],
+                    {
+                        nextHop: '192.0.2.210',
+                        asns: [65008, 65108],
+                        localPref: 100,
+                        communities: ['65000:120']
+                    }
+                ),
+                { vrfName: 'route-lens-lab' }
+            )
+        },
+        {
+            name: 'route-assurance-post-in-candidates',
+            data: routeMonitoringMessage(
+                {
+                    ...routeLensIngressPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update(
+                    [
+                        routeAssuranceNotSelectedPrefix,
+                        routeAssuranceNotExportedPrefix,
+                        routeAssuranceOutboundGapPrefix,
+                        routeAssuranceMultiEgressPrefix
+                    ],
+                    {
+                        nextHop: '192.0.2.210',
+                        asns: [65008, 65108],
+                        localPref: 220,
+                        communities: ['65000:120', '65000:220']
+                    }
+                ),
+                {
+                    vrfName: 'route-lens-lab',
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.POST_POLICY
+                }
+            )
+        },
+        {
             name: 'peer-up-route-lens-egress',
             data: bmpMessage(
                 BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
                 peerUpPayload({
                     ...routeLensEgressPeer,
                     localAddress: '192.0.2.212',
+                    vrfName: 'route-lens-lab'
+                })
+            )
+        },
+        {
+            name: 'peer-up-route-assurance-egress',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...routeAssuranceEgressPeer,
+                    localAddress: '192.0.2.213',
                     vrfName: 'route-lens-lab'
                 })
             )
@@ -987,6 +1076,104 @@ function buildScenario(options) {
                     asns: [65000, 65008, 65108],
                     localPref: 220,
                     communities: ['65000:220', '65000:999']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT | BmpConst.BMP_SESSION_FLAGS.POST_POLICY
+                }
+            )
+        },
+        {
+            name: 'route-assurance-outbound-filtered-pre-out',
+            data: routeMonitoringMessage(
+                {
+                    ...routeLensEgressPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([routeAssuranceOutboundGapPrefix], {
+                    nextHop: '192.0.2.210',
+                    asns: [65008, 65108],
+                    localPref: 220,
+                    communities: ['65000:124']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT,
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.FILTERED_IN_OUTBOUND_POLICY
+                    }
+                }
+            )
+        },
+        {
+            name: 'route-assurance-multi-egress-a-pre-out',
+            data: routeMonitoringMessage(
+                {
+                    ...routeLensEgressPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([routeAssuranceMultiEgressPrefix], {
+                    nextHop: '192.0.2.210',
+                    asns: [65008, 65108],
+                    localPref: 220,
+                    communities: ['65000:125']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT
+                }
+            )
+        },
+        {
+            name: 'route-assurance-multi-egress-a-post-out',
+            data: routeMonitoringMessage(
+                {
+                    ...routeLensEgressPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([routeAssuranceMultiEgressPrefix], {
+                    nextHop: '192.0.2.1',
+                    asns: [65000, 65008, 65108],
+                    localPref: 220,
+                    communities: ['65000:125', '65000:901']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT | BmpConst.BMP_SESSION_FLAGS.POST_POLICY
+                }
+            )
+        },
+        {
+            name: 'route-assurance-multi-egress-b-pre-out',
+            data: routeMonitoringMessage(
+                {
+                    ...routeAssuranceEgressPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([routeAssuranceMultiEgressPrefix], {
+                    nextHop: '192.0.2.210',
+                    asns: [65008, 65108],
+                    localPref: 220,
+                    communities: ['65000:125']
+                }),
+                {
+                    vrfName: 'route-lens-lab',
+                    extendedFlags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT
+                }
+            )
+        },
+        {
+            name: 'route-assurance-multi-egress-b-post-out',
+            data: routeMonitoringMessage(
+                {
+                    ...routeAssuranceEgressPeer,
+                    flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
+                },
+                ipv4Update([routeAssuranceMultiEgressPrefix], {
+                    nextHop: '192.0.2.2',
+                    asns: [65000, 65008, 65108],
+                    localPref: 220,
+                    communities: ['65000:125', '65000:902']
                 }),
                 {
                     vrfName: 'route-lens-lab',
@@ -1285,6 +1472,27 @@ function buildScenario(options) {
                     localPref: 220,
                     communities: ['65000:120', '65000:220']
                 }),
+                {
+                    vrfName: 'route-lens-lab',
+                    pathStatus: {
+                        status: BmpConst.BMP_PATH_STATUS.BEST | BmpConst.BMP_PATH_STATUS.PRIMARY
+                    }
+                }
+            )
+        },
+        {
+            name: 'route-assurance-selected-loc-rib-routes',
+            data: routeMonitoringMessage(
+                routeLensLocRibPeer,
+                ipv4Update(
+                    [routeAssuranceNotExportedPrefix, routeAssuranceOutboundGapPrefix, routeAssuranceMultiEgressPrefix],
+                    {
+                        nextHop: '192.0.2.210',
+                        asns: [65008, 65108],
+                        localPref: 220,
+                        communities: ['65000:120', '65000:220']
+                    }
+                ),
                 {
                     vrfName: 'route-lens-lab',
                     pathStatus: {

@@ -21,6 +21,7 @@ const RouteIpv4Qp = () => import('../view/bgp/RouteIpv4Qp.vue');
 const RouteIpv6Qp = () => import('../view/bgp/RouteIpv6Qp.vue');
 const BmpMain = () => import('../view/bmp/BmpMain.vue');
 const BmpConfig = () => import('../view/bmp/BmpConfig.vue');
+const BgpRouteAssurance = () => import('../view/bmp/BgpRouteAssurance.vue');
 const BgpRouteLens = () => import('../view/bmp/BgpRouteLens.vue');
 const BgpSession = () => import('../view/bmp/BgpSession.vue');
 const BgpLocRib = () => import('../view/bmp/BgpLocRib.vue');
@@ -187,6 +188,12 @@ const routes = [
                         path: 'bgp-session',
                         name: 'BgpSession',
                         component: BgpSession,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'route-assurance',
+                        name: 'BgpRouteAssurance',
+                        component: BgpRouteAssurance,
                         meta: { keepAlive: true }
                     },
                     {

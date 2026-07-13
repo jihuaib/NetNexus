@@ -4,7 +4,7 @@
             <template #title>
                 <span class="page-title">
                     <RouteOutlined />
-                    Route Lens
+                    路由追踪
                 </span>
             </template>
             <template #extra>
@@ -392,6 +392,7 @@
 <script setup>
     import ipaddr from 'ipaddr.js';
     import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
+    import { useRoute } from 'vue-router';
     import { EyeOutlined, RouteOutlined, SearchOutlined } from '../../ui/icons';
     import { ADDRESS_FAMILY_NAME } from '../../const/bgpConst';
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
@@ -399,6 +400,8 @@
     import { notify } from '../../utils/notify';
 
     defineOptions({ name: 'BgpRouteLens' });
+
+    const currentRoute = useRoute();
 
     const stageDefinitions = [
         {
@@ -467,6 +470,8 @@
     let refreshTimer = null;
     let requestId = 0;
     let lastAutoErrorMessage = '';
+    let suppressNextStateRefresh = false;
+    let lastAppliedDeepLink = '';
 
     const normalizeResult = payload => {
         const source = payload && typeof payload === 'object' ? payload : {};
@@ -647,7 +652,29 @@
     const registerEvents = () => liveEvents.forEach(event => EventBus.on(event, eventPageId, scheduleRefresh));
     const unregisterEvents = () => liveEvents.forEach(event => EventBus.off(event, eventPageId));
 
+    const applyDeepLinkQuery = () => {
+        if (currentRoute.name !== 'BgpRouteLens') return;
+        const query = String(currentRoute.query.q || '').trim();
+        if (!query) return;
+        const requestedState = String(currentRoute.query.state || 'active').toLowerCase();
+        const state = ['active', 'all', 'stale'].includes(requestedState) ? requestedState : 'active';
+        const deepLinkKey = `${query}\u001f${state}`;
+        if (deepLinkKey === lastAppliedDeepLink && query === lastQuery.value && state === routeState.value) return;
+
+        lastAppliedDeepLink = deepLinkKey;
+        if (routeState.value !== state) {
+            suppressNextStateRefresh = true;
+            routeState.value = state;
+        }
+        routeQuery.value = query;
+        searchRoute();
+    };
+
     watch(routeState, () => {
+        if (suppressNextStateRefresh) {
+            suppressNextStateRefresh = false;
+            return;
+        }
         clearRefreshTimer();
         if (lastQuery.value && hasSearched.value) runQuery(lastQuery.value);
     });
@@ -657,7 +684,16 @@
         if (query) queryError.value = '';
     });
 
-    onActivated(registerEvents);
+    watch(
+        () => [currentRoute.name, currentRoute.query.q, currentRoute.query.state],
+        () => applyDeepLinkQuery(),
+        { flush: 'post' }
+    );
+
+    onActivated(() => {
+        registerEvents();
+        applyDeepLinkQuery();
+    });
     onDeactivated(() => {
         clearRefreshTimer();
         unregisterEvents();

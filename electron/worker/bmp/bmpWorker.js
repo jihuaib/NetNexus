@@ -10,6 +10,7 @@ const BmpBgpRoute = require('./bmpBgpRoute');
 const BmpConst = require('../../const/bmpConst');
 const { buildRoutePrefixQuery, routeMatchesPrefixQuery } = require('../../utils/routePrefixUtils');
 const RouteUpdateAggregator = require('../../utils/routeUpdateAggregator');
+const { buildBmpRouteAssurance } = require('../../utils/bmpRouteAssurance');
 const { buildBmpRouteLens } = require('../../utils/bmpRouteLens');
 
 class BmpWorker {
@@ -66,6 +67,10 @@ class BmpWorker {
             this.getBgpInstanceStatisticsReports.bind(this)
         );
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_ROUTE_LENS, this.getRouteLens.bind(this));
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.GET_ROUTE_ASSURANCE,
+            this.getRouteAssurance.bind(this)
+        );
     }
 
     createBmpSession(socket, clientAddress, clientPort) {
@@ -414,6 +419,16 @@ class BmpWorker {
             this.messageHandler.sendSuccessResponse(messageId, result, '路由追踪查询成功');
         } catch (error) {
             logger.error(`Error getting Route Lens: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    getRouteAssurance(messageId, data = {}) {
+        try {
+            const result = buildBmpRouteAssurance(this.bmpSessionMap, data);
+            this.messageHandler.sendSuccessResponse(messageId, result, '路由保障矩阵查询成功');
+        } catch (error) {
+            logger.error(`Error getting Route Assurance: ${error.message}`);
             this.messageHandler.sendErrorResponse(messageId, error.message);
         }
     }

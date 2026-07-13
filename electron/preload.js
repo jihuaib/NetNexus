@@ -142,6 +142,7 @@ contextBridge.exposeInMainWorld('bmpApi', {
     // 数据获取
     getClientList: () => ipcRenderer.invoke('bmp:getClientList'),
     getRouteLens: (query, routeState = 'active') => ipcRenderer.invoke('bmp:getRouteLens', query, routeState),
+    getRouteAssurance: (filters = {}) => ipcRenderer.invoke('bmp:getRouteAssurance', filters),
     getBgpSessions: client => ipcRenderer.invoke('bmp:getBgpSessions', client),
     getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState, prefixFilter) =>
         ipcRenderer.invoke('bmp:getBgpRoutes', client, session, af, ribType, page, pageSize, routeState, prefixFilter),

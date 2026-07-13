@@ -68,6 +68,7 @@ const bmpBrowserMockScript = `
                 routeKey
             }),
         getRouteLens: (query, routeState = 'active') => window.__bmpE2eCall('getRouteLens', query, routeState),
+        getRouteAssurance: (filters = {}) => window.__bmpE2eCall('getRouteAssurance', filters),
         purgeStaleBgpRoutes: (client, session, af, ribType) =>
             window.__bmpE2eCall('purgeStaleBgpRoutes', {
                 client,
@@ -476,6 +477,10 @@ const BmpE2eController = (() => {
                         query: data.query,
                         routeState: data.routeState
                     };
+                case 'getRouteAssurance':
+                    return {
+                        ...data
+                    };
                 case 'getBgpSessions':
                 case 'getBgpInstances':
                 case 'purgeStaleBgpRoutes':
@@ -554,6 +559,28 @@ const BmpE2eController = (() => {
                     insights: data?.insights?.length || 0
                 };
             }
+            if (methodName === 'getRouteAssurance') {
+                return {
+                    status: response.status,
+                    filters: data?.filters,
+                    funnel: data?.funnel,
+                    summary: data?.summary,
+                    facets: {
+                        clients: data?.facets?.clients?.length || 0,
+                        vrfs: data?.facets?.vrfs?.length || 0,
+                        addressFamilies: data?.facets?.addressFamilies?.length || 0,
+                        categories: data?.facets?.categories?.length || 0
+                    },
+                    issueCount: data?.issues?.length || 0,
+                    issues: (data?.issues || []).slice(0, 10).map(issue => ({
+                        category: issue.category,
+                        evidenceType: issue.evidenceType,
+                        displayPrefix: issue.nlri?.displayPrefix,
+                        stagePresence: issue.stagePresence
+                    })),
+                    pagination: data?.pagination
+                };
+            }
             return {
                 status: response.status,
                 msg: response.msg || '',
@@ -625,6 +652,8 @@ const BmpE2eController = (() => {
                         query: args[0],
                         routeState: args[1]
                     });
+                case 'getRouteAssurance':
+                    return this.invokeWorker('getRouteAssurance', args[0] || {});
                 case 'purgeStaleBgpRoutes':
                     return this.invokeWorker('purgeStaleBgpRoutes', args[0]);
                 case 'purgeStaleBgpInstanceRoutes':

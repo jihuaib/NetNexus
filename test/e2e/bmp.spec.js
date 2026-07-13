@@ -310,6 +310,133 @@ test.describe('BMP pages', () => {
             await recordStep('Output: Adj-RIB pagination onChange queried worker page=2 and rendered 10.10.25.0');
         });
 
+        await test.step('Find five RIB-pipeline anomaly classes in Route Assurance', async () => {
+            await recordStep(
+                'Input: route=/#/bmp/route-assurance, vrf=route-lens-lab; verify five-stage funnel, evidence semantics, filtering, alert errors, and Route Lens drilldown'
+            );
+
+            await page.goto('/#/bmp/route-assurance');
+            const assurancePage = page.getByTestId('bmp-route-assurance-page');
+            await expect(assurancePage).toBeVisible();
+            await expect(page.getByRole('tab', { name: '路由矩阵', exact: true })).toHaveAttribute(
+                'aria-selected',
+                'true'
+            );
+
+            const vrfSelect = page.getByTestId('route-assurance-vrf');
+            await vrfSelect.click();
+            await page.getByRole('option').filter({ hasText: 'route-lens-lab' }).click();
+            await page.getByTestId('route-assurance-search').click();
+
+            const expectedFunnel = {
+                preIn: '6',
+                postIn: '5',
+                locRib: '4',
+                preOut: '3',
+                postOut: '2'
+            };
+            for (const [stage, count] of Object.entries(expectedFunnel)) {
+                await expect(page.getByTestId(`route-assurance-stage-${stage}`).locator('strong')).toHaveText(count, {
+                    timeout: 10000
+                });
+            }
+
+            const issueRows = page.getByTestId('route-assurance-issue-row');
+            await expect(issueRows).toHaveCount(5);
+            const expectedIssues = [
+                ['203.0.121.0/24', '入站阶段缺口', '设备上报'],
+                ['203.0.122.0/24', '未进入 Loc-RIB', '推测分析'],
+                ['203.0.123.0/24', '未生成出站路由', '推测分析'],
+                ['203.0.124.0/24', '出站阶段缺口', '设备上报'],
+                ['203.0.125.0/24', '多出口属性不一致', '观测事实']
+            ];
+            for (const [prefix, category, evidence] of expectedIssues) {
+                const row = issueRows.filter({ hasText: prefix });
+                await expect(row).toHaveCount(1);
+                await expect(row).toContainText(category);
+                await expect(row).toContainText(evidence);
+            }
+
+            await expect
+                .poll(
+                    () =>
+                        controller.timeline.some(
+                            item =>
+                                item.message === 'worker query: getRouteAssurance' &&
+                                item.data?.request?.vrf === 'route-lens-lab'
+                        ),
+                    { timeout: 10000 }
+                )
+                .toBe(true);
+
+            const measureAssuranceLayout = () =>
+                assurancePage.evaluate(root => {
+                    const filter = root.querySelector('.filter-panel')?.getBoundingClientRect();
+                    const funnel = root.querySelector('.funnel-section')?.getBoundingClientRect();
+                    const matrix = root.querySelector('.matrix-section')?.getBoundingClientRect();
+                    const tableContent = root
+                        .querySelector('.assurance-table .nn-table-content')
+                        ?.getBoundingClientRect();
+                    const pagination = root.querySelector('.assurance-table .nn-pagination')?.getBoundingClientRect();
+                    const generatedAt = root.querySelector('.generated-at');
+                    const generatedStyle = generatedAt ? getComputedStyle(generatedAt) : null;
+                    return {
+                        filterTop: filter?.top || 0,
+                        filterHeight: filter?.height || 0,
+                        funnelTop: funnel?.top || 0,
+                        matrixBottom: matrix?.bottom || 0,
+                        tableHeight: tableContent?.height || 0,
+                        paginationTop: pagination?.top || 0,
+                        paginationBottom: pagination?.bottom || 0,
+                        generatedBackground: generatedStyle?.backgroundColor || '',
+                        generatedRadius: Number.parseFloat(generatedStyle?.borderRadius || '0')
+                    };
+                });
+            const stableLayout = await measureAssuranceLayout();
+            expect(stableLayout.tableHeight).toBeGreaterThan(100);
+            expect(stableLayout.matrixBottom - stableLayout.paginationBottom).toBeGreaterThanOrEqual(0);
+            expect(stableLayout.matrixBottom - stableLayout.paginationBottom).toBeLessThanOrEqual(14);
+            expect(stableLayout.generatedBackground).not.toBe('rgba(0, 0, 0, 0)');
+            expect(stableLayout.generatedRadius).toBeGreaterThan(8);
+            await page.getByTestId('route-assurance-query').fill('10.0.0.0/99');
+            await page.getByTestId('route-assurance-search').click();
+            const malformedCidrToast = page
+                .getByRole('alert')
+                .filter({ hasText: 'Route Assurance 查询失败：CIDR 前缀格式无效' });
+            await expect(malformedCidrToast).toBeVisible();
+            await expect(issueRows).toHaveCount(5);
+            await expect(assurancePage.locator('[role="alert"]')).toHaveCount(0);
+            const errorLayout = await measureAssuranceLayout();
+            expect(errorLayout).toEqual(stableLayout);
+            await malformedCidrToast.getByRole('button', { name: '关闭' }).click();
+
+            await page.getByTestId('route-assurance-query').fill('');
+            const categorySelect = page.getByTestId('route-assurance-category');
+            await categorySelect.click();
+            await page.getByRole('option').filter({ hasText: '出站阶段缺口' }).click();
+            await page.getByTestId('route-assurance-search').click();
+            await expect(issueRows).toHaveCount(1);
+            const filteredLayout = await measureAssuranceLayout();
+            expect(filteredLayout.tableHeight).toBe(stableLayout.tableHeight);
+            expect(filteredLayout.paginationTop).toBe(stableLayout.paginationTop);
+            expect(filteredLayout.paginationBottom).toBe(stableLayout.paginationBottom);
+            const outboundGapRow = issueRows.filter({ hasText: '203.0.124.0/24' });
+            await expect(outboundGapRow).toContainText('设备上报');
+            await outboundGapRow.getByTestId('route-assurance-open-lens').click();
+
+            const routeLensPage = page.getByTestId('bmp-route-lens-page');
+            await expect(routeLensPage).toBeVisible();
+            await expect(page.getByTestId('route-lens-query')).toHaveValue('203.0.124.0/24');
+            await expect(page.getByTestId('route-lens-stage-preOut')).toContainText('203.0.124.0/24', {
+                timeout: 10000
+            });
+            await expect(page.getByTestId('route-lens-stage-postOut')).not.toContainText('203.0.124.0/24');
+
+            await recordStep(
+                'Output: route-lens-lab funnel=6→5→4→3→2; five anomaly categories rendered with reported/observed/inferred evidence, invalid CIDR stayed in a floating alert, and outbound gap drilled into Route Lens'
+            );
+        });
+
         await test.step('Trace a prefix across the Route Lens pipeline', async () => {
             await recordStep(
                 'Input: route=/#/bmp/route-lens, query=203.0.126.1 (IP longest-prefix lookup), then query=10.10.0.1 (Path Marking evidence)'
@@ -318,7 +445,7 @@ test.describe('BMP pages', () => {
             await page.goto('/#/bmp/route-lens');
             const routeLensPage = page.getByTestId('bmp-route-lens-page');
             await expect(routeLensPage).toBeVisible();
-            await expect(page.getByRole('tab', { name: 'Route Lens', exact: true })).toHaveAttribute(
+            await expect(page.getByRole('tab', { name: '路由追踪', exact: true })).toHaveAttribute(
                 'aria-selected',
                 'true'
             );
