@@ -662,12 +662,19 @@ function buildScenario(options) {
         routerId: '192.0.2.9'
     };
     const routeLensRd = rd(65000, 120);
-    const routeLensPeer = {
+    const routeLensIngressPeer = {
         peerType: BmpConst.BMP_PEER_TYPE.L3VPN,
         rd: routeLensRd,
         peerAddress: '192.0.2.10',
         peerAs: 65008,
         routerId: '192.0.2.10'
+    };
+    const routeLensEgressPeer = {
+        peerType: BmpConst.BMP_PEER_TYPE.L3VPN,
+        rd: routeLensRd,
+        peerAddress: '192.0.2.12',
+        peerAs: 65010,
+        routerId: '192.0.2.12'
     };
     const routeLensLocRibPeer = {
         flags: BmpConst.BMP_LOC_RIB_FLAGS.FILTERED,
@@ -900,7 +907,7 @@ function buildScenario(options) {
             data: bmpMessage(
                 BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
                 peerUpPayload({
-                    ...routeLensPeer,
+                    ...routeLensIngressPeer,
                     localAddress: '192.0.2.210',
                     vrfName: 'route-lens-lab'
                 })
@@ -909,7 +916,7 @@ function buildScenario(options) {
         {
             name: 'route-lens-lifecycle-pre-in',
             data: routeMonitoringMessage(
-                routeLensPeer,
+                routeLensIngressPeer,
                 ipv4Update([routeLensLifecyclePrefix], {
                     nextHop: '192.0.2.210',
                     asns: [65008, 65108],
@@ -923,7 +930,7 @@ function buildScenario(options) {
             name: 'route-lens-lifecycle-post-in',
             data: routeMonitoringMessage(
                 {
-                    ...routeLensPeer,
+                    ...routeLensIngressPeer,
                     flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
                 },
                 ipv4Update([routeLensLifecyclePrefix], {
@@ -939,10 +946,21 @@ function buildScenario(options) {
             )
         },
         {
+            name: 'peer-up-route-lens-egress',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...routeLensEgressPeer,
+                    localAddress: '192.0.2.212',
+                    vrfName: 'route-lens-lab'
+                })
+            )
+        },
+        {
             name: 'route-lens-lifecycle-pre-out',
             data: routeMonitoringMessage(
                 {
-                    ...routeLensPeer,
+                    ...routeLensEgressPeer,
                     flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
                 },
                 ipv4Update([routeLensLifecyclePrefix], {
@@ -961,12 +979,12 @@ function buildScenario(options) {
             name: 'route-lens-lifecycle-post-out',
             data: routeMonitoringMessage(
                 {
-                    ...routeLensPeer,
+                    ...routeLensEgressPeer,
                     flags: BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS
                 },
                 ipv4Update([routeLensLifecyclePrefix], {
                     nextHop: '192.0.2.1',
-                    asns: [65008, 65108],
+                    asns: [65000, 65008, 65108],
                     localPref: 220,
                     communities: ['65000:220', '65000:999']
                 }),

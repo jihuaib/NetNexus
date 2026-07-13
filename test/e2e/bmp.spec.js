@@ -406,6 +406,23 @@ test.describe('BMP pages', () => {
                 await expect(routeCard).toContainText('route-lens-lab');
             }
 
+            for (const stageTestId of ['route-lens-stage-preIn', 'route-lens-stage-postIn']) {
+                const ingressCard = page
+                    .getByTestId(stageTestId)
+                    .getByTestId('route-lens-route-card')
+                    .filter({ hasText: lifecyclePrefix });
+                await expect(ingressCard).toContainText('192.0.2.10');
+                await expect(ingressCard).not.toContainText('192.0.2.12');
+            }
+            for (const stageTestId of ['route-lens-stage-preOut', 'route-lens-stage-postOut']) {
+                const egressCard = page
+                    .getByTestId(stageTestId)
+                    .getByTestId('route-lens-route-card')
+                    .filter({ hasText: lifecyclePrefix });
+                await expect(egressCard).toContainText('192.0.2.12');
+                await expect(egressCard).not.toContainText('192.0.2.10');
+            }
+
             const locRibStage = page.getByTestId('route-lens-stage-locRib');
             const reportedLocRibCard = locRibStage
                 .getByTestId('route-lens-route-card')
@@ -440,6 +457,9 @@ test.describe('BMP pages', () => {
             await expect(outboundDiff).toContainText('Next Hop');
             await expect(outboundDiff).toContainText('192.0.2.210');
             await expect(outboundDiff).toContainText('192.0.2.1');
+            await expect(outboundDiff).toContainText('AS Path');
+            await expect(outboundDiff).toContainText('65008 65108');
+            await expect(outboundDiff).toContainText('65000 65008 65108');
             await expect(outboundDiff).toContainText('Communities');
             await expect(outboundDiff).toContainText('65000:120 65000:220');
             await expect(outboundDiff).toContainText('65000:220 65000:999');
@@ -537,7 +557,7 @@ test.describe('BMP pages', () => {
             await emptyQueryToast.getByRole('button', { name: '关闭' }).click();
 
             await recordStep(
-                'Output: five-stage IPv4 lifecycle rendered with policy diffs and reported Best/Primary; EVPN and BGP-LS exact/substring NLRI queries rendered correctly; malformed CIDR and empty input used alert toasts without shifting the result layout'
+                'Output: ingress Peer 192.0.2.10 reported RIB-In, Loc-RIB selected the route, and egress Peer 192.0.2.12 reported RIB-Out with NextHop/AS-Path/Community rewrites; EVPN and BGP-LS exact/substring NLRI queries rendered correctly; malformed CIDR and empty input used alert toasts without shifting the result layout'
             );
         });
 
