@@ -1,43 +1,66 @@
-import { onBeforeUnmount, ref } from 'vue';
+import { onBeforeUnmount, ref, watch } from 'vue';
 
 const DEFAULT_HIDE_DELAY = 800;
 
-export function useAutoHideScrollbar(hideDelay = DEFAULT_HIDE_DELAY) {
-    const scrollbarActive = ref(false);
-    let hideTimer = null;
+export function useAutoHideScrollbar(scrollElementRef, hideDelay = DEFAULT_HIDE_DELAY) {
+    const scrollbarXActive = ref(false);
+    const scrollbarYActive = ref(false);
+    const horizontalState = { active: scrollbarXActive, hideTimer: null };
+    const verticalState = { active: scrollbarYActive, hideTimer: null };
+    let lastScrollLeft = 0;
+    let lastScrollTop = 0;
 
-    const clearHideTimer = () => {
-        if (hideTimer !== null) {
-            clearTimeout(hideTimer);
-            hideTimer = null;
+    const clearHideTimer = state => {
+        if (state.hideTimer !== null) {
+            clearTimeout(state.hideTimer);
+            state.hideTimer = null;
         }
     };
 
-    const hideScrollbar = () => {
-        clearHideTimer();
-        scrollbarActive.value = false;
-    };
-
-    const pinScrollbar = () => {
-        clearHideTimer();
-        scrollbarActive.value = true;
-    };
-
-    const showScrollbar = () => {
-        scrollbarActive.value = true;
-        clearHideTimer();
-        hideTimer = setTimeout(() => {
-            hideTimer = null;
-            scrollbarActive.value = false;
+    const activateScrollbar = state => {
+        state.active.value = true;
+        clearHideTimer(state);
+        state.hideTimer = setTimeout(() => {
+            state.hideTimer = null;
+            state.active.value = false;
         }, hideDelay);
     };
 
-    onBeforeUnmount(clearHideTimer);
+    const syncScrollPosition = element => {
+        lastScrollLeft = element?.scrollLeft ?? 0;
+        lastScrollTop = element?.scrollTop ?? 0;
+    };
+
+    const handleScroll = event => {
+        const element = event.currentTarget;
+        if (!element) {
+            return;
+        }
+        const nextScrollLeft = element.scrollLeft;
+        const nextScrollTop = element.scrollTop;
+        const scrolledHorizontally = nextScrollLeft !== lastScrollLeft;
+        const scrolledVertically = nextScrollTop !== lastScrollTop;
+
+        lastScrollLeft = nextScrollLeft;
+        lastScrollTop = nextScrollTop;
+
+        if (scrolledHorizontally) {
+            activateScrollbar(horizontalState);
+        }
+        if (scrolledVertically) {
+            activateScrollbar(verticalState);
+        }
+    };
+
+    watch(scrollElementRef, syncScrollPosition, { flush: 'post' });
+    onBeforeUnmount(() => {
+        clearHideTimer(horizontalState);
+        clearHideTimer(verticalState);
+    });
 
     return {
-        scrollbarActive,
-        pinScrollbar,
-        showScrollbar,
-        hideScrollbar
+        scrollbarXActive,
+        scrollbarYActive,
+        handleScroll
     };
 }

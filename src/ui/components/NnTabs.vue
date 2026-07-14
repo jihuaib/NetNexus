@@ -7,12 +7,13 @@
             :aria-orientation="tabPosition === 'left' ? 'vertical' : 'horizontal'"
         >
             <div
+                ref="navWrapRef"
                 class="nn-tabs-nav-wrap"
-                :class="{ 'nn-scrollbar-active': scrollbarActive }"
-                @pointerenter="showScrollbar"
-                @pointermove="showScrollbar"
-                @pointerleave="hideScrollbar"
-                @scroll.passive="showScrollbar"
+                :class="{
+                    'nn-scrollbar-x-active': scrollbarXActive,
+                    'nn-scrollbar-y-active': scrollbarYActive
+                }"
+                @scroll.passive="handleScroll"
             >
                 <div class="nn-tabs-nav-list">
                     <button
@@ -82,7 +83,8 @@
     const emit = defineEmits(['update:activeKey', 'change']);
 
     const slots = useSlots();
-    const { scrollbarActive, showScrollbar, hideScrollbar } = useAutoHideScrollbar();
+    const navWrapRef = ref(null);
+    const { scrollbarXActive, scrollbarYActive, handleScroll } = useAutoHideScrollbar(navWrapRef);
     const internalActiveKey = ref(undefined);
     const hasControlledActiveKey = computed(() => props.activeKey !== undefined && props.activeKey !== null);
     const currentActiveKey = computed(() => (hasControlledActiveKey.value ? props.activeKey : internalActiveKey.value));
@@ -239,15 +241,18 @@
         background: transparent;
     }
 
-    .nn-tabs-nav-wrap.nn-scrollbar-active {
+    .nn-tabs-nav-wrap.nn-scrollbar-x-active,
+    .nn-tabs-nav-wrap.nn-scrollbar-y-active {
         scrollbar-color: var(--nn-color-text-placeholder) transparent;
     }
 
-    .nn-tabs-nav-wrap.nn-scrollbar-active::-webkit-scrollbar-thumb {
+    .nn-tabs-nav-wrap.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal,
+    .nn-tabs-nav-wrap.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical {
         background: var(--nn-color-text-placeholder);
     }
 
-    .nn-tabs-nav-wrap::-webkit-scrollbar-thumb:hover {
+    .nn-tabs-nav-wrap.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal:hover,
+    .nn-tabs-nav-wrap.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical:hover {
         background: var(--nn-color-text-muted);
     }
 

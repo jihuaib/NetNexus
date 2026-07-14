@@ -5,9 +5,11 @@ const {
     applyBmpRouteAssuranceMutation,
     buildBmpRouteAssuranceAnalysis,
     buildBmpRouteAssuranceAnalysisAsync,
+    buildBmpRouteAssuranceAnalysisFromPersistedRoutesAsync,
     countBmpRouteAssuranceSourcePaths,
     getRouteAssuranceStage,
     makeRouteAssuranceSourceKey,
+    normalizeBmpRouteAssuranceCommittedDelta,
     paginateBmpRouteAssuranceAnalysis
 } = require('./bmpRouteAssurance');
 
@@ -16,6 +18,14 @@ const {
 // full-network aggregates. Callers can opt into a larger LRU explicitly.
 const DEFAULT_MAX_CACHE_ENTRIES = 1;
 const PAGINATION_ONLY_OPTIONS = new Set(['category', 'page', 'pageSize']);
+const PERSISTED_REBUILD_ACTIONS = new Set([
+    'scope_open',
+    'scope_stale',
+    'scope_eor',
+    'scope_timeout',
+    'connection_close'
+]);
+const PERSISTED_NOOP_ACTIONS = new Set(['connection_open']);
 
 function normalizedRouteState(value) {
     const state = String(value || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE)
@@ -98,6 +108,9 @@ class BmpRouteAssuranceService {
         this.pendingMutations = new Map();
         this.bootstrapPromise = null;
         this.bootstrapCacheKey = null;
+        this.dataMode = 'memory';
+        this.persistedSourceToken = Object.freeze({ kind: 'bmp-persisted-routes' });
+        this.persistedAnalysisOptions = null;
     }
 
     getMapId(bmpSessionMap) {
@@ -212,6 +225,7 @@ class BmpRouteAssuranceService {
     }
 
     async buildSnapshotAsync(bmpSessionMap, analysisOptions, cacheKey, control = {}) {
+        this.dataMode = 'memory';
         this.state = 'bootstrapping';
         this.bootstrapGeneration += 1;
         const generation = this.bootstrapGeneration;
@@ -247,10 +261,7 @@ class BmpRouteAssuranceService {
                 for (const mutation of this.pendingMutations.values()) {
                     applyBmpRouteAssuranceBootstrapMutation(analysis, mutation);
                 }
-                analysis.summary.scannedPathCount = countBmpRouteAssuranceSourcePaths(
-                    bmpSessionMap,
-                    analysisOptions
-                );
+                analysis.summary.scannedPathCount = countBmpRouteAssuranceSourcePaths(bmpSessionMap, analysisOptions);
                 cacheEntry.revision = this.revision;
                 this.incrementalUpdateCount += this.pendingMutations.size;
                 this.pendingMutations.clear();
@@ -289,8 +300,7 @@ class BmpRouteAssuranceService {
         this.revision += 1;
         this.invalidationCount += 1;
         this.lastInvalidationReason = String(reason || 'data-change');
-        this.state =
-            this.enabled && options.prepareBootstrap === true ? 'dirty' : this.enabled ? 'ready' : 'disabled';
+        this.state = this.enabled && options.prepareBootstrap === true ? 'dirty' : this.enabled ? 'ready' : 'disabled';
         return this.revision;
     }
 
@@ -319,6 +329,7 @@ class BmpRouteAssuranceService {
         }
 
         const rebuildingInvalidatedSnapshot = this.enabled && this.state === 'dirty';
+        this.dataMode = 'memory';
         this.enabled = true;
         this.state = 'bootstrapping';
         this.bootstrapGeneration += 1;
@@ -359,10 +370,7 @@ class BmpRouteAssuranceService {
                 for (const mutation of this.pendingMutations.values()) {
                     applyBmpRouteAssuranceBootstrapMutation(analysis, mutation);
                 }
-                analysis.summary.scannedPathCount = countBmpRouteAssuranceSourcePaths(
-                    bmpSessionMap,
-                    analysisOptions
-                );
+                analysis.summary.scannedPathCount = countBmpRouteAssuranceSourcePaths(bmpSessionMap, analysisOptions);
                 this.incrementalUpdateCount += this.pendingMutations.size;
                 this.pendingMutations.clear();
                 this.state = 'ready';
@@ -386,6 +394,140 @@ class BmpRouteAssuranceService {
         return this.bootstrapPromise;
     }
 
+    async bootstrapFromPersistedRoutes(routeRows, options = {}, control = {}) {
+        const rebuildingInvalidatedSnapshot = this.enabled && this.state === 'dirty';
+        this.enabled = true;
+        this.state = 'bootstrapping';
+        this.dataMode = 'persisted';
+        this.bootstrapGeneration += 1;
+        const generation = this.bootstrapGeneration;
+        this.cache.clear();
+        if (!rebuildingInvalidatedSnapshot) {
+            this.revision += 1;
+            this.invalidationCount += 1;
+            this.lastInvalidationReason = 'persisted-routes-bootstrap';
+        }
+        this.pendingMutations.clear();
+        this.bootstrapProgress = { scannedPathCount: 0 };
+        const analysisOptions = makeAnalysisOptions(options);
+        this.persistedAnalysisOptions = analysisOptions;
+        const cacheKey = this.makeCacheKey(this.persistedSourceToken, analysisOptions);
+        this.bootstrapCacheKey = cacheKey;
+        const startedAt = performance.now();
+
+        this.bootstrapPromise = buildBmpRouteAssuranceAnalysisFromPersistedRoutesAsync(routeRows, analysisOptions, {
+            chunkSize: control.chunkSize,
+            issueChunkSize: control.issueChunkSize,
+            resolveContext: control.resolveContext,
+            shouldCancel: () => generation !== this.bootstrapGeneration || !this.enabled,
+            onProgress: progress => {
+                this.bootstrapProgress = { ...progress };
+                control.onProgress?.(this.getStatus());
+            }
+        })
+            .then(analysis => {
+                if (generation !== this.bootstrapGeneration || !this.enabled) {
+                    return this.getStatus();
+                }
+                this.lastAggregationDurationMs = performance.now() - startedAt;
+                this.aggregationCount += 1;
+                const cacheEntry = {
+                    analysis,
+                    aggregationDurationMs: this.lastAggregationDurationMs,
+                    revision: this.revision
+                };
+                this.cache.set(cacheKey, cacheEntry);
+                for (const mutation of this.pendingMutations.values()) {
+                    applyBmpRouteAssuranceBootstrapMutation(analysis, mutation);
+                }
+                cacheEntry.revision = this.revision;
+                this.incrementalUpdateCount += this.pendingMutations.size;
+                this.pendingMutations.clear();
+                this.state = 'ready';
+                this.bootstrapPromise = null;
+                this.bootstrapCacheKey = null;
+                return this.getStatus();
+            })
+            .catch(error => {
+                if (error?.code === 'BMP_ROUTE_ASSURANCE_CANCELLED') {
+                    return this.getStatus();
+                }
+                if (generation === this.bootstrapGeneration) {
+                    this.state = this.enabled ? 'dirty' : 'disabled';
+                    this.cache.clear();
+                    this.bootstrapPromise = null;
+                    this.bootstrapCacheKey = null;
+                    this.pendingMutations.clear();
+                }
+                throw error;
+            });
+        return this.bootstrapPromise;
+    }
+
+    getPersistedCacheEntry(options = {}) {
+        if (!this.enabled) {
+            throw new Error('路由矩阵分析未开启');
+        }
+        if (this.state === 'bootstrapping') {
+            throw new Error('路由矩阵正在初始化，请稍候');
+        }
+        if (this.state === 'dirty') {
+            throw new Error('路由矩阵正在重新同步，请稍候');
+        }
+        const analysisOptions = makeAnalysisOptions(options);
+        const cacheKey = this.makeCacheKey(this.persistedSourceToken, analysisOptions);
+        const cacheEntry = this.cache.get(cacheKey);
+        if (!cacheEntry) {
+            const error = new Error('当前持久化路由矩阵不包含该筛选快照，请先重新 bootstrap');
+            error.code = 'BMP_ROUTE_ASSURANCE_PERSISTED_SNAPSHOT_MISS';
+            throw error;
+        }
+        this.cache.delete(cacheKey);
+        this.cache.set(cacheKey, cacheEntry);
+        return cacheEntry;
+    }
+
+    queryPersisted(options = {}) {
+        const queryStartedAt = performance.now();
+        const cacheEntry = this.getPersistedCacheEntry(options);
+        this.cacheHits += 1;
+        const result = paginateBmpRouteAssuranceAnalysis(cacheEntry.analysis, options);
+        result.summary = {
+            ...result.summary,
+            cacheHit: true,
+            dataRevision: cacheEntry.revision,
+            aggregationDurationMs: cacheEntry.aggregationDurationMs,
+            queryDurationMs: performance.now() - queryStartedAt
+        };
+        return result;
+    }
+
+    async queryPersistedAsync(options = {}) {
+        if (this.state === 'bootstrapping' && this.bootstrapPromise) {
+            await this.bootstrapPromise;
+        }
+        return this.queryPersisted(options);
+    }
+
+    applyCommittedDelta(delta) {
+        const action = String(delta?.action || '')
+            .trim()
+            .toLowerCase();
+        // Scope/connection transitions can change the effective state of many
+        // SQLite rows at once. A single route aggregate cannot represent that;
+        // false tells the caller to invalidate and stream a fresh snapshot.
+        if (PERSISTED_REBUILD_ACTIONS.has(action)) {
+            return false;
+        }
+        if (PERSISTED_NOOP_ACTIONS.has(action)) {
+            return true;
+        }
+        if (delta?.committed === true && delta.projectionChanged === false) {
+            return true;
+        }
+        return this.applyMutation(normalizeBmpRouteAssuranceCommittedDelta(delta));
+    }
+
     getStatus() {
         return {
             enabled: this.enabled,
@@ -393,7 +535,8 @@ class BmpRouteAssuranceService {
             dataRevision: this.revision,
             cacheSize: this.cache.size,
             incrementalUpdateCount: this.incrementalUpdateCount,
-            progress: { ...this.bootstrapProgress }
+            progress: { ...this.bootstrapProgress },
+            dataMode: this.dataMode
         };
     }
 
@@ -405,14 +548,26 @@ class BmpRouteAssuranceService {
         if (this.state === 'bootstrapping') {
             const scope = mutation.scope === 'instance' ? 'instance' : 'session';
             const stage = mutation.stage || getRouteAssuranceStage(mutation.ribType, scope);
-            const sourceKey = makeRouteAssuranceSourceKey({
-                clientKey: mutation.clientKey,
-                scope,
-                ownerKey: mutation.ownerKey,
-                stage,
-                routeKey: mutation.routeKey
-            });
+            const sourceKey =
+                mutation.sourceKey ||
+                makeRouteAssuranceSourceKey({
+                    clientKey: mutation.clientKey,
+                    scope,
+                    ownerKey: mutation.ownerKey,
+                    stage,
+                    routeKey: mutation.routeKey
+                });
             const previousPending = this.pendingMutations.get(sourceKey);
+            if (mutation.sourceKey) {
+                this.pendingMutations.set(sourceKey, {
+                    ...mutation,
+                    sourceKey,
+                    bootstrapInitiallyNew: previousPending
+                        ? previousPending.bootstrapInitiallyNew
+                        : mutation.isNew === true
+                });
+                return true;
+            }
             const bootstrapCandidateRoutes = previousPending?.bootstrapCandidateRoutes || new Set();
             [mutation.previous, mutation.route].forEach(route => {
                 if ((typeof route === 'object' && route !== null) || typeof route === 'function') {
@@ -422,9 +577,7 @@ class BmpRouteAssuranceService {
             this.pendingMutations.set(sourceKey, {
                 ...mutation,
                 bootstrapCandidateRoutes,
-                bootstrapInitiallyNew: previousPending
-                    ? previousPending.bootstrapInitiallyNew
-                    : mutation.isNew === true
+                bootstrapInitiallyNew: previousPending ? previousPending.bootstrapInitiallyNew : mutation.isNew === true
             });
             return true;
         }
@@ -460,6 +613,7 @@ class BmpRouteAssuranceService {
             lastAggregationDurationMs: this.lastAggregationDurationMs,
             enabled: this.enabled,
             state: this.state,
+            dataMode: this.dataMode,
             bootstrapProgress: { ...this.bootstrapProgress },
             incrementalUpdateCount: this.incrementalUpdateCount
         };

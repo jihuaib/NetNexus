@@ -310,7 +310,7 @@ const commandCases = [
 const helpCases = [
     {
         input: 'show bmp route client-id 1 session-id 1 af ',
-        includes: ['ipv4-unc', 'ipv6-unc', 'l2vpn-evpn', 'Address family'],
+        includes: ['ipv4-unc', 'ipv6-unc', 'ipv4-multicast', 'ipv6-multicast', 'l2vpn-evpn', 'Address family'],
         excludes: ['<ipv4-unc|ipv6-unc']
     },
     {

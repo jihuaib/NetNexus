@@ -11,8 +11,9 @@ const BMP_V4_TLV_DRAFT = {
 };
 
 const BMP_INITIATION_TLV_TYPE = {
-    SYS_NAME: 1,
-    SYS_DESC: 2,
+    STRING: 0,
+    SYS_DESC: 1,
+    SYS_NAME: 2,
     VRF_TABLE_NAME: 3
 };
 

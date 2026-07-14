@@ -48,8 +48,10 @@ async function main() {
 
         let pauseCount = 0;
         let resumeCount = 0;
+        const committedBatches = [];
         client = new BmpPersistenceClient({
             dbPath,
+            logLevel: 'info',
             batchSize: 1,
             flushMs: 1000,
             highWatermarkBytes: 1,
@@ -59,10 +61,31 @@ async function main() {
             },
             onResume: () => {
                 resumeCount += 1;
+            },
+            onCommittedBatch: (result, committedBatch) => {
+                committedBatches.push({ result, committedBatch });
             }
         });
         const opened = await client.open();
         assert.equal(opened.journalMode, 'wal');
+        assert.equal(opened.logLevel, 'info');
+        assert.equal(opened.sqlTraceEnabled, false);
+        assert.equal(client.logLevel, 'info');
+        assert.deepEqual(await client.setLogLevel('debug'), {
+            logLevel: 'debug',
+            sqlTraceEnabled: true
+        });
+        assert.equal(client.logLevel, 'debug');
+        assert.deepEqual(await client.setLogLevel('info'), {
+            logLevel: 'info',
+            sqlTraceEnabled: false
+        });
+        assert.equal(client.logLevel, 'info');
+        assert.deepEqual(await client.setLogLevel('not-a-log-level'), {
+            logLevel: 'off',
+            sqlTraceEnabled: false
+        });
+        assert.equal(client.logLevel, 'off');
 
         client.enqueue(buildConnectionMutation(bmpSession, 'connection_open'));
         client.enqueue(
@@ -78,12 +101,25 @@ async function main() {
         assert.equal(resumeCount, 1);
         assert.equal(client.getWatermark().bufferedBytes, 0);
         assert.equal((await client.queryRoutes({ routeState: 'all' })).total, 1);
+        const committedDeltas = committedBatches.flatMap(entry => entry.result.deltas);
+        assert.equal(committedDeltas.length, 1);
+        assert.equal(committedDeltas[0].classification, 'announce');
+        assert.equal(committedDeltas[0].current.ip, '198.51.100.0');
+        const summary = await client.queryScopeSummary({ ownerKey: committedDeltas[0].ownerKey });
+        assert.deepEqual(
+            { active: summary.active, stale: summary.stale, total: summary.total },
+            { active: 1, stale: 0, total: 1 }
+        );
+        assert.equal((await client.purgeStaleRoutes({ ownerKey: committedDeltas[0].ownerKey })).purged, 0);
 
         await client.close();
         client = null;
 
         const offline = new BmpPersistenceClient({ dbPath, readOnly: true });
-        await offline.open();
+        assert.equal(offline.logLevel, 'off');
+        const offlineOpened = await offline.open();
+        assert.equal(offlineOpened.logLevel, 'off');
+        assert.equal(offlineOpened.sqlTraceEnabled, false);
         const routes = await offline.queryRoutes({ routeState: 'all' });
         assert.equal(routes.total, 1);
         assert.equal(routes.list[0].canonicalRouteKey.keyHex.length, 64);

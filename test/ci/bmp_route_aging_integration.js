@@ -1,32 +1,19 @@
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const BgpConst = require('../../electron/const/bgpConst');
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
-const BmpRouteAgingScheduler = require('../../electron/worker/bmp/bmpRouteAgingScheduler');
+const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
 
 const AFI = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
 const SAFI = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST;
 const RIB_TYPE = BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN;
-
-function nextImmediate() {
-    return new Promise(resolve => setImmediate(resolve));
-}
-
-async function waitForSchedulerIdle(scheduler, label, timeoutMs = 1000) {
-    const deadline = Date.now() + timeoutMs;
-    while (scheduler.getStatus().jobs > 0) {
-        if (Date.now() >= deadline) {
-            throw new Error(`${label} timed out`);
-        }
-        await nextImmediate();
-    }
-    // Give a replaced timer or already queued pump one more turn to expose a
-    // duplicate completion callback before assertions are made.
-    await nextImmediate();
-}
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-route-aging-'));
 
 function makeRoute(owner, prefix, epoch) {
     const route = new BmpBgpRoute(owner, null);
@@ -37,49 +24,51 @@ function makeRoute(owner, prefix, epoch) {
         pathId: 0,
         rd: '0:0',
         ip: prefix,
-        mask: 24
+        mask: 24,
+        nlriDetail: { prefix, length: 24, pathId: 0, rd: '0:0' }
     });
+    route.assignRouteAttr({ origin: 'IGP', nextHop: '192.0.2.254' });
     route.markActive(epoch);
     return route;
 }
 
-function createHarness(remotePort) {
-    const mutations = [];
+async function createHarness(name, remotePort) {
+    const committedBatches = [];
     const persistenceFailures = [];
-    const routeUpdates = [];
-    const schedulerErrors = [];
-    const scheduler = new BmpRouteAgingScheduler({
-        batchSize: 1,
-        timeBudgetMs: 100,
-        onError: (error, key, phase) => schedulerErrors.push({ error, key, phase })
+    const mutations = [];
+    const client = new BmpPersistenceClient({
+        dbPath: path.join(tempDir, `${name}.sqlite3`),
+        batchSize: 100,
+        flushMs: 1000,
+        onCommittedBatch(result, batch) {
+            committedBatches.push({ result, batch });
+        }
     });
+    await client.open();
+
     const worker = {
         bmpConfigData: {},
-        persistence: {},
+        persistence: client,
         enqueuePersistenceMutation(mutation) {
             mutations.push(mutation);
+            client.enqueue(mutation);
             return true;
         },
         handlePersistenceFailure(error) {
             persistenceFailures.push(error);
         },
-        enqueueRouteUpdateEvent(update) {
-            routeUpdates.push(update);
-        },
+        enqueueRouteUpdateEvent() {},
         invalidateRouteAssurance() {},
-        scheduleInMemoryRouteAging(options) {
-            return scheduler.schedule(options);
-        }
+        requestPersistenceSweep() {}
     };
-    const messageHandler = { sendEvent() {} };
-    const bmpSession = new BmpSession(messageHandler, worker);
+    const bmpSession = new BmpSession({ sendEvent() {} }, worker);
     Object.assign(bmpSession, {
         localIp: '127.0.0.1',
         localPort: 11019,
         remoteIp: '192.0.2.10',
         remotePort,
         sysName: 'aging-integration-router',
-        bmpVersion: BmpConst.BMP_VERSION.V3
+        bmpVersion: BmpConst.BMP_VERSION.V4
     });
 
     const owner = new BmpBgpSession(bmpSession);
@@ -92,35 +81,47 @@ function createHarness(remotePort) {
         sessionState: BmpConst.BMP_SESSION_STATE.PEER_UP
     });
     owner.ribTypes.push(RIB_TYPE);
-
-    const oldRoute = makeRoute(owner, '203.0.113.0', owner.getRibEpoch(AFI, SAFI, RIB_TYPE));
-    const routeMap = new Map([[oldRoute.getRouteKey(), oldRoute]]);
-    owner.bgpRoutes.set(`${AFI}|${SAFI}`, new Map([[RIB_TYPE, routeMap]]));
-    owner.recordRouteAdd(AFI, SAFI, RIB_TYPE, oldRoute);
-
-    const stale = owner.markRoutesStale(AFI, SAFI, [RIB_TYPE], 'peer-up-refresh')[0];
-    assert.equal(stale.staleEpoch, 1);
-    assert.equal(oldRoute.routeState, BmpConst.BMP_ROUTE_STATE.STALE);
-
-    bmpSession.persistScopeState(owner, AFI, SAFI, RIB_TYPE, 'peer', 'syncing', 'scope_open');
+    owner.ensureRouteScope(AFI, SAFI, RIB_TYPE);
 
     return {
         bmpSession,
+        client,
+        committedBatches,
         mutations,
-        oldRoute,
         owner,
         persistenceFailures,
-        routeMap,
-        routeUpdates,
-        scheduler,
-        schedulerErrors
+        scopeId: bmpSession.getPersistenceScopeId(owner, AFI, SAFI, RIB_TYPE, 'peer')
     };
 }
 
-function testMutationBuildFailureIsFailClosed() {
-    const harness = createHarness(50003);
-    const buildError = new Error('canonical route identity is unavailable');
+async function seedRoutes(harness, prefixes, eventAtMs) {
+    harness.bmpSession.persistScopeState(harness.owner, AFI, SAFI, RIB_TYPE, 'peer', 'ready', 'scope_open', {
+        eventAtMs
+    });
+    prefixes.forEach(prefix => {
+        const route = makeRoute(harness.owner, prefix, harness.owner.getRibEpoch(AFI, SAFI, RIB_TYPE));
+        harness.bmpSession.persistSessionRouteUpsert(harness.owner, route, AFI, SAFI, RIB_TYPE, { eventAtMs });
+    });
+    await harness.client.fence();
+}
 
+function startRefresh(harness, refreshedPrefix, refreshStartedAtMs) {
+    const routeCount = harness.owner.getRouteSummary(AFI, SAFI, RIB_TYPE).total || 3;
+    harness.owner.setRouteSummary(AFI, SAFI, RIB_TYPE, { active: routeCount, stale: 0, total: routeCount });
+    const stale = harness.owner.markRoutesStale(AFI, SAFI, [RIB_TYPE], 'peer-up-refresh')[0];
+    assert.equal(stale.staleEpoch, 1);
+    harness.bmpSession.persistScopeState(harness.owner, AFI, SAFI, RIB_TYPE, 'peer', 'syncing', 'scope_open', {
+        eventAtMs: refreshStartedAtMs,
+        reason: 'peer-up-refresh'
+    });
+    const currentRoute = makeRoute(harness.owner, refreshedPrefix, harness.owner.getRibEpoch(AFI, SAFI, RIB_TYPE));
+    harness.bmpSession.persistSessionRouteUpsert(harness.owner, currentRoute, AFI, SAFI, RIB_TYPE);
+    return currentRoute;
+}
+
+function testMutationBuildFailureIsFailClosed(harness) {
+    const buildError = new Error('canonical route identity is unavailable');
+    const mutationsBefore = harness.mutations.length;
     assert.equal(
         harness.bmpSession.makeAndEnqueuePersistenceMutation(() => {
             throw buildError;
@@ -128,97 +129,136 @@ function testMutationBuildFailureIsFailClosed() {
         false
     );
     assert.deepEqual(harness.persistenceFailures, [buildError]);
-}
-
-function scopeEvents(harness) {
-    return harness.mutations.filter(mutation => mutation.scope).map(mutation => mutation.eventType);
+    assert.equal(harness.mutations.length, mutationsBefore);
 }
 
 async function testRefreshTimeoutFinalization() {
-    const harness = createHarness(50001);
-    const currentRoute = makeRoute(harness.owner, '203.0.114.0', harness.owner.getRibEpoch(AFI, SAFI, RIB_TYPE));
-    harness.routeMap.set(currentRoute.getRouteKey(), currentRoute);
-    harness.owner.recordRouteAdd(AFI, SAFI, RIB_TYPE, currentRoute);
+    const harness = await createHarness('refresh-timeout', 50001);
+    try {
+        const initialAtMs = Date.now() - 30 * 60 * 1000;
+        const refreshStartedAtMs = Date.now() - 20 * 60 * 1000;
+        await seedRoutes(harness, ['203.0.113.0', '203.0.114.0', '203.0.115.0'], initialAtMs);
+        startRefresh(harness, '203.0.113.0', refreshStartedAtMs);
+        await harness.client.fence();
 
-    assert.deepEqual(harness.owner.getRouteSummary(AFI, SAFI, RIB_TYPE), {
-        active: 1,
-        stale: 1,
-        total: 2
-    });
-    assert.equal(
-        harness.bmpSession.scheduleSessionRouteAging(harness.owner, AFI, SAFI, RIB_TYPE, 0, {
-            finalizeRefreshTimeout: true
-        }),
-        true
-    );
+        let routes = await harness.client.queryRoutes({ scopeId: harness.scopeId, routeState: 'all', pageSize: 10 });
+        assert.equal(routes.total, 3);
+        assert.equal(routes.list.filter(route => route.routeState === 'active').length, 1);
+        assert.equal(routes.list.filter(route => route.routeState === 'stale').length, 2);
+        let summary = await harness.client.queryScopeSummary({ scopeId: harness.scopeId });
+        assert.equal(summary.scopes[0].scopeState, 'syncing');
+        assert.equal(summary.scopes[0].currentEpoch, 1);
 
-    await waitForSchedulerIdle(harness.scheduler, 'refresh-timeout aging');
+        const beforeDeadline = await harness.client.sweep({
+            staleBeforeMs: 0,
+            refreshTimeoutBeforeMs: refreshStartedAtMs - 1,
+            eventsBeforeMs: 0,
+            routeLimit: 1
+        });
+        assert.equal(beforeDeadline.routes, 0);
 
-    assert.equal(harness.routeMap.has(harness.oldRoute.getRouteKey()), false, 'the previous epoch route must age out');
-    assert.equal(
-        harness.routeMap.get(currentRoute.getRouteKey()),
-        currentRoute,
-        'the current epoch route must survive'
-    );
-    assert.deepEqual(harness.owner.getRouteSummary(AFI, SAFI, RIB_TYPE), {
-        active: 1,
-        stale: 0,
-        total: 1
-    });
-    assert.deepEqual(scopeEvents(harness), ['scope_open', 'scope_timeout']);
+        const firstSweep = await harness.client.sweep({
+            staleBeforeMs: 0,
+            refreshTimeoutBeforeMs: Date.now() - 10 * 60 * 1000,
+            eventsBeforeMs: 0,
+            routeLimit: 1
+        });
+        assert.equal(firstSweep.routes, 1);
+        assert.equal(firstSweep.refreshTimeoutScopes, 0);
+        summary = await harness.client.queryScopeSummary({ scopeId: harness.scopeId });
+        assert.equal(summary.scopes[0].scopeState, 'syncing');
 
-    const timeoutMutation = harness.mutations.find(mutation => mutation.eventType === 'scope_timeout');
-    assert.ok(timeoutMutation, 'refresh timeout must be persisted');
-    assert.equal(timeoutMutation.scope.epoch, 1);
-    assert.equal(timeoutMutation.scope.state, 'ready');
-    assert.equal(timeoutMutation.reason, 'refresh-timeout');
-    assert.equal(harness.bmpSession.getPersistenceScopeState(harness.owner, AFI, SAFI, RIB_TYPE), 'ready');
-    assert.deepEqual(
-        harness.routeUpdates.map(update => ({ type: update.type, changedCount: update.changedCount })),
-        [{ type: BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_DELETE, changedCount: 1 }]
-    );
-    assert.deepEqual(harness.schedulerErrors, []);
+        const secondSweep = await harness.client.sweep({
+            staleBeforeMs: 0,
+            refreshTimeoutBeforeMs: Date.now() - 10 * 60 * 1000,
+            eventsBeforeMs: 0,
+            routeLimit: 1
+        });
+        assert.equal(secondSweep.routes, 1);
+        assert.equal(secondSweep.refreshTimeoutScopes, 1);
+        routes = await harness.client.queryRoutes({ scopeId: harness.scopeId, routeState: 'all' });
+        assert.equal(routes.total, 1);
+        assert.equal(routes.list[0].ip, '203.0.113.0');
+        assert.equal(routes.list[0].routeState, 'active');
+        summary = await harness.client.queryScopeSummary({ scopeId: harness.scopeId });
+        assert.equal(summary.scopes[0].scopeState, 'ready');
+        assert.equal(summary.scopes[0].staleReason, 'refresh-timeout');
+        assert.deepEqual(
+            { active: summary.active, stale: summary.stale, total: summary.total },
+            {
+                active: 1,
+                stale: 0,
+                total: 1
+            }
+        );
+
+        testMutationBuildFailureIsFailClosed(harness);
+        assert.ok(
+            harness.committedBatches.some(batch =>
+                batch.result.deltas.some(delta => delta.classification === 'announce')
+            ),
+            'the client callback should expose committed SQLite route deltas'
+        );
+    } finally {
+        await harness.client.close({ suppressErrors: true });
+    }
 }
 
-async function testEorWinsRefreshTimeoutRace() {
-    const harness = createHarness(50002);
-    assert.equal(
-        harness.bmpSession.scheduleSessionRouteAging(harness.owner, AFI, SAFI, RIB_TYPE, 10_000, {
-            finalizeRefreshTimeout: true
-        }),
-        true
-    );
-    assert.deepEqual(harness.scheduler.getStatus(), { jobs: 1, ready: 0 });
-    assert.equal(harness.routeMap.has(harness.oldRoute.getRouteKey()), true);
+async function testEorOwnsCleanup() {
+    const harness = await createHarness('eor-cleanup', 50002);
+    try {
+        const initialAtMs = Date.now() - 30 * 60 * 1000;
+        const refreshStartedAtMs = Date.now() - 20 * 60 * 1000;
+        await seedRoutes(harness, ['198.51.100.0', '198.51.101.0'], initialAtMs);
+        startRefresh(harness, '198.51.100.0', refreshStartedAtMs);
+        harness.bmpSession.persistScopeState(harness.owner, AFI, SAFI, RIB_TYPE, 'peer', 'ready', 'scope_eor', {
+            reason: 'eor'
+        });
+        await harness.client.fence();
 
-    harness.bmpSession.persistScopeState(harness.owner, AFI, SAFI, RIB_TYPE, 'peer', 'ready', 'scope_eor');
-    assert.equal(
-        harness.bmpSession.scheduleSessionRouteAging(harness.owner, AFI, SAFI, RIB_TYPE, 0),
-        false,
-        'EOR must reuse and accelerate the fixed scope job instead of creating a competing timeout job'
-    );
-    assert.equal(harness.scheduler.getStatus().jobs, 1);
+        let summary = await harness.client.queryScopeSummary({ scopeId: harness.scopeId });
+        assert.equal(summary.scopes[0].scopeState, 'ready');
+        assert.equal(summary.scopes[0].eorEpoch, 1);
+        assert.equal(summary.stale, 1);
 
-    await waitForSchedulerIdle(harness.scheduler, 'EOR aging');
+        const swept = await harness.client.sweep({
+            staleBeforeMs: 0,
+            refreshTimeoutBeforeMs: Date.now(),
+            eventsBeforeMs: 0,
+            routeLimit: 10
+        });
+        assert.equal(swept.routes, 1);
+        assert.equal(swept.finalizedCleanupScopes, 1);
+        assert.equal(swept.refreshTimeoutScopes, 0);
 
-    assert.equal(harness.routeMap.has(harness.oldRoute.getRouteKey()), false);
-    assert.deepEqual(scopeEvents(harness), ['scope_open', 'scope_eor']);
-    assert.equal(
-        harness.mutations.some(mutation => mutation.eventType === 'scope_timeout'),
-        false,
-        'the replaced refresh-timeout callback must not overwrite EOR'
-    );
-    assert.equal(harness.bmpSession.getPersistenceScopeState(harness.owner, AFI, SAFI, RIB_TYPE), 'ready');
-    assert.equal(harness.mutations.at(-1).eventType, 'scope_eor');
-    assert.deepEqual(harness.scheduler.getStatus(), { jobs: 0, ready: 0 });
-    assert.deepEqual(harness.schedulerErrors, []);
+        const routes = await harness.client.queryRoutes({ scopeId: harness.scopeId, routeState: 'all' });
+        assert.equal(routes.total, 1);
+        assert.equal(routes.list[0].ip, '198.51.100.0');
+        assert.equal(routes.list[0].routeState, 'active');
+        summary = await harness.client.queryScopeSummary({ scopeId: harness.scopeId });
+        assert.equal(summary.scopes[0].scopeState, 'ready');
+        assert.equal(summary.scopes[0].eorEpoch, 1);
+        assert.equal(summary.scopes[0].staleReason, null);
+
+        const events = await harness.client.queryEvents({ scopeId: harness.scopeId, pageSize: 100 });
+        assert.ok(events.list.some(event => event.eventType === 'scope_eor'));
+        assert.equal(
+            events.list.some(event => event.eventType === 'scope_timeout'),
+            false
+        );
+    } finally {
+        await harness.client.close({ suppressErrors: true });
+    }
 }
 
 async function main() {
-    testMutationBuildFailureIsFailClosed();
-    await testRefreshTimeoutFinalization();
-    await testEorWinsRefreshTimeoutRace();
-    console.log('BMP route aging persistence integration tests passed');
+    try {
+        await testRefreshTimeoutFinalization();
+        await testEorOwnsCleanup();
+        console.log('BMP SQLite route aging integration tests passed');
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 }
 
 main().catch(error => {

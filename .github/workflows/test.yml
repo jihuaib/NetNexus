@@ -8,6 +8,38 @@ on:
             - master
 
 jobs:
+    frr-bmp-e2e:
+        name: FRR BMP Interoperability E2E
+        runs-on: ubuntu-24.04
+        timeout-minutes: 30
+        env:
+            NODE_VERSION: '16.20.2'
+            FRR_BMP_ROUTES_PER_FAMILY: '1024'
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+
+            - name: Setup Python for native modules
+              uses: actions/setup-python@v5
+              with:
+                  python-version: '3.11'
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Verify Docker
+              run: docker info
+
+            - name: Run FRR BMP interoperability E2E
+              run: npm run test:e2e:frr
+
     e2e-macos:
         name: macOS ${{ matrix.arch }} Tests and Packaged E2E
         strategy:
@@ -16,11 +48,14 @@ jobs:
                 include:
                     - arch: arm64
                       runner: macos-15
+                      bmpAssuranceFirstBuildBudgetMs: '15000'
                     - arch: x64
                       runner: macos-15-intel
+                      bmpAssuranceFirstBuildBudgetMs: '30000'
         runs-on: ${{ matrix.runner }}
         env:
             NODE_VERSION: '16.20.2'
+            BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS: ${{ matrix.bmpAssuranceFirstBuildBudgetMs }}
 
         steps:
             - name: Checkout

@@ -50,12 +50,7 @@ async function verifyAsyncCacheMiss() {
             sessionRd: '0:0',
             vrfTableNames: ['async-query']
         }),
-        bgpRoutes: new Map([
-            [
-                '1|1',
-                new Map([[BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, routes]])
-            ]
-        ])
+        bgpRoutes: new Map([['1|1', new Map([[BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, routes]])]])
     };
     const bmpSession = {
         getClientInfo: () => ({ sysName: 'async-query-router', remoteIp: '192.0.2.99' }),
@@ -70,29 +65,33 @@ async function verifyAsyncCacheMiss() {
         eventLoopYielded = true;
     });
 
-    const first = await service.queryAsync(sessionMap, { page: 1, pageSize: 25 }, {
-        chunkSize: 100,
-        onProgress: status => {
-            if (mutationApplied || Number(status.progress?.scannedPathCount) < 100) {
-                return;
+    const first = await service.queryAsync(
+        sessionMap,
+        { page: 1, pageSize: 25 },
+        {
+            chunkSize: 100,
+            onProgress: status => {
+                if (mutationApplied || Number(status.progress?.scannedPathCount) < 100) {
+                    return;
+                }
+                mutationApplied = true;
+                const route = makeRoute(250);
+                routes.set(route.routeKey, route);
+                service.applyMutation({
+                    action: 'upsert',
+                    isNew: true,
+                    clientKey,
+                    bmpSession,
+                    scope: 'session',
+                    ownerKey,
+                    owner,
+                    ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
+                    routeKey: route.routeKey,
+                    route
+                });
             }
-            mutationApplied = true;
-            const route = makeRoute(250);
-            routes.set(route.routeKey, route);
-            service.applyMutation({
-                action: 'upsert',
-                isNew: true,
-                clientKey,
-                bmpSession,
-                scope: 'session',
-                ownerKey,
-                owner,
-                ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
-                routeKey: route.routeKey,
-                route
-            });
         }
-    });
+    );
 
     assert.equal(eventLoopYielded, true, 'filter cache miss must yield instead of blocking the BMP worker');
     assert.equal(mutationApplied, true);

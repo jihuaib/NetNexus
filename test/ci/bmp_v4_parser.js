@@ -1,4 +1,7 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const ipaddr = require('ipaddr.js');
 const BmpConst = require('../../electron/const/bmpConst');
 const BgpConst = require('../../electron/const/bgpConst');
@@ -6,7 +9,18 @@ const BmpSession = require('../../electron/worker/bmp/bmpSession');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
+const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
+const { buildScope, buildRouteUpsertMutation } = require('../../electron/worker/bmp/bmpPersistenceMutation');
 const { decodeExtendedPeerFlagsValue } = require('../../electron/utils/bmpUtils');
+
+const persistenceTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-v4-parser-'));
+const persistenceStores = new Set();
+let persistenceBatchSequence = 0;
+
+process.on('exit', () => {
+    persistenceStores.forEach(store => store.close());
+    fs.rmSync(persistenceTempDir, { recursive: true, force: true });
+});
 
 const LABEL_UNICAST_ADD_PATH_INFERRED_WARNING =
     'label-unicast ADD-PATH is inferred from same-AFI unicast capability; Peer Up did not advertise ADD-PATH for label-unicast';
@@ -392,12 +406,34 @@ function pathMarkingValue(status, reason = null) {
 
 function makeSession(config = {}) {
     const events = [];
+    const store = new BmpPersistenceStore({
+        dbPath: path.join(persistenceTempDir, `session-${persistenceStores.size + 1}.sqlite3`)
+    }).open();
+    persistenceStores.add(store);
     const bmpWorker = {
         bmpSessionMap: new Map(),
         bmpConfigData: {
             bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20,
             ...config
-        }
+        },
+        persistence: store,
+        enqueuePersistenceMutation(mutation) {
+            persistenceBatchSequence += 1;
+            store.applyBatch({
+                batchId: `bmp-v4-parser-${persistenceBatchSequence}`,
+                createdAtMs: Date.now(),
+                mutations: [mutation]
+            });
+            return true;
+        },
+        requestPersistenceSweep() {},
+        enqueueRouteUpdateEvent(update) {
+            events.push({ type: BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE, payload: { data: update } });
+        },
+        enqueueInstanceRouteUpdateEvent(update) {
+            events.push({ type: BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE, payload: { data: update } });
+        },
+        invalidateRouteAssurance() {}
     };
     const session = new BmpSession(
         {
@@ -417,7 +453,8 @@ function makeSession(config = {}) {
         session
     );
 
-    return { session, events };
+    session.__persistenceStore = store;
+    return { session, events, store };
 }
 
 function bytesFromDump(dump) {
@@ -466,15 +503,41 @@ function hasStatelessAddPathCompatibilityWarning(route) {
     );
 }
 
+function hydratePersistedRoute(route) {
+    return Object.assign(route, {
+        getRouteKey: () => route.routeKey,
+        getRouteInfo: () => route,
+        getRouteListInfo: () => route
+    });
+}
+
+function queryScopeRoutes(session, owner, afi, safi, ribType, kind = 'peer', routeState = 'all') {
+    const scope = buildScope(session, owner, afi, safi, ribType, { kind });
+    return session.__persistenceStore
+        .queryRoutes({ scopeId: scope.id, routeState, pageSize: 5000 })
+        .list.map(hydratePersistedRoute);
+}
+
+function queryBgpRoutes(session, owner, afi, safi, ribType, routeState = 'all') {
+    return queryScopeRoutes(session, owner, afi, safi, ribType, 'peer', routeState);
+}
+
+function queryLocRibRoutes(session, instance, routeState = 'all') {
+    return queryScopeRoutes(session, instance, instance.afi, instance.safi, 'loc-rib', 'loc-rib', routeState);
+}
+
+function persistSeedRoute(session, owner, route, afi, safi, ribType, kind) {
+    const mutation = buildRouteUpsertMutation(session, owner, route, afi, safi, ribType, {
+        kind,
+        state: 'ready',
+        scopeState: 'ready'
+    });
+    session.bmpWorker.enqueuePersistenceMutation(mutation);
+}
+
 function addLocRibRoute(session, afi, safi, prefix, mask) {
     const rdRaw = 'raw:0000000000000000';
-    const instanceKey = BmpBgpInstance.makeKey(
-        BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
-        '0:0',
-        afi,
-        safi,
-        rdRaw
-    );
+    const instanceKey = BmpBgpInstance.makeKey(BmpConst.BMP_PEER_TYPE.LOCAL_RIB, '0:0', afi, safi, rdRaw);
     let instance = session.bgpInstanceMap.get(instanceKey);
     if (!instance) {
         instance = new BmpBgpInstance(session);
@@ -496,21 +559,20 @@ function addLocRibRoute(session, afi, safi, prefix, mask) {
     const route = new BmpBgpRoute(null, instance);
     route.afi = afi;
     route.safi = safi;
+    route.ribType = 'loc-rib';
     route.ip = prefix;
     route.mask = mask;
-    instance.bgpRoutes.set(BmpBgpRoute.makeKey(null, null, prefix, mask), route);
+    route.rd = instance.instanceRd;
+    route.pathId = 0;
+    route.nlriDetail = { prefix, length: mask, rd: route.rd, pathId: 0 };
+    route.markActive(instance.getRibEpoch());
+    persistSeedRoute(session, instance, route, afi, safi, 'loc-rib', 'loc-rib');
     return { instance, instanceKey };
 }
 
 function addBgpSessionRoute(session, afi, safi, prefix, mask, ribType = BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN) {
     const rdRaw = 'raw:0000000000000000';
-    const sessionKey = BmpBgpSession.makeKey(
-        BmpConst.BMP_PEER_TYPE.GLOBAL,
-        '0:0',
-        '192.0.2.2',
-        65000,
-        rdRaw
-    );
+    const sessionKey = BmpBgpSession.makeKey(BmpConst.BMP_PEER_TYPE.GLOBAL, '0:0', '192.0.2.2', 65000, rdRaw);
     let bgpSession = session.bgpSessionMap.get(sessionKey);
     if (!bgpSession) {
         bgpSession = new BmpBgpSession(session);
@@ -522,25 +584,20 @@ function addBgpSessionRoute(session, afi, safi, prefix, mask, ribType = BmpConst
         session.bgpSessionMap.set(sessionKey, bgpSession);
     }
 
-    const afKey = `${afi}|${safi}`;
-    if (!bgpSession.bgpRoutes.has(afKey)) {
-        bgpSession.bgpRoutes.set(afKey, new Map());
-    }
-
-    const ribTypeRouteMap = bgpSession.bgpRoutes.get(afKey);
-    if (!ribTypeRouteMap.has(ribType)) {
-        ribTypeRouteMap.set(ribType, new Map());
-    }
-
     const route = new BmpBgpRoute(bgpSession, null);
     route.afi = afi;
     route.safi = safi;
+    route.ribType = ribType;
     route.ip = prefix;
     route.mask = mask;
-    const routeKey = BmpBgpRoute.makeKey(null, null, prefix, mask);
-    ribTypeRouteMap.get(ribType).set(routeKey, route);
+    route.rd = bgpSession.sessionRd;
+    route.pathId = 0;
+    route.nlriDetail = { prefix, length: mask, rd: route.rd, pathId: 0 };
+    route.markActive(bgpSession.getRibEpoch(afi, safi, ribType));
+    bgpSession.ensureRouteScope(afi, safi, ribType);
+    persistSeedRoute(session, bgpSession, route, afi, safi, ribType, 'peer');
 
-    return { bgpSession, sessionKey, afKey, ribType };
+    return { bgpSession, sessionKey, afKey: `${afi}|${safi}`, ribType };
 }
 
 const { session, events } = makeSession();
@@ -548,6 +605,7 @@ session.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
 );
 const rejectedRouteMutations = [];
+const enqueuePersistenceMutation = session.bmpWorker.enqueuePersistenceMutation;
 session.bmpWorker.enqueuePersistenceMutation = mutation => rejectedRouteMutations.push(mutation);
 const incompleteUpdate = Buffer.concat([
     Buffer.alloc(BgpConst.BGP_MARKER_LEN, 0xff),
@@ -559,10 +617,7 @@ const incompleteUpdate = Buffer.concat([
         bmpMessage(
             BmpConst.BMP_VERSION.V4,
             BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
-            Buffer.concat([
-                peerHeader(),
-                indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, packet)
-            ])
+            Buffer.concat([peerHeader(), indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, packet)])
         )
     );
 });
@@ -571,7 +626,7 @@ assert.equal(
     0,
     'invalid or non-UPDATE BGP messages must not advance EOR or mutate route persistence'
 );
-delete session.bmpWorker.enqueuePersistenceMutation;
+session.bmpWorker.enqueuePersistenceMutation = enqueuePersistenceMutation;
 session.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -584,17 +639,24 @@ const bgpSessionKey = BmpBgpSession.makeKey(BmpConst.BMP_PEER_TYPE.GLOBAL, '0:0'
 const bgpSession = session.bgpSessionMap.get(bgpSessionKey);
 assert.ok(bgpSession, 'BMPv4 Peer Up should create a BGP session');
 
-const routeMap = bgpSession.bgpRoutes
-    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
-assert.equal(routeMap.size, 1);
-const ipv4UnicastRoute = [...routeMap.values()][0];
+const ipv4UnicastRoutes = queryBgpRoutes(
+    session,
+    bgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.equal(ipv4UnicastRoutes.length, 1);
+const ipv4UnicastRoute = ipv4UnicastRoutes[0];
 assert.equal(ipv4UnicastRoute.ip, '203.0.113.0');
 assert.equal(ipv4UnicastRoute.routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
 assert.equal(ipv4UnicastRoute.pathId, 0);
 assert.equal(ipv4UnicastRoute.rd, '0:0');
 assert.equal(ipv4UnicastRoute.getRouteKey(), '0|0:0|203.0.113.0|24');
-assert.equal(routeMap.has(ipv4UnicastRoute.getRouteKey()), true);
+assert.equal(
+    ipv4UnicastRoutes.some(route => route.routeKey === ipv4UnicastRoute.getRouteKey()),
+    true
+);
 assert.equal(ipv4UnicastRoute.getRouteListInfo().rd, '0:0');
 assert.equal(ipv4UnicastRoute.getRouteListInfo().pathId, 0);
 assert.equal(ipv4UnicastRoute.getRouteInfo().nlriDetail.rd, '0:0');
@@ -620,18 +682,20 @@ bmp3RibInPolicySession.processMessage(
     )
 );
 const bmp3RibInPolicyBgpSession = bmp3RibInPolicySession.bgpSessionMap.get(bgpSessionKey);
-const bmp3PrePolicyRoutes = [
-    ...bmp3RibInPolicyBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
-const bmp3PostPolicyRoutes = [
-    ...bmp3RibInPolicyBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN)
-        .values()
-];
+const bmp3PrePolicyRoutes = queryBgpRoutes(
+    bmp3RibInPolicySession,
+    bmp3RibInPolicyBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+const bmp3PostPolicyRoutes = queryBgpRoutes(
+    bmp3RibInPolicySession,
+    bmp3RibInPolicyBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN
+);
 assert.ok(
     bmp3PrePolicyRoutes.some(route => route.ip === '203.0.115.0'),
     'BMPv3 Route Monitoring without post-policy flag should store pre-policy Adj-RIB-In routes'
@@ -673,10 +737,13 @@ pathMarkingGroupSession.processMessage(
     )
 );
 const pathMarkingGroupBgpSession = pathMarkingGroupSession.bgpSessionMap.get(bgpSessionKey);
-const pathMarkingGroupRouteMap = pathMarkingGroupBgpSession.bgpRoutes
-    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
-const pathMarkingGroupRoutes = [...pathMarkingGroupRouteMap.values()];
+const pathMarkingGroupRoutes = queryBgpRoutes(
+    pathMarkingGroupSession,
+    pathMarkingGroupBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
 assert.equal(pathMarkingGroupRoutes.length, 2);
 pathMarkingGroupRoutes.forEach(route => {
     assert.equal(route.pathStatus, BmpConst.BMP_PATH_STATUS.BEST | BmpConst.BMP_PATH_STATUS.PRIMARY);
@@ -692,7 +759,11 @@ pathMarkingGroupRoutes.forEach(route => {
 });
 assert.ok(pathMarkingGroupRoutes[0].attrId, 'routes with parsed attributes should have attrId');
 assert.equal(pathMarkingGroupRoutes[0].attrId, pathMarkingGroupRoutes[1].attrId);
-assert.equal(pathMarkingGroupRoutes[0].getRouteInfo().attrRefCount, 2);
+assert.equal(
+    Object.prototype.hasOwnProperty.call(pathMarkingGroupRoutes[0].getRouteInfo(), 'attrRefCount'),
+    false,
+    'SQLite attribute deduplication must not recreate the in-memory attribute reference counter'
+);
 
 const { session: pathMarkingIndexSession } = makeSession();
 pathMarkingIndexSession.processMessage(
@@ -718,10 +789,13 @@ pathMarkingIndexSession.processMessage(
     )
 );
 const pathMarkingIndexBgpSession = pathMarkingIndexSession.bgpSessionMap.get(bgpSessionKey);
-const pathMarkingIndexRouteMap = pathMarkingIndexBgpSession.bgpRoutes
-    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
-const pathMarkingIndexRoutes = [...pathMarkingIndexRouteMap.values()];
+const pathMarkingIndexRoutes = queryBgpRoutes(
+    pathMarkingIndexSession,
+    pathMarkingIndexBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
 const unmarkedRoute = pathMarkingIndexRoutes.find(route => route.ip === '203.0.122.0');
 const markedRoute = pathMarkingIndexRoutes.find(route => route.ip === '203.0.123.0');
 assert.equal(unmarkedRoute.pathStatus, null);
@@ -752,10 +826,13 @@ enterpriseRouteTlvSession.processMessage(
     )
 );
 const enterpriseRouteTlvBgpSession = enterpriseRouteTlvSession.bgpSessionMap.get(bgpSessionKey);
-const enterpriseRouteTlvRouteMap = enterpriseRouteTlvBgpSession.bgpRoutes
-    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
-const enterpriseRouteTlvRoutes = [...enterpriseRouteTlvRouteMap.values()];
+const enterpriseRouteTlvRoutes = queryBgpRoutes(
+    enterpriseRouteTlvSession,
+    enterpriseRouteTlvBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
 const enterpriseRouteTlvFirstRoute = enterpriseRouteTlvRoutes.find(route => route.ip === '203.0.128.0');
 const enterpriseRouteTlvSecondRouteInfo = enterpriseRouteTlvRoutes
     .find(route => route.ip === '203.0.129.0')
@@ -798,12 +875,13 @@ draft19PathMarkingSession.processMessage(
     )
 );
 const draft19PathMarkingBgpSession = draft19PathMarkingSession.bgpSessionMap.get(bgpSessionKey);
-const draft19PathMarkingRoute = [
-    ...draft19PathMarkingBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-][0];
+const draft19PathMarkingRoute = queryBgpRoutes(
+    draft19PathMarkingSession,
+    draft19PathMarkingBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+)[0];
 assert.equal(draft19PathMarkingRoute.ip, '203.0.124.0');
 assert.equal(draft19PathMarkingRoute.pathStatus, BmpConst.BMP_PATH_STATUS.STALE);
 assert.equal(draft19PathMarkingRoute.pathStatusText, 'Stale');
@@ -827,10 +905,13 @@ evpnBmpSession.processMessage(
     )
 );
 const evpnBgpSession = evpnBmpSession.bgpSessionMap.get(bgpSessionKey);
-const evpnRouteMap = evpnBgpSession.bgpRoutes
-    .get(`${BgpConst.BGP_AFI_TYPE.AFI_L2VPN}|${BgpConst.BGP_SAFI_TYPE.SAFI_EVPN}`)
-    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
-const evpnRoute = [...evpnRouteMap.values()][0];
+const evpnRoute = queryBgpRoutes(
+    evpnBmpSession,
+    evpnBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+    BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+)[0];
 assert.equal(evpnRoute.labels, 'VNI 10000');
 assert.equal(evpnRoute.nlriDetail.encapsulationType, 'vni');
 assert.equal(evpnRoute.nlriDetail.labels[0].raw24, 10000);
@@ -856,16 +937,27 @@ staleRefreshSession.processMessage(
     )
 );
 const staleRefreshBgpSession = staleRefreshSession.bgpSessionMap.get(bgpSessionKey);
-const staleRefreshRouteMap = staleRefreshBgpSession.bgpRoutes
-    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
-const staleRefreshRoute = [...staleRefreshRouteMap.values()][0];
+let staleRefreshRoutes = queryBgpRoutes(
+    staleRefreshSession,
+    staleRefreshBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+const staleRefreshRoute = staleRefreshRoutes[0];
 assert.equal(staleRefreshRoute.routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
 staleRefreshSession.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
 );
-assert.equal(staleRefreshRoute.routeState, BmpConst.BMP_ROUTE_STATE.STALE);
-assert.equal(staleRefreshRoute.staleReason, 'peer-up-refresh');
+staleRefreshRoutes = queryBgpRoutes(
+    staleRefreshSession,
+    staleRefreshBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.equal(staleRefreshRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
+assert.equal(staleRefreshRoutes[0].staleReason, 'refresh-pending');
 staleRefreshSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -876,8 +968,15 @@ staleRefreshSession.processMessage(
         ])
     )
 );
-assert.equal(staleRefreshRouteMap.size, 1);
-assert.equal([...staleRefreshRouteMap.values()][0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
+staleRefreshRoutes = queryBgpRoutes(
+    staleRefreshSession,
+    staleRefreshBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.equal(staleRefreshRoutes.length, 1);
+assert.equal(staleRefreshRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
 
 session.processMessage(
     bmpMessage(
@@ -942,7 +1041,7 @@ const locRibInstance = session.bgpInstanceMap.get(locRibInstanceKey);
 assert.ok(locRibInstance, 'BMPv4 Loc-RIB Route Monitoring should create a Loc-RIB instance');
 assert.equal(locRibInstance.instanceFlags, BmpConst.BMP_LOC_RIB_FLAGS.FILTERED);
 assert.deepEqual(locRibInstance.vrfTableNames, ['global']);
-const locRibRouteMonitoringRoute = [...locRibInstance.bgpRoutes.values()][0];
+const locRibRouteMonitoringRoute = queryLocRibRoutes(session, locRibInstance)[0];
 assert.equal(locRibRouteMonitoringRoute.ip, '198.51.100.0');
 assert.ok(
     locRibRouteMonitoringRoute
@@ -1005,7 +1104,9 @@ assert.ok(
     locRibDefaultRdEvpnInstance,
     'Loc-RIB EVPN route should create private RD instance from Route Monitoring header RD'
 );
-const locRibDefaultRdEvpnRoute = [...locRibDefaultRdEvpnInstance.bgpRoutes.values()].find(route => route.pathId === 88);
+const locRibDefaultRdEvpnRoute = queryLocRibRoutes(locRibDefaultRdEvpnAddPathSession, locRibDefaultRdEvpnInstance).find(
+    route => route.pathId === 88
+);
 assert.ok(locRibDefaultRdEvpnRoute, 'Loc-RIB EVPN route should parse ADD-PATH path-id from RD 0:0 capability');
 assert.equal(locRibDefaultRdEvpnRoute.labels, 'VNI 10002');
 assert.ok(
@@ -1060,9 +1161,10 @@ const locRibExactRdEvpnNoAddPathInstance = locRibDefaultRdEvpnAddPathSession.bgp
         BgpConst.BGP_SAFI_TYPE.SAFI_EVPN
     )
 );
-const locRibExactRdEvpnNoAddPathRoute = [...locRibExactRdEvpnNoAddPathInstance.bgpRoutes.values()].find(
-    route => route.pathId === 0
-);
+const locRibExactRdEvpnNoAddPathRoute = queryLocRibRoutes(
+    locRibDefaultRdEvpnAddPathSession,
+    locRibExactRdEvpnNoAddPathInstance
+).find(route => route.pathId === 0);
 assert.ok(
     locRibExactRdEvpnNoAddPathRoute,
     'Loc-RIB EVPN exact RD without ADD-PATH must not fall back to RD 0:0 ADD-PATH'
@@ -1119,7 +1221,10 @@ assert.equal(
     ),
     true
 );
-const locRibPublicPrivateAddPathPublicRoutes = [...locRibPublicPrivateAddPathPublicInstance.bgpRoutes.values()];
+const locRibPublicPrivateAddPathPublicRoutes = queryLocRibRoutes(
+    locRibPublicPrivateAddPathSession,
+    locRibPublicPrivateAddPathPublicInstance
+);
 assert.equal(locRibPublicPrivateAddPathPublicRoutes.length, 1);
 assert.equal(locRibPublicPrivateAddPathPublicRoutes[0].ip, '198.51.101.0');
 assert.equal(locRibPublicPrivateAddPathPublicRoutes[0].pathId, 0);
@@ -1166,8 +1271,8 @@ const locRibStatelessPrivateInstance = locRibStatelessAddPathSession.bgpInstance
 );
 assert.ok(locRibStatelessPublicInstance, 'Public Loc-RIB route should create an instance without Peer Up');
 assert.ok(locRibStatelessPrivateInstance, 'Private Loc-RIB stateless route should create an instance without Peer Up');
-const locRibStatelessPublicRoutes = [...locRibStatelessPublicInstance.bgpRoutes.values()];
-const locRibStatelessPrivateRoutes = [...locRibStatelessPrivateInstance.bgpRoutes.values()];
+const locRibStatelessPublicRoutes = queryLocRibRoutes(locRibStatelessAddPathSession, locRibStatelessPublicInstance);
+const locRibStatelessPrivateRoutes = queryLocRibRoutes(locRibStatelessAddPathSession, locRibStatelessPrivateInstance);
 assert.ok(locRibStatelessPublicRoutes.some(route => route.ip === '198.51.103.0' && route.pathId === 0));
 assert.ok(locRibStatelessPrivateRoutes.some(route => route.ip === '10.101.0.0' && route.pathId === 56));
 
@@ -1226,16 +1331,12 @@ locRibPeerDownSession.processMessage(
         ])
     )
 );
-assert.equal(locRibPeerDownSession.bgpInstanceMap.get(ipv4LocRib.instanceKey).bgpRoutes.size, 1);
-assert.equal(locRibPeerDownSession.bgpInstanceMap.get(ipv6LocRib.instanceKey).bgpRoutes.size, 1);
-assert.equal(
-    [...locRibPeerDownSession.bgpInstanceMap.get(ipv4LocRib.instanceKey).bgpRoutes.values()][0].routeState,
-    BmpConst.BMP_ROUTE_STATE.STALE
-);
-assert.equal(
-    [...locRibPeerDownSession.bgpInstanceMap.get(ipv6LocRib.instanceKey).bgpRoutes.values()][0].routeState,
-    BmpConst.BMP_ROUTE_STATE.STALE
-);
+let ipv4LocRibRoutes = queryLocRibRoutes(locRibPeerDownSession, ipv4LocRib.instance);
+let ipv6LocRibRoutes = queryLocRibRoutes(locRibPeerDownSession, ipv6LocRib.instance);
+assert.equal(ipv4LocRibRoutes.length, 1);
+assert.equal(ipv6LocRibRoutes.length, 1);
+assert.equal(ipv4LocRibRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
+assert.equal(ipv6LocRibRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
 locRibPeerDownSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -1243,8 +1344,10 @@ locRibPeerDownSession.processMessage(
         locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED)
     )
 );
-assert.equal(locRibPeerDownSession.bgpInstanceMap.get(ipv4LocRib.instanceKey).bgpRoutes.size, 1);
-assert.equal(locRibPeerDownSession.bgpInstanceMap.get(ipv6LocRib.instanceKey).bgpRoutes.size, 1);
+ipv4LocRibRoutes = queryLocRibRoutes(locRibPeerDownSession, ipv4LocRib.instance);
+ipv6LocRibRoutes = queryLocRibRoutes(locRibPeerDownSession, ipv6LocRib.instance);
+assert.equal(ipv4LocRibRoutes.length, 1);
+assert.equal(ipv6LocRibRoutes.length, 1);
 
 const { session: peerUpRefreshSession } = makeSession();
 const ipv4BgpRoute = addBgpSessionRoute(
@@ -1265,16 +1368,24 @@ peerUpRefreshSession.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
 );
 const refreshedBgpSession = peerUpRefreshSession.bgpSessionMap.get(ipv4BgpRoute.sessionKey);
-assert.equal(refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).size, 1);
-assert.equal(refreshedBgpSession.bgpRoutes.get(ipv6BgpRoute.afKey).get(ipv6BgpRoute.ribType).size, 1);
-assert.equal(
-    [...refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).values()][0].routeState,
-    BmpConst.BMP_ROUTE_STATE.STALE
+let refreshedIpv4Routes = queryBgpRoutes(
+    peerUpRefreshSession,
+    refreshedBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    ipv4BgpRoute.ribType
 );
-assert.equal(
-    [...refreshedBgpSession.bgpRoutes.get(ipv6BgpRoute.afKey).get(ipv6BgpRoute.ribType).values()][0].routeState,
-    BmpConst.BMP_ROUTE_STATE.STALE
+const refreshedIpv6Routes = queryBgpRoutes(
+    peerUpRefreshSession,
+    refreshedBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    ipv6BgpRoute.ribType
 );
+assert.equal(refreshedIpv4Routes.length, 1);
+assert.equal(refreshedIpv6Routes.length, 1);
+assert.equal(refreshedIpv4Routes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
+assert.equal(refreshedIpv6Routes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
 assert.deepEqual(refreshedBgpSession.enabledAddressFamilies, [
     { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST }
 ]);
@@ -1288,9 +1399,16 @@ peerUpRefreshSession.processMessage(
         ])
     )
 );
-assert.equal(refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).size, 2);
+refreshedIpv4Routes = queryBgpRoutes(
+    peerUpRefreshSession,
+    refreshedBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    ipv4BgpRoute.ribType
+);
+assert.equal(refreshedIpv4Routes.length, 2);
 assert.ok(
-    [...refreshedBgpSession.bgpRoutes.get(ipv4BgpRoute.afKey).get(ipv4BgpRoute.ribType).values()].some(
+    refreshedIpv4Routes.some(
         route => route.ip === '203.0.114.0' && route.routeState === BmpConst.BMP_ROUTE_STATE.ACTIVE
     )
 );
@@ -1310,6 +1428,14 @@ const peerDownIpv6Route = addBgpSessionRoute(
     '2001:db8:120::',
     64
 );
+const peerDownPostPolicyRoute = addBgpSessionRoute(
+    peerDownMultiAfSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    '203.0.122.0',
+    24,
+    BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN
+);
 peerDownIpv4Route.bgpSession.enabledAddressFamilies = [
     { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST },
     { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST }
@@ -1321,23 +1447,45 @@ peerDownMultiAfSession.processMessage(
         Buffer.concat([peerHeader(), Buffer.from([BmpConst.BMP_PEER_DOWN_REASON.PEER_DE_CONFIGURED])])
     )
 );
-assert.equal(
-    peerDownIpv4Route.bgpSession.bgpRoutes.get(peerDownIpv4Route.afKey).get(peerDownIpv4Route.ribType).size,
-    1
+let peerDownIpv4Routes = queryBgpRoutes(
+    peerDownMultiAfSession,
+    peerDownIpv4Route.bgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    peerDownIpv4Route.ribType
 );
-assert.equal(
-    peerDownIpv6Route.bgpSession.bgpRoutes.get(peerDownIpv6Route.afKey).get(peerDownIpv6Route.ribType).size,
-    1
+let peerDownIpv6Routes = queryBgpRoutes(
+    peerDownMultiAfSession,
+    peerDownIpv6Route.bgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    peerDownIpv6Route.ribType
 );
-assert.equal(
-    [...peerDownIpv4Route.bgpSession.bgpRoutes.get(peerDownIpv4Route.afKey).get(peerDownIpv4Route.ribType).values()][0]
-        .routeState,
-    BmpConst.BMP_ROUTE_STATE.STALE
+let peerDownPostPolicyRoutes = queryBgpRoutes(
+    peerDownMultiAfSession,
+    peerDownPostPolicyRoute.bgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    peerDownPostPolicyRoute.ribType
 );
+assert.equal(peerDownIpv4Routes.length, 1);
+assert.equal(peerDownIpv6Routes.length, 1);
+assert.equal(peerDownPostPolicyRoutes.length, 1);
+assert.equal(peerDownIpv4Routes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
+assert.equal(peerDownIpv6Routes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
 assert.equal(
-    [...peerDownIpv6Route.bgpSession.bgpRoutes.get(peerDownIpv6Route.afKey).get(peerDownIpv6Route.ribType).values()][0]
-        .routeState,
-    BmpConst.BMP_ROUTE_STATE.STALE
+    peerDownPostPolicyRoutes[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE,
+    'Peer Down flags must not leave another monitored RIB view active'
+);
+assert.deepEqual(
+    Array.from(peerDownIpv4Route.bgpSession.routeScopes.keys()).sort(),
+    [
+        `${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}|${BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN}`,
+        `${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}|${BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN}`,
+        `${BgpConst.BGP_AFI_TYPE.AFI_IPV6}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}|${BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN}`
+    ].sort(),
+    'Peer Down must not synthesize unobserved AFI/SAFI and RIB scope combinations'
 );
 peerDownMultiAfSession.processMessage(
     bmpMessage(
@@ -1346,14 +1494,30 @@ peerDownMultiAfSession.processMessage(
         peerUpPayloadForAf(BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
     )
 );
-assert.equal(
-    peerDownIpv4Route.bgpSession.bgpRoutes.get(peerDownIpv4Route.afKey).get(peerDownIpv4Route.ribType).size,
-    1
+peerDownIpv4Routes = queryBgpRoutes(
+    peerDownMultiAfSession,
+    peerDownIpv4Route.bgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    peerDownIpv4Route.ribType
 );
-assert.equal(
-    peerDownIpv6Route.bgpSession.bgpRoutes.get(peerDownIpv6Route.afKey).get(peerDownIpv6Route.ribType).size,
-    1
+peerDownIpv6Routes = queryBgpRoutes(
+    peerDownMultiAfSession,
+    peerDownIpv6Route.bgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    peerDownIpv6Route.ribType
 );
+peerDownPostPolicyRoutes = queryBgpRoutes(
+    peerDownMultiAfSession,
+    peerDownPostPolicyRoute.bgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    peerDownPostPolicyRoute.ribType
+);
+assert.equal(peerDownIpv4Routes.length, 1);
+assert.equal(peerDownIpv6Routes.length, 1);
+assert.equal(peerDownPostPolicyRoutes.length, 1);
 
 const { session: peerDownNotificationMultiAfSession } = makeSession();
 const peerDownNotificationIpv4Route = addBgpSessionRoute(
@@ -1390,8 +1554,13 @@ const notificationOwner = peerDownNotificationMultiAfSession.bgpSessionMap.get(
 assert.equal(notificationOwner, peerDownNotificationIpv4Route.bgpSession);
 assert.equal(notificationOwner.sessionState, BmpConst.BMP_SESSION_STATE.PEER_DOWN);
 assert.equal(
-    [...notificationOwner.bgpRoutes.get(peerDownNotificationIpv4Route.afKey).get(peerDownNotificationIpv4Route.ribType).values()][0]
-        .routeState,
+    queryBgpRoutes(
+        peerDownNotificationMultiAfSession,
+        notificationOwner,
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        peerDownNotificationIpv4Route.ribType
+    )[0].routeState,
     BmpConst.BMP_ROUTE_STATE.STALE
 );
 const notificationEpoch = notificationOwner.getRibEpoch(
@@ -1441,11 +1610,15 @@ addPathSession.processMessage(
     )
 );
 const addPathBgpSession = addPathSession.bgpSessionMap.get(bgpSessionKey);
-const addPathRouteMap = addPathBgpSession.bgpRoutes
-    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
-assert.equal(addPathRouteMap.size, 1);
-assert.equal([...addPathRouteMap.values()][0].pathId, 77);
+let addPathRoutes = queryBgpRoutes(
+    addPathSession,
+    addPathBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.equal(addPathRoutes.length, 1);
+assert.equal(addPathRoutes[0].pathId, 77);
 assert.equal(
     addPathBgpSession.addPathReceiveMap.get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`),
     true
@@ -1464,7 +1637,14 @@ addPathSession.processMessage(
         ])
     )
 );
-assert.equal(addPathRouteMap.size, 0);
+addPathRoutes = queryBgpRoutes(
+    addPathSession,
+    addPathBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.equal(addPathRoutes.length, 0);
 addPathSession.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
 );
@@ -1478,10 +1658,15 @@ addPathSession.processMessage(
         ])
     )
 );
-const addPathDisabledRouteMap = addPathBgpSession.bgpRoutes
-    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
-assert.equal([...addPathDisabledRouteMap.values()][0].pathId, 0);
+const addPathDisabledRoutes = queryBgpRoutes(
+    addPathSession,
+    addPathBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
+    BmpConst.BMP_ROUTE_STATE.ACTIVE
+);
+assert.equal(addPathDisabledRoutes[0].pathId, 0);
 assert.equal(
     addPathBgpSession.addPathMap.has(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`),
     false
@@ -1544,18 +1729,20 @@ assert.equal(
     ),
     false
 );
-const globalAndL3vpnPublicRoutes = [
-    ...globalAndL3vpnPublicSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
-const globalAndL3vpnPrivateRoutes = [
-    ...globalAndL3vpnPrivateSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
+const globalAndL3vpnPublicRoutes = queryBgpRoutes(
+    globalAndL3vpnAddPathSession,
+    globalAndL3vpnPublicSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+const globalAndL3vpnPrivateRoutes = queryBgpRoutes(
+    globalAndL3vpnAddPathSession,
+    globalAndL3vpnPrivateSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
 assert.ok(globalAndL3vpnPublicRoutes.some(route => route.ip === '203.0.118.0' && route.pathId === 0));
 assert.ok(globalAndL3vpnPrivateRoutes.some(route => route.ip === '10.200.0.0' && route.pathId === 66));
 
@@ -1578,12 +1765,13 @@ postRibOutUnadvertisedAfSession.processMessage(
     )
 );
 const postRibOutUnadvertisedAfBgpSession = postRibOutUnadvertisedAfSession.bgpSessionMap.get(bgpSessionKey);
-const postRibOutUnadvertisedLabelRoutes = [
-    ...postRibOutUnadvertisedAfBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT)
-        .values()
-];
+const postRibOutUnadvertisedLabelRoutes = queryBgpRoutes(
+    postRibOutUnadvertisedAfSession,
+    postRibOutUnadvertisedAfBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT
+);
 assert.ok(
     postRibOutUnadvertisedLabelRoutes.some(route => route.ip === '10.210.0.0' && route.labels === '307(BOS)'),
     'Session Post-Policy Adj-RIB-Out should store routes for AFs missing from Peer Up capabilities'
@@ -1615,18 +1803,20 @@ extendedFlagsPostPolicyRibOutSession.processMessage(
     )
 );
 const extendedFlagsPostPolicyRibOutBgpSession = extendedFlagsPostPolicyRibOutSession.bgpSessionMap.get(bgpSessionKey);
-const extendedFlagsPostPolicyAdjRibOutRoutes = [
-    ...extendedFlagsPostPolicyRibOutBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT)
-        .values()
-];
-const extendedFlagsPostPolicyPostAdjRibOutRoutes = [
-    ...extendedFlagsPostPolicyRibOutBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT)
-        .values()
-];
+const extendedFlagsPostPolicyAdjRibOutRoutes = queryBgpRoutes(
+    extendedFlagsPostPolicyRibOutSession,
+    extendedFlagsPostPolicyRibOutBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT
+);
+const extendedFlagsPostPolicyPostAdjRibOutRoutes = queryBgpRoutes(
+    extendedFlagsPostPolicyRibOutSession,
+    extendedFlagsPostPolicyRibOutBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT
+);
 assert.ok(
     !extendedFlagsPostPolicyAdjRibOutRoutes.some(route => route.ip === '203.0.127.0'),
     'BMPv4 Extended Flags TLV post-policy RIB-Out should not be copied into Adj-RIB-Out'
@@ -1652,23 +1842,25 @@ extendedFlagsHeaderRibOutSession.processMessage(
     )
 );
 const extendedFlagsHeaderRibOutBgpSession = extendedFlagsHeaderRibOutSession.bgpSessionMap.get(bgpSessionKey);
-const extendedFlagsClearedRibInRoutes = [
-    ...extendedFlagsHeaderRibOutBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
+const extendedFlagsClearedRibInRoutes = queryBgpRoutes(
+    extendedFlagsHeaderRibOutSession,
+    extendedFlagsHeaderRibOutBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
 assert.ok(
     extendedFlagsClearedRibInRoutes.some(route => route.ip === '203.0.119.0'),
     'BMPv4 Extended Flags TLV should override peer-header flags and clear Adj-RIB-Out for pre-policy RIB-In'
 );
 assert.ok(
-    ![
-        ...extendedFlagsHeaderRibOutBgpSession.bgpRoutes
-            .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-            .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT)
-            .values()
-    ].some(route => route.ip === '203.0.119.0'),
+    !queryBgpRoutes(
+        extendedFlagsHeaderRibOutSession,
+        extendedFlagsHeaderRibOutBgpSession,
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT
+    ).some(route => route.ip === '203.0.119.0'),
     'BMPv4 Extended Flags TLV value 0 must not leak header Adj-RIB-Out into the effective RIB type'
 );
 extendedFlagsHeaderRibOutSession.processMessage(
@@ -1686,12 +1878,13 @@ extendedFlagsHeaderRibOutSession.processMessage(
         ])
     )
 );
-const extendedFlagsSetRibOutRoutes = [
-    ...extendedFlagsHeaderRibOutBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT)
-        .values()
-];
+const extendedFlagsSetRibOutRoutes = queryBgpRoutes(
+    extendedFlagsHeaderRibOutSession,
+    extendedFlagsHeaderRibOutBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT
+);
 assert.ok(
     extendedFlagsSetRibOutRoutes.some(route => route.ip === '203.0.125.0'),
     'BMPv4 Extended Flags TLV should set Adj-RIB-Out even when peer-header only carries the X flag'
@@ -1717,18 +1910,20 @@ extendedFlagsPostPolicyRibInSession.processMessage(
     )
 );
 const extendedFlagsPostPolicyRibInBgpSession = extendedFlagsPostPolicyRibInSession.bgpSessionMap.get(bgpSessionKey);
-const extendedFlagsPostPolicyPreRibInRoutes = [
-    ...extendedFlagsPostPolicyRibInBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
-const extendedFlagsPostPolicyRibInRoutes = [
-    ...extendedFlagsPostPolicyRibInBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN)
-        .values()
-];
+const extendedFlagsPostPolicyPreRibInRoutes = queryBgpRoutes(
+    extendedFlagsPostPolicyRibInSession,
+    extendedFlagsPostPolicyRibInBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+const extendedFlagsPostPolicyRibInRoutes = queryBgpRoutes(
+    extendedFlagsPostPolicyRibInSession,
+    extendedFlagsPostPolicyRibInBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN
+);
 assert.ok(
     !extendedFlagsPostPolicyPreRibInRoutes.some(route => route.ip === '203.0.126.0'),
     'BMPv4 Extended Flags TLV post-policy RIB-In should not be copied into pre-policy Adj-RIB-In'
@@ -1776,18 +1971,20 @@ rightAlignedExtendedFlagsRibInSession.processMessage(
     )
 );
 const rightAlignedExtendedFlagsRibInBgpSession = rightAlignedExtendedFlagsRibInSession.bgpSessionMap.get(bgpSessionKey);
-const rightAlignedExtendedFlagsPreRibInRoutes = [
-    ...rightAlignedExtendedFlagsRibInBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
-const rightAlignedExtendedFlagsRibInRoutes = [
-    ...rightAlignedExtendedFlagsRibInBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN)
-        .values()
-];
+const rightAlignedExtendedFlagsPreRibInRoutes = queryBgpRoutes(
+    rightAlignedExtendedFlagsRibInSession,
+    rightAlignedExtendedFlagsRibInBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+const rightAlignedExtendedFlagsRibInRoutes = queryBgpRoutes(
+    rightAlignedExtendedFlagsRibInSession,
+    rightAlignedExtendedFlagsRibInBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN
+);
 assert.ok(
     !rightAlignedExtendedFlagsPreRibInRoutes.some(route => route.ip === '203.0.129.0'),
     'BMPv4 right-aligned Extended Flags TLV post-policy RIB-In should not update pre-policy Adj-RIB-In'
@@ -1848,12 +2045,13 @@ sixPeSession.processMessage(
     )
 );
 const sixPeBgpSession = sixPeSession.bgpSessionMap.get(bgpSessionKey);
-const sixPeRoutes = [
-    ...sixPeBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV6}|${BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
+const sixPeRoutes = queryBgpRoutes(
+    sixPeSession,
+    sixPeBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+    BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
 const sixPeRoute = sixPeRoutes.find(route => route.ip === '2001:db8:60::' && route.labels === '401(BOS)');
 assert.ok(sixPeRoute, '6PE IPv6 labeled-unicast route should be stored');
 assert.equal(
@@ -1937,18 +2135,20 @@ privateUnicastAddPathLabeledRouteSession.processMessage(
 const privateUnicastAddPathLabeledRouteBgpSession = privateUnicastAddPathLabeledRouteSession.bgpSessionMap.get(
     BmpBgpSession.makeKey(BmpConst.BMP_PEER_TYPE.L3VPN, '65000:201', '192.0.2.6', 65004)
 );
-const privateUnicastAddPathRoutes = [
-    ...privateUnicastAddPathLabeledRouteBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
-const privateLabeledUnicastRoutes = [
-    ...privateUnicastAddPathLabeledRouteBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
+const privateUnicastAddPathRoutes = queryBgpRoutes(
+    privateUnicastAddPathLabeledRouteSession,
+    privateUnicastAddPathLabeledRouteBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+const privateLabeledUnicastRoutes = queryBgpRoutes(
+    privateUnicastAddPathLabeledRouteSession,
+    privateUnicastAddPathLabeledRouteBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
 assert.ok(privateUnicastAddPathRoutes.some(route => route.ip === '10.201.1.0' && route.pathId === 68));
 assert.ok(privateLabeledUnicastRoutes.some(route => route.ip === '10.201.2.0' && route.pathId === 0));
 assert.ok(
@@ -2039,12 +2239,13 @@ privateLabeledAddPathUnicastNoAddPathSession.processMessage(
 const privateLabeledAddPathUnicastNoAddPathBgpSession = privateLabeledAddPathUnicastNoAddPathSession.bgpSessionMap.get(
     BmpBgpSession.makeKey(BmpConst.BMP_PEER_TYPE.L3VPN, '65000:202', '192.0.2.7', 65005)
 );
-const exactPrivateLabeledUnicastRoutes = [
-    ...privateLabeledAddPathUnicastNoAddPathBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST}`)
-        .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN)
-        .values()
-];
+const exactPrivateLabeledUnicastRoutes = queryBgpRoutes(
+    privateLabeledAddPathUnicastNoAddPathSession,
+    privateLabeledAddPathUnicastNoAddPathBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
 const exactPrivateLabeledRoute = exactPrivateLabeledUnicastRoutes.find(
     route => route.ip === '10.202.2.0' && route.pathId === 72
 );
@@ -2145,7 +2346,7 @@ const locRibLabeledRouteInstance = locRibUnicastAddPathLabeledRouteSession.bgpIn
         BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
     )
 );
-const locRibLabeledRoutes = [...locRibLabeledRouteInstance.bgpRoutes.values()];
+const locRibLabeledRoutes = queryLocRibRoutes(locRibUnicastAddPathLabeledRouteSession, locRibLabeledRouteInstance);
 assert.ok(
     !locRibLabeledRoutes.some(route => route.pathId === 71),
     'Loc-RIB labeled route must not infer ADD-PATH from IPv4 unicast when label AF was advertised'
@@ -2210,7 +2411,11 @@ assert.ok(
     locRibUnadvertisedLabelAfInstance,
     'Loc-RIB IPv4 label route should create instance even when Peer Up omitted label AF'
 );
-const locRibUnadvertisedLabelAfRoute = [...locRibUnadvertisedLabelAfInstance.bgpRoutes.values()].find(
+const locRibUnadvertisedLabelAfRoutes = queryLocRibRoutes(
+    locRibUnadvertisedLabelAfSession,
+    locRibUnadvertisedLabelAfInstance
+);
+const locRibUnadvertisedLabelAfRoute = locRibUnadvertisedLabelAfRoutes.find(
     route => route.ip === '1.1.1.0' && route.pathId === 76
 );
 assert.ok(
@@ -2227,7 +2432,7 @@ assert.ok(
     'Loc-RIB IPv4 label route inferred from unicast ADD-PATH should keep warning detail'
 );
 assert.ok(
-    ![...locRibUnadvertisedLabelAfInstance.bgpRoutes.values()].some(route => route.ip === '0.0.0.0'),
+    !locRibUnadvertisedLabelAfRoutes.some(route => route.ip === '0.0.0.0'),
     'Loc-RIB IPv4 label ADD-PATH inference must not leave a bogus 0.0.0.0 route'
 );
 
@@ -2284,9 +2489,8 @@ const locRibCrossRdLabelInstance = locRibDefaultRdLabelAddPathSession.bgpInstanc
     )
 );
 assert.ok(locRibCrossRdLabelInstance, 'Loc-RIB IPv4 label route should create its own RD instance');
-const locRibCrossRdLabelRoute = [...locRibCrossRdLabelInstance.bgpRoutes.values()].find(
-    route => route.ip === '10.105.2.0' && route.pathId === 0
-);
+const locRibCrossRdLabelRoutes = queryLocRibRoutes(locRibDefaultRdLabelAddPathSession, locRibCrossRdLabelInstance);
+const locRibCrossRdLabelRoute = locRibCrossRdLabelRoutes.find(route => route.ip === '10.105.2.0' && route.pathId === 0);
 assert.ok(
     locRibCrossRdLabelRoute,
     'Loc-RIB IPv4 label route must not infer ADD-PATH from RD 0:0 label-unicast capability'
@@ -2295,7 +2499,7 @@ assert.equal(locRibCrossRdLabelRoute.labels, '306(BOS)');
 assert.equal(locRibCrossRdLabelRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
 assert.equal(locRibCrossRdLabelRoute.nlriDetail.warnings.length, 0);
 assert.ok(
-    ![...locRibCrossRdLabelInstance.bgpRoutes.values()].some(route => route.ip === '0.0.0.0'),
+    !locRibCrossRdLabelRoutes.some(route => route.ip === '0.0.0.0'),
     'Loc-RIB IPv4 label route must not create a bogus 0.0.0.0 route from cross-RD ADD-PATH'
 );
 
@@ -2375,13 +2579,17 @@ const exactLocRibLabeledRouteInstance = locRibLabeledAddPathUnicastNoAddPathSess
         BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
     )
 );
-const exactLocRibLabeledRoute = [...exactLocRibLabeledRouteInstance.bgpRoutes.values()].find(
+const exactLocRibLabeledRoutes = queryLocRibRoutes(
+    locRibLabeledAddPathUnicastNoAddPathSession,
+    exactLocRibLabeledRouteInstance
+);
+const exactLocRibLabeledRoute = exactLocRibLabeledRoutes.find(
     route => route.ip === '10.103.2.0' && route.pathId === 73
 );
 assert.ok(exactLocRibLabeledRoute, 'Loc-RIB labeled exact ADD-PATH must not fall back to IPv4 unicast no ADD-PATH');
 assert.equal(exactLocRibLabeledRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.OK);
 assert.equal(exactLocRibLabeledRoute.nlriDetail.warnings.length, 0);
-const invalidLocRibNoLabelRoute = [...exactLocRibLabeledRouteInstance.bgpRoutes.values()].find(
+const invalidLocRibNoLabelRoute = exactLocRibLabeledRoutes.find(
     route => route.ip === '10.103.0.0' && route.mask === 16 && route.pathId === 75
 );
 assert.ok(invalidLocRibNoLabelRoute, 'Loc-RIB IPv4 labeled-unicast route without label should still be stored');
@@ -2426,10 +2634,13 @@ statelessAddPathSession.processMessage(
     )
 );
 const statelessBgpSession = statelessAddPathSession.bgpSessionMap.get(bgpSessionKey);
-const statelessRouteMap = statelessBgpSession.bgpRoutes
-    .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-    .get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
-const statelessRoutes = [...statelessRouteMap.values()];
+const statelessRoutes = queryBgpRoutes(
+    statelessAddPathSession,
+    statelessBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
 assert.ok(statelessRoutes.some(route => route.ip === '203.0.115.0' && route.pathId === 88));
 assert.ok(statelessRoutes.some(route => route.ip === '203.0.116.0' && route.pathId === 0));
 assert.equal(
@@ -2486,10 +2697,13 @@ statelessNoAddPathCompatCases.forEach(({ flags, prefix }) => {
 });
 const statelessNoAddPathCompatBgpSession = statelessNoAddPathCompatSession.bgpSessionMap.get(bgpSessionKey);
 statelessNoAddPathCompatCases.forEach(({ ribType, prefix }) => {
-    const routeMap = statelessNoAddPathCompatBgpSession.bgpRoutes
-        .get(`${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`)
-        .get(ribType);
-    const route = [...routeMap.values()].find(candidate => candidate.ip === prefix && candidate.pathId === 0);
+    const route = queryBgpRoutes(
+        statelessNoAddPathCompatSession,
+        statelessNoAddPathCompatBgpSession,
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        ribType
+    ).find(candidate => candidate.ip === prefix && candidate.pathId === 0);
     assert.ok(route, `stateless non-ADD-PATH route should be stored in RIB type ${ribType}`);
     assert.ok(
         hasRouteParseStatus(route.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING),
@@ -2528,9 +2742,10 @@ const statelessNoAddPathCompatLocRibInstance = statelessNoAddPathCompatSession.b
     )
 );
 assert.ok(statelessNoAddPathCompatLocRibInstance, 'stateless non-ADD-PATH Loc-RIB route should create instance');
-const statelessNoAddPathCompatLocRibRoute = [...statelessNoAddPathCompatLocRibInstance.bgpRoutes.values()].find(
-    route => route.ip === '203.0.254.0' && route.pathId === 0
-);
+const statelessNoAddPathCompatLocRibRoute = queryLocRibRoutes(
+    statelessNoAddPathCompatSession,
+    statelessNoAddPathCompatLocRibInstance
+).find(route => route.ip === '203.0.254.0' && route.pathId === 0);
 assert.ok(statelessNoAddPathCompatLocRibRoute, 'stateless non-ADD-PATH route should be stored in Loc-RIB');
 assert.ok(
     hasRouteParseStatus(statelessNoAddPathCompatLocRibRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.WARNING),
@@ -2605,7 +2820,7 @@ const huaweiDraft20Session = makeSession();
 huaweiDraft20Session.session.recvMsg(tcpPayloadFromEthernetFrame(huaweiDraft19Frame));
 const huaweiDraft20Instance = huaweiDraft20Session.session.bgpInstanceMap.get(locRibPeerUpInstanceKey);
 assert.equal(
-    huaweiDraft20Instance ? huaweiDraft20Instance.bgpRoutes.size : 0,
+    huaweiDraft20Instance ? queryLocRibRoutes(huaweiDraft20Session.session, huaweiDraft20Instance).length : 0,
     0,
     'draft-20 mode should not auto-detect Huawei draft-19 Route Monitoring TLVs'
 );
@@ -2617,7 +2832,7 @@ huaweiSession.recvMsg(tcpPayloadFromEthernetFrame(huaweiDraft19Frame));
 const huaweiLocRibInstance = huaweiSession.bgpInstanceMap.get(locRibPeerUpInstanceKey);
 assert.ok(huaweiLocRibInstance, 'Huawei BMPv4 draft-19 Loc-RIB messages should create a Loc-RIB instance');
 assert.deepEqual(huaweiLocRibInstance.vrfTableNames, ['global']);
-const huaweiRoutes = [...huaweiLocRibInstance.bgpRoutes.values()];
+const huaweiRoutes = queryLocRibRoutes(huaweiSession, huaweiLocRibInstance);
 assert.equal(huaweiRoutes.length, 1);
 assert.equal(huaweiRoutes[0].ip, '2.1.1.1');
 assert.ok(huaweiEvents.some(event => event.type === BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE));
@@ -2691,7 +2906,7 @@ const huaweiLabelAddPathInstance = huaweiLabelAddPathSession.bgpInstanceMap.get(
     )
 );
 assert.ok(huaweiLabelAddPathInstance, 'Huawei draft-19 Loc-RIB IPv4 label ADD-PATH frame should create label instance');
-const huaweiLabelAddPathRoutes = [...huaweiLabelAddPathInstance.bgpRoutes.values()];
+const huaweiLabelAddPathRoutes = queryLocRibRoutes(huaweiLabelAddPathSession, huaweiLabelAddPathInstance);
 assert.ok(
     huaweiLabelAddPathRoutes.some(
         route => route.ip === '2.1.1.2' && route.mask === 32 && route.pathId === 0 && route.labels === '48000(BOS)'

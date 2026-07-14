@@ -1,4 +1,6 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
@@ -8,6 +10,7 @@ const BmpSession = require('../../electron/worker/bmp/bmpSession');
 const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
+const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
 const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
 
 const AFI = BgpConst.BGP_AFI_TYPE.AFI_L2VPN;
@@ -197,17 +200,30 @@ class CaptureMessageHandler {
     sendEvent() {}
 }
 
-function makeWorker() {
+async function makeWorker() {
     const BmpWorker = loadBmpWorkerClass(__dirname, module);
     const worker = Object.create(BmpWorker.prototype);
     worker.bmpSessionMap = new Map();
     worker.messageHandler = new CaptureMessageHandler();
+    worker.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-evpn-report-'));
+    const dbPath = path.join(worker.tempDir, 'bmp.sqlite3');
+    worker.persistence = new BmpPersistenceClient({ dbPath, batchSize: 256, flushMs: 1 });
+    await worker.persistence.open();
+    worker.persistenceReader = new BmpPersistenceClient({ dbPath, readOnly: true });
+    await worker.persistenceReader.open();
     return worker;
 }
 
-function callWorker(worker, methodName, data) {
+async function closeWorker(worker) {
+    await worker.persistence?.drain();
+    await worker.persistenceReader?.close();
+    await worker.persistence?.close();
+    fs.rmSync(worker.tempDir, { recursive: true, force: true });
+}
+
+async function callWorker(worker, methodName, data) {
     const messageId = `${methodName}-${worker.messageHandler.responses.length + 1}`;
-    worker[methodName](messageId, data);
+    await worker[methodName](messageId, data);
     const response = worker.messageHandler.responses.find(item => item.messageId === messageId);
     assert.ok(response, `${methodName} did not send a response`);
     assert.equal(response.status, 'success', `${methodName} failed: ${response.msg}`);
@@ -223,11 +239,9 @@ function makeClient() {
     };
 }
 
-function makeBmpSession(client) {
-    const bmpSession = new BmpSession(
-        { sendEvent() {} },
-        { bmpConfigData: { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 } }
-    );
+function makeBmpSession(client, worker) {
+    worker.bmpConfigData = { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 };
+    const bmpSession = new BmpSession({ sendEvent() {} }, worker);
     bmpSession.localIp = client.localIp;
     bmpSession.localPort = client.localPort;
     bmpSession.remoteIp = client.remoteIp;
@@ -247,7 +261,7 @@ function makeBgpSession(bmpSession) {
     bgpSession.sessionState = BmpConst.BMP_SESSION_STATE.PEER_UP;
     bgpSession.enabledAddressFamilies = [{ afi: AFI, safi: SAFI }];
     bgpSession.ribTypes = [RIB_TYPE];
-    bgpSession.bgpRoutes.set(`${AFI}|${SAFI}`, new Map([[RIB_TYPE, new Map()]]));
+    bgpSession.ensureRouteScope(AFI, SAFI, RIB_TYPE);
     return bgpSession;
 }
 
@@ -268,17 +282,12 @@ function makeLocRibInstance(bmpSession) {
     return instance;
 }
 
-function addRouteToBgpSession(routeWriter, bgpSession, routeMap, parsedPacket, nlri) {
+function addRouteToBgpSession(routeWriter, bgpSession, parsedPacket, nlri) {
     const route = new BmpBgpRoute(bgpSession, null);
     routeWriter.setRouteNlri(route, nlri, AFI, SAFI);
     routeWriter.setRouteAttributes(route, parsedPacket);
     route.markActive(bgpSession.getRibEpoch(AFI, SAFI, RIB_TYPE));
-
-    const routeKey = route.getRouteKey();
-    assert.equal(routeMap.has(routeKey), false, `duplicate BGP session route key ${routeKey}`);
-    routeMap.set(routeKey, route);
-    bgpSession.recordRouteAdd(AFI, SAFI, RIB_TYPE, route);
-    bgpSession.addRouteToPrefixIndex(AFI, SAFI, RIB_TYPE, routeKey, route);
+    assert.equal(routeWriter.persistSessionRouteUpsert(bgpSession, route, AFI, SAFI, RIB_TYPE), true);
     return route;
 }
 
@@ -287,18 +296,13 @@ function addRouteToLocRib(routeWriter, instance, parsedPacket, nlri) {
     routeWriter.setRouteNlri(route, nlri, AFI, SAFI);
     routeWriter.setRouteAttributes(route, parsedPacket);
     route.markActive(instance.getRibEpoch());
-
-    const routeKey = route.getRouteKey();
-    assert.equal(instance.bgpRoutes.has(routeKey), false, `duplicate Loc-RIB route key ${routeKey}`);
-    instance.bgpRoutes.set(routeKey, route);
-    instance.recordRouteAdd(route);
-    instance.addRouteToPrefixIndex(routeKey, route);
+    assert.equal(routeWriter.persistInstanceRouteUpsert(instance, route, AFI, SAFI), true);
     return route;
 }
 
-function populateEvpnRoutes(bgpSession, locRibInstance) {
-    const routeWriter = new BmpSession({ sendEvent() {} }, { bmpConfigData: {} });
-    const sessionRouteMap = bgpSession.bgpRoutes.get(`${AFI}|${SAFI}`).get(RIB_TYPE);
+function populateEvpnRoutes(routeWriter, bgpSession, locRibInstance) {
+    const sessionRoutes = [];
+    const locRibRoutes = [];
     const seenTypes = new Set();
     const samples = {};
 
@@ -308,8 +312,9 @@ function populateEvpnRoutes(bgpSession, locRibInstance) {
             const { parsedPacket, nlri } = parseEvpnRoute(routeType, index);
             seenTypes.add(nlri.routeType);
 
-            const sessionRoute = addRouteToBgpSession(routeWriter, bgpSession, sessionRouteMap, parsedPacket, nlri);
-            addRouteToLocRib(routeWriter, locRibInstance, parsedPacket, nlri);
+            const sessionRoute = addRouteToBgpSession(routeWriter, bgpSession, parsedPacket, nlri);
+            sessionRoutes.push(sessionRoute);
+            locRibRoutes.push(addRouteToLocRib(routeWriter, locRibInstance, parsedPacket, nlri));
 
             if (!samples[routeType]) {
                 samples[routeType] = sessionRoute;
@@ -321,7 +326,7 @@ function populateEvpnRoutes(bgpSession, locRibInstance) {
         [...seenTypes].sort((a, b) => a - b),
         EVPN_ROUTE_TYPES
     );
-    return { sessionRouteMap, samples };
+    return { sessionRoutes, locRibRoutes, samples };
 }
 
 function assertPage(result, total, page, pageSize) {
@@ -341,144 +346,157 @@ function assertRouteTypesPresent(routes) {
     );
 }
 
-function main() {
-    const worker = makeWorker();
-    const client = makeClient();
-    const bmpSession = makeBmpSession(client);
-    const bgpSession = makeBgpSession(bmpSession);
-    const locRibInstance = makeLocRibInstance(bmpSession);
+async function main() {
+    const worker = await makeWorker();
+    try {
+        const client = makeClient();
+        const bmpSession = makeBmpSession(client, worker);
+        const bgpSession = makeBgpSession(bmpSession);
+        const locRibInstance = makeLocRibInstance(bmpSession);
 
-    bmpSession.bgpSessionMap.set(
-        BmpBgpSession.makeKey(bgpSession.sessionType, bgpSession.sessionRd, bgpSession.sessionIp, bgpSession.sessionAs),
-        bgpSession
-    );
-    bmpSession.bgpInstanceMap.set(
-        BmpBgpInstance.makeKey(locRibInstance.instanceType, locRibInstance.instanceRd, AFI, SAFI),
-        locRibInstance
-    );
-    worker.bmpSessionMap.set(
-        BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort),
-        bmpSession
-    );
+        bmpSession.bgpSessionMap.set(
+            BmpBgpSession.makeKey(
+                bgpSession.sessionType,
+                bgpSession.sessionRd,
+                bgpSession.sessionIp,
+                bgpSession.sessionAs
+            ),
+            bgpSession
+        );
+        bmpSession.bgpInstanceMap.set(
+            BmpBgpInstance.makeKey(locRibInstance.instanceType, locRibInstance.instanceRd, AFI, SAFI),
+            locRibInstance
+        );
+        worker.bmpSessionMap.set(
+            BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort),
+            bmpSession
+        );
 
-    const { sessionRouteMap, samples } = populateEvpnRoutes(bgpSession, locRibInstance);
-    assert.equal(sessionRouteMap.size, ROUTE_COUNT);
-    assert.equal(locRibInstance.bgpRoutes.size, ROUTE_COUNT);
-    assertRouteTypesPresent([...sessionRouteMap.values()]);
-    assertRouteTypesPresent([...locRibInstance.bgpRoutes.values()]);
+        const { sessionRoutes, locRibRoutes, samples } = populateEvpnRoutes(bmpSession, bgpSession, locRibInstance);
+        assert.equal(sessionRoutes.length, ROUTE_COUNT);
+        assert.equal(locRibRoutes.length, ROUTE_COUNT);
+        assertRouteTypesPresent(sessionRoutes);
+        assertRouteTypesPresent(locRibRoutes);
+        await worker.persistence.drain();
 
-    const sessions = callWorker(worker, 'getBgpSessions', client);
-    assert.equal(sessions.length, 1);
-    assert.equal(sessions[0].routeSummary.total, ROUTE_COUNT);
-    assert.ok(sessions[0].enabledAddrFamilyTypes.includes(AF));
+        const sessions = await callWorker(worker, 'getBgpSessions', client);
+        assert.equal(sessions.length, 1);
+        assert.equal(sessions[0].routeSummary.total, ROUTE_COUNT);
+        assert.ok(sessions[0].enabledAddrFamilyTypes.includes(AF));
 
-    const instances = callWorker(worker, 'getBgpInstances', client);
-    assert.equal(instances.length, 1);
-    assert.equal(instances[0].addrFamilyType, AF);
-    assert.equal(instances[0].routeSummary.total, ROUTE_COUNT);
+        const instances = await callWorker(worker, 'getBgpInstances', client);
+        assert.equal(instances.length, 1);
+        assert.equal(instances[0].addrFamilyType, AF);
+        assert.equal(instances[0].routeSummary.total, ROUTE_COUNT);
 
-    const sessionQuery = {
-        client,
-        session: bgpSession.getSessionInfo(),
-        af: AF,
-        ribType: RIB_TYPE,
-        routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
-    };
-    const instanceQuery = {
-        client,
-        instance: locRibInstance.getInstanceInfo(),
-        routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
-    };
+        const sessionQuery = {
+            client,
+            session: bgpSession.getSessionInfo(),
+            af: AF,
+            ribType: RIB_TYPE,
+            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
+        };
+        const instanceQuery = {
+            client,
+            instance: locRibInstance.getInstanceInfo(),
+            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
+        };
 
-    assertPage(
-        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }),
-        ROUTE_COUNT,
-        1,
-        PAGE_SIZE
-    );
-    assertPage(
-        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }),
-        ROUTE_COUNT,
-        2,
-        PAGE_SIZE
-    );
-    assertPage(
-        callWorker(worker, 'getBgpRoutes', {
+        assertPage(
+            await callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }),
+            ROUTE_COUNT,
+            1,
+            PAGE_SIZE
+        );
+        assertPage(
+            await callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }),
+            ROUTE_COUNT,
+            2,
+            PAGE_SIZE
+        );
+        assertPage(
+            await callWorker(worker, 'getBgpRoutes', {
+                ...sessionQuery,
+                page: Math.ceil(ROUTE_COUNT / PAGE_SIZE),
+                pageSize: PAGE_SIZE
+            }),
+            ROUTE_COUNT,
+            Math.ceil(ROUTE_COUNT / PAGE_SIZE),
+            PAGE_SIZE
+        );
+
+        assertPage(
+            await callWorker(worker, 'getBgpInstanceRoutes', { ...instanceQuery, page: 1, pageSize: PAGE_SIZE }),
+            ROUTE_COUNT,
+            1,
+            PAGE_SIZE
+        );
+        assertPage(
+            await callWorker(worker, 'getBgpInstanceRoutes', {
+                ...instanceQuery,
+                page: Math.ceil(ROUTE_COUNT / PAGE_SIZE),
+                pageSize: PAGE_SIZE
+            }),
+            ROUTE_COUNT,
+            Math.ceil(ROUTE_COUNT / PAGE_SIZE),
+            PAGE_SIZE
+        );
+
+        const macIpRoute = samples[2];
+        const macIpByPrefix = await callWorker(worker, 'getBgpRoutes', {
             ...sessionQuery,
-            page: Math.ceil(ROUTE_COUNT / PAGE_SIZE),
-            pageSize: PAGE_SIZE
-        }),
-        ROUTE_COUNT,
-        Math.ceil(ROUTE_COUNT / PAGE_SIZE),
-        PAGE_SIZE
-    );
+            page: 1,
+            pageSize: PAGE_SIZE,
+            prefixFilter: macIpRoute.nlriDetail.ipAddress
+        });
+        assert.equal(macIpByPrefix.total, 1);
+        assert.equal(macIpByPrefix.list[0].routeKey, macIpRoute.getRouteKey());
 
-    assertPage(
-        callWorker(worker, 'getBgpInstanceRoutes', { ...instanceQuery, page: 1, pageSize: PAGE_SIZE }),
-        ROUTE_COUNT,
-        1,
-        PAGE_SIZE
-    );
-    assertPage(
-        callWorker(worker, 'getBgpInstanceRoutes', {
+        const ipPrefixRoute = samples[5];
+        const ipPrefixByCidr = await callWorker(worker, 'getBgpInstanceRoutes', {
             ...instanceQuery,
-            page: Math.ceil(ROUTE_COUNT / PAGE_SIZE),
-            pageSize: PAGE_SIZE
-        }),
-        ROUTE_COUNT,
-        Math.ceil(ROUTE_COUNT / PAGE_SIZE),
-        PAGE_SIZE
-    );
+            page: 1,
+            pageSize: PAGE_SIZE,
+            prefixFilter: `${ipPrefixRoute.nlriDetail.ipPrefix}/${ipPrefixRoute.nlriDetail.prefixLength}`
+        });
+        assert.equal(ipPrefixByCidr.total, 1);
+        assert.equal(ipPrefixByCidr.list[0].routeKey, ipPrefixRoute.getRouteKey());
 
-    const macIpRoute = samples[2];
-    const macIpByPrefix = callWorker(worker, 'getBgpRoutes', {
-        ...sessionQuery,
-        page: 1,
-        pageSize: PAGE_SIZE,
-        prefixFilter: macIpRoute.nlriDetail.ipAddress
-    });
-    assert.equal(macIpByPrefix.total, 1);
-    assert.equal(macIpByPrefix.list[0].routeKey, macIpRoute.getRouteKey());
+        const macIpScan = await callWorker(worker, 'getBgpRoutes', {
+            ...sessionQuery,
+            page: 1,
+            pageSize: PAGE_SIZE,
+            prefixFilter: 'evpn:mac-ip'
+        });
+        assert.equal(macIpScan.total, ROUTES_PER_TYPE);
+        assert.equal(macIpScan.list.length, Math.min(PAGE_SIZE, ROUTES_PER_TYPE));
+        assert.ok(macIpScan.list.every(route => route.ip.includes('evpn:mac-ip')));
 
-    const ipPrefixRoute = samples[5];
-    const ipPrefixByCidr = callWorker(worker, 'getBgpInstanceRoutes', {
-        ...instanceQuery,
-        page: 1,
-        pageSize: PAGE_SIZE,
-        prefixFilter: `${ipPrefixRoute.nlriDetail.ipPrefix}/${ipPrefixRoute.nlriDetail.prefixLength}`
-    });
-    assert.equal(ipPrefixByCidr.total, 1);
-    assert.equal(ipPrefixByCidr.list[0].routeKey, ipPrefixRoute.getRouteKey());
+        const sessionDetail = await callWorker(worker, 'getBgpRouteDetail', {
+            ...sessionQuery,
+            routeKey: samples[11].getRouteKey()
+        });
+        assert.equal(sessionDetail.routeType, 11);
+        assert.equal(sessionDetail.nlriDetail.routeTypeName, 'Leaf A-D');
+        assert.equal(Object.prototype.hasOwnProperty.call(sessionDetail, 'summary'), false);
 
-    const macIpScan = callWorker(worker, 'getBgpRoutes', {
-        ...sessionQuery,
-        page: 1,
-        pageSize: PAGE_SIZE,
-        prefixFilter: 'evpn:mac-ip'
-    });
-    assert.equal(macIpScan.total, ROUTES_PER_TYPE);
-    assert.equal(macIpScan.list.length, Math.min(PAGE_SIZE, ROUTES_PER_TYPE));
-    assert.ok(macIpScan.list.every(route => route.ip.includes('evpn:mac-ip')));
+        const locRibDetail = await callWorker(worker, 'getBgpInstanceRouteDetail', {
+            ...instanceQuery,
+            routeKey: samples[6].getRouteKey()
+        });
+        assert.equal(locRibDetail.routeType, 6);
+        assert.equal(locRibDetail.nlriDetail.routeTypeName, 'Selective Multicast Ethernet Tag');
+        assert.equal(locRibDetail.nlriDetail.groupAddress.startsWith('239.'), true);
 
-    const sessionDetail = callWorker(worker, 'getBgpRouteDetail', {
-        ...sessionQuery,
-        routeKey: samples[11].getRouteKey()
-    });
-    assert.equal(sessionDetail.routeType, 11);
-    assert.equal(sessionDetail.nlriDetail.routeTypeName, 'Leaf A-D');
-    assert.equal(Object.prototype.hasOwnProperty.call(sessionDetail, 'summary'), false);
-
-    const locRibDetail = callWorker(worker, 'getBgpInstanceRouteDetail', {
-        ...instanceQuery,
-        routeKey: samples[6].getRouteKey()
-    });
-    assert.equal(locRibDetail.routeType, 6);
-    assert.equal(locRibDetail.nlriDetail.routeTypeName, 'Selective Multicast Ethernet Tag');
-    assert.equal(locRibDetail.nlriDetail.groupAddress.startsWith('239.'), true);
-
-    console.log(
-        `EVPN BGP route reporting passed: routeTypes=${EVPN_ROUTE_TYPES.join(',')}, sessionRoutes=${ROUTE_COUNT}, locRibRoutes=${ROUTE_COUNT}, pageSize=${PAGE_SIZE}`
-    );
+        console.log(
+            `EVPN BGP route reporting passed: routeTypes=${EVPN_ROUTE_TYPES.join(',')}, sessionRoutes=${ROUTE_COUNT}, locRibRoutes=${ROUTE_COUNT}, pageSize=${PAGE_SIZE}`
+        );
+    } finally {
+        await closeWorker(worker);
+    }
 }
 
-main();
+main().catch(error => {
+    console.error(error);
+    process.exitCode = 1;
+});

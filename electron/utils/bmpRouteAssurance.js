@@ -35,6 +35,24 @@ const EGRESS_COMPARE_FIELDS = [
     'prefixSid',
     'labels'
 ];
+const RETAINED_ROUTE_FIELDS = [
+    'routeKey',
+    'afi',
+    'safi',
+    'addrFamilyType',
+    'ip',
+    'mask',
+    'rd',
+    'pathId',
+    'pathStatus',
+    'pathStatusText',
+    'routeState',
+    'routeType',
+    'dqpn',
+    'dqpnBits',
+    ...EGRESS_COMPARE_FIELDS
+];
+const RETAINED_NLRI_DETAIL_FIELDS = ['prefix', 'rd', 'routeType', 'routeTypeName', 'nlriTypeName', 'dqpn', 'dqpnBits'];
 
 function stableId(parts) {
     return crypto
@@ -185,7 +203,38 @@ function makePeerInfo(sessionKey, session) {
     };
 }
 
-function makeEntry({ client, ownerKey, owner, peer, stage, ribType, route }) {
+function cloneRetainedValue(value) {
+    if (Array.isArray(value)) {
+        return value.map(cloneRetainedValue);
+    }
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneRetainedValue(item)]));
+    }
+    return value;
+}
+
+function makeRetainedRoute(routeInfo) {
+    const retained = {};
+    RETAINED_ROUTE_FIELDS.forEach(field => {
+        if (routeInfo[field] !== undefined) {
+            retained[field] = cloneRetainedValue(routeInfo[field]);
+        }
+    });
+    if (routeInfo.nlriDetail && typeof routeInfo.nlriDetail === 'object') {
+        const nlriDetail = {};
+        RETAINED_NLRI_DETAIL_FIELDS.forEach(field => {
+            if (routeInfo.nlriDetail[field] !== undefined) {
+                nlriDetail[field] = cloneRetainedValue(routeInfo.nlriDetail[field]);
+            }
+        });
+        if (Object.keys(nlriDetail).length > 0) {
+            retained.nlriDetail = nlriDetail;
+        }
+    }
+    return retained;
+}
+
+function makeEntry({ client, ownerKey, owner, peer, stage, ribType, route, sourceKey, retainFullRoute = true }) {
     const routeInfo = typeof route?.getRouteInfo === 'function' ? route.getRouteInfo() : { ...route };
     const afi = Number(routeInfo.afi);
     const safi = Number(routeInfo.safi);
@@ -207,7 +256,8 @@ function makeEntry({ client, ownerKey, owner, peer, stage, ribType, route }) {
         displayPrefix: getRouteDisplayPrefix(routeInfo),
         routeLensQuery: getRouteLensQuery(routeInfo),
         vrfTableNames,
-        route
+        route: retainFullRoute ? route : makeRetainedRoute(routeInfo),
+        sourceKey: sourceKey || null
     };
 }
 
@@ -238,6 +288,7 @@ function makeCompactEntry(entry, meta) {
         peer: entry.peer,
         ownerKey: entry.ownerKey,
         route: entry.route,
+        sourceKey: entry.sourceKey || null,
         meta
     };
 }
@@ -446,6 +497,322 @@ function removeFacetEntry(facets, entry) {
     }
 }
 
+function normalizePersistedScope(scopeKind) {
+    const normalized = normalizedText(scopeKind);
+    return normalized === 'instance' || normalized === 'loc-rib' || normalized === 'locrib' ? 'instance' : 'session';
+}
+
+function makePersistedRouteAssuranceSourceKey(context = {}) {
+    const sourceId = context.sourceId ?? context.clientKey ?? '';
+    const scopeId = context.scopeId ?? '';
+    const routeId = context.routeId ?? '';
+    if (scopeId && routeId) {
+        return ['persisted', sourceId, scopeId, routeId].map(value => String(value ?? '')).join('\u001f');
+    }
+    return makeRouteAssuranceSourceKey({
+        clientKey: sourceId,
+        scope: normalizePersistedScope(context.scopeKind ?? context.scope),
+        ownerKey: context.ownerKey ?? scopeId,
+        stage: context.stage,
+        ribType: context.ribType,
+        routeKey: context.routeKey ?? routeId
+    });
+}
+
+function makePersistedOwnerKey(scope, ownerKey, scopeId, peer = {}) {
+    if (scope === 'instance') {
+        return String(ownerKey || scopeId || ['loc-rib', peer.type, peer.rd, peer.vrf].join('|'));
+    }
+    if (
+        [peer.type, peer.rd, peer.rdRaw, peer.ip, peer.as].some(
+            value => value !== null && value !== undefined && value !== ''
+        )
+    ) {
+        return ['peer', peer.type, peer.rd, peer.rdRaw, peer.ip, peer.as]
+            .map(value => String(value ?? ''))
+            .join('\u001f');
+    }
+    return String(ownerKey || scopeId || 'peer');
+}
+
+function makePersistedRouteContext(row, overrides = {}) {
+    if (!row || typeof row !== 'object') {
+        return null;
+    }
+    const isEnvelope =
+        row.route &&
+        typeof row.route === 'object' &&
+        ['sourceId', 'scopeId', 'scopeKind', 'ownerKey', 'routeId', 'ribType'].some(field => row[field] !== undefined);
+    const route = overrides.route || (isEnvelope ? row.route : row);
+    if (!route || typeof route !== 'object') {
+        return null;
+    }
+    const previous = overrides.previous || row.previous || null;
+    const identityRoute = route || previous || {};
+    const sourceInfo = overrides.source || row.source || identityRoute.source || previous?.source || {};
+    const peer = overrides.peer || row.peer || identityRoute.peer || previous?.peer || {};
+    const sourceId =
+        overrides.sourceId ??
+        row.sourceId ??
+        identityRoute.persistentSourceId ??
+        previous?.persistentSourceId ??
+        sourceInfo.id ??
+        sourceInfo.key;
+    const scopeId = overrides.scopeId ?? row.scopeId ?? identityRoute.persistentScopeId ?? previous?.persistentScopeId;
+    const routeId =
+        overrides.routeId ??
+        row.routeId ??
+        identityRoute.persistentRouteId ??
+        previous?.persistentRouteId ??
+        identityRoute.routeKey ??
+        previous?.routeKey;
+    const scopeKind =
+        overrides.scopeKind ??
+        overrides.scope ??
+        row.scopeKind ??
+        row.scope ??
+        identityRoute.scopeKind ??
+        previous?.scopeKind;
+    const scope = normalizePersistedScope(scopeKind);
+    const ribType =
+        overrides.ribType ??
+        row.ribType ??
+        identityRoute.ribType ??
+        previous?.ribType ??
+        (scope === 'instance' ? 'loc-rib' : null);
+    const stage = overrides.stage || row.stage || getRouteAssuranceStage(ribType, scope);
+    if (!sourceId || !routeId || !stage) {
+        return null;
+    }
+    const ownerKey = makePersistedOwnerKey(
+        scope,
+        overrides.ownerKey ?? row.ownerKey ?? identityRoute.ownerKey ?? previous?.ownerKey,
+        scopeId,
+        peer
+    );
+    const afi = Number(overrides.afi ?? row.afi ?? identityRoute.afi ?? previous?.afi);
+    const safi = Number(overrides.safi ?? row.safi ?? identityRoute.safi ?? previous?.safi);
+    const routeKey = String(
+        overrides.routeKey ?? row.routeKey ?? identityRoute.routeKey ?? previous?.routeKey ?? routeId
+    );
+    const normalizedRoute = {
+        ...identityRoute,
+        ...(Number.isFinite(afi) ? { afi } : {}),
+        ...(Number.isFinite(safi) ? { safi } : {}),
+        routeKey
+    };
+    const clientInfo = {
+        sysName: sourceInfo.sysName || '',
+        localIp: sourceInfo.localIp || '',
+        localPort: sourceInfo.localPort ?? null,
+        remoteIp: sourceInfo.remoteIp || '',
+        remotePort: sourceInfo.remotePort ?? null
+    };
+    const vrfTableNames = Array.from(
+        new Set(
+            [peer.vrf, row.vrfName, identityRoute.vrfName]
+                .flatMap(value => (Array.isArray(value) ? value : [value]))
+                .filter(value => typeof value === 'string' && value.trim())
+                .map(value => value.trim())
+        )
+    );
+    const owner =
+        scope === 'instance'
+            ? {
+                  instanceType: peer.type ?? null,
+                  instanceRd: peer.rd || '0:0',
+                  instanceIp: peer.ip || '',
+                  instanceAs: peer.as ?? null,
+                  vrfTableNames
+              }
+            : {
+                  sessionType: peer.type ?? null,
+                  sessionRd: peer.rd || '0:0',
+                  sessionIp: peer.ip || '',
+                  sessionAs: peer.as ?? null,
+                  vrfTableNames
+              };
+    const sourceKey =
+        overrides.sourceKey ||
+        row.sourceKey ||
+        makePersistedRouteAssuranceSourceKey({
+            sourceId,
+            scopeId,
+            routeId,
+            scope,
+            ownerKey,
+            stage,
+            ribType,
+            routeKey
+        });
+    return {
+        clientKey: String(overrides.clientKey ?? row.clientKey ?? sourceId),
+        client: { key: String(overrides.clientKey ?? row.clientKey ?? sourceId), ...clientInfo },
+        bmpSession: { getClientInfo: () => clientInfo },
+        scope,
+        ownerKey,
+        owner,
+        peer:
+            scope === 'session'
+                ? {
+                      key: ownerKey,
+                      ip: peer.ip || '',
+                      as: peer.as ?? null,
+                      rd: peer.rd || '0:0',
+                      type: peer.type ?? null
+                  }
+                : null,
+        stage,
+        ribType: scope === 'instance' ? 'loc-rib' : Number(ribType),
+        afi,
+        safi,
+        routeKey,
+        route: normalizedRoute,
+        sourceKey,
+        sourceId: String(sourceId),
+        scopeId: scopeId === undefined || scopeId === null ? '' : String(scopeId),
+        routeId: String(routeId),
+        retainFullRoute: false
+    };
+}
+
+function normalizeBmpRouteAssuranceCommittedDelta(delta = {}) {
+    const action = normalizedText(delta.action);
+    if (action !== 'upsert' && action !== 'delete') {
+        throw new TypeError("BMP Route Assurance committed delta action 必须是 'upsert' 或 'delete'");
+    }
+    const scopeDescriptor =
+        (delta.scope && typeof delta.scope === 'object' && delta.scope) ||
+        (delta.mutation?.scope && typeof delta.mutation.scope === 'object' && delta.mutation.scope) ||
+        {};
+    const sourceValue =
+        (delta.source && typeof delta.source === 'object' && delta.source) ||
+        (delta.mutation?.source && typeof delta.mutation.source === 'object' && delta.mutation.source) ||
+        null;
+    const connectionDescriptor =
+        (delta.connection && typeof delta.connection === 'object' && delta.connection) ||
+        (delta.mutation?.connection && typeof delta.mutation.connection === 'object' && delta.mutation.connection) ||
+        null;
+    const sourceDescriptor = sourceValue
+        ? {
+              ...sourceValue,
+              localIp: connectionDescriptor?.localIp ?? sourceValue.localIp,
+              localPort: connectionDescriptor?.localPort ?? sourceValue.localPort,
+              remoteIp: connectionDescriptor?.remoteIp ?? sourceValue.remoteIp,
+              remotePort: connectionDescriptor?.remotePort ?? sourceValue.remotePort
+          }
+        : connectionDescriptor;
+    const currentRoute = delta.route || delta.current || null;
+    const identityRoute = currentRoute ||
+        delta.previous || {
+            routeKey: delta.routeKey || delta.legacyRouteKey || delta.routeId,
+            persistentRouteId: delta.routeId,
+            persistentScopeId: delta.scopeId,
+            persistentSourceId: delta.sourceId,
+            afi: delta.afi ?? scopeDescriptor.afi,
+            safi: delta.safi ?? scopeDescriptor.safi,
+            scopeKind: delta.scopeKind ?? scopeDescriptor.kind,
+            ribType: delta.ribType ?? scopeDescriptor.ribType,
+            source: sourceDescriptor,
+            peer: delta.peer
+        };
+    const scopePeer = {
+        type: scopeDescriptor.peerType,
+        rd: scopeDescriptor.peerRd,
+        ip: scopeDescriptor.peerIp,
+        as: scopeDescriptor.peerAs,
+        vrf: scopeDescriptor.vrfName,
+        ...(delta.peer || identityRoute.peer || delta.previous?.peer || {})
+    };
+    const context = makePersistedRouteContext(identityRoute, {
+        sourceId: delta.sourceId ?? sourceDescriptor?.id,
+        clientKey: delta.clientKey,
+        scopeId: delta.scopeId ?? scopeDescriptor.id,
+        routeId: delta.routeId,
+        scopeKind: delta.scopeKind ?? scopeDescriptor.kind,
+        ownerKey: delta.ownerKey ?? scopeDescriptor.ownerKey,
+        afi: delta.afi ?? scopeDescriptor.afi,
+        safi: delta.safi ?? scopeDescriptor.safi,
+        ribType: delta.ribType ?? scopeDescriptor.ribType,
+        stage: delta.stage,
+        routeKey: delta.routeKey ?? delta.legacyRouteKey,
+        sourceKey: delta.sourceKey,
+        source: sourceDescriptor || identityRoute.source || delta.previous?.source,
+        peer: scopePeer,
+        route: identityRoute,
+        previous: delta.previous
+    });
+    if (!context) {
+        throw new TypeError('BMP Route Assurance committed delta 缺少 source/scope/route identity 或有效 RIB stage');
+    }
+    return {
+        ...context,
+        action,
+        previous: delta.previous || null,
+        route: action === 'delete' ? currentRoute || delta.previous || context.route : context.route,
+        isNew: delta.isNew === true,
+        retainFullRoute: false
+    };
+}
+
+async function* flattenPersistedRouteRows(value) {
+    const resolved = await value;
+    if (!resolved) {
+        return;
+    }
+    if (Array.isArray(resolved)) {
+        for (const row of resolved) {
+            yield row;
+        }
+        return;
+    }
+    if (Array.isArray(resolved.list) || Array.isArray(resolved.rows)) {
+        for (const row of resolved.list || resolved.rows) {
+            yield row;
+        }
+        return;
+    }
+    if (typeof resolved[Symbol.asyncIterator] === 'function') {
+        for await (const item of resolved) {
+            yield* flattenPersistedRouteRows(item);
+        }
+        return;
+    }
+    if (typeof resolved[Symbol.iterator] === 'function' && typeof resolved !== 'string') {
+        for (const item of resolved) {
+            yield* flattenPersistedRouteRows(item);
+        }
+        return;
+    }
+    yield resolved;
+}
+
+async function* iteratePersistedRouteRows(source) {
+    if (typeof source !== 'function') {
+        yield* flattenPersistedRouteRows(source);
+        return;
+    }
+    let cursor = null;
+    const seenCursors = new Set();
+    while (true) {
+        const page = await source(cursor);
+        if (!page) {
+            return;
+        }
+        yield* flattenPersistedRouteRows(page);
+        const nextCursor = page.nextCursor ?? null;
+        if (!nextCursor) {
+            return;
+        }
+        const cursorKey = typeof nextCursor === 'string' ? nextCursor : JSON.stringify(nextCursor);
+        if (seenCursors.has(cursorKey)) {
+            throw new Error('BMP Route Assurance 持久化分页游标未向前推进');
+        }
+        seenCursors.add(cursorKey);
+        cursor = nextCursor;
+    }
+}
+
 function* iterateRouteAssuranceSources(bmpSessionMap, filters) {
     const sourceMap = bmpSessionMap instanceof Map ? bmpSessionMap : new Map();
     for (const [clientKey, bmpSession] of sourceMap) {
@@ -541,12 +908,31 @@ function makeEmptyCollection() {
         stagePathCounts: Object.fromEntries(STAGES.map(stage => [stage, 0])),
         grouped: new Map(),
         sourceEntries: new WeakMap(),
+        sourceEntriesByKey: new Map(),
+        sourcePathKeys: new Set(),
         facets: makeFacetAccumulator()
     };
 }
 
+function addSourceEntryIndex(index, key, entry) {
+    if (!index || key === null || key === undefined || key === '') {
+        return;
+    }
+    const existing = index.get(key);
+    if (!existing) {
+        index.set(key, entry);
+    } else if (Array.isArray(existing)) {
+        existing.push(entry);
+    } else {
+        index.set(key, [existing, entry]);
+    }
+}
+
 function collectRouteAssuranceSource(collection, source, filters) {
     collection.scannedPathCount += 1;
+    if (source.sourceKey) {
+        collection.sourcePathKeys.add(source.sourceKey);
+    }
     if (!source.route || !routeStateMatches(source.route, filters.routeState)) {
         return;
     }
@@ -568,14 +954,10 @@ function collectRouteAssuranceSource(collection, source, filters) {
     const compactEntry = makeCompactEntry(entry, group.meta);
     addGroupStageEntry(group, source.stage, compactEntry);
     if ((typeof source.route === 'object' && source.route !== null) || typeof source.route === 'function') {
-        const existingSourceEntry = collection.sourceEntries.get(source.route);
-        if (!existingSourceEntry) {
-            collection.sourceEntries.set(source.route, compactEntry);
-        } else if (Array.isArray(existingSourceEntry)) {
-            existingSourceEntry.push(compactEntry);
-        } else {
-            collection.sourceEntries.set(source.route, [existingSourceEntry, compactEntry]);
-        }
+        addSourceEntryIndex(collection.sourceEntries, source.route, compactEntry);
+    }
+    if (source.sourceKey) {
+        addSourceEntryIndex(collection.sourceEntriesByKey, source.sourceKey, compactEntry);
     }
     collection.stagePathCounts[source.stage] += 1;
     collection.filteredPathCount += 1;
@@ -603,6 +985,33 @@ async function collectGroupedEntriesAsync(bmpSessionMap, filters, options = {}) 
             const error = new Error('路由矩阵分析初始化已取消');
             error.code = 'BMP_ROUTE_ASSURANCE_CANCELLED';
             throw error;
+        }
+        collectRouteAssuranceSource(collection, source, filters);
+        chunkCount += 1;
+        if (chunkCount >= chunkSize) {
+            chunkCount = 0;
+            options.onProgress?.({ scannedPathCount: collection.scannedPathCount });
+            await yieldToEventLoop();
+        }
+    }
+    options.onProgress?.({ scannedPathCount: collection.scannedPathCount });
+    return collection;
+}
+
+async function collectPersistedGroupedEntriesAsync(routeRows, filters, options = {}) {
+    const collection = makeEmptyCollection();
+    const chunkSize = Math.max(100, Math.floor(Number(options.chunkSize)) || 5000);
+    let chunkCount = 0;
+    for await (const row of iteratePersistedRouteRows(routeRows)) {
+        if (options.shouldCancel?.()) {
+            const error = new Error('路由矩阵分析初始化已取消');
+            error.code = 'BMP_ROUTE_ASSURANCE_CANCELLED';
+            throw error;
+        }
+        const overrides = options.resolveContext?.(row) || {};
+        const source = makePersistedRouteContext(row, overrides);
+        if (!source || !entryMatchesClient({ client: source.client }, filters.client)) {
+            continue;
         }
         collectRouteAssuranceSource(collection, source, filters);
         chunkCount += 1;
@@ -852,8 +1261,8 @@ function buildGroupIssues(group) {
                 entries: postOut
             });
             issue.differences = differences;
-            issue.peers = Array.from(postOutByPeer.values(), peerEntries => peerEntries[0].peer).sort(
-                (left, right) => left.key.localeCompare(right.key)
+            issue.peers = Array.from(postOutByPeer.values(), peerEntries => peerEntries[0].peer).sort((left, right) =>
+                left.key.localeCompare(right.key)
             );
             issue.severity = 'warning';
             issues.push(issue);
@@ -1012,6 +1421,8 @@ function makeIncrementalState(collection, issueIndex) {
     return {
         grouped: collection.grouped,
         sourceEntries: collection.sourceEntries,
+        sourceEntriesByKey: collection.sourceEntriesByKey,
+        sourcePathKeys: collection.sourcePathKeys,
         facets: collection.facets,
         issuesByGroup,
         allIssuePositions,
@@ -1083,11 +1494,7 @@ function addGroupIssues(analysis, groupKey) {
     state.issuesByGroup.set(groupKey, nextIssues);
     nextIssues.forEach(issue => {
         addDenseIssue(analysis.allIssues, state.allIssuePositions, issue);
-        addDenseIssue(
-            analysis.issuesByCategory[issue.category],
-            state.categoryIssuePositions[issue.category],
-            issue
-        );
+        addDenseIssue(analysis.issuesByCategory[issue.category], state.categoryIssuePositions[issue.category], issue);
         updateEvidenceCount(state, issue.evidenceType, 1);
     });
 }
@@ -1121,7 +1528,9 @@ function makeRouteAssuranceEntry(context) {
         peer,
         stage,
         ribType: scope === 'instance' ? 'loc-rib' : Number(context.ribType),
-        route: context.route
+        route: context.route,
+        sourceKey: context.sourceKey,
+        retainFullRoute: context.retainFullRoute !== false
     });
 }
 
@@ -1135,20 +1544,48 @@ function entryMatchesAnalysis(entry, filters) {
     );
 }
 
-function removeAnalysisEntry(analysis, entry, sourceRoute) {
+function removeSourceEntryIndex(index, key, entry) {
+    if (!index || key === null || key === undefined || key === '') {
+        return;
+    }
+    const current = index.get(key);
+    if (Array.isArray(current)) {
+        const next = current.filter(item => item !== entry);
+        if (next.length === 0) {
+            index.delete(key);
+        } else if (next.length === 1) {
+            index.set(key, next[0]);
+        } else {
+            index.set(key, next);
+        }
+    } else if (current === entry) {
+        index.delete(key);
+    }
+}
+
+function removeAnalysisEntry(analysis, entry, sourceRoute, sourceKey = entry?.sourceKey) {
     const state = analysis._incremental;
     const groupKey = getEntryMeta(entry).groupKey;
     const group = state.grouped.get(groupKey);
     if (!group) {
-        state.sourceEntries.delete(sourceRoute);
+        if ((typeof sourceRoute === 'object' && sourceRoute !== null) || typeof sourceRoute === 'function') {
+            removeSourceEntryIndex(state.sourceEntries, sourceRoute, entry);
+        }
+        removeSourceEntryIndex(state.sourceEntriesByKey, sourceKey, entry);
         return;
     }
     const previousStageCount = getGroupStageCount(group, entry.stage);
     if (!removeGroupStageEntry(group, entry.stage, entry)) {
-        state.sourceEntries.delete(sourceRoute);
+        if ((typeof sourceRoute === 'object' && sourceRoute !== null) || typeof sourceRoute === 'function') {
+            removeSourceEntryIndex(state.sourceEntries, sourceRoute, entry);
+        }
+        removeSourceEntryIndex(state.sourceEntriesByKey, sourceKey, entry);
         return;
     }
-    state.sourceEntries.delete(sourceRoute);
+    if ((typeof sourceRoute === 'object' && sourceRoute !== null) || typeof sourceRoute === 'function') {
+        removeSourceEntryIndex(state.sourceEntries, sourceRoute, entry);
+    }
+    removeSourceEntryIndex(state.sourceEntriesByKey, sourceKey, entry);
     removeFacetEntry(state.facets, entry);
     analysis.summary.stagePathCounts[entry.stage] = Math.max(
         0,
@@ -1165,7 +1602,7 @@ function removeAnalysisEntry(analysis, entry, sourceRoute) {
     }
 }
 
-function addAnalysisEntry(analysis, entry, sourceRoute) {
+function addAnalysisEntry(analysis, entry, sourceRoute, sourceKey = entry?.sourceKey) {
     const state = analysis._incremental;
     const nextMeta = makeGroupMeta(entry);
     const groupKey = nextMeta.groupKey;
@@ -1182,7 +1619,12 @@ function addAnalysisEntry(analysis, entry, sourceRoute) {
     }
     const compactEntry = makeCompactEntry(entry, group.meta);
     addGroupStageEntry(group, entry.stage, compactEntry);
-    state.sourceEntries.set(sourceRoute, compactEntry);
+    if ((typeof sourceRoute === 'object' && sourceRoute !== null) || typeof sourceRoute === 'function') {
+        addSourceEntryIndex(state.sourceEntries, sourceRoute, compactEntry);
+    }
+    if (sourceKey) {
+        addSourceEntryIndex(state.sourceEntriesByKey, sourceKey, compactEntry);
+    }
     recordFacetEntry(state.facets, entry);
     analysis.summary.stagePathCounts[entry.stage] = (analysis.summary.stagePathCounts[entry.stage] || 0) + 1;
     analysis.summary.filteredPathCount = (analysis.summary.filteredPathCount || 0) + 1;
@@ -1206,9 +1648,10 @@ function applyBmpRouteAssuranceMutation(analysis, mutation = {}) {
     );
     const previousRoute = mutation.previous || mutation.route;
     const previousSourceEntry =
-        previousRoute && (typeof previousRoute === 'object' || typeof previousRoute === 'function')
+        (mutation.sourceKey && state.sourceEntriesByKey?.get(mutation.sourceKey)) ||
+        (previousRoute && (typeof previousRoute === 'object' || typeof previousRoute === 'function')
             ? state.sourceEntries.get(previousRoute) || null
-            : null;
+            : null);
     const oldEntries = Array.isArray(previousSourceEntry)
         ? [...previousSourceEntry]
         : previousSourceEntry
@@ -1227,13 +1670,25 @@ function applyBmpRouteAssuranceMutation(analysis, mutation = {}) {
         affectedGroupKeys.add(`${nextEntry.client.key}\u001f${nextEntry.nlriKey}`);
     }
     affectedGroupKeys.forEach(groupKey => removeGroupIssues(analysis, groupKey));
-    oldEntries.forEach(oldEntry => removeAnalysisEntry(analysis, oldEntry, previousRoute));
+    oldEntries.forEach(oldEntry =>
+        removeAnalysisEntry(analysis, oldEntry, previousRoute, mutation.sourceKey || oldEntry.sourceKey)
+    );
     if (nextEntry) {
-        addAnalysisEntry(analysis, nextEntry, mutation.route);
+        addAnalysisEntry(analysis, nextEntry, mutation.route, mutation.sourceKey || nextEntry.sourceKey);
     }
     affectedGroupKeys.forEach(groupKey => addGroupIssues(analysis, groupKey));
 
-    if (mutation.adjustScannedPathCount !== false) {
+    if (mutation.adjustScannedPathCount !== false && mutation.sourceKey && state.sourcePathKeys) {
+        const wasCounted = state.sourcePathKeys.has(mutation.sourceKey);
+        const isCounted = mutation.action !== 'delete' && mutationClientMatches;
+        if (wasCounted && !isCounted) {
+            state.sourcePathKeys.delete(mutation.sourceKey);
+            analysis.summary.scannedPathCount = Math.max(0, (analysis.summary.scannedPathCount || 0) - 1);
+        } else if (!wasCounted && isCounted) {
+            state.sourcePathKeys.add(mutation.sourceKey);
+            analysis.summary.scannedPathCount = (analysis.summary.scannedPathCount || 0) + 1;
+        }
+    } else if (mutation.adjustScannedPathCount !== false) {
         if (mutation.action === 'delete' && mutationClientMatches) {
             analysis.summary.scannedPathCount = Math.max(0, (analysis.summary.scannedPathCount || 0) - 1);
         } else if (mutation.action !== 'delete' && mutation.isNew === true && mutationClientMatches) {
@@ -1253,14 +1708,16 @@ function applyBmpRouteAssuranceBootstrapMutation(analysis, mutation = {}) {
     if (!sourceEntries) {
         return false;
     }
+    if (mutation.sourceKey) {
+        return applyBmpRouteAssuranceMutation(analysis, mutation);
+    }
     const candidateRoutes =
         mutation.bootstrapCandidateRoutes instanceof Set
             ? Array.from(mutation.bootstrapCandidateRoutes)
             : [mutation.previous, mutation.route].filter(Boolean);
     const presentRoutes = candidateRoutes.filter(
         route =>
-            ((typeof route === 'object' && route !== null) || typeof route === 'function') &&
-            sourceEntries.has(route)
+            ((typeof route === 'object' && route !== null) || typeof route === 'function') && sourceEntries.has(route)
     );
     const finalRoutePresent =
         mutation.action !== 'delete' &&
@@ -1366,6 +1823,29 @@ async function buildBmpRouteAssuranceAnalysisAsync(bmpSessionMap, options = {}, 
     return finalizeBmpRouteAssuranceAnalysis(collection, filters, startedAt, issueIndex);
 }
 
+async function buildBmpRouteAssuranceAnalysisFromPersistedRoutesAsync(routeRows, options = {}, control = {}) {
+    const startedAt = Date.now();
+    const filters = normalizeFilters(options);
+    const collection = await collectPersistedGroupedEntriesAsync(routeRows, filters, control);
+    if (control.shouldCancel?.()) {
+        const error = new Error('路由矩阵分析初始化已取消');
+        error.code = 'BMP_ROUTE_ASSURANCE_CANCELLED';
+        throw error;
+    }
+    await yieldToEventLoop();
+    const issueIndex = await buildIssuesAsync(collection.grouped, {
+        issueChunkSize: control.issueChunkSize,
+        shouldCancel: control.shouldCancel,
+        onIssueProgress: progress => {
+            control.onProgress?.({
+                scannedPathCount: collection.scannedPathCount,
+                ...progress
+            });
+        }
+    });
+    return finalizeBmpRouteAssuranceAnalysis(collection, filters, startedAt, issueIndex);
+}
+
 function selectIssuePage(analysis, categories, offset, pageSize) {
     const allIssues = Array.isArray(analysis?.allIssues) ? analysis.allIssues : [];
     if (categories.length === 0) {
@@ -1450,11 +1930,14 @@ module.exports = {
     buildBmpRouteAssurance,
     buildBmpRouteAssuranceAnalysis,
     buildBmpRouteAssuranceAnalysisAsync,
+    buildBmpRouteAssuranceAnalysisFromPersistedRoutesAsync,
     countBmpRouteAssuranceSourcePaths,
     paginateBmpRouteAssuranceAnalysis,
     applyBmpRouteAssuranceMutation,
     applyBmpRouteAssuranceBootstrapMutation,
     getRouteAssuranceStage,
     makeRouteAssuranceEntry,
-    makeRouteAssuranceSourceKey
+    makeRouteAssuranceSourceKey,
+    makePersistedRouteAssuranceSourceKey,
+    normalizeBmpRouteAssuranceCommittedDelta
 };

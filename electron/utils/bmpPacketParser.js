@@ -282,7 +282,8 @@ function decodeBmpTlv(tlv, context) {
 
     if (
         (context === 'initiation' &&
-            (decoded.type === BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME ||
+            (decoded.type === BmpConst.BMP_INITIATION_TLV_TYPE.STRING ||
+                decoded.type === BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME ||
                 decoded.type === BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC ||
                 decoded.type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME)) ||
         ((context === 'peer-up' || context === 'peer-down' || context === 'termination') &&

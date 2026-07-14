@@ -195,6 +195,19 @@ function ipv4Update(
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, body);
 }
 
+function endOfRibUpdate(afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
+    if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
+        return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(0)]));
+    }
+
+    const mpUnreach = pathAttr(
+        BgpConst.BGP_PATH_ATTR.MP_UNREACH_NLRI,
+        Buffer.concat([u16(afi), Buffer.from([safi])]),
+        BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL
+    );
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(mpUnreach.length), mpUnreach]));
+}
+
 function labeledUnicastNlri(prefix, label = 300, pathId = null) {
     const rawLabel = (label << 4) | 1;
     const labelBytes = Buffer.from([(rawLabel >> 16) & 0xff, (rawLabel >> 8) & 0xff, rawLabel & 0xff]);
@@ -786,14 +799,25 @@ function buildScenario(options) {
             addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
         }
     ];
-    const evpnAddPathFamilies = [
+    // A Peer Up is a complete capability snapshot for one Loc-RIB RD. Keep
+    // IPv4 unicast in the default-RD snapshot when adding EVPN, otherwise the
+    // collector correctly treats the omitted IPv4 AF as removed/stale.
+    const defaultLocRibEvpnAddPathFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        },
         {
             afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
             addPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY
         }
     ];
-    const evpnReceiveAddPathFamilies = [
+    const defaultLocRibEvpnReceiveAddPathFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        },
         {
             afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
@@ -1507,8 +1531,8 @@ function buildScenario(options) {
                 BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
                 locRibPeerUpPayload({
                     vrfName: 'global-evpn',
-                    recvAddressFamilies: evpnAddPathFamilies,
-                    sendAddressFamilies: evpnReceiveAddPathFamilies
+                    recvAddressFamilies: defaultLocRibEvpnAddPathFamilies,
+                    sendAddressFamilies: defaultLocRibEvpnReceiveAddPathFamilies
                 })
             )
         },
@@ -1695,6 +1719,65 @@ function buildScenario(options) {
             }
         ])
     });
+
+    // Finish every Loc-RIB AF populated by the scenario. Peer Up starts a new
+    // epoch in syncing state; EOR makes the completed snapshot authoritative.
+    messages.push(
+        {
+            name: 'eor-loc-rib-default-ipv4-unicast',
+            data: routeMonitoringMessage(locRibPeer, endOfRibUpdate(), { vrfName: 'global' })
+        },
+        {
+            name: 'eor-loc-rib-route-lens-ipv4-unicast',
+            data: routeMonitoringMessage(routeLensLocRibPeer, endOfRibUpdate(), { vrfName: 'route-lens-lab' })
+        },
+        {
+            name: 'eor-loc-rib-private-ipv4-unicast',
+            data: routeMonitoringMessage(privateLocRibPeer, endOfRibUpdate(), { vrfName: 'vrf-blue' })
+        },
+        {
+            name: 'eor-loc-rib-private-label-peer-ipv4-unicast',
+            data: routeMonitoringMessage(privateLabelLocRibPeer, endOfRibUpdate(), { vrfName: 'vrf-label' })
+        },
+        {
+            name: 'eor-loc-rib-private-label-peer-labeled-unicast',
+            data: routeMonitoringMessage(
+                privateLabelLocRibPeer,
+                endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST),
+                { vrfName: 'vrf-label' }
+            )
+        },
+        {
+            name: 'eor-loc-rib-private-label-error-ipv4-unicast',
+            data: routeMonitoringMessage(privateLabelLocRibErrorPeer, endOfRibUpdate(), {
+                vrfName: 'vrf-label-error'
+            })
+        },
+        {
+            name: 'eor-loc-rib-private-label-error-labeled-unicast',
+            data: routeMonitoringMessage(
+                privateLabelLocRibErrorPeer,
+                endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST),
+                { vrfName: 'vrf-label-error' }
+            )
+        },
+        {
+            name: 'eor-loc-rib-default-evpn',
+            data: routeMonitoringMessage(
+                locRibPeer,
+                endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN),
+                { vrfName: 'global-evpn' }
+            )
+        },
+        {
+            name: 'eor-loc-rib-private-evpn',
+            data: routeMonitoringMessage(
+                privateEvpnLocRibPeer,
+                endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN),
+                { vrfName: 'vrf-evpn-blue' }
+            )
+        }
+    );
 
     return messages;
 }

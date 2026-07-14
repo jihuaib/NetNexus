@@ -11,6 +11,8 @@ const PER_AFI_SAFI_STATS_TYPES = new Set([
 
 function getInitiationTlvName(tlvType) {
     switch (tlvType) {
+        case BmpConst.BMP_INITIATION_TLV_TYPE.STRING:
+            return 'string';
         case BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME:
             return 'sysName';
         case BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC:

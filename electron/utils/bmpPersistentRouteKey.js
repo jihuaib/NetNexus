@@ -10,6 +10,7 @@ const AFI_L2VPN = 25;
 const AFI_BGP_LS = 16388;
 
 const SAFI_UNICAST = 1;
+const SAFI_MULTICAST = 2;
 const SAFI_LABEL_UNICAST = 4;
 const SAFI_BGP_LS = 71;
 const SAFI_BGP_LS_VPN = 72;
@@ -55,6 +56,13 @@ const NON_NLRI_FIELDS = new Set([
     'staleAt',
     'staleReason',
     'routeTlvs',
+    // These fields are copied onto EVPN NLRI objects from BGP path
+    // attributes by annotateEvpnPathAttributes(). A withdrawal commonly
+    // carries only MP_UNREACH_NLRI, so including them would give the same
+    // wire NLRI a different persistent route key on announce and withdraw.
+    'encapsulation',
+    'encapsulationType',
+    'pmsiTunnel',
     'pathStatus',
     'pathStatusNames',
     'pathStatusText',
@@ -503,7 +511,7 @@ function canonicalizeNlriIdentity(input = {}) {
 
     if (
         (afi === AFI_IPV4 || afi === AFI_IPV6) &&
-        (safi === SAFI_UNICAST || safi === SAFI_LABEL_UNICAST || safi === SAFI_VPN)
+        (safi === SAFI_UNICAST || safi === SAFI_MULTICAST || safi === SAFI_LABEL_UNICAST || safi === SAFI_VPN)
     ) {
         const identity = {
             kind: safi === SAFI_VPN ? 'vpn-prefix' : 'ip-prefix',

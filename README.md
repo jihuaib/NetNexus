@@ -42,6 +42,8 @@ npm run build
 npm run pack:mac:arm64
 npm run lint
 npm test
+npm run test:e2e:frr
+npm run frr:bmp:lab -- --help
 npm run mock:bmp
 npm run docs:screenshots
 npm run docs:pdf
@@ -50,9 +52,39 @@ npm run docs:pdf
 说明：
 
 - `npm run mock:bmp` 会向本机 BMP 服务发送模拟数据，用于查看 BMP 页面布局和接口返回。
+- `npm run test:e2e:frr` 会通过 Docker 启动两台固定为 `FRR 10.5.4` 的路由器，使用真实 BMPv3 客户端验证 Initiation、Peer Up/Down、pre/post-policy Route Monitoring、Loc-RIB、Statistics 和 SQLite 查询链路。测试覆盖 FRR BMP Route Monitoring 支持的 7 个地址族：IPv4/IPv6 Unicast、IPv4/IPv6 Multicast、VPNv4、VPNv6 和 L2VPN EVPN；默认在 5 个可伸缩地址族各生成 1024 条路由，Multicast 每族生成一条 default，共 5122 条源路由、15366 条三视图持久化路由。可通过 `FRR_BMP_ROUTES_PER_FAMILY` 调整每个可伸缩地址族的路由量；Labeled Unicast 和 Flowspec 不属于 FRR BMP Route Monitoring 支持范围，继续由 mock/解析器测试覆盖。运行前需要启动 Docker。
 - `npm run docs:screenshots` 会打开本地页面并更新 `docs/images` 下的文档截图，需要先启动 `npm start` 或设置 `NETNEXUS_DOCS_URL`；截图视口默认不小于 `1920x1200`，可用 `NETNEXUS_DOCS_WINDOW_WIDTH`、`NETNEXUS_DOCS_WINDOW_HEIGHT` 覆盖。脚本会自动启动 BGP、BMP、RPKI、FTP、DHCP、SNMP、NTP、RADIUS、TFTP、Syslog 和 TCP/UDP 工具 mock 服务，并注入演示数据。
 - `npm run docs:pdf` 会合并 `docs` 目录下的功能文档，生成带目录且展开全部截图的 `output/pdf/netnexus-docs.pdf`。README 和外部 API 参考不进入功能 PDF。
 - 标准端口如 `67`、`69`、`123` 在部分系统上需要管理员/root 权限，联调时可以改用高位端口。
+
+### 本地 FRR BMP 手工联调
+
+FRR 是 BMP 客户端，会主动连接 NetNexus 的 BMP 服务端。可以先创建并配置好常驻 FRR 环境，再启动本地 NetNexus：
+
+```bash
+# 终端 1：启动两台 FRR，建立双栈 BGP、注入路由并在后台常驻
+npm run frr:bmp:lab -- start --port 1790 --routes 1024
+
+# 终端 2：启动 NetNexus
+npm run dev
+```
+
+进入 NetNexus 的“BMP → BMP配置”，将“服务端端口”设为 `1790`，不启用认证，然后点击“启动服务器”。FRR 在 NetNexus 启动前连接失败不会退出，而会持续重试；连接成功后可在“BGP会话”“BGP Loc-RIB”及对应统计页面查看数据。
+
+`--routes`（也可写成 `--routes-per-family`）表示 5 个可扩展地址族中每个地址族的路由数；IPv4/IPv6 Multicast 各固定生成一条 default。默认值 `1024` 会产生 5122 条源路由，以及 15366 条 pre-policy、post-policy、Loc-RIB 三视图路由。其他管理命令：
+
+```bash
+# 查看双栈 BGP、BMP 连接和路由量状态
+npm run frr:bmp:lab -- status
+
+# 调整端口或路由量后重建已有环境
+npm run frr:bmp:lab -- start --port 1790 --routes 2048 --replace
+
+# 联调完成后删除本工作区创建的 FRR 容器和 Docker 网络
+npm run frr:bmp:lab -- stop
+```
+
+运行前需要启动 Docker。`status` 和 `stop` 只匹配当前工作区专属的 Docker label，不会清理自动 E2E 或其他 FRR 容器。
 
 ## 技术栈
 
@@ -81,6 +113,7 @@ NetNexus/
 │   ├── store/            # keep-alive 等状态
 │   └── view/             # 页面组件
 ├── test/ci/              # Node CI 测试脚本
+├── test/integration/     # 依赖真实协议实现的互操作 E2E
 ├── package.json
 └── vite.config.js
 ```
@@ -89,6 +122,7 @@ NetNexus/
 
 - [BGP 模拟器](docs/BGP_SIMULATOR.md)
 - [BMP 监控器](docs/BMP_MONITOR.md)
+- [BMP SQLite 数据库说明](docs/BMP_SQLITE_DATABASE.md)
 - [RPKI RTR 服务](docs/RPKI_VALIDATOR.md)
 - [SNMP 工具](docs/SNMP_MANAGER.md)
 - [FTP 服务器](docs/FTP_SERVER.md)

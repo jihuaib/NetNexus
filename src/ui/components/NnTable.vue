@@ -12,12 +12,12 @@
                         <div
                             ref="contentRef"
                             class="nn-table-content"
-                            :class="{ 'nn-scrollbar-active': scrollbarActive }"
+                            :class="{
+                                'nn-scrollbar-x-active': scrollbarXActive,
+                                'nn-scrollbar-y-active': scrollbarYActive
+                            }"
                             :style="contentStyle"
-                            @pointerenter="pinScrollbar"
-                            @pointermove="pinScrollbar"
-                            @pointerleave="hideScrollbar"
-                            @scroll.passive="showScrollbar"
+                            @scroll.passive="handleScroll"
                         >
                             <table :style="tableStyle">
                                 <colgroup>
@@ -257,8 +257,8 @@
 
     const emit = defineEmits(['change']);
     const slots = useSlots();
-    const { scrollbarActive, pinScrollbar, showScrollbar, hideScrollbar } = useAutoHideScrollbar();
     const contentRef = ref(null);
+    const { scrollbarXActive, scrollbarYActive, handleScroll } = useAutoHideScrollbar(contentRef);
     const localCurrentPage = ref(1);
     const localPageSize = ref(10);
     const quickPageInput = ref('1');
@@ -696,7 +696,7 @@
         border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
         background: var(--nn-color-bg-surface);
-        scrollbar-color: transparent transparent;
+        scrollbar-color: auto;
         scrollbar-width: thin;
     }
 
@@ -715,15 +715,13 @@
         background: transparent;
     }
 
-    .nn-table-content.nn-scrollbar-active {
-        scrollbar-color: var(--nn-color-text-placeholder) transparent;
-    }
-
-    .nn-table-content.nn-scrollbar-active::-webkit-scrollbar-thumb {
+    .nn-table-content.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal,
+    .nn-table-content.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical {
         background: var(--nn-color-text-placeholder);
     }
 
-    .nn-table-content::-webkit-scrollbar-thumb:hover {
+    .nn-table-content.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal:hover,
+    .nn-table-content.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical:hover {
         background: var(--nn-color-text-muted);
     }
 

@@ -21,6 +21,10 @@ const bmpSession = {
 
 function makeSession(ip, asn) {
     const session = new BmpBgpSession(bmpSession);
+    // Production sessions intentionally no longer own route maps. This test
+    // exercises the legacy in-memory utility adapter, so keep its Map as
+    // fixture-only state instead of relying on the session constructor.
+    session.bgpRoutes = new Map();
     Object.assign(session, {
         sessionType: BmpConst.BMP_PEER_TYPE.GLOBAL,
         sessionRd: '0:0',
@@ -40,6 +44,8 @@ const egressA = makeSession('198.51.100.2', 65002);
 const egressB = makeSession('198.51.100.3', 65003);
 
 const locRib = new BmpBgpInstance(bmpSession);
+// Same fixture-only compatibility map for the legacy utility adapter.
+locRib.bgpRoutes = new Map();
 Object.assign(locRib, {
     afi: 1,
     safi: 1,

@@ -4,7 +4,7 @@ const BgpConst = require('../../electron/const/bgpConst');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
-const { buildBmpRouteLens } = require('../../electron/utils/bmpRouteLens');
+const { buildBmpRouteLens, buildBmpRouteLensFromPersistedRoutes } = require('../../electron/utils/bmpRouteLens');
 
 const clientInfo = {
     localIp: '127.0.0.1',
@@ -26,7 +26,8 @@ Object.assign(bgpSession, {
     sessionIp: '198.51.100.1',
     sessionAs: 65001,
     sessionRouterId: '198.51.100.1',
-    sessionState: BmpConst.BMP_SESSION_STATE.PEER_UP
+    sessionState: BmpConst.BMP_SESSION_STATE.PEER_UP,
+    bgpRoutes: new Map()
 });
 const sessionKey = BmpBgpSession.makeKey(
     bgpSession.sessionType,
@@ -44,7 +45,8 @@ Object.assign(locRib, {
     instanceRd: '0:0',
     instanceIp: '0.0.0.0',
     instanceAs: 65000,
-    instanceRouterId: '192.0.2.1'
+    instanceRouterId: '192.0.2.1',
+    bgpRoutes: new Map()
 });
 const instanceKey = BmpBgpInstance.makeKey(locRib.instanceType, locRib.instanceRd, locRib.afi, locRib.safi);
 bmpSession.bgpInstanceMap.set(instanceKey, locRib);
@@ -92,13 +94,13 @@ function addSessionRoute(ribType, route) {
     }
     const routeKey = route.getRouteKey();
     ribMap.get(ribType).set(routeKey, route);
-    bgpSession.addRouteToPrefixIndex(route.afi, route.safi, ribType, routeKey, route);
+    bgpSession.addRouteToPrefixIndex?.(route.afi, route.safi, ribType, routeKey, route);
 }
 
 function addInstanceRoute(route) {
     const routeKey = route.getRouteKey();
     locRib.bgpRoutes.set(routeKey, route);
-    locRib.addRouteToPrefixIndex(routeKey, route);
+    locRib.addRouteToPrefixIndex?.(routeKey, route);
 }
 
 const exactPreRoute = makeRoute(bgpSession, '10.0.0.0', 8, 1, { localPref: 100 });
@@ -405,5 +407,108 @@ assert.equal(unmatchedText.query.mode, 'text');
 assert.equal(unmatchedText.summary.total, 0);
 assert.throws(() => buildBmpRouteLens(sessionMap, { query: '' }), /Prefix、IP 或 NLRI 标识/);
 assert.throws(() => buildBmpRouteLens(sessionMap, { query: '192.0.2.1/99' }), /CIDR 前缀格式无效/);
+
+const persistedSource = {
+    remoteIp: '192.0.2.1',
+    sysName: 'router-a',
+    sysDesc: 'persisted test router'
+};
+const persistedPeer = { type: 0, rd: '0:0', ip: '198.51.100.1', as: 65001, vrf: 'blue' };
+function makePersistedRow(scopeId, scopeKind, ribType, attributes = {}, peer = persistedPeer) {
+    return {
+        persistentRouteId: `route-${scopeId}`,
+        persistentScopeId: scopeId,
+        persistentSourceId: 'source-a',
+        scopeKind,
+        ribType,
+        peer,
+        source: persistedSource,
+        routeKey: '1|0:0|10.0.0.0|8',
+        routeState: BmpConst.BMP_ROUTE_STATE.ACTIVE,
+        afi: 1,
+        safi: 1,
+        rd: '0:0',
+        ip: '10.0.0.0',
+        mask: 8,
+        pathId: 1,
+        origin: 'IGP',
+        asPath: '65001',
+        nextHop: attributes.nextHop || '192.0.2.254',
+        localPref: attributes.localPref ?? 100,
+        med: 0,
+        communities: ['65000:100'],
+        pathStatus: attributes.pathStatus,
+        routeTlvs: attributes.routeTlvs
+    };
+}
+
+const persistedRows = [
+    makePersistedRow('scope-pre-in', 'peer', '1', {
+        localPref: 100,
+        routeTlvs: [{ name: 'VRF/Table Name', valueText: 'route-blue' }]
+    }),
+    makePersistedRow('scope-post-in', 'peer', '2', { localPref: 200 }),
+    makePersistedRow('scope-pre-out', 'peer', '4', { nextHop: '192.0.2.253' }),
+    makePersistedRow('scope-post-out', 'peer', '5', { nextHop: '192.0.2.253' }),
+    makePersistedRow(
+        'scope-loc-rib',
+        'loc-rib',
+        'loc-rib',
+        { localPref: 200, pathStatus: BmpConst.BMP_PATH_STATUS.BEST },
+        { type: 3, rd: '0:0', ip: '0.0.0.0', as: 65000, vrf: 'blue' }
+    )
+];
+const persistedExact = buildBmpRouteLensFromPersistedRoutes(persistedRows, {
+    query: '10.0.0.7/8',
+    routeState: 'active'
+});
+assert.deepEqual(persistedExact.summary.stageCounts, {
+    preIn: 1,
+    postIn: 1,
+    locRib: 1,
+    preOut: 1,
+    postOut: 1
+});
+assert.equal(persistedExact.summary.total, 5);
+assert.equal(persistedExact.summary.clientCount, 1);
+assert.equal(persistedExact.summary.peerCount, 1);
+assert.equal(persistedExact.summary.instanceCount, 1);
+assert.equal(persistedExact.policyDiffs.inbound[0].status, 'modified');
+assert.deepEqual(persistedExact.policyDiffs.inbound[0].changes.localPref, { before: 100, after: 200 });
+assert.equal(persistedExact.policyDiffs.outbound[0].status, 'unchanged');
+assert.equal(persistedExact.stages.preIn[0].client.persistentSourceId, 'source-a');
+assert.equal(persistedExact.stages.preIn[0].session.persistentScopeId, 'scope-pre-in');
+assert.equal(persistedExact.stages.preIn[0].route.persistentRouteId, 'route-scope-pre-in');
+assert.deepEqual(persistedExact.stages.preIn[0].vrfTableNames, ['route-blue']);
+
+const persistedStaleRow = {
+    ...makePersistedRow('scope-stale', 'peer', '1'),
+    routeState: BmpConst.BMP_ROUTE_STATE.STALE
+};
+assert.equal(
+    buildBmpRouteLensFromPersistedRoutes([persistedStaleRow], {
+        query: '10.0.0.0/8',
+        routeState: 'active'
+    }).summary.total,
+    0
+);
+assert.equal(
+    buildBmpRouteLensFromPersistedRoutes([persistedStaleRow], {
+        query: '10.0.0.0/8',
+        routeState: 'stale'
+    }).summary.total,
+    1
+);
+
+const persistedIncomplete = buildBmpRouteLensFromPersistedRoutes(
+    { list: persistedRows.slice(0, 2), total: persistedRows.length, nextCursor: 'next-page' },
+    { query: '10.0.0.0/8' }
+);
+assert.equal(persistedIncomplete.summary.truncated, true);
+assert.equal(persistedIncomplete.policyDiffs.summary.incomplete, true);
+assert.deepEqual(
+    persistedIncomplete.insights.map(insight => insight.id),
+    ['analysis-suppressed-by-truncation']
+);
 
 console.log('BMP Route Lens tests passed');

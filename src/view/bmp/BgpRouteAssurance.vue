@@ -257,10 +257,10 @@
                                 !analysisEnabled
                                     ? '路由分析未开启，请先开启右上角分析开关'
                                     : hasLoaded
-                                    ? '当前筛选范围未发现路由保障异常'
-                                    : loading
-                                      ? '正在加载路由保障数据'
-                                      : '暂无路由保障数据'
+                                      ? '当前筛选范围未发现路由保障异常'
+                                      : loading
+                                        ? '正在加载路由保障数据'
+                                        : '暂无路由保障数据'
                             "
                         />
                     </template>
@@ -400,8 +400,7 @@
         lastAutoError = normalized;
     };
 
-    const isTransientAnalysisState = message =>
-        /正在初始化|正在重新同步/.test(String(message || ''));
+    const isTransientAnalysisState = message => /正在初始化|正在重新同步/.test(String(message || ''));
 
     const loadAssurance = async ({ page = 1, pageSize = 25, silent = false } = {}) => {
         if (!analysisEnabled.value) return;

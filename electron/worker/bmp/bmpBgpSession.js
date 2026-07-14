@@ -1,9 +1,6 @@
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const { toSerializableTlvs } = require('../../utils/bmpUtils');
-const { getRoutePrefixIndexKeys } = require('../../utils/routePrefixUtils');
-const BmpConst = require('../../const/bmpConst');
 const BgpConst = require('../../const/bgpConst');
-const { BmpRouteAttrStore, DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
 
 class BmpBgpSession {
     constructor(bmpSession) {
@@ -42,9 +39,10 @@ class BmpBgpSession {
         this.addPathSendMap = new Map();
         this.addPathMap = new Map();
 
-        this.bgpRoutes = new Map();
-        this.attrStore = new BmpRouteAttrStore();
-        this.routePrefixIndexes = new Map();
+        // Route payloads live exclusively in SQLite. Keep only one small record per
+        // observed RIB scope so packet parsing and Peer Up/Down lifecycle handling do
+        // not scale with the number of routes.
+        this.routeScopes = new Map();
         this.routeSummaries = new Map();
         this.ribEpochMap = new Map();
         this.ribStaleMetadataMap = new Map();
@@ -127,12 +125,6 @@ class BmpBgpSession {
         return `${afi}|${safi}|${ribType}`;
     }
 
-    static normalizeRouteState(routeState) {
-        return routeState === BmpConst.BMP_ROUTE_STATE.STALE
-            ? BmpConst.BMP_ROUTE_STATE.STALE
-            : BmpConst.BMP_ROUTE_STATE.ACTIVE;
-    }
-
     getRouteTableKey(afi, safi, ribType) {
         return `${afi}|${safi}|${ribType}`;
     }
@@ -167,155 +159,34 @@ class BmpBgpSession {
         return this.routeSummaries.get(key);
     }
 
-    updateSummaryStateCount(summary, routeState, delta) {
-        const state = BmpBgpSession.normalizeRouteState(routeState);
-        if (state === BmpConst.BMP_ROUTE_STATE.STALE) {
-            summary.stale = Math.max(0, summary.stale + delta);
-        } else {
-            summary.active = Math.max(0, summary.active + delta);
-        }
+    setRouteSummary(afi, safi, ribType, summary = {}) {
+        const value = {
+            active: Math.max(0, Number(summary.active) || 0),
+            stale: Math.max(0, Number(summary.stale) || 0),
+            total: Math.max(0, Number(summary.total) || 0)
+        };
+        this.routeSummaries.set(this.getRouteTableKey(afi, safi, ribType), value);
+        return { ...value };
     }
 
-    recordRouteAdd(afi, safi, ribType, route) {
-        const summary = this.ensureRouteTableSummary(afi, safi, ribType);
-        summary.total += 1;
-        this.updateSummaryStateCount(summary, route.routeState, 1);
+    ensureRouteScope(afi, safi, ribType) {
+        const key = this.getRouteTableKey(afi, safi, ribType);
+        if (!this.routeScopes.has(key)) {
+            this.routeScopes.set(key, {
+                afi: Number(afi),
+                safi: Number(safi),
+                ribType
+            });
+        }
+        return this.routeScopes.get(key);
     }
 
-    recordRouteDelete(afi, safi, ribType, route) {
-        const summary = this.ensureRouteTableSummary(afi, safi, ribType);
-        summary.total = Math.max(0, summary.total - 1);
-        this.updateSummaryStateCount(summary, route.routeState, -1);
-    }
-
-    recordRouteStateChange(afi, safi, ribType, previousState, nextState) {
-        const previous = BmpBgpSession.normalizeRouteState(previousState);
-        const next = BmpBgpSession.normalizeRouteState(nextState);
-        if (previous === next) {
-            return;
-        }
-
-        const summary = this.ensureRouteTableSummary(afi, safi, ribType);
-        this.updateSummaryStateCount(summary, previous, -1);
-        this.updateSummaryStateCount(summary, next, 1);
-    }
-
-    ensureRoutePrefixIndex(afi, safi, ribType) {
-        const tableKey = this.getRouteTableKey(afi, safi, ribType);
-        if (!this.routePrefixIndexes.has(tableKey)) {
-            this.routePrefixIndexes.set(tableKey, new Map());
-        }
-        return this.routePrefixIndexes.get(tableKey);
-    }
-
-    addRouteKeyToPrefixIndex(prefixIndex, prefixKey, routeKey) {
-        const existing = prefixIndex.get(prefixKey);
-        if (!existing) {
-            prefixIndex.set(prefixKey, routeKey);
-            return;
-        }
-
-        if (existing instanceof Set) {
-            existing.add(routeKey);
-            return;
-        }
-
-        if (existing !== routeKey) {
-            prefixIndex.set(prefixKey, new Set([existing, routeKey]));
-        }
-    }
-
-    removeRouteKeyFromPrefixIndex(prefixIndex, prefixKey, routeKey) {
-        const existing = prefixIndex.get(prefixKey);
-        if (!existing) {
-            return;
-        }
-
-        if (!(existing instanceof Set)) {
-            if (existing === routeKey) {
-                prefixIndex.delete(prefixKey);
-            }
-            return;
-        }
-
-        existing.delete(routeKey);
-        if (existing.size === 0) {
-            prefixIndex.delete(prefixKey);
-            return;
-        }
-
-        if (existing.size === 1) {
-            prefixIndex.set(prefixKey, existing.values().next().value);
-        }
-    }
-
-    addRouteToPrefixIndex(afi, safi, ribType, routeKey, route) {
-        const prefixIndex = this.ensureRoutePrefixIndex(afi, safi, ribType);
-        getRoutePrefixIndexKeys(route).forEach(prefixKey => {
-            this.addRouteKeyToPrefixIndex(prefixIndex, prefixKey, routeKey);
+    getRouteScopeAddressFamilies() {
+        const families = new Map();
+        this.routeScopes.forEach(scope => {
+            families.set(`${scope.afi}|${scope.safi}`, { afi: scope.afi, safi: scope.safi });
         });
-    }
-
-    removeRouteFromPrefixIndex(afi, safi, ribType, routeKey, route) {
-        const tableKey = this.getRouteTableKey(afi, safi, ribType);
-        const prefixIndex = this.routePrefixIndexes.get(tableKey);
-        if (!prefixIndex) {
-            return;
-        }
-
-        getRoutePrefixIndexKeys(route).forEach(prefixKey => {
-            this.removeRouteKeyFromPrefixIndex(prefixIndex, prefixKey, routeKey);
-        });
-    }
-
-    getRouteKeysByPrefix(afi, safi, ribType, prefixKey) {
-        const tableKey = this.getRouteTableKey(afi, safi, ribType);
-        const routeKeys = this.routePrefixIndexes.get(tableKey)?.get(prefixKey);
-        if (!routeKeys) {
-            return [];
-        }
-        return routeKeys instanceof Set ? routeKeys : [routeKeys];
-    }
-
-    assignRouteAttr(route, attr) {
-        if (!route) {
-            return null;
-        }
-
-        const nextAttrId = this.attrStore.intern(attr);
-        const prevAttrId = route.attrId;
-
-        if (prevAttrId === nextAttrId) {
-            this.attrStore.release(nextAttrId);
-            route._inlineAttr = null;
-            return nextAttrId;
-        }
-
-        if (prevAttrId) {
-            this.attrStore.release(prevAttrId);
-        }
-
-        route.attrId = nextAttrId;
-        route._inlineAttr = null;
-        return nextAttrId;
-    }
-
-    releaseRouteAttr(route) {
-        if (!route?.attrId) {
-            return;
-        }
-
-        this.attrStore.release(route.attrId);
-        route.attrId = null;
-        route._inlineAttr = null;
-    }
-
-    getRouteAttr(route) {
-        return this.attrStore.get(route?.attrId) || route?.getInlineRouteAttr?.() || { ...DEFAULT_BMP_ROUTE_ATTR };
-    }
-
-    getRouteAttrEntry(route) {
-        return this.attrStore.getEntry(route?.attrId);
+        return Array.from(families.values());
     }
 
     getRibEpoch(afi, safi, ribType) {
@@ -334,16 +205,15 @@ class BmpBgpSession {
     }
 
     markRoutesStale(afi, safi, ribTypes, reason) {
-        const afKey = `${afi}|${safi}`;
-        const ribTypeRouteMap = this.bgpRoutes.get(afKey);
         const targetRibTypes =
             Array.isArray(ribTypes) && ribTypes.length > 0
                 ? ribTypes
-                : ribTypeRouteMap
-                  ? Array.from(ribTypeRouteMap.keys())
-                  : [];
+                : Array.from(this.routeScopes.values())
+                      .filter(scope => scope.afi === Number(afi) && scope.safi === Number(safi))
+                      .map(scope => scope.ribType);
 
         return targetRibTypes.map(ribType => {
+            this.ensureRouteScope(afi, safi, ribType);
             const staleEpoch = this.advanceRibEpoch(afi, safi, ribType);
             const summary = this.ensureRouteTableSummary(afi, safi, ribType);
             const changed = summary.active;
@@ -417,9 +287,7 @@ class BmpBgpSession {
     }
 
     closeSession() {
-        this.bgpRoutes.clear();
-        this.attrStore.clear();
-        this.routePrefixIndexes.clear();
+        this.routeScopes.clear();
         this.routeSummaries.clear();
         this.recvAddPathMap.clear();
         this.sendAddPathMap.clear();

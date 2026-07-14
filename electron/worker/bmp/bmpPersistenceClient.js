@@ -19,6 +19,7 @@ class BmpPersistenceClient {
     constructor(options = {}) {
         this.dbPath = options.dbPath;
         this.readOnly = options.readOnly === true;
+        this.logLevel = typeof options.logLevel === 'string' ? options.logLevel : 'off';
         this.batchSize = positiveInteger(options.batchSize, DEFAULT_BATCH_SIZE);
         this.batchBytes = positiveInteger(options.batchBytes, DEFAULT_BATCH_BYTES);
         this.flushMs = positiveInteger(options.flushMs, DEFAULT_FLUSH_MS);
@@ -32,6 +33,7 @@ class BmpPersistenceClient {
         this.onPause = typeof options.onPause === 'function' ? options.onPause : null;
         this.onResume = typeof options.onResume === 'function' ? options.onResume : null;
         this.onError = typeof options.onError === 'function' ? options.onError : null;
+        this.onCommittedBatch = typeof options.onCommittedBatch === 'function' ? options.onCommittedBatch : null;
 
         this.worker = null;
         this.workerAlive = false;
@@ -83,10 +85,13 @@ class BmpPersistenceClient {
             }
         });
 
-        return this.sendRequest(BMP_PERSISTENCE_OP.OPEN, {
+        const result = await this.sendRequest(BMP_PERSISTENCE_OP.OPEN, {
             dbPath: this.dbPath,
-            readOnly: this.readOnly
+            readOnly: this.readOnly,
+            logLevel: this.logLevel
         });
+        this.logLevel = result?.logLevel || this.logLevel;
+        return result;
     }
 
     makeRequestId() {
@@ -247,7 +252,7 @@ class BmpPersistenceClient {
         pending.attempts = (pending.attempts || 0) + 1;
 
         this.sendRequest(BMP_PERSISTENCE_OP.APPLY_BATCH, pending.batch, { allowDuringClosing: true })
-            .then(() => {
+            .then(result => {
                 if (this.inFlight !== pending) {
                     return;
                 }
@@ -263,6 +268,16 @@ class BmpPersistenceClient {
                 }
                 this.resolveIdleWaitersIfReady();
                 this.resolveFenceWaiters();
+                if (this.onCommittedBatch) {
+                    try {
+                        const callbackResult = this.onCommittedBatch(result, pending.batch);
+                        if (callbackResult && typeof callbackResult.catch === 'function') {
+                            callbackResult.catch(error => this.onError?.(error));
+                        }
+                    } catch (error) {
+                        this.onError?.(error);
+                    }
+                }
             })
             .catch(error => {
                 if (this.inFlight !== pending) {
@@ -389,12 +404,42 @@ class BmpPersistenceClient {
         return this.sendRequest(BMP_PERSISTENCE_OP.QUERY_ROUTES, query);
     }
 
+    queryRouteScope(query = {}) {
+        return this.sendRequest(BMP_PERSISTENCE_OP.QUERY_ROUTE_SCOPE, query);
+    }
+
+    queryScopeSummary(query = {}) {
+        return this.sendRequest(BMP_PERSISTENCE_OP.QUERY_SCOPE_SUMMARY, query);
+    }
+
+    queryTopology(query = {}) {
+        return this.sendRequest(BMP_PERSISTENCE_OP.QUERY_TOPOLOGY, query);
+    }
+
+    queryStatisticsReports(query = {}) {
+        return this.sendRequest(BMP_PERSISTENCE_OP.QUERY_STATISTICS_REPORTS, query);
+    }
+
+    async purgeStaleRoutes(query = {}) {
+        if (!this.readOnly) {
+            await this.fence();
+        }
+        return this.sendRequest(BMP_PERSISTENCE_OP.PURGE_STALE_ROUTES, query);
+    }
+
     queryEvents(query = {}) {
         return this.sendRequest(BMP_PERSISTENCE_OP.QUERY_EVENTS, query);
     }
 
     getStatus(options = {}) {
         return this.sendRequest(BMP_PERSISTENCE_OP.GET_STATUS, options);
+    }
+
+    async setLogLevel(level) {
+        const logLevel = typeof level === 'string' ? level : 'off';
+        const result = await this.sendRequest(BMP_PERSISTENCE_OP.SET_LOG_LEVEL, { logLevel });
+        this.logLevel = result?.logLevel || logLevel;
+        return result;
     }
 
     sweep(options = {}) {

@@ -200,43 +200,47 @@ async function verifyBootstrapMutationRace() {
     let replacementRoute = null;
     let mutationApplied = false;
 
-    await raceService.enableWithBootstrap(raceSessionMap, {}, {
-        chunkSize: 100,
-        onProgress: status => {
-            if (mutationApplied || Number(status.progress?.scannedPathCount) < 100) {
-                return;
+    await raceService.enableWithBootstrap(
+        raceSessionMap,
+        {},
+        {
+            chunkSize: 100,
+            onProgress: status => {
+                if (mutationApplied || Number(status.progress?.scannedPathCount) < 100) {
+                    return;
+                }
+                mutationApplied = true;
+                raceRouteMap.delete(replacedKey);
+                raceService.applyMutation({
+                    action: 'delete',
+                    isNew: false,
+                    clientKey: raceClientKey,
+                    bmpSession: raceBmpSession,
+                    scope: 'session',
+                    ownerKey: raceOwnerKey,
+                    owner: raceOwner,
+                    ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
+                    routeKey: replacedKey,
+                    route: originalRoute,
+                    previous: originalRoute
+                });
+                replacementRoute = { ...originalRoute, nextHop: '192.0.2.99' };
+                raceRouteMap.set(replacedKey, replacementRoute);
+                raceService.applyMutation({
+                    action: 'upsert',
+                    isNew: true,
+                    clientKey: raceClientKey,
+                    bmpSession: raceBmpSession,
+                    scope: 'session',
+                    ownerKey: raceOwnerKey,
+                    owner: raceOwner,
+                    ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
+                    routeKey: replacedKey,
+                    route: replacementRoute
+                });
             }
-            mutationApplied = true;
-            raceRouteMap.delete(replacedKey);
-            raceService.applyMutation({
-                action: 'delete',
-                isNew: false,
-                clientKey: raceClientKey,
-                bmpSession: raceBmpSession,
-                scope: 'session',
-                ownerKey: raceOwnerKey,
-                owner: raceOwner,
-                ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
-                routeKey: replacedKey,
-                route: originalRoute,
-                previous: originalRoute
-            });
-            replacementRoute = { ...originalRoute, nextHop: '192.0.2.99' };
-            raceRouteMap.set(replacedKey, replacementRoute);
-            raceService.applyMutation({
-                action: 'upsert',
-                isNew: true,
-                clientKey: raceClientKey,
-                bmpSession: raceBmpSession,
-                scope: 'session',
-                ownerKey: raceOwnerKey,
-                owner: raceOwner,
-                ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
-                routeKey: replacedKey,
-                route: replacementRoute
-            });
         }
-    });
+    );
 
     assert.equal(mutationApplied, true);
     const result = raceService.query(raceSessionMap, { page: 1, pageSize: 25 });
@@ -257,12 +261,7 @@ async function verifyBootstrapInvalidationCancelsOldGeneration() {
     }
     const ghostOwner = {
         getSessionInfo: () => ({ sessionIp: '198.51.100.30', sessionAs: 65030, sessionRd: '0:0' }),
-        bgpRoutes: new Map([
-            [
-                '1|1',
-                new Map([[BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, ghostRouteMap]])
-            ]
-        ])
+        bgpRoutes: new Map([['1|1', new Map([[BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, ghostRouteMap]])]])
     };
     const ghostBmpSession = {
         getClientInfo: () => ({ sysName: 'ghost-router', remoteIp: '192.0.2.30' }),
@@ -272,17 +271,21 @@ async function verifyBootstrapInvalidationCancelsOldGeneration() {
     const ghostSessionMap = new Map([['ghost-client', ghostBmpSession]]);
     const ghostService = new BmpRouteAssuranceService({ enabled: false });
     let invalidated = false;
-    const cancelledStatus = await ghostService.enableWithBootstrap(ghostSessionMap, {}, {
-        chunkSize: 100,
-        onProgress: status => {
-            if (invalidated || Number(status.progress?.scannedPathCount) < 100) {
-                return;
+    const cancelledStatus = await ghostService.enableWithBootstrap(
+        ghostSessionMap,
+        {},
+        {
+            chunkSize: 100,
+            onProgress: status => {
+                if (invalidated || Number(status.progress?.scannedPathCount) < 100) {
+                    return;
+                }
+                invalidated = true;
+                ghostRouteMap.clear();
+                ghostService.invalidate('session-close', { prepareBootstrap: true });
             }
-            invalidated = true;
-            ghostRouteMap.clear();
-            ghostService.invalidate('session-close', { prepareBootstrap: true });
         }
-    });
+    );
 
     assert.equal(invalidated, true);
     assert.equal(cancelledStatus.state, 'dirty');

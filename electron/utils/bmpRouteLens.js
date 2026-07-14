@@ -690,7 +690,7 @@ function buildInsights(entries, policyDiffs) {
 }
 
 function makeEntry({ clientKey, client, scopeKey, session, instance, stage, ribType, route, match }) {
-    const routeInfo = route.getRouteInfo();
+    const routeInfo = typeof route?.getRouteInfo === 'function' ? route.getRouteInfo() : route;
     const coreKey = routeCoreKey(routeInfo);
     const scopeType = session ? 'session' : 'instance';
     const id = `route-${stableId([clientKey, scopeType, scopeKey, stage, ribType, coreKey])}`;
@@ -714,6 +714,134 @@ function makeEntry({ clientKey, client, scopeKey, session, instance, stage, ribT
         route: routeInfo,
         match,
         correlationKey
+    };
+}
+
+function finalizeRouteLensResult({ query, routeState, resultLimit, stages, entries, truncated }) {
+    STAGE_NAMES.forEach(stage => {
+        stages[stage].sort((left, right) => {
+            const textRank = match =>
+                match?.matchType === 'text-exact' ? 0 : match?.matchType === 'text-contains' ? 1 : 0;
+            const textOrder = textRank(left.match) - textRank(right.match);
+            const prefixOrder = (right.match?.prefixLength || 0) - (left.match?.prefixLength || 0);
+            return textOrder || prefixOrder || left.id.localeCompare(right.id);
+        });
+    });
+
+    const policyDiffs = truncated
+        ? {
+              inbound: [],
+              outbound: [],
+              summary: {
+                  total: 0,
+                  modified: 0,
+                  unchanged: 0,
+                  missingAfter: 0,
+                  missingAfterReported: 0,
+                  missingAfterInferred: 0,
+                  postOnly: 0,
+                  incomplete: true
+              }
+          }
+        : buildPolicyDiffs(entries);
+    const insightResult = truncated
+        ? {
+              markingEvidenceCount: entries.filter(
+                  entry => entry.route?.pathStatus !== null && entry.route?.pathStatus !== undefined
+              ).length,
+              locRibObservedCount: entries.filter(entry => entry.stage === 'locRib').length,
+              insights: [
+                  {
+                      id: 'analysis-suppressed-by-truncation',
+                      severity: 'warning',
+                      evidenceType: 'observational',
+                      title: '结果截断，已停止跨阶段判断',
+                      description:
+                          '当前仅展示部分匹配路由。为避免把尚未遍历的阶段误判为缺失，属性差异和选路推测已暂停；请缩小查询范围后重试。',
+                      stage: 'all',
+                      count: entries.length,
+                      evidence: []
+                  }
+              ]
+          }
+        : buildInsights(entries, policyDiffs);
+    const clientIds = new Set(
+        entries.map(
+            entry =>
+                entry.client?.persistentSourceId ||
+                stableId([
+                    entry.client?.localIp,
+                    entry.client?.localPort,
+                    entry.client?.remoteIp,
+                    entry.client?.remotePort
+                ])
+        )
+    );
+    const peerIds = new Set(
+        entries
+            .filter(entry => entry.session)
+            .map(entry =>
+                stableId([
+                    entry.client?.persistentSourceId,
+                    entry.client?.localIp,
+                    entry.client?.localPort,
+                    entry.client?.remoteIp,
+                    entry.client?.remotePort,
+                    entry.session?.sessionType,
+                    entry.session?.sessionRd,
+                    entry.session?.sessionIp,
+                    entry.session?.sessionAs
+                ])
+            )
+    );
+    const instanceIds = new Set(
+        entries
+            .filter(entry => entry.instance)
+            .map(entry =>
+                stableId([
+                    entry.client?.persistentSourceId,
+                    entry.client?.localIp,
+                    entry.client?.localPort,
+                    entry.client?.remoteIp,
+                    entry.client?.remotePort,
+                    entry.instance?.instanceType,
+                    entry.instance?.instanceRd,
+                    entry.afi,
+                    entry.safi
+                ])
+            )
+    );
+    const inferredCount = truncated
+        ? 0
+        : policyDiffs.summary.missingAfterInferred + (insightResult.markingEvidenceCount === 0 ? 1 : 0);
+    const stageCounts = Object.fromEntries(STAGE_NAMES.map(stage => [stage, stages[stage].length]));
+
+    return {
+        query: {
+            input: query.input,
+            mode: query.mode,
+            matchType: query.matchType,
+            addressFamily: query.addressFamily,
+            normalized: query.normalized
+        },
+        routeState,
+        stages,
+        policyDiffs,
+        insights: insightResult.insights,
+        summary: {
+            total: entries.length,
+            clientCount: clientIds.size,
+            peerCount: peerIds.size,
+            instanceCount: instanceIds.size,
+            reportedCount: insightResult.markingEvidenceCount,
+            observedCount: entries.length,
+            inferredCount,
+            locRibObservedCount: insightResult.locRibObservedCount,
+            stageCounts,
+            resultLimit,
+            truncated
+        },
+        generatedAt: new Date().toISOString()
     };
 }
 
@@ -815,122 +943,156 @@ function buildBmpRouteLens(bmpSessionMap, options = {}, routeStateArgument = nul
         }
     }
 
-    STAGE_NAMES.forEach(stage => {
-        stages[stage].sort((left, right) => {
-            const textRank = match =>
-                match?.matchType === 'text-exact' ? 0 : match?.matchType === 'text-contains' ? 1 : 0;
-            const textOrder = textRank(left.match) - textRank(right.match);
-            const prefixOrder = (right.match?.prefixLength || 0) - (left.match?.prefixLength || 0);
-            return textOrder || prefixOrder || left.id.localeCompare(right.id);
-        });
-    });
+    return finalizeRouteLensResult({ query, routeState, resultLimit, stages, entries, truncated });
+}
 
-    const policyDiffs = truncated
-        ? {
-              inbound: [],
-              outbound: [],
-              summary: {
-                  total: 0,
-                  modified: 0,
-                  unchanged: 0,
-                  missingAfter: 0,
-                  missingAfterReported: 0,
-                  missingAfterInferred: 0,
-                  postOnly: 0,
-                  incomplete: true
-              }
-          }
-        : buildPolicyDiffs(entries);
-    const insightResult = truncated
-        ? {
-              markingEvidenceCount: entries.filter(
-                  entry => entry.route?.pathStatus !== null && entry.route?.pathStatus !== undefined
-              ).length,
-              locRibObservedCount: entries.filter(entry => entry.stage === 'locRib').length,
-              insights: [
-                  {
-                      id: 'analysis-suppressed-by-truncation',
-                      severity: 'warning',
-                      evidenceType: 'observational',
-                      title: '结果截断，已停止跨阶段判断',
-                      description:
-                          '当前仅展示部分匹配路由。为避免把尚未遍历的阶段误判为缺失，属性差异和选路推测已暂停；请缩小查询范围后重试。',
-                      stage: 'all',
-                      count: entries.length,
-                      evidence: []
-                  }
-              ]
-          }
-        : buildInsights(entries, policyDiffs);
-    const clientIds = new Set(
-        entries.map(entry =>
-            stableId([entry.client?.localIp, entry.client?.localPort, entry.client?.remoteIp, entry.client?.remotePort])
-        )
-    );
-    const peerIds = new Set(
-        entries
-            .filter(entry => entry.session)
-            .map(entry =>
-                stableId([
-                    entry.client?.localIp,
-                    entry.client?.localPort,
-                    entry.client?.remoteIp,
-                    entry.client?.remotePort,
-                    entry.session?.sessionType,
-                    entry.session?.sessionRd,
-                    entry.session?.sessionIp,
-                    entry.session?.sessionAs
-                ])
-            )
-    );
-    const instanceIds = new Set(
-        entries
-            .filter(entry => entry.instance)
-            .map(entry =>
-                stableId([
-                    entry.client?.localIp,
-                    entry.client?.localPort,
-                    entry.client?.remoteIp,
-                    entry.client?.remotePort,
-                    entry.instance?.instanceType,
-                    entry.instance?.instanceRd,
-                    entry.afi,
-                    entry.safi
-                ])
-            )
-    );
-    const inferredCount = truncated
-        ? 0
-        : policyDiffs.summary.missingAfterInferred + (insightResult.markingEvidenceCount === 0 ? 1 : 0);
-    const stageCounts = Object.fromEntries(STAGE_NAMES.map(stage => [stage, stages[stage].length]));
+function getPersistedRouteStage(row) {
+    const scopeKind = normalizeText(row?.scopeKind).replace(/[\s_]+/g, '-');
+    const ribTypeText = normalizeText(row?.ribType).replace(/[\s_]+/g, '-');
+    if (scopeKind === LOC_RIB_TYPE || ribTypeText === LOC_RIB_TYPE) {
+        return 'locRib';
+    }
+
+    const numericStage = RIB_STAGE_MAP.get(Number(row?.ribType));
+    if (numericStage) {
+        return numericStage;
+    }
 
     return {
-        query: {
-            input: query.input,
-            mode: query.mode,
-            matchType: query.matchType,
-            addressFamily: query.addressFamily,
-            normalized: query.normalized
-        },
-        routeState,
-        stages,
-        policyDiffs,
-        insights: insightResult.insights,
-        summary: {
-            total: entries.length,
-            clientCount: clientIds.size,
-            peerCount: peerIds.size,
-            instanceCount: instanceIds.size,
-            reportedCount: insightResult.markingEvidenceCount,
-            observedCount: entries.length,
-            inferredCount,
-            locRibObservedCount: insightResult.locRibObservedCount,
-            stageCounts,
-            resultLimit,
-            truncated
-        },
-        generatedAt: new Date().toISOString()
+        prein: 'preIn',
+        'pre-in': 'preIn',
+        'pre-adj-rib-in': 'preIn',
+        postin: 'postIn',
+        'post-in': 'postIn',
+        'adj-rib-in': 'postIn',
+        preout: 'preOut',
+        'pre-out': 'preOut',
+        'adj-rib-out': 'preOut',
+        postout: 'postOut',
+        'post-out': 'postOut',
+        'post-adj-rib-out': 'postOut'
+    }[ribTypeText];
+}
+
+function persistedVrfTableNames(peer) {
+    const values = peer?.vrfTableNames ?? peer?.vrf;
+    if (Array.isArray(values)) {
+        return values.filter(Boolean).map(value => String(value));
+    }
+    return values === null || values === undefined || values === '' ? [] : [String(values)];
+}
+
+function buildPersistedRouteContext(row, stage) {
+    const source = row?.source && typeof row.source === 'object' ? row.source : {};
+    const peer = row?.peer && typeof row.peer === 'object' ? row.peer : {};
+    const persistentSourceId = row?.persistentSourceId || source.persistentSourceId || source.id || '';
+    const persistentScopeId = row?.persistentScopeId || '';
+    const clientKey =
+        String(persistentSourceId || '') ||
+        stableId([source.localIp, source.localPort, source.remoteIp, source.remotePort, source.sysName]);
+    const client = {
+        ...source,
+        ...(persistentSourceId ? { persistentSourceId: String(persistentSourceId) } : {})
     };
+    const vrfTableNames = persistedVrfTableNames(peer);
+    const scopeKey = [peer.type ?? '', peer.rd ?? '0:0', peer.ip ?? '', peer.as ?? ''].join('|');
+    const numericRibType = Number(row?.ribType);
+    const ribType = stage === 'locRib' ? LOC_RIB_TYPE : Number.isFinite(numericRibType) ? numericRibType : row?.ribType;
+
+    if (stage === 'locRib') {
+        return {
+            clientKey,
+            client,
+            scopeKey,
+            instance: {
+                instanceType: peer.type ?? null,
+                instanceRd: peer.rd || '0:0',
+                instanceIp: peer.ip || '',
+                instanceAs: peer.as ?? null,
+                vrfTableNames,
+                persistentScopeId,
+                scopeState: row?.scopeState
+            },
+            stage,
+            ribType
+        };
+    }
+
+    return {
+        clientKey,
+        client,
+        scopeKey,
+        session: {
+            sessionType: peer.type ?? null,
+            sessionRd: peer.rd || '0:0',
+            sessionIp: peer.ip || '',
+            sessionAs: peer.as ?? null,
+            vrfTableNames,
+            persistentScopeId,
+            scopeState: row?.scopeState
+        },
+        stage,
+        ribType
+    };
+}
+
+function persistedMatchOrder(left, right) {
+    const textRank = candidate =>
+        candidate.match?.matchType === 'text-exact' ? 0 : candidate.match?.matchType === 'text-contains' ? 1 : 0;
+    const textOrder = textRank(left) - textRank(right);
+    const prefixOrder = (right.match?.prefixLength || 0) - (left.match?.prefixLength || 0);
+    const leftKey = [
+        left.row?.persistentSourceId,
+        left.row?.persistentScopeId,
+        left.row?.persistentRouteId,
+        left.row?.routeKey,
+        routeCoreKey(left.row)
+    ].join('|');
+    const rightKey = [
+        right.row?.persistentSourceId,
+        right.row?.persistentScopeId,
+        right.row?.persistentRouteId,
+        right.row?.routeKey,
+        routeCoreKey(right.row)
+    ].join('|');
+    return textOrder || prefixOrder || leftKey.localeCompare(rightKey);
+}
+
+/**
+ * Build Route Lens output directly from BmpPersistenceStore.queryRoutes() rows.
+ * Accepts either the returned `list` or the complete paged response object.
+ */
+function buildBmpRouteLensFromPersistedRoutes(rows, options = {}) {
+    const normalizedOptions =
+        options && typeof options === 'object' && !Array.isArray(options) ? options : { query: options };
+    const queryInput = normalizedOptions.query ?? options;
+    const query = parseRouteLensQuery(queryInput);
+    const routeState = normalizeRouteState(normalizedOptions.routeState);
+    const resultLimit = getResultLimit(normalizedOptions, queryInput);
+    const stages = Object.fromEntries(STAGE_NAMES.map(stage => [stage, []]));
+    const entries = [];
+    const routeRows = Array.isArray(rows) ? rows : Array.isArray(rows?.list) ? rows.list : [];
+    const sourceIncomplete =
+        normalizedOptions.sourceTruncated === true ||
+        normalizedOptions.hasMore === true ||
+        (!Array.isArray(rows) &&
+            (Boolean(rows?.nextCursor) ||
+                (Number.isFinite(Number(rows?.total)) && Number(rows.total) > routeRows.length)));
+
+    const candidates = routeRows
+        .filter(row => row && typeof row === 'object' && routeStateMatches(row, routeState))
+        .map(row => ({ row, stage: getPersistedRouteStage(row), match: matchRoute(row, query) }))
+        .filter(candidate => candidate.stage && candidate.match)
+        .sort(persistedMatchOrder);
+    const truncated = sourceIncomplete || candidates.length > resultLimit;
+
+    candidates.slice(0, resultLimit).forEach(({ row, stage, match }) => {
+        const entry = makeEntry({ ...buildPersistedRouteContext(row, stage), route: row, match });
+        entries.push(entry);
+        stages[entry.stage].push(entry);
+    });
+
+    return finalizeRouteLensResult({ query, routeState, resultLimit, stages, entries, truncated });
 }
 
 function createEmptyRouteLensResult(query, routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE) {
@@ -943,6 +1105,7 @@ module.exports = {
     POLICY_DIFF_FIELDS,
     STAGE_NAMES,
     buildBmpRouteLens,
+    buildBmpRouteLensFromPersistedRoutes,
     createEmptyRouteLensResult,
     parseRouteLensQuery
 };

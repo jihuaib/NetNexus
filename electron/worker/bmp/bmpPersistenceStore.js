@@ -1,8 +1,12 @@
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+const ipaddr = require('ipaddr.js');
+const { getAddrFamilyType } = require('../../utils/bgpUtils');
+const { installBmpSqlTrace } = require('./bmpSqlTrace');
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 5000;
 
@@ -24,6 +28,39 @@ function parseJson(value, fallback = null) {
     }
 }
 
+function makeStatisticsReportIdentity(report) {
+    if (!report || typeof report !== 'object' || Array.isArray(report)) {
+        return null;
+    }
+    const hasSession = report.session && typeof report.session === 'object' && !Array.isArray(report.session);
+    const hasInstance = report.instance && typeof report.instance === 'object' && !Array.isArray(report.instance);
+    if (Boolean(hasSession) === Boolean(hasInstance)) {
+        return null;
+    }
+
+    const stringifyPart = value => String(value ?? '');
+    if (hasSession) {
+        const session = report.session;
+        return {
+            kind: 'session',
+            key: JSON.stringify(
+                [
+                    session.sessionType,
+                    session.sessionRdRaw || session.sessionRd,
+                    session.sessionIp,
+                    session.sessionAs
+                ].map(stringifyPart)
+            )
+        };
+    }
+
+    const instance = report.instance;
+    return {
+        kind: 'instance',
+        key: JSON.stringify([instance.instanceType, instance.instanceRdRaw || instance.instanceRd].map(stringifyPart))
+    };
+}
+
 function finiteNumber(value, fallback = null) {
     if (value === null || value === undefined || value === '') {
         return fallback;
@@ -38,6 +75,43 @@ function positiveInteger(value, fallback, maximum = Number.MAX_SAFE_INTEGER) {
         return fallback;
     }
     return Math.min(number, maximum);
+}
+
+function normalizePrefixCidrs(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const normalized = [];
+    const seen = new Set();
+    value.forEach(item => {
+        let prefix;
+        let prefixLength;
+        if (typeof item === 'string') {
+            const separator = item.lastIndexOf('/');
+            if (separator <= 0) {
+                return;
+            }
+            prefix = item.slice(0, separator).trim();
+            prefixLength = finiteNumber(item.slice(separator + 1));
+        } else if (item && typeof item === 'object') {
+            prefix = String(item.prefix ?? item.ip ?? '').trim();
+            prefixLength = finiteNumber(item.prefixLength ?? item.mask ?? item.length);
+        }
+        if (!prefix || !Number.isInteger(prefixLength) || prefixLength < 0 || prefixLength > 128) {
+            return;
+        }
+        const key = `${prefix}\u0000${prefixLength}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            normalized.push({ prefix, prefixLength });
+        }
+    });
+    return normalized;
+}
+
+function isStrictIpAddress(value) {
+    const text = String(value || '').trim();
+    return ipaddr.IPv4.isValidFourPartDecimal(text) || ipaddr.IPv6.isValid(text);
 }
 
 function encodeCursor(kind, data) {
@@ -73,6 +147,9 @@ class BmpPersistenceStore {
 
         this.dbPath = path.resolve(options.dbPath);
         this.readOnly = options.readOnly === true;
+        this.logLevel = options.logLevel;
+        this.sqlTraceLog = options.sqlTraceLog;
+        this.sqlTrace = null;
         this.db = null;
         this.statements = null;
     }
@@ -90,6 +167,10 @@ class BmpPersistenceStore {
             readonly: this.readOnly,
             fileMustExist: this.readOnly,
             timeout: 5000
+        });
+        this.sqlTrace = installBmpSqlTrace(this.db, {
+            logLevel: this.logLevel,
+            log: this.sqlTraceLog
         });
         try {
             this.db.pragma('busy_timeout = 5000');
@@ -110,10 +191,21 @@ class BmpPersistenceStore {
         } catch (error) {
             this.db.close();
             this.db = null;
+            this.sqlTrace = null;
             throw error;
         }
 
         return this;
+    }
+
+    setLogLevel(level) {
+        this.logLevel = level;
+        this.sqlTrace?.setLogLevel(level);
+        return this;
+    }
+
+    isSqlTraceEnabled() {
+        return this.sqlTrace?.isEnabled() === true;
     }
 
     validateReadableSchema() {
@@ -152,7 +244,8 @@ class BmpPersistenceStore {
             bmp_current_routes: ['scope_id', 'route_id', 'connection_id', 'rib_epoch', 'last_event_id', 'attr_id'],
             bmp_route_attributes: ['attr_id', 'attr_json'],
             bmp_ingest_batches: ['batch_id', 'created_at_ms'],
-            bmp_statistics_samples: ['sample_id', 'source_id', 'statistics_json']
+            bmp_statistics_samples: ['sample_id', 'source_id', 'report_kind', 'report_key', 'statistics_json'],
+            bmp_statistics_latest: ['source_id', 'report_kind', 'report_key', 'sample_id', 'observed_at_ms']
         };
         const existingTables = new Set(
             this.db
@@ -357,6 +450,8 @@ class BmpPersistenceStore {
                 source_id TEXT NOT NULL,
                 connection_id TEXT NOT NULL,
                 scope_id TEXT,
+                report_kind TEXT,
+                report_key TEXT,
                 observed_at_ms INTEGER NOT NULL,
                 source_timestamp_ms INTEGER,
                 statistics_json TEXT NOT NULL,
@@ -369,6 +464,17 @@ class BmpPersistenceStore {
                 ON bmp_statistics_samples(scope_id, observed_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_bmp_statistics_observed
                 ON bmp_statistics_samples(observed_at_ms, sample_id);
+
+            CREATE TABLE IF NOT EXISTS bmp_statistics_latest (
+                source_id TEXT NOT NULL,
+                report_kind TEXT NOT NULL CHECK(report_kind IN ('session', 'instance')),
+                report_key TEXT NOT NULL,
+                sample_id INTEGER NOT NULL,
+                observed_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (source_id, report_kind, report_key),
+                FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
+                FOREIGN KEY (sample_id) REFERENCES bmp_statistics_samples(sample_id)
+            ) WITHOUT ROWID;
 
             `);
 
@@ -400,6 +506,15 @@ class BmpPersistenceStore {
             );
             if (!currentRouteColumns.has('connection_id')) {
                 this.db.exec('ALTER TABLE bmp_current_routes ADD COLUMN connection_id TEXT');
+            }
+            const statisticsColumns = new Set(
+                this.db.pragma('table_info(bmp_statistics_samples)').map(column => column.name)
+            );
+            if (!statisticsColumns.has('report_kind')) {
+                this.db.exec('ALTER TABLE bmp_statistics_samples ADD COLUMN report_kind TEXT');
+            }
+            if (!statisticsColumns.has('report_key')) {
+                this.db.exec('ALTER TABLE bmp_statistics_samples ADD COLUMN report_key TEXT');
             }
             this.db.exec(`
                 UPDATE bmp_current_routes
@@ -457,7 +572,62 @@ class BmpPersistenceStore {
                     ON bmp_current_routes(last_event_id);
                 CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_connection
                     ON bmp_current_routes(scope_id, connection_id, rib_epoch, last_seen_ms);
+                CREATE INDEX IF NOT EXISTS idx_bmp_statistics_report_time
+                    ON bmp_statistics_samples(
+                        source_id, report_kind, report_key, observed_at_ms DESC, sample_id DESC
+                    );
             `);
+            const classifyStatistics = this.db.prepare(`
+                UPDATE bmp_statistics_samples
+                   SET report_kind = @reportKind, report_key = @reportKey
+                 WHERE sample_id = @sampleId
+            `);
+            this.db
+                .prepare(
+                    `SELECT sample_id, statistics_json
+                       FROM bmp_statistics_samples
+                      WHERE report_kind IS NULL OR report_key IS NULL`
+                )
+                .all()
+                .forEach(row => {
+                    const identity = makeStatisticsReportIdentity(parseJson(row.statistics_json));
+                    if (identity) {
+                        classifyStatistics.run({
+                            sampleId: row.sample_id,
+                            reportKind: identity.kind,
+                            reportKey: identity.key
+                        });
+                    }
+                });
+            const upsertLatestStatistics = this.db.prepare(`
+                INSERT INTO bmp_statistics_latest(source_id, report_kind, report_key, sample_id, observed_at_ms)
+                VALUES (@sourceId, @reportKind, @reportKey, @sampleId, @observedAtMs)
+                ON CONFLICT(source_id, report_kind, report_key) DO UPDATE SET
+                    sample_id = excluded.sample_id,
+                    observed_at_ms = excluded.observed_at_ms
+                WHERE excluded.observed_at_ms > bmp_statistics_latest.observed_at_ms
+                   OR (
+                       excluded.observed_at_ms = bmp_statistics_latest.observed_at_ms
+                       AND excluded.sample_id > bmp_statistics_latest.sample_id
+                   )
+            `);
+            this.db
+                .prepare(
+                    `SELECT sample_id, source_id, report_kind, report_key, observed_at_ms
+                       FROM bmp_statistics_samples
+                      WHERE report_kind IN ('session', 'instance') AND report_key IS NOT NULL
+                      ORDER BY observed_at_ms, sample_id`
+                )
+                .all()
+                .forEach(row => {
+                    upsertLatestStatistics.run({
+                        sourceId: row.source_id,
+                        reportKind: row.report_kind,
+                        reportKey: row.report_key,
+                        sampleId: row.sample_id,
+                        observedAtMs: row.observed_at_ms
+                    });
+                });
             const connectionsWithoutGeneration = this.db
                 .prepare(
                     `SELECT connection_id
@@ -567,6 +737,13 @@ class BmpPersistenceStore {
                 SELECT event_id
                   FROM bmp_route_events
                  WHERE connection_id = @connectionId AND source_sequence = @sequence
+                 LIMIT 1
+            `),
+            findCurrentRoute: this.db.prepare(`
+                SELECT r.*, route_attr.attr_json AS attr_json
+                  FROM bmp_current_routes r
+                  LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_id = r.attr_id
+                 WHERE r.scope_id = @scopeId AND r.route_id = @routeId
                  LIMIT 1
             `),
             insertBatch: this.db.prepare(`
@@ -744,6 +921,11 @@ class BmpPersistenceStore {
                 )
                 ON CONFLICT(connection_id, source_sequence) DO NOTHING
             `),
+            updateEventType: this.db.prepare(`
+                UPDATE bmp_route_events
+                   SET event_type = @eventType
+                 WHERE event_id = @eventId
+            `),
             upsertRoute: this.db.prepare(`
                 INSERT INTO bmp_current_routes(
                     scope_id, route_id, route_key_json, route_identity_json, route_key_version,
@@ -802,10 +984,132 @@ class BmpPersistenceStore {
             `),
             insertStatistics: this.db.prepare(`
                 INSERT INTO bmp_statistics_samples(
-                    source_id, connection_id, scope_id, observed_at_ms, source_timestamp_ms, statistics_json
-                ) VALUES (@sourceId, @connectionId, @scopeId, @eventAtMs, @sourceTimestampMs, @statisticsJson)
+                    source_id, connection_id, scope_id, report_kind, report_key,
+                    observed_at_ms, source_timestamp_ms, statistics_json
+                ) VALUES (
+                    @sourceId, @connectionId, @scopeId, @reportKind, @reportKey,
+                    @eventAtMs, @sourceTimestampMs, @statisticsJson
+                )
+            `),
+            upsertLatestStatistics: this.db.prepare(`
+                INSERT INTO bmp_statistics_latest(source_id, report_kind, report_key, sample_id, observed_at_ms)
+                VALUES (@sourceId, @reportKind, @reportKey, @sampleId, @eventAtMs)
+                ON CONFLICT(source_id, report_kind, report_key) DO UPDATE SET
+                    sample_id = excluded.sample_id,
+                    observed_at_ms = excluded.observed_at_ms
+                WHERE excluded.observed_at_ms > bmp_statistics_latest.observed_at_ms
+                   OR (
+                       excluded.observed_at_ms = bmp_statistics_latest.observed_at_ms
+                       AND excluded.sample_id > bmp_statistics_latest.sample_id
+                   )
             `)
         };
+    }
+
+    mapDeltaRouteRow(row) {
+        if (!row) {
+            return null;
+        }
+        const route = {
+            ...parseJson(row.route_json, {}),
+            ...parseJson(row.attr_json, {})
+        };
+        return {
+            ...route,
+            persistentRouteId: row.route_id,
+            persistentScopeId: row.scope_id,
+            routeKey: route.routeKey || row.legacy_route_key,
+            canonicalRouteKey: parseJson(row.route_key_json),
+            afi: route.afi ?? row.afi,
+            safi: route.safi ?? row.safi,
+            pathId: route.pathId ?? row.path_id,
+            rd: route.rd ?? row.rd,
+            ip: route.ip ?? route.prefix ?? row.prefix,
+            mask: route.mask ?? route.length ?? row.prefix_length,
+            attrId: row.attr_id || '',
+            ribEpoch: row.rib_epoch
+        };
+    }
+
+    mapDeltaMutationRoute(mutation) {
+        const routeData = mutation.route;
+        if (!routeData) {
+            return null;
+        }
+        const route = {
+            ...parseJson(routeData.routeJson, {}),
+            ...parseJson(routeData.attrJson, {})
+        };
+        return {
+            ...route,
+            persistentRouteId: routeData.id,
+            persistentScopeId: mutation.scope?.id || null,
+            routeKey: route.routeKey || routeData.legacyRouteKey,
+            canonicalRouteKey: parseJson(routeData.keyJson),
+            afi: route.afi ?? finiteNumber(routeData.afi),
+            safi: route.safi ?? finiteNumber(routeData.safi),
+            pathId: route.pathId ?? finiteNumber(routeData.pathId, 0),
+            rd: route.rd ?? routeData.rd ?? null,
+            ip: route.ip ?? route.prefix ?? routeData.prefix ?? null,
+            mask: route.mask ?? route.length ?? finiteNumber(routeData.prefixLength),
+            attrId: routeData.attrId || '',
+            ribEpoch: finiteNumber(mutation.scope?.epoch, 0)
+        };
+    }
+
+    buildCommittedRouteDelta(mutation, eventId, options = {}) {
+        const route = mutation.route || {};
+        return {
+            action: options.action,
+            classification: options.classification,
+            requestedEventType: mutation.eventType,
+            eventType: options.eventType || options.classification,
+            eventId,
+            committed: true,
+            projectionChanged: options.projectionChanged === true,
+            sourceId: mutation.source?.id || null,
+            connectionId: mutation.connection?.id || null,
+            scopeId: mutation.scope?.id || null,
+            ownerKey: mutation.scope?.ownerKey || null,
+            source: mutation.source || null,
+            connection: mutation.connection || null,
+            scope: mutation.scope || null,
+            scopeKind: mutation.scope?.kind || null,
+            afi: finiteNumber(route.afi ?? mutation.scope?.afi),
+            safi: finiteNumber(route.safi ?? mutation.scope?.safi),
+            ribType: mutation.scope?.ribType ?? null,
+            routeId: route.id || null,
+            legacyRouteKey: route.legacyRouteKey || options.previous?.routeKey || null,
+            routeKey: route.legacyRouteKey || options.previous?.routeKey || null,
+            reason: mutation.reason || null,
+            previous: options.previous || null,
+            current: options.current || null,
+            context: mutation.context ?? null,
+            mutation: {
+                eventType: mutation.eventType,
+                sequence: mutation.sequence,
+                eventAtMs: mutation.eventAtMs,
+                sourceTimestampMs: mutation.sourceTimestampMs ?? null,
+                reason: mutation.reason || null,
+                context: mutation.context ?? null,
+                source: mutation.source,
+                connection: mutation.connection,
+                scope: mutation.scope || null
+            }
+        };
+    }
+
+    buildApplyBatchResult(duplicate, applied, deltas) {
+        const result = { duplicate, applied };
+        // Keep the historic enumerable response shape for strict callers while exposing
+        // committed deltas to direct store consumers. The worker explicitly serializes it.
+        Object.defineProperty(result, 'deltas', {
+            configurable: false,
+            enumerable: false,
+            writable: false,
+            value: deltas
+        });
+        return result;
     }
 
     applyMutation(batchId, mutation, batchCache = null) {
@@ -824,7 +1128,7 @@ class BmpPersistenceStore {
                 sequence: mutation.sequence
             })
         ) {
-            return false;
+            return { applied: false, delta: null };
         }
 
         const sourceSignature = `${source.identityJson}|${source.remoteIp || ''}|${source.sysName || ''}|${
@@ -900,6 +1204,14 @@ class BmpPersistenceStore {
             batchCache?.attributes.add(route.attrId);
         }
 
+        const isRouteUpsert = ['upsert', 'announce', 'replace', 'refresh'].includes(mutation.eventType);
+        const isRouteDelete = ['delete', 'withdraw', 'purge'].includes(mutation.eventType);
+        const previousRow =
+            route && scope && (isRouteUpsert || isRouteDelete)
+                ? this.statements.findCurrentRoute.get({ scopeId: scope.id, routeId: route.id })
+                : null;
+        const previousRoute = this.mapDeltaRouteRow(previousRow);
+
         const eventResult = this.statements.insertEvent.run({
             batchId,
             sourceId: source.id,
@@ -920,15 +1232,17 @@ class BmpPersistenceStore {
             routeJson: route ? route.routeJson : null
         });
         if (eventResult.changes === 0) {
-            return false;
+            return { applied: false, delta: null };
         }
 
         const eventId = Number(eventResult.lastInsertRowid);
+        let delta = null;
         switch (mutation.eventType) {
+            case 'upsert':
             case 'announce':
             case 'replace':
-            case 'refresh':
-                this.statements.upsertRoute.run({
+            case 'refresh': {
+                const routeResult = this.statements.upsertRoute.run({
                     scopeId: scope.id,
                     routeId: route.id,
                     keyJson: route.keyJson,
@@ -951,16 +1265,49 @@ class BmpPersistenceStore {
                     eventId,
                     connectionId: connection.id
                 });
+                const projectionChanged = routeResult.changes > 0;
+                const classification = projectionChanged
+                    ? previousRow
+                        ? (previousRow.attr_id || null) === (route.attrId || null)
+                            ? 'refresh'
+                            : 'replace'
+                        : 'announce'
+                    : 'upsert-noop';
+                this.statements.updateEventType.run({ eventId, eventType: classification });
+                delta = this.buildCommittedRouteDelta(mutation, eventId, {
+                    action: 'upsert',
+                    classification,
+                    projectionChanged,
+                    previous: previousRoute,
+                    current: projectionChanged ? this.mapDeltaMutationRoute(mutation) : previousRoute
+                });
                 break;
+            }
+            case 'delete':
             case 'withdraw':
-            case 'purge':
-                this.statements.withdrawRoute.run({
+            case 'purge': {
+                const routeResult = this.statements.withdrawRoute.run({
                     scopeId: scope.id,
                     routeId: route.id,
                     connectionId: connection.id,
                     epoch: finiteNumber(scope.epoch, 0)
                 });
+                const projectionChanged = routeResult.changes > 0;
+                const classification = projectionChanged
+                    ? mutation.eventType === 'purge'
+                        ? 'purge'
+                        : 'withdraw'
+                    : 'withdraw-noop';
+                this.statements.updateEventType.run({ eventId, eventType: classification });
+                delta = this.buildCommittedRouteDelta(mutation, eventId, {
+                    action: 'delete',
+                    classification,
+                    projectionChanged,
+                    previous: previousRoute,
+                    current: projectionChanged ? null : previousRoute
+                });
                 break;
+            }
             case 'scope_eor':
                 this.statements.markScopeEor.run({
                     scopeId: scope.id,
@@ -990,20 +1337,35 @@ class BmpPersistenceStore {
                 });
                 break;
             case 'statistics':
-                this.statements.insertStatistics.run({
-                    sourceId: source.id,
-                    connectionId: connection.id,
-                    scopeId: scope?.id || null,
-                    eventAtMs,
-                    sourceTimestampMs: finiteNumber(mutation.sourceTimestampMs),
-                    statisticsJson: asJson(mutation.statistics || {})
-                });
+                {
+                    const statistics = mutation.statistics || {};
+                    const identity = makeStatisticsReportIdentity(statistics);
+                    const result = this.statements.insertStatistics.run({
+                        sourceId: source.id,
+                        connectionId: connection.id,
+                        scopeId: scope?.id || null,
+                        reportKind: identity?.kind || null,
+                        reportKey: identity?.key || null,
+                        eventAtMs,
+                        sourceTimestampMs: finiteNumber(mutation.sourceTimestampMs),
+                        statisticsJson: asJson(statistics)
+                    });
+                    if (identity) {
+                        this.statements.upsertLatestStatistics.run({
+                            sourceId: source.id,
+                            reportKind: identity.kind,
+                            reportKey: identity.key,
+                            sampleId: Number(result.lastInsertRowid),
+                            eventAtMs
+                        });
+                    }
+                }
                 break;
             default:
                 break;
         }
 
-        return true;
+        return { applied: true, delta };
     }
 
     applyBatch(batch = {}) {
@@ -1027,10 +1389,11 @@ class BmpPersistenceStore {
                 mutationCount: mutations.length
             });
             if (batchResult.changes === 0) {
-                return { duplicate: true, applied: 0 };
+                return this.buildApplyBatchResult(true, 0, []);
             }
 
             let applied = 0;
+            const deltas = [];
             const batchCache = {
                 sources: new Map(),
                 connections: new Set(),
@@ -1038,11 +1401,15 @@ class BmpPersistenceStore {
                 attributes: new Set()
             };
             mutations.forEach(mutation => {
-                if (this.applyMutation(batchId, mutation, batchCache)) {
+                const mutationResult = this.applyMutation(batchId, mutation, batchCache);
+                if (mutationResult.applied) {
                     applied += 1;
                 }
+                if (mutationResult.delta) {
+                    deltas.push(mutationResult.delta);
+                }
             });
-            return { duplicate: false, applied };
+            return this.buildApplyBatchResult(false, applied, deltas);
         });
 
         return transaction();
@@ -1065,6 +1432,13 @@ class BmpPersistenceStore {
         const page = positiveInteger(query.page, 1);
         const pageSize = positiveInteger(query.pageSize, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
         const cursor = decodeCursor(query.cursor, 'routes-by-id');
+        const orderBy = query.orderBy || 'routeId';
+        if (!['routeId', 'firstSeen'].includes(orderBy)) {
+            throw new Error(`Unsupported BMP persistence route order: ${orderBy}`);
+        }
+        if (cursor && orderBy === 'firstSeen') {
+            throw new Error('BMP persistence routes cursor cannot be combined with orderBy firstSeen');
+        }
         const includeTotal = query.includeTotal !== false;
         const where = [];
         const params = {};
@@ -1075,19 +1449,154 @@ class BmpPersistenceStore {
                 params[name] = value;
             }
         };
+        const routePrefixValuesSql = `(
+            lower(COALESCE(r.prefix, '')),
+            lower(COALESCE(json_extract(r.route_json, '$.ip'), '')),
+            lower(COALESCE(json_extract(r.route_json, '$.prefix'), '')),
+            lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.prefix'), '')),
+            lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipPrefix'), '')),
+            lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipAddress'), ''))
+        )`;
+        const exactCidrPredicate = (prefixParam, lengthParam) => `(
+            (lower(COALESCE(r.prefix, '')) = @${prefixParam} AND r.prefix_length = @${lengthParam})
+            OR (
+                lower(COALESCE(json_extract(r.route_json, '$.ip'), '')) = @${prefixParam}
+                AND COALESCE(
+                    json_extract(r.route_json, '$.mask'),
+                    json_extract(r.route_json, '$.length')
+                ) = @${lengthParam}
+            )
+            OR (
+                (
+                    lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.prefix'), '')) = @${prefixParam}
+                    OR lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipPrefix'), '')) = @${prefixParam}
+                )
+                AND COALESCE(
+                    json_extract(r.route_json, '$.nlriDetail.prefixLength'),
+                    json_extract(r.route_json, '$.nlriDetail.length')
+                ) = @${lengthParam}
+            )
+            OR (
+                lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipAddress'), '')) = @${prefixParam}
+                AND @${lengthParam} IN (32, 128)
+            )
+        )`;
 
         addFilter('s.source_id = @sourceId', 'sourceId', query.sourceId);
         addFilter('s.scope_id = @scopeId', 'scopeId', query.scopeId);
+        addFilter('s.owner_key = @ownerKey', 'ownerKey', query.ownerKey);
+        addFilter('r.connection_id = @connectionId', 'connectionId', query.connectionId);
         addFilter('r.route_id = @routeId', 'routeId', query.routeId);
         addFilter('r.legacy_route_key = @legacyRouteKey', 'legacyRouteKey', query.legacyRouteKey || query.routeKey);
         addFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
         addFilter('r.afi = @afi', 'afi', finiteNumber(query.afi));
         addFilter('r.safi = @safi', 'safi', finiteNumber(query.safi));
+        addFilter('r.prefix_length = @prefixLength', 'prefixLength', finiteNumber(query.prefixLength));
         addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
-        if (query.prefix) {
+        addFilter('s.scope_state = @scopeState', 'scopeState', query.scopeState);
+        if (query.prefixExact !== undefined && query.prefixExact !== null && query.prefixExact !== '') {
+            params.prefixExact = String(query.prefixExact);
+            where.push('r.prefix = @prefixExact');
+        } else if (query.prefix) {
             params.prefixStart = String(query.prefix);
             params.prefixEnd = `${params.prefixStart}\uffff`;
             where.push('r.prefix >= @prefixStart AND r.prefix < @prefixEnd');
+        }
+        const prefixCidrs = normalizePrefixCidrs(query.prefixCidrs);
+        if (prefixCidrs.length > 400) {
+            throw new Error('BMP persistence prefixCidrs supports at most 400 entries');
+        }
+        if (prefixCidrs.length > 0) {
+            const cidrWhere = prefixCidrs.map((cidr, index) => {
+                params[`cidrPrefix${index}`] = cidr.prefix.toLowerCase();
+                params[`cidrLength${index}`] = cidr.prefixLength;
+                return exactCidrPredicate(`cidrPrefix${index}`, `cidrLength${index}`);
+            });
+            where.push(`(${cidrWhere.join(' OR ')})`);
+        }
+        const searchText = String(query.searchText ?? '')
+            .trim()
+            .toLowerCase();
+        if (searchText) {
+            params.searchText = searchText;
+            where.push(`instr(lower(
+                COALESCE(r.prefix, '') || char(31) ||
+                COALESCE(r.legacy_route_key, '') || char(31) ||
+                COALESCE(r.route_id, '') || char(31) ||
+                COALESCE(r.route_json, '') || char(31) ||
+                COALESCE(route_attr.attr_json, '') || char(31) ||
+                COALESCE(s.owner_key, '') || char(31) ||
+                COALESCE(s.peer_ip, '') || char(31) ||
+                COALESCE(s.peer_as, '') || char(31) ||
+                COALESCE(s.vrf_name, '') || char(31) ||
+                COALESCE(src.sys_name, '') || char(31) ||
+                COALESCE(src.remote_ip, '')
+            ), @searchText) > 0`);
+        }
+        const routeIdentityText = String(query.routeIdentityText ?? '')
+            .trim()
+            .toLowerCase();
+        if (routeIdentityText) {
+            params.routeIdentityText = routeIdentityText;
+            where.push(`instr(lower(
+                COALESCE(r.prefix, '') || char(31) ||
+                COALESCE(r.legacy_route_key, '') || char(31) ||
+                COALESCE(r.route_json, '') || char(31) ||
+                CASE r.afi
+                    WHEN 1 THEN 'ipv4'
+                    WHEN 2 THEN 'ipv6'
+                    WHEN 25 THEN 'l2vpn'
+                    WHEN 16388 THEN 'bgp-ls'
+                    ELSE 'unknown (' || r.afi || ')'
+                END || ' ' ||
+                CASE r.safi
+                    WHEN 1 THEN 'unicast'
+                    WHEN 2 THEN 'multicast'
+                    WHEN 4 THEN 'labeled unicast'
+                    WHEN 5 THEN 'mvpn'
+                    WHEN 70 THEN 'evpn'
+                    WHEN 71 THEN 'bgp-ls'
+                    WHEN 72 THEN 'bgp-ls-vpn'
+                    WHEN 128 THEN 'vpn'
+                    WHEN 133 THEN 'flowspec'
+                    ELSE 'unknown (' || r.safi || ')'
+                END
+            ), @routeIdentityText) > 0`);
+        }
+        const prefixFilter = String(query.prefixFilter ?? '').trim();
+        if (prefixFilter) {
+            let parsedCidr = null;
+            try {
+                const separator = prefixFilter.lastIndexOf('/');
+                if (separator > 0 && isStrictIpAddress(prefixFilter.slice(0, separator))) {
+                    parsedCidr = ipaddr.parseCIDR(prefixFilter);
+                }
+            } catch (_error) {
+                // A non-CIDR prefix filter is handled as an exact IP or plain text below.
+            }
+            if (parsedCidr) {
+                const [address, length] = parsedCidr;
+                params.prefixFilterValue = address.constructor
+                    .networkAddressFromCIDR(`${address.toString()}/${length}`)
+                    .toString()
+                    .toLowerCase();
+                params.prefixFilterLength = length;
+                where.push(exactCidrPredicate('prefixFilterValue', 'prefixFilterLength'));
+            } else if (isStrictIpAddress(prefixFilter)) {
+                params.prefixFilterValue = ipaddr.parse(prefixFilter).toString().toLowerCase();
+                where.push(`@prefixFilterValue IN ${routePrefixValuesSql}`);
+            } else {
+                params.prefixFilterText = prefixFilter.toLowerCase();
+                where.push(`instr(lower(
+                    COALESCE(r.prefix, '') || char(31) ||
+                    COALESCE(json_extract(r.route_json, '$.ip'), '') || char(31) ||
+                    COALESCE(json_extract(r.route_json, '$.prefix'), '') || char(31) ||
+                    COALESCE(json_extract(r.route_json, '$.nlriDetail.prefix'), '') || char(31) ||
+                    COALESCE(json_extract(r.route_json, '$.nlriDetail.ipPrefix'), '') || char(31) ||
+                    COALESCE(json_extract(r.route_json, '$.nlriDetail.ipAddress'), '') || char(31) ||
+                    COALESCE(json_extract(r.route_json, '$.nlriDetail.formatted'), '')
+                ), @prefixFilterText) > 0`);
+            }
         }
         if (query.routeState && query.routeState !== 'all') {
             where.push(`${stateSql} = @routeState`);
@@ -1114,6 +1623,7 @@ class BmpPersistenceStore {
                         FROM bmp_current_routes r
                         JOIN bmp_rib_scopes s ON s.scope_id = r.scope_id
                         JOIN bmp_sources src ON src.source_id = s.source_id
+                        LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_id = r.attr_id
                         ${countWhereSql}
                   `
                       )
@@ -1127,16 +1637,24 @@ class BmpPersistenceStore {
                        s.peer_type, s.peer_rd,
                        s.peer_ip, s.peer_as, s.vrf_name, s.rib_type, s.current_epoch,
                        s.eor_epoch, s.scope_state, s.stale_reason AS scope_stale_reason,
-                       s.refresh_started_ms, s.cleanup_pending_epoch,
+                       s.stale_since_ms, s.refresh_started_ms, s.updated_at_ms AS scope_updated_at_ms,
+                       s.cleanup_pending_epoch,
                        route_attr.attr_json AS attr_json,
                        src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,
+                       conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
+                       conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,
                        ${stateSql} AS effective_state
                   FROM bmp_current_routes r
                   JOIN bmp_rib_scopes s ON s.scope_id = r.scope_id
                   JOIN bmp_sources src ON src.source_id = s.source_id
+                  JOIN bmp_connections conn ON conn.connection_id = r.connection_id
                   LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_id = r.attr_id
                   ${whereSql}
-                 ORDER BY r.scope_id, r.route_id
+                 ORDER BY ${
+                     orderBy === 'firstSeen'
+                         ? 'r.first_seen_ms, r.last_event_id, r.scope_id, r.route_id'
+                         : 'r.scope_id, r.route_id'
+                 }
                  LIMIT @limit OFFSET @offset
             `
                 )
@@ -1154,7 +1672,7 @@ class BmpPersistenceStore {
             page,
             pageSize,
             nextCursor:
-                hasMore && lastRow
+                orderBy === 'routeId' && hasMore && lastRow
                     ? encodeCursor('routes-by-id', {
                           scopeId: lastRow.scope_id,
                           routeId: lastRow.route_id
@@ -1176,6 +1694,8 @@ class BmpPersistenceStore {
             persistentRouteId: row.route_id,
             persistentScopeId: row.scope_id,
             persistentSourceId: row.source_id,
+            persistentConnectionId: row.connection_id,
+            ownerKey: row.owner_key,
             routeKey: route.routeKey || row.legacy_route_key,
             canonicalRouteKey: parseJson(row.route_key_json),
             routeState: row.effective_state,
@@ -1185,6 +1705,18 @@ class BmpPersistenceStore {
                       row.scope_stale_reason ||
                       (row.rib_epoch < row.current_epoch ? 'refresh-pending' : 'connection-replaced')
                     : null,
+            staleAt:
+                row.effective_state === 'stale'
+                    ? route.staleAt ||
+                      (row.stale_since_ms === null &&
+                      row.refresh_started_ms === null &&
+                      row.scope_updated_at_ms === null
+                          ? null
+                          : new Date(
+                                row.stale_since_ms ?? row.refresh_started_ms ?? row.scope_updated_at_ms
+                            ).toISOString())
+                    : null,
+            staleEpoch: row.effective_state === 'stale' ? (route.staleEpoch ?? row.current_epoch ?? null) : null,
             scopeStaleReason: row.scope_stale_reason,
             ribEpoch: row.rib_epoch,
             currentEpoch: row.current_epoch,
@@ -1203,7 +1735,10 @@ class BmpPersistenceStore {
                 vrf: row.vrf_name
             },
             source: {
-                remoteIp: row.source_remote_ip,
+                localIp: row.connection_local_ip,
+                localPort: row.connection_local_port,
+                remoteIp: row.connection_remote_ip || row.source_remote_ip,
+                remotePort: row.connection_remote_port,
                 sysName: row.sys_name,
                 sysDesc: row.sys_desc
             },
@@ -1211,6 +1746,573 @@ class BmpPersistenceStore {
             lastSeenAt: new Date(row.last_seen_ms).toISOString(),
             sourceTimestampMs: row.source_timestamp_ms
         };
+    }
+
+    queryRouteScope(query = {}) {
+        if (!this.db) {
+            this.open();
+        }
+        const routeQuery = query.routeQuery || {};
+        const summaryQuery = query.summaryQuery || {};
+        return this.db.transaction(() => ({
+            routes: this.queryRoutes(routeQuery),
+            summary: this.queryScopeSummary(summaryQuery)
+        }))();
+    }
+
+    queryTopology(query = {}) {
+        if (!this.db) {
+            this.open();
+        }
+
+        const params = {};
+        const sourceWhere = [];
+        if (query.sourceId !== undefined && query.sourceId !== null && query.sourceId !== '') {
+            params.sourceId = String(query.sourceId);
+            sourceWhere.push('src.source_id = @sourceId');
+        }
+        const sourceWhereSql = sourceWhere.length > 0 ? `WHERE ${sourceWhere.join(' AND ')}` : '';
+        const scopeWhereSql = sourceWhere.length > 0 ? 'WHERE s.source_id = @sourceId' : '';
+        const stateSql = this.buildRouteStateSql();
+
+        const readSnapshot = this.db.transaction(() => {
+            const sourceRows = this.db
+                .prepare(
+                    `
+                    SELECT src.*,
+                           conn.connection_id AS latest_connection_id,
+                           conn.connection_generation AS latest_connection_generation,
+                           conn.local_ip AS latest_local_ip, conn.local_port AS latest_local_port,
+                           conn.remote_ip AS latest_remote_ip, conn.remote_port AS latest_remote_port,
+                           conn.opened_at_ms AS latest_opened_at_ms,
+                           conn.closed_at_ms AS latest_closed_at_ms,
+                           conn.close_reason AS latest_close_reason,
+                           conn.connection_state AS latest_connection_state
+                      FROM bmp_sources src
+                      LEFT JOIN bmp_connections conn ON conn.connection_id = (
+                          SELECT candidate.connection_id
+                            FROM bmp_connections candidate
+                           WHERE candidate.source_id = src.source_id
+                           ORDER BY candidate.connection_generation DESC,
+                                    candidate.opened_at_ms DESC, candidate.connection_id DESC
+                           LIMIT 1
+                      )
+                      ${sourceWhereSql}
+                     ORDER BY src.source_id
+                `
+                )
+                .all(params);
+            const scopeRows = this.db
+                .prepare(
+                    `
+                    SELECT s.*,
+                           conn.connection_id AS scope_connection_id,
+                           conn.connection_generation AS scope_connection_generation,
+                           conn.connection_state AS scope_connection_state,
+                           conn.local_ip AS scope_local_ip, conn.local_port AS scope_local_port,
+                           conn.remote_ip AS scope_remote_ip, conn.remote_port AS scope_remote_port,
+                           conn.opened_at_ms AS scope_opened_at_ms,
+                           conn.closed_at_ms AS scope_closed_at_ms,
+                           conn.close_reason AS scope_close_reason,
+                           SUM(CASE
+                               WHEN r.route_id IS NOT NULL AND ${stateSql} = 'active' THEN 1 ELSE 0
+                           END) AS active,
+                           SUM(CASE
+                               WHEN r.route_id IS NOT NULL AND ${stateSql} = 'stale' THEN 1 ELSE 0
+                           END) AS stale,
+                           COUNT(r.route_id) AS total
+                      FROM bmp_rib_scopes s
+                      LEFT JOIN bmp_current_routes r ON r.scope_id = s.scope_id
+                      LEFT JOIN bmp_connections conn ON conn.connection_id = s.last_connection_id
+                      ${scopeWhereSql}
+                     GROUP BY s.scope_id
+                     ORDER BY s.source_id, s.scope_kind, s.owner_key, s.afi, s.safi, s.rib_type, s.scope_id
+                `
+                )
+                .all(params);
+            return { sourceRows, scopeRows };
+        });
+
+        const { sourceRows, scopeRows } = readSnapshot();
+        const emptySummary = () => ({ active: 0, stale: 0, total: 0 });
+        const addSummary = (target, value) => {
+            target.active += Number(value.active || 0);
+            target.stale += Number(value.stale || 0);
+            target.total += Number(value.total || 0);
+        };
+        const mapConnection = (row, prefix = '') => {
+            const connectionId = row[`${prefix}connection_id`] ?? row.last_connection_id ?? null;
+            if (!connectionId) {
+                return null;
+            }
+            return {
+                connectionId,
+                generation: finiteNumber(row[`${prefix}connection_generation`], 0),
+                state: row[`${prefix}connection_state`] || null,
+                localIp: row[`${prefix}local_ip`] || null,
+                localPort: finiteNumber(row[`${prefix}local_port`]),
+                remoteIp: row[`${prefix}remote_ip`] || null,
+                remotePort: finiteNumber(row[`${prefix}remote_port`]),
+                openedAtMs: finiteNumber(row[`${prefix}opened_at_ms`]),
+                closedAtMs: finiteNumber(row[`${prefix}closed_at_ms`]),
+                closeReason: row[`${prefix}close_reason`] || null
+            };
+        };
+        const normalizePeerNumber = value => {
+            if (value === null || value === undefined || value === '') {
+                return null;
+            }
+            const number = Number(value);
+            return Number.isSafeInteger(number) ? number : value;
+        };
+
+        const clients = sourceRows.map(row => {
+            const metadata = parseJson(row.metadata_json, {});
+            const connection = mapConnection(row, 'latest_');
+            const routeSummary = emptySummary();
+            return {
+                persistentSourceId: row.source_id,
+                sourceId: row.source_id,
+                sourceIdentity: parseJson(row.source_identity_json, {}),
+                sysName: row.sys_name,
+                sysDesc: row.sys_desc,
+                bmpVersion: metadata?.bmpVersion ?? null,
+                bmpV4TlvDraft: metadata?.bmpV4TlvDraft ?? null,
+                metadata,
+                remoteIp: connection?.remoteIp || row.remote_ip,
+                localIp: connection?.localIp || null,
+                localPort: connection?.localPort ?? null,
+                remotePort: connection?.remotePort ?? null,
+                persistentConnectionId: connection?.connectionId || null,
+                connectionId: connection?.connectionId || null,
+                connectionState: connection?.state || null,
+                isOnline: connection?.state === 'open',
+                connection,
+                firstSeenMs: finiteNumber(row.first_seen_ms),
+                lastSeenMs: finiteNumber(row.last_seen_ms),
+                receivedAt: connection?.openedAtMs ?? null,
+                routeSummary,
+                sessions: [],
+                instances: []
+            };
+        });
+        const clientBySourceId = new Map(clients.map(client => [client.sourceId, client]));
+        const sessionByKey = new Map();
+        const scopes = [];
+
+        scopeRows.forEach(row => {
+            const scopeIdentity = parseJson(row.scope_identity_json, {});
+            const peerRdIdentity = scopeIdentity?.peer?.rd;
+            const connection = mapConnection(row, 'scope_');
+            const routeSummary = {
+                active: Number(row.active || 0),
+                stale: Number(row.stale || 0),
+                total: Number(row.total || 0)
+            };
+            const scope = {
+                persistentScopeId: row.scope_id,
+                scopeId: row.scope_id,
+                persistentSourceId: row.source_id,
+                sourceId: row.source_id,
+                persistentOwnerKey: row.owner_key,
+                ownerKey: row.owner_key,
+                persistentConnectionId: row.last_connection_id,
+                connectionId: row.last_connection_id,
+                scopeIdentity,
+                scopeKind: row.scope_kind,
+                peerType: normalizePeerNumber(row.peer_type),
+                peerRd: row.peer_rd,
+                peerRdRaw:
+                    typeof peerRdIdentity === 'string' && peerRdIdentity.startsWith('raw:') ? peerRdIdentity : null,
+                peerIp: row.peer_ip,
+                peerAs: normalizePeerNumber(row.peer_as),
+                vrfName: row.vrf_name,
+                afi: Number(row.afi),
+                safi: Number(row.safi),
+                addrFamilyType: getAddrFamilyType(Number(row.afi), Number(row.safi)),
+                ribType: row.rib_type,
+                currentEpoch: Number(row.current_epoch || 0),
+                eorEpoch: finiteNumber(row.eor_epoch),
+                scopeState: row.scope_state,
+                staleReason: row.stale_reason,
+                staleSinceMs: finiteNumber(row.stale_since_ms),
+                refreshStartedMs: finiteNumber(row.refresh_started_ms),
+                cleanupPendingEpoch: finiteNumber(row.cleanup_pending_epoch),
+                connectionState: connection?.state || null,
+                isOnline: connection?.state === 'open',
+                connection,
+                createdAtMs: finiteNumber(row.created_at_ms),
+                updatedAtMs: finiteNumber(row.updated_at_ms),
+                routeSummary
+            };
+            scopes.push(scope);
+
+            const client = clientBySourceId.get(scope.sourceId);
+            if (!client) {
+                return;
+            }
+            addSummary(client.routeSummary, routeSummary);
+            if (scope.scopeKind === 'loc-rib') {
+                client.instances.push({
+                    persistentSourceId: scope.sourceId,
+                    sourceId: scope.sourceId,
+                    persistentOwnerKey: scope.ownerKey,
+                    ownerKey: scope.ownerKey,
+                    persistentScopeId: scope.scopeId,
+                    scopeId: scope.scopeId,
+                    persistentConnectionId: scope.connectionId,
+                    connectionId: scope.connectionId,
+                    connectionState: scope.connectionState,
+                    isOnline: scope.isOnline,
+                    connection: scope.connection,
+                    instanceType: scope.peerType,
+                    instanceFlags: null,
+                    rawInstanceFlags: null,
+                    instanceRd: scope.peerRd,
+                    instanceRdRaw: scope.peerRdRaw,
+                    instanceIp: scope.peerIp,
+                    instanceAs: scope.peerAs,
+                    instanceRouterId: null,
+                    instanceState: null,
+                    afi: scope.afi,
+                    safi: scope.safi,
+                    addrFamilyType: scope.addrFamilyType,
+                    ribTypes: [scope.ribType],
+                    vrfTableNames: scope.vrfName ? [scope.vrfName] : [],
+                    ribEpoch: scope.currentEpoch,
+                    scopeState: scope.scopeState,
+                    staleReason: scope.staleReason,
+                    routeSummary: { ...routeSummary },
+                    routeScopes: [scope]
+                });
+                return;
+            }
+
+            const sessionKey = `${scope.sourceId}\u0000${scope.ownerKey || scope.scopeId}`;
+            let session = sessionByKey.get(sessionKey);
+            if (!session) {
+                session = {
+                    persistentSourceId: scope.sourceId,
+                    sourceId: scope.sourceId,
+                    persistentOwnerKey: scope.ownerKey,
+                    ownerKey: scope.ownerKey,
+                    persistentConnectionId: scope.connectionId,
+                    connectionId: scope.connectionId,
+                    connectionState: scope.connectionState,
+                    isOnline: scope.isOnline,
+                    connection: scope.connection,
+                    sessionType: scope.peerType,
+                    sessionFlags: null,
+                    rawSessionFlags: null,
+                    sessionRd: scope.peerRd,
+                    sessionRdRaw: scope.peerRdRaw,
+                    sessionIp: scope.peerIp,
+                    sessionAs: scope.peerAs,
+                    sessionRouterId: null,
+                    sessionState: null,
+                    enabledAddressFamilies: [],
+                    ribTypes: [],
+                    vrfTableNames: [],
+                    ribEpochMap: {},
+                    routeSummary: emptySummary(),
+                    routeScopes: []
+                };
+                sessionByKey.set(sessionKey, session);
+                client.sessions.push(session);
+            }
+            const sessionConnectionGeneration = finiteNumber(session.connection?.generation, -1);
+            if ((connection?.generation ?? -1) > sessionConnectionGeneration) {
+                session.persistentConnectionId = scope.connectionId;
+                session.connectionId = scope.connectionId;
+                session.connectionState = scope.connectionState;
+                session.connection = scope.connection;
+            }
+            session.isOnline = session.isOnline || scope.isOnline;
+            session.routeScopes.push(scope);
+            addSummary(session.routeSummary, routeSummary);
+            if (!session.enabledAddressFamilies.some(item => item.afi === scope.afi && item.safi === scope.safi)) {
+                session.enabledAddressFamilies.push({ afi: scope.afi, safi: scope.safi });
+            }
+            if (!session.ribTypes.includes(scope.ribType)) {
+                session.ribTypes.push(scope.ribType);
+            }
+            if (scope.vrfName && !session.vrfTableNames.includes(scope.vrfName)) {
+                session.vrfTableNames.push(scope.vrfName);
+            }
+            session.ribEpochMap[`${scope.afi}|${scope.safi}|${scope.ribType}`] = scope.currentEpoch;
+        });
+
+        clients.forEach(client => {
+            client.sessions.sort((left, right) => String(left.ownerKey).localeCompare(String(right.ownerKey)));
+            client.instances.sort((left, right) => String(left.ownerKey).localeCompare(String(right.ownerKey)));
+        });
+        const routeSummary = emptySummary();
+        clients.forEach(client => addSummary(routeSummary, client.routeSummary));
+        return {
+            clients,
+            scopes,
+            routeSummary,
+            sourceCount: clients.length,
+            sessionCount: clients.reduce((total, client) => total + client.sessions.length, 0),
+            instanceCount: clients.reduce((total, client) => total + client.instances.length, 0),
+            scopeCount: scopes.length
+        };
+    }
+
+    queryScopeSummary(query = {}) {
+        if (!this.db) {
+            this.open();
+        }
+
+        const where = [];
+        const params = {};
+        const addFilter = (sql, name, value) => {
+            if (value !== undefined && value !== null && value !== '') {
+                where.push(sql);
+                params[name] = value;
+            }
+        };
+        addFilter('s.source_id = @sourceId', 'sourceId', query.sourceId);
+        addFilter('s.scope_id = @scopeId', 'scopeId', query.scopeId);
+        addFilter('s.owner_key = @ownerKey', 'ownerKey', query.ownerKey);
+        addFilter('s.last_connection_id = @connectionId', 'connectionId', query.connectionId);
+        addFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
+        addFilter('s.afi = @afi', 'afi', finiteNumber(query.afi));
+        addFilter('s.safi = @safi', 'safi', finiteNumber(query.safi));
+        addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
+        addFilter('s.scope_state = @scopeState', 'scopeState', query.scopeState);
+        const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+        const stateSql = this.buildRouteStateSql();
+        const rows = this.db
+            .prepare(
+                `
+                SELECT s.scope_id, s.source_id, s.last_connection_id, s.owner_key,
+                       s.scope_kind, s.afi, s.safi, s.rib_type, s.scope_state,
+                       s.current_epoch, s.eor_epoch, s.stale_reason,
+                       SUM(CASE WHEN r.route_id IS NOT NULL AND ${stateSql} = 'active' THEN 1 ELSE 0 END) AS active,
+                       SUM(CASE WHEN r.route_id IS NOT NULL AND ${stateSql} = 'stale' THEN 1 ELSE 0 END) AS stale,
+                       COUNT(r.route_id) AS total
+                  FROM bmp_rib_scopes s
+                  LEFT JOIN bmp_current_routes r ON r.scope_id = s.scope_id
+                  ${whereSql}
+                 GROUP BY s.scope_id
+                 ORDER BY s.scope_id
+            `
+            )
+            .all(params)
+            .map(row => ({
+                scopeId: row.scope_id,
+                sourceId: row.source_id,
+                connectionId: row.last_connection_id,
+                ownerKey: row.owner_key,
+                scopeKind: row.scope_kind,
+                afi: row.afi,
+                safi: row.safi,
+                ribType: row.rib_type,
+                scopeState: row.scope_state,
+                currentEpoch: row.current_epoch,
+                eorEpoch: row.eor_epoch,
+                staleReason: row.stale_reason,
+                active: Number(row.active || 0),
+                stale: Number(row.stale || 0),
+                total: Number(row.total || 0)
+            }));
+        return {
+            active: rows.reduce((total, row) => total + row.active, 0),
+            stale: rows.reduce((total, row) => total + row.stale, 0),
+            total: rows.reduce((total, row) => total + row.total, 0),
+            scopes: rows
+        };
+    }
+
+    purgeStaleRoutes(query = {}) {
+        if (this.readOnly) {
+            throw new Error('Cannot purge stale routes from a read-only BMP persistence store');
+        }
+        if (!this.db) {
+            this.open();
+        }
+        if (!query.scopeId && !query.ownerKey) {
+            throw new Error('BMP stale route purge requires scopeId or ownerKey');
+        }
+
+        const routeLimit = positiveInteger(query.routeLimit, 2000, 20000);
+        const where = [`${this.buildRouteStateSql()} = 'stale'`];
+        const params = {};
+        const addFilter = (sql, name, value) => {
+            if (value !== undefined && value !== null && value !== '') {
+                where.push(sql);
+                params[name] = value;
+            }
+        };
+        addFilter('s.source_id = @sourceId', 'sourceId', query.sourceId);
+        addFilter('s.scope_id = @scopeId', 'scopeId', query.scopeId);
+        addFilter('s.owner_key = @ownerKey', 'ownerKey', query.ownerKey);
+        addFilter('s.last_connection_id = @connectionId', 'connectionId', query.connectionId);
+        addFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
+        addFilter('r.afi = @afi', 'afi', finiteNumber(query.afi));
+        addFilter('r.safi = @safi', 'safi', finiteNumber(query.safi));
+        addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
+        addFilter('r.prefix = @prefixExact', 'prefixExact', query.prefixExact);
+        addFilter('r.prefix_length = @prefixLength', 'prefixLength', finiteNumber(query.prefixLength));
+        const whereSql = `WHERE ${where.join(' AND ')}`;
+        const eventAtMs = finiteNumber(query.eventAtMs, Date.now());
+        const reason = query.reason || 'manual-stale-purge';
+        const batchId = `manual-purge-${eventAtMs}-${crypto.randomBytes(8).toString('hex')}`;
+
+        const purge = this.db.transaction(() => {
+            const rows = this.db
+                .prepare(
+                    `
+                    SELECT r.*, s.source_id, s.scope_kind, s.owner_key, s.scope_identity_json,
+                           s.peer_type, s.peer_rd, s.peer_ip, s.peer_as, s.vrf_name, s.rib_type,
+                           s.current_epoch, s.eor_epoch, s.scope_state,
+                           s.last_connection_id, s.stale_reason AS scope_stale_reason,
+                           s.stale_since_ms, s.refresh_started_ms, s.updated_at_ms AS scope_updated_at_ms,
+                           s.cleanup_pending_epoch,
+                           route_attr.attr_json AS attr_json,
+                           src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,
+                           conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
+                           conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,
+                           ${this.buildRouteStateSql()} AS effective_state
+                      FROM bmp_current_routes r
+                      JOIN bmp_rib_scopes s ON s.scope_id = r.scope_id
+                      JOIN bmp_sources src ON src.source_id = s.source_id
+                      JOIN bmp_connections conn ON conn.connection_id = r.connection_id
+                      LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_id = r.attr_id
+                      ${whereSql}
+                     ORDER BY r.scope_id, r.route_id
+                     LIMIT @limit
+                `
+                )
+                .all({ ...params, limit: routeLimit + 1 });
+            const hasMore = rows.length > routeLimit;
+            const candidates = hasMore ? rows.slice(0, routeLimit) : rows;
+            const deleteRoute = this.db.prepare(
+                'DELETE FROM bmp_current_routes WHERE scope_id = @scopeId AND route_id = @routeId'
+            );
+            const minimumSequence = this.db.prepare(`
+                SELECT MIN(source_sequence) AS value
+                  FROM bmp_route_events
+                 WHERE connection_id = @connectionId
+            `);
+            const nextSequenceByConnection = new Map();
+            const takeSyntheticSequence = connectionId => {
+                if (!nextSequenceByConnection.has(connectionId)) {
+                    const currentMinimum = finiteNumber(minimumSequence.get({ connectionId })?.value);
+                    nextSequenceByConnection.set(
+                        connectionId,
+                        currentMinimum !== null && currentMinimum < 0 ? currentMinimum - 1 : -1
+                    );
+                }
+                const sequence = nextSequenceByConnection.get(connectionId);
+                nextSequenceByConnection.set(connectionId, sequence - 1);
+                return sequence;
+            };
+            const deletedRows = [];
+            candidates.forEach(row => {
+                const result = deleteRoute.run({ scopeId: row.scope_id, routeId: row.route_id });
+                if (result.changes > 0) {
+                    const eventResult = this.statements.insertEvent.run({
+                        batchId,
+                        sourceId: row.source_id,
+                        connectionId: row.last_connection_id,
+                        sequence: takeSyntheticSequence(row.last_connection_id),
+                        scopeId: row.scope_id,
+                        routeId: row.route_id,
+                        eventType: 'purge',
+                        eventAtMs,
+                        sourceTimestampMs: null,
+                        epoch: row.current_epoch,
+                        attrId: row.attr_id || null,
+                        reason,
+                        afi: row.afi,
+                        safi: row.safi,
+                        prefix: row.prefix || null,
+                        legacyRouteKey: row.legacy_route_key || null,
+                        routeJson: row.route_json
+                    });
+                    deletedRows.push({ ...row, purge_event_id: Number(eventResult.lastInsertRowid) });
+                }
+            });
+            if (deletedRows.length > 0) {
+                this.statements.insertBatch.run({
+                    batchId,
+                    createdAtMs: eventAtMs,
+                    mutationCount: deletedRows.length
+                });
+            }
+            return { hasMore, rows: deletedRows };
+        });
+        const result = purge();
+        const routes = result.rows.map(row => this.mapRouteRow(row));
+        return {
+            purged: routes.length,
+            hasMore: result.hasMore,
+            routes,
+            deltas: result.rows.map((row, index) => ({
+                action: 'delete',
+                classification: 'purge',
+                eventType: 'purge',
+                eventId: row.purge_event_id,
+                committed: true,
+                projectionChanged: true,
+                sourceId: row.source_id,
+                connectionId: row.last_connection_id,
+                scopeId: row.scope_id,
+                ownerKey: row.owner_key,
+                source: { id: row.source_id },
+                connection: { id: row.last_connection_id },
+                scope: {
+                    id: row.scope_id,
+                    ownerKey: row.owner_key,
+                    kind: row.scope_kind,
+                    afi: row.afi,
+                    safi: row.safi,
+                    ribType: row.rib_type,
+                    epoch: row.current_epoch,
+                    state: row.scope_state
+                },
+                scopeKind: row.scope_kind,
+                afi: row.afi,
+                safi: row.safi,
+                ribType: row.rib_type,
+                routeId: row.route_id,
+                legacyRouteKey: row.legacy_route_key,
+                routeKey: row.legacy_route_key,
+                reason,
+                previous: routes[index],
+                current: null,
+                context: query.context ?? null,
+                mutation: null
+            }))
+        };
+    }
+
+    queryStatisticsReports(query = {}) {
+        if (!this.db) {
+            this.open();
+        }
+        const sourceId = String(query.sourceId || '').trim();
+        if (!sourceId) {
+            throw new Error('BMP statistics report query requires sourceId');
+        }
+        const kind = String(query.kind || '').trim();
+        if (kind !== 'session' && kind !== 'instance') {
+            throw new Error('BMP statistics report query kind must be session or instance');
+        }
+
+        return this.db
+            .prepare(
+                `SELECT sample.statistics_json
+                   FROM bmp_statistics_latest latest
+                   JOIN bmp_statistics_samples sample ON sample.sample_id = latest.sample_id
+                  WHERE latest.source_id = @sourceId AND latest.report_kind = @kind
+                  ORDER BY latest.observed_at_ms DESC, latest.sample_id DESC`
+            )
+            .all({ sourceId, kind })
+            .map(row => parseJson(row.statistics_json))
+            .filter(report => report && typeof report === 'object' && !Array.isArray(report));
     }
 
     queryEvents(query = {}) {
@@ -1435,64 +2537,30 @@ class BmpPersistenceStore {
                     )
                     DELETE FROM bmp_current_routes
                      WHERE (scope_id, route_id) IN (
-                         SELECT route_candidate.scope_id, route_candidate.route_id
-                           FROM (
-                               SELECT r.scope_id, r.route_id
-                                 FROM candidate_scopes candidate
-                                 CROSS JOIN bmp_rib_scopes s
-                                 CROSS JOIN bmp_current_routes r
-                                WHERE s.scope_id = candidate.scope_id
-                                  AND r.scope_id = candidate.scope_id
-                                  AND r.rib_epoch < s.current_epoch
-                                  AND (
+                         SELECT r.scope_id, r.route_id
+                           FROM candidate_scopes candidate
+                           JOIN bmp_rib_scopes s ON s.scope_id = candidate.scope_id
+                           JOIN bmp_current_routes r ON r.scope_id = candidate.scope_id
+                          WHERE (
+                              (
+                                  (
                                       s.cleanup_pending_epoch >= s.current_epoch
                                       OR (
                                           s.scope_state = 'syncing'
                                           AND s.refresh_started_ms <= @refreshTimeoutBeforeMs
                                       )
                                   )
-                               UNION ALL
-                               SELECT r.scope_id, r.route_id
-                                 FROM candidate_scopes candidate
-                                 CROSS JOIN bmp_rib_scopes s
-                                 CROSS JOIN bmp_current_routes r
-                                WHERE s.scope_id = candidate.scope_id
-                                  AND r.scope_id = candidate.scope_id
-                                  AND r.connection_id < s.last_connection_id
-                                  AND r.rib_epoch >= s.current_epoch
                                   AND (
-                                      s.cleanup_pending_epoch >= s.current_epoch
-                                      OR (
-                                          s.scope_state = 'syncing'
-                                          AND s.refresh_started_ms <= @refreshTimeoutBeforeMs
-                                      )
+                                      r.rib_epoch < s.current_epoch
+                                      OR r.connection_id <> s.last_connection_id
                                   )
-                               UNION ALL
-                               SELECT r.scope_id, r.route_id
-                                 FROM candidate_scopes candidate
-                                 CROSS JOIN bmp_rib_scopes s
-                                 CROSS JOIN bmp_current_routes r
-                                WHERE s.scope_id = candidate.scope_id
-                                  AND r.scope_id = candidate.scope_id
-                                  AND r.connection_id > s.last_connection_id
-                                  AND r.rib_epoch >= s.current_epoch
-                                  AND (
-                                      s.cleanup_pending_epoch >= s.current_epoch
-                                      OR (
-                                          s.scope_state = 'syncing'
-                                          AND s.refresh_started_ms <= @refreshTimeoutBeforeMs
-                                      )
-                                  )
-                               UNION ALL
-                               SELECT r.scope_id, r.route_id
-                                 FROM candidate_scopes candidate
-                                 CROSS JOIN bmp_rib_scopes s
-                                 CROSS JOIN bmp_current_routes r
-                                WHERE s.scope_id = candidate.scope_id
-                                  AND r.scope_id = candidate.scope_id
-                                  AND s.scope_state IN ('stale', 'down')
+                              )
+                              OR (
+                                  s.scope_state IN ('stale', 'down')
                                   AND s.stale_since_ms <= @staleBeforeMs
-                           ) AS route_candidate
+                              )
+                          )
+                          ORDER BY r.scope_id, r.route_id
                           LIMIT @routeLimit
                      )
                 `
@@ -1562,6 +2630,10 @@ class BmpPersistenceStore {
                      WHERE sample_id IN (
                         SELECT sample_id FROM bmp_statistics_samples
                          WHERE observed_at_ms <= @eventsBeforeMs
+                           AND NOT EXISTS (
+                               SELECT 1 FROM bmp_statistics_latest latest
+                                WHERE latest.sample_id = bmp_statistics_samples.sample_id
+                           )
                          ORDER BY observed_at_ms, sample_id
                          LIMIT @auxiliaryLimit
                      )
@@ -1644,6 +2716,7 @@ class BmpPersistenceStore {
         this.db.close();
         this.db = null;
         this.statements = null;
+        this.sqlTrace = null;
     }
 }
 

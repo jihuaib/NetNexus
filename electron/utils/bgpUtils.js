@@ -74,6 +74,8 @@ function getBgpSafiName(safi) {
     switch (safi) {
         case BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST:
             return 'Unicast';
+        case BgpConst.BGP_SAFI_TYPE.SAFI_MULTICAST:
+            return 'Multicast';
         case BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST:
             return 'Labeled Unicast';
         case BgpConst.BGP_SAFI_TYPE.SAFI_MVPN:
@@ -327,6 +329,9 @@ function getAddrFamilyType(afi, safi) {
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV4_UNC;
             }
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_MULTICAST) {
+                addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV4_MULTICAST;
+            }
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.VPNV4;
             }
@@ -346,6 +351,9 @@ function getAddrFamilyType(afi, safi) {
         case BgpConst.BGP_AFI_TYPE.AFI_IPV6:
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV6_UNC;
+            }
+            if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_MULTICAST) {
+                addrFamily = BgpConst.BGP_ADDR_FAMILY.IPV6_MULTICAST;
             }
             if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
                 addrFamily = BgpConst.BGP_ADDR_FAMILY.VPNV6;
@@ -393,6 +401,14 @@ function getAfiAndSafi(addrFamily) {
         case BgpConst.BGP_ADDR_FAMILY.IPV6_UNC:
             afi = BgpConst.BGP_AFI_TYPE.AFI_IPV6;
             safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST;
+            break;
+        case BgpConst.BGP_ADDR_FAMILY.IPV4_MULTICAST:
+            afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
+            safi = BgpConst.BGP_SAFI_TYPE.SAFI_MULTICAST;
+            break;
+        case BgpConst.BGP_ADDR_FAMILY.IPV6_MULTICAST:
+            afi = BgpConst.BGP_AFI_TYPE.AFI_IPV6;
+            safi = BgpConst.BGP_SAFI_TYPE.SAFI_MULTICAST;
             break;
         case BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN:
             afi = BgpConst.BGP_AFI_TYPE.AFI_L2VPN;

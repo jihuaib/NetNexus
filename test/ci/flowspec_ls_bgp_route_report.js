@@ -1,4 +1,6 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
@@ -8,6 +10,7 @@ const BmpSession = require('../../electron/worker/bmp/bmpSession');
 const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
+const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
 const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
 
 const RIB_TYPE = BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN;
@@ -221,17 +224,36 @@ class CaptureMessageHandler {
     sendEvent() {}
 }
 
-function makeWorker() {
+async function makeWorker() {
     const BmpWorker = loadBmpWorkerClass(__dirname, module);
     const worker = Object.create(BmpWorker.prototype);
     worker.bmpSessionMap = new Map();
     worker.messageHandler = new CaptureMessageHandler();
+    worker.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-route-report-'));
+    worker.persistence = new BmpPersistenceClient({
+        dbPath: path.join(worker.tempDir, 'bmp.sqlite3'),
+        batchSize: 256,
+        flushMs: 1
+    });
+    await worker.persistence.open();
+    worker.persistenceReader = new BmpPersistenceClient({
+        dbPath: path.join(worker.tempDir, 'bmp.sqlite3'),
+        readOnly: true
+    });
+    await worker.persistenceReader.open();
     return worker;
 }
 
-function callWorker(worker, methodName, data) {
+async function closeWorker(worker) {
+    await worker.persistence?.drain();
+    await worker.persistenceReader?.close();
+    await worker.persistence?.close();
+    fs.rmSync(worker.tempDir, { recursive: true, force: true });
+}
+
+async function callWorker(worker, methodName, data) {
     const messageId = `${methodName}-${worker.messageHandler.responses.length + 1}`;
-    worker[methodName](messageId, data);
+    await worker[methodName](messageId, data);
     const response = worker.messageHandler.responses.find(item => item.messageId === messageId);
     assert.ok(response, `${methodName} did not send a response`);
     assert.equal(response.status, 'success', `${methodName} failed: ${response.msg}`);
@@ -247,11 +269,9 @@ function makeClient() {
     };
 }
 
-function makeBmpSession(client) {
-    const bmpSession = new BmpSession(
-        { sendEvent() {} },
-        { bmpConfigData: { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 } }
-    );
+function makeBmpSession(client, worker) {
+    worker.bmpConfigData = { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 };
+    const bmpSession = new BmpSession({ sendEvent() {} }, worker);
     bmpSession.localIp = client.localIp;
     bmpSession.localPort = client.localPort;
     bmpSession.remoteIp = client.remoteIp;
@@ -271,7 +291,7 @@ function makeBgpSession(bmpSession, scenario) {
     bgpSession.sessionState = BmpConst.BMP_SESSION_STATE.PEER_UP;
     bgpSession.enabledAddressFamilies = [{ afi: scenario.afi, safi: scenario.safi }];
     bgpSession.ribTypes = [RIB_TYPE];
-    bgpSession.bgpRoutes.set(`${scenario.afi}|${scenario.safi}`, new Map([[RIB_TYPE, new Map()]]));
+    bgpSession.ensureRouteScope(scenario.afi, scenario.safi, RIB_TYPE);
     return bgpSession;
 }
 
@@ -305,17 +325,12 @@ function parseScenarioRoute(scenario, variant, routeIndex) {
     return { parsedPacket, nlri: attr.mpReach.nlri[0] };
 }
 
-function addRouteToBgpSession(routeWriter, scenario, bgpSession, routeMap, parsedPacket, nlri) {
+function addRouteToBgpSession(routeWriter, scenario, bgpSession, parsedPacket, nlri) {
     const route = new BmpBgpRoute(bgpSession, null);
     routeWriter.setRouteNlri(route, nlri, scenario.afi, scenario.safi);
     routeWriter.setRouteAttributes(route, parsedPacket);
     route.markActive(bgpSession.getRibEpoch(scenario.afi, scenario.safi, RIB_TYPE));
-
-    const routeKey = route.getRouteKey();
-    assert.equal(routeMap.has(routeKey), false, `duplicate BGP session route key ${routeKey}`);
-    routeMap.set(routeKey, route);
-    bgpSession.recordRouteAdd(scenario.afi, scenario.safi, RIB_TYPE, route);
-    bgpSession.addRouteToPrefixIndex(scenario.afi, scenario.safi, RIB_TYPE, routeKey, route);
+    assert.equal(routeWriter.persistSessionRouteUpsert(bgpSession, route, scenario.afi, scenario.safi, RIB_TYPE), true);
     return route;
 }
 
@@ -324,39 +339,28 @@ function addRouteToLocRib(routeWriter, scenario, instance, parsedPacket, nlri) {
     routeWriter.setRouteNlri(route, nlri, scenario.afi, scenario.safi);
     routeWriter.setRouteAttributes(route, parsedPacket);
     route.markActive(instance.getRibEpoch());
-
-    const routeKey = route.getRouteKey();
-    assert.equal(instance.bgpRoutes.has(routeKey), false, `duplicate Loc-RIB route key ${routeKey}`);
-    instance.bgpRoutes.set(routeKey, route);
-    instance.recordRouteAdd(route);
-    instance.addRouteToPrefixIndex(routeKey, route);
+    assert.equal(routeWriter.persistInstanceRouteUpsert(instance, route, scenario.afi, scenario.safi), true);
     return route;
 }
 
-function populateScenarioRoutes(scenario, bgpSession, locRibInstance) {
-    const routeWriter = new BmpSession({ sendEvent() {} }, { bmpConfigData: {} });
-    const sessionRouteMap = bgpSession.bgpRoutes.get(`${scenario.afi}|${scenario.safi}`).get(RIB_TYPE);
+function populateScenarioRoutes(routeWriter, scenario, bgpSession, locRibInstance) {
+    const sessionRoutes = [];
+    const locRibRoutes = [];
     const samples = {};
 
     scenario.variants.forEach(variant => {
         for (let i = 0; i < scenario.routesPerVariant; i += 1) {
             const { parsedPacket, nlri } = parseScenarioRoute(scenario, variant, i);
-            const sessionRoute = addRouteToBgpSession(
-                routeWriter,
-                scenario,
-                bgpSession,
-                sessionRouteMap,
-                parsedPacket,
-                nlri
-            );
-            addRouteToLocRib(routeWriter, scenario, locRibInstance, parsedPacket, nlri);
+            const sessionRoute = addRouteToBgpSession(routeWriter, scenario, bgpSession, parsedPacket, nlri);
+            sessionRoutes.push(sessionRoute);
+            locRibRoutes.push(addRouteToLocRib(routeWriter, scenario, locRibInstance, parsedPacket, nlri));
             if (!samples[variant.name]) {
                 samples[variant.name] = sessionRoute;
             }
         }
     });
 
-    return { sessionRouteMap, samples };
+    return { sessionRoutes, locRibRoutes, samples };
 }
 
 function assertPage(result, total, page, pageSize) {
@@ -368,119 +372,138 @@ function assertPage(result, total, page, pageSize) {
     assert.equal(result.summary.stale, 0);
 }
 
-function runScenario(scenario) {
-    const worker = makeWorker();
-    const client = makeClient();
-    const bmpSession = makeBmpSession(client);
-    const bgpSession = makeBgpSession(bmpSession, scenario);
-    const locRibInstance = makeLocRibInstance(bmpSession, scenario);
-    const total = scenario.variants.length * scenario.routesPerVariant;
+async function runScenario(scenario) {
+    const worker = await makeWorker();
+    try {
+        const client = makeClient();
+        const bmpSession = makeBmpSession(client, worker);
+        const bgpSession = makeBgpSession(bmpSession, scenario);
+        const locRibInstance = makeLocRibInstance(bmpSession, scenario);
+        const total = scenario.variants.length * scenario.routesPerVariant;
 
-    bmpSession.bgpSessionMap.set(
-        BmpBgpSession.makeKey(bgpSession.sessionType, bgpSession.sessionRd, bgpSession.sessionIp, bgpSession.sessionAs),
-        bgpSession
-    );
-    bmpSession.bgpInstanceMap.set(
-        BmpBgpInstance.makeKey(locRibInstance.instanceType, locRibInstance.instanceRd, scenario.afi, scenario.safi),
-        locRibInstance
-    );
-    worker.bmpSessionMap.set(
-        BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort),
-        bmpSession
-    );
+        bmpSession.bgpSessionMap.set(
+            BmpBgpSession.makeKey(
+                bgpSession.sessionType,
+                bgpSession.sessionRd,
+                bgpSession.sessionIp,
+                bgpSession.sessionAs
+            ),
+            bgpSession
+        );
+        bmpSession.bgpInstanceMap.set(
+            BmpBgpInstance.makeKey(locRibInstance.instanceType, locRibInstance.instanceRd, scenario.afi, scenario.safi),
+            locRibInstance
+        );
+        worker.bmpSessionMap.set(
+            BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort),
+            bmpSession
+        );
 
-    const { sessionRouteMap, samples } = populateScenarioRoutes(scenario, bgpSession, locRibInstance);
-    assert.equal(sessionRouteMap.size, total);
-    assert.equal(locRibInstance.bgpRoutes.size, total);
-    scenario.assertRoutes([...sessionRouteMap.values()]);
-    scenario.assertRoutes([...locRibInstance.bgpRoutes.values()]);
+        const { sessionRoutes, locRibRoutes, samples } = populateScenarioRoutes(
+            bmpSession,
+            scenario,
+            bgpSession,
+            locRibInstance
+        );
+        assert.equal(sessionRoutes.length, total);
+        assert.equal(locRibRoutes.length, total);
+        scenario.assertRoutes(sessionRoutes);
+        scenario.assertRoutes(locRibRoutes);
+        await worker.persistence.drain();
 
-    const sessions = callWorker(worker, 'getBgpSessions', client);
-    assert.equal(sessions.length, 1);
-    assert.equal(sessions[0].routeSummary.total, total);
-    assert.ok(sessions[0].enabledAddrFamilyTypes.includes(scenario.af));
+        const sessions = await callWorker(worker, 'getBgpSessions', client);
+        assert.equal(sessions.length, 1);
+        assert.equal(sessions[0].routeSummary.total, total);
+        assert.ok(sessions[0].enabledAddrFamilyTypes.includes(scenario.af));
 
-    const instances = callWorker(worker, 'getBgpInstances', client);
-    assert.equal(instances.length, 1);
-    assert.equal(instances[0].addrFamilyType, scenario.af);
-    assert.equal(instances[0].routeSummary.total, total);
+        const instances = await callWorker(worker, 'getBgpInstances', client);
+        assert.equal(instances.length, 1);
+        assert.equal(instances[0].addrFamilyType, scenario.af);
+        assert.equal(instances[0].routeSummary.total, total);
 
-    const sessionQuery = {
-        client,
-        session: bgpSession.getSessionInfo(),
-        af: scenario.af,
-        ribType: RIB_TYPE,
-        routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
-    };
-    const instanceQuery = {
-        client,
-        instance: locRibInstance.getInstanceInfo(),
-        routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
-    };
-    const lastPage = Math.ceil(total / PAGE_SIZE);
+        const sessionQuery = {
+            client,
+            session: bgpSession.getSessionInfo(),
+            af: scenario.af,
+            ribType: RIB_TYPE,
+            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
+        };
+        const instanceQuery = {
+            client,
+            instance: locRibInstance.getInstanceInfo(),
+            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
+        };
+        const lastPage = Math.ceil(total / PAGE_SIZE);
 
-    assertPage(
-        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }),
-        total,
-        1,
-        PAGE_SIZE
-    );
-    assertPage(
-        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }),
-        total,
-        2,
-        PAGE_SIZE
-    );
-    assertPage(
-        callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: lastPage, pageSize: PAGE_SIZE }),
-        total,
-        lastPage,
-        PAGE_SIZE
-    );
-    assertPage(
-        callWorker(worker, 'getBgpInstanceRoutes', { ...instanceQuery, page: 1, pageSize: PAGE_SIZE }),
-        total,
-        1,
-        PAGE_SIZE
-    );
-    assertPage(
-        callWorker(worker, 'getBgpInstanceRoutes', { ...instanceQuery, page: lastPage, pageSize: PAGE_SIZE }),
-        total,
-        lastPage,
-        PAGE_SIZE
-    );
+        assertPage(
+            await callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 1, pageSize: PAGE_SIZE }),
+            total,
+            1,
+            PAGE_SIZE
+        );
+        assertPage(
+            await callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: 2, pageSize: PAGE_SIZE }),
+            total,
+            2,
+            PAGE_SIZE
+        );
+        assertPage(
+            await callWorker(worker, 'getBgpRoutes', { ...sessionQuery, page: lastPage, pageSize: PAGE_SIZE }),
+            total,
+            lastPage,
+            PAGE_SIZE
+        );
+        assertPage(
+            await callWorker(worker, 'getBgpInstanceRoutes', { ...instanceQuery, page: 1, pageSize: PAGE_SIZE }),
+            total,
+            1,
+            PAGE_SIZE
+        );
+        assertPage(
+            await callWorker(worker, 'getBgpInstanceRoutes', {
+                ...instanceQuery,
+                page: lastPage,
+                pageSize: PAGE_SIZE
+            }),
+            total,
+            lastPage,
+            PAGE_SIZE
+        );
 
-    const exactRoute = samples[scenario.exactVariant];
-    const exactResult = callWorker(worker, 'getBgpRoutes', {
-        ...sessionQuery,
-        page: 1,
-        pageSize: PAGE_SIZE,
-        prefixFilter: exactRoute.ip
-    });
-    assert.equal(exactResult.total, 1);
-    assert.equal(exactResult.list[0].routeKey, exactRoute.getRouteKey());
+        const exactRoute = samples[scenario.exactVariant];
+        const exactResult = await callWorker(worker, 'getBgpRoutes', {
+            ...sessionQuery,
+            page: 1,
+            pageSize: PAGE_SIZE,
+            prefixFilter: exactRoute.ip
+        });
+        assert.equal(exactResult.total, 1);
+        assert.equal(exactResult.list[0].routeKey, exactRoute.getRouteKey());
 
-    const scanResult = callWorker(worker, 'getBgpRoutes', {
-        ...sessionQuery,
-        page: 1,
-        pageSize: PAGE_SIZE,
-        prefixFilter: scenario.scanFilter
-    });
-    assert.equal(scanResult.total, scenario.scanExpectedTotal);
-    assert.equal(scanResult.list.length, Math.min(PAGE_SIZE, scenario.scanExpectedTotal));
-    assert.ok(scanResult.list.every(scenario.scanPredicate));
+        const scanResult = await callWorker(worker, 'getBgpRoutes', {
+            ...sessionQuery,
+            page: 1,
+            pageSize: PAGE_SIZE,
+            prefixFilter: scenario.scanFilter
+        });
+        assert.equal(scanResult.total, scenario.scanExpectedTotal);
+        assert.equal(scanResult.list.length, Math.min(PAGE_SIZE, scenario.scanExpectedTotal));
+        assert.ok(scanResult.list.every(scenario.scanPredicate));
 
-    const sessionDetail = callWorker(worker, 'getBgpRouteDetail', {
-        ...sessionQuery,
-        routeKey: samples[scenario.detailVariant].getRouteKey()
-    });
-    const locRibDetail = callWorker(worker, 'getBgpInstanceRouteDetail', {
-        ...instanceQuery,
-        routeKey: samples[scenario.locRibDetailVariant].getRouteKey()
-    });
-    scenario.assertDetail(sessionDetail, locRibDetail);
+        const sessionDetail = await callWorker(worker, 'getBgpRouteDetail', {
+            ...sessionQuery,
+            routeKey: samples[scenario.detailVariant].getRouteKey()
+        });
+        const locRibDetail = await callWorker(worker, 'getBgpInstanceRouteDetail', {
+            ...instanceQuery,
+            routeKey: samples[scenario.locRibDetailVariant].getRouteKey()
+        });
+        scenario.assertDetail(sessionDetail, locRibDetail);
 
-    return total;
+        return total;
+    } finally {
+        await closeWorker(worker);
+    }
 }
 
 const ipv4FlowSpecScenario = {
@@ -641,8 +664,18 @@ const scenarios = [
     )
 ];
 
-const totals = scenarios.map(runScenario);
+async function main() {
+    const totals = [];
+    for (const scenario of scenarios) {
+        totals.push(await runScenario(scenario));
+    }
 
-console.log(
-    `FlowSpec/BGP-LS route reporting passed: ipv4FlowSpec=${totals[0]}, ipv6FlowSpec=${totals[1]}, bgpLs=${totals[2]}, bgpLsVpn=${totals[3]}, pageSize=${PAGE_SIZE}`
-);
+    console.log(
+        `FlowSpec/BGP-LS route reporting passed: ipv4FlowSpec=${totals[0]}, ipv6FlowSpec=${totals[1]}, bgpLs=${totals[2]}, bgpLsVpn=${totals[3]}, pageSize=${PAGE_SIZE}`
+    );
+}
+
+main().catch(error => {
+    console.error(error);
+    process.exitCode = 1;
+});

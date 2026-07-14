@@ -47,8 +47,9 @@ local COMMON_TLV_NAMES = {
 }
 
 local INITIATION_TLV_NAMES = {
-    [1] = "sysName",
-    [2] = "sysDesc",
+    [0] = "String",
+    [1] = "sysDesc",
+    [2] = "sysName",
     [3] = "VRF/Table Name",
 }
 

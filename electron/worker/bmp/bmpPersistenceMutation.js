@@ -5,6 +5,7 @@ const {
     createScopeKey,
     createRouteKey
 } = require('../../utils/bmpPersistentRouteKey');
+const { canonicalizeBmpRouteAttr } = require('./bmpRouteAttrStore');
 
 let lastConnectionGeneration = 0;
 const DUPLICATED_ROUTE_ATTRIBUTE_FIELDS = [
@@ -169,8 +170,10 @@ function buildRoute(owner, route, afi, safi) {
         route,
         nlri: route.nlriDetail || routeInfo.nlriDetail || route
     });
-    const attrEntry = owner?.getRouteAttrEntry?.(route) || null;
-    const attr = owner?.getRouteAttr?.(route) || null;
+    const attr = route?.getRouteAttr?.() || owner?.getRouteAttr?.(route) || null;
+    const canonicalAttr = attr ? canonicalizeBmpRouteAttr(attr) : null;
+    const attrJson = canonicalAttr ? stringify(canonicalAttr) : null;
+    const attrId = attrJson ? crypto.createHash('sha256').update(attrJson).digest('hex') : null;
     return {
         id: key.keyHex,
         keyJson: stringify({
@@ -189,8 +192,8 @@ function buildRoute(owner, route, afi, safi) {
         prefixLength: route.mask ?? route.length ?? routeInfo.mask ?? routeInfo.length ?? null,
         nlriKind: key.canonicalIdentity.nlri.kind,
         nlriJson: stringify(route.nlriDetail || routeInfo.nlriDetail || route),
-        attrId: attrEntry?.hash || null,
-        attrJson: attrEntry ? stringify(attrEntry.attr || attr) : attr ? stringify(attr) : null,
+        attrId,
+        attrJson,
         routeJson: stringify(compactRouteInfo)
     };
 }
@@ -268,8 +271,8 @@ function buildScopeMutation(bmpSession, owner, afi, safi, ribType, eventType, op
 
 function buildRouteUpsertMutation(bmpSession, owner, route, afi, safi, ribType, options = {}) {
     const routeData = buildRoute(owner, route, afi, safi);
-    let eventType = 'announce';
-    if (!options.isNewRoute) {
+    let eventType = options.isNewRoute === undefined ? 'upsert' : 'announce';
+    if (options.isNewRoute === false) {
         eventType = options.previousAttrHash === routeData.attrId ? 'refresh' : 'replace';
     }
     const mutation = buildScopeMutation(bmpSession, owner, afi, safi, ribType, eventType, options);
@@ -282,9 +285,6 @@ function buildRouteWithdrawMutation(bmpSession, owner, withdrawn, existingRoute,
     const eventType = options.eventType === 'purge' ? 'purge' : 'withdraw';
     const mutation = buildScopeMutation(bmpSession, owner, afi, safi, ribType, eventType, options);
     mutation.route = buildWithdrawRoute(owner, withdrawn, afi, safi, existingRoute);
-    if (!existingRoute) {
-        mutation.reason = options.reason || 'not-in-current-rib';
-    }
     return mutation;
 }
 
@@ -298,6 +298,8 @@ function buildRoutePurgeMutation(bmpSession, owner, route, afi, safi, ribType, o
 
 module.exports = {
     ensurePersistenceContext,
+    buildSource,
+    buildScope,
     buildConnectionMutation,
     buildScopeMutation,
     buildRouteUpsertMutation,

@@ -160,7 +160,7 @@ BMP 查询接口由外部 HTTP API 提供。API 是只读的，不负责启动 B
 
 ## 注意事项
 
-- BMP 数据当前保存在 worker 内存和本地运行状态中，不等同于长期历史数据库。
-- BMP 客户端断开后，对应连接会从客户端列表移除。
+- SQLite 是 BMP RIB 的权威存储；完整路由不再保存在 worker 内存中。数据库表、字段、关联和自动清理规则详见 [BMP SQLite 数据库说明](BMP_SQLITE_DATABASE.md)。
+- BMP 客户端断开后会保留为离线节点；Session、Loc-RIB 和未超过保留期的路由可在 BMP 重启后从 SQLite 恢复，并以 stale 状态展示。
 - 打开 debug/info 日志时，高频 BMP Route Monitoring 会产生大量日志，可能影响 CPU 和磁盘 IO。
 - MD5 认证依赖服务器部署页面中的 TCP MD5 代理能力。

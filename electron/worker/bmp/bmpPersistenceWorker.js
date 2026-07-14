@@ -1,4 +1,5 @@
 const { parentPort } = require('worker_threads');
+const logger = require('../../log/logger');
 const BmpPersistenceStore = require('./bmpPersistenceStore');
 const { BMP_PERSISTENCE_OP } = require('./bmpPersistenceConst');
 
@@ -24,22 +25,61 @@ function requireStore() {
     return store;
 }
 
+function getLogStatus(currentStore) {
+    return {
+        logLevel: logger.logLevel,
+        sqlTraceEnabled: typeof currentStore.isSqlTraceEnabled === 'function' ? currentStore.isSqlTraceEnabled() : false
+    };
+}
+
 function handleMessage(message) {
     const { messageId, op, data = {} } = message || {};
     try {
         switch (op) {
             case BMP_PERSISTENCE_OP.OPEN:
+                logger.setLevel(data.logLevel);
                 if (store) {
                     store.close();
                 }
                 store = new BmpPersistenceStore(data).open();
-                success(messageId, store.getStatus());
+                if (typeof store.setLogLevel === 'function') {
+                    store.setLogLevel(logger.logLevel);
+                }
+                success(messageId, { ...store.getStatus(), ...getLogStatus(store) });
+                break;
+            case BMP_PERSISTENCE_OP.SET_LOG_LEVEL:
+                {
+                    const currentStore = requireStore();
+                    logger.setLevel(data.logLevel);
+                    if (typeof currentStore.setLogLevel === 'function') {
+                        currentStore.setLogLevel(logger.logLevel);
+                    }
+                    success(messageId, getLogStatus(currentStore));
+                }
                 break;
             case BMP_PERSISTENCE_OP.APPLY_BATCH:
-                success(messageId, requireStore().applyBatch(data));
+                {
+                    const result = requireStore().applyBatch(data);
+                    success(messageId, { ...result, deltas: result.deltas || [] });
+                }
                 break;
             case BMP_PERSISTENCE_OP.QUERY_ROUTES:
                 success(messageId, requireStore().queryRoutes(data));
+                break;
+            case BMP_PERSISTENCE_OP.QUERY_ROUTE_SCOPE:
+                success(messageId, requireStore().queryRouteScope(data));
+                break;
+            case BMP_PERSISTENCE_OP.QUERY_SCOPE_SUMMARY:
+                success(messageId, requireStore().queryScopeSummary(data));
+                break;
+            case BMP_PERSISTENCE_OP.QUERY_TOPOLOGY:
+                success(messageId, requireStore().queryTopology(data));
+                break;
+            case BMP_PERSISTENCE_OP.QUERY_STATISTICS_REPORTS:
+                success(messageId, requireStore().queryStatisticsReports(data));
+                break;
+            case BMP_PERSISTENCE_OP.PURGE_STALE_ROUTES:
+                success(messageId, requireStore().purgeStaleRoutes(data));
                 break;
             case BMP_PERSISTENCE_OP.QUERY_EVENTS:
                 success(messageId, requireStore().queryEvents(data));

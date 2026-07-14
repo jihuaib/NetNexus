@@ -649,6 +649,13 @@ class SystemApp {
         }
 
         appInstance.logLevel = this.currentLogLevel;
+        if (typeof appInstance.handleLogLevelChange === 'function') {
+            Promise.resolve()
+                .then(() => appInstance.handleLogLevelChange(this.currentLogLevel))
+                .catch(error => {
+                    logger.warn(`同步日志级别到应用组件失败: ${error.message}`);
+                });
+        }
         [appInstance.worker, appInstance.worker6, appInstance.mibWorker].forEach(worker => {
             if (!worker || typeof worker.sendRequest !== 'function') {
                 return;

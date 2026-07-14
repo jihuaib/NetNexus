@@ -3,8 +3,9 @@ const logger = require('../../log/logger');
 const { LOG_REQ_TYPES } = require('../../const/toolsConst');
 
 class WorkerMessageHandler {
-    constructor() {
+    constructor(options = {}) {
         this.handlers = new Map();
+        this.onLogLevelChange = typeof options.onLogLevelChange === 'function' ? options.onLogLevelChange : null;
     }
 
     /**
@@ -41,7 +42,15 @@ class WorkerMessageHandler {
 
             if (op === LOG_REQ_TYPES.SET_LOG_LEVEL) {
                 logger.setLevel(data);
-                this.sendSuccessResponse(messageId, null, '日志级别已更新');
+                const normalizedLogLevel = logger.logLevel;
+                Promise.resolve()
+                    .then(() => this.onLogLevelChange?.(normalizedLogLevel))
+                    .catch(error => {
+                        logger.warn(`同步日志级别到子组件失败: ${error.message}`);
+                    })
+                    .finally(() => {
+                        this.sendSuccessResponse(messageId, null, '日志级别已更新');
+                    });
                 return;
             }
 

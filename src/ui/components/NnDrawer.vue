@@ -104,7 +104,7 @@
         },
         maskClosable: {
             type: Boolean,
-            default: true
+            default: false
         },
         keyboard: {
             type: Boolean,

@@ -621,7 +621,20 @@ test.describe('Custom UI component interactions', () => {
                 document.documentElement.dataset.themePreset = nextPreset;
                 document.documentElement.style.colorScheme = nextPreset === 'dark' ? 'dark' : 'light';
             }, preset);
-            await page.waitForTimeout(360);
+            await expect
+                .poll(
+                    () =>
+                        headerButtons.first().evaluate(button => {
+                            const buttonColor = getComputedStyle(button).color;
+                            if (!buttonColor) return -1;
+
+                            return button
+                                .getAnimations()
+                                .filter(animation => animation.pending || animation.playState === 'running').length;
+                        }),
+                    { timeout: 2000 }
+                )
+                .toBe(0);
 
             const contrastStyle = await headerButtons.first().evaluate(button => {
                 const header = button.closest('.nn-card-head');
@@ -847,6 +860,21 @@ test.describe('Custom UI component interactions', () => {
         expect(Math.abs(reopenedBox.y - initialBox.y)).toBeLessThanOrEqual(1);
     });
 
+    test('keeps a modal open when its outside mask is clicked', async ({ page }) => {
+        await page.goto('/#/bgp/route-ipv6');
+        await expect(page.getByText('IPv6-UNC路由配置', { exact: true })).toBeVisible();
+
+        await page.getByRole('button', { name: '从 RouteViews 导入', exact: true }).click();
+        const importDialog = page.getByRole('dialog', { name: '导入 BGP MRT 路由文件' });
+        await expect(importDialog).toBeVisible();
+
+        await page.locator('.nn-modal-wrap').click({ position: { x: 4, y: 4 } });
+        await expect(importDialog).toBeVisible();
+
+        await importDialog.getByRole('button', { name: '关闭' }).click();
+        await expect(importDialog).toBeHidden();
+    });
+
     test('uses the active theme in the custom date range picker', async ({ page }) => {
         const rangePickerWarnings = [];
         page.on('console', message => {
@@ -961,6 +989,9 @@ test.describe('Custom UI component interactions', () => {
         expect(drawerStyle.codeBackground).not.toBe(drawerStyle.consoleBackground);
         expect(drawerStyle.codeColor).toBe(drawerStyle.text);
         expect(drawerStyle.codeBorder).toBe(drawerStyle.borderLight);
+
+        await page.locator('.nn-drawer-mask').click({ position: { x: 4, y: 4 } });
+        await expect(routeDrawer).toBeVisible();
 
         await routeDrawer.getByRole('button', { name: '关闭' }).click();
         await expect(routeDrawer).toBeHidden();

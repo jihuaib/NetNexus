@@ -385,6 +385,38 @@ const fixtures = [
         }
     }),
     withAfiSafi({
+        name: 'IPV4_MULTICAST',
+        family: BgpConst.BGP_ADDR_FAMILY.IPV4_MULTICAST,
+        nextHop: ipBytes('192.0.2.2'),
+        nlri: ipv4Prefix(24, '198.51.100.0'),
+        simpleTreeNlri: true,
+        assertReach(route, mpReach) {
+            assert.equal(mpReach.nextHop, '192.0.2.2');
+            assert.equal(route.prefix, '198.51.100.0');
+            assert.equal(route.length, 24);
+        },
+        assertUnreach(route) {
+            assert.equal(route.prefix, '198.51.100.0');
+            assert.equal(route.length, 24);
+        }
+    }),
+    withAfiSafi({
+        name: 'IPV6_MULTICAST',
+        family: BgpConst.BGP_ADDR_FAMILY.IPV6_MULTICAST,
+        nextHop: ipv6Bytes('20010db8000000000000000000000002'),
+        nlri: ipv6Prefix(48, '20010db8000200000000000000000000'),
+        simpleTreeNlri: true,
+        assertReach(route, mpReach) {
+            assert.equal(mpReach.nextHop, '2001:db8::2');
+            assert.equal(route.prefix, '2001:db8:2::');
+            assert.equal(route.length, 48);
+        },
+        assertUnreach(route) {
+            assert.equal(route.prefix, '2001:db8:2::');
+            assert.equal(route.length, 48);
+        }
+    }),
+    withAfiSafi({
         name: 'L2VPN_EVPN',
         family: BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN,
         nextHop: ipBytes('192.0.2.1'),

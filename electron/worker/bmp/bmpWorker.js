@@ -4,18 +4,19 @@ const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
 const BmpSession = require('./bmpSession');
 const SshTunnel = require('../shared/sshTunnel');
-const { getAfiAndSafi } = require('../../utils/bgpUtils');
+const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgpUtils');
 const BmpBgpSession = require('./bmpBgpSession');
 const BmpBgpInstance = require('./bmpBgpInstance');
 const BmpBgpRoute = require('./bmpBgpRoute');
 const BmpConst = require('../../const/bmpConst');
-const { buildRoutePrefixQuery, routeMatchesPrefixQuery } = require('../../utils/routePrefixUtils');
 const RouteUpdateAggregator = require('../../utils/routeUpdateAggregator');
 const BmpRouteAssuranceService = require('../../utils/bmpRouteAssuranceService');
-const { buildBmpRouteLens } = require('../../utils/bmpRouteLens');
-const ObservedRouteMap = require('./observedRouteMap');
+const {
+    MAX_RESULT_LIMIT: MAX_ROUTE_LENS_RESULT_LIMIT,
+    buildBmpRouteLensFromPersistedRoutes,
+    parseRouteLensQuery
+} = require('../../utils/bmpRouteLens');
 const BmpPersistenceClient = require('./bmpPersistenceClient');
-const BmpRouteAgingScheduler = require('./bmpRouteAgingScheduler');
 
 class BmpWorker {
     constructor() {
@@ -39,13 +40,13 @@ class BmpWorker {
         this.bmpSocketsPaused = false;
         this.persistenceSweepTimer = null;
         this.persistenceSweepCatchupTimer = null;
+        this.persistenceSweepRequestTimer = null;
         this.persistenceSweepRunning = false;
-        this.routeAgingScheduler = new BmpRouteAgingScheduler({
-            onError: (error, key) => logger.error(`BMP in-memory route aging failed for ${key}: ${error.message}`)
-        });
 
         // 创建消息处理器
-        this.messageHandler = new WorkerMessageHandler();
+        this.messageHandler = new WorkerMessageHandler({
+            onLogLevelChange: logLevel => this.handleLogLevelChange(logLevel)
+        });
         // 初始化消息处理器
         this.messageHandler.init();
         // 注册消息处理器
@@ -137,8 +138,8 @@ class BmpWorker {
         }
 
         this.bmpSessionMap.delete(sessionKey);
-        const clientInfo = bmpSession.getClientInfo();
         bmpSession.closeSession();
+        const clientInfo = bmpSession.getClientInfo();
         this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: clientInfo });
         return bmpSession;
     }
@@ -194,14 +195,6 @@ class BmpWorker {
         this.routeUpdateAggregator.clear();
     }
 
-    scheduleInMemoryRouteAging(options) {
-        return this.routeAgingScheduler?.schedule?.(options) ?? false;
-    }
-
-    cancelInMemoryRouteAging(prefix) {
-        return this.routeAgingScheduler?.cancelByPrefix?.(prefix) ?? 0;
-    }
-
     invalidateRouteAssurance(reason = 'bmp-data-change') {
         const revision = this.routeAssuranceService?.invalidate?.(reason, { prepareBootstrap: true }) ?? null;
         this.scheduleRouteAssuranceRebuild();
@@ -219,7 +212,10 @@ class BmpWorker {
                 return;
             }
             this.routeAssuranceService
-                .enableWithBootstrap(this.bmpSessionMap, this.routeAssuranceFilters)
+                .bootstrapFromPersistedRoutes(
+                    this.createPersistedRoutePageLoader(this.routeAssuranceFilters),
+                    this.routeAssuranceFilters
+                )
                 .catch(error => logger.error(`Route Assurance rebuild failed: ${error.message}`));
         });
     }
@@ -318,18 +314,111 @@ class BmpWorker {
         return true;
     }
 
+    async readPersistence(method, query = {}, options = {}) {
+        if (!this.persistence || typeof this.persistence[method] !== 'function') {
+            throw new Error('BMP持久化未打开');
+        }
+        if (options.fence !== false) {
+            await this.persistence.fence();
+        }
+
+        let result;
+        if (this.persistenceReader && typeof this.persistenceReader[method] === 'function') {
+            const reader = this.persistenceReader;
+            try {
+                result = await reader[method](query);
+            } catch (error) {
+                if (!this.handlePersistenceReaderFailure(reader, error)) {
+                    throw error;
+                }
+            }
+        }
+        if (result === undefined) {
+            result = await this.persistence[method](query);
+        }
+        return result;
+    }
+
+    handleCommittedPersistenceResult(result) {
+        const deltas = Array.isArray(result?.deltas) ? result.deltas : [];
+        if (!this.routeAssuranceService?.enabled || deltas.length === 0) {
+            return;
+        }
+        try {
+            deltas.forEach(delta => {
+                if (!delta?.projectionChanged || !['upsert', 'delete'].includes(delta.action)) {
+                    return;
+                }
+                const scope = delta.scope || delta.mutation?.scope || null;
+                const source = delta.source || delta.mutation?.source || null;
+                this.routeAssuranceService.applyCommittedDelta({
+                    ...delta,
+                    scope,
+                    source,
+                    scopeKind: delta.scopeKind || scope?.kind,
+                    ribType: delta.ribType || scope?.ribType,
+                    afi: delta.afi ?? scope?.afi,
+                    safi: delta.safi ?? scope?.safi,
+                    route: delta.action === 'upsert' ? delta.current : delta.previous
+                });
+            });
+        } catch (error) {
+            logger.error(`Route Assurance committed delta failed: ${error.message}`);
+            this.invalidateRouteAssurance('committed-delta-error');
+        }
+    }
+
+    createPersistedRoutePageLoader(filters = {}) {
+        const routeState = filters.routeState || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE;
+        return cursor =>
+            this.readPersistence('queryRoutes', {
+                routeState,
+                pageSize: 5000,
+                includeTotal: false,
+                cursor
+            });
+    }
+
+    async handleLogLevelChange(logLevel) {
+        if (this.bmpConfigData) {
+            this.bmpConfigData.logLevel = logLevel;
+        }
+
+        const clients = [
+            ['writer', this.persistence],
+            ['reader', this.persistenceReader]
+        ];
+        await Promise.all(
+            clients.map(async ([role, client]) => {
+                if (!client || typeof client.setLogLevel !== 'function') {
+                    return;
+                }
+                try {
+                    await client.setLogLevel(logLevel);
+                } catch (error) {
+                    logger.warn(`同步 BMP SQLite ${role} 日志级别失败: ${error.message}`);
+                }
+            })
+        );
+    }
+
+    createPersistenceClient(options) {
+        return new BmpPersistenceClient(options);
+    }
+
     async initializePersistence() {
         this.persistenceFailure = null;
         this.bmpSocketsPaused = false;
-        if (this.bmpConfigData.persistenceEnabled === false) {
-            return null;
-        }
+        // SQLite is the BMP RIB. It is no longer an optional projection of an
+        // in-memory route map, so ingestion must fail closed if it cannot open.
+        this.bmpConfigData.persistenceEnabled = true;
         if (!this.bmpConfigData.persistenceDbPath) {
             throw new Error('BMP persistence database path is missing');
         }
 
-        this.persistence = new BmpPersistenceClient({
+        this.persistence = this.createPersistenceClient({
             dbPath: this.bmpConfigData.persistenceDbPath,
+            logLevel: this.bmpConfigData.logLevel,
             batchSize: this.bmpConfigData.persistenceBatchSize,
             batchBytes: this.bmpConfigData.persistenceBatchBytes,
             flushMs: this.bmpConfigData.persistenceFlushMs,
@@ -345,16 +434,24 @@ class BmpWorker {
             },
             onError: error => {
                 this.handlePersistenceFailure(error);
-            }
+            },
+            onCommittedBatch: result => this.handleCommittedPersistenceResult(result)
         });
         const status = await this.persistence.open();
-        const persistenceReader = new BmpPersistenceClient({
+        const persistenceReader = this.createPersistenceClient({
             dbPath: this.bmpConfigData.persistenceDbPath,
             readOnly: true,
+            logLevel: this.bmpConfigData.logLevel,
             onError: error => this.handlePersistenceReaderFailure(persistenceReader, error)
         });
-        this.persistenceReader = persistenceReader;
-        await persistenceReader.open();
+        try {
+            await persistenceReader.open();
+            this.persistenceReader = persistenceReader;
+        } catch (error) {
+            logger.warn(`BMP persistence read replica unavailable; using writer for reads: ${error.message}`);
+            await persistenceReader.close({ suppressErrors: true }).catch(() => {});
+            this.persistenceReader = null;
+        }
         this.schedulePersistenceSweep();
         logger.info(
             `BMP persistence opened schema=${status.schemaVersion} journal=${status.journalMode} path=${status.dbPath}`
@@ -380,6 +477,21 @@ class BmpWorker {
             clearTimeout(this.persistenceSweepCatchupTimer);
             this.persistenceSweepCatchupTimer = null;
         }
+        if (this.persistenceSweepRequestTimer) {
+            clearTimeout(this.persistenceSweepRequestTimer);
+            this.persistenceSweepRequestTimer = null;
+        }
+    }
+
+    requestPersistenceSweep() {
+        if (!this.persistence || this.persistenceSweepRequestTimer) {
+            return false;
+        }
+        this.persistenceSweepRequestTimer = setTimeout(() => {
+            this.persistenceSweepRequestTimer = null;
+            this.runPersistenceSweep();
+        }, 250);
+        return true;
     }
 
     async runPersistenceSweep() {
@@ -388,6 +500,7 @@ class BmpWorker {
         }
         this.persistenceSweepRunning = true;
         let shouldCatchUp = false;
+        let routeProjectionChanged = false;
         try {
             // Scope EOR/timeout mutations determine which epoch is safe to age.
             // Fence the writer queue before calculating retention candidates.
@@ -431,6 +544,10 @@ class BmpWorker {
                     eventLimit,
                     auxiliaryLimit: eventLimit
                 });
+                routeProjectionChanged =
+                    routeProjectionChanged ||
+                    Number(result.routes || 0) > 0 ||
+                    Number(result.refreshTimeoutScopes || 0) > 0;
                 shouldCatchUp = result.hasMore === true;
                 if (!shouldCatchUp || Date.now() - sweepStartedAt >= timeBudgetMs) {
                     break;
@@ -440,6 +557,9 @@ class BmpWorker {
             logger.error(`BMP persistence sweep failed: ${error.message}`);
         } finally {
             this.persistenceSweepRunning = false;
+            if (routeProjectionChanged) {
+                this.invalidateRouteAssurance('persistence-sweep');
+            }
             if (shouldCatchUp && this.persistence && !this.persistenceSweepCatchupTimer) {
                 const delayMs = Math.max(250, Number(this.bmpConfigData?.persistenceSweepCatchupDelayMs) || 1000);
                 this.persistenceSweepCatchupTimer = setTimeout(() => {
@@ -530,26 +650,55 @@ class BmpWorker {
 
             // 启动ipv4服务器并监听端口
             const listenPormise = util.promisify(this.server.listen).bind(this.server);
-            await listenPormise(this.bmpConfigData.port, '0.0.0.0');
+            await listenPormise({ port: this.bmpConfigData.port, host: '0.0.0.0' });
             logger.info(`TCP Server listening on port ${this.bmpConfigData.port} at 0.0.0.0`);
 
             // 启动ipv6服务器并监听端口
             const ipv6ListenPormise = util.promisify(this.ipv6Server.listen).bind(this.ipv6Server);
-            await ipv6ListenPormise(this.bmpConfigData.port, '::');
+            await ipv6ListenPormise({ port: this.bmpConfigData.port, host: '::', ipv6Only: true });
             logger.info(`TCP Server listening on port ${this.bmpConfigData.port} at ::`);
 
             logger.info(`bmp协议启动成功`);
             this.messageHandler.sendSuccessResponse(messageId, null, 'bmp协议启动成功');
         } catch (err) {
+            await this.closeTcpServers();
             logger.error(`Error starting TCP server: ${err.message}`);
             this.messageHandler.sendErrorResponse(messageId, 'bmp协议启动失败');
         }
     }
 
+    async closeTcpServers() {
+        const servers = [this.server, this.ipv6Server];
+        this.server = null;
+        this.ipv6Server = null;
+        await Promise.all(
+            servers.map(
+                server =>
+                    new Promise(resolve => {
+                        if (!server || !server.listening) {
+                            resolve();
+                            return;
+                        }
+                        try {
+                            server.close(error => {
+                                if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') {
+                                    logger.error(`Failed to close BMP listener: ${error.message}`);
+                                }
+                                resolve();
+                            });
+                        } catch (error) {
+                            if (error.code !== 'ERR_SERVER_NOT_RUNNING') {
+                                logger.error(`Failed to close BMP listener: ${error.message}`);
+                            }
+                            resolve();
+                        }
+                    })
+            )
+        );
+    }
+
     async startBmp(messageId, bmpConfigData) {
         this.bmpConfigData = bmpConfigData;
-        this.routeAgingScheduler.batchSize = Math.max(1, Number(this.bmpConfigData.inMemoryAgingBatchSize) || 2000);
-        this.routeAgingScheduler.timeBudgetMs = Math.max(1, Number(this.bmpConfigData.inMemoryAgingTimeBudgetMs) || 8);
         this.bmpConfigData.bmpV4TlvDraft =
             Number(this.bmpConfigData.bmpV4TlvDraft) === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
                 ? BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
@@ -662,7 +811,6 @@ class BmpWorker {
     async stopBmp(messageId) {
         logger.info('Stopping BMP server...');
         this.clearRouteUpdateAggregation();
-        this.routeAgingScheduler?.clear?.();
         this.clearPersistenceSweepTimer();
         this.pauseBmpSockets();
 
@@ -704,15 +852,7 @@ class BmpWorker {
             this.sshTunnel = null;
         }
 
-        if (this.server) {
-            this.server.close();
-            this.server = null;
-        }
-
-        if (this.ipv6Server) {
-            this.ipv6Server.close();
-            this.ipv6Server = null;
-        }
+        await this.closeTcpServers();
 
         // 发送全局终止事件通知前端
         this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: null });
@@ -798,21 +938,7 @@ class BmpWorker {
             return;
         }
         try {
-            await this.persistence.fence();
-            let result;
-            if (this.persistenceReader) {
-                const reader = this.persistenceReader;
-                try {
-                    result = await reader.queryRoutes(data);
-                } catch (error) {
-                    if (!this.handlePersistenceReaderFailure(reader, error)) {
-                        throw error;
-                    }
-                }
-            }
-            if (!result) {
-                result = await this.persistence.queryRoutes(data);
-            }
+            const result = await this.readPersistence('queryRoutes', data);
             this.messageHandler.sendSuccessResponse(messageId, result, '查询持久化路由成功');
         } catch (error) {
             this.messageHandler.sendErrorResponse(messageId, error.message);
@@ -825,39 +951,106 @@ class BmpWorker {
             return;
         }
         try {
-            await this.persistence.fence();
-            let result;
-            if (this.persistenceReader) {
-                const reader = this.persistenceReader;
-                try {
-                    result = await reader.queryEvents(data);
-                } catch (error) {
-                    if (!this.handlePersistenceReaderFailure(reader, error)) {
-                        throw error;
-                    }
-                }
-            }
-            if (!result) {
-                result = await this.persistence.queryEvents(data);
-            }
+            const result = await this.readPersistence('queryEvents', data);
             this.messageHandler.sendSuccessResponse(messageId, result, '查询BMP路由事件成功');
         } catch (error) {
             this.messageHandler.sendErrorResponse(messageId, error.message);
         }
     }
 
-    getClientList(messageId) {
-        const clientList = [];
-        this.bmpSessionMap.forEach((session, _) => {
-            const clientInfo = session.getClientInfo();
-            clientList.push(clientInfo);
-        });
-        this.messageHandler.sendSuccessResponse(messageId, clientList, '获取客户端列表成功');
+    getPersistentSourceId(value = {}) {
+        return value?.persistentSourceId || value?.sourceId || null;
     }
 
-    getRouteLens(messageId, data = {}) {
+    makeClientEndpointKey(value = {}) {
+        return [value.localIp, value.localPort, value.remoteIp, value.remotePort]
+            .map(item => String(item ?? ''))
+            .join('|');
+    }
+
+    findLiveBmpSession(client = {}) {
+        const sourceId = this.getPersistentSourceId(client);
+        if (sourceId) {
+            for (const bmpSession of this.bmpSessionMap.values()) {
+                if (bmpSession.getPersistentSourceId?.() === sourceId) {
+                    return bmpSession;
+                }
+            }
+        }
+        const key = this.makeClientEndpointKey(client);
+        for (const bmpSession of this.bmpSessionMap.values()) {
+            if (this.makeClientEndpointKey(bmpSession) === key) {
+                return bmpSession;
+            }
+        }
+        return null;
+    }
+
+    findTopologyClient(topology, client = {}) {
+        const clients = Array.isArray(topology?.clients) ? topology.clients : [];
+        const sourceId = this.getPersistentSourceId(client);
+        if (sourceId) {
+            return clients.find(item => this.getPersistentSourceId(item) === sourceId) || null;
+        }
+        const key = this.makeClientEndpointKey(client);
+        return clients.find(item => this.makeClientEndpointKey(item) === key) || null;
+    }
+
+    async queryClientTopology(client = null) {
+        const sourceId = this.getPersistentSourceId(client || {});
+        const topology = await this.readPersistence('queryTopology', sourceId ? { sourceId } : {});
+        return {
+            topology,
+            client: client ? this.findTopologyClient(topology, client) : null
+        };
+    }
+
+    async getClientList(messageId) {
         try {
-            const result = buildBmpRouteLens(this.bmpSessionMap, data);
+            const { topology } = await this.queryClientTopology();
+            const clients = new Map();
+            (topology?.clients || []).forEach(client => {
+                const { sessions: _sessions, instances: _instances, ...clientInfo } = client;
+                const key = this.getPersistentSourceId(clientInfo) || this.makeClientEndpointKey(clientInfo);
+                clients.set(key, clientInfo);
+            });
+            this.bmpSessionMap.forEach(bmpSession => {
+                const live = bmpSession.getClientInfo();
+                const key = this.getPersistentSourceId(live) || this.makeClientEndpointKey(live);
+                clients.set(key, {
+                    ...(clients.get(key) || {}),
+                    ...live,
+                    connectionState: 'open',
+                    isOnline: true
+                });
+            });
+            const clientList = Array.from(clients.values()).sort(
+                (left, right) => Number(Boolean(right.isOnline)) - Number(Boolean(left.isOnline))
+            );
+            this.messageHandler.sendSuccessResponse(messageId, clientList, '获取客户端列表成功');
+        } catch (error) {
+            logger.error(`Error getting BMP clients: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async getRouteLens(messageId, data = {}) {
+        try {
+            const parsedQuery = parseRouteLensQuery(data.query);
+            const query = {
+                routeState: data.routeState || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
+                pageSize: MAX_ROUTE_LENS_RESULT_LIMIT + 1,
+                includeTotal: true
+            };
+            if (parsedQuery.mode === 'covering') {
+                query.prefixCidrs = parsedQuery.indexKeys.map(key => key.slice('cidr:'.length));
+            } else if (parsedQuery.mode === 'exact') {
+                query.prefixFilter = parsedQuery.normalized;
+            } else {
+                query.routeIdentityText = parsedQuery.normalized;
+            }
+            const rows = await this.readPersistence('queryRoutes', query);
+            const result = buildBmpRouteLensFromPersistedRoutes(rows, data);
             this.messageHandler.sendSuccessResponse(messageId, result, '路由追踪查询成功');
         } catch (error) {
             logger.error(`Error getting Route Lens: ${error.message}`);
@@ -870,10 +1063,33 @@ class BmpWorker {
             if (!this.routeAssuranceService) {
                 this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
             }
-            if (this.routeAssuranceService.enabled) {
-                this.routeAssuranceFilters = { ...data };
+            if (!this.routeAssuranceService.enabled) {
+                throw new Error('路由矩阵分析未开启');
             }
-            const result = await this.routeAssuranceService.queryAsync(this.bmpSessionMap, data);
+            const analysisFilters = this.getRouteAssuranceAnalysisFilters(data);
+            const persistedQuery = {
+                ...analysisFilters,
+                category: data.category,
+                page: data.page,
+                pageSize: data.pageSize
+            };
+            this.routeAssuranceFilters = analysisFilters;
+            let result;
+            try {
+                result = await this.routeAssuranceService.queryPersistedAsync(persistedQuery);
+            } catch (error) {
+                const needsBootstrap =
+                    error?.code === 'BMP_ROUTE_ASSURANCE_PERSISTED_SNAPSHOT_MISS' ||
+                    this.routeAssuranceService.state === 'dirty';
+                if (!needsBootstrap) {
+                    throw error;
+                }
+                await this.routeAssuranceService.bootstrapFromPersistedRoutes(
+                    this.createPersistedRoutePageLoader(analysisFilters),
+                    analysisFilters
+                );
+                result = this.routeAssuranceService.queryPersisted(persistedQuery);
+            }
             this.messageHandler.sendSuccessResponse(messageId, result, '路由保障矩阵查询成功');
         } catch (error) {
             logger.error(`Error getting Route Assurance: ${error.message}`);
@@ -890,12 +1106,11 @@ class BmpWorker {
             this.routeAssuranceFilters = enabled ? { ...(data.filters || {}) } : {};
             let status;
             if (enabled) {
-                do {
-                    status = await this.routeAssuranceService.enableWithBootstrap(
-                        this.bmpSessionMap,
-                        data.filters || {}
-                    );
-                } while (status.enabled && status.state !== 'ready');
+                this.routeAssuranceFilters = this.getRouteAssuranceAnalysisFilters(data.filters || {});
+                status = await this.routeAssuranceService.bootstrapFromPersistedRoutes(
+                    this.createPersistedRoutePageLoader(this.routeAssuranceFilters),
+                    this.routeAssuranceFilters
+                );
             } else {
                 status = this.routeAssuranceService.setEnabled(false);
             }
@@ -910,58 +1125,248 @@ class BmpWorker {
         }
     }
 
-    getBgpSessions(messageId, client) {
-        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
-        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
-        const peerList = [];
-        if (!bmpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
-            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
-            return;
+    getRouteAssuranceAnalysisFilters(filters = {}) {
+        return Object.fromEntries(
+            ['client', 'vrf', 'af', 'query', 'routeState']
+                .filter(key => filters[key] !== undefined)
+                .map(key => [key, filters[key]])
+        );
+    }
+
+    normalizePersistedSession(session = {}) {
+        const routeScopes = Array.isArray(session.routeScopes) ? session.routeScopes : [];
+        const enabledAddressFamilies = Array.isArray(session.enabledAddressFamilies)
+            ? session.enabledAddressFamilies
+            : [];
+        const enabledAddrFamilyTypes = Array.from(
+            new Set(enabledAddressFamilies.map(item => getAddrFamilyType(Number(item.afi), Number(item.safi))))
+        );
+        return {
+            ...session,
+            enabledAddressFamilies,
+            enabledAddrFamilyTypes,
+            routeScopes,
+            isOnline: session.isOnline === true
+        };
+    }
+
+    buildLiveSessionTopology(bmpSession, bgpSession, persisted = null) {
+        const ownerKey = BmpBgpSession.makeKey(
+            bgpSession.sessionType,
+            bgpSession.sessionRd,
+            bgpSession.sessionIp,
+            bgpSession.sessionAs,
+            bgpSession.sessionRdRaw
+        );
+        let routeScopes = Array.isArray(persisted?.routeScopes)
+            ? persisted.routeScopes.map(scope => ({ ...scope }))
+            : [];
+        if (routeScopes.length === 0) {
+            routeScopes = Array.from(bgpSession.routeScopes.values(), scope => {
+                const routeSummary = bgpSession.getRouteSummary(scope.afi, scope.safi, scope.ribType);
+                const scopeId = bmpSession.getPersistenceScopeId(
+                    bgpSession,
+                    scope.afi,
+                    scope.safi,
+                    scope.ribType,
+                    'peer'
+                );
+                return {
+                    persistentScopeId: scopeId,
+                    scopeId,
+                    persistentSourceId: bmpSession.getPersistentSourceId?.() || null,
+                    persistentOwnerKey: ownerKey,
+                    ownerKey,
+                    afi: Number(scope.afi),
+                    safi: Number(scope.safi),
+                    addrFamilyType: getAddrFamilyType(Number(scope.afi), Number(scope.safi)),
+                    ribType: scope.ribType,
+                    scopeState: bmpSession.getPersistenceScopeState(bgpSession, scope.afi, scope.safi, scope.ribType),
+                    connectionState: 'open',
+                    isOnline: true,
+                    routeSummary
+                };
+            });
         }
-        bmpSession.bgpSessionMap.forEach((session, _) => {
-            peerList.push(session.getSessionInfo());
+        routeScopes.forEach(scope => {
+            bgpSession.setRouteSummary(scope.afi, scope.safi, scope.ribType, scope.routeSummary || scope);
         });
-        this.messageHandler.sendSuccessResponse(messageId, peerList, '获取对等体列表成功');
+        const sourceId = bmpSession.getPersistentSourceId?.() || this.getPersistentSourceId(persisted || {});
+        return this.normalizePersistedSession({
+            ...(persisted || {}),
+            ...bgpSession.getSessionInfo(),
+            persistentSourceId: sourceId,
+            sourceId,
+            persistentOwnerKey: ownerKey,
+            ownerKey,
+            persistentConnectionId: bmpSession.persistenceConnectionId || null,
+            connectionId: bmpSession.persistenceConnectionId || null,
+            connectionState: 'open',
+            isOnline: bgpSession.sessionState === BmpConst.BMP_SESSION_STATE.PEER_UP,
+            routeScopes
+        });
     }
 
-    getBgpStatisticsReports(messageId, client) {
-        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
-        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
-        if (!bmpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
-            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
-            return;
-        }
+    async getBgpSessions(messageId, client) {
+        try {
+            const { client: persistedClient } = await this.queryClientTopology(client);
+            const peerMap = new Map();
+            (persistedClient?.sessions || []).forEach(session => {
+                const normalized = this.normalizePersistedSession(session);
+                peerMap.set(normalized.persistentOwnerKey || normalized.ownerKey, normalized);
+            });
 
-        this.messageHandler.sendSuccessResponse(
-            messageId,
-            Array.from(bmpSession.bgpStatisticsReportMap.values()),
-            '获取BGP统计报表成功'
+            const bmpSession = this.findLiveBmpSession(client);
+            if (bmpSession) {
+                for (const bgpSession of bmpSession.bgpSessionMap.values()) {
+                    const ownerKey = BmpBgpSession.makeKey(
+                        bgpSession.sessionType,
+                        bgpSession.sessionRd,
+                        bgpSession.sessionIp,
+                        bgpSession.sessionAs,
+                        bgpSession.sessionRdRaw
+                    );
+                    peerMap.set(ownerKey, this.buildLiveSessionTopology(bmpSession, bgpSession, peerMap.get(ownerKey)));
+                }
+            }
+            this.messageHandler.sendSuccessResponse(messageId, Array.from(peerMap.values()), '获取对等体列表成功');
+        } catch (error) {
+            logger.error(`Error getting BGP sessions: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    getStatisticsSessionKey(session = {}) {
+        return [session.sessionType, session.sessionRdRaw || session.sessionRd, session.sessionIp, session.sessionAs]
+            .map(value => String(value ?? ''))
+            .join('|');
+    }
+
+    getStatisticsInstanceKey(instance = {}) {
+        return [instance.instanceType, instance.instanceRdRaw || instance.instanceRd]
+            .map(value => String(value ?? ''))
+            .join('|');
+    }
+
+    getStatisticsReportKey(kind, report = {}) {
+        return kind === 'instance'
+            ? this.getStatisticsInstanceKey(report.instance)
+            : this.getStatisticsSessionKey(report.session);
+    }
+
+    findStatisticsTopologyEntity(kind, report, topologyClient) {
+        const items = kind === 'instance' ? topologyClient?.instances : topologyClient?.sessions;
+        if (!Array.isArray(items)) {
+            return null;
+        }
+        const expectedKey = this.getStatisticsReportKey(kind, report);
+        return (
+            items.find(item => {
+                const candidate = kind === 'instance' ? { instance: item } : { session: item };
+                return this.getStatisticsReportKey(kind, candidate) === expectedKey;
+            }) || null
         );
     }
 
-    getBgpInstanceStatisticsReports(messageId, client) {
-        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
-        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
-        if (!bmpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
-            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
-            return;
+    normalizeStatisticsReport(kind, report, currentClient, topologyClient) {
+        const entityField = kind === 'instance' ? 'instance' : 'session';
+        const topologyEntity = this.findStatisticsTopologyEntity(kind, report, topologyClient);
+        const reportEntity = report?.[entityField] || {};
+        const entityIsOnline =
+            typeof topologyEntity?.isOnline === 'boolean'
+                ? topologyEntity.isOnline
+                : typeof currentClient?.isOnline === 'boolean'
+                  ? currentClient.isOnline
+                  : reportEntity.isOnline;
+        const entityConnectionState =
+            topologyEntity?.connectionState || currentClient?.connectionState || reportEntity.connectionState || null;
+
+        return {
+            ...(report || {}),
+            client: {
+                ...(report?.client || {}),
+                ...(currentClient || {})
+            },
+            [entityField]: {
+                ...reportEntity,
+                ...(topologyEntity || {}),
+                connectionState: entityConnectionState,
+                isOnline: entityIsOnline
+            }
+        };
+    }
+
+    async collectStatisticsReports(client, kind) {
+        let topologyClient = null;
+        let persistedReports = [];
+
+        if (this.persistence) {
+            const topologyResult = await this.queryClientTopology(client);
+            topologyClient = topologyResult.client;
+            const sourceId = this.getPersistentSourceId(topologyClient || client);
+            if (sourceId) {
+                persistedReports = await this.readPersistence(
+                    'queryStatisticsReports',
+                    { sourceId, kind },
+                    { fence: false }
+                );
+            }
         }
 
-        this.messageHandler.sendSuccessResponse(
-            messageId,
-            Array.from(bmpSession.bgpInstanceStatisticsReportMap.values()),
-            '获取BGP实例统计报表成功'
+        const bmpSession = this.findLiveBmpSession(client);
+        const currentClient = bmpSession
+            ? {
+                  ...(topologyClient || {}),
+                  ...bmpSession.getClientInfo(),
+                  connectionState: 'open',
+                  isOnline: true
+              }
+            : topologyClient || client || {};
+        const reportMap = new Map();
+        (persistedReports || []).forEach(report => {
+            reportMap.set(this.getStatisticsReportKey(kind, report), report);
+        });
+
+        const liveReports =
+            kind === 'instance'
+                ? bmpSession?.bgpInstanceStatisticsReportMap?.values?.()
+                : bmpSession?.bgpStatisticsReportMap?.values?.();
+        if (liveReports) {
+            for (const report of liveReports) {
+                reportMap.set(this.getStatisticsReportKey(kind, report), report);
+            }
+        }
+
+        return Array.from(reportMap.values(), report =>
+            this.normalizeStatisticsReport(kind, report, currentClient, topologyClient)
         );
+    }
+
+    async getBgpStatisticsReports(messageId, client) {
+        try {
+            const reports = await this.collectStatisticsReports(client, 'session');
+            this.messageHandler.sendSuccessResponse(messageId, reports, '获取BGP统计报表成功');
+        } catch (error) {
+            logger.error(`Error getting BGP statistics reports: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async getBgpInstanceStatisticsReports(messageId, client) {
+        try {
+            const reports = await this.collectStatisticsReports(client, 'instance');
+            this.messageHandler.sendSuccessResponse(messageId, reports, '获取BGP实例统计报表成功');
+        } catch (error) {
+            logger.error(`Error getting BGP instance statistics reports: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
     }
 
     getBmpSessionByClient(client) {
         const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
         return {
             bmpSessionKey,
-            bmpSession: this.bmpSessionMap.get(bmpSessionKey)
+            bmpSession: this.findLiveBmpSession(client) || this.bmpSessionMap.get(bmpSessionKey)
         };
     }
 
@@ -977,8 +1382,37 @@ class BmpWorker {
         return BmpBgpRoute.makeKey(routeInfo.pathId, routeInfo.rd, routeInfo.ip, routeInfo.mask, routeInfo.rdRaw);
     }
 
-    getBgpSessionRouteMap(client, session, af, ribType) {
+    getBgpSessionRouteScope(client, session, af, ribType) {
+        const { afi, safi } = getAfiAndSafi(af);
+        const persistedScope =
+            (Array.isArray(session?.routeScopes)
+                ? session.routeScopes.find(
+                      scope =>
+                          Number(scope.afi) === Number(afi) &&
+                          Number(scope.safi) === Number(safi) &&
+                          String(scope.ribType) === String(ribType)
+                  )
+                : null) || null;
+        const persistedScopeId =
+            session?.persistentScopeId ||
+            session?.scopeId ||
+            persistedScope?.persistentScopeId ||
+            persistedScope?.scopeId;
         const { bmpSessionKey, bmpSession } = this.getBmpSessionByClient(client);
+        if (persistedScopeId) {
+            let bgpSession = null;
+            if (bmpSession) {
+                const bgpSessionKey = BmpBgpSession.makeKey(
+                    session.sessionType,
+                    session.sessionRd,
+                    session.sessionIp,
+                    session.sessionAs,
+                    session.sessionRdRaw
+                );
+                bgpSession = bmpSession.bgpSessionMap.get(bgpSessionKey) || null;
+            }
+            return { bmpSession, bgpSession, scopeId: persistedScopeId, afi, safi, ribType };
+        }
         if (!bmpSession) {
             return { error: 'BMP会话不存在', log: `BMP会话 ${bmpSessionKey} 不存在` };
         }
@@ -995,28 +1429,49 @@ class BmpWorker {
             return { error: 'BGP会话不存在', log: `BMP会话 ${bmpSessionKey} 不存在BGP会话 ${bgpSessionKey}` };
         }
 
-        const { afi, safi } = getAfiAndSafi(af);
         const afKey = `${afi}|${safi}`;
-        const ribTypeRouteMap = bgpSession.bgpRoutes.get(afKey);
-        if (!ribTypeRouteMap) {
+        const hasAddressFamily =
+            bgpSession.routeScopes?.has?.(`${afi}|${safi}|${ribType}`) ||
+            bgpSession.enabledAddressFamilies?.some(
+                item => Number(item.afi) === Number(afi) && Number(item.safi) === Number(safi)
+            );
+        if (!hasAddressFamily) {
             return { error: '地址族不存在', log: `BGP会话 ${bgpSessionKey} 不存在地址族 ${afKey}` };
         }
-
-        const routeMap = ribTypeRouteMap.get(ribType);
-        if (!routeMap) {
+        if (
+            Array.isArray(bgpSession.ribTypes) &&
+            bgpSession.ribTypes.length > 0 &&
+            !bgpSession.ribTypes.some(item => String(item) === String(ribType))
+        ) {
             return { error: 'ribType不存在', log: `BGP会话 ${bgpSessionKey} 不存在 ribType ${ribType}` };
         }
 
-        return { bmpSession, bgpSession, routeMap, afi, safi };
+        const scopeId = bmpSession.getPersistenceScopeId(bgpSession, afi, safi, ribType, 'peer');
+        return { bmpSession, bgpSession, scopeId, afi, safi, ribType };
     }
 
-    getBgpInstanceRouteMap(client, instance) {
+    getBgpInstanceRouteScope(client, instance) {
+        const { afi, safi } = getAfiAndSafi(instance.addrFamilyType);
+        const persistedScopeId = instance?.persistentScopeId || instance?.scopeId;
         const { bmpSessionKey, bmpSession } = this.getBmpSessionByClient(client);
+        if (persistedScopeId) {
+            let bgpInstance = null;
+            if (bmpSession) {
+                const bgpInstKey = BmpBgpInstance.makeKey(
+                    instance.instanceType,
+                    instance.instanceRd,
+                    afi,
+                    safi,
+                    instance.instanceRdRaw
+                );
+                bgpInstance = bmpSession.bgpInstanceMap.get(bgpInstKey) || null;
+            }
+            return { bmpSession, bgpInstance, scopeId: persistedScopeId, afi, safi, ribType: 'loc-rib' };
+        }
         if (!bmpSession) {
             return { error: 'BMP会话不存在', log: `BMP会话 ${bmpSessionKey} 不存在` };
         }
 
-        const { afi, safi } = getAfiAndSafi(instance.addrFamilyType);
         const bgpInstKey = BmpBgpInstance.makeKey(
             instance.instanceType,
             instance.instanceRd,
@@ -1029,7 +1484,8 @@ class BmpWorker {
             return { error: 'BGP实例不存在', log: `BMP会话 ${bmpSessionKey} 不存在BGP实例 ${bgpInstKey}` };
         }
 
-        return { bmpSession, bgpInstance, routeMap: bgpInstance.bgpRoutes, afi, safi };
+        const scopeId = bmpSession.getPersistenceScopeId(bgpInstance, afi, safi, 'loc-rib', 'loc-rib');
+        return { bmpSession, bgpInstance, scopeId, afi, safi, ribType: 'loc-rib' };
     }
 
     sendRouteLookupError(messageId, lookup) {
@@ -1042,278 +1498,310 @@ class BmpWorker {
         return true;
     }
 
-    isRouteStateMatched(route, routeState) {
-        if (routeState === BmpConst.BMP_ROUTE_STATE_FILTER.ALL) {
-            return true;
-        }
-
-        const state = route.routeState || BmpConst.BMP_ROUTE_STATE.ACTIVE;
-        return state === routeState;
-    }
-
-    getPagedRouteResult(routeMap, options) {
-        const page = Math.max(1, Number(options.page) || 1);
-        const pageSize = Math.max(1, Number(options.pageSize) || 10);
-        const routeState = options.routeState || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE;
-        const prefixQuery = buildRoutePrefixQuery(options.prefixFilter);
-        const start = (page - 1) * pageSize;
-        const list = [];
-        let total = 0;
-
-        const appendRoute = route => {
-            if (!route || !this.isRouteStateMatched(route, routeState)) {
-                return;
-            }
-
-            if (
-                (prefixQuery.mode === 'scan' || prefixQuery.mode === 'index-or-scan') &&
-                !routeMatchesPrefixQuery(route, prefixQuery)
-            ) {
-                return;
-            }
-
-            if (total >= start && list.length < pageSize) {
-                list.push(route.getRouteListInfo());
-            }
-            total += 1;
+    toRouteListInfo(route = {}) {
+        return {
+            routeKey: route.routeKey,
+            addrFamilyType: route.addrFamilyType,
+            afi: route.afi,
+            safi: route.safi,
+            ip: route.ip,
+            mask: route.mask,
+            rd: route.rd,
+            rdRaw: route.rdRaw,
+            origin: route.origin,
+            asPath: route.asPath,
+            med: route.med,
+            nextHop: route.nextHop,
+            pathId: route.pathId,
+            labels: route.labels,
+            parseStatus: route.parseStatus,
+            pathStatus: route.pathStatus,
+            pathStatusNames: route.pathStatusNames,
+            pathStatusText: route.pathStatusText,
+            pathStatusUnknownBits: route.pathStatusUnknownBits,
+            pathStatusReason: route.pathStatusReason,
+            pathStatusReasonName: route.pathStatusReasonName,
+            pathStatusReasonText: route.pathStatusReasonText,
+            routeTlvCount: route.routeTlvCount ?? (Array.isArray(route.routeTlvs) ? route.routeTlvs.length : 0),
+            routeState: route.routeState
         };
-
-        const canUsePrefixIndex =
-            (prefixQuery.mode === 'index' || prefixQuery.mode === 'index-or-scan') &&
-            typeof options.getIndexedRouteKeys === 'function';
-        const indexedRouteKeys = canUsePrefixIndex ? options.getIndexedRouteKeys(prefixQuery.key) : [];
-
-        if (canUsePrefixIndex && (prefixQuery.mode === 'index' || indexedRouteKeys.length > 0)) {
-            indexedRouteKeys.forEach(routeKey => {
-                appendRoute(routeMap.get(routeKey));
-            });
-        } else {
-            routeMap.forEach(route => {
-                appendRoute(route);
-            });
-        }
-
-        return { list, total };
     }
 
-    getBgpInstanceRoutes(messageId, data) {
-        const {
-            client,
-            instance,
-            page,
-            pageSize,
-            routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
-            prefixFilter
-        } = data;
-        const lookup = this.getBgpInstanceRouteMap(client, instance);
-        if (this.sendRouteLookupError(messageId, lookup)) {
-            return;
-        }
-
-        const { list, total } = this.getPagedRouteResult(lookup.routeMap, {
-            page,
-            pageSize,
-            routeState,
-            prefixFilter,
-            getIndexedRouteKeys: prefixKey => lookup.bgpInstance.getRouteKeysByPrefix(prefixKey)
+    async queryRouteScope(lookup, options = {}) {
+        const snapshot = await this.readPersistence('queryRouteScope', {
+            routeQuery: {
+                scopeId: lookup.scopeId,
+                page: options.page,
+                pageSize: options.pageSize,
+                routeState: options.routeState || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
+                prefixFilter: options.prefixFilter,
+                orderBy: 'firstSeen'
+            },
+            summaryQuery: { scopeId: lookup.scopeId }
         });
-        const summary = lookup.bgpInstance.getRouteSummary();
-
-        this.messageHandler.sendSuccessResponse(messageId, { list, total, summary }, 'BGP实例获取路由列表成功');
+        const routes = snapshot?.routes;
+        const summaryResult = snapshot?.summary;
+        const summary = {
+            active: Number(summaryResult?.active || 0),
+            stale: Number(summaryResult?.stale || 0),
+            total: Number(summaryResult?.total || 0)
+        };
+        return {
+            list: (routes?.list || []).map(route => this.toRouteListInfo(route)),
+            total: Number(routes?.total || 0),
+            summary
+        };
     }
 
-    getBgpInstanceRouteDetail(messageId, data) {
-        const { client, instance, routeKey, route } = data;
-        const lookup = this.getBgpInstanceRouteMap(client, instance);
-        if (this.sendRouteLookupError(messageId, lookup)) {
-            return;
-        }
-
-        const key = this.getRouteKey(routeKey, route);
-        const bgpRoute = lookup.routeMap.get(key);
-        if (!bgpRoute) {
-            this.messageHandler.sendErrorResponse(messageId, '路由不存在');
-            return;
-        }
-
-        this.messageHandler.sendSuccessResponse(messageId, bgpRoute.getRouteInfo(), 'BGP实例获取路由详情成功');
-    }
-
-    getBgpRoutes(messageId, data) {
-        const {
-            client,
-            session,
-            af,
-            ribType,
-            page,
-            pageSize,
-            routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
-            prefixFilter
-        } = data;
-        const lookup = this.getBgpSessionRouteMap(client, session, af, ribType);
-        if (this.sendRouteLookupError(messageId, lookup)) {
-            return;
-        }
-
-        const { list, total } = this.getPagedRouteResult(lookup.routeMap, {
-            page,
-            pageSize,
-            routeState,
-            prefixFilter,
-            getIndexedRouteKeys: prefixKey =>
-                lookup.bgpSession.getRouteKeysByPrefix(lookup.afi, lookup.safi, ribType, prefixKey)
+    async queryRouteDetail(lookup, routeKey) {
+        const result = await this.readPersistence('queryRoutes', {
+            scopeId: lookup.scopeId,
+            legacyRouteKey: routeKey,
+            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL,
+            pageSize: 1
         });
-        const summary = lookup.bgpSession.getRouteSummary(lookup.afi, lookup.safi, ribType);
-
-        this.messageHandler.sendSuccessResponse(messageId, { list, total, summary }, '获取路由列表成功');
+        return result?.list?.[0] || null;
     }
 
-    getBgpRouteDetail(messageId, data) {
-        const { client, session, af, ribType, routeKey, route } = data;
-        const lookup = this.getBgpSessionRouteMap(client, session, af, ribType);
-        if (this.sendRouteLookupError(messageId, lookup)) {
-            return;
-        }
-
-        const key = this.getRouteKey(routeKey, route);
-        const bgpRoute = lookup.routeMap.get(key);
-        if (!bgpRoute) {
-            this.messageHandler.sendErrorResponse(messageId, '路由不存在');
-            return;
-        }
-
-        this.messageHandler.sendSuccessResponse(messageId, bgpRoute.getRouteInfo(), '获取路由详情成功');
-    }
-
-    purgeStaleRouteMap(routeMap, onDelete) {
-        let deleted = 0;
-        routeMap.forEach((route, key) => {
-            if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
-                if (typeof onDelete === 'function') {
-                    const accepted = onDelete(route, key);
-                    if (accepted === false) {
-                        return;
-                    }
-                }
-                routeMap.delete(key);
-                deleted += 1;
+    async getBgpInstanceRoutes(messageId, data) {
+        try {
+            const {
+                client,
+                instance,
+                page,
+                pageSize,
+                routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
+                prefixFilter
+            } = data;
+            const lookup = this.getBgpInstanceRouteScope(client, instance);
+            if (this.sendRouteLookupError(messageId, lookup)) {
+                return;
             }
-        });
+            const result = await this.queryRouteScope(lookup, { page, pageSize, routeState, prefixFilter });
+            lookup.bgpInstance?.setRouteSummary(result.summary);
+            this.messageHandler.sendSuccessResponse(messageId, result, 'BGP实例获取路由列表成功');
+        } catch (error) {
+            logger.error(`Error getting BGP instance routes: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async getBgpInstanceRouteDetail(messageId, data) {
+        try {
+            const { client, instance, routeKey, route } = data;
+            const lookup = this.getBgpInstanceRouteScope(client, instance);
+            if (this.sendRouteLookupError(messageId, lookup)) {
+                return;
+            }
+            const detail = await this.queryRouteDetail(lookup, this.getRouteKey(routeKey, route));
+            if (!detail) {
+                this.messageHandler.sendErrorResponse(messageId, '路由不存在');
+                return;
+            }
+            this.messageHandler.sendSuccessResponse(messageId, detail, 'BGP实例获取路由详情成功');
+        } catch (error) {
+            logger.error(`Error getting BGP instance route detail: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async getBgpRoutes(messageId, data) {
+        try {
+            const {
+                client,
+                session,
+                af,
+                ribType,
+                page,
+                pageSize,
+                routeState = BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
+                prefixFilter
+            } = data;
+            const lookup = this.getBgpSessionRouteScope(client, session, af, ribType);
+            if (this.sendRouteLookupError(messageId, lookup)) {
+                return;
+            }
+            const result = await this.queryRouteScope(lookup, { page, pageSize, routeState, prefixFilter });
+            lookup.bgpSession?.setRouteSummary(lookup.afi, lookup.safi, ribType, result.summary);
+            this.messageHandler.sendSuccessResponse(messageId, result, '获取路由列表成功');
+        } catch (error) {
+            logger.error(`Error getting BGP routes: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async getBgpRouteDetail(messageId, data) {
+        try {
+            const { client, session, af, ribType, routeKey, route } = data;
+            const lookup = this.getBgpSessionRouteScope(client, session, af, ribType);
+            if (this.sendRouteLookupError(messageId, lookup)) {
+                return;
+            }
+            const detail = await this.queryRouteDetail(lookup, this.getRouteKey(routeKey, route));
+            if (!detail) {
+                this.messageHandler.sendErrorResponse(messageId, '路由不存在');
+                return;
+            }
+            this.messageHandler.sendSuccessResponse(messageId, detail, '获取路由详情成功');
+        } catch (error) {
+            logger.error(`Error getting BGP route detail: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async purgeStaleScope(scopeId) {
+        let deleted = 0;
+        let hasMore = true;
+        while (hasMore) {
+            const result = await this.persistence.purgeStaleRoutes({
+                scopeId,
+                routeLimit: 20000,
+                reason: 'manual-stale-purge'
+            });
+            this.handleCommittedPersistenceResult(result);
+            deleted += Number(result?.purged || 0);
+            hasMore = result?.hasMore === true && Number(result?.purged || 0) > 0;
+        }
         return deleted;
     }
 
-    purgeStaleBgpInstanceRoutes(messageId, data) {
-        const { client, instance } = data;
-        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
-        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
-        if (!bmpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
-            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
-            return;
-        }
-
-        const { afi, safi } = getAfiAndSafi(instance.addrFamilyType);
-        const bgpInstKey = BmpBgpInstance.makeKey(
-            instance.instanceType,
-            instance.instanceRd,
-            afi,
-            safi,
-            instance.instanceRdRaw
-        );
-        const bgpInstance = bmpSession.bgpInstanceMap.get(bgpInstKey);
-        if (!bgpInstance) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在BGP实例 ${bgpInstKey}`);
-            this.messageHandler.sendErrorResponse(messageId, 'BGP实例不存在');
-            return;
-        }
-
-        const deleted = this.purgeStaleRouteMap(bgpInstance.bgpRoutes, (route, key) => {
-            if (
-                this.persistence &&
-                !bmpSession.persistInstanceRoutePurge(bgpInstance, route, afi, safi, {
-                    reason: 'manual-stale-purge'
-                })
-            ) {
-                return false;
+    async purgeStaleBgpInstanceRoutes(messageId, data) {
+        try {
+            const lookup = this.getBgpInstanceRouteScope(data.client, data.instance);
+            if (this.sendRouteLookupError(messageId, lookup)) {
+                return;
             }
-            bgpInstance.removeRouteFromPrefixIndex(key, route);
-            bgpInstance.recordRouteDelete(route);
-            bgpInstance.releaseRouteAttr(route);
-            return true;
-        });
-        if (deleted > 0 && !(bgpInstance.bgpRoutes instanceof ObservedRouteMap)) {
-            this.invalidateRouteAssurance('purge-stale-instance-routes');
+            const deleted = await this.purgeStaleScope(lookup.scopeId);
+            const summaryResult = await this.readPersistence('queryScopeSummary', { scopeId: lookup.scopeId });
+            lookup.bgpInstance?.setRouteSummary(summaryResult);
+            this.messageHandler.sendSuccessResponse(messageId, { deleted }, 'BGP实例过期路由清理成功');
+        } catch (error) {
+            logger.error(`Error purging BGP instance routes: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
         }
-        this.messageHandler.sendSuccessResponse(messageId, { deleted }, 'BGP实例过期路由清理成功');
     }
 
-    purgeStaleBgpRoutes(messageId, data) {
-        const { client, session, af, ribType } = data;
-        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
-        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
-        if (!bmpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
-            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
-            return;
-        }
-
-        const bgpSessionKey = BmpBgpSession.makeKey(
-            session.sessionType,
-            session.sessionRd,
-            session.sessionIp,
-            session.sessionAs,
-            session.sessionRdRaw
-        );
-        const bgpSession = bmpSession.bgpSessionMap.get(bgpSessionKey);
-        if (!bgpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在BGP会话 ${bgpSessionKey}`);
-            this.messageHandler.sendErrorResponse(messageId, 'BGP会话不存在');
-            return;
-        }
-
-        const { afi, safi } = getAfiAndSafi(af);
-        const ribTypeRouteMap = bgpSession.bgpRoutes.get(`${afi}|${safi}`);
-        const routeMap = ribTypeRouteMap ? ribTypeRouteMap.get(ribType) : null;
-        if (!routeMap) {
-            this.messageHandler.sendErrorResponse(messageId, '路由表不存在');
-            return;
-        }
-
-        const deleted = this.purgeStaleRouteMap(routeMap, (route, key) => {
-            if (
-                this.persistence &&
-                !bmpSession.persistSessionRoutePurge(bgpSession, route, afi, safi, ribType, {
-                    reason: 'manual-stale-purge'
-                })
-            ) {
-                return false;
+    async purgeStaleBgpRoutes(messageId, data) {
+        try {
+            const lookup = this.getBgpSessionRouteScope(data.client, data.session, data.af, data.ribType);
+            if (this.sendRouteLookupError(messageId, lookup)) {
+                return;
             }
-            bgpSession.removeRouteFromPrefixIndex(afi, safi, ribType, key, route);
-            bgpSession.recordRouteDelete(afi, safi, ribType, route);
-            bgpSession.releaseRouteAttr(route);
-            return true;
-        });
-        if (deleted > 0 && !(routeMap instanceof ObservedRouteMap)) {
-            this.invalidateRouteAssurance('purge-stale-session-routes');
+            const deleted = await this.purgeStaleScope(lookup.scopeId);
+            const summaryResult = await this.readPersistence('queryScopeSummary', { scopeId: lookup.scopeId });
+            lookup.bgpSession?.setRouteSummary(lookup.afi, lookup.safi, lookup.ribType, summaryResult);
+            this.messageHandler.sendSuccessResponse(messageId, { deleted }, '过期路由清理成功');
+        } catch (error) {
+            logger.error(`Error purging BGP routes: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
         }
-        this.messageHandler.sendSuccessResponse(messageId, { deleted }, '过期路由清理成功');
     }
 
-    getBgpInstances(messageId, client) {
-        const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
-        const bmpSession = this.bmpSessionMap.get(bmpSessionKey);
-        if (!bmpSession) {
-            logger.error(`BMP会话 ${bmpSessionKey} 不存在`);
-            this.messageHandler.sendErrorResponse(messageId, 'BMP会话不存在');
-            return;
-        }
+    normalizePersistedInstance(instance = {}) {
+        const routeScopes = Array.isArray(instance.routeScopes) ? instance.routeScopes : [];
+        return {
+            ...instance,
+            enabledAddressFamilies:
+                instance.enabledAddressFamilies ||
+                (instance.afi === undefined ? [] : [{ afi: Number(instance.afi), safi: Number(instance.safi) }]),
+            enabledAddrFamilyTypes:
+                instance.enabledAddrFamilyTypes ||
+                (instance.addrFamilyType === undefined || instance.addrFamilyType === null
+                    ? []
+                    : [instance.addrFamilyType]),
+            routeScopes,
+            isOnline: instance.isOnline === true
+        };
+    }
 
-        const instanceList = [];
-        bmpSession.bgpInstanceMap.forEach((instance, _) => {
-            instanceList.push(instance.getInstanceInfo());
+    buildLiveInstanceTopology(bmpSession, bgpInstance, persisted = null) {
+        const ownerKey = BmpBgpInstance.makeKey(
+            bgpInstance.instanceType,
+            bgpInstance.instanceRd,
+            bgpInstance.afi,
+            bgpInstance.safi,
+            bgpInstance.instanceRdRaw
+        );
+        const scopeId =
+            persisted?.persistentScopeId ||
+            persisted?.scopeId ||
+            bmpSession.getPersistenceScopeId(bgpInstance, bgpInstance.afi, bgpInstance.safi, 'loc-rib', 'loc-rib');
+        const persistedScope = Array.isArray(persisted?.routeScopes) ? persisted.routeScopes[0] : null;
+        const summary = persistedScope?.routeSummary || persisted?.routeSummary || bgpInstance.getRouteSummary();
+        bgpInstance.setRouteSummary(summary);
+        const sourceId = bmpSession.getPersistentSourceId?.() || this.getPersistentSourceId(persisted || {});
+        return this.normalizePersistedInstance({
+            ...(persisted || {}),
+            ...bgpInstance.getInstanceInfo(),
+            persistentSourceId: sourceId,
+            sourceId,
+            persistentOwnerKey: ownerKey,
+            ownerKey,
+            persistentScopeId: scopeId,
+            scopeId,
+            persistentConnectionId: bmpSession.persistenceConnectionId || null,
+            connectionId: bmpSession.persistenceConnectionId || null,
+            connectionState: 'open',
+            isOnline: bgpInstance.instanceState === BmpConst.BMP_SESSION_STATE.PEER_UP,
+            routeScopes: persisted?.routeScopes || [
+                {
+                    persistentScopeId: scopeId,
+                    scopeId,
+                    persistentSourceId: sourceId,
+                    persistentOwnerKey: ownerKey,
+                    ownerKey,
+                    afi: Number(bgpInstance.afi),
+                    safi: Number(bgpInstance.safi),
+                    addrFamilyType: getAddrFamilyType(Number(bgpInstance.afi), Number(bgpInstance.safi)),
+                    ribType: 'loc-rib',
+                    scopeState: bmpSession.getPersistenceScopeState(
+                        bgpInstance,
+                        bgpInstance.afi,
+                        bgpInstance.safi,
+                        'loc-rib'
+                    ),
+                    connectionState: 'open',
+                    isOnline: true,
+                    routeSummary: summary
+                }
+            ],
+            routeSummary: summary
         });
+    }
 
-        this.messageHandler.sendSuccessResponse(messageId, instanceList, '获取实例列表成功');
+    async getBgpInstances(messageId, client) {
+        try {
+            const { client: persistedClient } = await this.queryClientTopology(client);
+            const instanceMap = new Map();
+            (persistedClient?.instances || []).forEach(instance => {
+                const normalized = this.normalizePersistedInstance(instance);
+                instanceMap.set(
+                    normalized.persistentOwnerKey || normalized.ownerKey || normalized.persistentScopeId,
+                    normalized
+                );
+            });
+
+            const bmpSession = this.findLiveBmpSession(client);
+            if (bmpSession) {
+                for (const bgpInstance of bmpSession.bgpInstanceMap.values()) {
+                    const ownerKey = BmpBgpInstance.makeKey(
+                        bgpInstance.instanceType,
+                        bgpInstance.instanceRd,
+                        bgpInstance.afi,
+                        bgpInstance.safi,
+                        bgpInstance.instanceRdRaw
+                    );
+                    instanceMap.set(
+                        ownerKey,
+                        this.buildLiveInstanceTopology(bmpSession, bgpInstance, instanceMap.get(ownerKey))
+                    );
+                }
+            }
+            this.messageHandler.sendSuccessResponse(messageId, Array.from(instanceMap.values()), '获取实例列表成功');
+        } catch (error) {
+            logger.error(`Error getting BGP instances: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
     }
 }
 

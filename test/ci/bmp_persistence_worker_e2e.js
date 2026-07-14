@@ -7,6 +7,7 @@ const { Worker } = require('worker_threads');
 
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
+const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
 const { buildScenario, parseArgs } = require('../../scripts/mockBmpClient');
 
 function getFreePort() {
@@ -49,7 +50,7 @@ function createRequester(worker) {
     };
 }
 
-function sendScenario(port, messages) {
+function sendScenario(port, messages, options = {}) {
     return new Promise((resolve, reject) => {
         const socket = net.createConnection({ host: '127.0.0.1', port });
         socket.setNoDelay(true);
@@ -61,17 +62,36 @@ function sendScenario(port, messages) {
                         await new Promise(drainResolve => socket.once('drain', drainResolve));
                     }
                 }
-                socket.end();
+                if (options.keepOpen) {
+                    resolve(socket);
+                } else {
+                    socket.end();
+                }
             } catch (error) {
                 reject(error);
             }
         });
         socket.once('close', hadError => {
             if (!hadError) {
-                resolve();
+                resolve(null);
             }
         });
     });
+}
+
+async function waitForRoutes(request, minimum = 1) {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+        const response = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES, {
+            routeState: 'all',
+            pageSize: 5000
+        });
+        if (response.data.total >= minimum) {
+            return response;
+        }
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw new Error(`timed out waiting for ${minimum} persisted BMP routes`);
 }
 
 async function main() {
@@ -81,6 +101,7 @@ async function main() {
     const worker = new Worker(path.join(__dirname, '..', '..', 'electron', 'worker', 'bmp', 'bmpWorker.js'));
     const request = createRequester(worker);
     let offlineClient;
+    let bmpSocket;
     try {
         await request(BmpConst.BMP_REQ_TYPES.START_BMP, {
             port,
@@ -107,21 +128,104 @@ async function main() {
             '--once',
             '--no-dump-packets'
         ]);
-        await sendScenario(port, buildScenario(options));
+        bmpSocket = await sendScenario(port, buildScenario(options), { keepOpen: true });
 
         const liveStatus = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTENCE_STATUS);
         assert.equal(liveStatus.data.ready, true);
         assert.equal(liveStatus.data.journalMode, 'wal');
-        const liveRoutes = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES, {
-            routeState: 'all',
-            pageSize: 5000
-        });
+        const liveRoutes = await waitForRoutes(request, 10);
         assert.ok(liveRoutes.data.total > 10, `expected persisted routes, got ${liveRoutes.data.total}`);
         assert.equal(
             liveRoutes.data.list.every(route => route.persistentRouteId.length === 64),
             true
         );
         const persistedTotal = liveRoutes.data.total;
+
+        const clients = await request(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST);
+        assert.equal(clients.data.length, 1);
+        const client = clients.data[0];
+        const peerRoute = liveRoutes.data.list.find(
+            route => route.scopeKind === 'peer' && route.afi === 1 && route.safi === 1 && route.ip === '10.10.0.0'
+        );
+        assert.ok(peerRoute, 'expected a live IPv4 peer route');
+        const sessions = await request(BmpConst.BMP_REQ_TYPES.GET_BGP_SESSIONS, client);
+        const session = sessions.data.find(
+            item =>
+                String(item.sessionType) === String(peerRoute.peer.type) &&
+                item.sessionIp === peerRoute.peer.ip &&
+                String(item.sessionAs) === String(peerRoute.peer.as)
+        );
+        assert.ok(session, 'expected the persisted peer scope to resolve to a live session');
+        const peerScopeRoutes = liveRoutes.data.list.filter(
+            route => route.persistentScopeId === peerRoute.persistentScopeId
+        );
+        const peerRoutes = await request(BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTES, {
+            client,
+            session,
+            af: getAddrFamilyType(peerRoute.afi, peerRoute.safi),
+            ribType: peerRoute.ribType,
+            page: 1,
+            pageSize: 10,
+            routeState: 'all',
+            prefixFilter: `${peerRoute.ip}/${peerRoute.mask}`
+        });
+        assert.equal(peerRoutes.data.total, 1);
+        assert.equal(peerRoutes.data.list[0].routeKey, peerRoute.routeKey);
+        assert.equal(session.bgpRoutes, undefined, 'session API must not expose an in-memory route map');
+        assert.ok(session.routeSummary.total >= peerScopeRoutes.length);
+
+        const peerDetail = await request(BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTE_DETAIL, {
+            client,
+            session,
+            af: getAddrFamilyType(peerRoute.afi, peerRoute.safi),
+            ribType: peerRoute.ribType,
+            routeKey: peerRoute.routeKey
+        });
+        assert.equal(peerDetail.data.persistentRouteId, peerRoute.persistentRouteId);
+
+        const routeLens = await request(BmpConst.BMP_REQ_TYPES.GET_ROUTE_LENS, {
+            query: `${peerRoute.ip}/${peerRoute.mask}`,
+            routeState: 'all'
+        });
+        assert.ok(routeLens.data.summary.total > 0);
+
+        const assuranceStatus = await request(BmpConst.BMP_REQ_TYPES.SET_ROUTE_ASSURANCE_ENABLED, {
+            enabled: true,
+            filters: { routeState: 'all' }
+        });
+        assert.equal(assuranceStatus.data.state, 'ready');
+        const assurance = await request(BmpConst.BMP_REQ_TYPES.GET_ROUTE_ASSURANCE, {
+            routeState: 'all',
+            page: 1,
+            pageSize: 10
+        });
+        assert.ok(assurance.data.summary.scannedPathCount > 0);
+        await request(BmpConst.BMP_REQ_TYPES.SET_ROUTE_ASSURANCE_ENABLED, { enabled: false });
+
+        const locRibRoute = liveRoutes.data.list.find(route => route.scopeKind === 'loc-rib');
+        assert.ok(locRibRoute, 'expected a persisted Loc-RIB route');
+        const instances = await request(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCES, client);
+        const instance = instances.data.find(
+            item =>
+                String(item.instanceType) === String(locRibRoute.peer.type) &&
+                item.instanceRd === locRibRoute.peer.rd &&
+                getAddrFamilyType(locRibRoute.afi, locRibRoute.safi) === item.addrFamilyType
+        );
+        assert.ok(instance, 'expected the persisted Loc-RIB scope to resolve to a live instance');
+        assert.equal(instance.bgpRoutes, undefined, 'instance API must not expose an in-memory route map');
+        const instanceRoutes = await request(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_ROUTES, {
+            client,
+            instance,
+            page: 1,
+            pageSize: 10,
+            routeState: 'all',
+            prefixFilter: locRibRoute.ip
+        });
+        assert.ok(instanceRoutes.data.total > 0);
+
+        bmpSocket.end();
+        await new Promise(resolve => bmpSocket.once('close', resolve));
+        bmpSocket = null;
 
         await request(BmpConst.BMP_REQ_TYPES.STOP_BMP);
         await worker.terminate();
@@ -136,6 +240,7 @@ async function main() {
 
         console.log(`BMP worker persistence E2E passed: routes=${persistedTotal}`);
     } finally {
+        bmpSocket?.destroy();
         await offlineClient?.close().catch(() => {});
         await worker.terminate().catch(() => {});
         fs.rmSync(tempDir, { recursive: true, force: true });

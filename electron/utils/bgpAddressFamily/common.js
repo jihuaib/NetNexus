@@ -124,7 +124,7 @@ function parseFlowSpecLength(buffer, position) {
 function isSimpleIpNlri(afi, safi) {
     return (
         (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
-        safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        (safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST || safi === BgpConst.BGP_SAFI_TYPE.SAFI_MULTICAST)
     );
 }
 

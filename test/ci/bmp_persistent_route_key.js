@@ -154,6 +154,40 @@ const baseScope = {
     assertSameKey(expanded, compressed, 'IPv6 NLRI identity must normalize spelling and host bits');
 }
 
+// Multicast NLRI uses the same IP-prefix normalization rules while SAFI remains
+// part of the route identity.
+{
+    const ipv4HostBits = createRouteKey({
+        afi: 1,
+        safi: 2,
+        route: { ip: '239.1.2.129', mask: 24, nextHop: '192.0.2.1' }
+    });
+    const ipv4Network = createRouteKey({
+        afi: 1,
+        safi: 2,
+        nlri: { prefix: '239.1.2.0/24' }
+    });
+    assertSameKey(ipv4HostBits, ipv4Network, 'IPv4 multicast keys must normalize host bits');
+    assert.strictEqual(ipv4HostBits.canonicalIdentity.nlri.kind, 'ip-prefix');
+    assert.strictEqual(ipv4HostBits.canonicalIdentity.nlri.prefix.networkHex, 'ef010200');
+
+    const ipv6Expanded = createRouteKey({
+        afi: 2,
+        safi: 2,
+        nlri: { prefix: 'ff3e:0040:2001:0db8:ffff:ffff:ffff:ffff', length: 64 }
+    });
+    const ipv6Compressed = createRouteKey({
+        afi: 2,
+        safi: 2,
+        nlri: { prefix: 'ff3e:40:2001:db8::/64' }
+    });
+    assertSameKey(ipv6Expanded, ipv6Compressed, 'IPv6 multicast keys must normalize spelling and host bits');
+    assert.strictEqual(ipv6Expanded.canonicalIdentity.nlri.kind, 'ip-prefix');
+
+    const ipv4Unicast = createRouteKey({ afi: 1, safi: 1, nlri: { prefix: '239.1.2.0/24' } });
+    assertDifferentKey(ipv4Network, ipv4Unicast, 'unicast and multicast SAFIs must not share a route key');
+}
+
 // VPN labels are forwarding data, not the stable business prefix identity.
 {
     const firstLabel = createRouteKey({

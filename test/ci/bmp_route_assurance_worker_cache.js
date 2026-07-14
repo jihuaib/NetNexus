@@ -1,59 +1,115 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpRouteAssuranceService = require('../../electron/utils/bmpRouteAssuranceService');
-const BmpSession = require('../../electron/worker/bmp/bmpSession');
+const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
+const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
+const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
+const {
+    buildConnectionMutation,
+    buildScopeMutation,
+    buildRouteUpsertMutation
+} = require('../../electron/worker/bmp/bmpPersistenceMutation');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
 const BmpWorker = loadBmpWorkerClass(__dirname, module);
-const worker = Object.create(BmpWorker.prototype);
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-assurance-worker-'));
+const store = new BmpPersistenceStore({ dbPath: path.join(tempDir, 'bmp.sqlite3') }).open();
 const responses = [];
+const persistenceQueries = [];
 
-const route = {
-    afi: 1,
-    safi: 1,
-    rd: '0:0',
-    ip: '203.0.113.0',
-    mask: 24,
-    pathId: 1,
-    routeState: BmpConst.BMP_ROUTE_STATE.ACTIVE,
-    routeTlvs: [{ name: 'VRF/Table Name', value: 'worker-cache' }]
+const bmpSession = {
+    localIp: '127.0.0.1',
+    localPort: 11019,
+    remoteIp: '192.0.2.1',
+    remotePort: 50000,
+    sysName: 'cache-router',
+    sysDesc: 'Route Assurance SQLite worker cache test',
+    bmpVersion: 4,
+    getBmpV4TlvDraft: () => 20
 };
-const routeMap = new Map([['route', route]]);
-worker.bmpSessionMap = new Map([
-    [
-        'cache-client',
-        {
-            getClientInfo: () => ({ sysName: 'cache-router', remoteIp: '192.0.2.1' }),
-            bgpSessionMap: new Map([
-                [
-                    'cache-peer',
-                    {
-                        sessionIp: '198.51.100.1',
-                        sessionAs: 65001,
-                        sessionRd: '0:0',
-                        vrfTableNames: ['worker-cache'],
-                        bgpRoutes: new Map([['1|1', new Map([[BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, routeMap]])]])
-                    }
-                ]
-            ]),
-            bgpInstanceMap: new Map()
-        }
-    ]
+const owner = new BmpBgpSession(bmpSession);
+Object.assign(owner, {
+    sessionType: BmpConst.BMP_PEER_TYPE.GLOBAL,
+    sessionRd: '0:0',
+    sessionIp: '198.51.100.1',
+    sessionAs: 65001,
+    vrfTableNames: ['worker-cache']
+});
+
+function makeRoute(prefix, pathId) {
+    const route = new BmpBgpRoute(owner, null);
+    Object.assign(route, {
+        afi: 1,
+        safi: 1,
+        rd: '0:0',
+        ip: prefix,
+        mask: 24,
+        pathId,
+        nlriDetail: { prefix, length: 24, pathId, rd: '0:0' }
+    });
+    route.assignRouteAttr({
+        origin: 'IGP',
+        asPath: '65001',
+        nextHop: '192.0.2.254',
+        localPref: 100,
+        med: 0,
+        communities: []
+    });
+    route.setRouteTlvs([{ name: 'VRF/Table Name', value: 'worker-cache' }]);
+    route.markActive(owner.getRibEpoch(1, 1, BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN));
+    return route;
+}
+
+function applyBatch(batchId, mutations) {
+    return store.applyBatch({ batchId, createdAtMs: Date.now(), mutations });
+}
+
+const preRouteA = makeRoute('203.0.113.0', 1);
+const preRouteB = makeRoute('203.0.114.0', 2);
+applyBatch('seed-pre-in', [
+    buildConnectionMutation(bmpSession, 'connection_open'),
+    buildScopeMutation(bmpSession, owner, 1, 1, BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, 'scope_open', {
+        kind: 'peer',
+        state: 'syncing'
+    }),
+    buildRouteUpsertMutation(bmpSession, owner, preRouteA, 1, 1, BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, {
+        kind: 'peer',
+        scopeState: 'syncing'
+    }),
+    buildRouteUpsertMutation(bmpSession, owner, preRouteB, 1, 1, BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, {
+        kind: 'peer',
+        scopeState: 'syncing'
+    })
 ]);
-worker.routeAssuranceService = new BmpRouteAssuranceService();
-worker.routeUpdateAggregator = {
-    enqueueRouteUpdate() {},
-    enqueueInstanceRouteUpdate() {}
-};
-worker.scheduleRouteUpdateFlush = () => {};
-worker.messageHandler = {
-    sendSuccessResponse(messageId, data, msg) {
-        responses.push({ messageId, data, msg });
+
+const worker = Object.create(BmpWorker.prototype);
+Object.assign(worker, {
+    bmpSessionMap: new Map(),
+    persistenceFailure: null,
+    persistenceReader: null,
+    routeAssuranceService: new BmpRouteAssuranceService(),
+    routeAssuranceFilters: {},
+    routeAssuranceRebuildScheduled: false,
+    persistence: {
+        async fence() {},
+        async queryRoutes(query) {
+            persistenceQueries.push({ ...query });
+            // Force small real-SQLite pages so cursor traversal is observable.
+            return store.queryRoutes({ ...query, pageSize: Math.min(1, Number(query.pageSize) || 1) });
+        }
     },
-    sendErrorResponse(messageId, msg) {
-        throw new Error(`${messageId}: ${msg}`);
+    messageHandler: {
+        sendSuccessResponse(messageId, data, msg) {
+            responses.push({ messageId, data, msg });
+        },
+        sendErrorResponse(messageId, msg) {
+            throw new Error(`${messageId}: ${msg}`);
+        }
     }
-};
+});
 
 async function waitForRouteAssuranceRebuild() {
     await new Promise(resolve => setImmediate(resolve));
@@ -63,34 +119,67 @@ async function waitForRouteAssuranceRebuild() {
 }
 
 async function verifyWorkerCache() {
-    await worker.getRouteAssurance('first', { page: 1, pageSize: 1 });
-    await worker.getRouteAssurance('second', { page: 2, pageSize: 1 });
-    assert.equal(responses[0].data.summary.cacheHit, false);
+    await worker.getRouteAssurance('first', { page: 1, pageSize: 25 });
+    assert.equal(responses[0].data.summary.categoryCounts['inbound-gap'], 2);
+    assert.equal(responses[0].data.summary.cacheHit, true);
+    assert.equal(worker.routeAssuranceService.getStatus().dataMode, 'persisted');
+    assert.equal(persistenceQueries.length, 2, 'initial bootstrap must consume both SQLite cursor pages');
+    assert.equal(persistenceQueries[0].cursor, null);
+    assert.ok(persistenceQueries[1].cursor);
+
+    await worker.getRouteAssurance('second', { page: 1, pageSize: 25 });
     assert.equal(responses[1].data.summary.cacheHit, true);
+    assert.equal(persistenceQueries.length, 2, 'same analysis query must reuse the persisted snapshot');
 
-    const revisionBeforeUpdate = worker.routeAssuranceService.getStats().dataRevision;
-    worker.enqueueRouteUpdateEvent({ changedCount: 1 });
-    assert.equal(worker.routeAssuranceService.getStats().dataRevision, revisionBeforeUpdate + 1);
-    await waitForRouteAssuranceRebuild();
-    await worker.getRouteAssurance('after-update', { page: 1, pageSize: 1 });
-    assert.equal(responses[2].data.summary.cacheHit, true);
-    assert.equal(responses[2].data.summary.dataRevision, revisionBeforeUpdate + 1);
+    const postRoute = makeRoute('203.0.113.0', 1);
+    const committedPostIn = applyBatch('commit-post-in', [
+        buildScopeMutation(bmpSession, owner, 1, 1, BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN, 'scope_open', {
+            kind: 'peer',
+            state: 'syncing'
+        }),
+        buildRouteUpsertMutation(bmpSession, owner, postRoute, 1, 1, BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN, {
+            kind: 'peer',
+            scopeState: 'syncing'
+        })
+    ]);
+    assert.equal(committedPostIn.deltas.length, 1);
+    const revisionBeforeDelta = worker.routeAssuranceService.getStats().dataRevision;
+    worker.handleCommittedPersistenceResult(committedPostIn);
+    assert.equal(worker.routeAssuranceService.getStats().dataRevision, revisionBeforeDelta + 1);
 
-    const revisionBeforeInstanceUpdate = worker.routeAssuranceService.getStats().dataRevision;
-    worker.enqueueInstanceRouteUpdateEvent({ changedCount: 1 });
-    assert.equal(worker.routeAssuranceService.getStats().dataRevision, revisionBeforeInstanceUpdate + 1);
-    await waitForRouteAssuranceRebuild();
+    await worker.getRouteAssurance('after-committed-delta', { page: 1, pageSize: 25 });
+    assert.equal(responses[2].data.summary.categoryCounts['inbound-gap'], 1);
+    assert.equal(responses[2].data.summary.categoryCounts['not-selected'], 1);
+    assert.equal(persistenceQueries.length, 2, 'committed route delta must update the cache without rescanning SQLite');
 
-    const revisionBeforeSessionClose = worker.routeAssuranceService.getStats().dataRevision;
-    const closingSession = new BmpSession(worker.messageHandler, worker);
-    closingSession.closeSession();
-    assert.equal(worker.routeAssuranceService.getStats().dataRevision, revisionBeforeSessionClose + 1);
+    applyBatch('post-in-scope-stale', [
+        buildScopeMutation(bmpSession, owner, 1, 1, BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN, 'scope_stale', {
+            kind: 'peer',
+            state: 'stale',
+            reason: 'ci-scope-stale'
+        })
+    ]);
+    const revisionBeforeScopeChange = worker.routeAssuranceService.getStats().dataRevision;
+    worker.invalidateRouteAssurance('persistence-scope_stale');
+    assert.equal(worker.routeAssuranceService.state, 'dirty');
+    assert.equal(worker.routeAssuranceService.getStats().dataRevision, revisionBeforeScopeChange + 1);
     await waitForRouteAssuranceRebuild();
+    assert.equal(worker.routeAssuranceService.state, 'ready');
+    assert.equal(persistenceQueries.length, 4, 'scope-wide state change must rebuild from current SQLite rows');
+
+    await worker.getRouteAssurance('after-scope-rebuild', { page: 1, pageSize: 25 });
+    assert.equal(responses[3].data.summary.categoryCounts['inbound-gap'], 2);
+    assert.equal(responses[3].data.summary.categoryCounts['not-selected'], 0);
+    assert.equal(responses[3].data.summary.cacheHit, true);
 }
 
 verifyWorkerCache()
-    .then(() => console.log('BMP Route Assurance worker cache integration tests passed'))
+    .then(() => console.log('BMP Route Assurance SQLite worker cache integration tests passed'))
     .catch(error => {
         console.error(error);
         process.exitCode = 1;
+    })
+    .finally(() => {
+        store.close();
+        fs.rmSync(tempDir, { recursive: true, force: true });
     });

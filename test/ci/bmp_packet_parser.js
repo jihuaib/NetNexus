@@ -170,14 +170,19 @@ function collectNodes(node, predicate, result = []) {
 const initiation = bmpMessage(
     BmpConst.BMP_MSG_TYPE.INITIATION,
     Buffer.concat([
+        tlv(BmpConst.BMP_INITIATION_TLV_TYPE.STRING, Buffer.from('ci-free-form')),
         tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME, Buffer.from('ci-bmp')),
         tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC, Buffer.from('BMP parser CI'))
     ])
 );
+assert.equal(BmpConst.BMP_INITIATION_TLV_TYPE.STRING, 0, 'RFC 7854 String TLV type must be 0');
+assert.equal(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC, 1, 'RFC 7854 sysDescr TLV type must be 1');
+assert.equal(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME, 2, 'RFC 7854 sysName TLV type must be 2');
 const parsedInitiation = parseBmpPacket(initiation);
 assert.equal(parsedInitiation.valid, true, parsedInitiation.error);
 assert.equal(parsedInitiation.typeName, 'INITIATION');
-assert.equal(parsedInitiation.payload.tlvs[0].valueText, 'ci-bmp');
+assert.equal(parsedInitiation.payload.tlvs[0].valueText, 'ci-free-form');
+assert.equal(parsedInitiation.payload.tlvs[1].valueText, 'ci-bmp');
 assert.ok(getBmpPacketSummary(parsedInitiation).includes('ci-bmp'), 'BMP summary should include initiation TLVs');
 
 const peerUp = bmpMessage(

@@ -37,7 +37,9 @@ export const BGP_ADDR_FAMILY = {
     IPV4_LABEL_UNICAST: 12,
     IPV6_LABEL_UNICAST: 13,
     LINK_STATE: 14,
-    LINK_STATE_VPN: 15
+    LINK_STATE_VPN: 15,
+    IPV4_MULTICAST: 16,
+    IPV6_MULTICAST: 17
 };
 
 export const BGP_QP_ROUTE_GROWTH_MODE = {
@@ -102,17 +104,21 @@ export const ADDRESS_FAMILY_NAME = {
     [BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST]: 'IPv4 Label',
     [BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST]: 'IPv6 Label',
     [BGP_ADDR_FAMILY.LINK_STATE]: 'Link-State',
-    [BGP_ADDR_FAMILY.LINK_STATE_VPN]: 'Link-State VPN'
+    [BGP_ADDR_FAMILY.LINK_STATE_VPN]: 'Link-State VPN',
+    [BGP_ADDR_FAMILY.IPV4_MULTICAST]: 'IPv4 Multicast',
+    [BGP_ADDR_FAMILY.IPV6_MULTICAST]: 'IPv6 Multicast'
 };
 
 export const getAddrFamilyType = (afi, safi) => {
     if (afi === 1 && safi === 1) return BGP_ADDR_FAMILY.IPV4_UNC;
+    if (afi === 1 && safi === 2) return BGP_ADDR_FAMILY.IPV4_MULTICAST;
     if (afi === 1 && safi === 128) return BGP_ADDR_FAMILY.VPNV4;
     if (afi === 1 && safi === 4) return BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
     if (afi === 1 && safi === 5) return BGP_ADDR_FAMILY.IPV4_MVPN;
     if (afi === 1 && safi === 133) return BGP_ADDR_FAMILY.IPV4_FLOWSPEC;
     if (afi === 1 && safi === 241) return BGP_ADDR_FAMILY.IPV4_QP;
     if (afi === 2 && safi === 1) return BGP_ADDR_FAMILY.IPV6_UNC;
+    if (afi === 2 && safi === 2) return BGP_ADDR_FAMILY.IPV6_MULTICAST;
     if (afi === 2 && safi === 128) return BGP_ADDR_FAMILY.VPNV6;
     if (afi === 2 && safi === 4) return BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST;
     if (afi === 2 && safi === 5) return BGP_ADDR_FAMILY.IPV6_MVPN;

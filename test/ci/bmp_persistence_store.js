@@ -68,6 +68,12 @@ function batch(batchId, mutations) {
     return { batchId, createdAtMs: Date.now(), mutations };
 }
 
+function makeStatisticsMutation(bmpSession, report, eventAtMs) {
+    const mutation = buildConnectionMutation(bmpSession, 'statistics', { eventAtMs });
+    mutation.statistics = report;
+    return mutation;
+}
+
 let store;
 try {
     const { bmpSession, owner } = makeContext();
@@ -76,7 +82,7 @@ try {
 
     store = new BmpPersistenceStore({ dbPath }).open();
     assert.equal(store.getStatus().journalMode, 'wal');
-    assert.equal(store.getStatus().schemaVersion, 7);
+    assert.equal(store.getStatus().schemaVersion, 8);
 
     const connectionOpen = buildConnectionMutation(bmpSession, 'connection_open', { eventAtMs: oldTimestamp });
     const scopeOpen = buildScopeMutation(bmpSession, owner, 1, 1, 2, 'scope_open', {
@@ -100,6 +106,14 @@ try {
     });
     const firstResult = store.applyBatch(batch('batch-1', [connectionOpen, scopeOpen, announceA, announceB]));
     assert.deepEqual(firstResult, { duplicate: false, applied: 4 });
+    assert.equal(firstResult.deltas.length, 2);
+    assert.deepEqual(
+        firstResult.deltas.map(delta => delta.classification),
+        ['announce', 'announce']
+    );
+    assert.equal(firstResult.deltas[0].previous, null);
+    assert.equal(firstResult.deltas[0].current.ip, '203.0.113.0');
+    assert.equal(firstResult.deltas[0].mutation.scope.ownerKey, announceA.scope.ownerKey);
     assert.deepEqual(store.applyBatch(batch('batch-1', [connectionOpen])), { duplicate: true, applied: 0 });
     assert.equal(
         Object.prototype.hasOwnProperty.call(JSON.parse(announceA.route.routeJson), 'asPath'),
@@ -114,7 +128,61 @@ try {
         true
     );
     assert.equal(routes.list.find(route => route.ip === '203.0.113.0').asPath, '65001');
+    assert.deepEqual(routes.list[0].source, {
+        localIp: bmpSession.localIp,
+        localPort: bmpSession.localPort,
+        remoteIp: bmpSession.remoteIp,
+        remotePort: bmpSession.remotePort,
+        sysName: bmpSession.sysName,
+        sysDesc: bmpSession.sysDesc
+    });
     assert.equal(store.queryRoutes({ afi: 1, safi: 1, prefix: '203.0.113' }).total, 1);
+    assert.equal(store.queryRoutes({ ownerKey: announceA.scope.ownerKey }).total, 2);
+    assert.equal(store.queryRoutes({ connectionId: announceA.connection.id }).total, 2);
+    assert.equal(store.queryRoutes({ prefixExact: '203.0.113.0' }).total, 1);
+    assert.equal(store.queryRoutes({ prefixLength: 24 }).total, 2);
+    assert.equal(store.queryRoutes({ prefixCidrs: ['203.0.114.0/24'] }).total, 1);
+    assert.equal(store.queryRoutes({ searchText: '192.0.2.1' }).total, 2);
+    assert.equal(store.queryRoutes({ routeIdentityText: 'ipv4 unicast' }).total, 2);
+    assert.equal(
+        store.queryRoutes({ routeIdentityText: '192.0.2.1' }).total,
+        0,
+        'Route Lens text matching must not select a route by path attributes'
+    );
+    assert.equal(store.queryRoutes({ prefixFilter: '203.0.113.0/24' }).total, 1);
+    assert.equal(store.queryRoutes({ prefixFilter: '203.0.113.0' }).total, 1);
+    assert.equal(store.queryRoutes({ prefixFilter: '203.0.11' }).total, 2);
+    assert.equal(store.queryRoutes({ prefixFilter: '192.0.2.1' }).total, 0, 'next-hop must not match prefixFilter');
+    assert.deepEqual(store.queryScopeSummary({ scopeId: announceA.scope.id }), {
+        active: 2,
+        stale: 0,
+        total: 2,
+        scopes: [
+            {
+                scopeId: announceA.scope.id,
+                sourceId: announceA.source.id,
+                connectionId: announceA.connection.id,
+                ownerKey: announceA.scope.ownerKey,
+                scopeKind: 'peer',
+                afi: 1,
+                safi: 1,
+                ribType: '2',
+                scopeState: 'syncing',
+                currentEpoch: 0,
+                eorEpoch: null,
+                staleReason: null,
+                active: 2,
+                stale: 0,
+                total: 2
+            }
+        ]
+    });
+    const routeScopeSnapshot = store.queryRouteScope({
+        routeQuery: { scopeId: announceA.scope.id, routeState: 'all', pageSize: 1 },
+        summaryQuery: { scopeId: announceA.scope.id }
+    });
+    assert.equal(routeScopeSnapshot.routes.list.length, 1);
+    assert.equal(routeScopeSnapshot.routes.total, routeScopeSnapshot.summary.total);
     assert.equal(routes.list[0].persistentRouteId.length, 64);
     const firstRouteCursorPage = store.queryRoutes({ routeState: 'all', pageSize: 1, includeTotal: false });
     assert.equal(firstRouteCursorPage.total, null);
@@ -126,8 +194,30 @@ try {
         cursor: firstRouteCursorPage.nextCursor
     });
     assert.notEqual(firstRouteCursorPage.list[0].persistentRouteId, secondRouteCursorPage.list[0].persistentRouteId);
+    const firstSeenRoutePage = store.queryRoutes({
+        routeState: 'all',
+        orderBy: 'firstSeen',
+        page: 1,
+        pageSize: 1
+    });
+    const secondFirstSeenRoutePage = store.queryRoutes({
+        routeState: 'all',
+        orderBy: 'firstSeen',
+        page: 2,
+        pageSize: 1
+    });
+    assert.equal(firstSeenRoutePage.nextCursor, null);
+    assert.notEqual(firstSeenRoutePage.list[0].persistentRouteId, secondFirstSeenRoutePage.list[0].persistentRouteId);
+    assert.throws(
+        () =>
+            store.queryRoutes({
+                orderBy: 'firstSeen',
+                cursor: firstRouteCursorPage.nextCursor
+            }),
+        /cannot be combined/
+    );
 
-    const beforeAttrHash = owner.getRouteAttrEntry(routeA).hash;
+    const beforeAttrHash = announceA.route.attrId;
     routeA.assignRouteAttr({ ...routeA.getRouteAttr(), nextHop: '192.0.2.2' });
     const replaceA = buildRouteUpsertMutation(bmpSession, owner, routeA, 1, 1, 2, {
         kind: 'peer',
@@ -137,7 +227,10 @@ try {
         previousAttrHash: beforeAttrHash
     });
     assert.equal(replaceA.eventType, 'replace');
-    store.applyBatch(batch('batch-2', [replaceA]));
+    const replaceResult = store.applyBatch(batch('batch-2', [replaceA]));
+    assert.equal(replaceResult.deltas[0].classification, 'replace');
+    assert.equal(replaceResult.deltas[0].previous.nextHop, '192.0.2.1');
+    assert.equal(replaceResult.deltas[0].current.nextHop, '192.0.2.2');
 
     owner.advanceRibEpoch(1, 1, 2);
     const nextScope = buildScopeMutation(bmpSession, owner, 1, 1, 2, 'scope_open', {
@@ -150,18 +243,23 @@ try {
         state: 'syncing',
         scopeState: 'syncing',
         isNewRoute: false,
-        previousAttrHash: owner.getRouteAttrEntry(routeA).hash
+        previousAttrHash: replaceA.route.attrId
     });
     const eor = buildScopeMutation(bmpSession, owner, 1, 1, 2, 'scope_eor', {
         kind: 'peer',
         state: 'ready'
     });
-    store.applyBatch(batch('batch-3', [nextScope, refreshA, eor]));
+    const refreshResult = store.applyBatch(batch('batch-3', [nextScope, refreshA, eor]));
+    assert.equal(refreshResult.deltas[0].classification, 'refresh');
 
     routes = store.queryRoutes({ routeState: 'all', pageSize: 10 });
     assert.equal(routes.total, 2);
     assert.equal(routes.list.find(route => route.ip === '203.0.113.0').routeState, 'active');
-    assert.equal(routes.list.find(route => route.ip === '203.0.114.0').routeState, 'stale');
+    const staleAfterEor = routes.list.find(route => route.ip === '203.0.114.0');
+    assert.equal(staleAfterEor.routeState, 'stale');
+    assert.equal(staleAfterEor.staleReason, 'refresh-pending');
+    assert.equal(staleAfterEor.staleEpoch, 1);
+    assert.ok(staleAfterEor.staleAt);
 
     // A BMP reconnect/application restart creates a new in-memory owner whose epoch starts at zero.
     // The persisted connection generation must reset the scope epoch without reviving unseen routes.
@@ -211,7 +309,10 @@ try {
         2,
         { kind: 'peer' }
     );
-    store.applyBatch(batch('batch-late-old-connection', [lateOldWithdraw]));
+    const lateWithdrawResult = store.applyBatch(batch('batch-late-old-connection', [lateOldWithdraw]));
+    assert.equal(lateWithdrawResult.deltas[0].classification, 'withdraw-noop');
+    assert.equal(lateWithdrawResult.deltas[0].projectionChanged, false);
+    assert.equal(lateWithdrawResult.deltas[0].current.ip, '203.0.113.0');
     routes = store.queryRoutes({ routeState: 'all', pageSize: 10 });
     assert.equal(routes.list.find(route => route.ip === '203.0.113.0').routeState, 'active');
 
@@ -289,6 +390,109 @@ try {
         duplicate: false,
         applied: 1
     });
+
+    const statisticsBase = {
+        client: {
+            localIp: bmpSession.localIp,
+            localPort: bmpSession.localPort,
+            remoteIp: bmpSession.remoteIp,
+            remotePort: bmpSession.remotePort
+        },
+        tlvs: []
+    };
+    const firstSessionReport = {
+        ...statisticsBase,
+        session: {
+            sessionType: 0,
+            sessionRd: '0:0',
+            sessionRdRaw: 'raw:0000000000000000',
+            sessionIp: '198.51.100.1',
+            sessionAs: 65001
+        },
+        statistics: [{ type: 0, value: 10 }],
+        updatedAt: '2026-01-01T00:00:00.000Z'
+    };
+    const latestSessionReport = {
+        ...firstSessionReport,
+        statistics: [{ type: 0, value: 20 }],
+        updatedAt: '2026-01-01T00:00:02.000Z'
+    };
+    const otherSessionReport = {
+        ...statisticsBase,
+        session: { sessionType: 0, sessionRd: '0:0', sessionIp: '198.51.100.2', sessionAs: 65002 },
+        statistics: [{ type: 0, value: 30 }],
+        updatedAt: '2026-01-01T00:00:03.000Z'
+    };
+    const instanceReport = {
+        ...statisticsBase,
+        instance: {
+            instanceType: 3,
+            instanceRd: '65000:100',
+            instanceRdRaw: 'raw:0000fde800000064',
+            vrfTableNames: ['blue']
+        },
+        statistics: [{ type: 14, value: 40 }],
+        updatedAt: '2026-01-01T00:00:04.000Z'
+    };
+    store.applyBatch(
+        batch('statistics-latest', [
+            makeStatisticsMutation(bmpSession, firstSessionReport, oldTimestamp + 1000),
+            makeStatisticsMutation(bmpSession, latestSessionReport, oldTimestamp + 2000),
+            makeStatisticsMutation(bmpSession, otherSessionReport, oldTimestamp + 3000),
+            makeStatisticsMutation(bmpSession, instanceReport, oldTimestamp + 4000)
+        ])
+    );
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM bmp_statistics_samples').get().count, 4);
+    assert.equal(
+        store.db.prepare("SELECT COUNT(*) AS count FROM bmp_statistics_latest WHERE report_kind = 'session'").get()
+            .count,
+        2,
+        'the latest projection must contain one row per logical report key'
+    );
+    const sessionReports = store.queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'session' });
+    assert.equal(sessionReports.length, 2);
+    assert.equal(
+        sessionReports.find(report => report.session.sessionIp === '198.51.100.1').statistics[0].value,
+        20,
+        'a newer sample must replace the previous sample for the same logical report key'
+    );
+    assert.equal(sessionReports.find(report => report.session.sessionIp === '198.51.100.2').statistics[0].value, 30);
+    assert.deepEqual(store.queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'instance' }), [
+        instanceReport
+    ]);
+    assert.deepEqual(store.queryStatisticsReports({ sourceId: 'missing-source', kind: 'session' }), []);
+    assert.throws(
+        () => store.queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'invalid' }),
+        /kind must be session or instance/
+    );
+
+    const corruptSample = store.db
+        .prepare(
+            `INSERT INTO bmp_statistics_samples(
+                source_id, connection_id, scope_id, report_kind, report_key,
+                observed_at_ms, source_timestamp_ms, statistics_json
+             ) VALUES (@sourceId, @connectionId, NULL, 'session', 'corrupt', @observedAtMs, NULL, '{')`
+        )
+        .run({
+            sourceId: connectionOpen.source.id,
+            connectionId: connectionOpen.connection.id,
+            observedAtMs: oldTimestamp + 5000
+        });
+    store.db
+        .prepare(
+            `INSERT INTO bmp_statistics_latest(source_id, report_kind, report_key, sample_id, observed_at_ms)
+             VALUES (@sourceId, 'session', 'corrupt', @sampleId, @observedAtMs)`
+        )
+        .run({
+            sourceId: connectionOpen.source.id,
+            sampleId: Number(corruptSample.lastInsertRowid),
+            observedAtMs: oldTimestamp + 5000
+        });
+    assert.equal(
+        store.queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'session' }).length,
+        2,
+        'malformed historical JSON must be ignored without failing the whole query'
+    );
     const expectedEventCountBeforeReopen = store.getStatus({ includeCounts: true }).routeEvents;
 
     store.close();
@@ -296,6 +500,16 @@ try {
     const reopened = new BmpPersistenceStore({ dbPath, readOnly: true }).open();
     assert.equal(reopened.queryRoutes({ routeState: 'all' }).total, 0);
     assert.equal(reopened.queryEvents({ pageSize: 100 }).total, expectedEventCountBeforeReopen);
+    assert.equal(
+        reopened
+            .queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'session' })
+            .find(report => report.session.sessionIp === '198.51.100.1').statistics[0].value,
+        20,
+        'latest statistics reports must remain queryable after closing and reopening the database'
+    );
+    assert.deepEqual(reopened.queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'instance' }), [
+        instanceReport
+    ]);
     reopened.close();
 
     const recoveryDbPath = path.join(tempDir, 'recovery.sqlite3');
@@ -354,8 +568,7 @@ try {
                 kind: 'peer',
                 state: 'syncing',
                 scopeState: 'syncing',
-                isNewRoute: false,
-                previousAttrHash: replayContext.owner.getRouteAttrEntry(replayRoute).hash
+                isNewRoute: undefined
             }),
             buildScopeMutation(replayContext.bmpSession, replayContext.owner, 1, 1, 2, 'scope_eor', {
                 kind: 'peer',
@@ -416,8 +629,7 @@ try {
             buildRouteUpsertMutation(refreshContext.bmpSession, refreshContext.owner, refreshKeptRoute, 1, 1, 2, {
                 kind: 'peer',
                 scopeState: 'syncing',
-                isNewRoute: false,
-                previousAttrHash: refreshContext.owner.getRouteAttrEntry(refreshKeptRoute).hash
+                isNewRoute: undefined
             })
         ])
     );
@@ -454,6 +666,66 @@ try {
     assert.equal(routesAfterRefreshTimeout.total, 1);
     assert.equal(routesAfterRefreshTimeout.list[0].ip, '198.22.0.0');
     refreshStore.close();
+
+    // A route can be both from an old epoch and inside a stale/down scope. Sweep
+    // must count each physical row once so duplicate predicates cannot consume
+    // the bounded batch limit.
+    const overlappingSweepContext = makeContext();
+    const overlappingSweepStore = new BmpPersistenceStore({
+        dbPath: path.join(tempDir, 'overlapping-sweep.sqlite3')
+    }).open();
+    const overlappingRoutes = [
+        makeRoute(overlappingSweepContext.owner, '198.24.0.0', 1, '192.0.2.50'),
+        makeRoute(overlappingSweepContext.owner, '198.24.1.0', 2, '192.0.2.50'),
+        makeRoute(overlappingSweepContext.owner, '198.24.2.0', 3, '192.0.2.50')
+    ];
+    overlappingSweepStore.applyBatch(
+        batch(
+            'overlapping-sweep-routes',
+            overlappingRoutes.map(route =>
+                buildRouteUpsertMutation(
+                    overlappingSweepContext.bmpSession,
+                    overlappingSweepContext.owner,
+                    route,
+                    1,
+                    1,
+                    2,
+                    { kind: 'peer', scopeState: 'syncing', isNewRoute: true, eventAtMs: oldTimestamp }
+                )
+            )
+        )
+    );
+    overlappingSweepContext.owner.advanceRibEpoch(1, 1, 2);
+    overlappingSweepStore.applyBatch(
+        batch('overlapping-sweep-stale', [
+            buildScopeMutation(
+                overlappingSweepContext.bmpSession,
+                overlappingSweepContext.owner,
+                1,
+                1,
+                2,
+                'scope_stale',
+                { kind: 'peer', state: 'stale', eventAtMs: oldTimestamp }
+            )
+        ])
+    );
+    const overlappingFirstSweep = overlappingSweepStore.sweep({
+        staleBeforeMs: Date.now(),
+        refreshTimeoutBeforeMs: 0,
+        eventsBeforeMs: 0,
+        routeLimit: 2
+    });
+    assert.equal(overlappingFirstSweep.routes, 2);
+    assert.equal(overlappingSweepStore.queryRoutes({ routeState: 'all' }).total, 1);
+    const overlappingSecondSweep = overlappingSweepStore.sweep({
+        staleBeforeMs: Date.now(),
+        refreshTimeoutBeforeMs: 0,
+        eventsBeforeMs: 0,
+        routeLimit: 2
+    });
+    assert.equal(overlappingSecondSweep.routes, 1);
+    assert.equal(overlappingSweepStore.queryRoutes({ routeState: 'all' }).total, 0);
+    overlappingSweepStore.close();
 
     // Projection changes are epoch-owned. Old EOR/open/announce/withdraw mutations may remain
     // queryable as history, but must not roll a newer refresh backwards or touch its routes.
@@ -739,10 +1011,79 @@ try {
     assert.equal(purgeEvent.reason, 'manual-stale-purge');
     purgeStore.close();
 
+    const directPurgeDbPath = path.join(tempDir, 'direct-purge.sqlite3');
+    const directPurgeContext = makeContext();
+    const directPurgeRoute = makeRoute(directPurgeContext.owner, '198.21.0.0', 8, '192.0.2.12');
+    const directPurgeStore = new BmpPersistenceStore({ dbPath: directPurgeDbPath }).open();
+    const genericUpsert = buildRouteUpsertMutation(
+        directPurgeContext.bmpSession,
+        directPurgeContext.owner,
+        directPurgeRoute,
+        1,
+        1,
+        2,
+        { kind: 'peer', state: 'stale', scopeState: 'stale' }
+    );
+    assert.equal(genericUpsert.eventType, 'upsert');
+    const genericUpsertResult = directPurgeStore.applyBatch(batch('direct-purge-announce', [genericUpsert]));
+    assert.equal(genericUpsertResult.deltas[0].classification, 'announce');
+    assert.equal(directPurgeStore.queryEvents({ eventType: 'announce' }).total, 1);
+    assert.deepEqual(directPurgeStore.queryScopeSummary({ ownerKey: genericUpsert.scope.ownerKey }), {
+        active: 0,
+        stale: 1,
+        total: 1,
+        scopes: [
+            {
+                scopeId: genericUpsert.scope.id,
+                sourceId: genericUpsert.source.id,
+                connectionId: genericUpsert.connection.id,
+                ownerKey: genericUpsert.scope.ownerKey,
+                scopeKind: 'peer',
+                afi: 1,
+                safi: 1,
+                ribType: '2',
+                scopeState: 'stale',
+                currentEpoch: 0,
+                eorEpoch: null,
+                staleReason: null,
+                active: 0,
+                stale: 1,
+                total: 1
+            }
+        ]
+    });
+    const directPurge = directPurgeStore.purgeStaleRoutes({
+        scopeId: genericUpsert.scope.id,
+        reason: 'ci-direct-purge'
+    });
+    assert.equal(directPurge.purged, 1);
+    assert.equal(directPurge.hasMore, false);
+    assert.equal(directPurge.routes[0].ip, '198.21.0.0');
+    assert.equal(directPurge.deltas[0].classification, 'purge');
+    assert.equal(directPurge.deltas[0].reason, 'ci-direct-purge');
+    assert.ok(directPurge.deltas[0].eventId > 0);
+    assert.equal(directPurgeStore.queryRoutes({ routeState: 'all' }).total, 0);
+    const directPurgeEvents = directPurgeStore.queryEvents({ eventType: 'purge' });
+    assert.equal(directPurgeEvents.total, 1);
+    assert.equal(directPurgeEvents.list[0].reason, 'ci-direct-purge');
+    directPurgeStore.close();
+
     const migrationDbPath = path.join(tempDir, 'migration.sqlite3');
     const migrationContext = makeContext();
     const migrationRoute = makeRoute(migrationContext.owner, '198.24.0.0', 9, '192.0.2.50');
+    const migrationStatisticsReport = {
+        client: { remoteIp: migrationContext.bmpSession.remoteIp },
+        session: { sessionType: 0, sessionRd: '0:0', sessionIp: '198.51.100.9', sessionAs: 65009 },
+        statistics: [{ type: 0, value: 99 }],
+        tlvs: [],
+        updatedAt: '2026-01-02T00:00:00.000Z'
+    };
     let migrationStore = new BmpPersistenceStore({ dbPath: migrationDbPath }).open();
+    const migrationStatistics = makeStatisticsMutation(
+        migrationContext.bmpSession,
+        migrationStatisticsReport,
+        oldTimestamp
+    );
     migrationStore.applyBatch(
         batch('migration-route', [
             buildRouteUpsertMutation(migrationContext.bmpSession, migrationContext.owner, migrationRoute, 1, 1, 2, {
@@ -752,6 +1093,7 @@ try {
             })
         ])
     );
+    migrationStore.applyBatch(batch('migration-statistics', [migrationStatistics]));
     migrationStore.db.pragma('foreign_keys = OFF');
     migrationStore.db.exec(`
         DROP INDEX idx_bmp_current_routes_connection;
@@ -801,6 +1143,27 @@ try {
         DROP INDEX idx_bmp_scopes_cleanup_pending;
         ALTER TABLE bmp_rib_scopes DROP COLUMN refresh_started_ms;
         ALTER TABLE bmp_rib_scopes DROP COLUMN cleanup_pending_epoch;
+
+        DROP TABLE bmp_statistics_latest;
+        CREATE TABLE bmp_statistics_samples_legacy (
+            sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id TEXT NOT NULL,
+            connection_id TEXT NOT NULL,
+            scope_id TEXT,
+            observed_at_ms INTEGER NOT NULL,
+            source_timestamp_ms INTEGER,
+            statistics_json TEXT NOT NULL,
+            FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
+            FOREIGN KEY (connection_id) REFERENCES bmp_connections(connection_id),
+            FOREIGN KEY (scope_id) REFERENCES bmp_rib_scopes(scope_id)
+        );
+        INSERT INTO bmp_statistics_samples_legacy(
+            sample_id, source_id, connection_id, scope_id, observed_at_ms, source_timestamp_ms, statistics_json
+        )
+        SELECT sample_id, source_id, connection_id, scope_id, observed_at_ms, source_timestamp_ms, statistics_json
+          FROM bmp_statistics_samples;
+        DROP TABLE bmp_statistics_samples;
+        ALTER TABLE bmp_statistics_samples_legacy RENAME TO bmp_statistics_samples;
         PRAGMA user_version = 4;
     `);
     migrationStore.close();
@@ -809,8 +1172,13 @@ try {
         error => error.code === 'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED'
     );
     migrationStore = new BmpPersistenceStore({ dbPath: migrationDbPath }).open();
-    assert.equal(migrationStore.getStatus().schemaVersion, 7);
+    assert.equal(migrationStore.getStatus().schemaVersion, 8);
     assert.equal(migrationStore.queryRoutes({ routeState: 'all' }).total, 1);
+    assert.deepEqual(
+        migrationStore.queryStatisticsReports({ sourceId: migrationStatistics.source.id, kind: 'session' }),
+        [migrationStatisticsReport],
+        'migration must safely classify existing statistics JSON and rebuild the latest projection'
+    );
     assert.equal(
         migrationStore.db.prepare('SELECT connection_id FROM bmp_current_routes').get().connection_id,
         migrationStore.db.prepare('SELECT connection_id FROM bmp_route_events LIMIT 1').get().connection_id
@@ -824,15 +1192,16 @@ try {
     assert.equal(migratedIndexes.has('idx_bmp_scopes_refresh_since'), true);
     assert.equal(migratedIndexes.has('idx_bmp_scopes_cleanup_pending'), true);
     assert.equal(migratedIndexes.has('idx_bmp_current_routes_connection'), true);
+    assert.equal(migratedIndexes.has('idx_bmp_statistics_report_time'), true);
     migrationStore.close();
 
     const invalidSchemaDbPath = path.join(tempDir, 'invalid-schema.sqlite3');
     const invalidSchemaStore = new BmpPersistenceStore({ dbPath: invalidSchemaDbPath }).open();
-    invalidSchemaStore.db.exec('DROP TABLE bmp_statistics_samples');
+    invalidSchemaStore.db.exec('DROP TABLE bmp_statistics_latest');
     invalidSchemaStore.close();
     assert.throws(
         () => new BmpPersistenceStore({ dbPath: invalidSchemaDbPath, readOnly: true }).open(),
-        /missing required table bmp_statistics_samples/
+        /missing required table bmp_statistics_latest/
     );
 
     console.log('BMP SQLite persistence tests passed');

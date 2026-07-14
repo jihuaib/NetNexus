@@ -67,7 +67,7 @@ class BmpApp {
 
     async handleSaveBmpConfig(event, config) {
         try {
-            this.store.set(this.bmpConfigFileKey, config);
+            this.store.set(this.bmpConfigFileKey, { ...config, persistenceEnabled: true });
             return successResponse(null, 'BMP配置文件保存成功');
         } catch (error) {
             logger.error('Error saving BMP config:', error.message);
@@ -79,13 +79,26 @@ class BmpApp {
         this.serverDeploymentConfig = config;
     }
 
+    async handleLogLevelChange(logLevel) {
+        this.logLevel = logLevel;
+        const reader = this.offlinePersistenceReader;
+        if (!reader || typeof reader.setLogLevel !== 'function') {
+            return;
+        }
+        try {
+            await reader.setLogLevel(logLevel);
+        } catch (error) {
+            logger.warn(`同步离线 BMP SQLite 日志级别失败: ${error.message}`);
+        }
+    }
+
     async handleLoadBmpConfig() {
         try {
             const config = this.store.get(this.bmpConfigFileKey);
             if (!config) {
                 return successResponse(null, 'BMP配置文件不存在');
             }
-            return successResponse(config, 'BMP配置文件加载成功');
+            return successResponse({ ...config, persistenceEnabled: true }, 'BMP配置文件加载成功');
         } catch (error) {
             logger.error('Error loading BMP config:', error.message);
             return errorResponse(error.message);
@@ -165,11 +178,16 @@ class BmpApp {
         client.close({ suppressErrors: true }).catch(() => {});
     }
 
+    createPersistenceClient(options) {
+        return new BmpPersistenceClient(options);
+    }
+
     createOfflinePersistenceReader() {
         let client;
-        client = new BmpPersistenceClient({
+        client = this.createPersistenceClient({
             dbPath: this.persistenceDbPath,
             readOnly: true,
+            logLevel: this.logLevel,
             onError: error => this.handleOfflinePersistenceFailure(client, error)
         });
         return client;
@@ -192,7 +210,10 @@ class BmpApp {
                 throw error;
             }
 
-            const migrator = new BmpPersistenceClient({ dbPath: this.persistenceDbPath });
+            const migrator = this.createPersistenceClient({
+                dbPath: this.persistenceDbPath,
+                logLevel: this.logLevel
+            });
             try {
                 await migrator.open();
             } finally {
@@ -350,7 +371,8 @@ class BmpApp {
 
             bmpConfigData = {
                 ...bmpConfigData,
-                persistenceEnabled: bmpConfigData.persistenceEnabled !== false,
+                // SQLite now is the BMP RIB rather than an optional history sink.
+                persistenceEnabled: true,
                 persistenceDbPath: this.persistenceDbPath,
                 persistenceBatchSize: Number(bmpConfigData.persistenceBatchSize) || 2000,
                 persistenceBatchBytes: Number(bmpConfigData.persistenceBatchBytes) || 2 * 1024 * 1024,
@@ -364,7 +386,7 @@ class BmpApp {
                 persistenceMaxDbBytes: Number(bmpConfigData.persistenceMaxDbBytes) || 20 * 1024 * 1024 * 1024
             };
             await this.closeOfflinePersistenceReader();
-            this.runningPersistenceEnabled = bmpConfigData.persistenceEnabled;
+            this.runningPersistenceEnabled = true;
             logger.info(`${JSON.stringify({ ...bmpConfigData, persistenceDbPath: '[user-data]/bmp/bmp.sqlite3' })}`);
 
             // 获取日志级别配置

@@ -1,9 +1,6 @@
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const { toSerializableTlvs } = require('../../utils/bmpUtils');
-const { getRoutePrefixIndexKeys } = require('../../utils/routePrefixUtils');
-const BmpConst = require('../../const/bmpConst');
 const BgpConst = require('../../const/bgpConst');
-const { BmpRouteAttrStore, DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
 
 class BmpBgpInstance {
     constructor(bmpSession) {
@@ -41,9 +38,8 @@ class BmpBgpInstance {
         this.addPathSendMap = new Map();
         this.isAddPath = false;
 
-        this.bgpRoutes = new Map();
-        this.attrStore = new BmpRouteAttrStore();
-        this.routePrefixIndex = new Map();
+        // Full Loc-RIB route payloads are persisted in SQLite. The instance keeps
+        // only lifecycle metadata and a small cached summary.
         this.routeSummary = { active: 0, stale: 0, total: 0 };
         this.ribEpoch = 0;
         this.ribStaleMetadata = null;
@@ -115,146 +111,17 @@ class BmpBgpInstance {
         };
     }
 
-    static normalizeRouteState(routeState) {
-        return routeState === BmpConst.BMP_ROUTE_STATE.STALE
-            ? BmpConst.BMP_ROUTE_STATE.STALE
-            : BmpConst.BMP_ROUTE_STATE.ACTIVE;
-    }
-
     getRouteSummary() {
         return { ...this.routeSummary };
     }
 
-    updateSummaryStateCount(routeState, delta) {
-        const state = BmpBgpInstance.normalizeRouteState(routeState);
-        if (state === BmpConst.BMP_ROUTE_STATE.STALE) {
-            this.routeSummary.stale = Math.max(0, this.routeSummary.stale + delta);
-        } else {
-            this.routeSummary.active = Math.max(0, this.routeSummary.active + delta);
-        }
-    }
-
-    recordRouteAdd(route) {
-        this.routeSummary.total += 1;
-        this.updateSummaryStateCount(route.routeState, 1);
-    }
-
-    recordRouteDelete(route) {
-        this.routeSummary.total = Math.max(0, this.routeSummary.total - 1);
-        this.updateSummaryStateCount(route.routeState, -1);
-    }
-
-    recordRouteStateChange(previousState, nextState) {
-        const previous = BmpBgpInstance.normalizeRouteState(previousState);
-        const next = BmpBgpInstance.normalizeRouteState(nextState);
-        if (previous === next) {
-            return;
-        }
-
-        this.updateSummaryStateCount(previous, -1);
-        this.updateSummaryStateCount(next, 1);
-    }
-
-    addRouteKeyToPrefixIndex(prefixKey, routeKey) {
-        const existing = this.routePrefixIndex.get(prefixKey);
-        if (!existing) {
-            this.routePrefixIndex.set(prefixKey, routeKey);
-            return;
-        }
-
-        if (existing instanceof Set) {
-            existing.add(routeKey);
-            return;
-        }
-
-        if (existing !== routeKey) {
-            this.routePrefixIndex.set(prefixKey, new Set([existing, routeKey]));
-        }
-    }
-
-    removeRouteKeyFromPrefixIndex(prefixKey, routeKey) {
-        const existing = this.routePrefixIndex.get(prefixKey);
-        if (!existing) {
-            return;
-        }
-
-        if (!(existing instanceof Set)) {
-            if (existing === routeKey) {
-                this.routePrefixIndex.delete(prefixKey);
-            }
-            return;
-        }
-
-        existing.delete(routeKey);
-        if (existing.size === 0) {
-            this.routePrefixIndex.delete(prefixKey);
-            return;
-        }
-
-        if (existing.size === 1) {
-            this.routePrefixIndex.set(prefixKey, existing.values().next().value);
-        }
-    }
-
-    addRouteToPrefixIndex(routeKey, route) {
-        getRoutePrefixIndexKeys(route).forEach(prefixKey => {
-            this.addRouteKeyToPrefixIndex(prefixKey, routeKey);
-        });
-    }
-
-    removeRouteFromPrefixIndex(routeKey, route) {
-        getRoutePrefixIndexKeys(route).forEach(prefixKey => {
-            this.removeRouteKeyFromPrefixIndex(prefixKey, routeKey);
-        });
-    }
-
-    getRouteKeysByPrefix(prefixKey) {
-        const routeKeys = this.routePrefixIndex.get(prefixKey);
-        if (!routeKeys) {
-            return [];
-        }
-        return routeKeys instanceof Set ? routeKeys : [routeKeys];
-    }
-
-    assignRouteAttr(route, attr) {
-        if (!route) {
-            return null;
-        }
-
-        const nextAttrId = this.attrStore.intern(attr);
-        const prevAttrId = route.attrId;
-
-        if (prevAttrId === nextAttrId) {
-            this.attrStore.release(nextAttrId);
-            route._inlineAttr = null;
-            return nextAttrId;
-        }
-
-        if (prevAttrId) {
-            this.attrStore.release(prevAttrId);
-        }
-
-        route.attrId = nextAttrId;
-        route._inlineAttr = null;
-        return nextAttrId;
-    }
-
-    releaseRouteAttr(route) {
-        if (!route?.attrId) {
-            return;
-        }
-
-        this.attrStore.release(route.attrId);
-        route.attrId = null;
-        route._inlineAttr = null;
-    }
-
-    getRouteAttr(route) {
-        return this.attrStore.get(route?.attrId) || route?.getInlineRouteAttr?.() || { ...DEFAULT_BMP_ROUTE_ATTR };
-    }
-
-    getRouteAttrEntry(route) {
-        return this.attrStore.getEntry(route?.attrId);
+    setRouteSummary(summary = {}) {
+        this.routeSummary = {
+            active: Math.max(0, Number(summary.active) || 0),
+            stale: Math.max(0, Number(summary.stale) || 0),
+            total: Math.max(0, Number(summary.total) || 0)
+        };
+        return this.getRouteSummary();
     }
 
     getRibEpoch() {
@@ -321,13 +188,6 @@ class BmpBgpInstance {
     }
 
     closeInstance() {
-        if (typeof this.bgpRoutes.clearSilently === 'function') {
-            this.bgpRoutes.clearSilently();
-        } else {
-            this.bgpRoutes.clear();
-        }
-        this.attrStore.clear();
-        this.routePrefixIndex.clear();
         this.routeSummary = { active: 0, stale: 0, total: 0 };
         this.recvAddPathMap.clear();
         this.sendAddPathMap.clear();

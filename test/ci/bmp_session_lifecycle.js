@@ -1,5 +1,4 @@
 const assert = require('assert');
-const path = require('path');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
 const BmpConst = require('../../electron/const/bmpConst');
@@ -70,6 +69,8 @@ assert.strictEqual(
     'same-key reconnect should emit one termination for the old BMP session'
 );
 assert.strictEqual(reconnectTerminationEvents[0].payload.data.sysName, 'old-router');
+assert.strictEqual(reconnectTerminationEvents[0].payload.data.connectionState, 'closed');
+assert.strictEqual(reconnectTerminationEvents[0].payload.data.isOnline, false);
 
 const replacementKey = BmpSession.makeKey(
     replacement.localIp,
@@ -82,6 +83,8 @@ worker.removeBmpSessionByKey(replacementKey);
 
 const terminationEvents = events.filter(event => event.type === BmpConst.BMP_EVT_TYPES.TERMINATION);
 assert.strictEqual(terminationEvents.length, 2, 'BMP session removal should be idempotent after the first cleanup');
+assert.strictEqual(terminationEvents[1].payload.data.connectionState, 'closed');
+assert.strictEqual(terminationEvents[1].payload.data.isOnline, false);
 assert.strictEqual(worker.bmpSessionMap.has(replacementKey), false, 'removed BMP session should be deleted from map');
 
 console.log('BMP session lifecycle tests passed');

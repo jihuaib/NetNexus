@@ -43,20 +43,35 @@ function expectPublicLocRibRoute(route) {
     ).toBe(true);
 }
 
-async function expectAutoHidingScrollbar(locator) {
-    const isActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-active'));
-    const thumbColor = () =>
-        locator.evaluate(element => getComputedStyle(element, '::-webkit-scrollbar-thumb').backgroundColor);
+async function expectAutoHidingHorizontalScrollbar(locator) {
+    const isXActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-x-active'));
+    const isYActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-y-active'));
 
-    await expect.poll(isActive, { timeout: 2500 }).toBe(false);
-    await expect.poll(thumbColor).toBe('rgba(0, 0, 0, 0)');
+    await expect.poll(isXActive, { timeout: 2500 }).toBe(false);
+    await expect.poll(isYActive).toBe(false);
 
-    await locator.dispatchEvent('scroll');
-    await expect.poll(isActive).toBe(true);
-    await expect.poll(thumbColor).not.toBe('rgba(0, 0, 0, 0)');
+    await locator.hover();
+    await locator.dispatchEvent('pointermove');
+    await expect.poll(isXActive).toBe(false);
+    await expect.poll(isYActive).toBe(false);
 
-    await expect.poll(isActive, { timeout: 2500 }).toBe(false);
-    await expect.poll(thumbColor).toBe('rgba(0, 0, 0, 0)');
+    const scrollPosition = await locator.evaluate(element => {
+        if (element.scrollWidth <= element.clientWidth && element.firstElementChild) {
+            element.firstElementChild.style.minWidth = `${element.clientWidth + 100}px`;
+        }
+        const maximumScrollLeft = element.scrollWidth - element.clientWidth;
+        const previousScrollLeft = element.scrollLeft;
+        element.scrollLeft = previousScrollLeft < maximumScrollLeft ? previousScrollLeft + 20 : previousScrollLeft - 20;
+        element.dispatchEvent(new Event('scroll'));
+        return { maximumScrollLeft, previousScrollLeft, scrollLeft: element.scrollLeft };
+    });
+    expect(scrollPosition.maximumScrollLeft).toBeGreaterThan(0);
+    expect(scrollPosition.scrollLeft).not.toBe(scrollPosition.previousScrollLeft);
+    await expect.poll(isXActive).toBe(true);
+    await expect.poll(isYActive).toBe(false);
+
+    await expect.poll(isXActive, { timeout: 2500 }).toBe(false);
+    await expect.poll(isYActive).toBe(false);
 }
 
 async function expectBmpRouteLayout(page, pageTestId, detailTableTestId, routeTableTestId) {
@@ -169,10 +184,8 @@ async function expectBmpRouteLayout(page, pageTestId, detailTableTestId, routeTa
 
     const detailScrollbar = pageRoot.locator(`[data-testid="${detailTableTestId}"]:visible .nn-table-content`).first();
     const tabsScrollbar = pageRoot.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first();
-    // Keep the pointer away from both scrollbars: the thumb hover rule is intentionally
-    // visible even while the auto-hide state itself is inactive.
-    await page.mouse.move(0, 0);
-    await Promise.all([expectAutoHidingScrollbar(detailScrollbar), expectAutoHidingScrollbar(tabsScrollbar)]);
+    await expectAutoHidingHorizontalScrollbar(detailScrollbar);
+    await expectAutoHidingHorizontalScrollbar(tabsScrollbar);
 }
 
 test.describe('BMP pages', () => {

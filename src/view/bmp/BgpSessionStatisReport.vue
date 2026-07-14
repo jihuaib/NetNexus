@@ -1,5 +1,5 @@
 <template>
-    <div class="nn-container bmp-full-page">
+    <div class="nn-container bmp-full-page" data-testid="bmp-session-statistics-page">
         <nn-row class="bmp-full-row">
             <nn-col :span="24">
                 <nn-card title="BGP会话统计" class="bmp-full-card">
@@ -10,12 +10,18 @@
                             class="client-tabs"
                             :tab-bar-style="clientTabBarStyle"
                         >
-                            <nn-tab-pane
-                                v-for="client in clientList"
-                                :key="`${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`"
-                            >
+                            <nn-tab-pane v-for="client in clientList" :key="getClientKey(client)">
                                 <template #tab>
-                                    <span class="client-tab-label">{{ formatClientTab(client) }}</span>
+                                    <span class="client-tab-label" data-testid="bmp-statistics-client-tab-label">
+                                        <span class="client-tab-address">{{ formatClientTab(client) }}</span>
+                                        <span
+                                            class="client-tab-status"
+                                            :class="{ offline: !isClientOnline(client) }"
+                                            data-testid="bmp-statistics-client-status"
+                                        >
+                                            {{ formatClientConnectionState(client) }}
+                                        </span>
+                                    </span>
                                 </template>
                                 <div v-if="getClientReports(client).length > 0" class="bmp-inner-tabs-shell">
                                     <nn-tabs class="bmp-inner-tabs">
@@ -117,6 +123,19 @@
         return client.remoteIp || '-';
     };
 
+    const getClientOnlineState = client => {
+        if (typeof client?.isOnline === 'boolean') return client.isOnline;
+        if (typeof client?.online === 'boolean') return client.online;
+        const state = String(client?.connectionState || '').toLowerCase();
+        if (['offline', 'disconnected', 'closed', 'down'].includes(state)) return false;
+        if (['online', 'connected', 'open', 'up'].includes(state)) return true;
+        return null;
+    };
+
+    const isClientOnline = client => getClientOnlineState(client) ?? true;
+
+    const formatClientConnectionState = client => (isClientOnline(client) ? '已连接' : '已断开');
+
     const columns = [
         {
             title: 'Type',
@@ -154,16 +173,37 @@
     const detailsDrawerTitle = ref('');
     const currentDetails = ref(null);
 
+    const getClientSourceId = client => client?.persistentSourceId || client?.sourceId || null;
+
+    const getClientTransportKey = client =>
+        `${client?.localIp || ''}|${client?.localPort || ''}|${client?.remoteIp || ''}|${client?.remotePort || ''}`;
+
     const getClientKey = client => {
-        return `${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`;
+        const sourceId = getClientSourceId(client);
+        return sourceId ? `source:${sourceId}` : `connection:${getClientTransportKey(client)}`;
     };
 
-    const toPlainClient = client => ({
-        localIp: client.localIp,
-        localPort: client.localPort,
-        remoteIp: client.remoteIp,
-        remotePort: client.remotePort
-    });
+    const isSameClient = (left, right) => {
+        if (!left || !right) return false;
+        const leftSourceId = getClientSourceId(left);
+        const rightSourceId = getClientSourceId(right);
+        if (leftSourceId && rightSourceId) return leftSourceId === rightSourceId;
+        return getClientTransportKey(left) === getClientTransportKey(right);
+    };
+
+    const toPlainClient = client => {
+        const sourceId = getClientSourceId(client);
+        return {
+            localIp: client.localIp,
+            localPort: client.localPort,
+            remoteIp: client.remoteIp,
+            remotePort: client.remotePort,
+            persistentSourceId: sourceId,
+            sourceId,
+            persistentConnectionId: client.persistentConnectionId || client.connectionId || null,
+            connectionId: client.connectionId || client.persistentConnectionId || null
+        };
+    };
 
     const getSessionKey = session => {
         return `${session.sessionType}|${session.sessionRdRaw || session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
@@ -193,25 +233,38 @@
         currentDetails.value = null;
     };
 
-    const deleteReportsByClient = clientKey => {
+    const updateReportsForClient = (previousClientKey, client) => {
+        const nextClientKey = getClientKey(client);
         const nextMap = new Map(reportMap.value);
-        for (const key of nextMap.keys()) {
-            if (key.startsWith(`${clientKey}|`)) {
-                nextMap.delete(key);
-            }
+        for (const [key, report] of Array.from(nextMap.entries())) {
+            if (report.clientKey !== previousClientKey) continue;
+            const nextKey = `${nextClientKey}|${getSessionKey(report.session)}`;
+            nextMap.delete(key);
+            nextMap.set(nextKey, {
+                ...report,
+                key: nextKey,
+                clientKey: nextClientKey,
+                client: { ...report.client, ...client }
+            });
         }
         reportMap.value = nextMap;
     };
 
-    const upsertReport = data => {
+    const upsertReport = (data, fallbackClient = null) => {
         if (data && data.client && data.session && data.statistics) {
-            const clientKey = getClientKey(data.client);
+            const sourceId = getClientSourceId(data.client) || getClientSourceId(fallbackClient);
+            const client = {
+                ...(fallbackClient || {}),
+                ...data.client,
+                ...(sourceId ? { persistentSourceId: sourceId, sourceId } : {})
+            };
+            const clientKey = getClientKey(client);
             const key = `${clientKey}|${getSessionKey(data.session)}`;
             const nextMap = new Map(reportMap.value);
             nextMap.set(key, {
                 key,
                 clientKey,
-                client: data.client,
+                client,
                 session: data.session,
                 statistics: data.statistics,
                 tlvs: data.tlvs || [],
@@ -231,29 +284,19 @@
         if (result.status === 'success') {
             const data = result.data;
             if (data) {
-                // 特定客户端终止的情况
-                const existingIndex = clientList.value.findIndex(
-                    client =>
-                        `${client.localIp || ''}-${client.localPort || ''}-${client.remoteIp || ''}-${client.remotePort || ''}` ===
-                        `${data.localIp || ''}-${data.localPort || ''}-${data.remoteIp || ''}-${data.remotePort || ''}`
-                );
+                const existingIndex = clientList.value.findIndex(client => isSameClient(client, data));
                 if (existingIndex !== -1) {
-                    clientList.value.splice(existingIndex, 1);
-                    deleteReportsByClient(getClientKey(data));
-
-                    if (clientList.value.length > 0 && !activeClientKey.value) {
-                        activeClientKey.value = getClientKey(clientList.value[0]);
-                    }
+                    const existingClient = clientList.value[existingIndex];
+                    const clientKey = getClientKey(existingClient);
+                    Object.assign(existingClient, data, { isOnline: false, connectionState: 'closed' });
+                    updateReportsForClient(clientKey, existingClient);
                 }
             } else {
-                // BMP 服务停止，清空所有数据
-                clientList.value = [];
-                activeClientKey.value = '';
-                reportMap.value = new Map();
-            }
-
-            if (clientList.value.length === 0) {
-                activeClientKey.value = '';
+                for (const client of clientList.value) {
+                    const clientKey = getClientKey(client);
+                    Object.assign(client, { isOnline: false, connectionState: 'closed' });
+                    updateReportsForClient(clientKey, client);
+                }
             }
         } else {
             console.error('termination handler error', result.msg);
@@ -262,16 +305,16 @@
 
     const onClientListUpdate = result => {
         if (result.status === 'success') {
-            // 存在则更新，否则添加
-            const existingIndex = clientList.value.findIndex(
-                client =>
-                    `${client.localIp || ''}-${client.localPort || ''}-${client.remoteIp || ''}-${client.remotePort || ''}` ===
-                    `${result.data.localIp || ''}-${result.data.localPort || ''}-${result.data.remoteIp || ''}-${result.data.remotePort || ''}`
-            );
+            const existingIndex = clientList.value.findIndex(client => isSameClient(client, result.data));
             if (existingIndex !== -1) {
-                clientList.value[existingIndex] = result.data;
+                const existingClient = clientList.value[existingIndex];
+                const previousClientKey = getClientKey(existingClient);
+                const wasActive = previousClientKey === activeClientKey.value;
+                Object.assign(existingClient, result.data, { isOnline: true, connectionState: 'open' });
+                updateReportsForClient(previousClientKey, existingClient);
+                if (wasActive) activeClientKey.value = getClientKey(existingClient);
             } else {
-                clientList.value.push(result.data);
+                clientList.value.push({ ...result.data, isOnline: true, connectionState: 'open' });
             }
             if (clientList.value.length > 0 && !activeClientKey.value) {
                 activeClientKey.value = getClientKey(clientList.value[0]);
@@ -309,7 +352,7 @@
             for (const client of clientList.value) {
                 const result = await window.bmpApi.getBgpStatisticsReports(toPlainClient(client));
                 if (result.status === 'success') {
-                    (result.data || []).forEach(report => upsertReport(report));
+                    (result.data || []).forEach(report => upsertReport(report, client));
                 }
             }
         } catch (error) {
@@ -462,11 +505,30 @@
     }
 
     .client-tab-label {
-        display: block;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
         max-width: 112px;
+        overflow: hidden;
+    }
+
+    .client-tab-address {
+        display: block;
+        max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .client-tab-status {
+        color: var(--nn-color-success);
+        font-size: 11px;
+        line-height: 16px;
+    }
+
+    .client-tab-status.offline {
+        color: var(--nn-color-text-muted);
     }
 
     .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {

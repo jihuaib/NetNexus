@@ -68,7 +68,7 @@ test.describe('Tools pages', () => {
         await expect(emptyMacCell.locator('.nn-tag')).toHaveCount(0);
     });
 
-    test('scrolls the port connection table horizontally in a narrow window', async ({ page }) => {
+    test('only shows the port table scrollbar for the axis being scrolled', async ({ page }) => {
         await page.setViewportSize({ width: 1000, height: 800 });
         await page.goto('/#/tools/port-monitor');
         await expectAnyTextVisible(page, '3000', { timeout: 10000 });
@@ -79,19 +79,41 @@ test.describe('Tools pages', () => {
         const actionHeader = tableHeaders.filter({ hasText: '操作' });
         await expect(tableContent).toBeVisible();
 
+        await page.addStyleTag({ content: '.port-table .nn-table-content { max-height: 40px !important; }' });
         const initialGeometry = await tableContent.evaluate(element => ({
+            clientHeight: element.clientHeight,
             clientWidth: element.clientWidth,
+            scrollHeight: element.scrollHeight,
             scrollWidth: element.scrollWidth,
-            scrollLeft: element.scrollLeft
+            scrollLeft: element.scrollLeft,
+            scrollTop: element.scrollTop
         }));
         expect(initialGeometry.scrollWidth).toBeGreaterThanOrEqual(1058);
         expect(initialGeometry.scrollWidth - initialGeometry.clientWidth).toBeGreaterThan(100);
+        expect(initialGeometry.scrollHeight - initialGeometry.clientHeight).toBeGreaterThan(0);
         expect(initialGeometry.scrollLeft).toBe(0);
+        expect(initialGeometry.scrollTop).toBe(0);
         expect((await processHeader.boundingBox()).width).toBeGreaterThanOrEqual(178);
 
         await tableContent.hover();
-        await expect(tableContent).toHaveClass(/nn-scrollbar-active/u);
+        await expect(tableContent).not.toHaveClass(/nn-scrollbar-[xy]-active/u);
+        await tableContent.dispatchEvent('scroll');
+        await expect(tableContent).not.toHaveClass(/nn-scrollbar-[xy]-active/u);
+
+        const verticalScroll = await tableContent.evaluate(element => {
+            const previousScrollTop = element.scrollTop;
+            element.scrollTop = Math.min(20, element.scrollHeight - element.clientHeight);
+            element.dispatchEvent(new Event('scroll'));
+            return { previousScrollTop, scrollTop: element.scrollTop };
+        });
+        expect(verticalScroll.scrollTop).toBeGreaterThan(verticalScroll.previousScrollTop);
+        await expect(tableContent).toHaveClass(/nn-scrollbar-y-active/u);
+        await expect(tableContent).not.toHaveClass(/nn-scrollbar-x-active/u);
+        await expect(tableContent).not.toHaveClass(/nn-scrollbar-y-active/u, { timeout: 2500 });
+
         await page.mouse.wheel(500, 0);
+        await expect(tableContent).toHaveClass(/nn-scrollbar-x-active/u);
+        await expect(tableContent).not.toHaveClass(/nn-scrollbar-y-active/u);
         await expect
             .poll(() =>
                 tableContent.evaluate(element => element.scrollWidth - element.clientWidth - element.scrollLeft)

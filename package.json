@@ -73,6 +73,8 @@
         "test:ci:minified": "node scripts/run-ci-tests-on-minified-electron.js",
         "test:e2e": "playwright test",
         "test:e2e:browser": "cross-env E2E_TARGET=browser E2E_SKIP_PACK=1 playwright test",
+        "test:e2e:frr": "node test/integration/bmp_frr_e2e.js",
+        "frr:bmp:lab": "node scripts/frr-bmp-lab-cli.js",
         "test:packaged:sqlite": "node scripts/verify-packaged-sqlite.js",
         "mock:bgp": "node scripts/mockBgpClient.js",
         "mock:bmp": "node scripts/mockBmpClient.js",

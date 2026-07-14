@@ -47,7 +47,9 @@
                         <nn-row :gutter="12">
                             <nn-col :span="12">
                                 <nn-form-item label="持久化路由" name="persistenceEnabled">
-                                    <nn-checkbox v-model:checked="bmpConfig.persistenceEnabled" />
+                                    <nn-checkbox v-model:checked="bmpConfig.persistenceEnabled" disabled>
+                                        SQLite RIB
+                                    </nn-checkbox>
                                 </nn-form-item>
                             </nn-col>
                             <nn-col :span="12">
@@ -142,10 +144,7 @@
                             data-testid="bmp-client-table"
                             :columns="clientColumns"
                             :data-source="clientList"
-                            :row-key="
-                                record =>
-                                    `${record.localIp || ''}-${record.localPort || ''}-${record.remoteIp || ''}-${record.remotePort || ''}`
-                            "
+                            :row-key="getClientKey"
                             :pagination="{
                                 pageSize: 20,
                                 showSizeChanger: false,
@@ -166,6 +165,11 @@
                                 </template>
                                 <template v-else-if="column.key === 'tlvCount'">
                                     {{ getClientTlvCount(record) }}
+                                </template>
+                                <template v-else-if="column.key === 'connectionState'">
+                                    <nn-tag :color="record.isOnline ? 'green' : 'default'">
+                                        {{ record.isOnline ? '在线' : '已断开' }}
+                                    </nn-tag>
                                 </template>
                                 <template v-else-if="column.key === 'action'">
                                     <nn-button
@@ -234,6 +238,11 @@
         return (record.rawTlvs || []).length + (record.terminationTlvs || []).length;
     };
 
+    const getClientKey = record =>
+        record?.persistentSourceId ||
+        record?.sourceId ||
+        `${record?.localIp || ''}-${record?.localPort || ''}-${record?.remoteIp || ''}-${record?.remotePort || ''}`;
+
     const normalizeBmpV4TlvDraft = draft => {
         return Number(draft) === BMP_V4_TLV_DRAFT.DRAFT_19 ? BMP_V4_TLV_DRAFT.DRAFT_19 : BMP_V4_TLV_DRAFT.DRAFT_20;
     };
@@ -300,6 +309,12 @@
             align: 'right'
         },
         {
+            title: '状态',
+            key: 'connectionState',
+            width: 80,
+            align: 'center'
+        },
+        {
             title: '操作',
             key: 'action'
         }
@@ -362,8 +377,7 @@
             const result = await window.bmpApi.startBmp(payload);
             if (result.status === 'success') {
                 serverRunning.value = true;
-                // Clear the client list when starting the server
-                clientList.value = [];
+                await loadClientList();
                 notify.success(`${result.msg}`);
             } else {
                 notify.error(result.msg || 'BMP服务器启动失败');
@@ -405,11 +419,7 @@
         const data = result.data;
         if (result.status === 'success') {
             // 存在则更新，否则添加
-            const existingIndex = clientList.value.findIndex(
-                client =>
-                    `${client.localIp || ''}-${client.localPort || ''}-${client.remoteIp || ''}-${client.remotePort || ''}` ===
-                    `${data.localIp || ''}-${data.localPort || ''}-${data.remoteIp || ''}-${data.remotePort || ''}`
-            );
+            const existingIndex = clientList.value.findIndex(client => getClientKey(client) === getClientKey(data));
             if (existingIndex !== -1) {
                 clientList.value[existingIndex] = data;
             } else {
@@ -424,13 +434,14 @@
         if (result && result.data) {
             const data = result.data;
             if (result.status === 'success') {
-                const existingIndex = clientList.value.findIndex(
-                    client =>
-                        `${client.localIp || ''}-${client.localPort || ''}-${client.remoteIp || ''}-${client.remotePort || ''}` ===
-                        `${data.localIp || ''}-${data.localPort || ''}-${data.remoteIp || ''}-${data.remotePort || ''}`
-                );
+                const existingIndex = clientList.value.findIndex(client => getClientKey(client) === getClientKey(data));
                 if (existingIndex !== -1) {
-                    clientList.value.splice(existingIndex, 1);
+                    clientList.value[existingIndex] = {
+                        ...clientList.value[existingIndex],
+                        ...data,
+                        connectionState: 'closed',
+                        isOnline: false
+                    };
                 }
             } else {
                 console.error('termination handler error', data.msg);
@@ -490,7 +501,7 @@
                     savedDraft
                 );
                 bmpConfig.value.enableAuth = savedConfig.data.enableAuth || false;
-                bmpConfig.value.persistenceEnabled = savedConfig.data.persistenceEnabled !== false;
+                bmpConfig.value.persistenceEnabled = true;
                 bmpConfig.value.localPort = savedConfig.data.localPort;
                 bmpConfig.value.peerIP = savedConfig.data.peerIP || '';
                 bmpConfig.value.md5Password = savedConfig.data.md5Password || '';

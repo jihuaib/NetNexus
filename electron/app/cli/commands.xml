@@ -456,7 +456,7 @@
                 <element id="9" cfg-id="3" type="parameter">
                     <name>&lt;af&gt;</name>
                     <description>Address family</description>
-                    <type>enum(ipv4-unc,ipv6-unc,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)</type>
+                    <type>enum(ipv4-unc,ipv6-unc,ipv4-multicast,ipv6-multicast,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)</type>
                 </element>
                 <element id="10" type="keyword">
                     <name>rib</name>
