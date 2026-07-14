@@ -78,16 +78,13 @@ jobs:
 
     build-macos:
         name: Build macOS ${{ matrix.arch }}
-        strategy:
+            strategy:
             fail-fast: false
             matrix:
                 include:
                     - arch: arm64
                       runner: macos-15
                       dist_script: dist:mac:arm64
-                    - arch: x64
-                      runner: macos-15-intel
-                      dist_script: dist:mac
         runs-on: ${{ matrix.runner }}
         steps:
             - name: Checkout
