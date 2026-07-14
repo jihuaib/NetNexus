@@ -35,12 +35,37 @@
                     </div>
 
                     <div class="mib-status-group">
-                        <nn-tag v-if="mibCompileLoading" color="processing">后台编译中</nn-tag>
+                        <nn-tag v-if="mibCompileLoading || showMibCompileProgress" color="processing">
+                            {{ mibCompileProgressTag }}
+                        </nn-tag>
                         <nn-tag v-else-if="mibStatus.cacheHit" color="success">缓存命中</nn-tag>
                         <nn-tag color="blue">用户 {{ mibStatus.modules.length }}</nn-tag>
                         <nn-tag color="cyan">基础 {{ mibStatus.baseModules.length }}</nn-tag>
                         <nn-tag color="green">OID {{ mibStatus.totalObjects }}</nn-tag>
                         <nn-tag color="default">文件 {{ mibStatus.expandedFileCount }}</nn-tag>
+                    </div>
+                </div>
+
+                <div v-if="showMibCompileProgress" class="mib-compile-progress" role="status" aria-live="polite">
+                    <div class="mib-compile-progress-info">
+                        <span class="mib-compile-progress-phase">{{ mibCompileProgressTitle }}</span>
+                        <span class="mib-compile-progress-file" :title="mibCompileProgress?.filePath || ''">
+                            {{ mibCompileProgressFile }}
+                        </span>
+                        <span class="mib-compile-progress-counts">
+                            成功 {{ mibCompileCounts.compiled }} · 跳过 {{ mibCompileCounts.skipped }} · 失败
+                            {{ mibCompileCounts.failed }}
+                        </span>
+                    </div>
+                    <div
+                        class="mib-compile-progress-bar"
+                        role="progressbar"
+                        aria-label="MIB编译进度"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        :aria-valuenow="mibCompilePercent"
+                    >
+                        <div class="mib-compile-progress-fill" :style="{ width: `${mibCompilePercent}%` }" />
                     </div>
                 </div>
 
@@ -152,16 +177,29 @@
                             <div class="mib-panel-header">
                                 <span class="mib-panel-title">文件状态</span>
                                 <span class="mib-panel-meta">
-                                    已编译 {{ compiledFileCount }} / 失败 {{ failedFileCount }}
+                                    已编译 {{ compiledFileCount }} / 跳过 {{ skippedFileCount }} / 失败
+                                    {{ failedFileCount }}
                                 </span>
                             </div>
                             <div class="mib-file-list">
                                 <div v-for="record in mibFiles" :key="record.filePath" class="mib-file-row">
                                     <nn-tag
-                                        :color="record.status === 'compiled' ? 'green' : 'red'"
+                                        :color="
+                                            record.status === 'compiled'
+                                                ? 'green'
+                                                : record.status === 'skipped'
+                                                  ? 'gold'
+                                                  : 'red'
+                                        "
                                         class="mib-file-tag"
                                     >
-                                        {{ record.status === 'compiled' ? '已编译' : '失败' }}
+                                        {{
+                                            record.status === 'compiled'
+                                                ? '已编译'
+                                                : record.status === 'skipped'
+                                                  ? '已跳过'
+                                                  : '失败'
+                                        }}
                                     </nn-tag>
                                     <nn-tooltip :title="record.filePath">
                                         <span class="mib-file-name">{{ record.fileName }}</span>
@@ -611,7 +649,8 @@
 <script setup>
     import { computed, reactive, ref, nextTick, onActivated, onBeforeUnmount, onMounted } from 'vue';
     import { notify } from '../../utils/notify';
-    import { DEFAULT_VALUES } from '../../const/snmpConst';
+    import EventBus from '../../utils/eventBus';
+    import { DEFAULT_VALUES, MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
     import {
         ApiOutlined,
         BellOutlined,
@@ -631,6 +670,7 @@
     defineOptions({ name: 'SnmpMib' });
 
     const mibCompileLoading = ref(false);
+    const mibCompileProgress = ref(null);
     const oidTranslateLoading = ref(false);
     const oidQuery = ref('');
     const oidResult = ref(null);
@@ -698,6 +738,7 @@
     const mibStatus = ref({
         loadedFiles: [],
         failedFiles: [],
+        skippedFiles: [],
         requestedFiles: [],
         modules: [],
         baseModules: [],
@@ -810,6 +851,45 @@
 
     const compiledFileCount = computed(() => mibStatus.value.loadedFiles.length);
     const failedFileCount = computed(() => mibStatus.value.failedFiles.length);
+    const skippedFileCount = computed(() => mibStatus.value.skippedFiles.length);
+    const showMibCompileProgress = computed(
+        () => mibCompileProgress.value && !['completed', 'failed'].includes(mibCompileProgress.value.phase)
+    );
+    const mibCompileCounts = computed(() => ({
+        compiled: mibCompileProgress.value?.counts?.compiled || 0,
+        skipped: mibCompileProgress.value?.counts?.skipped || 0,
+        failed: mibCompileProgress.value?.counts?.failed || 0
+    }));
+    const mibCompilePercent = computed(() =>
+        Math.max(0, Math.min(100, Math.round(mibCompileProgress.value?.percent || 0)))
+    );
+    const mibCompileProgressTitle = computed(() => {
+        const progress = mibCompileProgress.value || {};
+        switch (progress.phase) {
+            case 'scanning':
+                return `扫描 ${progress.scanned || 0}/${progress.scanTotal || 0}`;
+            case 'compiling':
+                return `编译 ${progress.completed || 0}/${progress.total || 0}`;
+            case 'planning':
+                return '分析依赖关系';
+            case 'serializing':
+                return `解析批次 ${progress.completed || 0}/${progress.total || 0}`;
+            case 'indexing':
+                return '生成 OID 索引';
+            case 'caching':
+                return '保存缓存';
+            case 'syncing':
+                return '同步 SNMP 服务';
+            default:
+                return '准备编译';
+        }
+    });
+    const mibCompileProgressFile = computed(
+        () => mibCompileProgress.value?.fileName || mibCompileProgress.value?.message || '请稍候'
+    );
+    const mibCompileProgressTag = computed(() =>
+        showMibCompileProgress.value ? mibCompileProgressTitle.value : '后台编译中'
+    );
     const isGetNextMode = computed(() => getRequestMode.value === 'getNext');
     const getModalTitle = computed(() => (isGetNextMode.value ? 'SNMP GET-NEXT' : 'SNMP GET'));
     const getModalOkText = computed(() => (isGetNextMode.value ? '发送 GET-NEXT' : '发送 GET'));
@@ -824,6 +904,7 @@
     const normalizeMibStatus = payload => ({
         loadedFiles: Array.isArray(payload?.loadedFiles) ? payload.loadedFiles : [],
         failedFiles: Array.isArray(payload?.failedFiles) ? payload.failedFiles : [],
+        skippedFiles: Array.isArray(payload?.skippedFiles) ? payload.skippedFiles : [],
         requestedFiles: Array.isArray(payload?.requestedFiles) ? payload.requestedFiles : [],
         modules: Array.isArray(payload?.modules) ? payload.modules : [],
         baseModules: Array.isArray(payload?.baseModules) ? payload.baseModules : [],
@@ -1258,6 +1339,10 @@
                 status: file.status || 'compiled',
                 msg: file.msg || ''
             })),
+            ...mibStatus.value.skippedFiles.map(file => ({
+                ...file,
+                status: 'skipped'
+            })),
             ...mibStatus.value.failedFiles.map(file => ({
                 ...file,
                 status: 'failed'
@@ -1298,19 +1383,14 @@
         return mibStatusLoadPromise;
     };
 
-    const compileMibFiles = async filePaths => {
+    const compileMibFiles = async (filePaths, { force = false } = {}) => {
         try {
             mibCompileLoading.value = true;
             // Electron IPC cannot structured-clone Vue's reactive array Proxy.
             const plainFilePaths = [...filePaths];
-            const result = await window.snmpApi.compileMibs(plainFilePaths);
+            const result = await window.snmpApi.compileMibs(plainFilePaths, { force });
             if (result.status === 'success') {
                 setMibStatus(result.data);
-                if (result.data?.failedFiles?.length > 0) {
-                    notify.warning(`MIB编译完成，${result.data.failedFiles.length} 个文件失败`);
-                } else {
-                    notify.success('MIB编译完成');
-                }
             } else {
                 notify.error(result.msg || 'MIB编译失败');
             }
@@ -1370,7 +1450,7 @@
         const currentFiles = mibStatus.value.requestedFiles.length
             ? mibStatus.value.requestedFiles
             : mibFiles.value.map(file => file.filePath);
-        await compileMibFiles(currentFiles);
+        await compileMibFiles(currentFiles, { force: true });
     };
 
     const padTime = value => String(value).padStart(2, '0');
@@ -1910,15 +1990,45 @@
         clearValidationErrors: () => {}
     });
 
+    const handleMibCompileProgress = response => {
+        if (response?.status !== 'success' || !response.data?.progressId) {
+            return;
+        }
+
+        const next = response.data;
+        if (
+            mibCompileProgress.value?.progressId &&
+            mibCompileProgress.value.progressId !== next.progressId &&
+            next.phase !== 'preparing' &&
+            !['completed', 'failed'].includes(mibCompileProgress.value.phase)
+        ) {
+            return;
+        }
+        if (
+            mibCompileProgress.value?.progressId === next.progressId &&
+            !['preparing', 'scanning'].includes(next.phase) &&
+            Number(next.completed) < Number(mibCompileProgress.value.completed)
+        ) {
+            return;
+        }
+        mibCompileProgress.value = {
+            ...mibCompileProgress.value,
+            ...next,
+            counts: next.counts || mibCompileProgress.value?.counts
+        };
+    };
+
     onActivated(() => {
         loadMibStatus();
     });
 
     onMounted(() => {
+        EventBus.on(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB, handleMibCompileProgress);
         loadMibStatus();
     });
 
     onBeforeUnmount(() => {
+        EventBus.off(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB);
         clearPendingTreeReleases();
     });
 </script>
@@ -1976,6 +2086,60 @@
         grid-template-columns: minmax(0, 1fr) 96px;
         gap: 8px;
         min-width: 0;
+    }
+
+    .mib-compile-progress {
+        flex-shrink: 0;
+        min-width: 0;
+        padding: 7px 10px;
+        background: var(--nn-color-bg-info-subtle);
+        border: 1px solid var(--nn-color-border-info);
+        border-radius: 6px;
+    }
+
+    .mib-compile-progress-info {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        min-width: 0;
+        font-size: 12px;
+        line-height: 18px;
+    }
+
+    .mib-compile-progress-phase {
+        flex-shrink: 0;
+        color: var(--nn-color-primary);
+        font-weight: 600;
+    }
+
+    .mib-compile-progress-file {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        color: var(--nn-color-text-strong);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .mib-compile-progress-counts {
+        flex-shrink: 0;
+        color: var(--nn-color-text-muted);
+        white-space: nowrap;
+    }
+
+    .mib-compile-progress-bar {
+        height: 3px;
+        margin-top: 5px;
+        overflow: hidden;
+        background: var(--nn-color-bg-progress);
+        border-radius: 2px;
+    }
+
+    .mib-compile-progress-fill {
+        height: 100%;
+        background: var(--nn-gradient-progress);
+        border-radius: 2px;
+        transition: width 0.2s ease;
     }
 
     .mib-main {

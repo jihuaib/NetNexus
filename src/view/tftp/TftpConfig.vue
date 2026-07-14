@@ -98,7 +98,7 @@
                             </nn-col>
                         </nn-row>
 
-                        <div style="margin-top: 8px; color: var(--nn-color-text-muted)">
+                        <div class="nn-helper-text" style="margin-top: 8px">
                             默认端口为 69（绑定该端口通常需要管理员/root 权限）。支持 RFC 2347/2348/2349
                             选项协商（blksize、timeout、tsize）。
                         </div>

@@ -69,6 +69,8 @@ const bmpBrowserMockScript = `
             }),
         getRouteLens: (query, routeState = 'active') => window.__bmpE2eCall('getRouteLens', query, routeState),
         getRouteAssurance: (filters = {}) => window.__bmpE2eCall('getRouteAssurance', filters),
+        setRouteAssuranceEnabled: (enabled, filters = {}) =>
+            window.__bmpE2eCall('setRouteAssuranceEnabled', enabled, filters),
         purgeStaleBgpRoutes: (client, session, af, ribType) =>
             window.__bmpE2eCall('purgeStaleBgpRoutes', {
                 client,
@@ -481,6 +483,11 @@ const BmpE2eController = (() => {
                     return {
                         ...data
                     };
+                case 'setRouteAssuranceEnabled':
+                    return {
+                        enabled: Boolean(data.enabled),
+                        filters: data.filters || {}
+                    };
                 case 'getBgpSessions':
                 case 'getBgpInstances':
                 case 'purgeStaleBgpRoutes':
@@ -653,7 +660,12 @@ const BmpE2eController = (() => {
                         routeState: args[1]
                     });
                 case 'getRouteAssurance':
-                    return this.invokeWorker('getRouteAssurance', args[0] || {});
+                    return this.invokeWorkerAsync('getRouteAssurance', args[0] || {});
+                case 'setRouteAssuranceEnabled':
+                    return this.invokeWorkerAsync('setRouteAssuranceEnabled', {
+                        enabled: Boolean(args[0]),
+                        filters: args[1] || {}
+                    });
                 case 'purgeStaleBgpRoutes':
                     return this.invokeWorker('purgeStaleBgpRoutes', args[0]);
                 case 'purgeStaleBgpInstanceRoutes':
@@ -770,6 +782,19 @@ const BmpE2eController = (() => {
             const messageId = `${methodName}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             this.worker.messageHandler.responses.delete(messageId);
             this.worker[methodName](messageId, data);
+            const response = this.worker.messageHandler.responses.get(messageId);
+            this.worker.messageHandler.responses.delete(messageId);
+            this.record(`worker query: ${methodName}`, {
+                request: this.summarizeWorkerRequest(methodName, data),
+                response: this.summarizeResponse(methodName, response)
+            });
+            return response || errorResponse(`${methodName} did not return a response`);
+        }
+
+        async invokeWorkerAsync(methodName, data) {
+            const messageId = `${methodName}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            this.worker.messageHandler.responses.delete(messageId);
+            await this.worker[methodName](messageId, data);
             const response = this.worker.messageHandler.responses.get(messageId);
             this.worker.messageHandler.responses.delete(messageId);
             this.record(`worker query: ${methodName}`, {

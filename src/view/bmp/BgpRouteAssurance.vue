@@ -8,7 +8,18 @@
                 </span>
             </template>
             <template #extra>
-                <span v-if="generatedAt" class="generated-at">更新于 {{ generatedAt }}</span>
+                <div class="analysis-controls">
+                    <div class="analysis-toggle">
+                        <span>{{ analysisEnabled ? '分析已开启' : '分析已关闭' }}</span>
+                        <nn-switch
+                            v-model:checked="analysisEnabled"
+                            data-testid="route-assurance-toggle"
+                            aria-label="路由矩阵分析"
+                            @change="handleAnalysisToggle"
+                        />
+                    </div>
+                    <span v-if="generatedAt" class="generated-at">更新于 {{ generatedAt }}</span>
+                </div>
             </template>
 
             <section class="filter-panel" aria-label="路由保障筛选">
@@ -18,6 +29,7 @@
                         v-model:value="draftFilters.client"
                         data-testid="route-assurance-client"
                         :options="clientOptions"
+                        :disabled="!analysisEnabled"
                         allow-clear
                         placeholder="全部 Client"
                     />
@@ -28,6 +40,7 @@
                         v-model:value="draftFilters.vrf"
                         data-testid="route-assurance-vrf"
                         :options="vrfOptions"
+                        :disabled="!analysisEnabled"
                         allow-clear
                         placeholder="全部 VRF"
                     />
@@ -38,6 +51,7 @@
                         v-model:value="draftFilters.af"
                         data-testid="route-assurance-af"
                         :options="addressFamilyOptions"
+                        :disabled="!analysisEnabled"
                         allow-clear
                         placeholder="全部地址族"
                     />
@@ -48,13 +62,19 @@
                         v-model:value="draftFilters.category"
                         data-testid="route-assurance-category"
                         :options="categoryOptions"
+                        :disabled="!analysisEnabled"
                         allow-clear
                         placeholder="全部异常"
                     />
                 </div>
                 <div class="filter-control route-state-control">
                     <label>路由状态</label>
-                    <nn-radio-group v-model:value="draftFilters.routeState" size="small" aria-label="路由状态">
+                    <nn-radio-group
+                        v-model:value="draftFilters.routeState"
+                        :disabled="!analysisEnabled"
+                        size="small"
+                        aria-label="路由状态"
+                    >
                         <nn-radio-button value="active">Current</nn-radio-button>
                         <nn-radio-button value="all">All</nn-radio-button>
                         <nn-radio-button value="stale">Stale</nn-radio-button>
@@ -65,6 +85,7 @@
                     <nn-input
                         v-model:value="draftFilters.query"
                         data-testid="route-assurance-query"
+                        :disabled="!analysisEnabled"
                         allow-clear
                         placeholder="IP、CIDR、EVPN 或 BGP-LS NLRI"
                         @press-enter="applyFilters"
@@ -73,10 +94,11 @@
                     </nn-input>
                 </div>
                 <div class="filter-actions">
-                    <nn-button @click="resetFilters">重置</nn-button>
+                    <nn-button :disabled="!analysisEnabled" @click="resetFilters">重置</nn-button>
                     <nn-button
                         type="primary"
                         data-testid="route-assurance-search"
+                        :disabled="!analysisEnabled"
                         :loading="loading"
                         @click="applyFilters"
                     >
@@ -232,7 +254,9 @@
                     <template #emptyText>
                         <nn-empty
                             :description="
-                                hasLoaded
+                                !analysisEnabled
+                                    ? '路由分析未开启，请先开启右上角分析开关'
+                                    : hasLoaded
                                     ? '当前筛选范围未发现路由保障异常'
                                     : loading
                                       ? '正在加载路由保障数据'
@@ -310,6 +334,7 @@
     const assuranceResult = ref(emptyResult());
     const loading = ref(false);
     const hasLoaded = ref(false);
+    const analysisEnabled = ref(false);
     const eventPageId = BMP_EVENT_PAGE_ID.PAGE_ID_BMP_ROUTE_ASSURANCE || 'bmp-route-assurance';
     const liveEvents = [
         'bmp:routeUpdate',
@@ -321,7 +346,9 @@
     ];
     let refreshTimer = null;
     let requestId = 0;
+    let toggleRequestId = 0;
     let lastAutoError = '';
+    let pageActive = false;
 
     const normalizeResult = payload => {
         const source = payload && typeof payload === 'object' ? payload : {};
@@ -373,23 +400,34 @@
         lastAutoError = normalized;
     };
 
+    const isTransientAnalysisState = message =>
+        /正在初始化|正在重新同步/.test(String(message || ''));
+
     const loadAssurance = async ({ page = 1, pageSize = 25, silent = false } = {}) => {
+        if (!analysisEnabled.value) return;
         const currentRequestId = ++requestId;
+        let retryScheduled = false;
         if (!silent) loading.value = true;
         try {
             if (!window.bmpApi?.getRouteAssurance) {
                 throw new Error('当前 BMP 服务不支持 Route Assurance，请重启应用后重试。');
             }
             const response = await window.bmpApi.getRouteAssurance(buildRequest(page, pageSize));
-            if (currentRequestId !== requestId) return;
+            if (currentRequestId !== requestId || !analysisEnabled.value) return;
             assuranceResult.value = normalizeResult(unwrapResponse(response));
             hasLoaded.value = true;
             lastAutoError = '';
         } catch (error) {
             if (currentRequestId !== requestId) return;
+            if (analysisEnabled.value && isTransientAnalysisState(error?.message)) {
+                retryScheduled = true;
+                loading.value = true;
+                scheduleRefresh(1000);
+                return;
+            }
             showQueryError(error?.message, silent);
         } finally {
-            if (currentRequestId === requestId) loading.value = false;
+            if (currentRequestId === requestId && !retryScheduled) loading.value = false;
         }
     };
 
@@ -418,20 +456,74 @@
         refreshTimer = null;
     };
 
-    const scheduleRefresh = () => {
+    const scheduleRefresh = (delay = 900) => {
+        if (!analysisEnabled.value) return;
         clearRefreshTimer();
         refreshTimer = setTimeout(() => {
             refreshTimer = null;
+            if (!analysisEnabled.value) return;
             loadAssurance({
                 page: assuranceResult.value.pagination.page || 1,
                 pageSize: assuranceResult.value.pagination.pageSize || 25,
                 silent: true
             });
-        }, 900);
+        }, delay);
     };
 
-    const registerEvents = () => liveEvents.forEach(event => EventBus.on(event, eventPageId, scheduleRefresh));
+    const handleLiveRefresh = () => scheduleRefresh();
+    const registerEvents = () => liveEvents.forEach(event => EventBus.on(event, eventPageId, handleLiveRefresh));
     const unregisterEvents = () => liveEvents.forEach(event => EventBus.off(event, eventPageId));
+
+    const disableAnalysis = () => {
+        clearRefreshTimer();
+        unregisterEvents();
+        requestId += 1;
+        loading.value = false;
+        hasLoaded.value = false;
+        lastAutoError = '';
+        assuranceResult.value = emptyResult();
+    };
+
+    const setBackendAnalysisEnabled = async enabled => {
+        if (!window.bmpApi?.setRouteAssuranceEnabled) {
+            throw new Error('当前 BMP 服务不支持路由矩阵分析开关，请重启应用后重试。');
+        }
+        const filters = enabled ? buildRequest(1, assuranceResult.value.pagination.pageSize || 25) : {};
+        return unwrapResponse(await window.bmpApi.setRouteAssuranceEnabled(enabled, filters));
+    };
+
+    const handleAnalysisToggle = async checked => {
+        const currentToggleRequestId = ++toggleRequestId;
+        const enabled = Boolean(checked);
+        analysisEnabled.value = enabled;
+        if (!enabled) {
+            disableAnalysis();
+            try {
+                await setBackendAnalysisEnabled(false);
+            } catch (error) {
+                if (currentToggleRequestId === toggleRequestId) {
+                    notify.error(`关闭 Route Assurance 分析失败：${error?.message || '未知错误'}`);
+                }
+            }
+            return;
+        }
+        try {
+            loading.value = true;
+            await setBackendAnalysisEnabled(true);
+            if (currentToggleRequestId !== toggleRequestId || !analysisEnabled.value) return;
+            if (pageActive) registerEvents();
+            await loadAssurance({ page: 1, pageSize: assuranceResult.value.pagination.pageSize || 25 });
+        } catch (error) {
+            if (currentToggleRequestId !== toggleRequestId) return;
+            analysisEnabled.value = false;
+            disableAnalysis();
+            notify.error(`开启 Route Assurance 分析失败：${error?.message || '未知错误'}`);
+        } finally {
+            if (currentToggleRequestId === toggleRequestId && !hasLoaded.value) {
+                loading.value = false;
+            }
+        }
+    };
 
     const issues = computed(() => assuranceResult.value.issues || []);
     const summary = computed(() => assuranceResult.value.summary || {});
@@ -681,16 +773,29 @@
     };
 
     onActivated(() => {
-        registerEvents();
-        if (!hasLoaded.value) loadAssurance();
+        pageActive = true;
+        if (analysisEnabled.value) {
+            registerEvents();
+            loadAssurance({
+                page: assuranceResult.value.pagination.page || 1,
+                pageSize: assuranceResult.value.pagination.pageSize || 25,
+                silent: true
+            });
+        }
     });
     onDeactivated(() => {
+        pageActive = false;
         clearRefreshTimer();
         unregisterEvents();
     });
     onBeforeUnmount(() => {
+        pageActive = false;
         clearRefreshTimer();
         unregisterEvents();
+        if (analysisEnabled.value) {
+            analysisEnabled.value = false;
+            setBackendAnalysisEnabled(false).catch(() => {});
+        }
     });
 </script>
 
@@ -732,6 +837,24 @@
 
     .page-title {
         gap: 7px;
+    }
+
+    .analysis-controls,
+    .analysis-toggle {
+        display: flex;
+        align-items: center;
+    }
+
+    .analysis-controls {
+        gap: 10px;
+    }
+
+    .analysis-toggle {
+        gap: 7px;
+        color: var(--nn-color-text-card-head-ghost);
+        cursor: pointer;
+        font-size: 12px;
+        white-space: nowrap;
     }
 
     .generated-at {

@@ -303,6 +303,34 @@ test.describe('Custom UI component interactions', () => {
         await expect(ntpMenuItem).toHaveAttribute('aria-current', 'page');
     });
 
+    test('uses compact typography for configuration helper text', async ({ page }) => {
+        const helperTextPages = [
+            { route: '/#/dhcp/dhcp-config', title: 'DHCP服务器配置', minimumCount: 1 },
+            { route: '/#/tftp/tftp-config', title: 'TFTP服务器配置', minimumCount: 1 },
+            { route: '/#/ntp/ntp-config', title: 'NTP服务器配置', minimumCount: 2 },
+            { route: '/#/syslog/syslog-config', title: 'Syslog服务器配置', minimumCount: 1 },
+            { route: '/#/rpki/rpki-config', title: 'RPKI服务器配置', minimumCount: 2 }
+        ];
+
+        for (const helperTextPage of helperTextPages) {
+            await page.goto(helperTextPage.route);
+            await expect(page.getByText(helperTextPage.title, { exact: true })).toBeVisible();
+
+            const helperTexts = page.locator('.nn-helper-text');
+            await expect(helperTexts.first()).toBeVisible();
+
+            const styles = await helperTexts.evaluateAll(elements =>
+                elements.map(element => ({
+                    fontSize: getComputedStyle(element).fontSize,
+                    lineHeight: getComputedStyle(element).lineHeight
+                }))
+            );
+
+            expect(styles.length).toBeGreaterThanOrEqual(helperTextPage.minimumCount);
+            expect(styles.every(style => style.fontSize === '12px' && style.lineHeight === '18px')).toBe(true);
+        }
+    });
+
     test('uses distinct navigation icons and keeps settings icons aligned with their pages', async ({ page }) => {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto('/#/tools/packet-parser');

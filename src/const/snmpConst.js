@@ -66,5 +66,9 @@ export const SNMP_PRIV_PROTOCOL = {
 
 export const SNMP_EVENT_PAGE_ID = {
     PAGE_ID_SNMP_CONFIG: 1,
-    PAGE_ID_SNMP_TRAP: 2
+    PAGE_ID_SNMP_TRAP: 2,
+    PAGE_ID_SNMP_MIB: 3,
+    PAGE_ID_SNMP_MIB_NOTIFICATION: 4
 };
+
+export const MIB_COMPILE_PROGRESS_EVENT = 'snmp:mibCompileProgress';

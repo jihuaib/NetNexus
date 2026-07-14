@@ -72,8 +72,11 @@ function parseRouteDistinguisherNlri(buffer, position, afi) {
     }
 
     let rd = null;
+    let rdRaw = null;
     if (position + BgpConst.BGP_RD_LEN <= boundedNlriEnd) {
-        rd = rdBufferToString(buffer.subarray(position, position + BgpConst.BGP_RD_LEN));
+        const rdBuffer = buffer.subarray(position, position + BgpConst.BGP_RD_LEN);
+        rd = rdBufferToString(rdBuffer);
+        rdRaw = `raw:${rdBuffer.toString('hex')}`;
     } else {
         errors.push('VPN RD is truncated');
     }
@@ -101,6 +104,7 @@ function parseRouteDistinguisherNlri(buffer, position, afi) {
         route: {
             prefix,
             rd,
+            rdRaw,
             length: prefixLength,
             labels,
             nlriBits: nlriBitLength,
@@ -135,8 +139,11 @@ function parseRouteDistinguisherWithdrawalNlri(buffer, position, afi) {
     }
 
     let rd = null;
+    let rdRaw = null;
     if (position + BgpConst.BGP_RD_LEN <= boundedNlriEnd) {
-        rd = rdBufferToString(buffer.subarray(position, position + BgpConst.BGP_RD_LEN));
+        const rdBuffer = buffer.subarray(position, position + BgpConst.BGP_RD_LEN);
+        rd = rdBufferToString(rdBuffer);
+        rdRaw = `raw:${rdBuffer.toString('hex')}`;
     } else {
         errors.push('VPN withdrawal RD is truncated');
     }
@@ -164,6 +171,7 @@ function parseRouteDistinguisherWithdrawalNlri(buffer, position, afi) {
         route: {
             prefix,
             rd,
+            rdRaw,
             length: prefixLength,
             compatibilityField,
             nlriBits: nlriBitLength,

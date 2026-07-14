@@ -32,6 +32,10 @@ const MIB_REQ_TYPES = {
     TRANSLATE_OID: 'translateOid'
 };
 
+const MIB_EVT_TYPES = {
+    COMPILE_PROGRESS: 'mib:compileProgress'
+};
+
 // SNMP版本
 const SNMP_VERSION = {
     v1: 1,
@@ -59,6 +63,7 @@ module.exports = {
     SNMP_EVT_TYPES,
     SNMP_REQ_TYPES,
     MIB_REQ_TYPES,
+    MIB_EVT_TYPES,
     SNMP_VERSION,
     SNMP_SECURITY_LEVEL,
     DEFAULT_SNMP_SETTINGS,

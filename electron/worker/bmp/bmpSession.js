@@ -2,6 +2,7 @@ const logger = require('../../log/logger');
 const BmpConst = require('../../const/bmpConst');
 const {
     getInitiationTlvName,
+    toUnixTimestampMs,
     parseCommonHeader,
     parsePeerHeader,
     parseBmpTlvs,
@@ -18,8 +19,18 @@ const { parseBgpPacket, getBgpPacketSummary: getBgpUpdateSummary } = require('..
 const { parseBmpPacket, getBmpPacketSummary } = require('../../utils/bmpPacketParser');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const BmpBgpInstance = require('./bmpBgpInstance');
+const ObservedRouteMap = require('./observedRouteMap');
+const IdentityFallbackMap = require('./identityFallbackMap');
+const {
+    buildConnectionMutation,
+    buildScopeMutation,
+    buildRouteUpsertMutation,
+    buildRouteWithdrawMutation,
+    buildRoutePurgeMutation
+} = require('./bmpPersistenceMutation');
 
 const LOC_RIB_DEFAULT_RD = '0:0';
+const LOC_RIB_DEFAULT_RD_RAW = 'raw:0000000000000000';
 const LOC_RIB_DEFAULT_RD_ADD_PATH_INFERRED_WARNING =
     'Loc-RIB ADD-PATH is inferred from RD 0:0 for the same AFI/SAFI; Peer Up did not advertise ADD-PATH for this RD';
 
@@ -39,14 +50,21 @@ class BmpSession {
         this.bmpVersion = null;
         this.terminationTlvs = [];
 
-        this.bgpSessionMap = new Map();
-        this.bgpInstanceMap = new Map();
+        this.bgpSessionMap = new IdentityFallbackMap(session =>
+            BmpBgpSession.makeKey(session.sessionType, session.sessionRd, session.sessionIp, session.sessionAs)
+        );
+        this.bgpInstanceMap = new IdentityFallbackMap(instance =>
+            BmpBgpInstance.makeKey(instance.instanceType, instance.instanceRd, instance.afi, instance.safi)
+        );
         this.bgpStatisticsReportMap = new Map();
         this.bgpInstanceStatisticsReportMap = new Map();
         this.instAddPathMap = new Map();
         this.instAddPathReceiveMap = new Map();
         this.instAddPathSendMap = new Map();
         this.messageBuffer = Buffer.alloc(0);
+        this.persistenceConnectionOpened = false;
+        this.persistenceConnectionClosed = false;
+        this.persistenceSequence = 0;
     }
 
     static makeKey(localIp, localPort, remoteIp, remotePort) {
@@ -60,6 +78,146 @@ class BmpSession {
 
     static makeStatisticsReportKey(...parts) {
         return parts.join('|');
+    }
+
+    enqueuePersistenceMutation(mutation) {
+        if (!this.bmpWorker || typeof this.bmpWorker.enqueuePersistenceMutation !== 'function') {
+            return false;
+        }
+        return this.bmpWorker.enqueuePersistenceMutation(mutation);
+    }
+
+    makeAndEnqueuePersistenceMutation(factory, ensureConnection = true) {
+        try {
+            if (ensureConnection && !this.persistenceConnectionOpened) {
+                this.persistConnectionOpen();
+            }
+            return this.enqueuePersistenceMutation(factory());
+        } catch (error) {
+            logger.error(`Failed to build BMP persistence mutation: ${error.message}`);
+            // Once persistence is active, silently skipping an event would make the
+            // database an untrustworthy projection of the in-memory RIB. Treat key or
+            // serialization failures exactly like writer failures and stop ingestion.
+            if (this.bmpWorker?.persistence && typeof this.bmpWorker.handlePersistenceFailure === 'function') {
+                this.bmpWorker.handlePersistenceFailure(error);
+            }
+            return false;
+        }
+    }
+
+    persistConnectionOpen() {
+        if (this.persistenceConnectionOpened || !this.remoteIp) {
+            return false;
+        }
+        this.persistenceConnectionOpened = true;
+        return this.makeAndEnqueuePersistenceMutation(() => buildConnectionMutation(this, 'connection_open'), false);
+    }
+
+    persistSourceUpdate() {
+        return this.makeAndEnqueuePersistenceMutation(() => buildConnectionMutation(this, 'source_update'));
+    }
+
+    persistConnectionClose(reason = 'connection-close') {
+        if (this.persistenceConnectionClosed || !this.persistenceConnectionOpened) {
+            return false;
+        }
+        this.persistenceConnectionClosed = true;
+        return this.makeAndEnqueuePersistenceMutation(() =>
+            buildConnectionMutation(this, 'connection_close', { reason })
+        );
+    }
+
+    persistStatistics(report, sourceTimestampMs = null) {
+        return this.makeAndEnqueuePersistenceMutation(() => {
+            const mutation = buildConnectionMutation(this, 'statistics', { sourceTimestampMs });
+            mutation.statistics = report;
+            return mutation;
+        });
+    }
+
+    getPersistenceScopeState(owner, afi, safi, ribType) {
+        const key = `${afi}|${safi}|${ribType}`;
+        return owner.persistenceScopeStateMap?.get(key) || 'syncing';
+    }
+
+    setPersistenceScopeState(owner, afi, safi, ribType, state) {
+        if (!owner.persistenceScopeStateMap) {
+            owner.persistenceScopeStateMap = new Map();
+        }
+        owner.persistenceScopeStateMap.set(`${afi}|${safi}|${ribType}`, state);
+    }
+
+    persistScopeState(owner, afi, safi, ribType, kind, state, eventType, options = {}) {
+        this.setPersistenceScopeState(owner, afi, safi, ribType, state);
+        return this.makeAndEnqueuePersistenceMutation(() =>
+            buildScopeMutation(this, owner, afi, safi, ribType, eventType, {
+                ...options,
+                kind,
+                state
+            })
+        );
+    }
+
+    persistSessionRouteUpsert(bgpSession, route, afi, safi, ribType, options = {}) {
+        route.ribType = ribType;
+        return this.makeAndEnqueuePersistenceMutation(() =>
+            buildRouteUpsertMutation(this, bgpSession, route, afi, safi, ribType, {
+                ...options,
+                kind: 'peer',
+                scopeState: this.getPersistenceScopeState(bgpSession, afi, safi, ribType)
+            })
+        );
+    }
+
+    persistSessionRouteWithdraw(bgpSession, withdrawn, route, afi, safi, ribType, options = {}) {
+        return this.makeAndEnqueuePersistenceMutation(() =>
+            buildRouteWithdrawMutation(this, bgpSession, withdrawn, route, afi, safi, ribType, {
+                ...options,
+                kind: 'peer',
+                state: this.getPersistenceScopeState(bgpSession, afi, safi, ribType)
+            })
+        );
+    }
+
+    persistInstanceRouteUpsert(bgpInstance, route, afi, safi, options = {}) {
+        route.ribType = 'loc-rib';
+        return this.makeAndEnqueuePersistenceMutation(() =>
+            buildRouteUpsertMutation(this, bgpInstance, route, afi, safi, 'loc-rib', {
+                ...options,
+                kind: 'loc-rib',
+                scopeState: this.getPersistenceScopeState(bgpInstance, afi, safi, 'loc-rib')
+            })
+        );
+    }
+
+    persistInstanceRouteWithdraw(bgpInstance, withdrawn, route, afi, safi, options = {}) {
+        return this.makeAndEnqueuePersistenceMutation(() =>
+            buildRouteWithdrawMutation(this, bgpInstance, withdrawn, route, afi, safi, 'loc-rib', {
+                ...options,
+                kind: 'loc-rib',
+                state: this.getPersistenceScopeState(bgpInstance, afi, safi, 'loc-rib')
+            })
+        );
+    }
+
+    persistSessionRoutePurge(bgpSession, route, afi, safi, ribType, options = {}) {
+        return this.makeAndEnqueuePersistenceMutation(() =>
+            buildRoutePurgeMutation(this, bgpSession, route, afi, safi, ribType, {
+                ...options,
+                kind: 'peer',
+                state: this.getPersistenceScopeState(bgpSession, afi, safi, ribType)
+            })
+        );
+    }
+
+    persistInstanceRoutePurge(bgpInstance, route, afi, safi, options = {}) {
+        return this.makeAndEnqueuePersistenceMutation(() =>
+            buildRoutePurgeMutation(this, bgpInstance, route, afi, safi, 'loc-rib', {
+                ...options,
+                kind: 'loc-rib',
+                state: this.getPersistenceScopeState(bgpInstance, afi, safi, 'loc-rib')
+            })
+        );
     }
 
     isAddPathReceiveEnabled(afi, safi, direction = 'receive') {
@@ -327,7 +485,13 @@ class BmpSession {
         };
 
         const getAddPathReceiveInfo = (afi, safi, direction = 'receive') => {
-            const instanceKey = BmpBgpInstance.makeKey(locRibPeer.peerType, locRibPeer.peerRd, afi, safi);
+            const instanceKey = BmpBgpInstance.makeKey(
+                locRibPeer.peerType,
+                locRibPeer.peerRd,
+                afi,
+                safi,
+                locRibPeer.peerRdRaw
+            );
             const bgpInstance = this.bgpInstanceMap.get(instanceKey);
             const advertisedForRequestedAf = this.hasAdvertisedAddressFamily(bgpInstance, afi, safi);
             if (bgpInstance) {
@@ -342,7 +506,8 @@ class BmpSession {
                     locRibPeer.peerType,
                     locRibPeer.peerRd,
                     afi,
-                    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+                    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                    locRibPeer.peerRdRaw
                 );
                 const unicastInstance = this.bgpInstanceMap.get(unicastInstanceKey);
                 if (
@@ -361,7 +526,13 @@ class BmpSession {
                 !this.hasNegotiatedAddressFamily(bgpInstance, afi, safi) &&
                 locRibPeer.peerRd !== LOC_RIB_DEFAULT_RD
             ) {
-                const defaultInstanceKey = BmpBgpInstance.makeKey(locRibPeer.peerType, LOC_RIB_DEFAULT_RD, afi, safi);
+                const defaultInstanceKey = BmpBgpInstance.makeKey(
+                    locRibPeer.peerType,
+                    LOC_RIB_DEFAULT_RD,
+                    afi,
+                    safi,
+                    LOC_RIB_DEFAULT_RD_RAW
+                );
                 const defaultInstance = this.bgpInstanceMap.get(defaultInstanceKey);
                 if (this.hasNegotiatedAddressFamily(defaultInstance, afi, safi)) {
                     const defaultAddPathInfo = getInstanceAddPathReceiveInfo(defaultInstance, afi, safi, direction);
@@ -720,7 +891,7 @@ class BmpSession {
     }
 
     getOrCreateLocRibInstance(peer, afi, safi, options = {}) {
-        const instanceKey = BmpBgpInstance.makeKey(peer.peerType, peer.peerRd, afi, safi);
+        const instanceKey = BmpBgpInstance.makeKey(peer.peerType, peer.peerRd, afi, safi, peer.peerRdRaw);
         let bgpInstance = this.bgpInstanceMap.get(instanceKey);
         let instanceInfoChanged = false;
         if (!bgpInstance) {
@@ -744,10 +915,12 @@ class BmpSession {
         bgpInstance.instanceFlags = peer.peerFlags;
         bgpInstance.rawInstanceFlags = peer.peerFlags;
         bgpInstance.instanceRd = peer.peerRd;
+        bgpInstance.instanceRdRaw = peer.peerRdRaw || null;
         bgpInstance.instanceIp = peer.peerAddress;
         bgpInstance.instanceAs = peer.peerAs;
         bgpInstance.instanceRouterId = peer.peerRouterId;
         bgpInstance.instanceTimestamp = peer.peerTimestamp;
+        bgpInstance.instanceTimestampMicroseconds = peer.peerTimestampMicroseconds;
         bgpInstance.instanceTimestampMs = peer.peerTimestampMs;
         bgpInstance.localIp = options.localAddress || bgpInstance.localIp || '0.0.0.0';
         bgpInstance.localPort = options.localPort || bgpInstance.localPort || 0;
@@ -768,12 +941,14 @@ class BmpSession {
         if (vrfTableNames.length > 0) {
             if (this.mergeVrfTableNames(bgpInstance, vrfTableNames)) {
                 instanceInfoChanged = true;
+                this.invalidateRouteAssurance('instance-vrf-metadata-change');
             }
         } else if (!bgpInstance.vrfTableNames || bgpInstance.vrfTableNames.length === 0) {
             const defaultVrfTableNames = peer.peerRd === '0:0' ? ['global'] : [];
             if (!Array.isArray(bgpInstance.vrfTableNames) || defaultVrfTableNames.length > 0) {
                 bgpInstance.vrfTableNames = defaultVrfTableNames;
                 instanceInfoChanged = true;
+                this.invalidateRouteAssurance('instance-vrf-metadata-change');
             }
         }
 
@@ -785,7 +960,72 @@ class BmpSession {
             });
         }
 
+        this.observeInstanceRouteMap(bgpInstance);
+
         return bgpInstance;
+    }
+
+    getRouteAssuranceClientKey() {
+        return BmpSession.makeKey(this.localIp, this.localPort, this.remoteIp, this.remotePort);
+    }
+
+    forwardRouteAssuranceMutation(context, mutation) {
+        if (!this.bmpWorker || typeof this.bmpWorker.applyRouteAssuranceMutation !== 'function') {
+            return;
+        }
+        this.bmpWorker.applyRouteAssuranceMutation({
+            ...context,
+            ...mutation,
+            clientKey: this.getRouteAssuranceClientKey(),
+            bmpSession: this
+        });
+    }
+
+    observeSessionRouteMap(bgpSession, afi, safi, ribType, routeMap) {
+        if (routeMap instanceof ObservedRouteMap) {
+            return routeMap;
+        }
+        return new ObservedRouteMap(routeMap, mutation => {
+            const ownerKey = BmpBgpSession.makeKey(
+                bgpSession.sessionType,
+                bgpSession.sessionRd,
+                bgpSession.sessionIp,
+                bgpSession.sessionAs,
+                bgpSession.sessionRdRaw
+            );
+            this.forwardRouteAssuranceMutation(
+                { scope: 'session', ownerKey, owner: bgpSession, afi, safi, ribType },
+                mutation
+            );
+        });
+    }
+
+    observeInstanceRouteMap(bgpInstance) {
+        if (bgpInstance.bgpRoutes instanceof ObservedRouteMap) {
+            return bgpInstance.bgpRoutes;
+        }
+        const routeMap = new ObservedRouteMap(bgpInstance.bgpRoutes, mutation => {
+            const ownerKey = BmpBgpInstance.makeKey(
+                bgpInstance.instanceType,
+                bgpInstance.instanceRd,
+                bgpInstance.afi,
+                bgpInstance.safi,
+                bgpInstance.instanceRdRaw
+            );
+            this.forwardRouteAssuranceMutation(
+                {
+                    scope: 'instance',
+                    ownerKey,
+                    owner: bgpInstance,
+                    afi: bgpInstance.afi,
+                    safi: bgpInstance.safi,
+                    stage: 'locRib'
+                },
+                mutation
+            );
+        });
+        bgpInstance.bgpRoutes = routeMap;
+        return routeMap;
     }
 
     getOrCreateBgpSessionRouteMap(bgpSession, afi, safi, ribType) {
@@ -821,7 +1061,9 @@ class BmpSession {
             });
         }
 
-        return ribTypeRouteMap.get(ribType);
+        const routeMap = this.observeSessionRouteMap(bgpSession, afi, safi, ribType, ribTypeRouteMap.get(ribType));
+        ribTypeRouteMap.set(ribType, routeMap);
+        return routeMap;
     }
 
     getBgpSessionRouteMap(bgpSession, afi, safi, ribType) {
@@ -1011,6 +1253,7 @@ class BmpSession {
         delete nlriDetail.parseWarning;
         route.pathId = normalizedPathId;
         route.rd = normalizedRd;
+        route.rdRaw = nlri.rdRaw || null;
         route.ip = nlri.displayPrefix || nlri.prefix;
         route.mask = nlri.length;
         route.afi = afi;
@@ -1080,6 +1323,33 @@ class BmpSession {
         logger.info(detail.join('\n'));
     }
 
+    getEndOfRibAddressFamilies(parsedBgpUpdate) {
+        const families = [];
+        const withdrawn = parsedBgpUpdate.withdrawnRoutes || [];
+        const nlri = parsedBgpUpdate.nlri || [];
+        const attributes = parsedBgpUpdate.pathAttributes || [];
+        if (
+            Number(parsedBgpUpdate.withdrawnRoutesLength || 0) === 0 &&
+            Number(parsedBgpUpdate.pathAttributesLength || 0) === 0 &&
+            withdrawn.length === 0 &&
+            attributes.length === 0 &&
+            nlri.length === 0
+        ) {
+            families.push({
+                afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+            });
+        }
+
+        if (attributes.length === 1 && attributes[0].typeCode === BgpConst.BGP_PATH_ATTR.MP_UNREACH_NLRI) {
+            const mpUnreach = attributes[0].mpUnreach;
+            if (mpUnreach && (!mpUnreach.withdrawnRoutes || mpUnreach.withdrawnRoutes.length === 0)) {
+                families.push({ afi: mpUnreach.afi, safi: mpUnreach.safi });
+            }
+        }
+        return families;
+    }
+
     processRouteMonitoringGlobal(message, version = BmpConst.BMP_VERSION.V3) {
         try {
             let position = 0;
@@ -1093,11 +1363,19 @@ class BmpSession {
                 peerType: sessionType,
                 peerFlags: sessionFlags,
                 peerRd: sessionRd,
+                peerRdRaw: sessionRdRaw,
                 peerAddress: sessionAddress,
-                peerAs: sessionAs
+                peerAs: sessionAs,
+                peerTimestampMs: sourceTimestampMs
             } = peerHeader.peer;
 
-            const bgpSessionKey = BmpBgpSession.makeKey(sessionType, sessionRd, sessionAddress, sessionAs);
+            const bgpSessionKey = BmpBgpSession.makeKey(
+                sessionType,
+                sessionRd,
+                sessionAddress,
+                sessionAs,
+                sessionRdRaw
+            );
             const bgpSession = this.bgpSessionMap.get(bgpSessionKey);
             if (!bgpSession) {
                 logger.error(`Received BGP Update message from unknown session: ${bgpSessionKey}`);
@@ -1126,6 +1404,7 @@ class BmpSession {
             bgpSession.lastRouteMonitoringTlvs = routePayload.routeTlvs || [];
             const routeVrfTableNames = this.decodeVrfTableNameTlvs(routePayload.routeTlvs);
             if (this.mergeVrfTableNames(bgpSession, routeVrfTableNames)) {
+                this.invalidateRouteAssurance('session-vrf-metadata-change');
                 this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.SESSION_UPDATE, {
                     data: {
                         client: this.getClientInfo()
@@ -1133,7 +1412,13 @@ class BmpSession {
                 });
             }
 
+            if (parsedBgpUpdate.type !== BgpConst.BGP_PACKET_TYPE.UPDATE) {
+                logger.error(`Route Monitoring contains non-UPDATE BGP message type: ${parsedBgpUpdate.type}`);
+                return;
+            }
             if (!parsedBgpUpdate.valid) {
+                // Preserve partially decoded NLRI for diagnostics, but never allow an
+                // invalid UPDATE to advance an EOR-gated stale sweep.
                 logger.error(`Received BGP Update message is invalid: ${parsedBgpUpdate.error}`);
             }
 
@@ -1150,6 +1435,24 @@ class BmpSession {
                 ribTypes
             });
 
+            if (parsedBgpUpdate.valid) {
+                this.getEndOfRibAddressFamilies(parsedBgpUpdate).forEach(family => {
+                    ribTypes.forEach(ribType => {
+                        this.persistScopeState(
+                            bgpSession,
+                            family.afi,
+                            family.safi,
+                            ribType,
+                            'peer',
+                            'ready',
+                            'scope_eor',
+                            { sourceTimestampMs }
+                        );
+                        this.scheduleSessionRouteAging(bgpSession, family.afi, family.safi, ribType, 0);
+                    });
+                });
+            }
+
             // 处理withdrawn routes (IPv4)
             if (parsedBgpUpdate.withdrawnRoutes && parsedBgpUpdate.withdrawnRoutes.length > 0) {
                 // 删除所有撤销的路由
@@ -1160,17 +1463,24 @@ class BmpSession {
                         BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
                         ribType
                     );
-                    if (!routeMap) {
-                        continue;
-                    }
                     for (const withdrawn of parsedBgpUpdate.withdrawnRoutes) {
                         const routeKey = BmpBgpRoute.makeKey(
                             withdrawn.pathId,
                             withdrawn.rd,
                             withdrawn.prefix,
-                            withdrawn.length
+                            withdrawn.length,
+                            withdrawn.rdRaw
                         );
-                        const route = routeMap.get(routeKey);
+                        const route = routeMap?.get(routeKey) || null;
+                        this.persistSessionRouteWithdraw(
+                            bgpSession,
+                            withdrawn,
+                            route,
+                            BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                            BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                            ribType,
+                            { sourceTimestampMs }
+                        );
                         if (route) {
                             bgpSession.removeRouteFromPrefixIndex(
                                 BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -1221,17 +1531,24 @@ class BmpSession {
                         mpUnreachNlri.safi,
                         ribType
                     );
-                    if (!routeMap) {
-                        continue;
-                    }
                     for (const withdrawn of mpUnreachNlri.withdrawnRoutes) {
                         const routeKey = BmpBgpRoute.makeKey(
                             withdrawn.pathId,
                             withdrawn.rd,
                             withdrawn.prefix,
-                            withdrawn.length
+                            withdrawn.length,
+                            withdrawn.rdRaw
                         );
-                        const route = routeMap.get(routeKey);
+                        const route = routeMap?.get(routeKey) || null;
+                        this.persistSessionRouteWithdraw(
+                            bgpSession,
+                            withdrawn,
+                            route,
+                            mpUnreachNlri.afi,
+                            mpUnreachNlri.safi,
+                            ribType,
+                            { sourceTimestampMs }
+                        );
                         if (route) {
                             bgpSession.removeRouteFromPrefixIndex(
                                 mpUnreachNlri.afi,
@@ -1269,14 +1586,22 @@ class BmpSession {
                         ribType
                     );
                     for (const nlri of parsedBgpUpdate.nlri) {
-                        const routeKey = BmpBgpRoute.makeKey(nlri.pathId, nlri.rd, nlri.prefix, nlri.length);
+                        const routeKey = BmpBgpRoute.makeKey(
+                            nlri.pathId,
+                            nlri.rd,
+                            nlri.prefix,
+                            nlri.length,
+                            nlri.rdRaw
+                        );
 
                         let bmpBgpRoute = routeMap.get(routeKey);
                         const isNewRoute = !bmpBgpRoute;
                         const previousRouteState = bmpBgpRoute?.routeState;
+                        const previousAttrHash = bmpBgpRoute
+                            ? bgpSession.getRouteAttrEntry(bmpBgpRoute)?.hash || null
+                            : null;
                         if (!bmpBgpRoute) {
                             bmpBgpRoute = new BmpBgpRoute(bgpSession, null);
-                            routeMap.set(routeKey, bmpBgpRoute);
                         } else {
                             bmpBgpRoute.clearAttributes();
                         }
@@ -1322,6 +1647,15 @@ class BmpSession {
                             routeKey,
                             bmpBgpRoute
                         );
+                        routeMap.set(routeKey, bmpBgpRoute);
+                        this.persistSessionRouteUpsert(
+                            bgpSession,
+                            bmpBgpRoute,
+                            BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                            BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                            ribType,
+                            { isNewRoute, previousAttrHash, sourceTimestampMs }
+                        );
 
                         isNotify = true;
                     }
@@ -1356,14 +1690,22 @@ class BmpSession {
                         ribType
                     );
                     for (const nlri of mpReachNlri.nlri) {
-                        const routeKey = BmpBgpRoute.makeKey(nlri.pathId, nlri.rd, nlri.prefix, nlri.length);
+                        const routeKey = BmpBgpRoute.makeKey(
+                            nlri.pathId,
+                            nlri.rd,
+                            nlri.prefix,
+                            nlri.length,
+                            nlri.rdRaw
+                        );
 
                         let bmpBgpRoute = routeMap.get(routeKey);
                         const isNewRoute = !bmpBgpRoute;
                         const previousRouteState = bmpBgpRoute?.routeState;
+                        const previousAttrHash = bmpBgpRoute
+                            ? bgpSession.getRouteAttrEntry(bmpBgpRoute)?.hash || null
+                            : null;
                         if (!bmpBgpRoute) {
                             bmpBgpRoute = new BmpBgpRoute(bgpSession, null);
-                            routeMap.set(routeKey, bmpBgpRoute);
                         } else {
                             bmpBgpRoute.clearAttributes();
                         }
@@ -1392,6 +1734,15 @@ class BmpSession {
                             ribType,
                             routeKey,
                             bmpBgpRoute
+                        );
+                        routeMap.set(routeKey, bmpBgpRoute);
+                        this.persistSessionRouteUpsert(
+                            bgpSession,
+                            bmpBgpRoute,
+                            mpReachNlri.afi,
+                            mpReachNlri.safi,
+                            ribType,
+                            { isNewRoute, previousAttrHash, sourceTimestampMs }
                         );
 
                         isNotify = true;
@@ -1422,6 +1773,7 @@ class BmpSession {
             }
             position = peerHeader.offset;
             const locRibPeer = peerHeader.peer;
+            const sourceTimestampMs = locRibPeer.peerTimestampMs;
 
             const routePayload = this.parseRouteMonitoringBgpUpdate(
                 message,
@@ -1443,6 +1795,10 @@ class BmpSession {
                     ? getEffectivePeerFlags(locRibPeer.peerFlags, routePayload.routeTlvs)
                     : locRibPeer.peerFlags;
 
+            if (parsedBgpUpdate.type !== BgpConst.BGP_PACKET_TYPE.UPDATE) {
+                logger.error(`Route Monitoring contains non-UPDATE BGP message type: ${parsedBgpUpdate.type}`);
+                return;
+            }
             if (!parsedBgpUpdate.valid) {
                 logger.error(`Received BGP Update message is invalid: ${parsedBgpUpdate.error}`);
             }
@@ -1451,6 +1807,25 @@ class BmpSession {
                 rawFlags: locRibPeer.peerFlags,
                 effectiveFlags: effectiveLocRibFlags
             });
+
+            if (parsedBgpUpdate.valid) {
+                this.getEndOfRibAddressFamilies(parsedBgpUpdate).forEach(family => {
+                    const bgpInstance = this.getOrCreateLocRibInstance(locRibPeer, family.afi, family.safi, {
+                        routeTlvs: routePayload.routeTlvs
+                    });
+                    this.persistScopeState(
+                        bgpInstance,
+                        family.afi,
+                        family.safi,
+                        'loc-rib',
+                        'loc-rib',
+                        'ready',
+                        'scope_eor',
+                        { sourceTimestampMs }
+                    );
+                    this.scheduleInstanceRouteAging(bgpInstance, 0);
+                });
+            }
 
             let isNotify = false;
             // 处理withdrawn routes (IPv4)
@@ -1468,9 +1843,18 @@ class BmpSession {
                         withdrawn.pathId,
                         withdrawn.rd,
                         withdrawn.prefix,
-                        withdrawn.length
+                        withdrawn.length,
+                        withdrawn.rdRaw
                     );
                     const route = bgpInstance.bgpRoutes.get(routeKey);
+                    this.persistInstanceRouteWithdraw(
+                        bgpInstance,
+                        withdrawn,
+                        route,
+                        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                        { sourceTimestampMs }
+                    );
                     if (route) {
                         bgpInstance.removeRouteFromPrefixIndex(routeKey, route);
                         bgpInstance.recordRouteDelete(route);
@@ -1510,9 +1894,18 @@ class BmpSession {
                         withdrawn.pathId,
                         withdrawn.rd,
                         withdrawn.prefix,
-                        withdrawn.length
+                        withdrawn.length,
+                        withdrawn.rdRaw
                     );
                     const route = bgpInstance.bgpRoutes.get(routeKey);
+                    this.persistInstanceRouteWithdraw(
+                        bgpInstance,
+                        withdrawn,
+                        route,
+                        mpUnreachNlri.afi,
+                        mpUnreachNlri.safi,
+                        { sourceTimestampMs }
+                    );
                     if (route) {
                         isNotify = true;
                         bgpInstance.removeRouteFromPrefixIndex(routeKey, route);
@@ -1542,14 +1935,16 @@ class BmpSession {
                 );
 
                 for (const nlri of parsedBgpUpdate.nlri) {
-                    const routeKey = BmpBgpRoute.makeKey(nlri.pathId, nlri.rd, nlri.prefix, nlri.length);
+                    const routeKey = BmpBgpRoute.makeKey(nlri.pathId, nlri.rd, nlri.prefix, nlri.length, nlri.rdRaw);
 
                     let bmpBgpRoute = bgpInstance.bgpRoutes.get(routeKey);
                     const isNewRoute = !bmpBgpRoute;
                     const previousRouteState = bmpBgpRoute?.routeState;
+                    const previousAttrHash = bmpBgpRoute
+                        ? bgpInstance.getRouteAttrEntry(bmpBgpRoute)?.hash || null
+                        : null;
                     if (!bmpBgpRoute) {
                         bmpBgpRoute = new BmpBgpRoute(null, bgpInstance);
-                        bgpInstance.bgpRoutes.set(routeKey, bmpBgpRoute);
                     } else {
                         bmpBgpRoute.clearAttributes();
                     }
@@ -1572,6 +1967,14 @@ class BmpSession {
                         bgpInstance.recordRouteStateChange(previousRouteState, bmpBgpRoute.routeState);
                     }
                     bgpInstance.addRouteToPrefixIndex(routeKey, bmpBgpRoute);
+                    bgpInstance.bgpRoutes.set(routeKey, bmpBgpRoute);
+                    this.persistInstanceRouteUpsert(
+                        bgpInstance,
+                        bmpBgpRoute,
+                        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                        { isNewRoute, previousAttrHash, sourceTimestampMs }
+                    );
 
                     isNotify = true;
                 }
@@ -1602,14 +2005,16 @@ class BmpSession {
                 });
 
                 for (const nlri of mpReachNlri.nlri) {
-                    const routeKey = BmpBgpRoute.makeKey(nlri.pathId, nlri.rd, nlri.prefix, nlri.length);
+                    const routeKey = BmpBgpRoute.makeKey(nlri.pathId, nlri.rd, nlri.prefix, nlri.length, nlri.rdRaw);
 
                     let bmpBgpRoute = bgpInstance.bgpRoutes.get(routeKey);
                     const isNewRoute = !bmpBgpRoute;
                     const previousRouteState = bmpBgpRoute?.routeState;
+                    const previousAttrHash = bmpBgpRoute
+                        ? bgpInstance.getRouteAttrEntry(bmpBgpRoute)?.hash || null
+                        : null;
                     if (!bmpBgpRoute) {
                         bmpBgpRoute = new BmpBgpRoute(null, bgpInstance);
-                        bgpInstance.bgpRoutes.set(routeKey, bmpBgpRoute);
                     } else {
                         bmpBgpRoute.clearAttributes();
                     }
@@ -1627,6 +2032,12 @@ class BmpSession {
                         bgpInstance.recordRouteStateChange(previousRouteState, bmpBgpRoute.routeState);
                     }
                     bgpInstance.addRouteToPrefixIndex(routeKey, bmpBgpRoute);
+                    bgpInstance.bgpRoutes.set(routeKey, bmpBgpRoute);
+                    this.persistInstanceRouteUpsert(bgpInstance, bmpBgpRoute, mpReachNlri.afi, mpReachNlri.safi, {
+                        isNewRoute,
+                        previousAttrHash,
+                        sourceTimestampMs
+                    });
 
                     isNotify = true;
                 }
@@ -1697,6 +2108,16 @@ class BmpSession {
                 reason
             );
             staleResults.forEach(result => {
+                this.persistScopeState(
+                    bgpSession,
+                    result.afi,
+                    result.safi,
+                    result.ribType,
+                    'peer',
+                    'stale',
+                    'scope_stale',
+                    { reason }
+                );
                 if (result.changed > 0) {
                     updates.push(result);
                 }
@@ -1721,7 +2142,152 @@ class BmpSession {
         if (!bgpInstance) {
             return { changed: 0 };
         }
-        return bgpInstance.markRoutesStale(reason);
+        const result = bgpInstance.markRoutesStale(reason);
+        this.persistScopeState(
+            bgpInstance,
+            bgpInstance.afi,
+            bgpInstance.safi,
+            'loc-rib',
+            'loc-rib',
+            'stale',
+            'scope_stale',
+            { reason }
+        );
+        return result;
+    }
+
+    getInMemoryAgingPrefix() {
+        return `${BmpSession.makeKey(this.localIp, this.localPort, this.remoteIp, this.remotePort)}|`;
+    }
+
+    getInMemoryRefreshTimeoutMs() {
+        return Math.max(60000, Number(this.bmpWorker?.bmpConfigData?.persistenceRefreshTimeoutMs) || 10 * 60 * 1000);
+    }
+
+    getInMemoryStaleRetentionMs() {
+        return Math.max(
+            60000,
+            Number(this.bmpWorker?.bmpConfigData?.persistenceStaleRetentionMs) || 24 * 60 * 60 * 1000
+        );
+    }
+
+    scheduleSessionRouteAging(bgpSession, afi, safi, ribType, delayMs = 0, agingOptions = {}) {
+        if (!this.bmpWorker || typeof this.bmpWorker.scheduleInMemoryRouteAging !== 'function') {
+            return false;
+        }
+        const routeMap = this.getBgpSessionRouteMap(bgpSession, afi, safi, ribType);
+        if (!routeMap) {
+            return false;
+        }
+        const targetEpoch = bgpSession.getRibEpoch(afi, safi, ribType);
+        const ownerKey = BmpBgpSession.makeKey(
+            bgpSession.sessionType,
+            bgpSession.sessionRd,
+            bgpSession.sessionIp,
+            bgpSession.sessionAs,
+            bgpSession.sessionRdRaw
+        );
+        const jobKey = `${this.getInMemoryAgingPrefix()}peer|${ownerKey}|${afi}|${safi}|${ribType}`;
+        return this.bmpWorker.scheduleInMemoryRouteAging({
+            key: jobKey,
+            routeMap,
+            targetEpoch,
+            delayMs,
+            isCurrent: epoch => bgpSession.getRibEpoch(afi, safi, ribType) === epoch,
+            isExhausted: () => bgpSession.getRouteSummary(afi, safi, ribType).stale <= 0,
+            onDelete: (route, routeKey) => {
+                bgpSession.removeRouteFromPrefixIndex(afi, safi, ribType, routeKey, route);
+                bgpSession.recordRouteDelete(afi, safi, ribType, route);
+                bgpSession.releaseRouteAttr(route);
+            },
+            onComplete: (deleted, detail = {}) => {
+                if (deleted > 0) {
+                    if (!(routeMap instanceof ObservedRouteMap)) {
+                        this.invalidateRouteAssurance('automatic-session-route-aging');
+                    }
+                    this.sendRouteUpdateEvent(
+                        BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_DELETE,
+                        bgpSession,
+                        getAddrFamilyType(afi, safi),
+                        ribType,
+                        deleted
+                    );
+                }
+                if (
+                    agingOptions.finalizeRefreshTimeout === true &&
+                    !detail.aborted &&
+                    bgpSession.getRibEpoch(afi, safi, ribType) === targetEpoch &&
+                    this.getPersistenceScopeState(bgpSession, afi, safi, ribType) === 'syncing'
+                ) {
+                    this.persistScopeState(bgpSession, afi, safi, ribType, 'peer', 'ready', 'scope_timeout', {
+                        reason: 'refresh-timeout'
+                    });
+                }
+            }
+        });
+    }
+
+    scheduleInstanceRouteAging(bgpInstance, delayMs = 0, agingOptions = {}) {
+        if (!this.bmpWorker || typeof this.bmpWorker.scheduleInMemoryRouteAging !== 'function') {
+            return false;
+        }
+        const routeMap = bgpInstance.bgpRoutes;
+        if (!routeMap) {
+            return false;
+        }
+        const targetEpoch = bgpInstance.getRibEpoch();
+        const ownerKey = BmpBgpInstance.makeKey(
+            bgpInstance.instanceType,
+            bgpInstance.instanceRd,
+            bgpInstance.afi,
+            bgpInstance.safi,
+            bgpInstance.instanceRdRaw
+        );
+        const jobKey = `${this.getInMemoryAgingPrefix()}loc-rib|${ownerKey}`;
+        return this.bmpWorker.scheduleInMemoryRouteAging({
+            key: jobKey,
+            routeMap,
+            targetEpoch,
+            delayMs,
+            isCurrent: epoch => bgpInstance.getRibEpoch() === epoch,
+            isExhausted: () => bgpInstance.getRouteSummary().stale <= 0,
+            onDelete: (route, routeKey) => {
+                bgpInstance.removeRouteFromPrefixIndex(routeKey, route);
+                bgpInstance.recordRouteDelete(route);
+                bgpInstance.releaseRouteAttr(route);
+            },
+            onComplete: (deleted, detail = {}) => {
+                if (deleted > 0) {
+                    if (!(routeMap instanceof ObservedRouteMap)) {
+                        this.invalidateRouteAssurance('automatic-instance-route-aging');
+                    }
+                    this.sendInstanceRouteUpdateEvent(
+                        BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_DELETE,
+                        bgpInstance,
+                        getAddrFamilyType(bgpInstance.afi, bgpInstance.safi),
+                        deleted
+                    );
+                }
+                if (
+                    agingOptions.finalizeRefreshTimeout === true &&
+                    !detail.aborted &&
+                    bgpInstance.getRibEpoch() === targetEpoch &&
+                    this.getPersistenceScopeState(bgpInstance, bgpInstance.afi, bgpInstance.safi, 'loc-rib') ===
+                        'syncing'
+                ) {
+                    this.persistScopeState(
+                        bgpInstance,
+                        bgpInstance.afi,
+                        bgpInstance.safi,
+                        'loc-rib',
+                        'loc-rib',
+                        'ready',
+                        'scope_timeout',
+                        { reason: 'refresh-timeout' }
+                    );
+                }
+            }
+        });
     }
 
     sendInstanceStaleEvent(bgpInstance) {
@@ -1776,6 +2342,7 @@ class BmpSession {
         return {
             sessionType: bgpSession.sessionType,
             sessionRd: bgpSession.sessionRd,
+            sessionRdRaw: bgpSession.sessionRdRaw,
             sessionIp: bgpSession.sessionIp,
             sessionAs: bgpSession.sessionAs
         };
@@ -1785,6 +2352,7 @@ class BmpSession {
         return {
             instanceType: bgpInstance.instanceType,
             instanceRd: bgpInstance.instanceRd,
+            instanceRdRaw: bgpInstance.instanceRdRaw,
             addrFamilyType: getAddrFamilyType(bgpInstance.afi, bgpInstance.safi)
         };
     }
@@ -1796,7 +2364,8 @@ class BmpSession {
             session: this.getSessionRouteEventInfo(bgpSession),
             af,
             ribType,
-            changedCount
+            changedCount,
+            assuranceIncremental: true
         };
 
         if (this.bmpWorker && typeof this.bmpWorker.enqueueRouteUpdateEvent === 'function') {
@@ -1813,7 +2382,8 @@ class BmpSession {
             client: this.getClientRouteEventInfo(),
             instance: this.getInstanceRouteEventInfo(bgpInstance),
             af,
-            changedCount
+            changedCount,
+            assuranceIncremental: true
         };
 
         if (this.bmpWorker && typeof this.bmpWorker.enqueueInstanceRouteUpdateEvent === 'function') {
@@ -1822,6 +2392,12 @@ class BmpSession {
         }
 
         this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE, { data: update });
+    }
+
+    invalidateRouteAssurance(reason) {
+        if (this.bmpWorker && typeof this.bmpWorker.invalidateRouteAssurance === 'function') {
+            this.bmpWorker.invalidateRouteAssurance(reason);
+        }
     }
 
     processInitiation(message) {
@@ -1860,6 +2436,8 @@ class BmpSession {
             // 创建一个初始化记录
             const clientInfo = this.getClientInfo();
 
+            this.persistConnectionOpen();
+            this.persistSourceUpdate();
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.INITIATION, { data: clientInfo });
             logger.info(`Processed initiation message: sysName=${this.sysName}, sysDesc=${this.sysDesc}`);
         } catch (err) {
@@ -1892,6 +2470,7 @@ class BmpSession {
                 peerType: sessionType,
                 peerFlags: sessionFlags,
                 peerRd: sessionRd,
+                peerRdRaw: sessionRdRaw,
                 peerAddress: sessionAddress,
                 peerAs: sessionAs
             } = peerHeader.peer;
@@ -1910,7 +2489,7 @@ class BmpSession {
                 return;
             }
 
-            const sessKey = BmpBgpSession.makeKey(sessionType, sessionRd, sessionAddress, sessionAs);
+            const sessKey = BmpBgpSession.makeKey(sessionType, sessionRd, sessionAddress, sessionAs, sessionRdRaw);
             const bgpSession = this.bgpSessionMap.get(sessKey);
             if (!bgpSession) {
                 logger.error(`Received BGP Update message from unknown session: ${sessKey}`);
@@ -1928,28 +2507,34 @@ class BmpSession {
                 ])
             );
 
-            if (peerDownPayload.parsedBgpNotification) {
-                // BGP Notification means the monitored BGP peer is down, not an AF-only BMP config refresh.
-                bgpSession.closeSession();
-                this.bgpSessionMap.delete(sessKey);
-            } else {
-                const staleAddressFamilies = addressFamilyKeys.map(key => {
-                    const [afi, safi] = key.split('|').map(value => Number(value));
-                    return { afi, safi };
-                });
-                const staleUpdates = this.markSessionRoutesStale(
-                    bgpSession,
-                    staleAddressFamilies,
-                    ribTypes,
-                    `peer-down:${reason}`
-                );
-                this.sendSessionStaleEvents(bgpSession, staleUpdates);
-
-                if (addressFamilyKeys.length > 1) {
-                    logger.info(
-                        `Peer Down marked ${addressFamilyKeys.length} address families stale for ${sessKey}; keeping routes until refresh, withdraw, purge, or BMP close`
+            const staleAddressFamilies = addressFamilyKeys.map(key => {
+                const [afi, safi] = key.split('|').map(value => Number(value));
+                return { afi, safi };
+            });
+            const staleUpdates = this.markSessionRoutesStale(
+                bgpSession,
+                staleAddressFamilies,
+                ribTypes,
+                `peer-down:${reason}`
+            );
+            this.sendSessionStaleEvents(bgpSession, staleUpdates);
+            staleAddressFamilies.forEach(addressFamily => {
+                ribTypes.forEach(ribType => {
+                    this.scheduleSessionRouteAging(
+                        bgpSession,
+                        addressFamily.afi,
+                        addressFamily.safi,
+                        ribType,
+                        this.getInMemoryStaleRetentionMs()
                     );
-                }
+                });
+            });
+            bgpSession.sessionState = BmpConst.BMP_SESSION_STATE.PEER_DOWN;
+
+            if (addressFamilyKeys.length > 1) {
+                logger.info(
+                    `Peer Down marked ${addressFamilyKeys.length} address families stale for ${sessKey}; keeping routes until refresh, withdraw, purge, or BMP close`
+                );
             }
 
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.SESSION_UPDATE, {
@@ -1971,17 +2556,21 @@ class BmpSession {
                 return;
             }
             position = peerHeader.offset;
-            const { peerType: instanceType, peerRd: instanceRd } = peerHeader.peer;
+            const { peerType: instanceType, peerRd: instanceRd, peerRdRaw: instanceRdRaw } = peerHeader.peer;
 
             const reason = message[position];
             position += 1;
             const peerDownPayload = this.parsePeerDownPayload(message, position, reason, version);
             const peerDownVrfTableNames = this.decodeVrfTableNameTlvs(peerDownPayload.tlvs);
 
-            const prefix = `${instanceType}|${instanceRd}|`;
+            const rdIdentity = instanceRdRaw || instanceRd;
+            const prefix = `${instanceType}|${rdIdentity}|`;
             const candidates = [];
             this.bgpInstanceMap.forEach((instance, key) => {
-                if (!key.startsWith(prefix)) {
+                if (
+                    instance.instanceType !== instanceType ||
+                    (instance.instanceRdRaw || instance.instanceRd) !== rdIdentity
+                ) {
                     return;
                 }
 
@@ -2002,6 +2591,8 @@ class BmpSession {
 
             candidates.forEach(({ instance }) => {
                 const result = this.markInstanceRoutesStale(instance, `loc-rib-peer-down:${reason}`);
+                instance.instanceState = BmpConst.BMP_SESSION_STATE.PEER_DOWN;
+                this.scheduleInstanceRouteAging(instance, this.getInMemoryStaleRetentionMs());
                 if (result.changed > 0) {
                     this.sendInstanceStaleEvent(instance);
                 }
@@ -2049,6 +2640,7 @@ class BmpSession {
             const rdBuffer = message.subarray(position, position + BgpConst.BGP_RD_LEN);
             position += BgpConst.BGP_RD_LEN;
             const sessionRd = rdBufferToString(rdBuffer);
+            const sessionRdRaw = `raw:${rdBuffer.toString('hex')}`;
 
             let sessionAddress;
             if (sessionFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
@@ -2069,8 +2661,9 @@ class BmpSession {
             position += 4;
             const sessionTimestamp = message.readUInt32BE(position);
             position += 4;
-            const sessionTimestampMs = message.readUInt32BE(position);
+            const sessionTimestampMicroseconds = message.readUInt32BE(position);
             position += 4;
+            const sessionTimestampMs = toUnixTimestampMs(sessionTimestamp, sessionTimestampMicroseconds);
 
             let localAddress;
             if (sessionFlags & BmpConst.BMP_SESSION_FLAGS.IPV6) {
@@ -2191,25 +2784,60 @@ class BmpSession {
                 }
             });
 
-            const bgpSessionKey = BmpBgpSession.makeKey(sessionType, sessionRd, sessionAddress, sessionAs);
+            const bgpSessionKey = BmpBgpSession.makeKey(
+                sessionType,
+                sessionRd,
+                sessionAddress,
+                sessionAs,
+                sessionRdRaw
+            );
             let bgpSession = this.bgpSessionMap.get(bgpSessionKey);
             if (!bgpSession) {
                 bgpSession = new BmpBgpSession(this);
                 this.bgpSessionMap.set(bgpSessionKey, bgpSession);
             } else {
+                const staleAddressFamilyKeys = new Set([
+                    ...bgpSession.enabledAddressFamilies.map(item => `${item.afi}|${item.safi}`),
+                    ...bgpSession.bgpRoutes.keys(),
+                    ...enabledAddressFamilies.map(item => `${item.afi}|${item.safi}`)
+                ]);
+                const staleAddressFamilies = Array.from(staleAddressFamilyKeys, key => {
+                    const [afi, safi] = key.split('|').map(Number);
+                    return { afi, safi };
+                });
                 const staleUpdates = this.markSessionRoutesStale(
                     bgpSession,
-                    enabledAddressFamilies,
+                    staleAddressFamilies,
                     this.getAllRibTypes(),
                     'peer-up-refresh'
                 );
                 this.sendSessionStaleEvents(bgpSession, staleUpdates);
-                this.clearSessionAddPathByAddressFamilies(bgpSession, enabledAddressFamilies);
+                this.clearSessionAddPathByAddressFamilies(bgpSession, staleAddressFamilies);
+                staleAddressFamilies.forEach(addressFamily => {
+                    const isStillEnabled = enabledAddressFamilies.some(
+                        item =>
+                            Number(item.afi) === Number(addressFamily.afi) &&
+                            Number(item.safi) === Number(addressFamily.safi)
+                    );
+                    this.getAllRibTypes().forEach(ribType => {
+                        if (!isStillEnabled) {
+                            this.scheduleSessionRouteAging(
+                                bgpSession,
+                                addressFamily.afi,
+                                addressFamily.safi,
+                                ribType,
+                                this.getInMemoryStaleRetentionMs()
+                            );
+                        }
+                    });
+                });
             }
 
-            this.mergeAddressFamilies(bgpSession.enabledAddressFamilies, enabledAddressFamilies);
-            this.mergeAddressFamilies(bgpSession.recvAddressFamilies, recvAddressFamilies);
-            this.mergeAddressFamilies(bgpSession.sendAddressFamilies, sentAddressFamilies);
+            // Peer Up is a fresh capability snapshot. Keep old route maps for graceful
+            // stale aging, but do not advertise withdrawn address families as enabled.
+            bgpSession.enabledAddressFamilies = enabledAddressFamilies.map(item => ({ ...item }));
+            bgpSession.recvAddressFamilies = recvAddressFamilies.map(item => ({ ...item }));
+            bgpSession.sendAddressFamilies = sentAddressFamilies.map(item => ({ ...item }));
 
             const allKeys = new Set([...recvAddPaths.keys(), ...sendAddPaths.keys()]);
             allKeys.forEach(key => {
@@ -2263,15 +2891,30 @@ class BmpSession {
             bgpSession.sessionType = sessionType;
             bgpSession.sessionFlags = effectiveSessionFlags;
             bgpSession.sessionRd = sessionRd;
+            bgpSession.sessionRdRaw = sessionRdRaw;
             bgpSession.sessionIp = sessionAddress;
             bgpSession.sessionAs = sessionAs;
             bgpSession.sessionRouterId = sessionRouterId;
             bgpSession.sessionTimestamp = sessionTimestamp;
+            bgpSession.sessionTimestampMicroseconds = sessionTimestampMicroseconds;
             bgpSession.sessionTimestampMs = sessionTimestampMs;
             bgpSession.localIp = localAddress;
             bgpSession.localPort = localPort;
             bgpSession.remotePort = remotePort;
             bgpSession.sessionState = BmpConst.BMP_SESSION_STATE.PEER_UP;
+
+            const scopeAddressFamilies = new Set(enabledAddressFamilies.map(item => `${item.afi}|${item.safi}`));
+            scopeAddressFamilies.forEach(afKey => {
+                const [afi, safi] = afKey.split('|').map(Number);
+                bgpSession.ribTypes.forEach(ribType => {
+                    this.persistScopeState(bgpSession, afi, safi, ribType, 'peer', 'syncing', 'scope_open', {
+                        sourceTimestampMs: sessionTimestampMs
+                    });
+                    this.scheduleSessionRouteAging(bgpSession, afi, safi, ribType, this.getInMemoryRefreshTimeoutMs(), {
+                        finalizeRefreshTimeout: true
+                    });
+                });
+            });
 
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.SESSION_UPDATE, {
                 data: {
@@ -2296,10 +2939,12 @@ class BmpSession {
                 peerType: instanceType,
                 peerFlags: instanceFlags,
                 peerRd: instanceRd,
+                peerRdRaw: instanceRdRaw,
                 peerAddress: instanceAddress,
                 peerAs: instanceAs,
                 peerRouterId: instanceRouterId,
                 peerTimestamp: instanceTimestamp,
+                peerTimestampMicroseconds: instanceTimestampMicroseconds,
                 peerTimestampMs: instanceTimestampMs
             } = peerHeader.peer;
 
@@ -2425,13 +3070,42 @@ class BmpSession {
                 }
             });
 
+            const enabledInstanceAfKeys = new Set(
+                enabledAddressFamilies.map(item => `${Number(item.afi)}|${Number(item.safi)}`)
+            );
+            const instanceRdIdentity = instanceRdRaw || instanceRd;
+            this.bgpInstanceMap.forEach(instance => {
+                const sameRd = instance.instanceRdRaw
+                    ? instance.instanceRdRaw === instanceRdIdentity
+                    : instance.instanceRd === instanceRd;
+                if (
+                    instance.instanceType !== instanceType ||
+                    !sameRd ||
+                    enabledInstanceAfKeys.has(`${Number(instance.afi)}|${Number(instance.safi)}`)
+                ) {
+                    return;
+                }
+                const staleResult = this.markInstanceRoutesStale(instance, 'peer-up-af-removed');
+                instance.instanceState = BmpConst.BMP_SESSION_STATE.PEER_DOWN;
+                this.scheduleInstanceRouteAging(instance, this.getInMemoryStaleRetentionMs());
+                if (staleResult.changed > 0) {
+                    this.sendInstanceStaleEvent(instance);
+                }
+            });
+
             enabledAddressFamilies.forEach(enabledAF => {
                 const addPathKey = `${enabledAF.afi}|${enabledAF.safi}`;
                 this.instAddPathMap.delete(addPathKey);
                 this.instAddPathReceiveMap.delete(addPathKey);
                 this.instAddPathSendMap.delete(addPathKey);
 
-                const instanceKey = BmpBgpInstance.makeKey(instanceType, instanceRd, enabledAF.afi, enabledAF.safi);
+                const instanceKey = BmpBgpInstance.makeKey(
+                    instanceType,
+                    instanceRd,
+                    enabledAF.afi,
+                    enabledAF.safi,
+                    instanceRdRaw
+                );
                 let bgpInstance = this.bgpInstanceMap.get(instanceKey);
                 if (!bgpInstance) {
                     bgpInstance = new BmpBgpInstance(this);
@@ -2448,9 +3122,9 @@ class BmpSession {
                     bgpInstance.isAddPath = false;
                 }
 
-                this.mergeAddressFamilies(bgpInstance.enabledAddressFamilies, enabledAddressFamilies);
-                this.mergeAddressFamilies(bgpInstance.recvAddressFamilies, recvAddressFamilies);
-                this.mergeAddressFamilies(bgpInstance.sendAddressFamilies, sentAddressFamilies);
+                bgpInstance.enabledAddressFamilies = enabledAddressFamilies.map(item => ({ ...item }));
+                bgpInstance.recvAddressFamilies = recvAddressFamilies.map(item => ({ ...item }));
+                bgpInstance.sendAddressFamilies = sentAddressFamilies.map(item => ({ ...item }));
 
                 bgpInstance.recvAddPathMap = recvAddPaths;
                 bgpInstance.sendAddPathMap = sendAddPaths;
@@ -2478,15 +3152,30 @@ class BmpSession {
                 bgpInstance.instanceType = instanceType;
                 bgpInstance.instanceFlags = effectiveInstanceFlags;
                 bgpInstance.instanceRd = instanceRd;
+                bgpInstance.instanceRdRaw = instanceRdRaw || null;
                 bgpInstance.instanceIp = instanceAddress;
                 bgpInstance.instanceAs = instanceAs;
                 bgpInstance.instanceRouterId = instanceRouterId;
                 bgpInstance.instanceTimestamp = instanceTimestamp;
+                bgpInstance.instanceTimestampMicroseconds = instanceTimestampMicroseconds;
                 bgpInstance.instanceTimestampMs = instanceTimestampMs;
                 bgpInstance.localIp = localAddress;
                 bgpInstance.localPort = localPort;
                 bgpInstance.remotePort = remotePort;
                 bgpInstance.instanceState = BmpConst.BMP_SESSION_STATE.PEER_UP;
+                this.persistScopeState(
+                    bgpInstance,
+                    enabledAF.afi,
+                    enabledAF.safi,
+                    'loc-rib',
+                    'loc-rib',
+                    'syncing',
+                    'scope_open',
+                    { sourceTimestampMs: instanceTimestampMs }
+                );
+                this.scheduleInstanceRouteAging(bgpInstance, this.getInMemoryRefreshTimeoutMs(), {
+                    finalizeRefreshTimeout: true
+                });
             });
 
             const allKeys = new Set([...recvAddPaths.keys(), ...sendAddPaths.keys()]);
@@ -2497,7 +3186,7 @@ class BmpSession {
                 const send = this.canRouterSendAddPath(recvMode, sendMode);
 
                 const [afi, safi] = key.split('|');
-                const instanceKey = BmpBgpInstance.makeKey(instanceType, instanceRd, afi, safi);
+                const instanceKey = BmpBgpInstance.makeKey(instanceType, instanceRd, afi, safi, instanceRdRaw);
                 const bgpInstance = this.bgpInstanceMap.get(instanceKey);
                 if (!bgpInstance) {
                     logger.error(`Instance not found for key: ${instanceKey}`);
@@ -2565,6 +3254,7 @@ class BmpSession {
                 peerType: sessionType,
                 peerFlags: sessionFlags,
                 peerRd: sessionRd,
+                peerRdRaw: sessionRdRaw,
                 peerAddress: sessionAddress,
                 peerAs: sessionAs,
                 peerRouterId: sessionRouterId,
@@ -2595,7 +3285,13 @@ class BmpSession {
                 statistics = statsResult.statistics;
             }
 
-            const bgpSessionKey = BmpBgpSession.makeKey(sessionType, sessionRd, sessionAddress, sessionAs);
+            const bgpSessionKey = BmpBgpSession.makeKey(
+                sessionType,
+                sessionRd,
+                sessionAddress,
+                sessionAs,
+                sessionRdRaw
+            );
             const bgpSession = this.bgpSessionMap.get(bgpSessionKey);
             const sessionInfo = bgpSession
                 ? bgpSession.getSessionInfo()
@@ -2603,6 +3299,7 @@ class BmpSession {
                       sessionType,
                       sessionFlags,
                       sessionRd,
+                      sessionRdRaw,
                       sessionIp: sessionAddress,
                       sessionAs,
                       sessionRouterId,
@@ -2618,10 +3315,11 @@ class BmpSession {
                 updatedAt: new Date().toISOString()
             };
             this.bgpStatisticsReportMap.set(
-                BmpSession.makeStatisticsReportKey(sessionType, sessionRd, sessionAddress, sessionAs),
+                BmpSession.makeStatisticsReportKey(sessionType, sessionRdRaw || sessionRd, sessionAddress, sessionAs),
                 report
             );
 
+            this.persistStatistics(report, sessionTimestampMs);
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, { data: report });
         } catch (err) {
             logger.error(`Error processing statistics report (global):`, err);
@@ -2641,6 +3339,7 @@ class BmpSession {
                 peerType: instanceType,
                 peerFlags: instanceFlags,
                 peerRd: instanceRd,
+                peerRdRaw: instanceRdRaw,
                 peerAddress: instanceIp,
                 peerAs: instanceAs,
                 peerRouterId: instanceRouterId,
@@ -2672,9 +3371,13 @@ class BmpSession {
             }
 
             const vrfTableNames = [];
-            const instancePrefix = `${instanceType}|${instanceRd}|`;
-            this.bgpInstanceMap.forEach((instance, key) => {
-                if (key.startsWith(instancePrefix) && Array.isArray(instance.vrfTableNames)) {
+            const rdIdentity = instanceRdRaw || instanceRd;
+            this.bgpInstanceMap.forEach(instance => {
+                if (
+                    instance.instanceType === instanceType &&
+                    (instance.instanceRdRaw || instance.instanceRd) === rdIdentity &&
+                    Array.isArray(instance.vrfTableNames)
+                ) {
                     vrfTableNames.push(...instance.vrfTableNames);
                 }
             });
@@ -2685,6 +3388,7 @@ class BmpSession {
                     instanceType,
                     instanceFlags,
                     instanceRd,
+                    instanceRdRaw,
                     instanceIp,
                     instanceAs,
                     instanceRouterId,
@@ -2697,10 +3401,11 @@ class BmpSession {
                 updatedAt: new Date().toISOString()
             };
             this.bgpInstanceStatisticsReportMap.set(
-                BmpSession.makeStatisticsReportKey(instanceType, instanceRd),
+                BmpSession.makeStatisticsReportKey(instanceType, instanceRdRaw || instanceRd),
                 report
             );
 
+            this.persistStatistics(report, instanceTimestampMs);
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, { data: report });
         } catch (err) {
             logger.error(`Error processing statistics report (local rib):`, err);
@@ -2754,6 +3459,15 @@ class BmpSession {
             }
 
             const msg = message.slice(BmpConst.BMP_HEADER_LENGTH, length);
+
+            if (
+                type === BmpConst.BMP_MSG_TYPE.PEER_DOWN_NOTIFICATION ||
+                type === BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION ||
+                type === BmpConst.BMP_MSG_TYPE.INITIATION ||
+                type === BmpConst.BMP_MSG_TYPE.TERMINATION
+            ) {
+                this.invalidateRouteAssurance(`bmp-message-${type}`);
+            }
 
             switch (type) {
                 case BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING:
@@ -2811,6 +3525,9 @@ class BmpSession {
     }
 
     closeSession() {
+        this.invalidateRouteAssurance('bmp-session-close');
+        this.bmpWorker?.cancelInMemoryRouteAging?.(this.getInMemoryAgingPrefix());
+        this.persistConnectionClose('bmp-session-close');
         // Close direct socket if exists
         if (this.socket) {
             this.socket.destroy();

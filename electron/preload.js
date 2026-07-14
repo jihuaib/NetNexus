@@ -143,6 +143,8 @@ contextBridge.exposeInMainWorld('bmpApi', {
     getClientList: () => ipcRenderer.invoke('bmp:getClientList'),
     getRouteLens: (query, routeState = 'active') => ipcRenderer.invoke('bmp:getRouteLens', query, routeState),
     getRouteAssurance: (filters = {}) => ipcRenderer.invoke('bmp:getRouteAssurance', filters),
+    setRouteAssuranceEnabled: (enabled, filters = {}) =>
+        ipcRenderer.invoke('bmp:setRouteAssuranceEnabled', { enabled, filters }),
     getBgpSessions: client => ipcRenderer.invoke('bmp:getBgpSessions', client),
     getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState, prefixFilter) =>
         ipcRenderer.invoke('bmp:getBgpRoutes', client, session, af, ribType, page, pageSize, routeState, prefixFilter),
@@ -158,7 +160,10 @@ contextBridge.exposeInMainWorld('bmpApi', {
     purgeStaleBgpInstanceRoutes: (client, instance) =>
         ipcRenderer.invoke('bmp:purgeStaleBgpInstanceRoutes', client, instance),
     getBgpStatisticsReports: client => ipcRenderer.invoke('bmp:getBgpStatisticsReports', client),
-    getBgpInstanceStatisticsReports: client => ipcRenderer.invoke('bmp:getBgpInstanceStatisticsReports', client)
+    getBgpInstanceStatisticsReports: client => ipcRenderer.invoke('bmp:getBgpInstanceStatisticsReports', client),
+    getPersistenceStatus: () => ipcRenderer.invoke('bmp:getPersistenceStatus'),
+    getPersistedRoutes: (query = {}) => ipcRenderer.invoke('bmp:getPersistedRoutes', query),
+    getPersistedRouteEvents: (query = {}) => ipcRenderer.invoke('bmp:getPersistedRouteEvents', query)
 });
 
 // rpki模块
@@ -234,7 +239,11 @@ contextBridge.exposeInMainWorld('snmpApi', {
     clearTrapHistory: () => ipcRenderer.invoke('snmp:clearTrapHistory'),
     selectMibFiles: () => ipcRenderer.invoke('snmp:selectMibFiles'),
     selectMibDirectory: () => ipcRenderer.invoke('snmp:selectMibDirectory'),
-    compileMibs: filePaths => ipcRenderer.invoke('snmp:compileMibs', filePaths),
+    compileMibs: (filePaths, options = {}) =>
+        ipcRenderer.invoke('snmp:compileMibs', {
+            filePaths,
+            force: Boolean(options.force)
+        }),
     getMibStatus: () => ipcRenderer.invoke('snmp:getMibStatus'),
     getMibTreeChildren: parentOid => ipcRenderer.invoke('snmp:getMibTreeChildren', parentOid),
     saveMibProject: payload => ipcRenderer.invoke('snmp:saveMibProject', payload),

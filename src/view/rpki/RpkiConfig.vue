@@ -32,7 +32,7 @@
                                         <nn-radio :value="RPKI_PROTOCOL_VERSION.V1">v1 - 支持 Router Key</nn-radio>
                                         <nn-radio :value="RPKI_PROTOCOL_VERSION.V0">v0 - 仅基础 ROA</nn-radio>
                                     </nn-radio-group>
-                                    <div style="color: var(--nn-color-text-muted); font-size: 12px; line-height: 1.5">
+                                    <div class="nn-helper-text">
                                         用于模拟不同能力的 RPKI-RTR cache。客户端请求高于该版本时，服务端返回
                                         Unsupported Protocol Version 并断开连接，客户端应按错误 PDU 版本重试。
                                     </div>
@@ -96,7 +96,7 @@
                                         <nn-radio :value="RPKI_ASPA_FORMAT.LATEST">最新 (current 8210bis)</nn-radio>
                                         <nn-radio :value="RPKI_ASPA_FORMAT.LEGACY">兼容 (draft-10 / 华为 VRP)</nn-radio>
                                     </nn-radio-group>
-                                    <div style="color: var(--nn-color-text-muted); font-size: 12px; line-height: 1.5">
+                                    <div class="nn-helper-text">
                                         最新格式遵循当前 draft-ietf-sidrops-8210bis 规范；兼容格式按 draft-10 在 body
                                         中携带 Flags、AFI Flags 和 Provider AS Count，适用于华为 VRP
                                         等老旧设备。仅在协议 v2 协商成功时生效。

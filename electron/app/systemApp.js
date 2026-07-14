@@ -834,6 +834,8 @@ class SystemApp {
                     await this.cliAccessServer.stop();
                 }
 
+                await this.bmpApp.closeOfflinePersistenceReader();
+
                 return true;
             }
             return false;
@@ -842,6 +844,7 @@ class SystemApp {
         if (isCliRunning) {
             await this.cliAccessServer.stop();
         }
+        await this.bmpApp.closeOfflinePersistenceReader();
         return true;
     }
 

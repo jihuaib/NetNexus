@@ -1,7 +1,81 @@
 const { successResponse } = require('./common');
 
-const snmpPageApiScript =
-    "    window.snmpApi = {\n        saveSnmpConfig: config => call('snmp.saveSnmpConfig', config),\n        getSnmpConfig: () => call('snmp.getSnmpConfig'),\n        startSnmp: config => call('snmp.startSnmp', config),\n        stopSnmp: () => call('snmp.stopSnmp'),\n        getTrapList: query => call('snmp.getTrapList', query),\n        clearTrapHistory: () => call('snmp.clearTrapHistory'),\n        selectMibFiles: () => call('snmp.selectMibFiles'),\n        selectMibDirectory: () => call('snmp.selectMibDirectory'),\n        compileMibs: filePaths => {\n            const cloneProbe = new MessageChannel();\n            try {\n                cloneProbe.port1.postMessage(filePaths);\n            } finally {\n                cloneProbe.port1.close();\n                cloneProbe.port2.close();\n            }\n            return call('snmp.compileMibs', [...filePaths]);\n        },\n        getMibStatus: () => call('snmp.getMibStatus'),\n        getMibTreeChildren: oid => call('snmp.getMibTreeChildren', oid),\n        saveMibProject: payload => call('snmp.saveMibProject', payload),\n        listMibProjects: () => call('snmp.listMibProjects'),\n        importMibProject: payload => call('snmp.importMibProject', payload),\n        clearMibs: () => call('snmp.clearMibs'),\n        translateOid: oid => call('snmp.translateOid', oid),\n        sendGetRequest: request => call('snmp.sendGetRequest', request),\n        sendGetNextRequest: request => call('snmp.sendGetNextRequest', request),\n        sendWalkRequest: request => call('snmp.sendWalkRequest', request),\n        sendSetRequest: request => call('snmp.sendSetRequest', request),\n        listOidInstances: request => call('snmp.listOidInstances', request)\n    };";
+const snmpPageApiScript = `
+    window.snmpApi = {
+        saveSnmpConfig: config => call('snmp.saveSnmpConfig', config),
+        getSnmpConfig: () => call('snmp.getSnmpConfig'),
+        startSnmp: config => call('snmp.startSnmp', config),
+        stopSnmp: () => call('snmp.stopSnmp'),
+        getTrapList: query => call('snmp.getTrapList', query),
+        clearTrapHistory: () => call('snmp.clearTrapHistory'),
+        selectMibFiles: () => call('snmp.selectMibFiles'),
+        selectMibDirectory: () => call('snmp.selectMibDirectory'),
+        compileMibs: async (filePaths, options = {}) => {
+            const payload = { filePaths: [...filePaths], force: Boolean(options.force) };
+            const cloneProbe = new MessageChannel();
+            try {
+                cloneProbe.port1.postMessage(payload);
+            } finally {
+                cloneProbe.port1.close();
+                cloneProbe.port2.close();
+            }
+
+            const progressId = 'e2e-mib-' + Date.now();
+            const emitProgress = progress =>
+                window.__featureE2eEmit('snmp:mibCompileProgress', {
+                    status: 'success',
+                    msg: 'MIB编译进度',
+                    data: { progressId, ...progress }
+                });
+            emitProgress({
+                phase: 'preparing',
+                completed: 0,
+                total: 3,
+                percent: 0,
+                counts: { compiled: 0, skipped: 0, failed: 0 },
+                message: '正在准备 MIB 编译'
+            });
+            await new Promise(resolve => setTimeout(resolve, 120));
+            for (let index = 1; index <= 3; index += 1) {
+                emitProgress({
+                    phase: 'compiling',
+                    completed: index,
+                    total: 3,
+                    percent: Math.round((index / 3) * 100),
+                    counts: { compiled: index, skipped: 0, failed: 0 },
+                    fileName: 'NETNEXUS-DEMO-' + index + '-MIB.mib',
+                    filePath: 'scripts/manual/snmp/mibs/NETNEXUS-DEMO-' + index + '-MIB.mib',
+                    fileStatus: 'compiled'
+                });
+                await new Promise(resolve => setTimeout(resolve, 120));
+            }
+
+            const result = await call('snmp.compileMibs', payload.filePaths);
+            emitProgress({
+                phase: 'completed',
+                completed: 3,
+                total: 3,
+                percent: 100,
+                counts: { compiled: 3, skipped: 0, failed: 0 },
+                fileName: '',
+                filePath: '',
+                message: 'MIB 编译完成'
+            });
+            return result;
+        },
+        getMibStatus: () => call('snmp.getMibStatus'),
+        getMibTreeChildren: oid => call('snmp.getMibTreeChildren', oid),
+        saveMibProject: payload => call('snmp.saveMibProject', payload),
+        listMibProjects: () => call('snmp.listMibProjects'),
+        importMibProject: payload => call('snmp.importMibProject', payload),
+        clearMibs: () => call('snmp.clearMibs'),
+        translateOid: oid => call('snmp.translateOid', oid),
+        sendGetRequest: request => call('snmp.sendGetRequest', request),
+        sendGetNextRequest: request => call('snmp.sendGetNextRequest', request),
+        sendWalkRequest: request => call('snmp.sendWalkRequest', request),
+        sendSetRequest: request => call('snmp.sendSetRequest', request),
+        listOidInstances: request => call('snmp.listOidInstances', request)
+    };`;
 
 function createSnmpPageState() {
     return {

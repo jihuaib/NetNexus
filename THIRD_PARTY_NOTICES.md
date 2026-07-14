@@ -15,6 +15,7 @@ not replace the license files included by each package.
 | asn1 | 0.2.6 | MIT | https://github.com/joyent/node-asn1.git |
 | atomically | 1.7.0 | MIT | https://github.com/fabiospampinato/atomically.git |
 | bcrypt-pbkdf | 1.0.2 | BSD-3-Clause | git://github.com/joyent/node-bcrypt-pbkdf.git |
+| better-sqlite3 | 11.10.0 | MIT | https://github.com/WiseLibs/better-sqlite3.git |
 | buildcheck | 0.0.7 | MIT | http://github.com/mscdex/buildcheck.git |
 | builder-util-runtime | 9.3.1 | MIT | git+https://github.com/electron-userland/electron-builder.git |
 | conf | 10.2.0 | MIT | sindresorhus/conf |

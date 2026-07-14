@@ -27,10 +27,10 @@
                                     :columns="columns"
                                     :data-source="filteredInterfaces"
                                     :pagination="{
-                                        pageSize: 20,
+                                        pageSize: 30,
                                         showSizeChanger: false,
                                         position: ['bottomCenter'],
-                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                        showTotal: total => '共 ' + total + ' 条，每页 30 条'
                                     }"
                                     size="small"
                                     row-key="name"
@@ -159,10 +159,10 @@
                                     :columns="routeColumns"
                                     :data-source="filteredRoutes"
                                     :pagination="{
-                                        pageSize: 20,
+                                        pageSize: 30,
                                         showSizeChanger: false,
                                         position: ['bottomCenter'],
-                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                        showTotal: total => '共 ' + total + ' 条，每页 30 条'
                                     }"
                                     size="small"
                                     row-key="id"

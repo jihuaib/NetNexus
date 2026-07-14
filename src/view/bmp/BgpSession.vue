@@ -333,7 +333,8 @@
 
     const getClientKey = client => `${client.localIp}|${client.localPort}|${client.remoteIp}|${client.remotePort}`;
 
-    const getSessionKey = session => `${session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
+    const getSessionKey = session =>
+        `${session.sessionType}|${session.sessionRdRaw || session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
 
     const getSessionApiInfo = session => {
         if (!session) {
@@ -343,6 +344,7 @@
         return {
             sessionType: session.sessionType,
             sessionRd: session.sessionRd,
+            sessionRdRaw: session.sessionRdRaw || null,
             sessionIp: session.sessionIp,
             sessionAs: session.sessionAs
         };
@@ -423,7 +425,7 @@
         if (record.routeKey) {
             return record.routeKey;
         }
-        return `${normalizeRoutePathId(record.pathId)}|${normalizeRouteRd(record.rd)}|${record.ip}|${record.mask}`;
+        return `${normalizeRoutePathId(record.pathId)}|${record.rdRaw || normalizeRouteRd(record.rd)}|${record.ip}|${record.mask}`;
     };
 
     const getRouteRowKey = record => `${record.addrFamilyType}|${getRouteKey(record)}`;

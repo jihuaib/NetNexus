@@ -45,12 +45,13 @@ async function main() {
     console.log(`[test:ci:minified] workspace: ${tempRoot}`);
     await minifyElectronRoot(electronRoot);
 
-    const result = spawnSync(process.execPath, [path.join(tempRoot, 'test', 'ci', 'run-tests.js')], {
+    const result = spawnSync(require('electron'), [path.join(tempRoot, 'test', 'ci', 'run-tests.js')], {
         cwd: tempRoot,
         stdio: 'inherit',
         env: {
             ...process.env,
             NODE_ENV: 'test',
+            ELECTRON_RUN_AS_NODE: '1',
             NETNEXUS_MINIFIED_CI: '1',
             NETNEXUS_SOURCE_PROJECT_ROOT: projectRoot
         }

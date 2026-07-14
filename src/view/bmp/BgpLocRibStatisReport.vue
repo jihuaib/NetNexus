@@ -171,7 +171,7 @@
     });
 
     const getInstanceKey = instance => {
-        return `${instance.instanceType}|${instance.instanceRd}`;
+        return `${instance.instanceType}|${instance.instanceRdRaw || instance.instanceRd}`;
     };
 
     const getClientReports = client => {

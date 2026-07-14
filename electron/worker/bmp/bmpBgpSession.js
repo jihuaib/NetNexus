@@ -13,10 +13,12 @@ class BmpBgpSession {
         this.sessionFlags = null;
         this.rawSessionFlags = null;
         this.sessionRd = null;
+        this.sessionRdRaw = null;
         this.sessionIp = null;
         this.sessionAs = null;
         this.sessionRouterId = null;
         this.sessionTimestamp = null;
+        this.sessionTimestampMicroseconds = null;
         this.sessionTimestampMs = null;
         this.localIp = null;
         this.localPort = null;
@@ -45,6 +47,7 @@ class BmpBgpSession {
         this.routePrefixIndexes = new Map();
         this.routeSummaries = new Map();
         this.ribEpochMap = new Map();
+        this.ribStaleMetadataMap = new Map();
     }
 
     getAddPathEnabledForKey(key, direction = 'receive') {
@@ -106,8 +109,8 @@ class BmpBgpSession {
         return this.getAddPathReceiveInfo(afi, safi, direction).enabled;
     }
 
-    static makeKey(sessionType, sessionRd, sessionIp, sessionAs) {
-        return `${sessionType}|${sessionRd}|${sessionIp}|${sessionAs}`;
+    static makeKey(sessionType, sessionRd, sessionIp, sessionAs, sessionRdRaw = null) {
+        return `${sessionType}|${sessionRdRaw || sessionRd}|${sessionIp}|${sessionAs}`;
     }
 
     static parseKey(key) {
@@ -342,18 +345,15 @@ class BmpBgpSession {
 
         return targetRibTypes.map(ribType => {
             const staleEpoch = this.advanceRibEpoch(afi, safi, ribType);
-            const routeMap = ribTypeRouteMap ? ribTypeRouteMap.get(ribType) : null;
-            let changed = 0;
-            if (routeMap) {
-                routeMap.forEach(route => {
-                    const previousState = route.routeState;
-                    route.markStale(reason, staleEpoch);
-                    if (BmpBgpSession.normalizeRouteState(previousState) !== BmpConst.BMP_ROUTE_STATE.STALE) {
-                        this.recordRouteStateChange(afi, safi, ribType, previousState, route.routeState);
-                        changed += 1;
-                    }
-                });
-            }
+            const summary = this.ensureRouteTableSummary(afi, safi, ribType);
+            const changed = summary.active;
+            summary.active = 0;
+            summary.stale = summary.total;
+            this.ribStaleMetadataMap.set(BmpBgpSession.makeRibEpochKey(afi, safi, ribType), {
+                staleEpoch,
+                staleReason: reason,
+                staleAt: new Date().toISOString()
+            });
             return { afi, safi, ribType, staleEpoch, changed };
         });
     }
@@ -384,10 +384,12 @@ class BmpBgpSession {
             sessionFlags: this.sessionFlags,
             rawSessionFlags: this.rawSessionFlags,
             sessionRd: this.sessionRd,
+            sessionRdRaw: this.sessionRdRaw,
             sessionIp: this.sessionIp,
             sessionAs: this.sessionAs,
             sessionRouterId: this.sessionRouterId,
             sessionTimestamp: this.sessionTimestamp,
+            sessionTimestampMicroseconds: this.sessionTimestampMicroseconds,
             sessionTimestampMs: this.sessionTimestampMs,
             localIp: this.localIp,
             localPort: this.localPort,
@@ -425,6 +427,7 @@ class BmpBgpSession {
         this.addPathSendMap.clear();
         this.addPathMap.clear();
         this.ribEpochMap.clear();
+        this.ribStaleMetadataMap.clear();
     }
 }
 

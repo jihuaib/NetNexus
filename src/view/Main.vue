@@ -68,6 +68,7 @@
 
         <!-- 更新通知 -->
         <UpdateNotification />
+        <MibCompileNotification />
     </div>
 </template>
 
@@ -85,6 +86,7 @@
     import { moduleNavigationIcons } from '../ui/navigationIcons';
 
     import SettingsDialog from '../components/SettingsDialog.vue';
+    import MibCompileNotification from '../components/MibCompileNotification.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
     import modalResizeHandler from '../utils/modalResizeHandler';
 

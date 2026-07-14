@@ -26,26 +26,31 @@ test.describe('SNMP pages', () => {
         }
     });
 
-    test('recompiles stored MIB files with an IPC-cloneable payload', async ({ page }) => {
+    test('shows live MIB file progress in one update-style notification', async ({ page }) => {
         await page.goto('/#/snmp/snmp-mib');
 
         const recompileButton = page.getByRole('button', { name: '重新编译' });
         await expect(recompileButton).toBeEnabled();
         await recompileButton.click();
 
-        const toast = page.locator('.nn-toast').filter({ hasText: 'MIB编译完成' });
-        const fixedTabs = page.locator('.nn-main-container > .fixed-tabs');
-        await expect(toast).toBeVisible();
-        await expect(toast).toHaveCSS('pointer-events', 'none');
-        await expect(toast.getByRole('button', { name: '关闭' })).toHaveCSS('pointer-events', 'auto');
+        const notification = page.locator('.mib-compile-notification');
+        await expect(notification).toBeVisible();
+        await notification.evaluate(element => {
+            element.dataset.e2eProgressNotification = 'same-node';
+        });
+        await expect(page.locator('.mib-compile-progress')).toBeVisible();
+        await expect(notification.locator('.notification-title')).toContainText(/正在(准备|编译|解析)/u);
+        await expect(notification.locator('[role="progressbar"]')).toBeVisible();
 
-        const [toastBox, tabsBox] = await Promise.all([toast.boundingBox(), fixedTabs.boundingBox()]);
-        expect(toastBox).not.toBeNull();
-        expect(tabsBox).not.toBeNull();
-        expect(toastBox.y).toBeGreaterThanOrEqual(tabsBox.y + tabsBox.height + 7);
+        await expect(notification.locator('.notification-title')).toContainText('MIB 编译完成');
+        await expect(notification.locator('.notification-description')).toContainText('成功 3');
+        await expect(notification).toHaveAttribute('data-e2e-progress-notification', 'same-node');
+        await expect(page.locator('.mib-compile-notification')).toHaveCount(1);
+        await expect(recompileButton).toBeEnabled();
 
         await page.getByRole('tab', { name: 'Trap监控', exact: true }).click();
         await expect(page).toHaveURL(/#\/snmp\/snmp-trap$/u);
+        await expect(notification).toBeVisible();
     });
 
     test('keeps disabled MIB context actions visible and the menu inside the viewport', async ({ page }) => {

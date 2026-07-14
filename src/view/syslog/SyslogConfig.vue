@@ -49,7 +49,7 @@
                             </nn-col>
                         </nn-row>
 
-                        <div style="margin-top: 8px; color: var(--nn-color-text-muted)">
+                        <div class="nn-helper-text" style="margin-top: 8px">
                             默认端口为 514（绑定该端口通常需要管理员/root 权限）。TCP 同时支持 RFC 6587 octet-counting
                             和换行分帧。
                         </div>

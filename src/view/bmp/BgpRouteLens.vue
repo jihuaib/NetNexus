@@ -536,7 +536,12 @@
                 allEntries.value
                     .filter(entry => entry.session)
                     .map(entry =>
-                        [entry.session.sessionIp, entry.session.sessionRd, entry.session.sessionAs, entry.af].join('|')
+                        [
+                            entry.session.sessionIp,
+                            entry.session.sessionRdRaw || entry.session.sessionRd,
+                            entry.session.sessionAs,
+                            entry.af
+                        ].join('|')
                     )
             ).size
     );
@@ -548,7 +553,7 @@
                     .map(entry =>
                         [
                             entry.instance.instanceIp,
-                            entry.instance.instanceRd,
+                            entry.instance.instanceRdRaw || entry.instance.instanceRd,
                             entry.instance.instanceType,
                             entry.af
                         ].join('|')

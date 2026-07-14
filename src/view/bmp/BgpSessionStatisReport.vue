@@ -166,7 +166,7 @@
     });
 
     const getSessionKey = session => {
-        return `${session.sessionType}|${session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
+        return `${session.sessionType}|${session.sessionRdRaw || session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
     };
 
     const getClientReports = client => {

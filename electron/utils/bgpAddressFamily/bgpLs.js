@@ -285,9 +285,12 @@ function parseBgpLsNlri(buffer, position, hasRd = false) {
     const nlriEnd = Math.min(position + nlriLength, buffer.length);
     const rawNlri = buffer.subarray(position, nlriEnd);
     let rd = null;
+    let rdRaw = null;
     if (hasRd) {
         if (position + BgpConst.BGP_RD_LEN <= nlriEnd) {
-            rd = rdBufferToString(buffer.subarray(position, position + BgpConst.BGP_RD_LEN));
+            const rdBuffer = buffer.subarray(position, position + BgpConst.BGP_RD_LEN);
+            rd = rdBufferToString(rdBuffer);
+            rdRaw = `raw:${rdBuffer.toString('hex')}`;
             position += BgpConst.BGP_RD_LEN;
         } else {
             errors.push('BGP-LS VPN RD is truncated');
@@ -301,6 +304,7 @@ function parseBgpLsNlri(buffer, position, hasRd = false) {
             route: {
                 prefix: `${hasRd ? 'bgp-ls-vpn' : 'bgp-ls'}:type-${nlriType}:0x${rawNlri.toString('hex')}`,
                 rd,
+                rdRaw,
                 length: nlriLength * 8,
                 nlriLength,
                 routeType: nlriType,
@@ -347,6 +351,7 @@ function parseBgpLsNlri(buffer, position, hasRd = false) {
         route: {
             prefix: routePrefix,
             rd,
+            rdRaw,
             length: routeLength,
             nlriLength,
             routeType: nlriType,

@@ -21,7 +21,7 @@
                                     <nn-tabs v-model:active-key="activeInstanceKey" class="bmp-inner-tabs">
                                         <nn-tab-pane
                                             v-for="instance in bgpInstances"
-                                            :key="`${instance.instanceType}|${instance.instanceRd}|${instance.addrFamilyType}`"
+                                            :key="getInstanceKey(instance)"
                                             :tab="`${formatVrfTableName(instance)} | ${ADDRESS_FAMILY_NAME[instance.addrFamilyType]}`"
                                         >
                                             <nn-table
@@ -212,7 +212,7 @@
         if (record.routeKey) {
             return record.routeKey;
         }
-        return `${normalizeRoutePathId(record.pathId)}|${normalizeRouteRd(record.rd)}|${record.ip}|${record.mask}`;
+        return `${normalizeRoutePathId(record.pathId)}|${record.rdRaw || normalizeRouteRd(record.rd)}|${record.ip}|${record.mask}`;
     };
 
     const getRouteRowKey = record => `${record.addrFamilyType}|${getRouteKey(record)}`;
@@ -220,6 +220,9 @@
     const formatClientTab = client => {
         return client.remoteIp || '-';
     };
+
+    const getInstanceKey = instance =>
+        `${instance.instanceType}|${instance.instanceRdRaw || instance.instanceRd}|${instance.addrFamilyType}`;
 
     const formatVrfTableName = instance => {
         return Array.isArray(instance.vrfTableNames) && instance.vrfTableNames.length > 0
@@ -376,7 +379,7 @@
         const clientKey = `${update.client.localIp}|${update.client.localPort}|${update.client.remoteIp}|${update.client.remotePort}`;
         if (clientKey !== activeClientKey.value) return;
 
-        const instKey = `${update.instance.instanceType}|${update.instance.instanceRd}|${update.instance.addrFamilyType}`;
+        const instKey = getInstanceKey(update.instance);
 
         if (instKey === activeInstanceKey.value) {
             scheduleRouteRefresh();
@@ -465,6 +468,22 @@
     const bgpInstances = ref([]);
     const activeInstanceKey = ref('');
 
+    const getActiveInstance = () =>
+        bgpInstances.value.find(instance => getInstanceKey(instance) === activeInstanceKey.value) || null;
+
+    const getActiveInstanceApiInfo = () => {
+        const instance = getActiveInstance();
+        if (!instance) {
+            return null;
+        }
+        return {
+            instanceType: instance.instanceType,
+            instanceRd: instance.instanceRd,
+            instanceRdRaw: instance.instanceRdRaw || null,
+            addrFamilyType: instance.addrFamilyType
+        };
+    };
+
     const loadBgpInstances = async () => {
         if (!activeClientKey.value) return;
         try {
@@ -475,7 +494,7 @@
                 bgpInstances.value = res.data || [];
                 if (bgpInstances.value.length > 0) {
                     const first = bgpInstances.value[0];
-                    const key = `${first.instanceType}|${first.instanceRd}|${first.addrFamilyType}`;
+                    const key = getInstanceKey(first);
                     activeInstanceKey.value = key;
                     bgpRoutePagination.value.current = 1;
                     loadInstanceRoutes();
@@ -506,11 +525,8 @@
         const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
         const client = { localIp, localPort, remoteIp, remotePort };
 
-        const instance = {
-            instanceType: activeInstanceKey.value.split('|')[0],
-            instanceRd: activeInstanceKey.value.split('|')[1],
-            addrFamilyType: activeInstanceKey.value.split('|')[2]
-        };
+        const instance = getActiveInstanceApiInfo();
+        if (!instance) return;
 
         const page = bgpRoutePagination.value.current;
         const pageSize = bgpRoutePagination.value.pageSize;
@@ -545,11 +561,8 @@
         const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
         const client = { localIp, localPort, remoteIp, remotePort };
 
-        const instance = {
-            instanceType: activeInstanceKey.value.split('|')[0],
-            instanceRd: activeInstanceKey.value.split('|')[1],
-            addrFamilyType: activeInstanceKey.value.split('|')[2]
-        };
+        const instance = getActiveInstanceApiInfo();
+        if (!instance) return;
 
         try {
             const res = await window.bmpApi.purgeStaleBgpInstanceRoutes(client, instance);
@@ -584,11 +597,11 @@
 
         const [localIp, localPort, remoteIp, remotePort] = activeClientKey.value.split('|');
         const client = { localIp, localPort, remoteIp, remotePort };
-        const instance = {
-            instanceType: activeInstanceKey.value.split('|')[0],
-            instanceRd: activeInstanceKey.value.split('|')[1],
-            addrFamilyType: activeInstanceKey.value.split('|')[2]
-        };
+        const instance = getActiveInstanceApiInfo();
+        if (!instance) {
+            currentDetails.value = record;
+            return;
+        }
         const routeKey = getRouteKey(record);
 
         try {

@@ -557,9 +557,15 @@ function parseEvpnIpPrefix(buffer, position, prefixLength, isIpv6, fieldName, er
 }
 
 function buildEvpnRoute(routeType, routeLength, routeValue, parsed) {
+    const rdRaw =
+        parsed.rdRaw ||
+        (parsed.rd && routeType !== 11 && routeValue.length >= BgpConst.BGP_RD_LEN
+            ? `raw:${routeValue.subarray(0, BgpConst.BGP_RD_LEN).toString('hex')}`
+            : null);
     return {
         prefix: parsed.prefix,
         rd: parsed.rd || null,
+        rdRaw,
         length: parsed.length,
         nlriLength: routeLength,
         routeType,
@@ -1042,6 +1048,7 @@ function buildEvpnLeafAdRouteKeyFields(routeKey, errors) {
         fields.routeKeyRoute = {
             prefix: keyRoute.prefix,
             rd: keyRoute.rd,
+            rdRaw: keyRoute.rdRaw,
             routeType: keyRoute.routeType,
             routeTypeName: keyRoute.routeTypeName,
             length: keyRoute.length,
@@ -1080,12 +1087,14 @@ function parseEvpnLeafAdRoute(routeType, routeLength, routeValue) {
     addEvpnTrailingByteError(routeValue, position, 'Leaf A-D', errors);
     const routeKeyFields = buildEvpnLeafAdRouteKeyFields(routeKey, errors);
     const rd = routeKeyFields.routeKeyRoute?.rd || null;
+    const rdRaw = routeKeyFields.routeKeyRoute?.rdRaw || null;
     const keyText = routeKeyFields.routeKeyPrefix || routeKeyFields.routeKeyHex || '?';
     const prefix = `evpn:leaf-ad:key=${keyText}:origin=${originatorRouterIp || '?'}`;
 
     return buildEvpnRoute(routeType, routeLength, routeValue, {
         prefix,
         rd,
+        rdRaw,
         length: routeLength,
         errors,
         fields: {

@@ -30,7 +30,51 @@ class MibWorker {
         return {
             filePaths: data.filePaths || data.requestedFiles || [],
             cacheFilePath: data.cacheFilePath || '',
-            force: Boolean(data.force)
+            force: Boolean(data.force),
+            progressId: typeof data.progressId === 'string' ? data.progressId : ''
+        };
+    }
+
+    createProgressCallback(progressId) {
+        if (!progressId) {
+            return undefined;
+        }
+
+        let lastSentAt = 0;
+        let lastSentPhase = '';
+        let pendingProgress = null;
+        const sendProgress = progress => {
+            lastSentAt = Date.now();
+            lastSentPhase = progress.phase;
+            this.messageHandler.sendEvent(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, {
+                progressId,
+                ...progress
+            });
+        };
+
+        return progress => {
+            const forceSend =
+                ['preparing', 'serializing', 'indexing', 'caching', 'completed', 'failed'].includes(progress.phase) ||
+                progress.fileStatus === 'failed' ||
+                progress.phase !== lastSentPhase;
+            const now = Date.now();
+
+            if (forceSend) {
+                if (pendingProgress) {
+                    sendProgress(pendingProgress);
+                    pendingProgress = null;
+                }
+                sendProgress(progress);
+                return;
+            }
+
+            if (now - lastSentAt >= 80) {
+                pendingProgress = null;
+                sendProgress(progress);
+                return;
+            }
+
+            pendingProgress = progress;
         };
     }
 
@@ -38,7 +82,8 @@ class MibWorker {
         const request = this.normalizeRequest(data);
         return this.mibRegistry.loadOrCompileMibFiles(request.filePaths, {
             cacheFilePath: request.cacheFilePath,
-            force: request.force
+            force: request.force,
+            onProgress: this.createProgressCallback(request.progressId)
         });
     }
 
@@ -47,7 +92,8 @@ class MibWorker {
             const request = this.normalizeRequest(data);
             const summary = this.mibRegistry.loadOrCompileMibFiles(request.filePaths, {
                 cacheFilePath: request.cacheFilePath,
-                force: request.force
+                force: request.force,
+                onProgress: this.createProgressCallback(request.progressId)
             });
             this.messageHandler.sendSuccessResponse(messageId, summary, 'MIB编译完成');
         } catch (error) {

@@ -44,8 +44,13 @@
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <nn-row>
-                            <nn-col :span="24">
+                        <nn-row :gutter="12">
+                            <nn-col :span="12">
+                                <nn-form-item label="持久化路由" name="persistenceEnabled">
+                                    <nn-checkbox v-model:checked="bmpConfig.persistenceEnabled" />
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="12">
                                 <nn-form-item label="启用认证" name="enableAuth">
                                     <nn-checkbox v-model:checked="bmpConfig.enableAuth" />
                                 </nn-form-item>
@@ -215,6 +220,7 @@
         port: DEFAULT_VALUES.DEFAULT_BMP_PORT,
         bmpV4TlvDraft: DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT,
         pathMarkingTlvType: getDefaultPathMarkingTlvType(DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT),
+        persistenceEnabled: true,
         localPort: '11019',
         enableAuth: false,
         peerIP: '',
@@ -484,6 +490,7 @@
                     savedDraft
                 );
                 bmpConfig.value.enableAuth = savedConfig.data.enableAuth || false;
+                bmpConfig.value.persistenceEnabled = savedConfig.data.persistenceEnabled !== false;
                 bmpConfig.value.localPort = savedConfig.data.localPort;
                 bmpConfig.value.peerIP = savedConfig.data.peerIP || '';
                 bmpConfig.value.md5Password = savedConfig.data.md5Password || '';

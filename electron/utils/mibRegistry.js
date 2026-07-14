@@ -5,7 +5,185 @@ const logger = require('../log/logger');
 const { formatSnmpValue } = require('./snmpValueFormatter');
 
 const MIB_FILE_EXTENSIONS = new Set(['.mib', '.txt', '.my', '']);
-const MIB_CACHE_SCHEMA_VERSION = 2;
+const MIB_CACHE_SCHEMA_VERSION = 3;
+const MAX_MIB_FILES_PER_BATCH = 128;
+const MAX_MIB_SOURCE_BYTES_PER_BATCH = 8 * 1024 * 1024;
+const MAX_CACHED_OID_ENTRIES = 250000;
+const MAX_CACHED_SOURCE_BYTES = 128 * 1024 * 1024;
+const MAX_MIB_CACHE_FILE_BYTES = 256 * 1024 * 1024;
+
+class MibCompileProgressReporter {
+    constructor(onProgress) {
+        this.onProgress = typeof onProgress === 'function' ? onProgress : null;
+        this.total = 0;
+        this.scanTotal = 0;
+        this.scanned = 0;
+        this.completed = 0;
+        this.counts = {
+            compiled: 0,
+            skipped: 0,
+            failed: 0
+        };
+        this.terminalFiles = new Set();
+    }
+
+    emit(payload = {}) {
+        if (!this.onProgress) {
+            return;
+        }
+
+        const progress = {
+            phase: payload.phase || 'preparing',
+            completed: this.completed,
+            total: this.total,
+            percent: this.getPercent(payload.phase),
+            scanned: this.scanned,
+            scanTotal: this.scanTotal,
+            counts: { ...this.counts },
+            ...payload
+        };
+
+        try {
+            this.onProgress(progress);
+        } catch (error) {
+            logger.warn(`MIB编译进度回调失败: ${error.message}`);
+        }
+    }
+
+    getPercent(phase) {
+        if (phase === 'completed') {
+            return 100;
+        }
+        if (phase === 'scanning') {
+            return this.scanTotal > 0 ? Math.round((this.scanned / this.scanTotal) * 100) : 0;
+        }
+        if (phase === 'indexing' || phase === 'caching') {
+            return 99;
+        }
+        return this.total > 0 ? Math.min(99, Math.round((this.completed / this.total) * 100)) : 0;
+    }
+
+    preparing(message = '正在准备 MIB 编译') {
+        this.emit({ phase: 'preparing', message });
+    }
+
+    discovered(total, scanTotal) {
+        this.total = total;
+        this.scanTotal = scanTotal;
+        this.emit({ phase: 'scanning', message: `发现 ${total} 个 MIB 文件` });
+    }
+
+    scannedFile(filePath, index) {
+        this.scanned = index;
+        this.emit({
+            phase: 'scanning',
+            filePath,
+            fileName: path.basename(filePath),
+            message: '正在读取 MIB 文件'
+        });
+    }
+
+    planning() {
+        this.emit({
+            phase: 'planning',
+            filePath: '',
+            fileName: '',
+            fileStatus: '',
+            message: '正在分析 MIB 模块和依赖关系'
+        });
+    }
+
+    beginCompilation() {
+        this.emit({
+            phase: 'compiling',
+            filePath: '',
+            fileName: '',
+            fileStatus: '',
+            message: '开始编译 MIB 文件'
+        });
+    }
+
+    startFile(filePath) {
+        if (this.terminalFiles.has(filePath)) {
+            return;
+        }
+        this.emit({
+            phase: 'compiling',
+            filePath,
+            fileName: path.basename(filePath),
+            fileStatus: 'compiling',
+            message: '正在编译当前文件'
+        });
+    }
+
+    serializing(filePaths) {
+        const currentFile = filePaths[filePaths.length - 1] || '';
+        this.emit({
+            phase: 'serializing',
+            filePath: currentFile,
+            fileName: currentFile ? path.basename(currentFile) : '',
+            batchSize: filePaths.length,
+            message: `正在解析当前批次（${filePaths.length} 个文件）`
+        });
+    }
+
+    finishFile(filePath, fileStatus, msg = '') {
+        if (!filePath || this.terminalFiles.has(filePath)) {
+            return;
+        }
+
+        this.terminalFiles.add(filePath);
+        this.completed += 1;
+        if (Object.prototype.hasOwnProperty.call(this.counts, fileStatus)) {
+            this.counts[fileStatus] += 1;
+        }
+        this.emit({
+            phase: 'compiling',
+            filePath,
+            fileName: path.basename(filePath),
+            fileStatus,
+            msg,
+            message: msg
+        });
+    }
+
+    indexing() {
+        this.emit({
+            phase: 'indexing',
+            filePath: '',
+            fileName: '',
+            fileStatus: '',
+            message: '正在生成 OID 索引'
+        });
+    }
+
+    caching() {
+        this.emit({
+            phase: 'caching',
+            filePath: '',
+            fileName: '',
+            fileStatus: '',
+            message: '正在保存 MIB 缓存'
+        });
+    }
+
+    complete(summary = {}, extra = {}) {
+        const compiled = Array.isArray(summary.loadedFiles) ? summary.loadedFiles.length : this.counts.compiled;
+        const skipped = Array.isArray(summary.skippedFiles) ? summary.skippedFiles.length : this.counts.skipped;
+        const failed = Array.isArray(summary.failedFiles) ? summary.failedFiles.length : this.counts.failed;
+        const total = Number(summary.expandedFileCount) || this.total || compiled + skipped + failed;
+
+        this.total = total;
+        this.completed = total;
+        this.counts = { compiled, skipped, failed };
+        this.emit({
+            phase: 'completed',
+            message: extra.cacheHit ? '已从缓存加载 MIB' : 'MIB 编译完成',
+            cacheHit: Boolean(extra.cacheHit),
+            ...extra
+        });
+    }
+}
 
 class MibRegistry {
     constructor() {
@@ -14,9 +192,12 @@ class MibRegistry {
 
     reset() {
         this.store = snmp.createModuleStore();
+        this.parserKeySequence = 0;
+        this.clearParserWorkingSet();
         this.compiledFiles = [];
         this.loadedFiles = [];
         this.failedFiles = [];
+        this.skippedFiles = [];
         this.oidIndex = new Map();
         this.oidChildIndex = new Map();
         this.cachedModuleNames = null;
@@ -28,14 +209,19 @@ class MibRegistry {
 
     loadOrCompileMibFiles(filePaths = [], options = {}) {
         const requestedPaths = this.normalizeFilePaths(filePaths);
+        const progressReporter = new MibCompileProgressReporter(options.onProgress);
         if (requestedPaths.length === 0) {
             this.reset();
-            return this.getSummary();
+            const summary = this.getSummary();
+            progressReporter.complete(summary);
+            return summary;
         }
 
         const sourceState = options.force ? null : this.captureMibSourceState(requestedPaths, options.cacheFilePath);
         if (!options.force && sourceState && this.isActiveSourceState(sourceState)) {
-            return this.getSummary();
+            const summary = this.getSummary();
+            progressReporter.complete(summary, { cacheHit: true });
+            return summary;
         }
 
         if (
@@ -46,156 +232,177 @@ class MibRegistry {
             const restoredSourceState = this.captureMibSourceState(requestedPaths, options.cacheFilePath);
             if (this.areMibSourceStatesEqual(sourceState, restoredSourceState)) {
                 this.activeSourceState = restoredSourceState;
-                return this.getSummary();
+                const summary = this.getSummary();
+                progressReporter.complete(summary, { cacheHit: true });
+                return summary;
             }
         }
 
-        const summary = this.compileMibFiles(requestedPaths);
+        const summary = this.compileMibFiles(requestedPaths, {
+            progressReporter,
+            completeProgress: false
+        });
         const compiledSourceState = this.captureMibSourceState(requestedPaths, options.cacheFilePath);
         if (options.cacheFilePath) {
+            progressReporter.caching();
             this.saveCache(options.cacheFilePath, requestedPaths, compiledSourceState);
         }
         const activeSourceState = this.captureMibSourceState(requestedPaths, options.cacheFilePath);
         if (activeSourceState) {
             this.activeSourceState = activeSourceState;
         }
+        progressReporter.complete(summary);
         return summary;
     }
 
-    compileMibFiles(filePaths = []) {
+    compileMibFiles(filePaths = [], options = {}) {
         const requestedPaths = this.normalizeFilePaths(filePaths);
-
-        try {
-            return this.compileMibFilesInBatch(requestedPaths);
-        } catch (error) {
-            logger.warn('MIB批量编译失败，回退逐文件编译:', error.message);
-            return this.compileMibFilesSequential(requestedPaths);
-        }
+        const progressReporter = options.progressReporter || new MibCompileProgressReporter(options.onProgress);
+        return this.compileMibFilesInBatch(requestedPaths, {
+            ...options,
+            progressReporter
+        });
     }
 
-    compileMibFilesInBatch(filePaths = []) {
+    compileMibFilesInBatch(filePaths = [], options = {}) {
         const requestedPaths = this.normalizeFilePaths(filePaths);
+        const progressReporter = options.progressReporter || new MibCompileProgressReporter(options.onProgress);
         this.reset();
         this.compiledFiles = requestedPaths;
+        progressReporter.preparing();
 
         if (requestedPaths.length === 0) {
-            return this.getSummary();
+            const summary = this.getSummary();
+            if (options.completeProgress !== false) {
+                progressReporter.complete(summary);
+            }
+            return summary;
         }
 
         const expansion = this.expandInputPaths(requestedPaths);
-        const metadata = this.buildFileMetadata(expansion.files);
-        if (!this.canBatchLoadMibFiles(expansion.files, metadata)) {
-            return this.compileMibFilesSequential(requestedPaths);
-        }
+        progressReporter.discovered(expansion.files.length + expansion.failedPaths.length, expansion.files.length);
+        const metadata = this.buildFileMetadata(expansion.files, (filePath, index) => {
+            progressReporter.scannedFile(filePath, index);
+        });
+        progressReporter.planning();
+        const preparation = this.prepareMibCandidates(expansion.files, metadata, requestedPaths);
+        const plan = this.createMibLoadPlan(
+            {
+                files: preparation.files,
+                failedPaths: [...expansion.failedPaths, ...preparation.failedFiles]
+            },
+            preparation.metadata
+        );
+        progressReporter.beginCompilation();
+        plan.failed.forEach(record => progressReporter.finishFile(record.filePath, 'failed', record.msg));
+        preparation.skippedFiles.forEach(record => progressReporter.finishFile(record.filePath, 'skipped', record.msg));
+        const loadResult = this.loadFromFilesInBatch(plan.loadOrder, preparation.metadata, progressReporter);
+        const loadedModuleNames = new Set(this.getModuleNames(true));
 
-        const plan = this.createMibLoadPlan(expansion, metadata);
-        if (plan.loadOrder.length > 0) {
-            this.loadFromFilesInBatch(plan.loadOrder);
-        }
-
-        this.loadedFiles = plan.loadOrder;
+        this.loadedFiles = loadResult.loadedFiles;
+        this.skippedFiles = preparation.skippedFiles;
         this.failedFiles = [
             ...plan.failed,
+            ...loadResult.failedFiles,
             ...plan.pending.map(filePath => ({
                 filePath,
                 fileName: path.basename(filePath),
-                msg: this.getWaitingDependencyMessage(metadata.get(filePath), plan.loadedModuleNames)
+                msg: this.getWaitingDependencyMessage(preparation.metadata.get(filePath), loadedModuleNames)
             }))
         ];
+        plan.pending.forEach(filePath => {
+            const record = this.failedFiles.find(item => item.filePath === filePath);
+            progressReporter.finishFile(filePath, 'failed', record?.msg || 'MIB依赖未满足');
+        });
 
+        progressReporter.indexing();
         this.rebuildOidIndex();
-        return this.getSummary();
+        const summary = this.getSummary();
+        if (options.completeProgress !== false) {
+            progressReporter.complete(summary);
+        }
+        return summary;
     }
 
-    compileMibFilesSequential(filePaths = []) {
-        const requestedPaths = this.normalizeFilePaths(filePaths);
-        this.reset();
-        this.compiledFiles = requestedPaths;
-
-        if (requestedPaths.length === 0) {
-            return this.getSummary();
-        }
-
-        const expansion = this.expandInputPaths(requestedPaths);
-        const metadata = this.buildFileMetadata(expansion.files);
-        const knownModules = this.getKnownModuleNames(metadata);
+    prepareMibCandidates(filePaths, metadata, requestedPaths = []) {
         const baseModules = new Set(this.getModuleNames(true));
-        const loadedModuleNames = new Set(baseModules);
-        const pending = [...expansion.files];
-        const loaded = [];
-        const failed = [...expansion.failedPaths];
-        const lastErrors = new Map();
-        let progressed = true;
-
-        while (pending.length > 0 && progressed) {
-            progressed = false;
-
-            for (let i = pending.length - 1; i >= 0; i--) {
-                const filePath = pending[i];
-                const fileMeta = metadata.get(filePath);
-                const unknownImports = fileMeta.imports.filter(
-                    moduleName => !baseModules.has(moduleName) && !knownModules.has(moduleName)
-                );
-                if (unknownImports.length > 0) {
-                    const msg = `缺少依赖MIB: ${unknownImports.join(', ')}`;
-                    lastErrors.set(filePath, msg);
-                    failed.push({
-                        filePath,
-                        fileName: path.basename(filePath),
-                        msg
-                    });
-                    pending.splice(i, 1);
-                    continue;
-                }
-
-                const waitingImports = fileMeta.imports.filter(moduleName => !loadedModuleNames.has(moduleName));
-                if (waitingImports.length > 0) {
-                    continue;
-                }
-
+        const explicitFiles = new Set(
+            requestedPaths.filter(filePath => {
                 try {
-                    const beforeModules = new Set(this.getModuleNames(true));
-                    this.loadFromFile(filePath);
-                    loaded.push(filePath);
-                    this.getModuleNames(true).forEach(moduleName => {
-                        if (!beforeModules.has(moduleName)) {
-                            loadedModuleNames.add(moduleName);
-                        }
-                    });
-                    if (fileMeta.moduleName) {
-                        loadedModuleNames.add(fileMeta.moduleName);
-                    }
-                    pending.splice(i, 1);
-                    progressed = true;
+                    return fs.statSync(filePath).isFile();
                 } catch (error) {
-                    lastErrors.set(filePath, error.message);
-                    failed.push({
-                        filePath,
-                        fileName: path.basename(filePath),
-                        msg: error.message
-                    });
-                    this.rebuildStoreFromFiles(loaded);
-                    pending.splice(i, 1);
+                    return false;
                 }
+            })
+        );
+        const groups = new Map();
+        const failedFiles = [];
+        const skippedFiles = [];
+
+        filePaths.forEach((filePath, order) => {
+            const fileMeta = metadata.get(filePath);
+            if (!fileMeta || fileMeta.parseError) {
+                failedFiles.push(this.createFileRecord(filePath, fileMeta?.parseError || 'MIB文件读取失败'));
+                return;
             }
-        }
 
-        this.loadedFiles = loaded;
-        this.failedFiles = [
-            ...failed,
-            ...pending.map(filePath => ({
+            if (!fileMeta.moduleName) {
+                skippedFiles.push(this.createFileRecord(filePath, '未识别到MIB模块定义，已跳过', 'skipped'));
+                return;
+            }
+
+            if (baseModules.has(fileMeta.moduleName)) {
+                skippedFiles.push(
+                    this.createFileRecord(filePath, `模块 ${fileMeta.moduleName} 已使用内置版本`, 'skipped')
+                );
+                return;
+            }
+
+            if (!groups.has(fileMeta.moduleName)) {
+                groups.set(fileMeta.moduleName, []);
+            }
+            groups.get(fileMeta.moduleName).push({
                 filePath,
-                fileName: path.basename(filePath),
-                msg: this.getWaitingDependencyMessage(
-                    metadata.get(filePath),
-                    loadedModuleNames,
-                    lastErrors.get(filePath)
-                )
-            }))
-        ];
+                fileMeta,
+                explicit: explicitFiles.has(filePath),
+                order
+            });
+        });
 
-        this.rebuildOidIndex();
-        return this.getSummary();
+        const selected = [];
+        groups.forEach(candidates => {
+            candidates.sort(
+                (left, right) => Number(right.explicit) - Number(left.explicit) || left.order - right.order
+            );
+            const winner = candidates[0];
+            selected.push(winner);
+            candidates.slice(1).forEach(candidate => {
+                skippedFiles.push(
+                    this.createFileRecord(
+                        candidate.filePath,
+                        `重复模块 ${candidate.fileMeta.moduleName}，已优先选择 ${winner.filePath}`,
+                        'skipped'
+                    )
+                );
+            });
+        });
+
+        selected.sort((left, right) => left.order - right.order);
+        return {
+            files: selected.map(candidate => candidate.filePath),
+            metadata: new Map(selected.map(candidate => [candidate.filePath, candidate.fileMeta])),
+            failedFiles,
+            skippedFiles
+        };
+    }
+
+    createFileRecord(filePath, msg, status = 'failed') {
+        return {
+            filePath,
+            fileName: path.basename(filePath),
+            status,
+            msg
+        };
     }
 
     createMibLoadPlan(expansion, metadata) {
@@ -254,6 +461,12 @@ class MibRegistry {
                 return false;
             }
 
+            const cacheStat = fs.statSync(cacheFilePath);
+            if (cacheStat.size > MAX_MIB_CACHE_FILE_BYTES) {
+                logger.warn(`MIB缓存文件过大（${cacheStat.size} 字节），将重新编译而不加载`);
+                return false;
+            }
+
             const cache = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
             if (cache.version !== MIB_CACHE_SCHEMA_VERSION) {
                 return false;
@@ -284,11 +497,24 @@ class MibRegistry {
     saveCache(cacheFilePath, requestedPaths, sourceState = null) {
         try {
             const expansion = sourceState ? null : this.expandInputPaths(requestedPaths);
+            const fileSignatures = sourceState ? sourceState.fileSignatures : this.getFileSignatures(expansion.files);
+            const sourceBytes = fileSignatures.reduce((total, signature) => total + (signature.size || 0), 0);
+            if (this.oidIndex.size > MAX_CACHED_OID_ENTRIES) {
+                logger.warn(
+                    `MIB对象数量 ${this.oidIndex.size} 超过缓存上限 ${MAX_CACHED_OID_ENTRIES}，跳过磁盘缓存以避免内存峰值`
+                );
+                return;
+            }
+            if (sourceBytes > MAX_CACHED_SOURCE_BYTES) {
+                logger.warn(`MIB源文件总大小 ${sourceBytes} 字节超过缓存上限，跳过磁盘缓存以避免内存峰值`);
+                return;
+            }
+
             const cache = {
                 version: MIB_CACHE_SCHEMA_VERSION,
                 createdAt: new Date().toISOString(),
                 requestedFiles: requestedPaths,
-                fileSignatures: sourceState ? sourceState.fileSignatures : this.getFileSignatures(expansion.files),
+                fileSignatures,
                 snapshot: this.buildSnapshot()
             };
 
@@ -319,6 +545,7 @@ class MibRegistry {
             requestedFiles: this.compiledFiles,
             loadedFiles: this.loadedFiles,
             failedFiles: this.failedFiles,
+            skippedFiles: this.skippedFiles,
             modules: summary.modules,
             baseModules: summary.baseModules,
             oidIndexEntries: Array.from(this.oidIndex.entries())
@@ -330,6 +557,7 @@ class MibRegistry {
         this.compiledFiles = this.normalizeFilePaths(snapshot.requestedFiles || []);
         this.loadedFiles = this.normalizeFilePaths(snapshot.loadedFiles || []);
         this.failedFiles = Array.isArray(snapshot.failedFiles) ? snapshot.failedFiles : [];
+        this.skippedFiles = Array.isArray(snapshot.skippedFiles) ? snapshot.skippedFiles : [];
         this.cachedModuleNames = Array.isArray(snapshot.modules) ? snapshot.modules : [];
         this.cachedBaseModuleNames = Array.isArray(snapshot.baseModules) ? snapshot.baseModules : [];
         this.oidIndex = new Map(Array.isArray(snapshot.oidIndexEntries) ? snapshot.oidIndexEntries : []);
@@ -456,10 +684,13 @@ class MibRegistry {
         return fallbackMsg || 'MIB依赖未满足或语法解析失败';
     }
 
-    buildFileMetadata(filePaths) {
+    buildFileMetadata(filePaths, onFile) {
         const metadata = new Map();
-        filePaths.forEach(filePath => {
+        filePaths.forEach((filePath, index) => {
             metadata.set(filePath, this.parseMibMetadata(filePath));
+            if (typeof onFile === 'function') {
+                onFile(filePath, index + 1, filePaths.length);
+            }
         });
         return metadata;
     }
@@ -484,12 +715,14 @@ class MibRegistry {
 
             return {
                 moduleName: moduleMatch ? moduleMatch[1] : null,
-                imports: Array.from(new Set(imports))
+                imports: Array.from(new Set(imports)),
+                sourceBytes: Buffer.byteLength(content)
             };
         } catch (error) {
             return {
                 moduleName: null,
                 imports: [],
+                sourceBytes: 0,
                 parseError: error.message
             };
         }
@@ -505,60 +738,203 @@ class MibRegistry {
         return names;
     }
 
-    canBatchLoadMibFiles(filePaths, metadata) {
+    loadFromFilesInBatch(filePaths, metadata, progressReporter = new MibCompileProgressReporter()) {
         const parser = this.store?.parser;
-        if (
-            !parser ||
-            typeof parser.Import !== 'function' ||
-            typeof parser.Serialize !== 'function' ||
-            typeof this.store.addTranslationsForModule !== 'function'
-        ) {
-            return false;
+        if (!parser || typeof parser.ParseModule !== 'function' || typeof parser.Serialize !== 'function') {
+            throw new Error('当前 net-snmp 版本不支持流式 MIB 批量编译');
         }
 
-        const moduleNames = new Set(this.getModuleNames(true));
-        const parserFileNames = new Set();
-        return filePaths.every(filePath => {
-            const fileMeta = metadata.get(filePath);
-            const moduleName = fileMeta?.moduleName;
-            const parserFileName = path.basename(filePath, path.extname(filePath));
-            if (
-                !moduleName ||
-                fileMeta.parseError ||
-                moduleNames.has(moduleName) ||
-                parserFileNames.has(parserFileName)
-            ) {
-                return false;
+        const loadedFiles = [];
+        const failedFiles = [];
+        const availableModules = new Set(this.getModuleNames(true));
+        const batches = this.createMibBatches(filePaths, metadata);
+
+        batches.forEach(batch => {
+            const readyFiles = [];
+            const plannedModules = new Set(availableModules);
+            batch.forEach(filePath => {
+                const fileMeta = metadata.get(filePath);
+                const missingImports = (fileMeta?.imports || []).filter(moduleName => !plannedModules.has(moduleName));
+                if (missingImports.length > 0) {
+                    const record = this.createFileRecord(filePath, `MIB依赖编译失败: ${missingImports.join(', ')}`);
+                    failedFiles.push(record);
+                    progressReporter.finishFile(filePath, 'failed', record.msg);
+                    return;
+                }
+
+                readyFiles.push(filePath);
+                plannedModules.add(fileMeta.moduleName);
+            });
+
+            if (readyFiles.length === 0) {
+                return;
             }
 
-            moduleNames.add(moduleName);
-            parserFileNames.add(parserFileName);
-            return true;
-        });
-    }
+            const batchResult = this.tryLoadMibBatch(readyFiles, metadata, progressReporter);
+            if (batchResult.success) {
+                readyFiles.forEach(filePath => {
+                    loadedFiles.push(filePath);
+                    availableModules.add(metadata.get(filePath).moduleName);
+                    progressReporter.finishFile(filePath, 'compiled');
+                });
+                return;
+            }
 
-    loadFromFilesInBatch(filePaths) {
-        const modulesBeforeLoad = new Set(this.getModuleNames(true));
-        return this.withSuppressedConsole(() => {
-            filePaths.forEach(filePath => this.store.parser.Import(filePath));
-            this.store.parser.Serialize();
-            this.getModuleNames(true).forEach(moduleName => {
-                if (!modulesBeforeLoad.has(moduleName)) {
-                    this.store.addTranslationsForModule(moduleName);
+            logger.warn(`MIB批次解析失败，隔离批次内文件: ${batchResult.error.message}`);
+            readyFiles.forEach(filePath => {
+                const fileMeta = metadata.get(filePath);
+                const missingImports = (fileMeta?.imports || []).filter(
+                    moduleName => !availableModules.has(moduleName)
+                );
+                if (missingImports.length > 0) {
+                    const record = this.createFileRecord(filePath, `MIB依赖编译失败: ${missingImports.join(', ')}`);
+                    failedFiles.push(record);
+                    progressReporter.finishFile(filePath, 'failed', record.msg);
+                    return;
                 }
+
+                const singleResult = this.tryLoadMibBatch([filePath], metadata, progressReporter);
+                if (!singleResult.success) {
+                    const record = this.createFileRecord(filePath, `MIB解析失败: ${singleResult.error.message}`);
+                    failedFiles.push(record);
+                    progressReporter.finishFile(filePath, 'failed', record.msg);
+                    return;
+                }
+
+                loadedFiles.push(filePath);
+                availableModules.add(fileMeta.moduleName);
+                progressReporter.finishFile(filePath, 'compiled');
             });
         });
+
+        return {
+            loadedFiles,
+            failedFiles
+        };
     }
 
-    loadFromFile(filePath) {
-        return this.withSuppressedConsole(() => this.store.loadFromFile(filePath));
-    }
+    createMibBatches(filePaths, metadata) {
+        const batches = [];
+        let currentBatch = [];
+        let currentBytes = 0;
 
-    rebuildStoreFromFiles(filePaths) {
-        this.store = snmp.createModuleStore();
+        const flush = () => {
+            if (currentBatch.length > 0) {
+                batches.push(currentBatch);
+                currentBatch = [];
+                currentBytes = 0;
+            }
+        };
+
         filePaths.forEach(filePath => {
-            this.loadFromFile(filePath);
+            const sourceBytes = metadata.get(filePath)?.sourceBytes || 0;
+            if (
+                currentBatch.length > 0 &&
+                (currentBatch.length >= MAX_MIB_FILES_PER_BATCH ||
+                    currentBytes + sourceBytes > MAX_MIB_SOURCE_BYTES_PER_BATCH)
+            ) {
+                flush();
+            }
+
+            currentBatch.push(filePath);
+            currentBytes += sourceBytes;
+            if (currentBatch.length >= MAX_MIB_FILES_PER_BATCH || currentBytes >= MAX_MIB_SOURCE_BYTES_PER_BATCH) {
+                flush();
+            }
         });
+        flush();
+        return batches;
+    }
+
+    tryLoadMibBatch(filePaths, metadata, progressReporter = new MibCompileProgressReporter()) {
+        const parser = this.store.parser;
+        const moduleNamesBefore = new Set(Object.keys(parser.Modules || {}));
+        const macroState = this.captureParserMacroState();
+        const expectedModules = new Set(filePaths.map(filePath => metadata.get(filePath).moduleName));
+
+        try {
+            this.withSuppressedConsole(() => {
+                filePaths.forEach(filePath => {
+                    progressReporter.startFile(filePath);
+                    const parserKey = `__netnexus_${this.parserKeySequence++}`;
+                    parser.ParseModule(parserKey, fs.readFileSync(filePath, 'utf8'));
+                    const detectedModuleName = parser.CharBuffer.ModuleName[parserKey];
+                    const expectedModuleName = metadata.get(filePath).moduleName;
+                    if (detectedModuleName !== expectedModuleName) {
+                        throw new Error(
+                            `模块名解析不一致: 预扫描 ${expectedModuleName}，解析器 ${detectedModuleName || '未识别'}`
+                        );
+                    }
+                });
+                progressReporter.serializing(filePaths);
+                parser.Serialize();
+            });
+
+            const unexpectedModules = Object.keys(parser.Modules || {}).filter(
+                moduleName => !moduleNamesBefore.has(moduleName) && !expectedModules.has(moduleName)
+            );
+            if (unexpectedModules.length > 0) {
+                throw new Error(`解析器生成了异常模块: ${unexpectedModules.join(', ')}`);
+            }
+
+            for (const moduleName of expectedModules) {
+                if (!parser.Modules[moduleName]) {
+                    throw new Error(`解析后未生成模块 ${moduleName}`);
+                }
+            }
+
+            return { success: true };
+        } catch (error) {
+            this.rollbackParserState(moduleNamesBefore, macroState);
+            return {
+                success: false,
+                error
+            };
+        } finally {
+            this.clearParserWorkingSet();
+        }
+    }
+
+    captureParserMacroState() {
+        const parser = this.store.parser;
+        const names = Array.isArray(parser.MACROS) ? [...parser.MACROS] : [];
+        return {
+            names,
+            definitions: new Map(Array.from(new Set(names)).map(name => [name, parser[name]]))
+        };
+    }
+
+    rollbackParserState(moduleNamesBefore, macroState) {
+        const parser = this.store.parser;
+        Object.keys(parser.Modules || {}).forEach(moduleName => {
+            if (!moduleNamesBefore.has(moduleName)) {
+                delete parser.Modules[moduleName];
+            }
+        });
+
+        const currentMacroNames = Array.isArray(parser.MACROS) ? parser.MACROS : [];
+        currentMacroNames.forEach(name => {
+            if (!macroState.definitions.has(name)) {
+                delete parser[name];
+            }
+        });
+        macroState.definitions.forEach((definition, name) => {
+            parser[name] = definition;
+        });
+        parser.MACROS = [...macroState.names];
+    }
+
+    clearParserWorkingSet() {
+        const parser = this.store?.parser;
+        if (!parser) {
+            return;
+        }
+
+        if (parser.CharBuffer) {
+            parser.CharBuffer.Table = {};
+            parser.CharBuffer.ModuleName = {};
+        }
+        parser.SymbolBuffer = {};
     }
 
     withSuppressedConsole(fn) {
@@ -637,6 +1013,7 @@ class MibRegistry {
         let entries;
         try {
             entries = fs.readdirSync(directoryPath, { withFileTypes: true });
+            entries.sort((left, right) => left.name.localeCompare(right.name));
         } catch (error) {
             failedPaths.push({
                 filePath: directoryPath,
@@ -679,12 +1056,12 @@ class MibRegistry {
                 }
 
                 const enumValues = this.getEnumerationValues(definition.SYNTAX, syntaxTypes);
-                this.oidIndex.set(definition.OID, {
-                    ...definition,
-                    ModuleName: definition.ModuleName || moduleName,
-                    ObjectName: definition.ObjectName || objectName,
-                    ...(Object.keys(enumValues).length > 0 ? { EnumValues: enumValues } : {})
-                });
+                definition.ModuleName ||= moduleName;
+                definition.ObjectName ||= objectName;
+                if (Object.keys(enumValues).length > 0) {
+                    definition.EnumValues = enumValues;
+                }
+                this.oidIndex.set(definition.OID, definition);
             });
         });
 
@@ -700,9 +1077,6 @@ class MibRegistry {
             const parentKey = parentOid || '';
             if (!this.oidChildIndex.has(parentKey)) {
                 this.oidChildIndex.set(parentKey, []);
-            }
-            if (!this.oidChildIndex.has(oid)) {
-                this.oidChildIndex.set(oid, []);
             }
             this.oidChildIndex.get(parentKey).push(oid);
         });
@@ -788,13 +1162,14 @@ class MibRegistry {
 
         return {
             requestedFiles: this.compiledFiles,
-            expandedFileCount: this.loadedFiles.length + this.failedFiles.length,
+            expandedFileCount: this.loadedFiles.length + this.failedFiles.length + this.skippedFiles.length,
             loadedFiles: this.loadedFiles.map(filePath => ({
                 filePath,
                 fileName: path.basename(filePath),
                 status: 'compiled'
             })),
             failedFiles: this.failedFiles,
+            skippedFiles: this.skippedFiles,
             modules: moduleNames,
             baseModules: moduleNamesWithBase.filter(moduleName => !moduleNames.includes(moduleName)),
             totalObjects: this.oidIndex.size,
@@ -1045,9 +1420,10 @@ class MibRegistry {
         }
 
         const moduleQualifiedName =
-            this.safeTranslate(match.oid, snmp.OidFormat.module) ||
-            `${match.definition.ModuleName}::${match.definition.ObjectName}`;
-        const pathName = this.safeTranslate(match.oid, snmp.OidFormat.path) || match.definition.NameSpace || null;
+            match.definition.ModuleName && match.definition.ObjectName
+                ? `${match.definition.ModuleName}::${match.definition.ObjectName}`
+                : this.safeTranslate(match.oid, snmp.OidFormat.module);
+        const pathName = match.definition.NameSpace || this.safeTranslate(match.oid, snmp.OidFormat.path) || null;
         const accessCapabilities = this.getAccessCapabilities(match.definition);
         const queryMetadata = this.getNodeQueryMetadata(
             match.oid,

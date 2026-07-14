@@ -467,7 +467,14 @@ function hasStatelessAddPathCompatibilityWarning(route) {
 }
 
 function addLocRibRoute(session, afi, safi, prefix, mask) {
-    const instanceKey = BmpBgpInstance.makeKey(BmpConst.BMP_PEER_TYPE.LOCAL_RIB, '0:0', afi, safi);
+    const rdRaw = 'raw:0000000000000000';
+    const instanceKey = BmpBgpInstance.makeKey(
+        BmpConst.BMP_PEER_TYPE.LOCAL_RIB,
+        '0:0',
+        afi,
+        safi,
+        rdRaw
+    );
     let instance = session.bgpInstanceMap.get(instanceKey);
     if (!instance) {
         instance = new BmpBgpInstance(session);
@@ -477,6 +484,7 @@ function addLocRibRoute(session, afi, safi, prefix, mask) {
         instance.instanceFlags = BmpConst.BMP_LOC_RIB_FLAGS.FILTERED;
         instance.rawInstanceFlags = BmpConst.BMP_LOC_RIB_FLAGS.FILTERED;
         instance.instanceRd = '0:0';
+        instance.instanceRdRaw = rdRaw;
         instance.instanceIp = '0.0.0.0';
         instance.instanceAs = 65000;
         instance.instanceRouterId = '192.0.2.1';
@@ -495,12 +503,20 @@ function addLocRibRoute(session, afi, safi, prefix, mask) {
 }
 
 function addBgpSessionRoute(session, afi, safi, prefix, mask, ribType = BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN) {
-    const sessionKey = BmpBgpSession.makeKey(BmpConst.BMP_PEER_TYPE.GLOBAL, '0:0', '192.0.2.2', 65000);
+    const rdRaw = 'raw:0000000000000000';
+    const sessionKey = BmpBgpSession.makeKey(
+        BmpConst.BMP_PEER_TYPE.GLOBAL,
+        '0:0',
+        '192.0.2.2',
+        65000,
+        rdRaw
+    );
     let bgpSession = session.bgpSessionMap.get(sessionKey);
     if (!bgpSession) {
         bgpSession = new BmpBgpSession(session);
         bgpSession.sessionType = BmpConst.BMP_PEER_TYPE.GLOBAL;
         bgpSession.sessionRd = '0:0';
+        bgpSession.sessionRdRaw = rdRaw;
         bgpSession.sessionIp = '192.0.2.2';
         bgpSession.sessionAs = 65000;
         session.bgpSessionMap.set(sessionKey, bgpSession);
@@ -531,6 +547,31 @@ const { session, events } = makeSession();
 session.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
 );
+const rejectedRouteMutations = [];
+session.bmpWorker.enqueuePersistenceMutation = mutation => rejectedRouteMutations.push(mutation);
+const incompleteUpdate = Buffer.concat([
+    Buffer.alloc(BgpConst.BGP_MARKER_LEN, 0xff),
+    u16(BgpConst.BGP_HEAD_LEN + 4),
+    Buffer.from([BgpConst.BGP_PACKET_TYPE.UPDATE])
+]);
+[incompleteUpdate, bgpPacket(BgpConst.BGP_PACKET_TYPE.KEEPALIVE, Buffer.alloc(0))].forEach(packet => {
+    session.processMessage(
+        bmpMessage(
+            BmpConst.BMP_VERSION.V4,
+            BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+            Buffer.concat([
+                peerHeader(),
+                indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, packet)
+            ])
+        )
+    );
+});
+assert.equal(
+    rejectedRouteMutations.length,
+    0,
+    'invalid or non-UPDATE BGP messages must not advance EOR or mutate route persistence'
+);
+delete session.bmpWorker.enqueuePersistenceMutation;
 session.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -1232,8 +1273,11 @@ assert.equal(
 );
 assert.equal(
     [...refreshedBgpSession.bgpRoutes.get(ipv6BgpRoute.afKey).get(ipv6BgpRoute.ribType).values()][0].routeState,
-    BmpConst.BMP_ROUTE_STATE.ACTIVE
+    BmpConst.BMP_ROUTE_STATE.STALE
 );
+assert.deepEqual(refreshedBgpSession.enabledAddressFamilies, [
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST }
+]);
 peerUpRefreshSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -1340,7 +1384,40 @@ peerDownNotificationMultiAfSession.processMessage(
         ])
     )
 );
-assert.equal(peerDownNotificationMultiAfSession.bgpSessionMap.has(peerDownNotificationIpv4Route.sessionKey), false);
+const notificationOwner = peerDownNotificationMultiAfSession.bgpSessionMap.get(
+    peerDownNotificationIpv4Route.sessionKey
+);
+assert.equal(notificationOwner, peerDownNotificationIpv4Route.bgpSession);
+assert.equal(notificationOwner.sessionState, BmpConst.BMP_SESSION_STATE.PEER_DOWN);
+assert.equal(
+    [...notificationOwner.bgpRoutes.get(peerDownNotificationIpv4Route.afKey).get(peerDownNotificationIpv4Route.ribType).values()][0]
+        .routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE
+);
+const notificationEpoch = notificationOwner.getRibEpoch(
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    peerDownNotificationIpv4Route.ribType
+);
+peerDownNotificationMultiAfSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        peerUpPayloadForAf(BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+    )
+);
+assert.equal(
+    peerDownNotificationMultiAfSession.bgpSessionMap.get(peerDownNotificationIpv4Route.sessionKey),
+    notificationOwner,
+    'Peer Up on the same BMP connection must retain the owner epoch generation'
+);
+assert.ok(
+    notificationOwner.getRibEpoch(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        peerDownNotificationIpv4Route.ribType
+    ) > notificationEpoch
+);
 
 const { session: addPathSession } = makeSession();
 addPathSession.processMessage(

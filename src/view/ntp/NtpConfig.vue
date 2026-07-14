@@ -102,7 +102,7 @@
                             </nn-col>
                         </nn-row>
 
-                        <div style="margin-top: 8px; color: var(--nn-color-text-muted)">
+                        <div class="nn-helper-text" style="margin-top: 8px">
                             默认端口为 123。若系统服务已占用或当前进程没有特权，可改为其他端口供测试脚本验证。
                         </div>
 
@@ -164,7 +164,7 @@
                             {{ lastClient }}
                         </nn-descriptions-item>
                     </nn-descriptions>
-                    <div style="margin-top: 12px; color: var(--nn-color-text-muted)">
+                    <div class="nn-helper-text" style="margin-top: 12px">
                         点击“刷新时间”后按“本机当前时间 + 时间偏移”同步显示，对应服务端响应里的 `transmitTimestamp`。
                     </div>
                 </nn-card>

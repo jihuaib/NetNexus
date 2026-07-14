@@ -323,7 +323,30 @@ test.describe('BMP pages', () => {
                 'true'
             );
 
+            const assuranceRequestCount = () =>
+                controller.timeline.filter(item => item.message === 'worker query: getRouteAssurance').length;
+            const requestCountBeforeEnable = assuranceRequestCount();
+            const analysisToggle = page.getByTestId('route-assurance-toggle');
+            await expect(analysisToggle).toHaveAttribute('aria-checked', 'false');
+            await expect(page.getByText('路由分析未开启，请先开启右上角分析开关')).toBeVisible();
+            await page.waitForTimeout(1000);
+            expect(assuranceRequestCount()).toBe(requestCountBeforeEnable);
+            await analysisToggle.click();
+            await expect(analysisToggle).toHaveAttribute('aria-checked', 'true');
+            await expect
+                .poll(
+                    () =>
+                        controller.timeline.some(
+                            item =>
+                                item.message === 'worker query: setRouteAssuranceEnabled' &&
+                                item.data?.request?.enabled === true
+                        ),
+                    { timeout: 10000 }
+                )
+                .toBe(true);
+
             const vrfSelect = page.getByTestId('route-assurance-vrf');
+            await expect(vrfSelect).toBeEnabled();
             await vrfSelect.click();
             await page.getByRole('option').filter({ hasText: 'route-lens-lab' }).click();
             await page.getByTestId('route-assurance-search').click();
@@ -398,6 +421,24 @@ test.describe('BMP pages', () => {
             expect(stableLayout.matrixBottom - stableLayout.paginationBottom).toBeLessThanOrEqual(14);
             expect(stableLayout.generatedBackground).not.toBe('rgba(0, 0, 0, 0)');
             expect(stableLayout.generatedRadius).toBeGreaterThan(8);
+
+            await analysisToggle.click();
+            await expect(analysisToggle).toHaveAttribute('aria-checked', 'false');
+            await expect
+                .poll(() => {
+                    const toggleEvents = controller.timeline.filter(
+                        item => item.message === 'worker query: setRouteAssuranceEnabled'
+                    );
+                    return toggleEvents.at(-1)?.data?.request?.enabled;
+                })
+                .toBe(false);
+            await expect(issueRows).toHaveCount(0);
+            await expect(page.getByText('路由分析未开启，请先开启右上角分析开关')).toBeVisible();
+            await expect(assurancePage.locator('.generated-at')).toHaveCount(0);
+            await analysisToggle.click();
+            await expect(analysisToggle).toHaveAttribute('aria-checked', 'true');
+            await expect(issueRows).toHaveCount(5, { timeout: 10000 });
+
             await page.getByTestId('route-assurance-query').fill('10.0.0.0/99');
             await page.getByTestId('route-assurance-search').click();
             const malformedCidrToast = page

@@ -151,6 +151,13 @@
     margin-top: 10px;
 }
 
+/* 配置页中的补充说明，和表单正文保持清晰的视觉层级 */
+.nn-helper-text {
+    color: var(--nn-color-text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
 /* TCP/UDP 等协议工具共用的收发日志面板 */
 .nn-packet-log {
     box-sizing: border-box;

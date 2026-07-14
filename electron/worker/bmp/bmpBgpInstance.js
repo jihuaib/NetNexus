@@ -15,10 +15,12 @@ class BmpBgpInstance {
         this.instanceFlags = null;
         this.rawInstanceFlags = null;
         this.instanceRd = null;
+        this.instanceRdRaw = null;
         this.instanceIp = null;
         this.instanceAs = null;
         this.instanceRouterId = null;
         this.instanceTimestamp = null;
+        this.instanceTimestampMicroseconds = null;
         this.instanceTimestampMs = null;
         this.localIp = null;
         this.localPort = null;
@@ -44,6 +46,7 @@ class BmpBgpInstance {
         this.routePrefixIndex = new Map();
         this.routeSummary = { active: 0, stale: 0, total: 0 };
         this.ribEpoch = 0;
+        this.ribStaleMetadata = null;
     }
 
     getAddPathEnabledForKey(key, direction = 'receive') {
@@ -98,8 +101,8 @@ class BmpBgpInstance {
         return this.getAddPathReceiveInfo(afi, safi, direction).enabled;
     }
 
-    static makeKey(instanceType, instanceRd, afi, safi) {
-        return `${instanceType}|${instanceRd}|${afi}|${safi}`;
+    static makeKey(instanceType, instanceRd, afi, safi, instanceRdRaw = null) {
+        return `${instanceType}|${instanceRdRaw || instanceRd}|${afi}|${safi}`;
     }
 
     static parseKey(key) {
@@ -265,15 +268,14 @@ class BmpBgpInstance {
 
     markRoutesStale(reason) {
         const staleEpoch = this.advanceRibEpoch();
-        let changed = 0;
-        this.bgpRoutes.forEach(route => {
-            const previousState = route.routeState;
-            route.markStale(reason, staleEpoch);
-            if (BmpBgpInstance.normalizeRouteState(previousState) !== BmpConst.BMP_ROUTE_STATE.STALE) {
-                this.recordRouteStateChange(previousState, route.routeState);
-                changed += 1;
-            }
-        });
+        const changed = this.routeSummary.active;
+        this.routeSummary.active = 0;
+        this.routeSummary.stale = this.routeSummary.total;
+        this.ribStaleMetadata = {
+            staleEpoch,
+            staleReason: reason,
+            staleAt: new Date().toISOString()
+        };
         return { staleEpoch, changed };
     }
 
@@ -289,10 +291,12 @@ class BmpBgpInstance {
             instanceFlags: this.instanceFlags,
             rawInstanceFlags: this.rawInstanceFlags,
             instanceRd: this.instanceRd,
+            instanceRdRaw: this.instanceRdRaw,
             instanceIp: this.instanceIp,
             instanceAs: this.instanceAs,
             instanceRouterId: this.instanceRouterId,
             instanceTimestamp: this.instanceTimestamp,
+            instanceTimestampMicroseconds: this.instanceTimestampMicroseconds,
             instanceTimestampMs: this.instanceTimestampMs,
             localIp: this.localIp,
             localPort: this.localPort,
@@ -317,7 +321,11 @@ class BmpBgpInstance {
     }
 
     closeInstance() {
-        this.bgpRoutes.clear();
+        if (typeof this.bgpRoutes.clearSilently === 'function') {
+            this.bgpRoutes.clearSilently();
+        } else {
+            this.bgpRoutes.clear();
+        }
         this.attrStore.clear();
         this.routePrefixIndex.clear();
         this.routeSummary = { active: 0, stale: 0, total: 0 };
@@ -327,6 +335,7 @@ class BmpBgpInstance {
         this.addPathSendMap.clear();
         this.isAddPath = false;
         this.ribEpoch = 0;
+        this.ribStaleMetadata = null;
     }
 }
 

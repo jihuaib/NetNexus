@@ -73,6 +73,7 @@
         "test:ci:minified": "node scripts/run-ci-tests-on-minified-electron.js",
         "test:e2e": "playwright test",
         "test:e2e:browser": "cross-env E2E_TARGET=browser E2E_SKIP_PACK=1 playwright test",
+        "test:packaged:sqlite": "node scripts/verify-packaged-sqlite.js",
         "mock:bgp": "node scripts/mockBgpClient.js",
         "mock:bmp": "node scripts/mockBmpClient.js",
         "mock:radius": "node scripts/mockRadiusClient.js",
@@ -116,7 +117,7 @@
             "zh-CN"
         ],
         "asar": false,
-        "npmRebuild": false,
+        "npmRebuild": true,
         "afterPack": "scripts/minify-electron-js.js",
         "electronUpdaterCompatibility": ">=2.16",
         "publish": {
@@ -223,6 +224,7 @@
         "wait-port": "^1.1.0"
     },
     "dependencies": {
+        "better-sqlite3": "11.10.0",
         "dayjs": "^1.11.13",
         "electron-log": "^5.3.3",
         "electron-store": "^8.2.0",

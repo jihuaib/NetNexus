@@ -2,6 +2,23 @@ const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 
+if (!process.versions.electron) {
+    const electronPath = require('electron');
+    const result = spawnSync(electronPath, [__filename], {
+        cwd: path.join(__dirname, '..', '..'),
+        stdio: 'inherit',
+        env: {
+            ...process.env,
+            ELECTRON_RUN_AS_NODE: '1',
+            NODE_ENV: 'test'
+        }
+    });
+    if (result.error) {
+        throw result.error;
+    }
+    process.exit(result.status || 0);
+}
+
 const ciTestDir = __dirname;
 const runnerFile = path.basename(__filename);
 const testScripts = fs

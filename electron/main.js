@@ -18,6 +18,20 @@ if (isPackagedE2e) {
     app.setPath('userData', path.join(app.getPath('temp'), 'netnexus-e2e', String(process.pid)));
 }
 
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (hasSingleInstanceLock) {
+    app.on('second-instance', () => {
+        if (!mainWindow) {
+            return;
+        }
+        if (mainWindow.isMinimized()) {
+            mainWindow.restore();
+        }
+        mainWindow.show();
+        mainWindow.focus();
+    });
+}
+
 async function createSplashWindow() {
     // 计算 splash 窗口在工作区域内的居中位置
     const { screen } = require('electron');
@@ -274,12 +288,16 @@ async function startApplication() {
     finishStartup();
 }
 
-app.whenReady()
-    .then(startApplication)
-    .catch(error => {
-        logger.error(`应用启动失败: ${error.message}`);
-        updateSplashProgress(splashProgress, `启动失败: ${error.message}`);
-    });
+if (!hasSingleInstanceLock) {
+    app.quit();
+} else {
+    app.whenReady()
+        .then(startApplication)
+        .catch(error => {
+            logger.error(`应用启动失败: ${error.message}`);
+            updateSplashProgress(splashProgress, `启动失败: ${error.message}`);
+        });
+}
 
 app.on('before-quit', () => {
     if (tray) {

@@ -116,15 +116,6 @@ END
     registry.loadOrCompileMibFiles(requestedFiles, { cacheFilePath });
     assert.equal(serializeCalls, serializeCallsAfterCompile + 2, 'a changed source file must recompile');
 
-    const fallbackRegistry = new MibRegistry();
-    fallbackRegistry.loadFromFilesInBatch = () => {
-        throw new Error('simulated batch parser failure');
-    };
-    const fallbackSummary = fallbackRegistry.compileMibFiles(requestedFiles);
-    assert.equal(fallbackSummary.loadedFiles.length, 3);
-    assert.equal(fallbackSummary.failedFiles.length, 0);
-    assert.equal(fallbackRegistry.translateOid(testOid).moduleQualifiedName, 'TEST-OBJECTS-MIB::testValue');
-
     console.log('MIB registry batch compilation tests passed');
 } finally {
     snmp.createModuleStore = originalCreateModuleStore;

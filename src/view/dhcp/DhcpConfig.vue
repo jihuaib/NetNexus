@@ -172,7 +172,7 @@
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <div style="margin-top: 8px; color: var(--nn-color-text-muted)">
+                        <div class="nn-helper-text" style="margin-top: 8px">
                             非标准监听端口仅适用于测试或自定义客户端。真实 DHCP/DHCPv6 客户端通常固定访问 67/547 端口。
                         </div>
                         <div style="margin-top: 12px; display: flex; justify-content: center">

@@ -9,8 +9,16 @@ on:
 
 jobs:
     e2e-macos:
-        name: macOS Tests and Packaged E2E
-        runs-on: macos-latest
+        name: macOS ${{ matrix.arch }} Tests and Packaged E2E
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - arch: arm64
+                      runner: macos-15
+                    - arch: x64
+                      runner: macos-15-intel
+        runs-on: ${{ matrix.runner }}
         env:
             NODE_VERSION: '16.20.2'
 
@@ -26,6 +34,11 @@ jobs:
 
             - name: Verify Node.js version
               run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+
+            - name: Setup Python for native modules
+              uses: actions/setup-python@v5
+              with:
+                  python-version: '3.11'
 
             - name: Install dependencies
               run: npm ci
@@ -45,11 +58,16 @@ jobs:
             - name: Run macOS packaged UI tests
               run: npm run test:e2e
 
+            - name: Verify packaged BMP SQLite
+              run: npm run test:packaged:sqlite
+              env:
+                  PACKAGED_SQLITE_EXPECTED_ARCH: ${{ matrix.arch }}
+
             - name: Upload Playwright report
               if: ${{ always() }}
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-report-macos
+                  name: playwright-report-macos-${{ matrix.arch }}
                   path: |
                       playwright-report/
                       test-results/
@@ -58,7 +76,7 @@ jobs:
 
     e2e-windows:
         name: Windows Tests and Packaged E2E
-        runs-on: windows-latest
+        runs-on: windows-2022
         env:
             NODE_VERSION: '16.20.2'
 
@@ -74,6 +92,11 @@ jobs:
 
             - name: Verify Node.js version
               run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+
+            - name: Setup Python for native modules
+              uses: actions/setup-python@v5
+              with:
+                  python-version: '3.11'
 
             - name: Install dependencies
               run: npm ci
@@ -92,6 +115,11 @@ jobs:
 
             - name: Run Windows packaged UI tests
               run: npm run test:e2e
+
+            - name: Verify packaged BMP SQLite
+              run: npm run test:packaged:sqlite
+              env:
+                  PACKAGED_SQLITE_EXPECTED_ARCH: x64
 
             - name: Upload Playwright report
               if: ${{ always() }}

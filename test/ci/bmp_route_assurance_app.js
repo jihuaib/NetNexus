@@ -9,6 +9,10 @@ async function main() {
     assert.equal(result.status, 'error');
     assert.equal(result.msg, 'BMP未启动');
 
+    const toggleResult = await app.setRouteAssuranceEnabled({ enabled: true });
+    assert.equal(toggleResult.status, 'error');
+    assert.equal(toggleResult.msg, 'BMP未启动');
+
     console.log('BMP Route Assurance app-state tests passed');
 }
 

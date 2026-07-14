@@ -686,11 +686,20 @@ function getClientKey(client) {
 }
 
 function getSessionKey(session) {
-    return joinKeyParts([session.sessionType, session.sessionRd, session.sessionIp, session.sessionAs]);
+    return joinKeyParts([
+        session.sessionType,
+        session.sessionRdRaw || session.sessionRd,
+        session.sessionIp,
+        session.sessionAs
+    ]);
 }
 
 function getInstanceKey(instance) {
-    return joinKeyParts([instance.instanceType, instance.instanceRd, instance.addrFamilyType]);
+    return joinKeyParts([
+        instance.instanceType,
+        instance.instanceRdRaw || instance.instanceRd,
+        instance.addrFamilyType
+    ]);
 }
 
 function getSessionStatisticsKey(report) {
@@ -699,7 +708,10 @@ function getSessionStatisticsKey(report) {
 
 function getInstanceStatisticsKey(report) {
     if (report && report.instance) {
-        return joinKeyParts([report.instance.instanceType, report.instance.instanceRd]);
+        return joinKeyParts([
+            report.instance.instanceType,
+            report.instance.instanceRdRaw || report.instance.instanceRd
+        ]);
     }
     return joinKeyParts([report.updatedAt, 'instance']);
 }

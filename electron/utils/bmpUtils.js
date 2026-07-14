@@ -36,6 +36,18 @@ function parseCommonHeader(buffer) {
     };
 }
 
+function toUnixTimestampMs(seconds, microseconds = 0) {
+    const secondsValue = Number(seconds);
+    const microsecondsValue = Number(microseconds);
+    if (!Number.isInteger(secondsValue) || secondsValue < 0) {
+        return null;
+    }
+    if (!Number.isInteger(microsecondsValue) || microsecondsValue < 0 || microsecondsValue > 999999) {
+        return secondsValue * 1000;
+    }
+    return secondsValue * 1000 + Math.floor(microsecondsValue / 1000);
+}
+
 function parsePeerHeader(buffer, offset = 0) {
     const startOffset = offset;
     if (!Buffer.isBuffer(buffer) || offset + 42 > buffer.length) {
@@ -54,6 +66,7 @@ function parsePeerHeader(buffer, offset = 0) {
     const rdBuffer = buffer.subarray(offset, offset + BgpConst.BGP_RD_LEN);
     offset += BgpConst.BGP_RD_LEN;
     const peerRd = rdBufferToString(rdBuffer);
+    const peerRdRaw = `raw:${rdBuffer.toString('hex')}`;
 
     let peerAddress;
     if (peerType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB) {
@@ -74,8 +87,9 @@ function parsePeerHeader(buffer, offset = 0) {
     offset += 4;
     const peerTimestamp = buffer.readUInt32BE(offset);
     offset += 4;
-    const peerTimestampMs = buffer.readUInt32BE(offset);
+    const peerTimestampMicroseconds = buffer.readUInt32BE(offset);
     offset += 4;
+    const peerTimestampMs = toUnixTimestampMs(peerTimestamp, peerTimestampMicroseconds);
 
     return {
         valid: true,
@@ -84,10 +98,12 @@ function parsePeerHeader(buffer, offset = 0) {
             peerType,
             peerFlags,
             peerRd,
+            peerRdRaw,
             peerAddress,
             peerAs,
             peerRouterId,
             peerTimestamp,
+            peerTimestampMicroseconds,
             peerTimestampMs
         }
     };
@@ -313,6 +329,7 @@ function parseStatsRecords(buffer, offset = 0, options = {}) {
 
 module.exports = {
     getInitiationTlvName,
+    toUnixTimestampMs,
     parseCommonHeader,
     parsePeerHeader,
     parseBmpTlvs,

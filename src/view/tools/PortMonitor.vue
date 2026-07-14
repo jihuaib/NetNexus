@@ -48,9 +48,9 @@
                 :data-source="filteredPorts"
                 :scroll="{ x: 1060, y: '100%' }"
                 :pagination="{
-                    pageSize: 20,
+                    pageSize: 30,
                     showSizeChanger: false,
-                    showTotal: total => '共 ' + total + ' 条，每页 20 条',
+                    showTotal: total => '共 ' + total + ' 条，每页 30 条',
                     position: ['bottomCenter']
                 }"
                 size="small"

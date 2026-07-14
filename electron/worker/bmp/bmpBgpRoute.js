@@ -30,6 +30,7 @@ class BmpBgpRoute {
         // key
         this.pathId = DEFAULT_PATH_ID;
         this.rd = DEFAULT_RD;
+        this.rdRaw = null;
         this.ip = null;
         this.mask = null;
         this.afi = null;
@@ -42,16 +43,129 @@ class BmpBgpRoute {
         this.routeTlvs = [];
         this.parseStatus = BmpBgpRoute.makeParseStatus();
 
-        this.routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
+        this._routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
+        this.ribType = null;
         this.ribEpoch = 0;
-        this.staleEpoch = null;
+        this._staleEpoch = null;
         this.lastSeenAt = null;
-        this.staleAt = null;
-        this.staleReason = null;
+        this._staleAt = null;
+        this._staleReason = null;
     }
 
     getRouteAttrOwner() {
         return this.BmpBgpSession || this.BmpBgpInstance || null;
+    }
+
+    getEffectiveRouteState() {
+        if (this._routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
+            return BmpConst.BMP_ROUTE_STATE.STALE;
+        }
+
+        if (this.BmpBgpInstance) {
+            if (!this.BmpBgpInstance.ribStaleMetadata) {
+                return BmpConst.BMP_ROUTE_STATE.ACTIVE;
+            }
+            return this.ribEpoch === this.BmpBgpInstance.getRibEpoch()
+                ? BmpConst.BMP_ROUTE_STATE.ACTIVE
+                : BmpConst.BMP_ROUTE_STATE.STALE;
+        }
+
+        if (this.BmpBgpSession && this.afi !== null && this.safi !== null) {
+            let currentEpoch = null;
+            if (this.ribType !== null && this.ribType !== undefined) {
+                const epochKey = `${this.afi}|${this.safi}|${this.ribType}`;
+                if (this.BmpBgpSession.ribStaleMetadataMap?.has(epochKey)) {
+                    currentEpoch = this.BmpBgpSession.getRibEpoch(this.afi, this.safi, this.ribType);
+                }
+            } else {
+                const prefix = `${this.afi}|${this.safi}|`;
+                const staleKeys = Array.from(this.BmpBgpSession.ribStaleMetadataMap?.keys?.() || []).filter(key =>
+                    key.startsWith(prefix)
+                );
+                const epochs = Array.from(this.BmpBgpSession.ribEpochMap || [])
+                    .filter(([key]) => key.startsWith(prefix))
+                    .map(([, epoch]) => epoch);
+                const uniqueEpochs = new Set(epochs);
+                if (staleKeys.length > 0 && uniqueEpochs.size === 1) {
+                    currentEpoch = uniqueEpochs.values().next().value;
+                }
+            }
+            if (currentEpoch !== null && this.ribEpoch !== currentEpoch) {
+                return BmpConst.BMP_ROUTE_STATE.STALE;
+            }
+        }
+
+        return BmpConst.BMP_ROUTE_STATE.ACTIVE;
+    }
+
+    get routeState() {
+        return this.getEffectiveRouteState();
+    }
+
+    set routeState(value) {
+        this._routeState =
+            value === BmpConst.BMP_ROUTE_STATE.STALE ? BmpConst.BMP_ROUTE_STATE.STALE : BmpConst.BMP_ROUTE_STATE.ACTIVE;
+    }
+
+    getScopeStaleMetadata() {
+        if (this.BmpBgpInstance) {
+            return this.BmpBgpInstance.ribStaleMetadata || null;
+        }
+        if (this.BmpBgpSession && this.ribType !== null && this.ribType !== undefined) {
+            return this.BmpBgpSession.ribStaleMetadataMap?.get(`${this.afi}|${this.safi}|${this.ribType}`);
+        }
+        return null;
+    }
+
+    get staleEpoch() {
+        return (
+            this._staleEpoch ??
+            (this.routeState === BmpConst.BMP_ROUTE_STATE.STALE
+                ? (this.getScopeStaleMetadata()?.staleEpoch ?? null)
+                : null)
+        );
+    }
+
+    set staleEpoch(value) {
+        this._staleEpoch = value;
+    }
+
+    get staleAt() {
+        return (
+            this._staleAt ||
+            (this.routeState === BmpConst.BMP_ROUTE_STATE.STALE ? this.getScopeStaleMetadata()?.staleAt : null) ||
+            null
+        );
+    }
+
+    set staleAt(value) {
+        this._staleAt = value;
+    }
+
+    get staleReason() {
+        return (
+            this._staleReason ||
+            (this.routeState === BmpConst.BMP_ROUTE_STATE.STALE ? this.getScopeStaleMetadata()?.staleReason : null) ||
+            null
+        );
+    }
+
+    set staleReason(value) {
+        this._staleReason = value;
+    }
+
+    getEffectiveStaleMetadata() {
+        if (this.routeState !== BmpConst.BMP_ROUTE_STATE.STALE) {
+            return null;
+        }
+        if (this._staleAt || this._staleReason || this._staleEpoch !== null) {
+            return {
+                staleAt: this._staleAt,
+                staleReason: this._staleReason,
+                staleEpoch: this._staleEpoch
+            };
+        }
+        return this.getScopeStaleMetadata();
     }
 
     getInlineRouteAttr() {
@@ -183,8 +297,9 @@ class BmpBgpRoute {
         return String(rd);
     }
 
-    static makeKey(pathId, rd, ip, mask) {
-        return `${BmpBgpRoute.normalizePathId(pathId)}|${BmpBgpRoute.normalizeRd(rd)}|${ip}|${mask}`;
+    static makeKey(pathId, rd, ip, mask, rdRaw = null) {
+        const rdIdentity = rdRaw || BmpBgpRoute.normalizeRd(rd);
+        return `${BmpBgpRoute.normalizePathId(pathId)}|${rdIdentity}|${ip}|${mask}`;
     }
 
     static hasParseIssue(issue) {
@@ -263,7 +378,7 @@ class BmpBgpRoute {
     }
 
     getRouteKey() {
-        return BmpBgpRoute.makeKey(this.pathId, this.rd, this.ip, this.mask);
+        return BmpBgpRoute.makeKey(this.pathId, this.rd, this.ip, this.mask, this.rdRaw);
     }
 
     getAddrFamilyType() {
@@ -325,6 +440,7 @@ class BmpBgpRoute {
             ip: this.ip,
             mask: this.mask,
             rd: BmpBgpRoute.normalizeRd(this.rd),
+            rdRaw: this.rdRaw,
             origin: routeAttr.origin,
             asPath: routeAttr.asPath,
             med: routeAttr.med,
@@ -349,6 +465,7 @@ class BmpBgpRoute {
         const attrEntry = this.getRouteAttrEntry();
         const pathStatusInfo = this.getPathStatusInfo();
         const routeTlvInfo = this.getRouteTlvInfo();
+        const staleMetadata = this.getEffectiveStaleMetadata();
         const routeInfo = {
             routeKey: this.getRouteKey(),
             addrFamilyType: this.getAddrFamilyType(),
@@ -357,6 +474,7 @@ class BmpBgpRoute {
             ip: this.ip,
             mask: this.mask,
             rd: BmpBgpRoute.normalizeRd(this.rd),
+            rdRaw: this.rdRaw,
             origin: routeAttr.origin,
             asPath: routeAttr.asPath,
             med: routeAttr.med,
@@ -385,16 +503,16 @@ class BmpBgpRoute {
             routeTlvCount: routeTlvInfo.routeTlvCount,
             routeState: this.routeState,
             ribEpoch: this.ribEpoch,
-            staleEpoch: this.staleEpoch,
+            staleEpoch: staleMetadata?.staleEpoch ?? this.staleEpoch,
             lastSeenAt: this.lastSeenAt,
-            staleAt: this.staleAt,
-            staleReason: this.staleReason
+            staleAt: staleMetadata?.staleAt || this.staleAt,
+            staleReason: staleMetadata?.staleReason || this.staleReason
         };
         return routeInfo;
     }
 
     markActive(ribEpoch = 0) {
-        this.routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
+        this._routeState = BmpConst.BMP_ROUTE_STATE.ACTIVE;
         this.ribEpoch = ribEpoch;
         this.lastSeenAt = new Date().toISOString();
         this.staleAt = null;
@@ -403,7 +521,7 @@ class BmpBgpRoute {
     }
 
     markStale(reason, staleEpoch = null) {
-        this.routeState = BmpConst.BMP_ROUTE_STATE.STALE;
+        this._routeState = BmpConst.BMP_ROUTE_STATE.STALE;
         this.staleReason = reason;
         this.staleEpoch = staleEpoch;
         this.staleAt = new Date().toISOString();

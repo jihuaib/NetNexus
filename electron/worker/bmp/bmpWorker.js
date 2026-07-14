@@ -6,12 +6,16 @@ const BmpSession = require('./bmpSession');
 const SshTunnel = require('../shared/sshTunnel');
 const { getAfiAndSafi } = require('../../utils/bgpUtils');
 const BmpBgpSession = require('./bmpBgpSession');
+const BmpBgpInstance = require('./bmpBgpInstance');
 const BmpBgpRoute = require('./bmpBgpRoute');
 const BmpConst = require('../../const/bmpConst');
 const { buildRoutePrefixQuery, routeMatchesPrefixQuery } = require('../../utils/routePrefixUtils');
 const RouteUpdateAggregator = require('../../utils/routeUpdateAggregator');
-const { buildBmpRouteAssurance } = require('../../utils/bmpRouteAssurance');
+const BmpRouteAssuranceService = require('../../utils/bmpRouteAssuranceService');
 const { buildBmpRouteLens } = require('../../utils/bmpRouteLens');
+const ObservedRouteMap = require('./observedRouteMap');
+const BmpPersistenceClient = require('./bmpPersistenceClient');
+const BmpRouteAgingScheduler = require('./bmpRouteAgingScheduler');
 
 class BmpWorker {
     constructor() {
@@ -23,9 +27,22 @@ class BmpWorker {
         this.sshTunnel = null; // SSH隧道（用于MD5认证）
 
         this.bmpSessionMap = new Map(); // bmp会话map
+        this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
+        this.routeAssuranceFilters = {};
+        this.routeAssuranceRebuildScheduled = false;
         this.routeUpdateAggregator = new RouteUpdateAggregator();
         this.routeUpdateFlushTimer = null;
         this.routeUpdateFlushIntervalMs = 1000;
+        this.persistence = null;
+        this.persistenceReader = null;
+        this.persistenceFailure = null;
+        this.bmpSocketsPaused = false;
+        this.persistenceSweepTimer = null;
+        this.persistenceSweepCatchupTimer = null;
+        this.persistenceSweepRunning = false;
+        this.routeAgingScheduler = new BmpRouteAgingScheduler({
+            onError: (error, key) => logger.error(`BMP in-memory route aging failed for ${key}: ${error.message}`)
+        });
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler();
@@ -71,9 +88,29 @@ class BmpWorker {
             BmpConst.BMP_REQ_TYPES.GET_ROUTE_ASSURANCE,
             this.getRouteAssurance.bind(this)
         );
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.SET_ROUTE_ASSURANCE_ENABLED,
+            this.setRouteAssuranceEnabled.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.GET_PERSISTENCE_STATUS,
+            this.getPersistenceStatus.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES,
+            this.getPersistedRoutes.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTE_EVENTS,
+            this.getPersistedRouteEvents.bind(this)
+        );
     }
 
     createBmpSession(socket, clientAddress, clientPort) {
+        if (this.persistenceFailure || this.persistence?.failure) {
+            socket.destroy();
+            return null;
+        }
         const sessionKey = BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
         this.removeBmpSessionByKey(sessionKey);
 
@@ -85,6 +122,10 @@ class BmpWorker {
         bmpSession.localPort = socket.localPort;
         bmpSession.remoteIp = clientAddress;
         bmpSession.remotePort = clientPort;
+
+        if (this.bmpSocketsPaused || this.persistence?.paused) {
+            socket.pause();
+        }
 
         return bmpSession;
     }
@@ -103,11 +144,17 @@ class BmpWorker {
     }
 
     enqueueRouteUpdateEvent(update) {
+        if (!update?.assuranceIncremental) {
+            this.invalidateRouteAssurance('route-update-without-delta');
+        }
         this.routeUpdateAggregator.enqueueRouteUpdate(update);
         this.scheduleRouteUpdateFlush();
     }
 
     enqueueInstanceRouteUpdateEvent(update) {
+        if (!update?.assuranceIncremental) {
+            this.invalidateRouteAssurance('instance-route-update-without-delta');
+        }
         this.routeUpdateAggregator.enqueueInstanceRouteUpdate(update);
         this.scheduleRouteUpdateFlush();
     }
@@ -145,6 +192,262 @@ class BmpWorker {
             this.routeUpdateFlushTimer = null;
         }
         this.routeUpdateAggregator.clear();
+    }
+
+    scheduleInMemoryRouteAging(options) {
+        return this.routeAgingScheduler?.schedule?.(options) ?? false;
+    }
+
+    cancelInMemoryRouteAging(prefix) {
+        return this.routeAgingScheduler?.cancelByPrefix?.(prefix) ?? 0;
+    }
+
+    invalidateRouteAssurance(reason = 'bmp-data-change') {
+        const revision = this.routeAssuranceService?.invalidate?.(reason, { prepareBootstrap: true }) ?? null;
+        this.scheduleRouteAssuranceRebuild();
+        return revision;
+    }
+
+    scheduleRouteAssuranceRebuild() {
+        if (this.routeAssuranceRebuildScheduled || !this.routeAssuranceService?.enabled) {
+            return;
+        }
+        this.routeAssuranceRebuildScheduled = true;
+        setImmediate(() => {
+            this.routeAssuranceRebuildScheduled = false;
+            if (!this.routeAssuranceService?.enabled || this.routeAssuranceService.state !== 'dirty') {
+                return;
+            }
+            this.routeAssuranceService
+                .enableWithBootstrap(this.bmpSessionMap, this.routeAssuranceFilters)
+                .catch(error => logger.error(`Route Assurance rebuild failed: ${error.message}`));
+        });
+    }
+
+    applyRouteAssuranceMutation(mutation) {
+        try {
+            return this.routeAssuranceService?.applyMutation?.(mutation) ?? false;
+        } catch (error) {
+            logger.error(`Route Assurance incremental update failed: ${error.message}`);
+            this.invalidateRouteAssurance('incremental-update-error');
+            return false;
+        }
+    }
+
+    enqueuePersistenceMutation(mutation) {
+        if (!this.persistence || !mutation || this.persistenceFailure) {
+            return false;
+        }
+        try {
+            this.persistence.enqueue(mutation);
+            return true;
+        } catch (error) {
+            logger.error(`BMP persistence enqueue failed: ${error.message}`);
+            this.handlePersistenceFailure(error);
+            return false;
+        }
+    }
+
+    pauseBmpSockets() {
+        this.bmpSocketsPaused = true;
+        this.bmpSessionMap.forEach(session => {
+            if (session.socket && !session.socket.destroyed) {
+                session.socket.pause();
+            }
+        });
+    }
+
+    resumeBmpSockets() {
+        if (this.persistenceFailure || this.persistence?.failure || this.persistence?.paused) {
+            return;
+        }
+        this.bmpSocketsPaused = false;
+        this.bmpSessionMap.forEach(session => {
+            if (session.socket && !session.socket.destroyed) {
+                session.socket.resume();
+            }
+        });
+    }
+
+    handlePersistenceFailure(error) {
+        if (this.persistenceFailure) {
+            return;
+        }
+        this.persistenceFailure = error instanceof Error ? error : new Error(String(error));
+        logger.error(`BMP persistence failed closed: ${this.persistenceFailure.message}`);
+        this.clearPersistenceSweepTimer();
+        this.pauseBmpSockets();
+        const servers = [this.server, this.ipv6Server];
+        this.server = null;
+        this.ipv6Server = null;
+        servers.forEach(server => {
+            if (server) {
+                try {
+                    server.close(closeError => {
+                        if (closeError && closeError.code !== 'ERR_SERVER_NOT_RUNNING') {
+                            logger.error(
+                                `Failed to close BMP listener after persistence failure: ${closeError.message}`
+                            );
+                        }
+                    });
+                } catch (closeError) {
+                    if (closeError.code !== 'ERR_SERVER_NOT_RUNNING') {
+                        logger.error(`Failed to close BMP listener after persistence failure: ${closeError.message}`);
+                    }
+                }
+            }
+        });
+        this.bmpSessionMap.forEach(session => {
+            if (session.socket && !session.socket.destroyed) {
+                session.socket.destroy();
+            }
+        });
+    }
+
+    handlePersistenceReaderFailure(reader, error) {
+        if (!reader || (!reader.failure && reader.workerAlive)) {
+            return false;
+        }
+        logger.error(`BMP persistence reader failed: ${error.message}`);
+        if (this.persistenceReader === reader) {
+            this.persistenceReader = null;
+        }
+        if (!reader.closing) {
+            reader.close({ suppressErrors: true }).catch(() => {});
+        }
+        return true;
+    }
+
+    async initializePersistence() {
+        this.persistenceFailure = null;
+        this.bmpSocketsPaused = false;
+        if (this.bmpConfigData.persistenceEnabled === false) {
+            return null;
+        }
+        if (!this.bmpConfigData.persistenceDbPath) {
+            throw new Error('BMP persistence database path is missing');
+        }
+
+        this.persistence = new BmpPersistenceClient({
+            dbPath: this.bmpConfigData.persistenceDbPath,
+            batchSize: this.bmpConfigData.persistenceBatchSize,
+            batchBytes: this.bmpConfigData.persistenceBatchBytes,
+            flushMs: this.bmpConfigData.persistenceFlushMs,
+            highWatermarkBytes: this.bmpConfigData.persistenceHighWatermarkBytes,
+            lowWatermarkBytes: this.bmpConfigData.persistenceLowWatermarkBytes,
+            onPause: bytes => {
+                logger.warn(`BMP persistence high watermark reached (${bytes} bytes); pausing sockets`);
+                this.pauseBmpSockets();
+            },
+            onResume: bytes => {
+                logger.info(`BMP persistence queue recovered (${bytes} bytes); resuming sockets`);
+                this.resumeBmpSockets();
+            },
+            onError: error => {
+                this.handlePersistenceFailure(error);
+            }
+        });
+        const status = await this.persistence.open();
+        const persistenceReader = new BmpPersistenceClient({
+            dbPath: this.bmpConfigData.persistenceDbPath,
+            readOnly: true,
+            onError: error => this.handlePersistenceReaderFailure(persistenceReader, error)
+        });
+        this.persistenceReader = persistenceReader;
+        await persistenceReader.open();
+        this.schedulePersistenceSweep();
+        logger.info(
+            `BMP persistence opened schema=${status.schemaVersion} journal=${status.journalMode} path=${status.dbPath}`
+        );
+        return status;
+    }
+
+    schedulePersistenceSweep() {
+        this.clearPersistenceSweepTimer();
+        if (!this.persistence) {
+            return;
+        }
+        const intervalMs = Math.max(1000, Number(this.bmpConfigData?.persistenceSweepIntervalMs) || 30000);
+        this.persistenceSweepTimer = setInterval(() => this.runPersistenceSweep(), intervalMs);
+    }
+
+    clearPersistenceSweepTimer() {
+        if (this.persistenceSweepTimer) {
+            clearInterval(this.persistenceSweepTimer);
+            this.persistenceSweepTimer = null;
+        }
+        if (this.persistenceSweepCatchupTimer) {
+            clearTimeout(this.persistenceSweepCatchupTimer);
+            this.persistenceSweepCatchupTimer = null;
+        }
+    }
+
+    async runPersistenceSweep() {
+        if (!this.persistence || this.persistenceSweepRunning) {
+            return;
+        }
+        this.persistenceSweepRunning = true;
+        let shouldCatchUp = false;
+        try {
+            // Scope EOR/timeout mutations determine which epoch is safe to age.
+            // Fence the writer queue before calculating retention candidates.
+            await this.persistence.fence();
+            const now = Date.now();
+            const staleRetentionMs = Math.max(
+                60000,
+                Number(this.bmpConfigData?.persistenceStaleRetentionMs) || 24 * 60 * 60 * 1000
+            );
+            const eventRetentionMs = Math.max(
+                60000,
+                Number(this.bmpConfigData?.persistenceEventRetentionMs) || 7 * 24 * 60 * 60 * 1000
+            );
+            const refreshTimeoutMs = Math.max(
+                60000,
+                Number(this.bmpConfigData?.persistenceRefreshTimeoutMs) || 10 * 60 * 1000
+            );
+            const routeLimit = Number(this.bmpConfigData?.persistenceSweepRouteLimit) || 5000;
+            const eventLimit = Number(this.bmpConfigData?.persistenceSweepEventLimit) || 20000;
+            const maxPasses = Math.max(1, Number(this.bmpConfigData?.persistenceSweepMaxPasses) || 16);
+            const timeBudgetMs = Math.max(100, Number(this.bmpConfigData?.persistenceSweepTimeBudgetMs) || 1000);
+            const maxDbBytes = Math.max(
+                256 * 1024 * 1024,
+                Number(this.bmpConfigData?.persistenceMaxDbBytes) || 20 * 1024 * 1024 * 1024
+            );
+            const storageStatus = await this.persistence.getStatus();
+            const storagePressure = storageStatus.logicalSize >= maxDbBytes;
+            if (storagePressure) {
+                logger.warn(
+                    `BMP persistence logical size ${storageStatus.logicalSize} exceeds limit ${maxDbBytes}; ` +
+                        'temporarily shortening history retention until space is reusable'
+                );
+            }
+            const sweepStartedAt = Date.now();
+            for (let pass = 0; pass < maxPasses; pass += 1) {
+                const result = await this.persistence.sweep({
+                    staleBeforeMs: storagePressure ? now : now - staleRetentionMs,
+                    refreshTimeoutBeforeMs: now - refreshTimeoutMs,
+                    eventsBeforeMs: storagePressure ? now : now - eventRetentionMs,
+                    routeLimit,
+                    eventLimit,
+                    auxiliaryLimit: eventLimit
+                });
+                shouldCatchUp = result.hasMore === true;
+                if (!shouldCatchUp || Date.now() - sweepStartedAt >= timeBudgetMs) {
+                    break;
+                }
+            }
+        } catch (error) {
+            logger.error(`BMP persistence sweep failed: ${error.message}`);
+        } finally {
+            this.persistenceSweepRunning = false;
+            if (shouldCatchUp && this.persistence && !this.persistenceSweepCatchupTimer) {
+                const delayMs = Math.max(250, Number(this.bmpConfigData?.persistenceSweepCatchupDelayMs) || 1000);
+                this.persistenceSweepCatchupTimer = setTimeout(() => {
+                    this.persistenceSweepCatchupTimer = null;
+                    this.runPersistenceSweep();
+                }, delayMs);
+            }
+        }
     }
 
     async startTcpServer(messageId) {
@@ -245,6 +548,8 @@ class BmpWorker {
 
     async startBmp(messageId, bmpConfigData) {
         this.bmpConfigData = bmpConfigData;
+        this.routeAgingScheduler.batchSize = Math.max(1, Number(this.bmpConfigData.inMemoryAgingBatchSize) || 2000);
+        this.routeAgingScheduler.timeBudgetMs = Math.max(1, Number(this.bmpConfigData.inMemoryAgingTimeBudgetMs) || 8);
         this.bmpConfigData.bmpV4TlvDraft =
             Number(this.bmpConfigData.bmpV4TlvDraft) === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
                 ? BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
@@ -266,6 +571,22 @@ class BmpWorker {
         }
         logger.info(`BMPv4 TLV draft set to draft-${this.bmpConfigData.bmpV4TlvDraft}`);
         logger.info(`BMP Path Marking TLV type set to ${this.bmpConfigData.pathMarkingTlvType}`);
+
+        try {
+            await this.initializePersistence();
+        } catch (error) {
+            logger.error(`Failed to initialize BMP persistence: ${error.message}`);
+            if (this.persistenceReader) {
+                await this.persistenceReader.close().catch(() => {});
+                this.persistenceReader = null;
+            }
+            if (this.persistence) {
+                await this.persistence.close().catch(() => {});
+                this.persistence = null;
+            }
+            this.messageHandler.sendErrorResponse(messageId, `BMP持久化初始化失败: ${error.message}`);
+            return;
+        }
 
         // 如果启用了 MD5 认证，使用 SSH 隧道启动远端代理。
         if (bmpConfigData.enableAuth && bmpConfigData.md5Password) {
@@ -341,6 +662,9 @@ class BmpWorker {
     async stopBmp(messageId) {
         logger.info('Stopping BMP server...');
         this.clearRouteUpdateAggregation();
+        this.routeAgingScheduler?.clear?.();
+        this.clearPersistenceSweepTimer();
+        this.pauseBmpSockets();
 
         // 停止SSH隧道和代理
         if (this.sshTunnel) {
@@ -390,9 +714,6 @@ class BmpWorker {
             this.ipv6Server = null;
         }
 
-        // 清空配置数据
-        this.bmpConfigData = null;
-
         // 发送全局终止事件通知前端
         this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: null });
 
@@ -401,7 +722,128 @@ class BmpWorker {
             session.closeSession();
         });
         this.bmpSessionMap.clear();
-        this.messageHandler.sendSuccessResponse(messageId, null, 'bmp协议停止成功');
+        this.routeAssuranceService?.setEnabled?.(false);
+
+        let persistenceError = null;
+        const persistenceWriter = this.persistence;
+        const persistenceReader = this.persistenceReader;
+        try {
+            if (persistenceWriter) {
+                await persistenceWriter.drain();
+                await this.runPersistenceSweep();
+            }
+        } catch (error) {
+            persistenceError = error;
+            logger.error(`BMP persistence drain failed: ${error.message}`);
+        } finally {
+            this.persistenceReader = null;
+            this.persistence = null;
+            if (persistenceReader) {
+                await persistenceReader.close({ suppressErrors: true }).catch(() => {});
+            }
+            if (persistenceWriter) {
+                await persistenceWriter.close({ suppressErrors: true }).catch(() => {});
+            }
+            this.bmpConfigData = null;
+        }
+
+        if (!persistenceError) {
+            this.messageHandler.sendSuccessResponse(messageId, null, 'bmp协议停止成功，持久化队列已落盘');
+        } else {
+            this.messageHandler.sendErrorResponse(
+                messageId,
+                `BMP已停止，但持久化队列未能确认安全落盘: ${persistenceError.message}`
+            );
+        }
+    }
+
+    async getPersistenceStatus(messageId) {
+        if (!this.persistence) {
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                { ready: false, enabled: this.bmpConfigData?.persistenceEnabled !== false, running: true },
+                'BMP持久化未打开'
+            );
+            return;
+        }
+        try {
+            await this.persistence.fence();
+            let status;
+            if (this.persistenceReader) {
+                const reader = this.persistenceReader;
+                try {
+                    status = await reader.getStatus();
+                } catch (error) {
+                    if (!this.handlePersistenceReaderFailure(reader, error)) {
+                        throw error;
+                    }
+                }
+            }
+            if (!status) {
+                status = await this.persistence.getStatus();
+            }
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                { ...status, enabled: true, running: true, watermark: this.persistence.getWatermark() },
+                '获取BMP持久化状态成功'
+            );
+        } catch (error) {
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async getPersistedRoutes(messageId, data = {}) {
+        if (!this.persistence) {
+            this.messageHandler.sendErrorResponse(messageId, 'BMP持久化未打开');
+            return;
+        }
+        try {
+            await this.persistence.fence();
+            let result;
+            if (this.persistenceReader) {
+                const reader = this.persistenceReader;
+                try {
+                    result = await reader.queryRoutes(data);
+                } catch (error) {
+                    if (!this.handlePersistenceReaderFailure(reader, error)) {
+                        throw error;
+                    }
+                }
+            }
+            if (!result) {
+                result = await this.persistence.queryRoutes(data);
+            }
+            this.messageHandler.sendSuccessResponse(messageId, result, '查询持久化路由成功');
+        } catch (error) {
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async getPersistedRouteEvents(messageId, data = {}) {
+        if (!this.persistence) {
+            this.messageHandler.sendErrorResponse(messageId, 'BMP持久化未打开');
+            return;
+        }
+        try {
+            await this.persistence.fence();
+            let result;
+            if (this.persistenceReader) {
+                const reader = this.persistenceReader;
+                try {
+                    result = await reader.queryEvents(data);
+                } catch (error) {
+                    if (!this.handlePersistenceReaderFailure(reader, error)) {
+                        throw error;
+                    }
+                }
+            }
+            if (!result) {
+                result = await this.persistence.queryEvents(data);
+            }
+            this.messageHandler.sendSuccessResponse(messageId, result, '查询BMP路由事件成功');
+        } catch (error) {
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
     }
 
     getClientList(messageId) {
@@ -423,12 +865,47 @@ class BmpWorker {
         }
     }
 
-    getRouteAssurance(messageId, data = {}) {
+    async getRouteAssurance(messageId, data = {}) {
         try {
-            const result = buildBmpRouteAssurance(this.bmpSessionMap, data);
+            if (!this.routeAssuranceService) {
+                this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
+            }
+            if (this.routeAssuranceService.enabled) {
+                this.routeAssuranceFilters = { ...data };
+            }
+            const result = await this.routeAssuranceService.queryAsync(this.bmpSessionMap, data);
             this.messageHandler.sendSuccessResponse(messageId, result, '路由保障矩阵查询成功');
         } catch (error) {
             logger.error(`Error getting Route Assurance: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async setRouteAssuranceEnabled(messageId, data = {}) {
+        try {
+            if (!this.routeAssuranceService) {
+                this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
+            }
+            const enabled = Boolean(data.enabled);
+            this.routeAssuranceFilters = enabled ? { ...(data.filters || {}) } : {};
+            let status;
+            if (enabled) {
+                do {
+                    status = await this.routeAssuranceService.enableWithBootstrap(
+                        this.bmpSessionMap,
+                        data.filters || {}
+                    );
+                } while (status.enabled && status.state !== 'ready');
+            } else {
+                status = this.routeAssuranceService.setEnabled(false);
+            }
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                status,
+                status.enabled ? '路由矩阵分析已开启' : '路由矩阵分析已关闭'
+            );
+        } catch (error) {
+            logger.error(`Error setting Route Assurance state: ${error.message}`);
             this.messageHandler.sendErrorResponse(messageId, error.message);
         }
     }
@@ -497,7 +974,7 @@ class BmpWorker {
             return '';
         }
 
-        return BmpBgpRoute.makeKey(routeInfo.pathId, routeInfo.rd, routeInfo.ip, routeInfo.mask);
+        return BmpBgpRoute.makeKey(routeInfo.pathId, routeInfo.rd, routeInfo.ip, routeInfo.mask, routeInfo.rdRaw);
     }
 
     getBgpSessionRouteMap(client, session, af, ribType) {
@@ -510,7 +987,8 @@ class BmpWorker {
             session.sessionType,
             session.sessionRd,
             session.sessionIp,
-            session.sessionAs
+            session.sessionAs,
+            session.sessionRdRaw
         );
         const bgpSession = bmpSession.bgpSessionMap.get(bgpSessionKey);
         if (!bgpSession) {
@@ -539,7 +1017,13 @@ class BmpWorker {
         }
 
         const { afi, safi } = getAfiAndSafi(instance.addrFamilyType);
-        const bgpInstKey = BmpBgpSession.makeKey(instance.instanceType, instance.instanceRd, afi, safi);
+        const bgpInstKey = BmpBgpInstance.makeKey(
+            instance.instanceType,
+            instance.instanceRd,
+            afi,
+            safi,
+            instance.instanceRdRaw
+        );
         const bgpInstance = bmpSession.bgpInstanceMap.get(bgpInstKey);
         if (!bgpInstance) {
             return { error: 'BGP实例不存在', log: `BMP会话 ${bmpSessionKey} 不存在BGP实例 ${bgpInstKey}` };
@@ -706,7 +1190,10 @@ class BmpWorker {
         routeMap.forEach((route, key) => {
             if (route.routeState === BmpConst.BMP_ROUTE_STATE.STALE) {
                 if (typeof onDelete === 'function') {
-                    onDelete(route, key);
+                    const accepted = onDelete(route, key);
+                    if (accepted === false) {
+                        return;
+                    }
                 }
                 routeMap.delete(key);
                 deleted += 1;
@@ -726,7 +1213,13 @@ class BmpWorker {
         }
 
         const { afi, safi } = getAfiAndSafi(instance.addrFamilyType);
-        const bgpInstKey = BmpBgpSession.makeKey(instance.instanceType, instance.instanceRd, afi, safi);
+        const bgpInstKey = BmpBgpInstance.makeKey(
+            instance.instanceType,
+            instance.instanceRd,
+            afi,
+            safi,
+            instance.instanceRdRaw
+        );
         const bgpInstance = bmpSession.bgpInstanceMap.get(bgpInstKey);
         if (!bgpInstance) {
             logger.error(`BMP会话 ${bmpSessionKey} 不存在BGP实例 ${bgpInstKey}`);
@@ -735,10 +1228,22 @@ class BmpWorker {
         }
 
         const deleted = this.purgeStaleRouteMap(bgpInstance.bgpRoutes, (route, key) => {
+            if (
+                this.persistence &&
+                !bmpSession.persistInstanceRoutePurge(bgpInstance, route, afi, safi, {
+                    reason: 'manual-stale-purge'
+                })
+            ) {
+                return false;
+            }
             bgpInstance.removeRouteFromPrefixIndex(key, route);
             bgpInstance.recordRouteDelete(route);
             bgpInstance.releaseRouteAttr(route);
+            return true;
         });
+        if (deleted > 0 && !(bgpInstance.bgpRoutes instanceof ObservedRouteMap)) {
+            this.invalidateRouteAssurance('purge-stale-instance-routes');
+        }
         this.messageHandler.sendSuccessResponse(messageId, { deleted }, 'BGP实例过期路由清理成功');
     }
 
@@ -756,7 +1261,8 @@ class BmpWorker {
             session.sessionType,
             session.sessionRd,
             session.sessionIp,
-            session.sessionAs
+            session.sessionAs,
+            session.sessionRdRaw
         );
         const bgpSession = bmpSession.bgpSessionMap.get(bgpSessionKey);
         if (!bgpSession) {
@@ -774,10 +1280,22 @@ class BmpWorker {
         }
 
         const deleted = this.purgeStaleRouteMap(routeMap, (route, key) => {
+            if (
+                this.persistence &&
+                !bmpSession.persistSessionRoutePurge(bgpSession, route, afi, safi, ribType, {
+                    reason: 'manual-stale-purge'
+                })
+            ) {
+                return false;
+            }
             bgpSession.removeRouteFromPrefixIndex(afi, safi, ribType, key, route);
             bgpSession.recordRouteDelete(afi, safi, ribType, route);
             bgpSession.releaseRouteAttr(route);
+            return true;
         });
+        if (deleted > 0 && !(routeMap instanceof ObservedRouteMap)) {
+            this.invalidateRouteAssurance('purge-stale-session-routes');
+        }
         this.messageHandler.sendSuccessResponse(messageId, { deleted }, '过期路由清理成功');
     }
 

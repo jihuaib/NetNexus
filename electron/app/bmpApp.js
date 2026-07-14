@@ -1,17 +1,29 @@
+const fs = require('fs');
+const path = require('path');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
 const WorkerWithPromise = require('../worker/core/workerWithPromise');
 const logger = require('../log/logger');
 const BmpConst = require('../const/bmpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
+const BmpPersistenceClient = require('../worker/bmp/bmpPersistenceClient');
 
 class BmpApp {
     constructor(ipcMain, store) {
         this.ipcMain = ipcMain;
         this.store = store;
         this.bmpConfigFileKey = 'bmp-config';
+        this.persistenceDbPath = path.join(
+            this.store?.path ? path.dirname(this.store.path) : process.cwd(),
+            'bmp',
+            'bmp.sqlite3'
+        );
         this.worker = null;
         this.eventDispatcher = null;
+        this.runningPersistenceEnabled = false;
+        this.offlinePersistenceReader = null;
+        this.offlinePersistenceOpenPromise = null;
+        this.offlinePersistenceLock = Promise.resolve();
 
         this.bmpInitiationHandler = null;
         this.bmpSessionUpdateHandler = null;
@@ -34,6 +46,7 @@ class BmpApp {
         this.ipcMain.handle('bmp:getClientList', this.handleGetClientList.bind(this));
         this.ipcMain.handle('bmp:getRouteLens', this.handleGetRouteLens.bind(this));
         this.ipcMain.handle('bmp:getRouteAssurance', this.handleGetRouteAssurance.bind(this));
+        this.ipcMain.handle('bmp:setRouteAssuranceEnabled', this.handleSetRouteAssuranceEnabled.bind(this));
         this.ipcMain.handle('bmp:getBgpSessions', this.handleGetBgpSessions.bind(this));
         this.ipcMain.handle('bmp:getBgpRoutes', this.handleGetBgpRoutes.bind(this));
         this.ipcMain.handle('bmp:getBgpRouteDetail', this.handleGetBgpRouteDetail.bind(this));
@@ -47,6 +60,9 @@ class BmpApp {
             'bmp:getBgpInstanceStatisticsReports',
             this.handleGetBgpInstanceStatisticsReports.bind(this)
         );
+        this.ipcMain.handle('bmp:getPersistenceStatus', this.handleGetPersistenceStatus.bind(this));
+        this.ipcMain.handle('bmp:getPersistedRoutes', this.handleGetPersistedRoutes.bind(this));
+        this.ipcMain.handle('bmp:getPersistedRouteEvents', this.handleGetPersistedRouteEvents.bind(this));
     }
 
     async handleSaveBmpConfig(event, config) {
@@ -103,6 +119,17 @@ class BmpApp {
         return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_ROUTE_ASSURANCE, filters);
     }
 
+    async setRouteAssuranceEnabled(settings = {}) {
+        if (this.worker === null) {
+            return errorResponse('BMP未启动');
+        }
+        const data =
+            settings && typeof settings === 'object'
+                ? { enabled: Boolean(settings.enabled), filters: settings.filters || {} }
+                : { enabled: Boolean(settings), filters: {} };
+        return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.SET_ROUTE_ASSURANCE_ENABLED, data);
+    }
+
     async queryBgpSessions(client) {
         return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_BGP_SESSIONS, client, []);
     }
@@ -113,6 +140,142 @@ class BmpApp {
 
     async queryBgpInstanceStatisticsReports(client) {
         return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCE_STATISTICS_REPORTS, client, []);
+    }
+
+    async serializeOfflinePersistence(operation) {
+        const previous = this.offlinePersistenceLock;
+        let release;
+        this.offlinePersistenceLock = new Promise(resolve => {
+            release = resolve;
+        });
+        await previous;
+        try {
+            return await operation();
+        } finally {
+            release();
+        }
+    }
+
+    handleOfflinePersistenceFailure(client, error) {
+        logger.error(`Offline BMP persistence reader failed: ${error.message}`);
+        if (this.offlinePersistenceReader === client) {
+            this.offlinePersistenceReader = null;
+            this.offlinePersistenceOpenPromise = null;
+        }
+        client.close({ suppressErrors: true }).catch(() => {});
+    }
+
+    createOfflinePersistenceReader() {
+        let client;
+        client = new BmpPersistenceClient({
+            dbPath: this.persistenceDbPath,
+            readOnly: true,
+            onError: error => this.handleOfflinePersistenceFailure(client, error)
+        });
+        return client;
+    }
+
+    async openOfflinePersistenceReader() {
+        let client = this.createOfflinePersistenceReader();
+        this.offlinePersistenceReader = client;
+        this.offlinePersistenceOpenPromise = client.open();
+        try {
+            await this.offlinePersistenceOpenPromise;
+            return client;
+        } catch (error) {
+            if (this.offlinePersistenceReader === client) {
+                this.offlinePersistenceReader = null;
+                this.offlinePersistenceOpenPromise = null;
+            }
+            await client.close({ suppressErrors: true }).catch(() => {});
+            if (error.code !== 'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED') {
+                throw error;
+            }
+
+            const migrator = new BmpPersistenceClient({ dbPath: this.persistenceDbPath });
+            try {
+                await migrator.open();
+            } finally {
+                await migrator.close({ suppressErrors: true }).catch(() => {});
+            }
+
+            client = this.createOfflinePersistenceReader();
+            this.offlinePersistenceReader = client;
+            this.offlinePersistenceOpenPromise = client.open();
+            await this.offlinePersistenceOpenPromise;
+            return client;
+        }
+    }
+
+    async withOfflinePersistence(query) {
+        return this.serializeOfflinePersistence(async () => {
+            if (!fs.existsSync(this.persistenceDbPath)) {
+                throw new Error('BMP持久化数据库不存在');
+            }
+            const client = this.offlinePersistenceReader || (await this.openOfflinePersistenceReader());
+            await this.offlinePersistenceOpenPromise;
+            return query(client);
+        });
+    }
+
+    async closeOfflinePersistenceReader() {
+        return this.serializeOfflinePersistence(() => this.closeOfflinePersistenceReaderUnlocked());
+    }
+
+    async closeOfflinePersistenceReaderUnlocked() {
+        const client = this.offlinePersistenceReader;
+        this.offlinePersistenceReader = null;
+        this.offlinePersistenceOpenPromise = null;
+        if (!client) {
+            return;
+        }
+        try {
+            await client.close({ suppressErrors: true });
+        } catch (_error) {
+            // Best-effort cleanup; a fresh reader will be opened on the next offline query.
+        }
+    }
+
+    async queryPersistenceStatus() {
+        if (this.worker && this.runningPersistenceEnabled) {
+            return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_PERSISTENCE_STATUS, null, null);
+        }
+        if (!fs.existsSync(this.persistenceDbPath)) {
+            return successResponse(
+                {
+                    enabled: this.worker ? this.runningPersistenceEnabled : true,
+                    ready: false,
+                    dbPath: this.persistenceDbPath,
+                    running: Boolean(this.worker)
+                },
+                'BMP持久化数据库尚未创建'
+            );
+        }
+        const status = await this.withOfflinePersistence(client => client.getStatus());
+        return successResponse(
+            {
+                ...status,
+                enabled: this.worker ? this.runningPersistenceEnabled : true,
+                running: Boolean(this.worker)
+            },
+            '获取BMP持久化状态成功'
+        );
+    }
+
+    async queryPersistedRoutes(query = {}) {
+        if (this.worker && this.runningPersistenceEnabled) {
+            return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES, query, null);
+        }
+        const result = await this.withOfflinePersistence(client => client.queryRoutes(query));
+        return successResponse(result, '查询离线BMP路由成功');
+    }
+
+    async queryPersistedRouteEvents(query = {}) {
+        if (this.worker && this.runningPersistenceEnabled) {
+            return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTE_EVENTS, query, null);
+        }
+        const result = await this.withOfflinePersistence(client => client.queryEvents(query));
+        return successResponse(result, '查询离线BMP路由事件成功');
     }
 
     async queryBgpRoutes({ client, session, af, ribType, page, pageSize, routeState, prefixFilter }) {
@@ -185,7 +348,24 @@ class BmpApp {
                 return errorResponse('bmp协议已经启动');
             }
 
-            logger.info(`${JSON.stringify(bmpConfigData)}`);
+            bmpConfigData = {
+                ...bmpConfigData,
+                persistenceEnabled: bmpConfigData.persistenceEnabled !== false,
+                persistenceDbPath: this.persistenceDbPath,
+                persistenceBatchSize: Number(bmpConfigData.persistenceBatchSize) || 2000,
+                persistenceBatchBytes: Number(bmpConfigData.persistenceBatchBytes) || 2 * 1024 * 1024,
+                persistenceFlushMs: Number(bmpConfigData.persistenceFlushMs) || 20,
+                persistenceHighWatermarkBytes: Number(bmpConfigData.persistenceHighWatermarkBytes) || 64 * 1024 * 1024,
+                persistenceLowWatermarkBytes: Number(bmpConfigData.persistenceLowWatermarkBytes) || 32 * 1024 * 1024,
+                persistenceStaleRetentionMs: Number(bmpConfigData.persistenceStaleRetentionMs) || 24 * 60 * 60 * 1000,
+                persistenceRefreshTimeoutMs: Number(bmpConfigData.persistenceRefreshTimeoutMs) || 10 * 60 * 1000,
+                persistenceEventRetentionMs:
+                    Number(bmpConfigData.persistenceEventRetentionMs) || 7 * 24 * 60 * 60 * 1000,
+                persistenceMaxDbBytes: Number(bmpConfigData.persistenceMaxDbBytes) || 20 * 1024 * 1024 * 1024
+            };
+            await this.closeOfflinePersistenceReader();
+            this.runningPersistenceEnabled = bmpConfigData.persistenceEnabled;
+            logger.info(`${JSON.stringify({ ...bmpConfigData, persistenceDbPath: '[user-data]/bmp/bmp.sqlite3' })}`);
 
             // 获取日志级别配置
             if (this.logLevel) {
@@ -255,20 +435,28 @@ class BmpApp {
             logger.info(`bmp启动成功 result: ${JSON.stringify(result)}`);
             return successResponse(null, result.msg);
         } catch (error) {
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.INITIATION, this.bmpInitiationHandler);
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.SESSION_UPDATE, this.bmpSessionUpdateHandler);
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE, this.bmpInstanceUpdateHandler);
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE, this.bmpRouteUpdateHandler);
-            this.worker.removeEventListener(
-                BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE,
-                this.bmpInstanceRouteUpdateHandler
-            );
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
-            await this.worker.terminate();
-            this.worker = null;
-            this.eventDispatcher.cleanup(); // 清理事件发送器
-            this.eventDispatcher = null;
+            const worker = this.worker;
+            if (worker) {
+                worker.removeEventListener(BmpConst.BMP_EVT_TYPES.INITIATION, this.bmpInitiationHandler);
+                worker.removeEventListener(BmpConst.BMP_EVT_TYPES.SESSION_UPDATE, this.bmpSessionUpdateHandler);
+                worker.removeEventListener(BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE, this.bmpInstanceUpdateHandler);
+                worker.removeEventListener(BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE, this.bmpRouteUpdateHandler);
+                worker.removeEventListener(
+                    BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE,
+                    this.bmpInstanceRouteUpdateHandler
+                );
+                worker.removeEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
+                worker.removeEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
+                await worker.terminate().catch(() => {});
+                if (this.worker === worker) {
+                    this.worker = null;
+                }
+            }
+            this.runningPersistenceEnabled = false;
+            if (this.eventDispatcher) {
+                this.eventDispatcher.cleanup(); // 清理事件发送器
+                this.eventDispatcher = null;
+            }
             logger.error('Error starting BMP:', error.message);
             return errorResponse(error.message);
         }
@@ -280,28 +468,62 @@ class BmpApp {
             return errorResponse('BMP未启动');
         }
 
+        const worker = this.worker;
         try {
-            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.STOP_BMP, null);
+            const result = await worker.sendRequest(BmpConst.BMP_REQ_TYPES.STOP_BMP, null);
             return successResponse(null, result.msg);
         } catch (error) {
             logger.error('Error stopping BMP:', error.message);
             return errorResponse(error.message);
         } finally {
-            // 移除事件监听器
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.INITIATION, this.bmpInitiationHandler);
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.SESSION_UPDATE, this.bmpSessionUpdateHandler);
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE, this.bmpInstanceUpdateHandler);
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE, this.bmpRouteUpdateHandler);
-            this.worker.removeEventListener(
+            // A failed persistence drain is reported to the caller, but the outer worker must
+            // still be released so the BMP service can be started again instead of becoming a zombie.
+            worker.removeEventListener(BmpConst.BMP_EVT_TYPES.INITIATION, this.bmpInitiationHandler);
+            worker.removeEventListener(BmpConst.BMP_EVT_TYPES.SESSION_UPDATE, this.bmpSessionUpdateHandler);
+            worker.removeEventListener(BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE, this.bmpInstanceUpdateHandler);
+            worker.removeEventListener(BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE, this.bmpRouteUpdateHandler);
+            worker.removeEventListener(
                 BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE,
                 this.bmpInstanceRouteUpdateHandler
             );
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
-            this.worker.removeEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
-            await this.worker.terminate();
-            this.worker = null;
-            this.eventDispatcher.cleanup(); // 清理事件发送器
-            this.eventDispatcher = null;
+            worker.removeEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
+            worker.removeEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
+            await worker.terminate().catch(() => {});
+            if (this.worker === worker) {
+                this.worker = null;
+            }
+            this.runningPersistenceEnabled = false;
+            if (this.eventDispatcher) {
+                this.eventDispatcher.cleanup(); // 清理事件发送器
+                this.eventDispatcher = null;
+            }
+        }
+    }
+
+    async handleGetPersistenceStatus() {
+        try {
+            return await this.queryPersistenceStatus();
+        } catch (error) {
+            logger.error('Error getting BMP persistence status:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetPersistedRoutes(event, query = {}) {
+        try {
+            return await this.queryPersistedRoutes(query);
+        } catch (error) {
+            logger.error('Error getting persisted BMP routes:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetPersistedRouteEvents(event, query = {}) {
+        try {
+            return await this.queryPersistedRouteEvents(query);
+        } catch (error) {
+            logger.error('Error getting persisted BMP route events:', error.message);
+            return errorResponse(error.message);
         }
     }
 
@@ -330,6 +552,15 @@ class BmpApp {
             return await this.queryRouteAssurance(filters);
         } catch (error) {
             logger.error('Error getting Route Assurance:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleSetRouteAssuranceEnabled(event, settings) {
+        try {
+            return await this.setRouteAssuranceEnabled(settings);
+        } catch (error) {
+            logger.error('Error setting Route Assurance state:', error.message);
             return errorResponse(error.message);
         }
     }

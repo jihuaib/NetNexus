@@ -280,26 +280,45 @@ class SnmpApp {
         }
     }
 
-    async handleCompileMibs(_event, filePaths = []) {
+    async handleCompileMibs(event, data = []) {
         try {
-            const selectedFiles = this.normalizeFilePaths(filePaths);
+            const request = Array.isArray(data)
+                ? { filePaths: data, force: false }
+                : {
+                      filePaths: data?.filePaths || data?.requestedFiles || [],
+                      force: Boolean(data?.force)
+                  };
+            const selectedFiles = this.normalizeFilePaths(request.filePaths);
             const requestedFiles = selectedFiles.length > 0 ? selectedFiles : this.getStoredMibFilePaths();
-            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS, {
-                filePaths: requestedFiles,
-                cacheFilePath: this.getMibCacheFilePath(),
-                force: true
-            });
-            const summary = result.data;
-
-            this.store.set(this.snmpMibFilesKey, requestedFiles);
-
-            if (this.worker) {
-                const workerResult = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, {
+            const result = await this.sendMibWorkerRequestWithProgress(
+                event,
+                SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS,
+                {
                     filePaths: requestedFiles,
-                    cacheFilePath: this.getMibCacheFilePath()
-                });
-                summary.worker = workerResult.data;
-            }
+                    cacheFilePath: this.getMibCacheFilePath(),
+                    force: request.force
+                },
+                async (workerResult, reportProgress) => {
+                    this.store.set(this.snmpMibFilesKey, requestedFiles);
+
+                    if (this.worker) {
+                        reportProgress({
+                            phase: 'syncing',
+                            percent: 99,
+                            filePath: '',
+                            fileName: '',
+                            fileStatus: '',
+                            message: '正在同步运行中的 SNMP 服务'
+                        });
+                        const workerSyncResult = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, {
+                            filePaths: requestedFiles,
+                            cacheFilePath: this.getMibCacheFilePath()
+                        });
+                        workerResult.data.worker = workerSyncResult.data;
+                    }
+                }
+            );
+            const summary = result.data;
 
             return successResponse(summary, 'MIB编译完成');
         } catch (error) {
@@ -308,13 +327,19 @@ class SnmpApp {
         }
     }
 
-    async handleGetMibStatus() {
+    async handleGetMibStatus(event) {
         try {
             const storedFiles = this.getStoredMibFilePaths();
-            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS, {
-                requestedFiles: storedFiles,
-                cacheFilePath: this.getMibCacheFilePath()
-            });
+            const result = await this.sendMibWorkerRequestWithProgress(
+                event,
+                SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS,
+                {
+                    requestedFiles: storedFiles,
+                    cacheFilePath: this.getMibCacheFilePath()
+                },
+                undefined,
+                { announceImmediately: false }
+            );
             return successResponse(result.data, result.msg || '获取MIB状态成功');
         } catch (error) {
             logger.error('获取MIB状态失败:', error);
@@ -1481,6 +1506,125 @@ class SnmpApp {
                 this.mibWorker = null;
             }
             throw error;
+        }
+    }
+
+    emitMibCompileProgress(target, progressId, progress = {}) {
+        if (!target || typeof target.send !== 'function') {
+            return;
+        }
+        if (typeof target.isDestroyed === 'function' && target.isDestroyed()) {
+            return;
+        }
+
+        target.send('unified-event', {
+            type: 'snmp:mibCompileProgress',
+            data: successResponse(
+                {
+                    progressId,
+                    ...progress
+                },
+                'MIB编译进度'
+            )
+        });
+    }
+
+    async sendMibWorkerRequestWithProgress(event, op, data = {}, finalize, options = {}) {
+        const target = event?.sender;
+        if (!target || typeof target.send !== 'function') {
+            const result = await this.sendMibWorkerRequest(op, data);
+            if (typeof finalize === 'function') {
+                await finalize(result, () => {});
+            }
+            return result;
+        }
+
+        const worker = this.getMibWorker();
+        const progressId = `${target.id || 'renderer'}-${WorkerWithPromise.generateMessageId()}`;
+        let latestProgress = {
+            phase: 'preparing',
+            completed: 0,
+            total: 0,
+            percent: 0,
+            counts: { compiled: 0, skipped: 0, failed: 0 },
+            message: '正在准备 MIB 编译'
+        };
+        let progressVisible = options.announceImmediately !== false;
+        const reportProgress = progress => {
+            progressVisible = true;
+            latestProgress = {
+                ...latestProgress,
+                ...progress,
+                counts: progress.counts || latestProgress.counts
+            };
+            this.emitMibCompileProgress(target, progressId, latestProgress);
+        };
+        const progressHandler = payload => {
+            if (!payload || payload.progressId !== progressId) {
+                return;
+            }
+
+            const { progressId: _workerProgressId, ...progress } = payload;
+            latestProgress = {
+                ...latestProgress,
+                ...progress,
+                counts: progress.counts || latestProgress.counts
+            };
+            if (progress.phase !== 'completed') {
+                progressVisible = true;
+                this.emitMibCompileProgress(target, progressId, latestProgress);
+            }
+        };
+
+        worker.addEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, progressHandler);
+        if (progressVisible) {
+            this.emitMibCompileProgress(target, progressId, latestProgress);
+        }
+
+        try {
+            const result = await worker.sendRequest(op, {
+                ...data,
+                progressId
+            });
+            if (typeof finalize === 'function') {
+                await finalize(result, reportProgress);
+            }
+
+            const summary = result.data || {};
+            const counts = {
+                compiled: Array.isArray(summary.loadedFiles) ? summary.loadedFiles.length : 0,
+                skipped: Array.isArray(summary.skippedFiles) ? summary.skippedFiles.length : 0,
+                failed: Array.isArray(summary.failedFiles) ? summary.failedFiles.length : 0
+            };
+            const total = Number(summary.expandedFileCount) || counts.compiled + counts.skipped + counts.failed;
+            const completedProgress = {
+                phase: 'completed',
+                completed: total,
+                total,
+                percent: 100,
+                counts,
+                cacheHit: Boolean(summary.cacheHit),
+                filePath: '',
+                fileName: '',
+                fileStatus: '',
+                message: summary.cacheHit ? '已从缓存加载 MIB' : 'MIB 编译完成'
+            };
+            if (progressVisible) {
+                reportProgress(completedProgress);
+            }
+            return result;
+        } catch (error) {
+            reportProgress({
+                phase: 'failed',
+                percent: latestProgress.percent || 0,
+                message: error.message || 'MIB编译失败'
+            });
+            if (/Worker stopped|terminated|Cannot post message/i.test(error.message)) {
+                this.mibWorker = null;
+            }
+            throw error;
+        } finally {
+            worker.removeEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, progressHandler);
         }
     }
 

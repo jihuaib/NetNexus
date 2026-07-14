@@ -92,6 +92,17 @@ function readInteger(parent, key, options = {}) {
     return number;
 }
 
+function readOptionalBoolean(parent, key) {
+    const value = parent[key];
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+    if (typeof value !== 'boolean') {
+        throw new ParameterError(`${key}必须是布尔值`);
+    }
+    return value;
+}
+
 function normalizeClient(value) {
     if (!isPlainObject(value)) {
         throw new ParameterError('client必须是对象');
@@ -113,6 +124,7 @@ function normalizeSession(value) {
     return {
         sessionType: readInteger(value, 'sessionType', { min: 0, max: 255 }),
         sessionRd: readString(value, 'sessionRd', { maxLength: 128 }),
+        sessionRdRaw: readString(value, 'sessionRdRaw', { required: false, maxLength: 32 }) || null,
         sessionIp: readString(value, 'sessionIp', { maxLength: 128 }),
         sessionAs: readInteger(value, 'sessionAs', { min: 0, max: 4294967295 })
     };
@@ -131,6 +143,7 @@ function normalizeInstance(value) {
     return {
         instanceType: readInteger(value, 'instanceType', { min: 0, max: 255 }),
         instanceRd: readString(value, 'instanceRd', { maxLength: 128 }),
+        instanceRdRaw: readString(value, 'instanceRdRaw', { required: false, maxLength: 32 }) || null,
         addrFamilyType
     };
 }
@@ -221,6 +234,44 @@ function normalizeInstanceRouteDetailQuery(body) {
         client: normalizeClient(readObject(body, 'client')),
         instance: normalizeInstance(readObject(body, 'instance')),
         routeKey: readString(body, 'routeKey', { maxLength: ROUTE_KEY_MAX_LENGTH })
+    };
+}
+
+function normalizePersistenceQuery(body, settings, includeState = true) {
+    if (!isPlainObject(body)) {
+        throw new ParameterError('请求体必须是对象');
+    }
+    const pageFilter = normalizePageFilter(
+        {
+            ...body,
+            routeState: includeState ? body.routeState : 'all',
+            prefixFilter: body.prefix || body.prefixFilter || ''
+        },
+        settings
+    );
+    const optionalString = (key, maxLength = 256) =>
+        readString(body, key, { required: false, allowEmpty: true, maxLength }) || undefined;
+    const optionalInteger = (key, min, max) =>
+        readInteger(body, key, { required: false, min, max, defaultValue: undefined });
+
+    return {
+        page: pageFilter.page,
+        pageSize: pageFilter.pageSize,
+        cursor: optionalString('cursor', 512),
+        includeTotal: readOptionalBoolean(body, 'includeTotal'),
+        routeState: includeState ? pageFilter.routeState : undefined,
+        prefix: pageFilter.prefixFilter || undefined,
+        sourceId: optionalString('sourceId', 64),
+        scopeId: optionalString('scopeId', 64),
+        routeId: optionalString('routeId', 64),
+        routeKey: optionalString('routeKey', ROUTE_KEY_MAX_LENGTH),
+        scopeKind: optionalString('scopeKind', 32),
+        ribType: optionalString('ribType', 32),
+        eventType: optionalString('eventType', 32),
+        afi: optionalInteger('afi', 0, 65535),
+        safi: optionalInteger('safi', 0, 255),
+        fromMs: optionalInteger('fromMs', 0, Number.MAX_SAFE_INTEGER),
+        toMs: optionalInteger('toMs', 0, Number.MAX_SAFE_INTEGER)
     };
 }
 
@@ -341,6 +392,27 @@ function createBmpApiRoutes(bmpApp) {
             handler: wrap(async ({ body }) => {
                 const client = normalizeClient(readObject(body, 'client'));
                 return runBmpQuery(bmpApp, () => bmpApp.queryBgpInstanceStatisticsReports(client));
+            })
+        },
+        {
+            method: 'GET',
+            path: '/api/v1/bmp/persistence/status',
+            handler: wrap(async () => bmpApp.queryPersistenceStatus())
+        },
+        {
+            method: 'POST',
+            path: '/api/v1/bmp/persistence/routes',
+            handler: wrap(async ({ body, settings }) => {
+                const payload = normalizePersistenceQuery(body, settings, true);
+                return bmpApp.queryPersistedRoutes(payload);
+            })
+        },
+        {
+            method: 'POST',
+            path: '/api/v1/bmp/persistence/events',
+            handler: wrap(async ({ body, settings }) => {
+                const payload = normalizePersistenceQuery(body, settings, false);
+                return bmpApp.queryPersistedRouteEvents(payload);
             })
         }
     ];

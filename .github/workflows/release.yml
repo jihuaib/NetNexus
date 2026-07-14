@@ -21,7 +21,7 @@ env:
 jobs:
     build-windows:
         name: Build Windows
-        runs-on: windows-latest
+        runs-on: windows-2022
         steps:
             - name: Checkout
               uses: actions/checkout@v4
@@ -36,6 +36,11 @@ jobs:
 
             - name: Verify Node.js version
               run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+
+            - name: Setup Python for native modules
+              uses: actions/setup-python@v5
+              with:
+                  python-version: '3.11'
 
             - name: Install dependencies
               run: npm ci
@@ -55,6 +60,11 @@ jobs:
             - name: Build Windows installer
               run: npm run dist -- --publish never
 
+            - name: Verify packaged BMP SQLite
+              run: npm run test:packaged:sqlite
+              env:
+                  PACKAGED_SQLITE_EXPECTED_ARCH: x64
+
             - name: Upload Windows artifacts
               uses: actions/upload-artifact@v4
               with:
@@ -67,8 +77,18 @@ jobs:
                   retention-days: 7
 
     build-macos:
-        name: Build macOS
-        runs-on: macos-latest
+        name: Build macOS ${{ matrix.arch }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - arch: arm64
+                      runner: macos-15
+                      dist_script: dist:mac:arm64
+                    - arch: x64
+                      runner: macos-15-intel
+                      dist_script: dist:mac
+        runs-on: ${{ matrix.runner }}
         steps:
             - name: Checkout
               uses: actions/checkout@v4
@@ -83,6 +103,11 @@ jobs:
 
             - name: Verify Node.js version
               run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+
+            - name: Setup Python for native modules
+              uses: actions/setup-python@v5
+              with:
+                  python-version: '3.11'
 
             - name: Install dependencies
               run: npm ci
@@ -100,16 +125,20 @@ jobs:
               run: npm run build
 
             - name: Build macOS packages
-              run: npm run dist:mac:all -- --publish never
+              run: npm run ${{ matrix.dist_script }} -- --publish never
+
+            - name: Verify packaged BMP SQLite
+              run: npm run test:packaged:sqlite
+              env:
+                  PACKAGED_SQLITE_EXPECTED_ARCH: ${{ matrix.arch }}
 
             - name: Upload macOS artifacts
               uses: actions/upload-artifact@v4
               with:
-                  name: macos
+                  name: macos-${{ matrix.arch }}
                   path: |
                       release/*.dmg
                       release/*.zip
-                      release/latest-mac.yml
                       release/*.blockmap
                   if-no-files-found: error
                   retention-days: 7
@@ -136,6 +165,14 @@ jobs:
               with:
                   path: release-assets
                   merge-multiple: true
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+
+            - name: Generate combined macOS update manifest
+              run: node scripts/generate-mac-update-manifest.js release-assets
 
             - name: List release assets
               run: ls -lah release-assets
