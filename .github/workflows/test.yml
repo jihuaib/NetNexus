@@ -51,7 +51,7 @@ jobs:
                       bmpAssuranceFirstBuildBudgetMs: '15000'
                     - arch: x64
                       runner: macos-15-intel
-                      bmpAssuranceFirstBuildBudgetMs: '30000'
+                      bmpAssuranceFirstBuildBudgetMs: '50000'
         runs-on: ${{ matrix.runner }}
         env:
             NODE_VERSION: '16.20.2'

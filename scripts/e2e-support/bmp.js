@@ -90,11 +90,13 @@ const bmpBrowserMockScript = `
 `;
 
 const BmpE2eController = (() => {
+    const fs = require('fs');
     const net = require('net');
+    const os = require('os');
     const path = require('path');
     const { spawn } = require('child_process');
     const { loadBmpWorkerClassFromFile } = require('../bmp-worker-loader');
-    const { findPackagedElectronRoot } = require('./packaged-app');
+    const { findPackagedElectronExecutable, findPackagedElectronRoot } = require('./packaged-app');
 
     const projectRoot = path.join(__dirname, '..', '..');
     const workspaceElectronRoot = path.join(projectRoot, 'electron');
@@ -103,6 +105,471 @@ const BmpE2eController = (() => {
     const BgpConst = require(path.join(electronRoot, 'const', 'bgpConst'));
     const BmpSession = require(path.join(electronRoot, 'worker', 'bmp', 'bmpSession'));
     const RouteUpdateAggregator = require(path.join(electronRoot, 'utils', 'routeUpdateAggregator'));
+    const BmpRouteAssuranceService = require(path.join(electronRoot, 'utils', 'bmpRouteAssuranceService'));
+    const persistenceStorePath = path.join(electronRoot, 'worker', 'bmp', 'bmpPersistenceStore.js');
+    const persistenceElectronExecutable =
+        process.env.E2E_TARGET === 'browser' ? require('electron') : findPackagedElectronExecutable();
+
+    function runPersistenceBridge() {
+        const BmpPersistenceStore = require(process.argv[1]);
+        let store = null;
+        let pendingMutations = [];
+        let batchSequence = 0;
+        let committedThrough = 0;
+
+        function send(message, callback) {
+            if (process.connected) {
+                process.send(message, callback);
+            } else if (callback) {
+                callback();
+            }
+        }
+
+        function respond(requestId, data = null) {
+            send({ type: 'response', requestId, status: 'success', data });
+        }
+
+        function fail(requestId, error) {
+            send({
+                type: 'response',
+                requestId,
+                status: 'error',
+                fatal: error?.bmpPersistenceFatal === true,
+                error: {
+                    message: error?.message || String(error),
+                    code: error?.code || 'BMP_E2E_PERSISTENCE_ERROR'
+                }
+            });
+        }
+
+        function requireStore() {
+            if (!store) {
+                throw new Error('BMP E2E persistence store is not open');
+            }
+            return store;
+        }
+
+        function flushPendingMutations() {
+            if (pendingMutations.length === 0) {
+                return null;
+            }
+            const entries = pendingMutations;
+            pendingMutations = [];
+            batchSequence += 1;
+            try {
+                const result = requireStore().applyBatch({
+                    batchId: `bmp-e2e-${process.pid}-${Date.now()}-${batchSequence}`,
+                    createdAtMs: Date.now(),
+                    mutations: entries.map(entry => entry.mutation)
+                });
+                const serializableResult = { ...result, deltas: result.deltas || [] };
+                committedThrough = entries[entries.length - 1].sequence;
+                send({
+                    type: 'committed',
+                    committedThrough,
+                    result: serializableResult
+                });
+                return serializableResult;
+            } catch (error) {
+                pendingMutations = [...entries, ...pendingMutations];
+                error.bmpPersistenceFatal = true;
+                throw error;
+            }
+        }
+
+        function invokeStore(method, data) {
+            const currentStore = requireStore();
+            flushPendingMutations();
+            switch (method) {
+                case 'fence':
+                case 'drain':
+                    return { committedThrough };
+                case 'queryRoutes':
+                case 'queryRouteScope':
+                case 'queryScopeSummary':
+                case 'queryTopology':
+                case 'queryStatisticsReports':
+                case 'purgeStaleRoutes':
+                case 'queryEvents':
+                case 'getStatus':
+                case 'sweep':
+                    return currentStore[method](data || {});
+                case 'checkpoint':
+                    return currentStore.checkpoint(data?.mode);
+                case 'setLogLevel':
+                    if (typeof currentStore.setLogLevel === 'function') {
+                        currentStore.setLogLevel(data?.logLevel);
+                    }
+                    return {
+                        logLevel: data?.logLevel || 'off',
+                        sqlTraceEnabled:
+                            typeof currentStore.isSqlTraceEnabled === 'function'
+                                ? currentStore.isSqlTraceEnabled()
+                                : false
+                    };
+                default:
+                    throw new Error(`Unsupported BMP E2E persistence method: ${method}`);
+            }
+        }
+
+        process.on('message', message => {
+            const { type, requestId } = message || {};
+            try {
+                if (type === 'open') {
+                    if (store) {
+                        store.close();
+                    }
+                    store = new BmpPersistenceStore(message.options || {}).open();
+                    respond(requestId, store.getStatus());
+                    return;
+                }
+                if (type === 'enqueue') {
+                    pendingMutations.push({
+                        sequence: message.sequence,
+                        mutation: message.mutation
+                    });
+                    return;
+                }
+                if (type === 'request') {
+                    respond(requestId, invokeStore(message.method, message.data));
+                    return;
+                }
+                if (type === 'close') {
+                    flushPendingMutations();
+                    if (store) {
+                        store.close();
+                        store = null;
+                    }
+                    send({ type: 'response', requestId, status: 'success', data: null }, () => process.exit(0));
+                    return;
+                }
+                throw new Error(`Unsupported BMP E2E persistence message: ${type}`);
+            } catch (error) {
+                fail(requestId, error);
+            }
+        });
+    }
+
+    const persistenceBridgeSource = `(${runPersistenceBridge.toString()})();`;
+
+    class E2eBmpPersistenceClient {
+        constructor(options = {}) {
+            this.options = options;
+            this.dbPath = options.dbPath;
+            this.readOnly = options.readOnly === true;
+            this.logLevel = options.logLevel || 'off';
+            this.onPause = typeof options.onPause === 'function' ? options.onPause : null;
+            this.onResume = typeof options.onResume === 'function' ? options.onResume : null;
+            this.onError = typeof options.onError === 'function' ? options.onError : null;
+            this.onCommittedBatch = typeof options.onCommittedBatch === 'function' ? options.onCommittedBatch : null;
+            this.worker = null;
+            this.workerAlive = false;
+            this.closing = false;
+            this.failure = null;
+            this.closePromise = null;
+            this.exitPromise = null;
+            this.callbacks = new Map();
+            this.requestSequence = 0;
+            this.mutationSequence = 0;
+            this.committedMutationSequence = 0;
+            this.queuedMutationBytes = new Map();
+            this.stderr = '';
+            this.paused = false;
+        }
+
+        async open() {
+            if (this.worker) {
+                return this.getStatus();
+            }
+            const child = spawn(persistenceElectronExecutable, ['-e', persistenceBridgeSource, persistenceStorePath], {
+                cwd: projectRoot,
+                env: {
+                    ...process.env,
+                    ELECTRON_RUN_AS_NODE: '1',
+                    NODE_ENV: 'test'
+                },
+                serialization: 'advanced',
+                stdio: ['ignore', 'ignore', 'pipe', 'ipc']
+            });
+            this.worker = child;
+            this.workerAlive = true;
+            child.stderr.on('data', chunk => {
+                this.stderr = `${this.stderr}${chunk.toString()}`.slice(-8000);
+            });
+            child.on('message', message => this.handleMessage(message));
+            child.once('error', error => this.handleFailure(error));
+            this.exitPromise = new Promise(resolve => {
+                let settled = false;
+                const settle = (code, signal) => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    this.workerAlive = false;
+                    const error = new Error(
+                        `BMP E2E persistence bridge exited code=${code} signal=${signal || 'none'}${
+                            this.stderr ? `: ${this.stderr.trim()}` : ''
+                        }`
+                    );
+                    this.rejectCallbacks(error);
+                    if (!this.closing) {
+                        this.handleFailure(error);
+                    }
+                    resolve({ code, signal });
+                };
+                child.once('exit', settle);
+                child.once('close', settle);
+            });
+
+            return this.sendRequest('open', {
+                options: {
+                    dbPath: this.dbPath,
+                    readOnly: this.readOnly,
+                    logLevel: this.logLevel
+                }
+            });
+        }
+
+        handleMessage(message) {
+            if (message?.type === 'committed') {
+                this.markCommitted(message.committedThrough);
+                if (this.onCommittedBatch) {
+                    try {
+                        const callbackResult = this.onCommittedBatch(message.result);
+                        if (callbackResult && typeof callbackResult.catch === 'function') {
+                            callbackResult.catch(error => this.onError?.(error));
+                        }
+                    } catch (error) {
+                        this.onError?.(error);
+                    }
+                }
+                return;
+            }
+
+            const callback = this.callbacks.get(message?.requestId);
+            if (!callback) {
+                return;
+            }
+            clearTimeout(callback.timer);
+            this.callbacks.delete(message.requestId);
+            if (message.status === 'success') {
+                callback.resolve(message.data);
+                return;
+            }
+            const error = new Error(message.error?.message || 'BMP E2E persistence request failed');
+            error.code = message.error?.code;
+            if (message.fatal === true) {
+                callback.reject(error);
+                this.handleFailure(error);
+                return;
+            }
+            callback.reject(error);
+        }
+
+        handleFailure(error) {
+            if (this.failure || this.closing) {
+                return;
+            }
+            this.failure = error instanceof Error ? error : new Error(String(error));
+            this.rejectCallbacks(this.failure);
+            this.onError?.(this.failure);
+        }
+
+        rejectCallbacks(error) {
+            this.callbacks.forEach(callback => {
+                clearTimeout(callback.timer);
+                callback.reject(error);
+            });
+            this.callbacks.clear();
+        }
+
+        sendRequest(type, payload = {}, options = {}) {
+            if (!this.worker || !this.workerAlive) {
+                return Promise.reject(this.failure || new Error('BMP E2E persistence bridge is not running'));
+            }
+            if (this.failure) {
+                return Promise.reject(this.failure);
+            }
+            if (this.closing && options.allowDuringClosing !== true) {
+                return Promise.reject(new Error('BMP E2E persistence bridge is closing'));
+            }
+
+            this.requestSequence += 1;
+            const requestId = `bmp-e2e-store-${process.pid}-${Date.now()}-${this.requestSequence}`;
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    this.callbacks.delete(requestId);
+                    reject(new Error(`BMP E2E persistence ${type} request timed out`));
+                }, 30000);
+                this.callbacks.set(requestId, { resolve, reject, timer });
+                this.worker.send({ type, requestId, ...payload }, error => {
+                    if (!error) {
+                        return;
+                    }
+                    const callback = this.callbacks.get(requestId);
+                    if (callback) {
+                        clearTimeout(callback.timer);
+                        this.callbacks.delete(requestId);
+                        callback.reject(error);
+                    }
+                });
+            });
+        }
+
+        enqueue(mutation) {
+            if (this.readOnly) {
+                throw new Error('Cannot enqueue writes on a read-only BMP E2E persistence client');
+            }
+            if (!this.worker || !this.workerAlive || this.closing) {
+                throw new Error('BMP E2E persistence bridge is not accepting writes');
+            }
+            if (this.failure) {
+                throw this.failure;
+            }
+            this.mutationSequence += 1;
+            const sequence = this.mutationSequence;
+            this.queuedMutationBytes.set(sequence, Buffer.byteLength(JSON.stringify(mutation), 'utf8'));
+            this.worker.send({ type: 'enqueue', sequence, mutation }, error => {
+                if (error) {
+                    this.handleFailure(error);
+                }
+            });
+        }
+
+        markCommitted(sequence) {
+            const committedThrough = Number(sequence) || 0;
+            this.committedMutationSequence = Math.max(this.committedMutationSequence, committedThrough);
+            for (const queuedSequence of this.queuedMutationBytes.keys()) {
+                if (queuedSequence <= this.committedMutationSequence) {
+                    this.queuedMutationBytes.delete(queuedSequence);
+                }
+            }
+        }
+
+        async fence() {
+            if (this.readOnly || this.committedMutationSequence >= this.mutationSequence) {
+                return;
+            }
+            const result = await this.request('fence');
+            this.markCommitted(result?.committedThrough);
+        }
+
+        drain() {
+            return this.fence();
+        }
+
+        request(method, data = {}) {
+            return this.sendRequest('request', { method, data });
+        }
+
+        queryRoutes(query = {}) {
+            return this.request('queryRoutes', query);
+        }
+
+        queryRouteScope(query = {}) {
+            return this.request('queryRouteScope', query);
+        }
+
+        queryScopeSummary(query = {}) {
+            return this.request('queryScopeSummary', query);
+        }
+
+        queryTopology(query = {}) {
+            return this.request('queryTopology', query);
+        }
+
+        queryStatisticsReports(query = {}) {
+            return this.request('queryStatisticsReports', query);
+        }
+
+        async purgeStaleRoutes(query = {}) {
+            await this.fence();
+            return this.request('purgeStaleRoutes', query);
+        }
+
+        queryEvents(query = {}) {
+            return this.request('queryEvents', query);
+        }
+
+        getStatus(options = {}) {
+            return this.request('getStatus', options);
+        }
+
+        sweep(options = {}) {
+            return this.request('sweep', options);
+        }
+
+        checkpoint(mode = 'PASSIVE') {
+            return this.request('checkpoint', { mode });
+        }
+
+        async setLogLevel(level) {
+            const result = await this.request('setLogLevel', { logLevel: level || 'off' });
+            this.logLevel = result?.logLevel || 'off';
+            return result;
+        }
+
+        getWatermark() {
+            const queueBytes = Array.from(this.queuedMutationBytes.values()).reduce((total, bytes) => total + bytes, 0);
+            return {
+                queueLength: this.queuedMutationBytes.size,
+                queueBytes,
+                inFlightBytes: 0,
+                bufferedBytes: queueBytes,
+                paused: false,
+                failed: Boolean(this.failure)
+            };
+        }
+
+        close(options = {}) {
+            if (!this.closePromise) {
+                this.closePromise = this.closeInternal(options);
+            }
+            return this.closePromise;
+        }
+
+        async closeInternal(options = {}) {
+            if (!this.worker) {
+                return;
+            }
+            const child = this.worker;
+            let closeError = null;
+            this.closing = true;
+            try {
+                if (this.workerAlive && !this.failure) {
+                    await this.sendRequest('close', {}, { allowDuringClosing: true });
+                }
+            } catch (error) {
+                closeError = error;
+            }
+            const waitForExit = timeout => {
+                let timer = null;
+                return Promise.race([
+                    this.exitPromise.then(() => true),
+                    new Promise(resolve => {
+                        timer = setTimeout(() => resolve(false), timeout);
+                    })
+                ]).finally(() => clearTimeout(timer));
+            };
+            try {
+                let exited = await waitForExit(2000);
+                if (!exited && this.workerAlive) {
+                    child.kill('SIGKILL');
+                    exited = await waitForExit(2000);
+                }
+                if (!exited) {
+                    closeError ||= new Error('BMP E2E persistence bridge did not exit after SIGKILL');
+                }
+            } finally {
+                this.worker = null;
+                this.workerAlive = false;
+                this.rejectCallbacks(closeError || new Error('BMP E2E persistence bridge closed'));
+            }
+            if (closeError && options.suppressErrors !== true) {
+                throw closeError;
+            }
+        }
+    }
 
     const BMP_EVENT_TYPE_TO_RENDERER_TYPE = {
         [BmpConst.BMP_EVT_TYPES.INITIATION]: 'bmp:initiation',
@@ -296,8 +763,11 @@ const BmpE2eController = (() => {
             this.timeline = [];
             this.lastRouteQuerySnapshot = null;
             this.eventListeners = new Set();
+            this.persistenceTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-e2e-'));
+            this.persistenceDbPath = path.join(this.persistenceTempDir, 'bmp.sqlite3');
+            this.cleanedUp = false;
             this.worker = this.createWorker();
-            this.record('controller initialized');
+            this.record('controller initialized', { persistenceDbPath: this.persistenceDbPath });
         }
 
         static async getFreePort() {
@@ -314,6 +784,7 @@ const BmpE2eController = (() => {
         createWorker() {
             const BmpWorker = loadBmpWorkerClass();
             const worker = Object.create(BmpWorker.prototype);
+            const hasPersistenceFactory = typeof worker.createPersistenceClient === 'function';
 
             worker.server = null;
             worker.ipv6Server = null;
@@ -321,12 +792,67 @@ const BmpE2eController = (() => {
             worker.bmpConfigData = null;
             worker.sshTunnel = null;
             worker.bmpSessionMap = new Map();
+            worker.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
+            worker.routeAssuranceFilters = {};
+            worker.routeAssuranceRebuildScheduled = false;
             worker.routeUpdateAggregator = new RouteUpdateAggregator();
             worker.routeUpdateFlushTimer = null;
             worker.routeUpdateFlushIntervalMs = 100;
+            worker.persistence = null;
+            worker.persistenceReader = null;
+            worker.persistenceFailure = null;
+            worker.bmpSocketsPaused = false;
+            worker.persistenceSweepTimer = null;
+            worker.persistenceSweepCatchupTimer = null;
+            worker.persistenceSweepRequestTimer = null;
+            worker.persistenceSweepRunning = false;
             worker.messageHandler = new CaptureMessageHandler(event => this.emitEvent(event));
+            worker.createPersistenceClient = options => new E2eBmpPersistenceClient(options);
+            if (!hasPersistenceFactory) {
+                worker.initializePersistence = () => this.initializeWorkerPersistence(worker);
+            }
 
             return worker;
+        }
+
+        async initializeWorkerPersistence(worker) {
+            worker.persistenceFailure = null;
+            worker.bmpSocketsPaused = false;
+            worker.bmpConfigData.persistenceEnabled = true;
+            if (!worker.bmpConfigData.persistenceDbPath) {
+                throw new Error('BMP persistence database path is missing');
+            }
+
+            worker.persistence = worker.createPersistenceClient({
+                dbPath: worker.bmpConfigData.persistenceDbPath,
+                logLevel: worker.bmpConfigData.logLevel,
+                batchSize: worker.bmpConfigData.persistenceBatchSize,
+                batchBytes: worker.bmpConfigData.persistenceBatchBytes,
+                flushMs: worker.bmpConfigData.persistenceFlushMs,
+                highWatermarkBytes: worker.bmpConfigData.persistenceHighWatermarkBytes,
+                lowWatermarkBytes: worker.bmpConfigData.persistenceLowWatermarkBytes,
+                onPause: () => worker.pauseBmpSockets?.(),
+                onResume: () => worker.resumeBmpSockets?.(),
+                onError: error => worker.handlePersistenceFailure?.(error),
+                onCommittedBatch: result => worker.handleCommittedPersistenceResult?.(result)
+            });
+            const status = await worker.persistence.open();
+            const reader = worker.createPersistenceClient({
+                dbPath: worker.bmpConfigData.persistenceDbPath,
+                readOnly: true,
+                logLevel: worker.bmpConfigData.logLevel,
+                onError: error => worker.handlePersistenceReaderFailure?.(reader, error)
+            });
+            try {
+                await reader.open();
+                worker.persistenceReader = reader;
+            } catch (error) {
+                await reader.close({ suppressErrors: true }).catch(() => {});
+                worker.persistenceReader = null;
+                this.record('BMP persistence read replica unavailable', { error: error.message });
+            }
+            worker.schedulePersistenceSweep?.();
+            return status;
         }
 
         onEvent(listener) {
@@ -620,6 +1146,10 @@ const BmpE2eController = (() => {
                 port: Number(config.port),
                 enableAuth: false,
                 bmpV4TlvDraft: draft,
+                logLevel: config.logLevel || 'off',
+                persistenceEnabled: true,
+                persistenceDbPath: this.persistenceDbPath,
+                persistenceSweepIntervalMs: 60 * 60 * 1000,
                 pathMarkingTlvType:
                     Number.isInteger(configuredPathMarkingTlvType) &&
                     configuredPathMarkingTlvType >= 1 &&
@@ -641,21 +1171,21 @@ const BmpE2eController = (() => {
                 case 'stopBmp':
                     return this.stopBmp();
                 case 'getClientList':
-                    return this.invokeWorker('getClientList', null);
+                    return this.invokeWorkerAsync('getClientList', null);
                 case 'getBgpSessions':
-                    return this.invokeWorker('getBgpSessions', args[0]);
+                    return this.invokeWorkerAsync('getBgpSessions', args[0]);
                 case 'getBgpRoutes':
-                    return this.invokeWorker('getBgpRoutes', args[0]);
+                    return this.invokeWorkerAsync('getBgpRoutes', args[0]);
                 case 'getBgpRouteDetail':
-                    return this.invokeWorker('getBgpRouteDetail', args[0]);
+                    return this.invokeWorkerAsync('getBgpRouteDetail', args[0]);
                 case 'getBgpInstances':
-                    return this.invokeWorker('getBgpInstances', args[0]);
+                    return this.invokeWorkerAsync('getBgpInstances', args[0]);
                 case 'getBgpInstanceRoutes':
-                    return this.invokeWorker('getBgpInstanceRoutes', args[0]);
+                    return this.invokeWorkerAsync('getBgpInstanceRoutes', args[0]);
                 case 'getBgpInstanceRouteDetail':
-                    return this.invokeWorker('getBgpInstanceRouteDetail', args[0]);
+                    return this.invokeWorkerAsync('getBgpInstanceRouteDetail', args[0]);
                 case 'getRouteLens':
-                    return this.invokeWorker('getRouteLens', {
+                    return this.invokeWorkerAsync('getRouteLens', {
                         query: args[0],
                         routeState: args[1]
                     });
@@ -667,13 +1197,13 @@ const BmpE2eController = (() => {
                         filters: args[1] || {}
                     });
                 case 'purgeStaleBgpRoutes':
-                    return this.invokeWorker('purgeStaleBgpRoutes', args[0]);
+                    return this.invokeWorkerAsync('purgeStaleBgpRoutes', args[0]);
                 case 'purgeStaleBgpInstanceRoutes':
-                    return this.invokeWorker('purgeStaleBgpInstanceRoutes', args[0]);
+                    return this.invokeWorkerAsync('purgeStaleBgpInstanceRoutes', args[0]);
                 case 'getBgpStatisticsReports':
-                    return this.invokeWorker('getBgpStatisticsReports', args[0]);
+                    return this.invokeWorkerAsync('getBgpStatisticsReports', args[0]);
                 case 'getBgpInstanceStatisticsReports':
-                    return this.invokeWorker('getBgpInstanceStatisticsReports', args[0]);
+                    return this.invokeWorkerAsync('getBgpInstanceStatisticsReports', args[0]);
                 default:
                     return errorResponse(`Unsupported BMP E2E method: ${method}`);
             }
@@ -704,10 +1234,25 @@ const BmpE2eController = (() => {
             this.savedConfig = this.normalizeConfig(config);
             this.worker.bmpConfigData = this.savedConfig;
             this.record('starting BMP TCP server', {
-                port: this.savedConfig.port
+                port: this.savedConfig.port,
+                persistenceDbPath: this.savedConfig.persistenceDbPath
             });
 
-            this.server = net.createServer(socket => {
+            try {
+                const persistenceStatus = await this.worker.initializePersistence();
+                this.record('BMP persistence initialized', {
+                    dbPath: persistenceStatus.dbPath,
+                    schemaVersion: persistenceStatus.schemaVersion,
+                    journalMode: persistenceStatus.journalMode
+                });
+            } catch (error) {
+                await this.closePersistence({ suppressErrors: true });
+                this.worker.bmpConfigData = null;
+                this.record('BMP persistence initialization failed', { error: error.message });
+                return errorResponse(`BMP持久化初始化失败: ${error.message}`);
+            }
+
+            const server = net.createServer(socket => {
                 const sessionKey = BmpSession.makeKey(
                     socket.localAddress,
                     socket.localPort,
@@ -735,18 +1280,35 @@ const BmpE2eController = (() => {
                 socket.on('close', () => this.worker.removeBmpSessionByKey(sessionKey));
                 socket.on('error', () => this.worker.removeBmpSessionByKey(sessionKey));
             });
+            this.server = server;
+            this.worker.server = server;
+            server.once('close', () => {
+                if (this.server === server) {
+                    this.server = null;
+                }
+                if (this.worker.server === server) {
+                    this.worker.server = null;
+                }
+            });
 
             try {
                 await new Promise((resolve, reject) => {
-                    this.server.once('error', reject);
-                    this.server.listen(this.savedConfig.port, '127.0.0.1', resolve);
+                    server.once('error', reject);
+                    server.listen(this.savedConfig.port, '127.0.0.1', resolve);
                 });
                 this.record('BMP TCP server started', {
                     port: this.savedConfig.port
                 });
                 return successResponse(null, 'bmp协议启动成功');
             } catch (error) {
-                this.server = null;
+                if (this.server === server) {
+                    this.server = null;
+                }
+                if (this.worker.server === server) {
+                    this.worker.server = null;
+                }
+                await this.closePersistence({ suppressErrors: true });
+                this.worker.bmpConfigData = null;
                 this.record('BMP TCP server start failed', {
                     error: error.message
                 });
@@ -754,41 +1316,85 @@ const BmpE2eController = (() => {
             }
         }
 
+        async closePersistence(options = {}) {
+            this.worker.clearPersistenceSweepTimer?.();
+            const writer = this.worker.persistence;
+            const reader = this.worker.persistenceReader;
+            if (!writer && !reader) {
+                return;
+            }
+
+            let closeError = null;
+            try {
+                if (writer) {
+                    await writer.drain();
+                }
+            } catch (error) {
+                closeError = error;
+            } finally {
+                this.worker.persistence = null;
+                this.worker.persistenceReader = null;
+                if (reader) {
+                    try {
+                        await reader.close({ suppressErrors: true });
+                    } catch (error) {
+                        closeError ||= error;
+                    }
+                }
+                if (writer) {
+                    try {
+                        await writer.close({ suppressErrors: options.suppressErrors === true });
+                    } catch (error) {
+                        closeError ||= error;
+                    }
+                }
+                this.worker.persistenceFailure = null;
+                this.worker.bmpSocketsPaused = false;
+            }
+
+            this.record('BMP persistence closed', {
+                dbPath: this.persistenceDbPath,
+                success: !closeError
+            });
+            if (closeError && options.suppressErrors !== true) {
+                throw closeError;
+            }
+        }
+
         async stopBmp() {
             this.record('stopping BMP server');
             this.worker.clearRouteUpdateAggregation?.();
+            this.worker.clearPersistenceSweepTimer?.();
 
             for (const session of this.worker.bmpSessionMap.values()) {
                 session.closeSession();
             }
             this.worker.bmpSessionMap.clear();
-            this.worker.bmpConfigData = null;
 
-            if (this.server) {
-                const server = this.server;
-                this.server = null;
+            const server = this.server || this.worker.server;
+            this.server = null;
+            this.worker.server = null;
+            if (server) {
                 await new Promise(resolve => server.close(resolve));
             }
+
+            let persistenceError = null;
+            try {
+                await this.closePersistence();
+            } catch (error) {
+                persistenceError = error;
+                this.record('BMP persistence close failed', { error: error.message });
+            }
+            this.worker.bmpConfigData = null;
 
             this.emitEvent({
                 type: 'bmp:termination',
                 data: successResponse(null)
             });
 
-            return successResponse(null, 'bmp协议停止成功');
-        }
-
-        invokeWorker(methodName, data) {
-            const messageId = `${methodName}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            this.worker.messageHandler.responses.delete(messageId);
-            this.worker[methodName](messageId, data);
-            const response = this.worker.messageHandler.responses.get(messageId);
-            this.worker.messageHandler.responses.delete(messageId);
-            this.record(`worker query: ${methodName}`, {
-                request: this.summarizeWorkerRequest(methodName, data),
-                response: this.summarizeResponse(methodName, response)
-            });
-            return response || errorResponse(`${methodName} did not return a response`);
+            return persistenceError
+                ? errorResponse(`BMP已停止，但持久化未能安全关闭: ${persistenceError.message}`)
+                : successResponse(null, 'bmp协议停止成功，持久化队列已落盘');
         }
 
         async invokeWorkerAsync(methodName, data) {
@@ -914,11 +1520,11 @@ const BmpE2eController = (() => {
             });
 
             while (Date.now() < deadline) {
-                const clients = this.invokeWorker('getClientList', null);
+                const clients = await this.invokeWorkerAsync('getClientList', null);
                 if (clients.status === 'success' && clients.data.length > 0) {
                     const client = clients.data[0];
-                    const sessions = this.invokeWorker('getBgpSessions', client);
-                    const instances = this.invokeWorker('getBgpInstances', client);
+                    const sessions = await this.invokeWorkerAsync('getBgpSessions', client);
+                    const instances = await this.invokeWorkerAsync('getBgpInstances', client);
 
                     if (
                         sessions.status === 'success' &&
@@ -932,7 +1538,7 @@ const BmpE2eController = (() => {
                         );
 
                         if (ipv4Session && locRibInstance) {
-                            const routeResult = this.invokeWorker('getBgpRoutes', {
+                            const routeResult = await this.invokeWorkerAsync('getBgpRoutes', {
                                 client,
                                 session: ipv4Session,
                                 af: ipv4Session.enabledAddrFamilyTypes[0],
@@ -941,7 +1547,7 @@ const BmpE2eController = (() => {
                                 pageSize: 25,
                                 routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
                             });
-                            const locRibRouteResult = this.invokeWorker('getBgpInstanceRoutes', {
+                            const locRibRouteResult = await this.invokeWorkerAsync('getBgpInstanceRoutes', {
                                 client,
                                 instance: locRibInstance,
                                 page: 1,
@@ -1045,7 +1651,7 @@ const BmpE2eController = (() => {
             }
 
             const exitInfo = await this.waitForMockClientExit({ timeout });
-            await this.waitForNoClients({ timeout });
+            await this.waitForNoLiveClients({ timeout });
             return exitInfo;
         }
 
@@ -1068,21 +1674,40 @@ const BmpE2eController = (() => {
             ]);
         }
 
-        async waitForNoClients({ timeout = 5000 } = {}) {
+        async waitForNoLiveClients({ timeout = 5000 } = {}) {
             const deadline = Date.now() + timeout;
             while (Date.now() < deadline) {
-                const result = this.invokeWorker('getClientList', null);
-                if (result.status === 'success' && result.data.length === 0) {
+                const result = await this.invokeWorkerAsync('getClientList', null);
+                if (
+                    result.status === 'success' &&
+                    Array.isArray(result.data) &&
+                    result.data.every(client => client?.isOnline !== true)
+                ) {
                     return true;
                 }
                 await delay(50);
             }
-            throw new Error('Timed out waiting for BMP client list to become empty');
+            throw new Error('Timed out waiting for all BMP clients to become offline');
         }
 
         async cleanup() {
-            await this.stopBmp();
-            await this.stopMockClient();
+            if (this.cleanedUp) {
+                return;
+            }
+            this.cleanedUp = true;
+            try {
+                await this.stopBmp();
+            } finally {
+                try {
+                    await this.stopMockClient();
+                } finally {
+                    try {
+                        await this.closePersistence({ suppressErrors: true });
+                    } finally {
+                        fs.rmSync(this.persistenceTempDir, { recursive: true, force: true });
+                    }
+                }
+            }
         }
     }
 

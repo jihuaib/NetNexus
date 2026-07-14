@@ -272,16 +272,30 @@ test.describe('BMP pages', () => {
             await page.goto('/#/bmp/bgp-session');
             await expect(page.getByTestId('bmp-session-page')).toBeVisible();
 
-            const sessionTable = page.getByTestId('bmp-session-table');
+            const expectedSessionTab = page.getByRole('tab', {
+                name: 'global | 192.0.2.2 | 65000',
+                exact: true
+            });
+            await expect(expectedSessionTab).toBeVisible({ timeout: 10000 });
+            await expectedSessionTab.click();
+            await expect(expectedSessionTab).toHaveAttribute('aria-selected', 'true');
+
+            const expectedSessionPanel = page.getByRole('tabpanel', {
+                name: 'global | 192.0.2.2 | 65000',
+                exact: true
+            });
+            await expect(expectedSessionPanel).toBeVisible();
+
+            const sessionTable = expectedSessionPanel.getByTestId('bmp-session-table');
             await expect(sessionTable).toContainText('192.0.2.2', { timeout: 10000 });
             await expect(sessionTable).toContainText('65000');
             await expect(sessionTable).toContainText('Peer Up');
 
-            const sessionRouteTable = page.getByTestId('bmp-session-route-table');
+            const sessionRouteTable = expectedSessionPanel.getByTestId('bmp-session-route-table');
             await expect(sessionRouteTable).toContainText('10.10.0.0', { timeout: 10000 });
             await expect(sessionRouteTable).toContainText('192.0.2.254');
             await expect(sessionRouteTable).toContainText('65000 65100');
-            await expect(page.getByText(`当前 ${EXPECTED_PUBLIC_ROUTE_COUNT}`)).toBeVisible();
+            await expect(expectedSessionPanel.getByText(`当前 ${EXPECTED_PUBLIC_ROUTE_COUNT}`)).toBeVisible();
             await expectBmpRouteLayout(page, 'bmp-session-page', 'bmp-session-table', 'bmp-session-route-table');
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
@@ -830,18 +844,44 @@ test.describe('BMP pages', () => {
             await recordStep('Input: route=/#/bmp/bgp-session-statis-report, expectedSession=192.0.2.2 | AS 65000');
 
             await page.goto('/#/bmp/bgp-session-statis-report');
-            await expect(page.getByText('192.0.2.2 | AS 65000')).toBeVisible({ timeout: 10000 });
-            await expect(page.getByText(String(EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT)).first()).toBeVisible();
+            const statisticsPage = page.getByTestId('bmp-session-statistics-page');
+            const statisticsTab = statisticsPage.getByRole('tab', {
+                name: '192.0.2.2 | AS 65000',
+                exact: true
+            });
+            await expect(statisticsTab).toBeVisible({ timeout: 10000 });
+            await statisticsTab.click();
+            const statisticsPanel = statisticsPage.getByRole('tabpanel', {
+                name: '192.0.2.2 | AS 65000',
+                exact: true
+            });
+            await expect(statisticsPanel).toBeVisible();
+            await expect(
+                statisticsPanel
+                    .locator('.report-table')
+                    .getByRole('cell', { name: String(EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT), exact: true })
+                    .first()
+            ).toBeVisible();
 
             await recordStep(`Output: session statistics visible, routeCount=${EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT}`);
         });
 
         await test.step('Verify BGP Loc-RIB statistics page', async () => {
-            await recordStep('Input: route=/#/bmp/bgp-loc-rib-statis-report, expectedInstance=global');
+            await recordStep('Input: route=/#/bmp/bgp-loc-rib-statis-report, expectedInstance=global-evpn');
 
             await page.goto('/#/bmp/bgp-loc-rib-statis-report');
-            await expect(page.getByText('global').first()).toBeVisible({ timeout: 10000 });
-            await expect(page.getByText(String(EXPECTED_LOC_RIB_ROUTE_COUNT)).first()).toBeVisible();
+            const statisticsPage = page.getByTestId('bmp-loc-rib-statistics-page');
+            const statisticsTab = statisticsPage.getByRole('tab', { name: 'global-evpn', exact: true });
+            await expect(statisticsTab).toBeVisible({ timeout: 10000 });
+            await statisticsTab.click();
+            const statisticsPanel = statisticsPage.getByRole('tabpanel', { name: 'global-evpn', exact: true });
+            await expect(statisticsPanel).toBeVisible();
+            await expect(
+                statisticsPanel
+                    .locator('.report-table')
+                    .getByRole('cell', { name: String(EXPECTED_LOC_RIB_ROUTE_COUNT), exact: true })
+                    .first()
+            ).toBeVisible();
 
             await recordStep(`Output: Loc-RIB statistics visible, routeCount=${EXPECTED_LOC_RIB_ROUTE_COUNT}`);
         });
@@ -865,8 +905,9 @@ test.describe('BMP pages', () => {
         });
     });
 
-    test('removes BMP client and BGP session from the UI when the client disconnects', async ({ page }) => {
+    test('keeps persisted BGP session history when the live BMP client disconnects', async ({ page }) => {
         const bmpPort = await BmpE2eController.getFreePort();
+        const expectedSessionTabName = 'global | 192.0.2.2 | 65000';
 
         await test.step('Start BMP server and connect mock client', async () => {
             await recordStep(`Input: route=/#/bmp/bmp-config, port=${bmpPort}, routes=${MOCK_BASE_ROUTE_COUNT}`);
@@ -892,30 +933,56 @@ test.describe('BMP pages', () => {
 
             await page.goto('/#/bmp/bgp-session');
             await expect(page.getByTestId('bmp-session-page')).toBeVisible();
-            await expect(page.getByTestId('bmp-session-page')).toContainText('192.0.2.2', { timeout: 10000 });
-            await expect(page.getByTestId('bmp-session-page')).toContainText('10.10.0.0', { timeout: 10000 });
+
+            const sessionTab = page.getByRole('tab', { name: expectedSessionTabName, exact: true });
+            await expect(sessionTab).toBeVisible({ timeout: 10000 });
+            await sessionTab.click();
+            await expect(sessionTab).toHaveAttribute('aria-selected', 'true');
+
+            const sessionPanel = page.getByRole('tabpanel', { name: expectedSessionTabName, exact: true });
+            await expect(sessionPanel).toBeVisible();
+            await expect(sessionPanel.getByTestId('bmp-session-table')).toContainText('192.0.2.2');
+            await expect(sessionPanel.getByTestId('bmp-session-route-table')).toContainText('10.10.0.0', {
+                timeout: 10000
+            });
 
             await recordStep('Output: BGP session and route are visible before disconnect');
         });
 
-        await test.step('Disconnect mock BMP client and verify UI removes the session', async () => {
+        await test.step('Disconnect mock BMP client and verify persisted session and routes remain offline', async () => {
             await recordStep('Input: mock BMP client sends TCP FIN while BMP server keeps running');
 
             const exitInfo = await controller.disconnectMockClient({ timeout: 5000 });
             expect(exitInfo.code).toBe(0);
             expect(exitInfo.signal).toBeNull();
 
-            await expect(page.getByTestId('bmp-session-page')).not.toContainText('192.0.2.2', {
-                timeout: 10000
-            });
-            await expect(page.getByTestId('bmp-session-page')).not.toContainText('10.10.0.0');
+            const sessionTab = page.getByRole('tab', { name: expectedSessionTabName, exact: true });
+            await expect(sessionTab).toBeVisible({ timeout: 10000 });
+            await sessionTab.click();
+            await expect(sessionTab).toHaveAttribute('aria-selected', 'true');
+
+            const sessionPanel = page.getByRole('tabpanel', { name: expectedSessionTabName, exact: true });
+            await expect(sessionPanel).toBeVisible();
+            const sessionTable = sessionPanel.getByTestId('bmp-session-table');
+            await expect(sessionTable).toContainText('192.0.2.2');
+            await expect(sessionTable.getByText('已断开', { exact: true })).toBeVisible({ timeout: 10000 });
+
+            await sessionPanel.getByRole('radio', { name: '过期', exact: true }).click();
+            const sessionRouteTable = sessionPanel.getByTestId('bmp-session-route-table');
+            await expect(sessionRouteTable).toContainText('10.10.0.0', { timeout: 10000 });
+            await expect(sessionRouteTable.locator('tr.route-stale-row', { hasText: '10.10.0.0' })).toBeVisible();
 
             await page.goto('/#/bmp/bmp-config');
-            await expect(page.getByTestId('bmp-client-table')).not.toContainText(EXPECTED_CLIENT_NAME, {
-                timeout: 10000
+            const clientTable = page.getByTestId('bmp-client-table');
+            const persistedClientRow = clientTable.locator('.nn-table-tbody > .nn-table-row', {
+                hasText: EXPECTED_CLIENT_NAME
             });
+            await expect(persistedClientRow).toContainText(EXPECTED_CLIENT_NAME, { timeout: 10000 });
+            await expect(persistedClientRow).toContainText('已断开');
 
-            await recordStep('Output: BMP client table and BGP session page no longer show the disconnected client');
+            await recordStep(
+                'Output: live BMP connection is closed, while the persisted client and BGP session remain disconnected with stale routes'
+            );
         });
     });
 });
