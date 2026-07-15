@@ -102,8 +102,10 @@ contextBridge.exposeInMainWorld('bgpApi', {
     generateIpv6Routes: config => ipcRenderer.invoke('bgp:generateIpv6Routes', config),
     deleteIpv4Routes: config => ipcRenderer.invoke('bgp:deleteIpv4Routes', config),
     deleteIpv6Routes: config => ipcRenderer.invoke('bgp:deleteIpv6Routes', config),
-    deleteAllRoutesByFamily: addressFamily => ipcRenderer.invoke('bgp:deleteAllRoutesByFamily', addressFamily),
-    getRoutes: (addressFamily, page, pageSize) => ipcRenderer.invoke('bgp:getRoutes', addressFamily, page, pageSize),
+    deleteAllRoutesByFamily: (addressFamily, options = {}) =>
+        ipcRenderer.invoke('bgp:deleteAllRoutesByFamily', addressFamily, options),
+    getRoutes: (addressFamily, page, pageSize, options = {}) =>
+        ipcRenderer.invoke('bgp:getRoutes', addressFamily, page, pageSize, options),
     getRouteDetail: (addressFamily, route) => ipcRenderer.invoke('bgp:getRouteDetail', addressFamily, route),
 
     saveIpv4QpRouteConfig: config => ipcRenderer.invoke('bgp:saveIpv4QpRouteConfig', config),
@@ -141,6 +143,11 @@ contextBridge.exposeInMainWorld('bmpApi', {
 
     // 数据获取
     getClientList: () => ipcRenderer.invoke('bmp:getClientList'),
+    deleteClientData: (request = {}) =>
+        ipcRenderer.invoke('bmp:deleteClientData', {
+            sourceId: typeof request?.sourceId === 'string' ? request.sourceId : '',
+            remoteIp: typeof request?.remoteIp === 'string' ? request.remoteIp : ''
+        }),
     getRouteLens: (query, routeState = 'active') => ipcRenderer.invoke('bmp:getRouteLens', query, routeState),
     getRouteAssurance: (filters = {}) => ipcRenderer.invoke('bmp:getRouteAssurance', filters),
     setRouteAssuranceEnabled: (enabled, filters = {}) =>

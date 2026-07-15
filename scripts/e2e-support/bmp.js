@@ -31,6 +31,7 @@ const bmpBrowserMockScript = `
         startBmp: config => window.__bmpE2eCall('startBmp', config),
         stopBmp: () => window.__bmpE2eCall('stopBmp'),
         getClientList: () => window.__bmpE2eCall('getClientList'),
+        deleteClientData: request => window.__bmpE2eCall('deleteClientData', structuredClone(request)),
         getBgpSessions: client => window.__bmpE2eCall('getBgpSessions', client),
         getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState, prefixFilter) =>
             window.__bmpE2eCall('getBgpRoutes', {
@@ -117,6 +118,19 @@ const BmpE2eController = (() => {
         let batchSequence = 0;
         let committedThrough = 0;
 
+        function reviveIpcBuffers(value) {
+            if (Buffer.isBuffer(value) || value === null || typeof value !== 'object') {
+                return value;
+            }
+            if (Array.isArray(value)) {
+                return value.map(reviveIpcBuffers);
+            }
+            if (value.type === 'Buffer' && Array.isArray(value.data)) {
+                return Buffer.from(value.data);
+            }
+            return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, reviveIpcBuffers(item)]));
+        }
+
         function send(message, callback) {
             if (process.connected) {
                 process.send(message, callback);
@@ -189,11 +203,36 @@ const BmpE2eController = (() => {
                 case 'queryScopeSummary':
                 case 'queryTopology':
                 case 'queryStatisticsReports':
+                case 'purgeSource':
                 case 'purgeStaleRoutes':
                 case 'queryEvents':
-                case 'getStatus':
                 case 'sweep':
                     return currentStore[method](data || {});
+                case 'getStatus': {
+                    const status = currentStore.getStatus({ ...(data || {}), includeCounts: true });
+                    const countQueries = {
+                        sources: 'SELECT COUNT(*) AS count FROM bmp_sources',
+                        connections: 'SELECT COUNT(*) AS count FROM bmp_connections',
+                        scopes: 'SELECT COUNT(*) AS count FROM bmp_rib_scopes',
+                        currentRoutes: 'SELECT COALESCE(SUM(route_count), 0) AS count FROM bmp_scope_route_counts',
+                        routeEvents: 'SELECT COUNT(*) AS count FROM bmp_route_events',
+                        statisticsSamples: 'SELECT COUNT(*) AS count FROM bmp_statistics_samples',
+                        statisticsLatest: 'SELECT COUNT(*) AS count FROM bmp_statistics_latest',
+                        routeAttributes: 'SELECT COUNT(*) AS count FROM bmp_route_attributes',
+                        ingestBatches: 'SELECT COUNT(*) AS count FROM bmp_ingest_batches'
+                    };
+                    const e2eTableCounts = Object.fromEntries(
+                        Object.entries(countQueries).map(([name, sql]) => [
+                            name,
+                            currentStore.db.prepare(sql).get().count
+                        ])
+                    );
+                    return {
+                        ...status,
+                        e2eTableCounts,
+                        e2eForeignKeyViolations: currentStore.db.pragma('foreign_key_check')
+                    };
+                }
                 case 'checkpoint':
                     return currentStore.checkpoint(data?.mode);
                 case 'setLogLevel':
@@ -212,7 +251,8 @@ const BmpE2eController = (() => {
             }
         }
 
-        process.on('message', message => {
+        process.on('message', rawMessage => {
+            const message = reviveIpcBuffers(rawMessage);
             const { type, requestId } = message || {};
             try {
                 if (type === 'open') {
@@ -252,6 +292,19 @@ const BmpE2eController = (() => {
 
     const persistenceBridgeSource = `(${runPersistenceBridge.toString()})();`;
 
+    function reviveIpcBuffers(value) {
+        if (Buffer.isBuffer(value) || value === null || typeof value !== 'object') {
+            return value;
+        }
+        if (Array.isArray(value)) {
+            return value.map(reviveIpcBuffers);
+        }
+        if (value.type === 'Buffer' && Array.isArray(value.data)) {
+            return Buffer.from(value.data);
+        }
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, reviveIpcBuffers(item)]));
+    }
+
     class E2eBmpPersistenceClient {
         constructor(options = {}) {
             this.options = options;
@@ -288,7 +341,7 @@ const BmpE2eController = (() => {
                     ELECTRON_RUN_AS_NODE: '1',
                     NODE_ENV: 'test'
                 },
-                serialization: 'advanced',
+                serialization: 'json',
                 stdio: ['ignore', 'ignore', 'pipe', 'ipc']
             });
             this.worker = child;
@@ -296,7 +349,7 @@ const BmpE2eController = (() => {
             child.stderr.on('data', chunk => {
                 this.stderr = `${this.stderr}${chunk.toString()}`.slice(-8000);
             });
-            child.on('message', message => this.handleMessage(message));
+            child.on('message', message => this.handleMessage(reviveIpcBuffers(message)));
             child.once('error', error => this.handleFailure(error));
             this.exitPromise = new Promise(resolve => {
                 let settled = false;
@@ -485,6 +538,11 @@ const BmpE2eController = (() => {
         async purgeStaleRoutes(query = {}) {
             await this.fence();
             return this.request('purgeStaleRoutes', query);
+        }
+
+        async purgeSource(query = {}) {
+            await this.fence();
+            return this.request('purgeSource', query);
         }
 
         queryEvents(query = {}) {
@@ -792,6 +850,8 @@ const BmpE2eController = (() => {
             worker.bmpConfigData = null;
             worker.sshTunnel = null;
             worker.bmpSessionMap = new Map();
+            worker.clientDataDeleteInProgress = new Set();
+            worker.clientDeleteRemoteIpGates = new Map();
             worker.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
             worker.routeAssuranceFilters = {};
             worker.routeAssuranceRebuildScheduled = false;
@@ -1174,6 +1234,8 @@ const BmpE2eController = (() => {
                     return this.invokeWorkerAsync('getClientList', null);
                 case 'getBgpSessions':
                     return this.invokeWorkerAsync('getBgpSessions', args[0]);
+                case 'deleteClientData':
+                    return this.invokeWorkerAsync('deleteClientData', args[0]);
                 case 'getBgpRoutes':
                     return this.invokeWorkerAsync('getBgpRoutes', args[0]);
                 case 'getBgpRouteDetail':

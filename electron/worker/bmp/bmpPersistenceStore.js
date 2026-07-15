@@ -5,8 +5,16 @@ const Database = require('better-sqlite3');
 const ipaddr = require('ipaddr.js');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const { installBmpSqlTrace } = require('./bmpSqlTrace');
+const {
+    BMP_ROUTE_FAMILIES,
+    BMP_ROUTE_PARTITIONS,
+    resolveBmpRoutePartition,
+    getBmpRoutePartitionById,
+    selectBmpRoutePartitions,
+    assertBmpRouteMatchesScope
+} = require('./bmpRoutePartitionManifest');
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 5000;
 
@@ -26,6 +34,42 @@ function parseJson(value, fallback = null) {
     } catch (_error) {
         return fallback;
     }
+}
+
+function buildStoredRouteProjection(row, options = {}) {
+    const nlriDetail = parseJson(row.nlri_json, {});
+    const payload = parseJson(options.routeJson ?? row.route_json, {});
+    const attributes = parseJson(options.attrJson ?? row.attr_json, {});
+    const routeTlvs = Array.isArray(payload.routeTlvs) ? payload.routeTlvs : [];
+    return {
+        routeKey: row.legacy_route_key || null,
+        addrFamilyType: getAddrFamilyType(Number(row.afi), Number(row.safi)),
+        afi: Number(row.afi),
+        safi: Number(row.safi),
+        ip: row.prefix || null,
+        mask: finiteNumber(row.prefix_length),
+        rd: row.rd || null,
+        rdRaw: payload.rdRaw ?? nlriDetail?.rdRaw ?? null,
+        pathId: finiteNumber(row.path_id, 0),
+        labels: null,
+        routeType: nlriDetail?.routeType ?? null,
+        rawNlri: nlriDetail?.rawNlri ?? null,
+        nlriDetail,
+        parseStatus: 0,
+        pathStatus: null,
+        pathStatusNames: [],
+        pathStatusText: null,
+        pathStatusUnknownBits: 0,
+        pathStatusReason: null,
+        pathStatusReasonName: null,
+        pathStatusReasonText: null,
+        pathStatusReasons: [],
+        routeTlvs,
+        routeTlvCount: routeTlvs.length,
+        ...payload,
+        ...attributes,
+        attrId: row.attr_id || ''
+    };
 }
 
 function makeStatisticsReportIdentity(report) {
@@ -139,6 +183,227 @@ function decodeCursor(value, kind) {
     }
 }
 
+function sha256Buffer(value) {
+    return crypto
+        .createHash('sha256')
+        .update(String(value ?? ''), 'utf8')
+        .digest();
+}
+
+function buildExpandedPartitionSelect(partition) {
+    return `SELECT current.partition_id, current.path_pk, current.scope_id,
+                   current.route_pk AS route_pk, identity.route_id, identity.route_key_json,
+                   identity.route_identity_json, identity.route_key_version,
+                   identity.legacy_route_key, identity.afi, identity.safi,
+                   identity.path_id, identity.rd, identity.prefix, identity.prefix_length,
+                   identity.nlri_kind, identity.nlri_json,
+                   current.payload_id, payload.route_json,
+                   current.attr_id, current.connection_id, current.rib_epoch,
+                   current.explicit_state, current.first_seen_ms, current.last_seen_ms,
+                   current.source_timestamp_ms, current.last_event_id
+              FROM ${partition.quotedTableName} current
+              JOIN bmp_route_identities identity ON identity.route_pk = current.route_pk
+              JOIN bmp_route_payloads payload ON payload.payload_id = current.payload_id`;
+}
+
+function buildExpandedCurrentRoutesSql(partitions = BMP_ROUTE_PARTITIONS) {
+    if (!Array.isArray(partitions) || partitions.length === 0) {
+        return `SELECT NULL AS partition_id, NULL AS path_pk, NULL AS scope_id,
+                       NULL AS route_pk, NULL AS route_id, NULL AS route_key_json,
+                       NULL AS route_identity_json, NULL AS route_key_version,
+                       NULL AS legacy_route_key, NULL AS afi, NULL AS safi,
+                       NULL AS path_id, NULL AS rd, NULL AS prefix, NULL AS prefix_length,
+                       NULL AS nlri_kind, NULL AS nlri_json, NULL AS payload_id,
+                       NULL AS route_json, NULL AS attr_id, NULL AS connection_id,
+                       NULL AS rib_epoch, NULL AS explicit_state, NULL AS first_seen_ms,
+                       NULL AS last_seen_ms, NULL AS source_timestamp_ms, NULL AS last_event_id
+                 WHERE 0`;
+    }
+    return partitions.map(buildExpandedPartitionSelect).join('\nUNION ALL\n');
+}
+
+function buildKnownFamilyPredicate(alias = 'identity') {
+    return BMP_ROUTE_FAMILIES.filter(family => family.fallback !== true)
+        .map(family => `(${alias}.afi = ${family.afi} AND ${alias}.safi = ${family.safi})`)
+        .join(' OR ');
+}
+
+function buildScopePartitionPredicate(alias = 'NEW') {
+    return BMP_ROUTE_PARTITIONS.map(partition => {
+        const familyPredicate = partition.fallback
+            ? `NOT (${buildKnownFamilyPredicate(alias)})`
+            : `${alias}.afi = ${partition.afi} AND ${alias}.safi = ${partition.safi}`;
+        return `(${alias}.partition_id = ${partition.partitionId}
+            AND ${alias}.scope_kind = '${partition.scopeKind}'
+            AND ${familyPredicate})`;
+    }).join(' OR ');
+}
+
+function buildPartitionDdl(partition) {
+    const table = partition.quotedTableName;
+    const token = partition.tableName;
+    const familyPredicate = partition.fallback
+        ? `NOT (${buildKnownFamilyPredicate('identity')})`
+        : `identity.afi = ${partition.afi} AND identity.safi = ${partition.safi}`;
+    const bucketChanged = `(
+        OLD.connection_id IS NOT NEW.connection_id
+        OR OLD.rib_epoch IS NOT NEW.rib_epoch
+        OR OLD.explicit_state IS NOT NEW.explicit_state
+    )`;
+    return `
+        CREATE TABLE ${table} (
+            path_pk INTEGER PRIMARY KEY,
+            partition_id INTEGER NOT NULL DEFAULT ${partition.partitionId}
+                CHECK(partition_id = ${partition.partitionId}),
+            scope_id TEXT NOT NULL,
+            route_pk INTEGER NOT NULL,
+            payload_id INTEGER NOT NULL,
+            attr_id TEXT,
+            connection_id TEXT NOT NULL,
+            rib_epoch INTEGER NOT NULL,
+            explicit_state TEXT NOT NULL DEFAULT 'active',
+            first_seen_ms INTEGER NOT NULL,
+            last_seen_ms INTEGER NOT NULL,
+            source_timestamp_ms INTEGER,
+            last_event_id INTEGER NOT NULL,
+            UNIQUE(scope_id, route_pk),
+            FOREIGN KEY (scope_id, partition_id)
+                REFERENCES bmp_rib_scopes(scope_id, partition_id) ON DELETE CASCADE,
+            FOREIGN KEY (route_pk) REFERENCES bmp_route_identities(route_pk),
+            FOREIGN KEY (payload_id) REFERENCES bmp_route_payloads(payload_id),
+            FOREIGN KEY (attr_id) REFERENCES bmp_route_attributes(attr_id),
+            FOREIGN KEY (connection_id) REFERENCES bmp_connections(connection_id)
+        );
+
+        CREATE INDEX idx_${token}_scope_first_seen
+            ON ${table}(scope_id, first_seen_ms, path_pk);
+        CREATE INDEX idx_${token}_scope_epoch
+            ON ${table}(scope_id, connection_id, rib_epoch, path_pk);
+        CREATE INDEX idx_${token}_route
+            ON ${table}(route_pk, scope_id);
+        CREATE INDEX idx_${token}_attr
+            ON ${table}(attr_id);
+        CREATE INDEX idx_${token}_payload
+            ON ${table}(payload_id);
+        CREATE INDEX idx_${token}_connection
+            ON ${table}(connection_id, scope_id);
+
+        CREATE TRIGGER trg_${token}_validate_insert
+        BEFORE INSERT ON ${table}
+        BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+                SELECT 1
+                  FROM bmp_route_identities identity
+                  JOIN bmp_rib_scopes scope ON scope.scope_id = NEW.scope_id
+                 WHERE identity.route_pk = NEW.route_pk
+                   AND scope.partition_id = ${partition.partitionId}
+                   AND scope.scope_kind = '${partition.scopeKind}'
+                   AND scope.afi = identity.afi
+                   AND scope.safi = identity.safi
+                   AND ${familyPredicate}
+            ) THEN RAISE(ABORT, 'BMP route identity does not match target partition') END;
+        END;
+
+        CREATE TRIGGER trg_${token}_validate_update
+        BEFORE UPDATE OF scope_id, partition_id, route_pk ON ${table}
+        WHEN OLD.scope_id IS NOT NEW.scope_id
+          OR OLD.partition_id IS NOT NEW.partition_id
+          OR OLD.route_pk IS NOT NEW.route_pk
+        BEGIN
+            SELECT RAISE(ABORT, 'BMP current route scope, partition, and identity are immutable');
+        END;
+
+        CREATE TRIGGER trg_${token}_insert_refs
+        AFTER INSERT ON ${table}
+        BEGIN
+            INSERT INTO bmp_scope_route_counts(
+                scope_id, connection_id, rib_epoch, explicit_state, route_count
+            ) VALUES (
+                NEW.scope_id, NEW.connection_id, NEW.rib_epoch, NEW.explicit_state, 1
+            )
+            ON CONFLICT(scope_id, connection_id, rib_epoch, explicit_state)
+            DO UPDATE SET route_count = route_count + 1;
+            UPDATE bmp_route_identities
+               SET current_ref_count = current_ref_count + 1
+             WHERE route_pk = NEW.route_pk;
+            UPDATE bmp_route_payloads
+               SET current_ref_count = current_ref_count + 1
+             WHERE payload_id = NEW.payload_id;
+            UPDATE bmp_route_attributes
+               SET current_ref_count = current_ref_count + 1
+             WHERE attr_id = NEW.attr_id;
+        END;
+
+        CREATE TRIGGER trg_${token}_delete_refs
+        AFTER DELETE ON ${table}
+        BEGIN
+            UPDATE bmp_scope_route_counts
+               SET route_count = route_count - 1
+             WHERE scope_id = OLD.scope_id
+               AND connection_id = OLD.connection_id
+               AND rib_epoch = OLD.rib_epoch
+               AND explicit_state = OLD.explicit_state;
+            DELETE FROM bmp_scope_route_counts
+             WHERE scope_id = OLD.scope_id
+               AND connection_id = OLD.connection_id
+               AND rib_epoch = OLD.rib_epoch
+               AND explicit_state = OLD.explicit_state
+               AND route_count = 0;
+            UPDATE bmp_route_identities
+               SET current_ref_count = current_ref_count - 1
+             WHERE route_pk = OLD.route_pk;
+            UPDATE bmp_route_payloads
+               SET current_ref_count = current_ref_count - 1
+             WHERE payload_id = OLD.payload_id;
+            UPDATE bmp_route_attributes
+               SET current_ref_count = current_ref_count - 1
+             WHERE attr_id = OLD.attr_id;
+        END;
+
+        CREATE TRIGGER trg_${token}_update_refs
+        AFTER UPDATE OF payload_id, attr_id, connection_id, rib_epoch, explicit_state ON ${table}
+        BEGIN
+            UPDATE bmp_scope_route_counts
+               SET route_count = route_count - 1
+             WHERE scope_id = OLD.scope_id
+               AND connection_id = OLD.connection_id
+               AND rib_epoch = OLD.rib_epoch
+               AND explicit_state = OLD.explicit_state
+               AND ${bucketChanged};
+            DELETE FROM bmp_scope_route_counts
+             WHERE scope_id = OLD.scope_id
+               AND connection_id = OLD.connection_id
+               AND rib_epoch = OLD.rib_epoch
+               AND explicit_state = OLD.explicit_state
+               AND route_count = 0
+               AND ${bucketChanged};
+            INSERT INTO bmp_scope_route_counts(
+                scope_id, connection_id, rib_epoch, explicit_state, route_count
+            )
+            SELECT NEW.scope_id, NEW.connection_id, NEW.rib_epoch, NEW.explicit_state, 1
+             WHERE ${bucketChanged}
+            ON CONFLICT(scope_id, connection_id, rib_epoch, explicit_state)
+            DO UPDATE SET route_count = route_count + 1;
+            UPDATE bmp_route_payloads
+               SET current_ref_count = current_ref_count - 1
+             WHERE payload_id = OLD.payload_id
+               AND OLD.payload_id IS NOT NEW.payload_id;
+            UPDATE bmp_route_payloads
+               SET current_ref_count = current_ref_count + 1
+             WHERE payload_id = NEW.payload_id
+               AND OLD.payload_id IS NOT NEW.payload_id;
+            UPDATE bmp_route_attributes
+               SET current_ref_count = current_ref_count - 1
+             WHERE attr_id = OLD.attr_id
+               AND OLD.attr_id IS NOT NEW.attr_id;
+            UPDATE bmp_route_attributes
+               SET current_ref_count = current_ref_count + 1
+             WHERE attr_id = NEW.attr_id
+               AND OLD.attr_id IS NOT NEW.attr_id;
+        END;
+    `;
+}
+
 class BmpPersistenceStore {
     constructor(options = {}) {
         if (!options.dbPath) {
@@ -152,6 +417,7 @@ class BmpPersistenceStore {
         this.sqlTrace = null;
         this.db = null;
         this.statements = null;
+        this.partitionStatements = null;
     }
 
     open() {
@@ -191,6 +457,8 @@ class BmpPersistenceStore {
         } catch (error) {
             this.db.close();
             this.db = null;
+            this.statements = null;
+            this.partitionStatements = null;
             this.sqlTrace = null;
             throw error;
         }
@@ -216,7 +484,7 @@ class BmpPersistenceStore {
             );
             error.code =
                 currentVersion < SCHEMA_VERSION
-                    ? 'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED'
+                    ? 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE'
                     : 'BMP_PERSISTENCE_SCHEMA_TOO_NEW';
             throw error;
         }
@@ -226,27 +494,51 @@ class BmpPersistenceStore {
             bmp_rib_scopes: [
                 'scope_id',
                 'source_id',
+                'partition_id',
                 'current_epoch',
                 'refresh_started_ms',
                 'cleanup_pending_epoch',
                 'last_connection_id'
             ],
+            bmp_scope_route_counts: ['scope_id', 'connection_id', 'rib_epoch', 'explicit_state', 'route_count'],
+            bmp_route_identities: [
+                'route_pk',
+                'route_id',
+                'afi',
+                'safi',
+                'nlri_json',
+                'current_ref_count',
+                'event_ref_count'
+            ],
+            bmp_route_payloads: ['payload_id', 'payload_hash', 'route_json', 'current_ref_count', 'event_ref_count'],
             bmp_route_events: [
                 'event_id',
                 'connection_id',
                 'source_sequence',
                 'event_type',
-                'afi',
-                'safi',
-                'prefix',
-                'legacy_route_key'
+                'partition_id',
+                'route_pk',
+                'payload_id',
+                'attr_id'
             ],
-            bmp_current_routes: ['scope_id', 'route_id', 'connection_id', 'rib_epoch', 'last_event_id', 'attr_id'],
-            bmp_route_attributes: ['attr_id', 'attr_json'],
+            bmp_route_attributes: ['attr_id', 'attr_json', 'current_ref_count', 'event_ref_count'],
             bmp_ingest_batches: ['batch_id', 'created_at_ms'],
             bmp_statistics_samples: ['sample_id', 'source_id', 'report_kind', 'report_key', 'statistics_json'],
             bmp_statistics_latest: ['source_id', 'report_kind', 'report_key', 'sample_id', 'observed_at_ms']
         };
+        BMP_ROUTE_PARTITIONS.forEach(partition => {
+            requiredSchema[partition.tableName] = [
+                'path_pk',
+                'partition_id',
+                'scope_id',
+                'route_pk',
+                'payload_id',
+                'attr_id',
+                'connection_id',
+                'rib_epoch',
+                'last_event_id'
+            ];
+        });
         const existingTables = new Set(
             this.db
                 .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -264,388 +556,354 @@ class BmpPersistenceStore {
                 }
             });
         });
+        const unifiedView = this.db
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'view' AND name = 'bmp_current_routes_all'")
+            .get();
+        if (!unifiedView) {
+            throw new Error('BMP persistence schema is missing required view bmp_current_routes_all');
+        }
     }
 
     migrate() {
         const currentVersion = this.db.pragma('user_version', { simple: true });
         if (currentVersion > SCHEMA_VERSION) {
-            throw new Error(
+            const error = new Error(
                 `BMP persistence schema ${currentVersion} is newer than supported schema ${SCHEMA_VERSION}`
             );
+            error.code = 'BMP_PERSISTENCE_SCHEMA_TOO_NEW';
+            throw error;
         }
         if (currentVersion === SCHEMA_VERSION) {
             return;
         }
 
-        const migration = this.db.transaction(() => {
+        const existingObjects = this.db
+            .prepare(
+                `SELECT type, name
+                   FROM sqlite_master
+                  WHERE name NOT LIKE 'sqlite_%'
+                  ORDER BY type, name`
+            )
+            .all();
+        if (currentVersion !== 0 || existingObjects.length > 0) {
+            const error = new Error(
+                `BMP persistence schema ${currentVersion} is incompatible with schema ${SCHEMA_VERSION}; migration is not supported`
+            );
+            error.code = 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE';
+            throw error;
+        }
+
+        const initialize = this.db.transaction(() => {
             this.db.exec(`
-            CREATE TABLE IF NOT EXISTS bmp_sources (
-                source_id TEXT PRIMARY KEY,
-                source_key_json TEXT NOT NULL,
-                source_identity_json TEXT NOT NULL,
-                remote_ip TEXT,
-                sys_name TEXT,
-                sys_desc TEXT,
-                first_seen_ms INTEGER NOT NULL,
-                last_seen_ms INTEGER NOT NULL,
-                metadata_json TEXT
-            ) WITHOUT ROWID;
+                CREATE TABLE bmp_sources (
+                    source_id TEXT PRIMARY KEY,
+                    source_key_json TEXT NOT NULL,
+                    source_identity_json TEXT NOT NULL,
+                    remote_ip TEXT,
+                    sys_name TEXT,
+                    sys_desc TEXT,
+                    first_seen_ms INTEGER NOT NULL,
+                    last_seen_ms INTEGER NOT NULL,
+                    metadata_json TEXT
+                ) WITHOUT ROWID;
 
-            CREATE TABLE IF NOT EXISTS bmp_connections (
-                connection_id TEXT PRIMARY KEY,
-                source_id TEXT NOT NULL,
-                connection_generation INTEGER NOT NULL,
-                local_ip TEXT,
-                local_port INTEGER,
-                remote_ip TEXT,
-                remote_port INTEGER,
-                opened_at_ms INTEGER NOT NULL,
-                closed_at_ms INTEGER,
-                close_reason TEXT,
-                connection_state TEXT NOT NULL,
-                FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id)
-            ) WITHOUT ROWID;
+                CREATE TABLE bmp_connections (
+                    connection_id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    connection_generation INTEGER NOT NULL,
+                    local_ip TEXT,
+                    local_port INTEGER,
+                    remote_ip TEXT,
+                    remote_port INTEGER,
+                    opened_at_ms INTEGER NOT NULL,
+                    closed_at_ms INTEGER,
+                    close_reason TEXT,
+                    connection_state TEXT NOT NULL,
+                    FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id)
+                ) WITHOUT ROWID;
 
-            CREATE INDEX IF NOT EXISTS idx_bmp_connections_source_time
-                ON bmp_connections(source_id, opened_at_ms DESC);
+                CREATE INDEX idx_bmp_connections_source_time
+                    ON bmp_connections(source_id, opened_at_ms DESC);
 
-            CREATE TABLE IF NOT EXISTS bmp_rib_scopes (
-                scope_id TEXT PRIMARY KEY,
-                source_id TEXT NOT NULL,
-                scope_key_json TEXT NOT NULL,
-                scope_identity_json TEXT NOT NULL,
-                scope_kind TEXT NOT NULL,
-                owner_key TEXT,
-                peer_type TEXT,
-                peer_rd TEXT,
-                peer_ip TEXT,
-                peer_as TEXT,
-                vrf_name TEXT,
-                afi INTEGER NOT NULL,
-                safi INTEGER NOT NULL,
-                rib_type TEXT NOT NULL,
-                current_epoch INTEGER NOT NULL DEFAULT 0,
-                eor_epoch INTEGER,
-                scope_state TEXT NOT NULL DEFAULT 'syncing',
-                stale_reason TEXT,
-                stale_since_ms INTEGER,
-                refresh_started_ms INTEGER,
-                cleanup_pending_epoch INTEGER,
-                last_connection_id TEXT,
-                created_at_ms INTEGER NOT NULL,
-                updated_at_ms INTEGER NOT NULL,
-                FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
-                FOREIGN KEY (last_connection_id) REFERENCES bmp_connections(connection_id)
-            ) WITHOUT ROWID;
+                CREATE TABLE bmp_rib_scopes (
+                    scope_id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    partition_id INTEGER NOT NULL,
+                    scope_key_json TEXT NOT NULL,
+                    scope_identity_json TEXT NOT NULL,
+                    scope_kind TEXT NOT NULL CHECK(scope_kind IN ('peer', 'loc-rib')),
+                    owner_key TEXT,
+                    peer_type TEXT,
+                    peer_rd TEXT,
+                    peer_ip TEXT,
+                    peer_as TEXT,
+                    vrf_name TEXT,
+                    afi INTEGER NOT NULL,
+                    safi INTEGER NOT NULL,
+                    rib_type TEXT NOT NULL,
+                    current_epoch INTEGER NOT NULL DEFAULT 0,
+                    eor_epoch INTEGER,
+                    scope_state TEXT NOT NULL DEFAULT 'syncing',
+                    stale_reason TEXT,
+                    stale_since_ms INTEGER,
+                    refresh_started_ms INTEGER,
+                    cleanup_pending_epoch INTEGER,
+                    last_connection_id TEXT,
+                    created_at_ms INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    UNIQUE(scope_id, partition_id),
+                    FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
+                    FOREIGN KEY (last_connection_id) REFERENCES bmp_connections(connection_id)
+                ) WITHOUT ROWID;
 
-            CREATE INDEX IF NOT EXISTS idx_bmp_scopes_source_af
-                ON bmp_rib_scopes(source_id, afi, safi, rib_type);
-            CREATE INDEX IF NOT EXISTS idx_bmp_scopes_state
-                ON bmp_rib_scopes(scope_state, updated_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_bmp_scopes_stale_since
-                ON bmp_rib_scopes(scope_state, stale_since_ms, scope_id);
-            CREATE INDEX IF NOT EXISTS idx_bmp_scopes_connection
-                ON bmp_rib_scopes(last_connection_id, scope_id);
-
-            CREATE TABLE IF NOT EXISTS bmp_route_attributes (
-                attr_id TEXT PRIMARY KEY,
-                attr_json TEXT NOT NULL,
-                first_seen_ms INTEGER NOT NULL,
-                last_seen_ms INTEGER NOT NULL
-            ) WITHOUT ROWID;
-
-            CREATE INDEX IF NOT EXISTS idx_bmp_route_attributes_last_seen
-                ON bmp_route_attributes(last_seen_ms, attr_id);
-
-            CREATE TABLE IF NOT EXISTS bmp_route_events (
-                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_id TEXT NOT NULL,
-                source_id TEXT NOT NULL,
-                connection_id TEXT NOT NULL,
-                source_sequence INTEGER NOT NULL,
-                scope_id TEXT,
-                route_id TEXT,
-                event_type TEXT NOT NULL,
-                observed_at_ms INTEGER NOT NULL,
-                source_timestamp_ms INTEGER,
-                rib_epoch INTEGER,
-                attr_id TEXT,
-                reason TEXT,
-                afi INTEGER,
-                safi INTEGER,
-                prefix TEXT,
-                legacy_route_key TEXT,
-                route_json TEXT,
-                UNIQUE(connection_id, source_sequence),
-                FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
-                FOREIGN KEY (connection_id) REFERENCES bmp_connections(connection_id),
-                FOREIGN KEY (scope_id) REFERENCES bmp_rib_scopes(scope_id),
-                FOREIGN KEY (attr_id) REFERENCES bmp_route_attributes(attr_id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_bmp_route_events_scope_time
-                ON bmp_route_events(scope_id, observed_at_ms DESC, event_id DESC);
-            CREATE INDEX IF NOT EXISTS idx_bmp_route_events_route_time
-                ON bmp_route_events(scope_id, route_id, observed_at_ms DESC, event_id DESC);
-            CREATE INDEX IF NOT EXISTS idx_bmp_route_events_type_time
-                ON bmp_route_events(event_type, observed_at_ms DESC);
-            CREATE INDEX IF NOT EXISTS idx_bmp_route_events_observed
-                ON bmp_route_events(observed_at_ms, event_id);
-            CREATE INDEX IF NOT EXISTS idx_bmp_route_events_attr
-                ON bmp_route_events(attr_id);
-
-            CREATE TABLE IF NOT EXISTS bmp_current_routes (
-                scope_id TEXT NOT NULL,
-                route_id TEXT NOT NULL,
-                route_key_json TEXT NOT NULL,
-                route_identity_json TEXT NOT NULL,
-                route_key_version INTEGER NOT NULL,
-                legacy_route_key TEXT,
-                afi INTEGER NOT NULL,
-                safi INTEGER NOT NULL,
-                path_id INTEGER NOT NULL,
-                rd TEXT,
-                prefix TEXT,
-                prefix_length INTEGER,
-                nlri_kind TEXT,
-                nlri_json TEXT NOT NULL,
-                attr_id TEXT,
-                route_json TEXT NOT NULL,
-                connection_id TEXT NOT NULL,
-                rib_epoch INTEGER NOT NULL,
-                explicit_state TEXT NOT NULL DEFAULT 'active',
-                first_seen_ms INTEGER NOT NULL,
-                last_seen_ms INTEGER NOT NULL,
-                source_timestamp_ms INTEGER,
-                last_event_id INTEGER NOT NULL,
-                PRIMARY KEY (scope_id, route_id),
-                FOREIGN KEY (scope_id) REFERENCES bmp_rib_scopes(scope_id),
-                FOREIGN KEY (connection_id) REFERENCES bmp_connections(connection_id),
-                FOREIGN KEY (attr_id) REFERENCES bmp_route_attributes(attr_id),
-                FOREIGN KEY (last_event_id) REFERENCES bmp_route_events(event_id)
-            ) WITHOUT ROWID;
-
-            CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_prefix
-                ON bmp_current_routes(afi, safi, prefix, prefix_length);
-            CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_epoch
-                ON bmp_current_routes(scope_id, rib_epoch, last_seen_ms);
-            CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_attr
-                ON bmp_current_routes(attr_id);
-            CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_last_seen
-                ON bmp_current_routes(last_seen_ms DESC, scope_id, route_id);
-            CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_last_event
-                ON bmp_current_routes(last_event_id);
-
-            CREATE TABLE IF NOT EXISTS bmp_ingest_batches (
-                batch_id TEXT PRIMARY KEY,
-                created_at_ms INTEGER NOT NULL,
-                mutation_count INTEGER NOT NULL
-            ) WITHOUT ROWID;
-
-            CREATE INDEX IF NOT EXISTS idx_bmp_ingest_batches_created
-                ON bmp_ingest_batches(created_at_ms);
-
-            CREATE TABLE IF NOT EXISTS bmp_statistics_samples (
-                sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_id TEXT NOT NULL,
-                connection_id TEXT NOT NULL,
-                scope_id TEXT,
-                report_kind TEXT,
-                report_key TEXT,
-                observed_at_ms INTEGER NOT NULL,
-                source_timestamp_ms INTEGER,
-                statistics_json TEXT NOT NULL,
-                FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
-                FOREIGN KEY (connection_id) REFERENCES bmp_connections(connection_id),
-                FOREIGN KEY (scope_id) REFERENCES bmp_rib_scopes(scope_id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_bmp_statistics_scope_time
-                ON bmp_statistics_samples(scope_id, observed_at_ms DESC);
-            CREATE INDEX IF NOT EXISTS idx_bmp_statistics_observed
-                ON bmp_statistics_samples(observed_at_ms, sample_id);
-
-            CREATE TABLE IF NOT EXISTS bmp_statistics_latest (
-                source_id TEXT NOT NULL,
-                report_kind TEXT NOT NULL CHECK(report_kind IN ('session', 'instance')),
-                report_key TEXT NOT NULL,
-                sample_id INTEGER NOT NULL,
-                observed_at_ms INTEGER NOT NULL,
-                PRIMARY KEY (source_id, report_kind, report_key),
-                FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
-                FOREIGN KEY (sample_id) REFERENCES bmp_statistics_samples(sample_id)
-            ) WITHOUT ROWID;
-
-            `);
-
-            const connectionColumns = new Set(this.db.pragma('table_info(bmp_connections)').map(column => column.name));
-            if (!connectionColumns.has('connection_generation')) {
-                this.db.exec('ALTER TABLE bmp_connections ADD COLUMN connection_generation INTEGER');
-            }
-            const scopeColumns = new Set(this.db.pragma('table_info(bmp_rib_scopes)').map(column => column.name));
-            if (!scopeColumns.has('refresh_started_ms')) {
-                this.db.exec('ALTER TABLE bmp_rib_scopes ADD COLUMN refresh_started_ms INTEGER');
-            }
-            if (!scopeColumns.has('cleanup_pending_epoch')) {
-                this.db.exec('ALTER TABLE bmp_rib_scopes ADD COLUMN cleanup_pending_epoch INTEGER');
-            }
-            const eventColumns = new Set(this.db.pragma('table_info(bmp_route_events)').map(column => column.name));
-            const eventColumnDefinitions = {
-                afi: 'INTEGER',
-                safi: 'INTEGER',
-                prefix: 'TEXT',
-                legacy_route_key: 'TEXT'
-            };
-            Object.entries(eventColumnDefinitions).forEach(([column, type]) => {
-                if (!eventColumns.has(column)) {
-                    this.db.exec(`ALTER TABLE bmp_route_events ADD COLUMN ${column} ${type}`);
-                }
-            });
-            const currentRouteColumns = new Set(
-                this.db.pragma('table_info(bmp_current_routes)').map(column => column.name)
-            );
-            if (!currentRouteColumns.has('connection_id')) {
-                this.db.exec('ALTER TABLE bmp_current_routes ADD COLUMN connection_id TEXT');
-            }
-            const statisticsColumns = new Set(
-                this.db.pragma('table_info(bmp_statistics_samples)').map(column => column.name)
-            );
-            if (!statisticsColumns.has('report_kind')) {
-                this.db.exec('ALTER TABLE bmp_statistics_samples ADD COLUMN report_kind TEXT');
-            }
-            if (!statisticsColumns.has('report_key')) {
-                this.db.exec('ALTER TABLE bmp_statistics_samples ADD COLUMN report_key TEXT');
-            }
-            this.db.exec(`
-                UPDATE bmp_current_routes
-                   SET connection_id = (
-                       SELECT connection_id
-                         FROM bmp_route_events
-                        WHERE event_id = bmp_current_routes.last_event_id
-                   )
-                 WHERE connection_id IS NULL;
-            `);
-            const routesWithoutConnection = this.db
-                .prepare('SELECT COUNT(*) AS count FROM bmp_current_routes WHERE connection_id IS NULL')
-                .get().count;
-            if (routesWithoutConnection > 0) {
-                throw new Error('BMP persistence migration could not recover current-route connection identity');
-            }
-            this.db.exec(`
-                UPDATE bmp_route_events
-                   SET afi = COALESCE(afi, (SELECT afi FROM bmp_rib_scopes WHERE scope_id = bmp_route_events.scope_id)),
-                       safi = COALESCE(safi, (SELECT safi FROM bmp_rib_scopes WHERE scope_id = bmp_route_events.scope_id))
-                 WHERE scope_id IS NOT NULL AND (afi IS NULL OR safi IS NULL);
-
-                UPDATE bmp_route_events
-                   SET prefix = COALESCE(prefix, json_extract(route_json, '$.ip')),
-                       legacy_route_key = COALESCE(legacy_route_key, json_extract(route_json, '$.routeKey'))
-                 WHERE route_id IS NOT NULL AND (prefix IS NULL OR legacy_route_key IS NULL);
-
-                CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_route_id
-                    ON bmp_current_routes(route_id, scope_id);
-                CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_legacy_key
-                    ON bmp_current_routes(legacy_route_key, scope_id);
-                CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_prefix_global
-                    ON bmp_current_routes(prefix, scope_id, route_id);
-                CREATE INDEX IF NOT EXISTS idx_bmp_route_events_source_time
-                    ON bmp_route_events(source_id, observed_at_ms DESC, event_id DESC);
-                CREATE INDEX IF NOT EXISTS idx_bmp_route_events_route_global_time
-                    ON bmp_route_events(route_id, observed_at_ms DESC, event_id DESC);
-                CREATE INDEX IF NOT EXISTS idx_bmp_route_events_legacy_time
-                    ON bmp_route_events(legacy_route_key, observed_at_ms DESC, event_id DESC);
-                CREATE INDEX IF NOT EXISTS idx_bmp_route_events_af_prefix_time
-                    ON bmp_route_events(afi, safi, prefix, observed_at_ms DESC, event_id DESC);
-                CREATE INDEX IF NOT EXISTS idx_bmp_route_events_prefix_time
-                    ON bmp_route_events(prefix, observed_at_ms DESC, event_id DESC);
-                CREATE INDEX IF NOT EXISTS idx_bmp_scopes_stale_since
+                CREATE INDEX idx_bmp_scopes_source_af
+                    ON bmp_rib_scopes(source_id, afi, safi, rib_type);
+                CREATE INDEX idx_bmp_scopes_state
+                    ON bmp_rib_scopes(scope_state, updated_at_ms);
+                CREATE INDEX idx_bmp_scopes_stale_since
                     ON bmp_rib_scopes(scope_state, stale_since_ms, scope_id);
-                CREATE INDEX IF NOT EXISTS idx_bmp_scopes_refresh_since
+                CREATE INDEX idx_bmp_scopes_refresh_since
                     ON bmp_rib_scopes(scope_state, refresh_started_ms, scope_id);
-                CREATE INDEX IF NOT EXISTS idx_bmp_scopes_cleanup_pending
+                CREATE INDEX idx_bmp_scopes_cleanup_pending
                     ON bmp_rib_scopes(cleanup_pending_epoch, scope_id);
-                CREATE INDEX IF NOT EXISTS idx_bmp_scopes_connection
+                CREATE INDEX idx_bmp_scopes_connection
                     ON bmp_rib_scopes(last_connection_id, scope_id);
-                CREATE INDEX IF NOT EXISTS idx_bmp_route_attributes_last_seen
-                    ON bmp_route_attributes(last_seen_ms, attr_id);
-                CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_last_event
-                    ON bmp_current_routes(last_event_id);
-                CREATE INDEX IF NOT EXISTS idx_bmp_current_routes_connection
-                    ON bmp_current_routes(scope_id, connection_id, rib_epoch, last_seen_ms);
-                CREATE INDEX IF NOT EXISTS idx_bmp_statistics_report_time
+
+                CREATE TRIGGER trg_bmp_rib_scopes_validate_partition_insert
+                BEFORE INSERT ON bmp_rib_scopes
+                WHEN NOT (${buildScopePartitionPredicate('NEW')})
+                BEGIN
+                    SELECT RAISE(ABORT, 'BMP scope does not match its route partition');
+                END;
+
+                CREATE TRIGGER trg_bmp_rib_scopes_validate_partition_update
+                BEFORE UPDATE OF partition_id, scope_kind, afi, safi ON bmp_rib_scopes
+                WHEN NOT (${buildScopePartitionPredicate('NEW')})
+                BEGIN
+                    SELECT RAISE(ABORT, 'BMP scope does not match its route partition');
+                END;
+
+                CREATE TABLE bmp_scope_route_counts (
+                    scope_id TEXT NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    rib_epoch INTEGER NOT NULL,
+                    explicit_state TEXT NOT NULL,
+                    route_count INTEGER NOT NULL CHECK(route_count >= 0),
+                    PRIMARY KEY (scope_id, connection_id, rib_epoch, explicit_state),
+                    FOREIGN KEY (scope_id) REFERENCES bmp_rib_scopes(scope_id) ON DELETE CASCADE,
+                    FOREIGN KEY (connection_id) REFERENCES bmp_connections(connection_id)
+                ) WITHOUT ROWID;
+
+                CREATE INDEX idx_bmp_scope_route_counts_connection
+                    ON bmp_scope_route_counts(connection_id, scope_id);
+
+                CREATE TABLE bmp_route_attributes (
+                    attr_id TEXT PRIMARY KEY,
+                    attr_json TEXT NOT NULL,
+                    first_seen_ms INTEGER NOT NULL,
+                    last_seen_ms INTEGER NOT NULL,
+                    current_ref_count INTEGER NOT NULL DEFAULT 0 CHECK(current_ref_count >= 0),
+                    event_ref_count INTEGER NOT NULL DEFAULT 0 CHECK(event_ref_count >= 0)
+                ) WITHOUT ROWID;
+
+                CREATE INDEX idx_bmp_route_attributes_gc
+                    ON bmp_route_attributes(current_ref_count, event_ref_count, last_seen_ms, attr_id);
+
+                CREATE TABLE bmp_route_identities (
+                    route_pk INTEGER PRIMARY KEY,
+                    route_id TEXT NOT NULL UNIQUE,
+                    route_key_json TEXT NOT NULL,
+                    route_identity_json TEXT NOT NULL,
+                    route_key_version INTEGER NOT NULL,
+                    legacy_route_key TEXT,
+                    afi INTEGER NOT NULL,
+                    safi INTEGER NOT NULL,
+                    path_id INTEGER NOT NULL,
+                    rd TEXT,
+                    prefix TEXT,
+                    prefix_length INTEGER,
+                    nlri_kind TEXT,
+                    nlri_json TEXT NOT NULL,
+                    first_seen_ms INTEGER NOT NULL,
+                    last_seen_ms INTEGER NOT NULL,
+                    current_ref_count INTEGER NOT NULL DEFAULT 0 CHECK(current_ref_count >= 0),
+                    event_ref_count INTEGER NOT NULL DEFAULT 0 CHECK(event_ref_count >= 0)
+                );
+
+                CREATE INDEX idx_bmp_route_identities_prefix
+                    ON bmp_route_identities(afi, safi, prefix, prefix_length, route_pk);
+                CREATE INDEX idx_bmp_route_identities_prefix_global
+                    ON bmp_route_identities(prefix, prefix_length, route_pk);
+                CREATE INDEX idx_bmp_route_identities_legacy
+                    ON bmp_route_identities(legacy_route_key, route_pk);
+                CREATE INDEX idx_bmp_route_identities_gc
+                    ON bmp_route_identities(current_ref_count, event_ref_count, last_seen_ms, route_pk);
+
+                CREATE TABLE bmp_route_payloads (
+                    payload_id INTEGER PRIMARY KEY,
+                    payload_hash BLOB NOT NULL UNIQUE,
+                    route_json TEXT NOT NULL,
+                    first_seen_ms INTEGER NOT NULL,
+                    last_seen_ms INTEGER NOT NULL,
+                    current_ref_count INTEGER NOT NULL DEFAULT 0 CHECK(current_ref_count >= 0),
+                    event_ref_count INTEGER NOT NULL DEFAULT 0 CHECK(event_ref_count >= 0)
+                );
+
+                CREATE INDEX idx_bmp_route_payloads_gc
+                    ON bmp_route_payloads(current_ref_count, event_ref_count, last_seen_ms, payload_id);
+
+                CREATE TABLE bmp_ingest_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    created_at_ms INTEGER NOT NULL,
+                    mutation_count INTEGER NOT NULL
+                ) WITHOUT ROWID;
+
+                CREATE INDEX idx_bmp_ingest_batches_created
+                    ON bmp_ingest_batches(created_at_ms);
+
+                CREATE TABLE bmp_route_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    source_sequence INTEGER NOT NULL,
+                    scope_id TEXT,
+                    partition_id INTEGER,
+                    route_pk INTEGER,
+                    payload_id INTEGER,
+                    event_type TEXT NOT NULL,
+                    observed_at_ms INTEGER NOT NULL,
+                    source_timestamp_ms INTEGER,
+                    rib_epoch INTEGER,
+                    attr_id TEXT,
+                    reason TEXT,
+                    CHECK(
+                        (route_pk IS NULL AND payload_id IS NULL)
+                        OR (route_pk IS NOT NULL AND payload_id IS NOT NULL)
+                    ),
+                    CHECK(
+                        (scope_id IS NULL AND partition_id IS NULL)
+                        OR (scope_id IS NOT NULL AND partition_id IS NOT NULL)
+                    ),
+                    UNIQUE(connection_id, source_sequence),
+                    FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
+                    FOREIGN KEY (connection_id) REFERENCES bmp_connections(connection_id),
+                    FOREIGN KEY (scope_id, partition_id)
+                        REFERENCES bmp_rib_scopes(scope_id, partition_id),
+                    FOREIGN KEY (route_pk) REFERENCES bmp_route_identities(route_pk),
+                    FOREIGN KEY (payload_id) REFERENCES bmp_route_payloads(payload_id),
+                    FOREIGN KEY (attr_id) REFERENCES bmp_route_attributes(attr_id)
+                );
+
+                CREATE INDEX idx_bmp_route_events_scope_time
+                    ON bmp_route_events(scope_id, observed_at_ms DESC, event_id DESC);
+                CREATE INDEX idx_bmp_route_events_route_time
+                    ON bmp_route_events(scope_id, route_pk, observed_at_ms DESC, event_id DESC);
+                CREATE INDEX idx_bmp_route_events_type_time
+                    ON bmp_route_events(event_type, observed_at_ms DESC);
+                CREATE INDEX idx_bmp_route_events_observed
+                    ON bmp_route_events(observed_at_ms, event_id);
+                CREATE INDEX idx_bmp_route_events_attr
+                    ON bmp_route_events(attr_id);
+                CREATE INDEX idx_bmp_route_events_payload
+                    ON bmp_route_events(payload_id);
+                CREATE INDEX idx_bmp_route_events_source_time
+                    ON bmp_route_events(source_id, observed_at_ms DESC, event_id DESC);
+                CREATE INDEX idx_bmp_route_events_route_global_time
+                    ON bmp_route_events(route_pk, observed_at_ms DESC, event_id DESC);
+                CREATE INDEX idx_bmp_route_events_partition_time
+                    ON bmp_route_events(partition_id, observed_at_ms DESC, event_id DESC);
+                CREATE INDEX idx_bmp_route_events_batch
+                    ON bmp_route_events(batch_id, event_id);
+
+                CREATE TRIGGER trg_bmp_route_events_insert_refs
+                AFTER INSERT ON bmp_route_events
+                BEGIN
+                    UPDATE bmp_route_identities
+                       SET event_ref_count = event_ref_count + 1
+                     WHERE route_pk = NEW.route_pk;
+                    UPDATE bmp_route_payloads
+                       SET event_ref_count = event_ref_count + 1
+                     WHERE payload_id = NEW.payload_id;
+                    UPDATE bmp_route_attributes
+                       SET event_ref_count = event_ref_count + 1
+                     WHERE attr_id = NEW.attr_id;
+                END;
+
+                CREATE TRIGGER trg_bmp_route_events_delete_refs
+                AFTER DELETE ON bmp_route_events
+                BEGIN
+                    UPDATE bmp_route_identities
+                       SET event_ref_count = event_ref_count - 1
+                     WHERE route_pk = OLD.route_pk;
+                    UPDATE bmp_route_payloads
+                       SET event_ref_count = event_ref_count - 1
+                     WHERE payload_id = OLD.payload_id;
+                    UPDATE bmp_route_attributes
+                       SET event_ref_count = event_ref_count - 1
+                     WHERE attr_id = OLD.attr_id;
+                END;
+
+                CREATE TRIGGER trg_bmp_route_events_route_refs_immutable
+                BEFORE UPDATE OF scope_id, partition_id, route_pk, payload_id, attr_id ON bmp_route_events
+                WHEN OLD.scope_id IS NOT NEW.scope_id
+                  OR OLD.partition_id IS NOT NEW.partition_id
+                  OR OLD.route_pk IS NOT NEW.route_pk
+                  OR OLD.payload_id IS NOT NEW.payload_id
+                  OR OLD.attr_id IS NOT NEW.attr_id
+                BEGIN
+                    SELECT RAISE(ABORT, 'BMP route event identity, payload, and attributes are immutable; scope and partition are immutable');
+                END;
+
+                CREATE TABLE bmp_statistics_samples (
+                    sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id TEXT NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    scope_id TEXT,
+                    report_kind TEXT,
+                    report_key TEXT,
+                    observed_at_ms INTEGER NOT NULL,
+                    source_timestamp_ms INTEGER,
+                    statistics_json TEXT NOT NULL,
+                    FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
+                    FOREIGN KEY (connection_id) REFERENCES bmp_connections(connection_id),
+                    FOREIGN KEY (scope_id) REFERENCES bmp_rib_scopes(scope_id)
+                );
+
+                CREATE INDEX idx_bmp_statistics_scope_time
+                    ON bmp_statistics_samples(scope_id, observed_at_ms DESC);
+                CREATE INDEX idx_bmp_statistics_observed
+                    ON bmp_statistics_samples(observed_at_ms, sample_id);
+                CREATE INDEX idx_bmp_statistics_report_time
                     ON bmp_statistics_samples(
                         source_id, report_kind, report_key, observed_at_ms DESC, sample_id DESC
                     );
+                CREATE INDEX idx_bmp_statistics_connection
+                    ON bmp_statistics_samples(connection_id, sample_id);
+
+                CREATE TABLE bmp_statistics_latest (
+                    source_id TEXT NOT NULL,
+                    report_kind TEXT NOT NULL CHECK(report_kind IN ('session', 'instance')),
+                    report_key TEXT NOT NULL,
+                    sample_id INTEGER NOT NULL,
+                    observed_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY (source_id, report_kind, report_key),
+                    FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
+                    FOREIGN KEY (sample_id) REFERENCES bmp_statistics_samples(sample_id)
+                ) WITHOUT ROWID;
+
+                CREATE INDEX idx_bmp_statistics_latest_sample
+                    ON bmp_statistics_latest(sample_id);
+
+                ${BMP_ROUTE_PARTITIONS.map(buildPartitionDdl).join('\n')}
+
+                CREATE VIEW bmp_current_routes_all AS
+                ${buildExpandedCurrentRoutesSql()};
             `);
-            const classifyStatistics = this.db.prepare(`
-                UPDATE bmp_statistics_samples
-                   SET report_kind = @reportKind, report_key = @reportKey
-                 WHERE sample_id = @sampleId
-            `);
-            this.db
-                .prepare(
-                    `SELECT sample_id, statistics_json
-                       FROM bmp_statistics_samples
-                      WHERE report_kind IS NULL OR report_key IS NULL`
-                )
-                .all()
-                .forEach(row => {
-                    const identity = makeStatisticsReportIdentity(parseJson(row.statistics_json));
-                    if (identity) {
-                        classifyStatistics.run({
-                            sampleId: row.sample_id,
-                            reportKind: identity.kind,
-                            reportKey: identity.key
-                        });
-                    }
-                });
-            const upsertLatestStatistics = this.db.prepare(`
-                INSERT INTO bmp_statistics_latest(source_id, report_kind, report_key, sample_id, observed_at_ms)
-                VALUES (@sourceId, @reportKind, @reportKey, @sampleId, @observedAtMs)
-                ON CONFLICT(source_id, report_kind, report_key) DO UPDATE SET
-                    sample_id = excluded.sample_id,
-                    observed_at_ms = excluded.observed_at_ms
-                WHERE excluded.observed_at_ms > bmp_statistics_latest.observed_at_ms
-                   OR (
-                       excluded.observed_at_ms = bmp_statistics_latest.observed_at_ms
-                       AND excluded.sample_id > bmp_statistics_latest.sample_id
-                   )
-            `);
-            this.db
-                .prepare(
-                    `SELECT sample_id, source_id, report_kind, report_key, observed_at_ms
-                       FROM bmp_statistics_samples
-                      WHERE report_kind IN ('session', 'instance') AND report_key IS NOT NULL
-                      ORDER BY observed_at_ms, sample_id`
-                )
-                .all()
-                .forEach(row => {
-                    upsertLatestStatistics.run({
-                        sourceId: row.source_id,
-                        reportKind: row.report_kind,
-                        reportKey: row.report_key,
-                        sampleId: row.sample_id,
-                        observedAtMs: row.observed_at_ms
-                    });
-                });
-            const connectionsWithoutGeneration = this.db
-                .prepare(
-                    `SELECT connection_id
-                       FROM bmp_connections
-                      WHERE connection_generation IS NULL
-                      ORDER BY opened_at_ms, connection_id`
-                )
-                .all();
-            const updateGeneration = this.db.prepare(
-                'UPDATE bmp_connections SET connection_generation = @generation WHERE connection_id = @connectionId'
-            );
-            connectionsWithoutGeneration.forEach((connection, index) => {
-                updateGeneration.run({ connectionId: connection.connection_id, generation: index + 1 });
-            });
             this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
             this.validateReadableSchema();
         });
-        migration();
+        initialize.immediate();
     }
 
     recoverInterruptedConnections(recoveredAtMs = Date.now()) {
@@ -739,11 +997,10 @@ class BmpPersistenceStore {
                  WHERE connection_id = @connectionId AND source_sequence = @sequence
                  LIMIT 1
             `),
-            findCurrentRoute: this.db.prepare(`
-                SELECT r.*, route_attr.attr_json AS attr_json
-                  FROM bmp_current_routes r
-                  LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_id = r.attr_id
-                 WHERE r.scope_id = @scopeId AND r.route_id = @routeId
+            findScopePartition: this.db.prepare(`
+                SELECT source_id, partition_id, scope_kind, afi, safi
+                  FROM bmp_rib_scopes
+                 WHERE scope_id = @scopeId
                  LIMIT 1
             `),
             insertBatch: this.db.prepare(`
@@ -795,13 +1052,13 @@ class BmpPersistenceStore {
             `),
             upsertScope: this.db.prepare(`
                 INSERT INTO bmp_rib_scopes(
-                    scope_id, source_id, scope_key_json, scope_identity_json, scope_kind, owner_key,
+                    scope_id, source_id, partition_id, scope_key_json, scope_identity_json, scope_kind, owner_key,
                     peer_type, peer_rd, peer_ip, peer_as, vrf_name, afi, safi, rib_type,
                     current_epoch, scope_state, stale_reason, stale_since_ms, refresh_started_ms,
                     cleanup_pending_epoch, last_connection_id,
                     created_at_ms, updated_at_ms
                 ) VALUES (
-                    @id, @sourceId, @keyJson, @identityJson, @kind, @ownerKey,
+                    @id, @sourceId, @partitionId, @keyJson, @identityJson, @kind, @ownerKey,
                     @peerType, @peerRd, @peerIp, @peerAs, @vrfName, @afi, @safi, @ribType,
                     @epoch, @state, @reason, @staleSinceMs, @refreshStartedMs, NULL, @connectionId,
                     @eventAtMs, @eventAtMs
@@ -881,6 +1138,8 @@ class BmpPersistenceStore {
                         THEN MAX(bmp_rib_scopes.updated_at_ms, excluded.updated_at_ms)
                         ELSE bmp_rib_scopes.updated_at_ms
                     END
+                WHERE bmp_rib_scopes.partition_id = excluded.partition_id
+                  AND bmp_rib_scopes.source_id = excluded.source_id
             `),
             markScopeEor: this.db.prepare(`
                 UPDATE bmp_rib_scopes
@@ -909,15 +1168,42 @@ class BmpPersistenceStore {
                 ON CONFLICT(attr_id) DO UPDATE SET
                     last_seen_ms = MAX(bmp_route_attributes.last_seen_ms, excluded.last_seen_ms)
             `),
+            upsertRouteIdentity: this.db.prepare(`
+                INSERT INTO bmp_route_identities(
+                    route_id, route_key_json, route_identity_json, route_key_version,
+                    legacy_route_key, afi, safi, path_id, rd, prefix, prefix_length,
+                    nlri_kind, nlri_json, first_seen_ms, last_seen_ms
+                ) VALUES (
+                    @routeId, @keyJson, @identityJson, @keyVersion,
+                    @legacyRouteKey, @afi, @safi, @pathId, @rd, @prefix, @prefixLength,
+                    @nlriKind, @nlriJson, @eventAtMs, @eventAtMs
+                )
+                ON CONFLICT(route_id) DO UPDATE SET
+                    legacy_route_key = COALESCE(excluded.legacy_route_key, bmp_route_identities.legacy_route_key),
+                    last_seen_ms = MAX(bmp_route_identities.last_seen_ms, excluded.last_seen_ms)
+                WHERE bmp_route_identities.route_identity_json = excluded.route_identity_json
+                RETURNING route_pk
+            `),
+            upsertRoutePayload: this.db.prepare(`
+                INSERT INTO bmp_route_payloads(
+                    payload_hash, route_json, first_seen_ms, last_seen_ms
+                ) VALUES (
+                    @payloadHash, @routeJson, @eventAtMs, @eventAtMs
+                )
+                ON CONFLICT(payload_hash) DO UPDATE SET
+                    last_seen_ms = MAX(bmp_route_payloads.last_seen_ms, excluded.last_seen_ms)
+                WHERE bmp_route_payloads.route_json = excluded.route_json
+                RETURNING payload_id
+            `),
             insertEvent: this.db.prepare(`
                 INSERT INTO bmp_route_events(
-                    batch_id, source_id, connection_id, source_sequence, scope_id, route_id,
-                    event_type, observed_at_ms, source_timestamp_ms, rib_epoch, attr_id, reason,
-                    afi, safi, prefix, legacy_route_key, route_json
+                    batch_id, source_id, connection_id, source_sequence, scope_id, partition_id,
+                    route_pk, payload_id, event_type, observed_at_ms,
+                    source_timestamp_ms, rib_epoch, attr_id, reason
                 ) VALUES (
-                    @batchId, @sourceId, @connectionId, @sequence, @scopeId, @routeId,
-                    @eventType, @eventAtMs, @sourceTimestampMs, @epoch, @attrId, @reason,
-                    @afi, @safi, @prefix, @legacyRouteKey, @routeJson
+                    @batchId, @sourceId, @connectionId, @sequence, @scopeId, @partitionId,
+                    @routePk, @payloadId, @eventType, @eventAtMs,
+                    @sourceTimestampMs, @epoch, @attrId, @reason
                 )
                 ON CONFLICT(connection_id, source_sequence) DO NOTHING
             `),
@@ -925,62 +1211,6 @@ class BmpPersistenceStore {
                 UPDATE bmp_route_events
                    SET event_type = @eventType
                  WHERE event_id = @eventId
-            `),
-            upsertRoute: this.db.prepare(`
-                INSERT INTO bmp_current_routes(
-                    scope_id, route_id, route_key_json, route_identity_json, route_key_version,
-                    legacy_route_key, afi, safi, path_id, rd, prefix, prefix_length, nlri_kind,
-                    nlri_json, attr_id, route_json, connection_id, rib_epoch, explicit_state, first_seen_ms,
-                    last_seen_ms, source_timestamp_ms, last_event_id
-                ) SELECT
-                    @scopeId, @routeId, @keyJson, @identityJson, @keyVersion,
-                    @legacyRouteKey, @afi, @safi, @pathId, @rd, @prefix, @prefixLength, @nlriKind,
-                    @nlriJson, @attrId, @routeJson, @connectionId, @epoch, 'active', @eventAtMs,
-                    @eventAtMs, @sourceTimestampMs, @eventId
-                 WHERE @connectionId = (
-                           SELECT last_connection_id FROM bmp_rib_scopes WHERE scope_id = @scopeId
-                       )
-                   AND @epoch = (
-                           SELECT current_epoch FROM bmp_rib_scopes WHERE scope_id = @scopeId
-                       )
-                ON CONFLICT(scope_id, route_id) DO UPDATE SET
-                    route_key_json = excluded.route_key_json,
-                    route_identity_json = excluded.route_identity_json,
-                    legacy_route_key = excluded.legacy_route_key,
-                    rd = excluded.rd,
-                    prefix = excluded.prefix,
-                    prefix_length = excluded.prefix_length,
-                    nlri_kind = excluded.nlri_kind,
-                    nlri_json = excluded.nlri_json,
-                    attr_id = excluded.attr_id,
-                    route_json = excluded.route_json,
-                    connection_id = excluded.connection_id,
-                    rib_epoch = excluded.rib_epoch,
-                    explicit_state = 'active',
-                    last_seen_ms = MAX(bmp_current_routes.last_seen_ms, excluded.last_seen_ms),
-                    source_timestamp_ms = excluded.source_timestamp_ms,
-                    last_event_id = excluded.last_event_id
-                WHERE excluded.last_event_id >= bmp_current_routes.last_event_id
-                  AND (
-                      bmp_current_routes.connection_id <> @connectionId
-                      OR excluded.rib_epoch >= bmp_current_routes.rib_epoch
-                  )
-                  AND @connectionId = (
-                      SELECT last_connection_id
-                        FROM bmp_rib_scopes
-                       WHERE scope_id = @scopeId
-                  )
-            `),
-            withdrawRoute: this.db.prepare(`
-                DELETE FROM bmp_current_routes
-                 WHERE scope_id = @scopeId AND route_id = @routeId
-                   AND EXISTS (
-                       SELECT 1
-                         FROM bmp_rib_scopes scope
-                        WHERE scope.scope_id = bmp_current_routes.scope_id
-                          AND scope.last_connection_id = @connectionId
-                          AND scope.current_epoch = @epoch
-                   )
             `),
             insertStatistics: this.db.prepare(`
                 INSERT INTO bmp_statistics_samples(
@@ -1004,16 +1234,96 @@ class BmpPersistenceStore {
                    )
             `)
         };
+
+        this.partitionStatements = new Map(
+            BMP_ROUTE_PARTITIONS.map(partition => {
+                const table = partition.quotedTableName;
+                const expanded = buildExpandedPartitionSelect(partition);
+                return [
+                    partition.partitionId,
+                    {
+                        findCurrentRoute: this.db.prepare(`
+                            SELECT r.*, route_attr.attr_json
+                              FROM (${expanded}) r
+                              LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_id = r.attr_id
+                             WHERE r.scope_id = @scopeId AND r.route_id = @routeId
+                             LIMIT 1
+                        `),
+                        upsertRoute: this.db.prepare(`
+                            INSERT INTO ${table}(
+                                partition_id, scope_id, route_pk, payload_id, attr_id,
+                                connection_id, rib_epoch, explicit_state, first_seen_ms,
+                                last_seen_ms, source_timestamp_ms, last_event_id
+                            )
+                            SELECT @partitionId, @scopeId, @routePk, @payloadId, @attrId,
+                                   @connectionId, @epoch, 'active', @eventAtMs,
+                                   @eventAtMs, @sourceTimestampMs, @eventId
+                             WHERE EXISTS (
+                                 SELECT 1
+                                   FROM bmp_rib_scopes scope
+                                  WHERE scope.scope_id = @scopeId
+                                    AND scope.partition_id = @partitionId
+                                    AND scope.last_connection_id = @connectionId
+                                    AND scope.current_epoch = @epoch
+                             )
+                            ON CONFLICT(scope_id, route_pk) DO UPDATE SET
+                                payload_id = excluded.payload_id,
+                                attr_id = excluded.attr_id,
+                                connection_id = excluded.connection_id,
+                                rib_epoch = excluded.rib_epoch,
+                                explicit_state = 'active',
+                                last_seen_ms = MAX(last_seen_ms, excluded.last_seen_ms),
+                                source_timestamp_ms = excluded.source_timestamp_ms,
+                                last_event_id = excluded.last_event_id
+                            WHERE excluded.last_event_id >= last_event_id
+                              AND (
+                                  connection_id <> @connectionId
+                                  OR excluded.rib_epoch >= rib_epoch
+                              )
+                              AND EXISTS (
+                                  SELECT 1
+                                    FROM bmp_rib_scopes scope
+                                   WHERE scope.scope_id = @scopeId
+                                     AND scope.partition_id = @partitionId
+                                     AND scope.last_connection_id = @connectionId
+                                     AND scope.current_epoch = @epoch
+                              )
+                        `),
+                        withdrawRoute: this.db.prepare(`
+                            DELETE FROM ${table}
+                             WHERE scope_id = @scopeId AND route_pk = @routePk
+                               AND EXISTS (
+                                   SELECT 1
+                                     FROM bmp_rib_scopes scope
+                                    WHERE scope.scope_id = @scopeId
+                                      AND scope.partition_id = @partitionId
+                                      AND scope.last_connection_id = @connectionId
+                                      AND scope.current_epoch = @epoch
+                               )
+                        `),
+                        deleteRoute: this.db.prepare(`
+                            DELETE FROM ${table}
+                             WHERE scope_id = @scopeId AND route_pk = @routePk
+                        `)
+                    }
+                ];
+            })
+        );
+    }
+
+    getPartitionStatements(partition) {
+        const statements = this.partitionStatements?.get(partition.partitionId);
+        if (!statements) {
+            throw new Error(`BMP route partition statements are unavailable for ${partition.key}`);
+        }
+        return statements;
     }
 
     mapDeltaRouteRow(row) {
         if (!row) {
             return null;
         }
-        const route = {
-            ...parseJson(row.route_json, {}),
-            ...parseJson(row.attr_json, {})
-        };
+        const route = buildStoredRouteProjection(row);
         return {
             ...route,
             persistentRouteId: row.route_id,
@@ -1036,10 +1346,20 @@ class BmpPersistenceStore {
         if (!routeData) {
             return null;
         }
-        const route = {
-            ...parseJson(routeData.routeJson, {}),
-            ...parseJson(routeData.attrJson, {})
-        };
+        const route = buildStoredRouteProjection(
+            {
+                afi: routeData.afi,
+                safi: routeData.safi,
+                path_id: routeData.pathId,
+                rd: routeData.rd,
+                prefix: routeData.prefix,
+                prefix_length: routeData.prefixLength,
+                nlri_json: routeData.nlriJson,
+                legacy_route_key: routeData.legacyRouteKey,
+                attr_id: routeData.attrId
+            },
+            { routeJson: routeData.routeJson, attrJson: routeData.attrJson }
+        );
         return {
             ...route,
             persistentRouteId: routeData.id,
@@ -1131,6 +1451,27 @@ class BmpPersistenceStore {
             return { applied: false, delta: null };
         }
 
+        const partition = scope
+            ? route
+                ? assertBmpRouteMatchesScope(route, scope)
+                : resolveBmpRoutePartition({ scopeKind: scope.kind, afi: scope.afi, safi: scope.safi })
+            : null;
+        if (scope) {
+            const existingScope = this.statements.findScopePartition.get({ scopeId: scope.id });
+            if (
+                existingScope &&
+                (existingScope.source_id !== source.id ||
+                    Number(existingScope.partition_id) !== partition.partitionId ||
+                    existingScope.scope_kind !== scope.kind ||
+                    Number(existingScope.afi) !== Number(scope.afi) ||
+                    Number(existingScope.safi) !== Number(scope.safi))
+            ) {
+                throw new Error(
+                    `BMP scope identity collision for ${scope.id}; existing scope does not match source, kind, or AFI/SAFI partition`
+                );
+            }
+        }
+
         const sourceSignature = `${source.identityJson}|${source.remoteIp || ''}|${source.sysName || ''}|${
             source.sysDesc || ''
         }|${asJson(source.metadata) || ''}`;
@@ -1162,13 +1503,14 @@ class BmpPersistenceStore {
         }
 
         if (scope) {
-            const scopeSignature = `${connection.id}|${scope.epoch}|${scope.state || 'syncing'}|${
+            const scopeSignature = `${partition.partitionId}|${connection.id}|${scope.epoch}|${scope.state || 'syncing'}|${
                 mutation.reason || scope.reason || ''
             }|${scope.vrfName || ''}|${mutation.eventType}`;
             if (!batchCache || batchCache.scopes.get(scope.id) !== scopeSignature) {
                 this.statements.upsertScope.run({
                     id: scope.id,
                     sourceId: source.id,
+                    partitionId: partition.partitionId,
                     keyJson: scope.keyJson,
                     identityJson: scope.identityJson,
                     kind: scope.kind,
@@ -1204,11 +1546,57 @@ class BmpPersistenceStore {
             batchCache?.attributes.add(route.attrId);
         }
 
+        let routePk = null;
+        let payloadId = null;
+        if (route) {
+            routePk = batchCache?.routeIdentities.get(route.id) ?? null;
+            if (routePk === null) {
+                const identity = this.statements.upsertRouteIdentity.get({
+                    routeId: route.id,
+                    keyJson: route.keyJson,
+                    identityJson: route.identityJson,
+                    keyVersion: Number(route.keyVersion),
+                    legacyRouteKey: route.legacyRouteKey || null,
+                    afi: Number(route.afi),
+                    safi: Number(route.safi),
+                    pathId: Number(route.pathId || 0),
+                    rd: route.rd || null,
+                    prefix: route.prefix || null,
+                    prefixLength: finiteNumber(route.prefixLength),
+                    nlriKind: route.nlriKind || null,
+                    nlriJson: route.nlriJson,
+                    eventAtMs
+                });
+                if (!identity) {
+                    throw new Error(`BMP route identity hash collision for route ${route.id}`);
+                }
+                routePk = Number(identity.route_pk);
+                batchCache?.routeIdentities.set(route.id, routePk);
+            }
+
+            const payloadHash = sha256Buffer(route.routeJson);
+            const payloadCacheKey = payloadHash.toString('hex');
+            payloadId = batchCache?.routePayloads.get(payloadCacheKey) ?? null;
+            if (payloadId === null) {
+                const payload = this.statements.upsertRoutePayload.get({
+                    payloadHash,
+                    routeJson: route.routeJson,
+                    eventAtMs
+                });
+                if (!payload) {
+                    throw new Error(`BMP route payload hash collision for route ${route.id}`);
+                }
+                payloadId = Number(payload.payload_id);
+                batchCache?.routePayloads.set(payloadCacheKey, payloadId);
+            }
+        }
+
         const isRouteUpsert = ['upsert', 'announce', 'replace', 'refresh'].includes(mutation.eventType);
         const isRouteDelete = ['delete', 'withdraw', 'purge'].includes(mutation.eventType);
+        const routeStatements = partition ? this.getPartitionStatements(partition) : null;
         const previousRow =
             route && scope && (isRouteUpsert || isRouteDelete)
-                ? this.statements.findCurrentRoute.get({ scopeId: scope.id, routeId: route.id })
+                ? routeStatements.findCurrentRoute.get({ scopeId: scope.id, routeId: route.id })
                 : null;
         const previousRoute = this.mapDeltaRouteRow(previousRow);
 
@@ -1218,18 +1606,15 @@ class BmpPersistenceStore {
             connectionId: connection.id,
             sequence: mutation.sequence,
             scopeId: scope?.id || null,
-            routeId: route?.id || null,
+            partitionId: partition?.partitionId ?? null,
+            routePk,
+            payloadId,
             eventType: mutation.eventType,
             eventAtMs,
             sourceTimestampMs: finiteNumber(mutation.sourceTimestampMs),
             epoch: finiteNumber(scope?.epoch),
             attrId: route?.attrId || null,
-            reason: mutation.reason || null,
-            afi: finiteNumber(route?.afi ?? scope?.afi),
-            safi: finiteNumber(route?.safi ?? scope?.safi),
-            prefix: route?.prefix || null,
-            legacyRouteKey: route?.legacyRouteKey || null,
-            routeJson: route ? route.routeJson : null
+            reason: mutation.reason || null
         });
         if (eventResult.changes === 0) {
             return { applied: false, delta: null };
@@ -1242,23 +1627,12 @@ class BmpPersistenceStore {
             case 'announce':
             case 'replace':
             case 'refresh': {
-                const routeResult = this.statements.upsertRoute.run({
+                const routeResult = routeStatements.upsertRoute.run({
+                    partitionId: partition.partitionId,
                     scopeId: scope.id,
-                    routeId: route.id,
-                    keyJson: route.keyJson,
-                    identityJson: route.identityJson,
-                    keyVersion: route.keyVersion,
-                    legacyRouteKey: route.legacyRouteKey || null,
-                    afi: Number(route.afi),
-                    safi: Number(route.safi),
-                    pathId: Number(route.pathId || 0),
-                    rd: route.rd || null,
-                    prefix: route.prefix || null,
-                    prefixLength: finiteNumber(route.prefixLength),
-                    nlriKind: route.nlriKind || null,
-                    nlriJson: route.nlriJson,
+                    routePk,
+                    payloadId,
                     attrId: route.attrId || null,
-                    routeJson: route.routeJson,
                     epoch: finiteNumber(scope.epoch, 0),
                     eventAtMs,
                     sourceTimestampMs: finiteNumber(mutation.sourceTimestampMs),
@@ -1286,9 +1660,10 @@ class BmpPersistenceStore {
             case 'delete':
             case 'withdraw':
             case 'purge': {
-                const routeResult = this.statements.withdrawRoute.run({
+                const routeResult = routeStatements.withdrawRoute.run({
+                    partitionId: partition.partitionId,
                     scopeId: scope.id,
-                    routeId: route.id,
+                    routePk,
                     connectionId: connection.id,
                     epoch: finiteNumber(scope.epoch, 0)
                 });
@@ -1398,7 +1773,9 @@ class BmpPersistenceStore {
                 sources: new Map(),
                 connections: new Set(),
                 scopes: new Map(),
-                attributes: new Set()
+                attributes: new Set(),
+                routeIdentities: new Map(),
+                routePayloads: new Map()
             };
             mutations.forEach(mutation => {
                 const mutationResult = this.applyMutation(batchId, mutation, batchCache);
@@ -1419,9 +1796,119 @@ class BmpPersistenceStore {
         return `CASE
             WHEN r.explicit_state = 'stale'
               OR s.scope_state IN ('stale', 'down')
-              OR r.connection_id <> s.last_connection_id
+              OR r.connection_id IS NOT s.last_connection_id
               OR r.rib_epoch < s.current_epoch
             THEN 'stale' ELSE 'active' END`;
+    }
+
+    resolveQueryPartitions(query = {}) {
+        if (query.scopeId !== undefined && query.scopeId !== null && query.scopeId !== '') {
+            const row = this.statements?.findScopePartition
+                ? this.statements.findScopePartition.get({ scopeId: String(query.scopeId) })
+                : this.db
+                      .prepare('SELECT partition_id FROM bmp_rib_scopes WHERE scope_id = @scopeId LIMIT 1')
+                      .get({ scopeId: String(query.scopeId) });
+            return row ? [getBmpRoutePartitionById(row.partition_id)] : [];
+        }
+
+        let partitionQuery = query;
+        if (query.routeId !== undefined && query.routeId !== null && query.routeId !== '') {
+            const identity = this.db
+                .prepare('SELECT afi, safi FROM bmp_route_identities WHERE route_id = @routeId LIMIT 1')
+                .get({ routeId: String(query.routeId) });
+            if (!identity) {
+                return [];
+            }
+            partitionQuery = { ...query, afi: identity.afi, safi: identity.safi };
+        }
+
+        const scopeWhere = [];
+        const params = {};
+        const addScopeFilter = (column, name, value) => {
+            if (value !== undefined && value !== null && value !== '') {
+                scopeWhere.push(`${column} = @${name}`);
+                params[name] = value;
+            }
+        };
+        addScopeFilter('source_id', 'sourceId', query.sourceId);
+        addScopeFilter('owner_key', 'ownerKey', query.ownerKey);
+        addScopeFilter('rib_type', 'ribType', query.ribType);
+        addScopeFilter('scope_state', 'scopeState', query.scopeState);
+        if (scopeWhere.length > 0) {
+            const rows = this.db
+                .prepare(
+                    `SELECT DISTINCT partition_id
+                       FROM bmp_rib_scopes
+                      WHERE ${scopeWhere.join(' AND ')}`
+                )
+                .all(params);
+            const presentIds = new Set(rows.map(row => Number(row.partition_id)));
+            return selectBmpRoutePartitions(partitionQuery).filter(partition => presentIds.has(partition.partitionId));
+        }
+        return selectBmpRoutePartitions(partitionQuery);
+    }
+
+    queryRouteCountFromCounters(query = {}) {
+        const hasValue = value => value !== undefined && value !== null && value !== '';
+        if (
+            hasValue(query.routeId) ||
+            hasValue(query.legacyRouteKey || query.routeKey) ||
+            hasValue(query.prefixLength) ||
+            hasValue(query.prefixExact) ||
+            hasValue(query.prefix) ||
+            normalizePrefixCidrs(query.prefixCidrs).length > 0 ||
+            String(query.searchText ?? '').trim() !== '' ||
+            String(query.routeIdentityText ?? '').trim() !== '' ||
+            String(query.prefixFilter ?? '').trim() !== ''
+        ) {
+            return null;
+        }
+
+        const where = [];
+        const params = {};
+        const addFilter = (column, name, value) => {
+            if (hasValue(value)) {
+                where.push(`${column} = @${name}`);
+                params[name] = value;
+            }
+        };
+        addFilter('s.source_id', 'sourceId', query.sourceId);
+        addFilter('s.scope_id', 'scopeId', query.scopeId);
+        addFilter('s.owner_key', 'ownerKey', query.ownerKey);
+        addFilter('s.scope_kind', 'scopeKind', query.scopeKind);
+        addFilter('s.afi', 'afi', finiteNumber(query.afi));
+        addFilter('s.safi', 'safi', finiteNumber(query.safi));
+        addFilter('s.rib_type', 'ribType', query.ribType);
+        addFilter('s.scope_state', 'scopeState', query.scopeState);
+        addFilter('count.connection_id', 'connectionId', query.connectionId);
+
+        const active = `(
+            s.scope_state NOT IN ('stale', 'down')
+            AND count.explicit_state <> 'stale'
+            AND count.connection_id IS s.last_connection_id
+            AND count.rib_epoch >= s.current_epoch
+        )`;
+        let aggregate = 'count.route_count';
+        if (query.routeState && query.routeState !== 'all') {
+            if (query.routeState === 'active') {
+                aggregate = `CASE WHEN ${active} THEN count.route_count ELSE 0 END`;
+            } else if (query.routeState === 'stale') {
+                aggregate = `CASE WHEN ${active} THEN 0 ELSE count.route_count END`;
+            } else {
+                return 0;
+            }
+        }
+        const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+        return Number(
+            this.db
+                .prepare(
+                    `SELECT COALESCE(SUM(${aggregate}), 0) AS total
+                       FROM bmp_rib_scopes s
+                       LEFT JOIN bmp_scope_route_counts count ON count.scope_id = s.scope_id
+                       ${whereSql}`
+                )
+                .get(params).total || 0
+        );
     }
 
     queryRoutes(query = {}) {
@@ -1440,6 +1927,11 @@ class BmpPersistenceStore {
             throw new Error('BMP persistence routes cursor cannot be combined with orderBy firstSeen');
         }
         const includeTotal = query.includeTotal !== false;
+        const partitions = this.resolveQueryPartitions(query);
+        const currentRoutesSql = `(${buildExpandedCurrentRoutesSql(partitions)})`;
+        const identityPrefixOnly =
+            partitions.length > 0 &&
+            partitions.every(partition => ['ipv4-unicast', 'ipv6-unicast'].includes(partition.familyKey));
         const where = [];
         const params = {};
         const stateSql = this.buildRouteStateSql();
@@ -1453,11 +1945,19 @@ class BmpPersistenceStore {
             lower(COALESCE(r.prefix, '')),
             lower(COALESCE(json_extract(r.route_json, '$.ip'), '')),
             lower(COALESCE(json_extract(r.route_json, '$.prefix'), '')),
-            lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.prefix'), '')),
-            lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipPrefix'), '')),
-            lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipAddress'), ''))
+            lower(COALESCE(json_extract(r.nlri_json, '$.prefix'), '')),
+            lower(COALESCE(json_extract(r.nlri_json, '$.ipPrefix'), '')),
+            lower(COALESCE(json_extract(r.nlri_json, '$.ipAddress'), ''))
         )`;
-        const exactCidrPredicate = (prefixParam, lengthParam) => `(
+        const exactCidrPredicate = (prefixParam, lengthParam) =>
+            identityPrefixOnly
+                ? `r.route_pk IN (
+                    SELECT candidate.route_pk
+                      FROM bmp_route_identities candidate
+                     WHERE candidate.prefix = @${prefixParam}
+                       AND candidate.prefix_length = @${lengthParam}
+                )`
+                : `(
             (lower(COALESCE(r.prefix, '')) = @${prefixParam} AND r.prefix_length = @${lengthParam})
             OR (
                 lower(COALESCE(json_extract(r.route_json, '$.ip'), '')) = @${prefixParam}
@@ -1468,16 +1968,16 @@ class BmpPersistenceStore {
             )
             OR (
                 (
-                    lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.prefix'), '')) = @${prefixParam}
-                    OR lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipPrefix'), '')) = @${prefixParam}
+                    lower(COALESCE(json_extract(r.nlri_json, '$.prefix'), '')) = @${prefixParam}
+                    OR lower(COALESCE(json_extract(r.nlri_json, '$.ipPrefix'), '')) = @${prefixParam}
                 )
                 AND COALESCE(
-                    json_extract(r.route_json, '$.nlriDetail.prefixLength'),
-                    json_extract(r.route_json, '$.nlriDetail.length')
+                    json_extract(r.nlri_json, '$.prefixLength'),
+                    json_extract(r.nlri_json, '$.length')
                 ) = @${lengthParam}
             )
             OR (
-                lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipAddress'), '')) = @${prefixParam}
+                lower(COALESCE(json_extract(r.nlri_json, '$.ipAddress'), '')) = @${prefixParam}
                 AND @${lengthParam} IN (32, 128)
             )
         )`;
@@ -1486,8 +1986,22 @@ class BmpPersistenceStore {
         addFilter('s.scope_id = @scopeId', 'scopeId', query.scopeId);
         addFilter('s.owner_key = @ownerKey', 'ownerKey', query.ownerKey);
         addFilter('r.connection_id = @connectionId', 'connectionId', query.connectionId);
-        addFilter('r.route_id = @routeId', 'routeId', query.routeId);
-        addFilter('r.legacy_route_key = @legacyRouteKey', 'legacyRouteKey', query.legacyRouteKey || query.routeKey);
+        if (query.routeId !== undefined && query.routeId !== null && query.routeId !== '') {
+            params.routeId = query.routeId;
+            where.push(`r.route_pk = (
+                SELECT candidate.route_pk
+                  FROM bmp_route_identities candidate
+                 WHERE candidate.route_id = @routeId
+            )`);
+        }
+        if (query.legacyRouteKey || query.routeKey) {
+            params.legacyRouteKey = query.legacyRouteKey || query.routeKey;
+            where.push(`r.route_pk IN (
+                SELECT candidate.route_pk
+                  FROM bmp_route_identities candidate
+                 WHERE candidate.legacy_route_key = @legacyRouteKey
+            )`);
+        }
         addFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
         addFilter('r.afi = @afi', 'afi', finiteNumber(query.afi));
         addFilter('r.safi = @safi', 'safi', finiteNumber(query.safi));
@@ -1496,11 +2010,19 @@ class BmpPersistenceStore {
         addFilter('s.scope_state = @scopeState', 'scopeState', query.scopeState);
         if (query.prefixExact !== undefined && query.prefixExact !== null && query.prefixExact !== '') {
             params.prefixExact = String(query.prefixExact);
-            where.push('r.prefix = @prefixExact');
+            where.push(`r.route_pk IN (
+                SELECT candidate.route_pk
+                  FROM bmp_route_identities candidate
+                 WHERE candidate.prefix = @prefixExact
+            )`);
         } else if (query.prefix) {
             params.prefixStart = String(query.prefix);
             params.prefixEnd = `${params.prefixStart}\uffff`;
-            where.push('r.prefix >= @prefixStart AND r.prefix < @prefixEnd');
+            where.push(`r.route_pk IN (
+                SELECT candidate.route_pk
+                  FROM bmp_route_identities candidate
+                 WHERE candidate.prefix >= @prefixStart AND candidate.prefix < @prefixEnd
+            )`);
         }
         const prefixCidrs = normalizePrefixCidrs(query.prefixCidrs);
         if (prefixCidrs.length > 400) {
@@ -1524,6 +2046,7 @@ class BmpPersistenceStore {
                 COALESCE(r.legacy_route_key, '') || char(31) ||
                 COALESCE(r.route_id, '') || char(31) ||
                 COALESCE(r.route_json, '') || char(31) ||
+                COALESCE(r.nlri_json, '') || char(31) ||
                 COALESCE(route_attr.attr_json, '') || char(31) ||
                 COALESCE(s.owner_key, '') || char(31) ||
                 COALESCE(s.peer_ip, '') || char(31) ||
@@ -1542,6 +2065,7 @@ class BmpPersistenceStore {
                 COALESCE(r.prefix, '') || char(31) ||
                 COALESCE(r.legacy_route_key, '') || char(31) ||
                 COALESCE(r.route_json, '') || char(31) ||
+                COALESCE(r.nlri_json, '') || char(31) ||
                 CASE r.afi
                     WHEN 1 THEN 'ipv4'
                     WHEN 2 THEN 'ipv6'
@@ -1584,18 +2108,30 @@ class BmpPersistenceStore {
                 where.push(exactCidrPredicate('prefixFilterValue', 'prefixFilterLength'));
             } else if (isStrictIpAddress(prefixFilter)) {
                 params.prefixFilterValue = ipaddr.parse(prefixFilter).toString().toLowerCase();
-                where.push(`@prefixFilterValue IN ${routePrefixValuesSql}`);
+                where.push(
+                    identityPrefixOnly
+                        ? `r.route_pk IN (
+                            SELECT candidate.route_pk
+                              FROM bmp_route_identities candidate
+                             WHERE candidate.prefix = @prefixFilterValue
+                        )`
+                        : `@prefixFilterValue IN ${routePrefixValuesSql}`
+                );
             } else {
                 params.prefixFilterText = prefixFilter.toLowerCase();
-                where.push(`instr(lower(
+                where.push(
+                    identityPrefixOnly
+                        ? `instr(lower(COALESCE(r.prefix, '')), @prefixFilterText) > 0`
+                        : `instr(lower(
                     COALESCE(r.prefix, '') || char(31) ||
                     COALESCE(json_extract(r.route_json, '$.ip'), '') || char(31) ||
                     COALESCE(json_extract(r.route_json, '$.prefix'), '') || char(31) ||
-                    COALESCE(json_extract(r.route_json, '$.nlriDetail.prefix'), '') || char(31) ||
-                    COALESCE(json_extract(r.route_json, '$.nlriDetail.ipPrefix'), '') || char(31) ||
-                    COALESCE(json_extract(r.route_json, '$.nlriDetail.ipAddress'), '') || char(31) ||
-                    COALESCE(json_extract(r.route_json, '$.nlriDetail.formatted'), '')
-                ), @prefixFilterText) > 0`);
+                    COALESCE(json_extract(r.nlri_json, '$.prefix'), '') || char(31) ||
+                    COALESCE(json_extract(r.nlri_json, '$.ipPrefix'), '') || char(31) ||
+                    COALESCE(json_extract(r.nlri_json, '$.ipAddress'), '') || char(31) ||
+                    COALESCE(json_extract(r.nlri_json, '$.formatted'), '')
+                ), @prefixFilterText) > 0`
+                );
             }
         }
         if (query.routeState && query.routeState !== 'all') {
@@ -1605,30 +2141,41 @@ class BmpPersistenceStore {
         const countWhereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
         const countParams = { ...params };
         if (cursor) {
-            if (typeof cursor.scopeId !== 'string' || typeof cursor.routeId !== 'string') {
+            const cursorRoutePk = finiteNumber(cursor.routePk);
+            if (typeof cursor.scopeId !== 'string' || cursorRoutePk === null) {
                 throw new Error('Invalid BMP persistence routes cursor fields');
             }
-            where.push('(r.scope_id, r.route_id) > (@cursorScopeId, @cursorRouteId)');
+            where.push('(r.scope_id, r.route_pk) > (@cursorScopeId, @cursorRoutePk)');
             params.cursorScopeId = cursor.scopeId;
-            params.cursorRouteId = cursor.routeId;
+            params.cursorRoutePk = cursorRoutePk;
         }
 
         const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+        const orderSql =
+            orderBy === 'firstSeen'
+                ? partitions.length === 1 && query.scopeId
+                    ? 'r.first_seen_ms, r.path_pk'
+                    : 'r.first_seen_ms, r.partition_id, r.path_pk'
+                : 'r.scope_id, r.route_pk';
         const readSnapshot = this.db.transaction(() => {
-            const total = includeTotal
-                ? this.db
-                      .prepare(
-                          `
+            let total = null;
+            if (includeTotal) {
+                total = this.queryRouteCountFromCounters(query);
+            }
+            if (includeTotal && total === null) {
+                total = this.db
+                    .prepare(
+                        `
                       SELECT COUNT(*) AS total
-                        FROM bmp_current_routes r
+                        FROM ${currentRoutesSql} r
                         JOIN bmp_rib_scopes s ON s.scope_id = r.scope_id
                         JOIN bmp_sources src ON src.source_id = s.source_id
                         LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_id = r.attr_id
                         ${countWhereSql}
                   `
-                      )
-                      .get(countParams).total
-                : null;
+                    )
+                    .get(countParams).total;
+            }
 
             const rows = this.db
                 .prepare(
@@ -1644,17 +2191,13 @@ class BmpPersistenceStore {
                        conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
                        conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,
                        ${stateSql} AS effective_state
-                  FROM bmp_current_routes r
+                  FROM ${currentRoutesSql} r
                   JOIN bmp_rib_scopes s ON s.scope_id = r.scope_id
                   JOIN bmp_sources src ON src.source_id = s.source_id
                   JOIN bmp_connections conn ON conn.connection_id = r.connection_id
                   LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_id = r.attr_id
                   ${whereSql}
-                 ORDER BY ${
-                     orderBy === 'firstSeen'
-                         ? 'r.first_seen_ms, r.last_event_id, r.scope_id, r.route_id'
-                         : 'r.scope_id, r.route_id'
-                 }
+                 ORDER BY ${orderSql}
                  LIMIT @limit OFFSET @offset
             `
                 )
@@ -1675,18 +2218,14 @@ class BmpPersistenceStore {
                 orderBy === 'routeId' && hasMore && lastRow
                     ? encodeCursor('routes-by-id', {
                           scopeId: lastRow.scope_id,
-                          routeId: lastRow.route_id
+                          routePk: lastRow.route_pk
                       })
                     : null
         };
     }
 
     mapRouteRow(row) {
-        const route = {
-            ...parseJson(row.route_json, {}),
-            ...parseJson(row.attr_json, {}),
-            attrId: row.attr_id || ''
-        };
+        const route = buildStoredRouteProjection(row);
         const scopeIdentity = parseJson(row.scope_identity_json, {});
         const peerRdIdentity = scopeIdentity?.peer?.rd;
         return {
@@ -1773,8 +2312,6 @@ class BmpPersistenceStore {
         }
         const sourceWhereSql = sourceWhere.length > 0 ? `WHERE ${sourceWhere.join(' AND ')}` : '';
         const scopeWhereSql = sourceWhere.length > 0 ? 'WHERE s.source_id = @sourceId' : '';
-        const stateSql = this.buildRouteStateSql();
-
         const readSnapshot = this.db.transaction(() => {
             const sourceRows = this.db
                 .prepare(
@@ -1814,15 +2351,23 @@ class BmpPersistenceStore {
                            conn.opened_at_ms AS scope_opened_at_ms,
                            conn.closed_at_ms AS scope_closed_at_ms,
                            conn.close_reason AS scope_close_reason,
-                           SUM(CASE
-                               WHEN r.route_id IS NOT NULL AND ${stateSql} = 'active' THEN 1 ELSE 0
-                           END) AS active,
-                           SUM(CASE
-                               WHEN r.route_id IS NOT NULL AND ${stateSql} = 'stale' THEN 1 ELSE 0
-                           END) AS stale,
-                           COUNT(r.route_id) AS total
+                           COALESCE(SUM(CASE
+                               WHEN s.scope_state NOT IN ('stale', 'down')
+                                AND count.explicit_state <> 'stale'
+                                AND count.connection_id = s.last_connection_id
+                                AND count.rib_epoch >= s.current_epoch
+                               THEN count.route_count ELSE 0
+                           END), 0) AS active,
+                           COALESCE(SUM(count.route_count), 0) - COALESCE(SUM(CASE
+                               WHEN s.scope_state NOT IN ('stale', 'down')
+                                AND count.explicit_state <> 'stale'
+                                AND count.connection_id = s.last_connection_id
+                                AND count.rib_epoch >= s.current_epoch
+                               THEN count.route_count ELSE 0
+                           END), 0) AS stale,
+                           COALESCE(SUM(count.route_count), 0) AS total
                       FROM bmp_rib_scopes s
-                      LEFT JOIN bmp_current_routes r ON r.scope_id = s.scope_id
+                      LEFT JOIN bmp_scope_route_counts count ON count.scope_id = s.scope_id
                       LEFT JOIN bmp_connections conn ON conn.connection_id = s.last_connection_id
                       ${scopeWhereSql}
                      GROUP BY s.scope_id
@@ -2082,18 +2627,29 @@ class BmpPersistenceStore {
         addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
         addFilter('s.scope_state = @scopeState', 'scopeState', query.scopeState);
         const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-        const stateSql = this.buildRouteStateSql();
         const rows = this.db
             .prepare(
                 `
                 SELECT s.scope_id, s.source_id, s.last_connection_id, s.owner_key,
                        s.scope_kind, s.afi, s.safi, s.rib_type, s.scope_state,
                        s.current_epoch, s.eor_epoch, s.stale_reason,
-                       SUM(CASE WHEN r.route_id IS NOT NULL AND ${stateSql} = 'active' THEN 1 ELSE 0 END) AS active,
-                       SUM(CASE WHEN r.route_id IS NOT NULL AND ${stateSql} = 'stale' THEN 1 ELSE 0 END) AS stale,
-                       COUNT(r.route_id) AS total
+                       COALESCE(SUM(CASE
+                           WHEN s.scope_state NOT IN ('stale', 'down')
+                            AND count.explicit_state <> 'stale'
+                            AND count.connection_id = s.last_connection_id
+                            AND count.rib_epoch >= s.current_epoch
+                           THEN count.route_count ELSE 0
+                       END), 0) AS active,
+                       COALESCE(SUM(count.route_count), 0) - COALESCE(SUM(CASE
+                           WHEN s.scope_state NOT IN ('stale', 'down')
+                            AND count.explicit_state <> 'stale'
+                            AND count.connection_id = s.last_connection_id
+                            AND count.rib_epoch >= s.current_epoch
+                           THEN count.route_count ELSE 0
+                       END), 0) AS stale,
+                       COALESCE(SUM(count.route_count), 0) AS total
                   FROM bmp_rib_scopes s
-                  LEFT JOIN bmp_current_routes r ON r.scope_id = s.scope_id
+                  LEFT JOIN bmp_scope_route_counts count ON count.scope_id = s.scope_id
                   ${whereSql}
                  GROUP BY s.scope_id
                  ORDER BY s.scope_id
@@ -2159,6 +2715,7 @@ class BmpPersistenceStore {
         const eventAtMs = finiteNumber(query.eventAtMs, Date.now());
         const reason = query.reason || 'manual-stale-purge';
         const batchId = `manual-purge-${eventAtMs}-${crypto.randomBytes(8).toString('hex')}`;
+        const currentRoutesSql = `(${buildExpandedCurrentRoutesSql(this.resolveQueryPartitions(query))})`;
 
         const purge = this.db.transaction(() => {
             const rows = this.db
@@ -2175,7 +2732,7 @@ class BmpPersistenceStore {
                            conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
                            conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,
                            ${this.buildRouteStateSql()} AS effective_state
-                      FROM bmp_current_routes r
+                      FROM ${currentRoutesSql} r
                       JOIN bmp_rib_scopes s ON s.scope_id = r.scope_id
                       JOIN bmp_sources src ON src.source_id = s.source_id
                       JOIN bmp_connections conn ON conn.connection_id = r.connection_id
@@ -2188,9 +2745,6 @@ class BmpPersistenceStore {
                 .all({ ...params, limit: routeLimit + 1 });
             const hasMore = rows.length > routeLimit;
             const candidates = hasMore ? rows.slice(0, routeLimit) : rows;
-            const deleteRoute = this.db.prepare(
-                'DELETE FROM bmp_current_routes WHERE scope_id = @scopeId AND route_id = @routeId'
-            );
             const minimumSequence = this.db.prepare(`
                 SELECT MIN(source_sequence) AS value
                   FROM bmp_route_events
@@ -2211,7 +2765,11 @@ class BmpPersistenceStore {
             };
             const deletedRows = [];
             candidates.forEach(row => {
-                const result = deleteRoute.run({ scopeId: row.scope_id, routeId: row.route_id });
+                const partition = getBmpRoutePartitionById(row.partition_id);
+                const result = this.getPartitionStatements(partition).deleteRoute.run({
+                    scopeId: row.scope_id,
+                    routePk: row.route_pk
+                });
                 if (result.changes > 0) {
                     const eventResult = this.statements.insertEvent.run({
                         batchId,
@@ -2219,18 +2777,15 @@ class BmpPersistenceStore {
                         connectionId: row.last_connection_id,
                         sequence: takeSyntheticSequence(row.last_connection_id),
                         scopeId: row.scope_id,
-                        routeId: row.route_id,
+                        partitionId: row.partition_id,
+                        routePk: row.route_pk,
+                        payloadId: row.payload_id,
                         eventType: 'purge',
                         eventAtMs,
                         sourceTimestampMs: null,
                         epoch: row.current_epoch,
                         attrId: row.attr_id || null,
-                        reason,
-                        afi: row.afi,
-                        safi: row.safi,
-                        prefix: row.prefix || null,
-                        legacyRouteKey: row.legacy_route_key || null,
-                        routeJson: row.route_json
+                        reason
                     });
                     deletedRows.push({ ...row, purge_event_id: Number(eventResult.lastInsertRowid) });
                 }
@@ -2289,6 +2844,118 @@ class BmpPersistenceStore {
         };
     }
 
+    purgeSource(query = {}) {
+        if (this.readOnly) {
+            throw new Error('Cannot purge a source from a read-only BMP persistence store');
+        }
+        if (!this.db) {
+            this.open();
+        }
+
+        const sourceId = typeof query.sourceId === 'string' ? query.sourceId.trim().toLowerCase() : '';
+        if (!/^[0-9a-f]{64}$/.test(sourceId)) {
+            const error = new Error('BMP persistence sourceId must be a 64-character hexadecimal value');
+            error.code = 'BMP_PERSISTENCE_INVALID_SOURCE_ID';
+            throw error;
+        }
+
+        const purge = this.db.transaction(() => {
+            const params = { sourceId };
+            const counts = {
+                sources: 0,
+                connections: 0,
+                scopes: 0,
+                currentRoutes: 0,
+                routeEvents: 0,
+                statisticsSamples: 0,
+                statisticsLatest: 0,
+                routeAttributes: 0,
+                ingestBatches: 0,
+                routeIdentities: 0,
+                routePayloads: 0
+            };
+            const exists = this.db.prepare('SELECT 1 FROM bmp_sources WHERE source_id = @sourceId LIMIT 1').get(params);
+            if (!exists) {
+                return { sourceId, deleted: false, counts };
+            }
+
+            const targetScopeIds = 'SELECT scope_id FROM bmp_rib_scopes WHERE source_id = @sourceId';
+            const targetConnectionIds = 'SELECT connection_id FROM bmp_connections WHERE source_id = @sourceId';
+            const sourcePartitions = this.db
+                .prepare('SELECT DISTINCT partition_id FROM bmp_rib_scopes WHERE source_id = @sourceId')
+                .all(params)
+                .map(row => getBmpRoutePartitionById(row.partition_id));
+            const remove = sql => this.db.prepare(sql).run(params).changes;
+
+            counts.statisticsLatest = remove(
+                `DELETE FROM bmp_statistics_latest
+                  WHERE source_id = @sourceId
+                     OR sample_id IN (
+                         SELECT sample_id
+                           FROM bmp_statistics_samples
+                          WHERE source_id = @sourceId
+                             OR scope_id IN (${targetScopeIds})
+                             OR connection_id IN (${targetConnectionIds})
+                     )`
+            );
+            sourcePartitions.forEach(partition => {
+                counts.currentRoutes += remove(
+                    `DELETE FROM ${partition.quotedTableName}
+                      WHERE scope_id IN (${targetScopeIds})`
+                );
+            });
+            counts.statisticsSamples = remove(
+                `DELETE FROM bmp_statistics_samples
+                  WHERE source_id = @sourceId
+                     OR scope_id IN (${targetScopeIds})
+                     OR connection_id IN (${targetConnectionIds})`
+            );
+            counts.routeEvents = remove(
+                `DELETE FROM bmp_route_events
+                  WHERE source_id = @sourceId
+                     OR scope_id IN (${targetScopeIds})
+                     OR connection_id IN (${targetConnectionIds})`
+            );
+            counts.scopes = remove('DELETE FROM bmp_rib_scopes WHERE source_id = @sourceId');
+            counts.connections = remove('DELETE FROM bmp_connections WHERE source_id = @sourceId');
+            counts.sources = remove('DELETE FROM bmp_sources WHERE source_id = @sourceId');
+
+            counts.routeAttributes = this.db
+                .prepare(
+                    `DELETE FROM bmp_route_attributes
+                      WHERE current_ref_count = 0 AND event_ref_count = 0`
+                )
+                .run().changes;
+            counts.routePayloads = this.db
+                .prepare(
+                    `DELETE FROM bmp_route_payloads
+                      WHERE current_ref_count = 0 AND event_ref_count = 0`
+                )
+                .run().changes;
+            counts.routeIdentities = this.db
+                .prepare(
+                    `DELETE FROM bmp_route_identities
+                      WHERE current_ref_count = 0 AND event_ref_count = 0`
+                )
+                .run().changes;
+            counts.ingestBatches = this.db
+                .prepare(
+                    `
+                DELETE FROM bmp_ingest_batches
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM bmp_route_events event
+                        WHERE event.batch_id = bmp_ingest_batches.batch_id
+                   )
+            `
+                )
+                .run().changes;
+
+            return { sourceId, deleted: counts.sources > 0, counts };
+        });
+
+        return purge();
+    }
+
     queryStatisticsReports(query = {}) {
         if (!this.db) {
             this.open();
@@ -2334,17 +3001,40 @@ class BmpPersistenceStore {
         };
         addFilter('e.source_id = @sourceId', 'sourceId', query.sourceId);
         addFilter('e.scope_id = @scopeId', 'scopeId', query.scopeId);
-        addFilter('e.route_id = @routeId', 'routeId', query.routeId);
+        addFilter('identity.route_id = @routeId', 'routeId', query.routeId);
         addFilter('e.event_type = @eventType', 'eventType', query.eventType);
         addFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
-        addFilter('e.afi = @afi', 'afi', finiteNumber(query.afi));
-        addFilter('e.safi = @safi', 'safi', finiteNumber(query.safi));
+        addFilter('COALESCE(identity.afi, s.afi) = @afi', 'afi', finiteNumber(query.afi));
+        addFilter('COALESCE(identity.safi, s.safi) = @safi', 'safi', finiteNumber(query.safi));
         addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
-        addFilter('e.legacy_route_key = @legacyRouteKey', 'legacyRouteKey', query.legacyRouteKey || query.routeKey);
+        const eventPartitionQuery = {};
+        if (query.scopeKind !== undefined && query.scopeKind !== null && query.scopeKind !== '') {
+            eventPartitionQuery.scopeKind = query.scopeKind;
+        }
+        if (finiteNumber(query.afi) !== null) {
+            eventPartitionQuery.afi = Number(query.afi);
+        }
+        if (finiteNumber(query.safi) !== null) {
+            eventPartitionQuery.safi = Number(query.safi);
+        }
+        if (Object.keys(eventPartitionQuery).length > 0) {
+            const eventPartitions = selectBmpRoutePartitions(eventPartitionQuery);
+            const placeholders = eventPartitions.map((partition, index) => {
+                const name = `eventPartition${index}`;
+                params[name] = partition.partitionId;
+                return `@${name}`;
+            });
+            where.push(`e.partition_id IN (${placeholders.join(', ')})`);
+        }
+        addFilter(
+            'identity.legacy_route_key = @legacyRouteKey',
+            'legacyRouteKey',
+            query.legacyRouteKey || query.routeKey
+        );
         if (query.prefix) {
             params.prefixStart = String(query.prefix);
             params.prefixEnd = `${params.prefixStart}\uffff`;
-            where.push('e.prefix >= @prefixStart AND e.prefix < @prefixEnd');
+            where.push('identity.prefix >= @prefixStart AND identity.prefix < @prefixEnd');
         }
         if (finiteNumber(query.fromMs) !== null) {
             where.push('e.observed_at_ms >= @fromMs');
@@ -2376,6 +3066,7 @@ class BmpPersistenceStore {
                       SELECT COUNT(*) AS total
                         FROM bmp_route_events e
                         LEFT JOIN bmp_rib_scopes s ON s.scope_id = e.scope_id
+                        LEFT JOIN bmp_route_identities identity ON identity.route_pk = e.route_pk
                         ${countWhereSql}
                   `
                       )
@@ -2384,11 +3075,19 @@ class BmpPersistenceStore {
             const rows = this.db
                 .prepare(
                     `
-                SELECT e.*, src.remote_ip, src.sys_name, s.scope_kind, s.scope_identity_json,
-                       e.afi, e.safi, s.rib_type, event_attr.attr_json AS attr_json
+                SELECT e.*, identity.route_id,
+                       COALESCE(identity.afi, s.afi) AS afi,
+                       COALESCE(identity.safi, s.safi) AS safi,
+                       identity.path_id, identity.rd, identity.prefix, identity.prefix_length,
+                       identity.nlri_json, identity.legacy_route_key,
+                       payload.route_json,
+                       src.remote_ip, src.sys_name, s.scope_kind, s.scope_identity_json,
+                       s.rib_type, event_attr.attr_json AS attr_json
                   FROM bmp_route_events e
                   JOIN bmp_sources src ON src.source_id = e.source_id
                   LEFT JOIN bmp_rib_scopes s ON s.scope_id = e.scope_id
+                  LEFT JOIN bmp_route_identities identity ON identity.route_pk = e.route_pk
+                  LEFT JOIN bmp_route_payloads payload ON payload.payload_id = e.payload_id
                   LEFT JOIN bmp_route_attributes event_attr ON event_attr.attr_id = e.attr_id
                   ${whereSql}
                  ORDER BY e.observed_at_ms DESC, e.event_id DESC
@@ -2418,14 +3117,7 @@ class BmpPersistenceStore {
                 ribEpoch: row.rib_epoch,
                 attrId: row.attr_id,
                 reason: row.reason,
-                route:
-                    row.route_json === null
-                        ? null
-                        : {
-                              ...parseJson(row.route_json, {}),
-                              ...parseJson(row.attr_json, {}),
-                              attrId: row.attr_id || ''
-                          },
+                route: row.route_json === null ? null : buildStoredRouteProjection(row),
                 source: { remoteIp: row.remote_ip, sysName: row.sys_name },
                 scope: {
                     kind: row.scope_kind,
@@ -2472,7 +3164,9 @@ class BmpPersistenceStore {
                   sources: this.db.prepare('SELECT COUNT(*) AS count FROM bmp_sources').get().count,
                   connections: this.db.prepare('SELECT COUNT(*) AS count FROM bmp_connections').get().count,
                   scopes: this.db.prepare('SELECT COUNT(*) AS count FROM bmp_rib_scopes').get().count,
-                  currentRoutes: this.db.prepare('SELECT COUNT(*) AS count FROM bmp_current_routes').get().count,
+                  currentRoutes: this.db
+                      .prepare('SELECT COALESCE(SUM(route_count), 0) AS count FROM bmp_scope_route_counts')
+                      .get().count,
                   routeEvents: this.db.prepare('SELECT COUNT(*) AS count FROM bmp_route_events').get().count
               }
             : {
@@ -2517,55 +3211,66 @@ class BmpPersistenceStore {
         const eventsBeforeMs = finiteNumber(options.eventsBeforeMs, Date.now() - 7 * 24 * 60 * 60 * 1000);
         const refreshTimeoutBeforeMs = finiteNumber(options.refreshTimeoutBeforeMs, Date.now() - 10 * 60 * 1000);
         const result = this.db.transaction(() => {
-            const routes = this.db
+            const candidateScopes = this.db
                 .prepare(
                     `
-                    WITH candidate_scopes(scope_id) AS MATERIALIZED (
-                        SELECT scope_id
-                          FROM bmp_rib_scopes
-                         WHERE cleanup_pending_epoch IS NOT NULL
-                        UNION
-                        SELECT scope_id
-                          FROM bmp_rib_scopes
-                         WHERE scope_state = 'syncing'
-                           AND refresh_started_ms <= @refreshTimeoutBeforeMs
-                        UNION
-                        SELECT scope_id
-                          FROM bmp_rib_scopes
-                         WHERE scope_state IN ('stale', 'down')
-                           AND stale_since_ms <= @staleBeforeMs
-                    )
-                    DELETE FROM bmp_current_routes
-                     WHERE (scope_id, route_id) IN (
-                         SELECT r.scope_id, r.route_id
-                           FROM candidate_scopes candidate
-                           JOIN bmp_rib_scopes s ON s.scope_id = candidate.scope_id
-                           JOIN bmp_current_routes r ON r.scope_id = candidate.scope_id
-                          WHERE (
-                              (
-                                  (
-                                      s.cleanup_pending_epoch >= s.current_epoch
-                                      OR (
-                                          s.scope_state = 'syncing'
-                                          AND s.refresh_started_ms <= @refreshTimeoutBeforeMs
-                                      )
-                                  )
-                                  AND (
-                                      r.rib_epoch < s.current_epoch
-                                      OR r.connection_id <> s.last_connection_id
-                                  )
-                              )
-                              OR (
-                                  s.scope_state IN ('stale', 'down')
-                                  AND s.stale_since_ms <= @staleBeforeMs
-                              )
-                          )
-                          ORDER BY r.scope_id, r.route_id
-                          LIMIT @routeLimit
-                     )
+                    SELECT scope_id, partition_id, last_connection_id, current_epoch,
+                           CASE
+                               WHEN scope_state IN ('stale', 'down')
+                                AND stale_since_ms <= @staleBeforeMs
+                               THEN 1 ELSE 0
+                           END AS purge_all
+                      FROM bmp_rib_scopes
+                     WHERE cleanup_pending_epoch >= current_epoch
+                        OR (
+                            scope_state = 'syncing'
+                            AND refresh_started_ms <= @refreshTimeoutBeforeMs
+                        )
+                        OR (
+                            scope_state IN ('stale', 'down')
+                            AND stale_since_ms <= @staleBeforeMs
+                        )
+                     ORDER BY scope_id
                 `
                 )
-                .run({ staleBeforeMs, refreshTimeoutBeforeMs, routeLimit }).changes;
+                .all({ staleBeforeMs, refreshTimeoutBeforeMs });
+            const candidateStatements = new Map();
+            let routes = 0;
+            for (const scope of candidateScopes) {
+                if (routes >= routeLimit) {
+                    break;
+                }
+                const partition = getBmpRoutePartitionById(scope.partition_id);
+                let selectCandidates = candidateStatements.get(partition.partitionId);
+                if (!selectCandidates) {
+                    selectCandidates = this.db.prepare(`
+                        SELECT route_pk
+                          FROM ${partition.quotedTableName}
+                         WHERE scope_id = @scopeId
+                           AND (
+                               @purgeAll = 1
+                               OR rib_epoch < @currentEpoch
+                               OR connection_id IS NOT @lastConnectionId
+                           )
+                         ORDER BY route_pk
+                         LIMIT @limit
+                    `);
+                    candidateStatements.set(partition.partitionId, selectCandidates);
+                }
+                const candidates = selectCandidates.all({
+                    scopeId: scope.scope_id,
+                    purgeAll: scope.purge_all,
+                    currentEpoch: scope.current_epoch,
+                    lastConnectionId: scope.last_connection_id,
+                    limit: routeLimit - routes
+                });
+                candidates.forEach(candidate => {
+                    routes += this.getPartitionStatements(partition).deleteRoute.run({
+                        scopeId: scope.scope_id,
+                        routePk: candidate.route_pk
+                    }).changes;
+                });
+            }
             const finalizedCleanupScopes = this.db
                 .prepare(
                     `
@@ -2575,11 +3280,11 @@ class BmpPersistenceStore {
                        AND scope.cleanup_pending_epoch IS NOT NULL
                        AND NOT EXISTS (
                            SELECT 1
-                             FROM bmp_current_routes route
-                            WHERE route.scope_id = scope.scope_id
+                             FROM bmp_scope_route_counts count
+                            WHERE count.scope_id = scope.scope_id
                               AND (
-                                  route.connection_id <> scope.last_connection_id
-                                  OR route.rib_epoch < scope.current_epoch
+                                  count.connection_id IS NOT scope.last_connection_id
+                                  OR count.rib_epoch < scope.current_epoch
                               )
                        )
                 `
@@ -2596,11 +3301,11 @@ class BmpPersistenceStore {
                        AND scope.refresh_started_ms <= @refreshTimeoutBeforeMs
                        AND NOT EXISTS (
                            SELECT 1
-                             FROM bmp_current_routes route
-                            WHERE route.scope_id = scope.scope_id
+                             FROM bmp_scope_route_counts count
+                            WHERE count.scope_id = scope.scope_id
                               AND (
-                                  route.connection_id <> scope.last_connection_id
-                                  OR route.rib_epoch < scope.current_epoch
+                                  count.connection_id IS NOT scope.last_connection_id
+                                  OR count.rib_epoch < scope.current_epoch
                               )
                        )
                 `
@@ -2613,10 +3318,6 @@ class BmpPersistenceStore {
                      WHERE event_id IN (
                         SELECT event_id FROM bmp_route_events
                           WHERE observed_at_ms <= @eventsBeforeMs
-                            AND NOT EXISTS (
-                                SELECT 1 FROM bmp_current_routes r
-                                 WHERE r.last_event_id = bmp_route_events.event_id
-                            )
                           ORDER BY observed_at_ms, event_id
                           LIMIT @eventLimit
                      )
@@ -2645,9 +3346,14 @@ class BmpPersistenceStore {
                     `
                     DELETE FROM bmp_ingest_batches
                      WHERE batch_id IN (
-                        SELECT batch_id FROM bmp_ingest_batches
-                         WHERE created_at_ms <= @eventsBeforeMs
-                         ORDER BY created_at_ms
+                        SELECT batch.batch_id FROM bmp_ingest_batches batch
+                         WHERE batch.created_at_ms <= @eventsBeforeMs
+                           AND NOT EXISTS (
+                               SELECT 1
+                                 FROM bmp_route_events event
+                                WHERE event.batch_id = batch.batch_id
+                           )
+                         ORDER BY batch.created_at_ms
                          LIMIT @auxiliaryLimit
                      )
                 `
@@ -2661,15 +3367,41 @@ class BmpPersistenceStore {
                         SELECT attr.attr_id
                           FROM bmp_route_attributes attr
                          WHERE attr.last_seen_ms <= @eventsBeforeMs
-                           AND NOT EXISTS (
-                               SELECT 1 FROM bmp_current_routes route
-                                WHERE route.attr_id = attr.attr_id
-                           )
-                           AND NOT EXISTS (
-                               SELECT 1 FROM bmp_route_events event
-                                WHERE event.attr_id = attr.attr_id
-                           )
+                           AND attr.current_ref_count = 0
+                           AND attr.event_ref_count = 0
                          ORDER BY attr.last_seen_ms
+                         LIMIT @auxiliaryLimit
+                     )
+                `
+                )
+                .run({ eventsBeforeMs, auxiliaryLimit }).changes;
+            const payloads = this.db
+                .prepare(
+                    `
+                    DELETE FROM bmp_route_payloads
+                     WHERE payload_id IN (
+                        SELECT payload_id
+                          FROM bmp_route_payloads
+                         WHERE last_seen_ms <= @eventsBeforeMs
+                           AND current_ref_count = 0
+                           AND event_ref_count = 0
+                         ORDER BY last_seen_ms, payload_id
+                         LIMIT @auxiliaryLimit
+                     )
+                `
+                )
+                .run({ eventsBeforeMs, auxiliaryLimit }).changes;
+            const identities = this.db
+                .prepare(
+                    `
+                    DELETE FROM bmp_route_identities
+                     WHERE route_pk IN (
+                        SELECT route_pk
+                          FROM bmp_route_identities
+                         WHERE last_seen_ms <= @eventsBeforeMs
+                           AND current_ref_count = 0
+                           AND event_ref_count = 0
+                         ORDER BY last_seen_ms, route_pk
                          LIMIT @auxiliaryLimit
                      )
                 `
@@ -2681,6 +3413,8 @@ class BmpPersistenceStore {
                 statistics,
                 batches,
                 attributes,
+                payloads,
+                identities,
                 finalizedCleanupScopes,
                 refreshTimeoutScopes,
                 effectiveLimits: { routeLimit, eventLimit, auxiliaryLimit },
@@ -2689,7 +3423,9 @@ class BmpPersistenceStore {
                     events >= eventLimit ||
                     statistics >= auxiliaryLimit ||
                     batches >= auxiliaryLimit ||
-                    attributes >= auxiliaryLimit
+                    attributes >= auxiliaryLimit ||
+                    payloads >= auxiliaryLimit ||
+                    identities >= auxiliaryLimit
             };
         })();
         return result;
@@ -2716,6 +3452,7 @@ class BmpPersistenceStore {
         this.db.close();
         this.db = null;
         this.statements = null;
+        this.partitionStatements = null;
         this.sqlTrace = null;
     }
 }

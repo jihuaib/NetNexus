@@ -1,6 +1,5 @@
 const fs = require('fs');
 const { once } = require('events');
-const readline = require('readline');
 const path = require('path');
 const ipaddr = require('ipaddr.js');
 const BgpConst = require('../const/bgpConst');
@@ -20,14 +19,6 @@ const ROA_ARRAY_KEYS = new Set([
     'records',
     'routes'
 ]);
-
-function getRoaDataFilePath(userDataPath) {
-    return path.join(userDataPath, 'rpki-roa.jsonl');
-}
-
-function makeRoaStorageKey(roa) {
-    return `${roa.ip}|${roa.mask}|${roa.asn}|${roa.maxLength}`;
-}
 
 function pickField(object, names) {
     for (const name of names) {
@@ -221,11 +212,7 @@ async function closeWriteStream(stream) {
     });
 }
 
-async function closeReadStream(input, rl = null) {
-    if (rl) {
-        rl.close();
-    }
-
+async function closeReadStream(input) {
     if (!input || input.closed) {
         return;
     }
@@ -260,94 +247,6 @@ async function renameWithRetry(sourcePath, targetPath, options = {}) {
             }
             await delay(delayMs * (attempt + 1));
         }
-    }
-}
-
-async function* iterateJsonlRoas(filePath) {
-    if (!(await fileExists(filePath))) {
-        return;
-    }
-
-    const input = fs.createReadStream(filePath, { encoding: 'utf8' });
-    const rl = readline.createInterface({
-        input,
-        crlfDelay: Infinity
-    });
-
-    try {
-        for await (const line of rl) {
-            const trimmed = line.trim();
-            if (!trimmed) {
-                continue;
-            }
-            const parsed = safeJsonParse(trimmed);
-            const roa = normalizeRoaObject(parsed);
-            if (roa) {
-                yield roa;
-            }
-        }
-    } finally {
-        await closeReadStream(input, rl);
-    }
-}
-
-async function readJsonlPage(filePath, page, pageSize) {
-    const safePage = Math.max(1, Number(page) || 1);
-    const safePageSize = Math.min(1000, Math.max(1, Number(pageSize) || 10));
-    const startIndex = (safePage - 1) * safePageSize;
-    const endIndex = startIndex + safePageSize;
-    const items = [];
-    let index = 0;
-
-    for await (const roa of iterateJsonlRoas(filePath)) {
-        if (index >= startIndex && index < endIndex) {
-            items.push(roa);
-        }
-        index += 1;
-        if (index >= endIndex) {
-            break;
-        }
-    }
-
-    return items;
-}
-
-async function countJsonlRows(filePath) {
-    let count = 0;
-    for await (const _roa of iterateJsonlRoas(filePath)) {
-        count += 1;
-    }
-    return count;
-}
-
-async function writeRoasToJsonl(filePath, roas) {
-    await ensureParentDir(filePath);
-    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
-    const seen = new Set();
-    let count = 0;
-
-    try {
-        for (const item of roas || []) {
-            const roa = normalizeRoaObject(item);
-            if (!roa) {
-                continue;
-            }
-            const key = makeRoaStorageKey(roa);
-            if (seen.has(key)) {
-                continue;
-            }
-            seen.add(key);
-            await writeLine(stream, JSON.stringify(roa));
-            count += 1;
-        }
-        await closeWriteStream(stream);
-        await renameWithRetry(tempPath, filePath);
-        return count;
-    } catch (error) {
-        stream.destroy();
-        await fs.promises.unlink(tempPath).catch(() => {});
-        throw error;
     }
 }
 
@@ -524,7 +423,7 @@ async function parseRoaJsonFile(filePath, onRoa) {
         await closeReadStream(input);
     }
 
-    if (!stopped && (collecting || inString || collectInString)) {
+    if (!stopped && (collecting || inString || collectInString || stack.length > 0)) {
         throw new Error('ROA JSON文件不完整或格式错误');
     }
 
@@ -532,17 +431,11 @@ async function parseRoaJsonFile(filePath, onRoa) {
 }
 
 module.exports = {
-    getRoaDataFilePath,
-    makeRoaStorageKey,
     normalizeRoaObject,
     fileExists,
     ensureParentDir,
     writeLine,
     closeWriteStream,
     renameWithRetry,
-    iterateJsonlRoas,
-    readJsonlPage,
-    countJsonlRows,
-    writeRoasToJsonl,
     parseRoaJsonFile
 };

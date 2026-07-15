@@ -535,6 +535,21 @@ test.describe('Custom UI component interactions', () => {
         await expect.soft(mibFileName).toHaveCSS('line-height', '18.2px');
     });
 
+    test('uses compact typography for BGP neighbor lists', async ({ page }) => {
+        await installLayoutApiFallbacks(page);
+        await page.goto('/#/bgp/bgp-peer-config');
+
+        await page.getByRole('tab', { name: 'IPv4-QP邻居', exact: true }).click();
+        const qpPanel = page.getByRole('tabpanel', { name: 'IPv4-QP邻居' });
+        const qpHeader = qpPanel.getByText('IPv4-QP邻居列表', { exact: true });
+        const qpTable = page.getByTestId('bgp-ipv4-qp-peer-table');
+
+        await expect(qpPanel).toBeVisible();
+        await expect(qpHeader).toHaveCSS('font-size', '12px');
+        await expect(qpHeader).toHaveCSS('line-height', '18px');
+        await expect(qpTable.locator('.nn-table')).toHaveCSS('font-size', '12px');
+    });
+
     test('uses a light themed receive panel for TCP and UDP', async ({ page }) => {
         for (const [route, panelSelector] of [
             ['/#/tools/tcp-tool', '.tcp-log-list'],

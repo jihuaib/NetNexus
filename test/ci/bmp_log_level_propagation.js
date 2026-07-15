@@ -5,6 +5,7 @@ const { Worker } = require('node:worker_threads');
 
 const BmpApp = require('../../electron/app/bmpApp');
 const { LOG_REQ_TYPES } = require('../../electron/const/toolsConst');
+const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
 const BmpWorker = loadBmpWorkerClass(__dirname, module);
@@ -138,7 +139,11 @@ async function testBmpWorkerPropagation() {
     const forwarded = [];
     const writer = {
         async open() {
-            return { schemaVersion: 8, journalMode: 'wal', dbPath: worker.bmpConfigData.persistenceDbPath };
+            return {
+                schemaVersion: BmpPersistenceStore.SCHEMA_VERSION,
+                journalMode: 'wal',
+                dbPath: worker.bmpConfigData.persistenceDbPath
+            };
         },
         async setLogLevel(logLevel) {
             forwarded.push(['writer', logLevel]);
@@ -186,16 +191,10 @@ async function testBmpAppOfflinePropagation() {
 
     const created = [];
     app.createPersistenceClient = options => {
-        const index = created.length;
         const client = {
             options,
             async open() {
-                if (index === 0) {
-                    const error = new Error('migration required');
-                    error.code = 'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED';
-                    throw error;
-                }
-                return { ready: true };
+                return { schemaVersion: BmpPersistenceStore.SCHEMA_VERSION };
             },
             async close() {}
         };
@@ -204,14 +203,14 @@ async function testBmpAppOfflinePropagation() {
     };
 
     const reader = await app.openOfflinePersistenceReader();
-    assert.equal(reader, created[2]);
+    assert.equal(reader, created[0]);
     assert.deepEqual(
         created.map(client => client.options.readOnly === true),
-        [true, false, true]
+        [true]
     );
     assert.deepEqual(
         created.map(client => client.options.logLevel),
-        ['debug', 'debug', 'debug']
+        ['debug']
     );
 
     const forwarded = [];
@@ -230,6 +229,34 @@ async function testBmpAppOfflinePropagation() {
         }
     };
     await assert.doesNotReject(app.handleLogLevelChange('warn'));
+
+    const incompatibleApp = Object.create(BmpApp.prototype);
+    incompatibleApp.persistenceDbPath = '/tmp/netnexus-bmp-offline-incompatible.sqlite3';
+    incompatibleApp.logLevel = 'debug';
+    incompatibleApp.offlinePersistenceReader = null;
+    incompatibleApp.offlinePersistenceOpenPromise = null;
+    const incompatibleClients = [];
+    incompatibleApp.createPersistenceClient = options => {
+        const client = {
+            options,
+            async open() {
+                const error = new Error('schema incompatible');
+                error.code = 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE';
+                throw error;
+            },
+            async close() {}
+        };
+        incompatibleClients.push(client);
+        return client;
+    };
+    await assert.rejects(
+        incompatibleApp.openOfflinePersistenceReader(),
+        error => error.code === 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE'
+    );
+    assert.equal(incompatibleClients.length, 1, 'an incompatible database must not start an in-process migrator');
+    assert.equal(incompatibleClients[0].options.readOnly, true);
+    assert.equal(incompatibleApp.offlinePersistenceReader, null);
+    assert.equal(incompatibleApp.offlinePersistenceOpenPromise, null);
 }
 
 async function testSystemAppHook() {

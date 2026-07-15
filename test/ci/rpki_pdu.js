@@ -9,6 +9,7 @@
  */
 
 const path = require('path');
+const { EventEmitter } = require('events');
 
 // 静默 logger（避免写文件副作用）
 process.env.NODE_ENV = 'test';
@@ -25,6 +26,7 @@ let passed = 0;
 let failed = 0;
 const failures = [];
 const asyncChecks = [];
+const ASYNC_CHECK_TIMEOUT_MS = 5000;
 
 function assert(cond, label) {
     if (cond) {
@@ -55,14 +57,20 @@ function assertBufEq(actualBuf, expectedHex, label) {
     assert(ok, label);
 }
 
-function assertThrows(fn, label) {
-    let threw = false;
-    try {
-        fn();
-    } catch (_err) {
-        threw = true;
+function splitWrittenPdus(writes) {
+    const pdus = [];
+    for (const write of writes) {
+        let offset = 0;
+        while (offset + RpkiConst.RPKI_HEADER_LENGTH <= write.length) {
+            const length = write.readUInt32BE(offset + 4);
+            if (length < RpkiConst.RPKI_HEADER_LENGTH || offset + length > write.length) {
+                break;
+            }
+            pdus.push(write.subarray(offset, offset + length));
+            offset += length;
+        }
     }
-    assert(threw, label);
+    return pdus;
 }
 
 function section(name) {
@@ -70,12 +78,21 @@ function section(name) {
 }
 
 function scheduleAsyncCheck(label, promise) {
+    let timeout;
+    const timeoutPromise = new Promise((resolve, reject) => {
+        timeout = setTimeout(
+            () => reject(new Error(`timed out after ${ASYNC_CHECK_TIMEOUT_MS}ms`)),
+            ASYNC_CHECK_TIMEOUT_MS
+        );
+    });
     asyncChecks.push(
-        promise.catch(err => {
-            failed++;
-            failures.push(`${label}: ${err.message}`);
-            console.log(`  ✗ ${label}: ${err.message}`);
-        })
+        Promise.race([promise, timeoutPromise])
+            .catch(err => {
+                failed++;
+                failures.push(`${label}: ${err.message}`);
+                console.log(`  ✗ ${label}: ${err.message}`);
+            })
+            .finally(() => clearTimeout(timeout))
     );
 }
 
@@ -87,10 +104,26 @@ function makeMockSession(version = RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
         sendEvent: (type, payload) => sentEvents.push({ type, payload })
     };
     const rpkiWorker = {
-        rpkiRoaMap: new Map(),
         rpkiRouterKeyMap: new Map(),
-        rpkiAspaMap: new Map(),
-        cacheSerial: 1
+        cacheSerial: 1,
+        snapshotSerial: null,
+        snapshotRoas: [],
+        snapshotAspas: [],
+        createDataSnapshot() {
+            return {
+                cacheSerial: this.snapshotSerial ?? this.cacheSerial,
+                roas: this.snapshotRoas,
+                aspas: this.snapshotAspas,
+                routerKeys: Array.from(this.rpkiRouterKeyMap.values())
+            };
+        },
+        iterateRoas(snapshot) {
+            return snapshot.roas;
+        },
+        iterateAspas(snapshot) {
+            return snapshot.aspas;
+        },
+        closeDataSnapshot() {}
     };
     const session = new RpkiSession(messageHandler, rpkiWorker);
     const socket = {
@@ -418,7 +451,14 @@ section('Version negotiation - handleResetQuery (RFC 8210 §7)');
     session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
     session.handleResetQuery({ version: 0, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
     assertEq(session.protocolVersion, 0, 'Negotiated to v0 for v0 client');
-    assert(sentBuffers.length >= 2, 'Cache Response + End of Data sent for v0');
+    scheduleAsyncCheck(
+        'v0 Reset Query async snapshot response',
+        session.sendQueue.then(() => {
+            assertEq(sentBuffers.length, 2, 'Cache Response + End of Data sent for v0');
+            assertEq(sentBuffers[0][1], RpkiConst.RPKI_MSG_TYPE.CACHE_RESPONSE, 'v0 reset starts with Cache Response');
+            assertEq(sentBuffers[1][1], RpkiConst.RPKI_MSG_TYPE.END_OF_DATA, 'v0 reset ends with End of Data');
+        })
+    );
 }
 {
     // v1 client → server accepts, sends Router Keys
@@ -427,21 +467,35 @@ section('Version negotiation - handleResetQuery (RFC 8210 §7)');
     session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
     session.handleResetQuery({ version: 1, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
     assertEq(session.protocolVersion, 1, 'Negotiated to v1');
-    const hasRouterKey = sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ROUTER_KEY);
-    assert(hasRouterKey, 'Router Key PDU sent for v1 client');
+    scheduleAsyncCheck(
+        'v1 Reset Query async Router Key response',
+        session.sendQueue.then(() => {
+            const hasRouterKey = sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ROUTER_KEY);
+            assert(hasRouterKey, 'Router Key PDU sent for v1 client');
+        })
+    );
 }
 {
     // v2 client → server accepts, sends Router Keys + ASPA
     const { session, sentBuffers, rpkiWorker } = makeMockSession();
-    rpkiWorker.rpkiAspaMap.set('b', new RpkiAspa(65002, [65003], 0));
-    rpkiWorker.rpkiAspaMap.set('a', new RpkiAspa(65000, [65001], 0));
+    rpkiWorker.snapshotSerial = 77;
+    rpkiWorker.snapshotAspas.push(new RpkiAspa(65002, [65003], 0));
+    rpkiWorker.snapshotAspas.push(new RpkiAspa(65000, [65001], 0));
     session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
     session.handleResetQuery({ version: 2, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
     assertEq(session.protocolVersion, 2, 'Negotiated to v2');
-    const aspaPdus = sentBuffers.filter(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA);
-    assertEq(aspaPdus.length, 2, 'ASPA PDUs sent for v2 client');
-    assertEq(aspaPdus[0].readUInt32BE(8), 65002, 'ASPA PDUs preserve insertion order');
-    assertEq(aspaPdus[1].readUInt32BE(8), 65000, 'ASPA PDUs do not sort by Customer ASN');
+    scheduleAsyncCheck(
+        'v2 Reset Query SQLite snapshot response',
+        session.sendQueue.then(() => {
+            const responsePdus = splitWrittenPdus(sentBuffers);
+            const aspaPdus = responsePdus.filter(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA);
+            assertEq(aspaPdus.length, 2, 'ASPA PDUs sent for v2 client');
+            assertEq(aspaPdus[0].readUInt32BE(8), 65002, 'ASPA PDUs preserve insertion order');
+            assertEq(aspaPdus[1].readUInt32BE(8), 65000, 'ASPA PDUs do not sort by Customer ASN');
+            const endOfData = responsePdus.find(b => b[1] === RpkiConst.RPKI_MSG_TYPE.END_OF_DATA);
+            assertEq(endOfData.readUInt32BE(8), 77, 'End of Data uses the serial captured with the data snapshot');
+        })
+    );
 }
 {
     // v3 client (unsupported) → server rejects with Error Report code=4
@@ -480,15 +534,86 @@ section('Version negotiation - handleResetQuery (RFC 8210 §7)');
     const { session, sentBuffers, rpkiWorker } = makeMockSession();
     rpkiWorker.rpkiConfigData = { maxProtocolVersion: RpkiConst.RPKI_PROTOCOL_VERSION.V1 };
     rpkiWorker.rpkiRouterKeyMap.set('k', new RpkiRouterKey('0123456789ABCDEF0123456789ABCDEF01234567', 100, 'AA'));
-    rpkiWorker.rpkiAspaMap.set('a', new RpkiAspa(65000, [65001], 0));
+    rpkiWorker.snapshotAspas.push(new RpkiAspa(65000, [65001], 0));
     session.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
     session.handleResetQuery({ version: 1, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
     assertEq(session.protocolVersion, 1, 'Retry with configured max v1 negotiates to v1');
-    assert(
-        sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ROUTER_KEY),
-        'Retry v1 sends Router Key'
+    scheduleAsyncCheck(
+        'configured v1 Reset Query suppresses ASPA asynchronously',
+        session.sendQueue.then(() => {
+            assert(
+                sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ROUTER_KEY),
+                'Retry v1 sends Router Key'
+            );
+            assert(!sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA), 'Retry v1 does not send ASPA');
+        })
     );
-    assert(!sentBuffers.some(b => b[1] === RpkiConst.RPKI_MSG_TYPE.ASPA), 'Retry v1 does not send ASPA');
+}
+
+section('ASPA full-table send honors socket backpressure');
+{
+    const { session, sentBuffers } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    const socket = new EventEmitter();
+    socket.destroyed = false;
+    let writes = 0;
+    socket.write = buffer => {
+        sentBuffers.push(Buffer.from(buffer));
+        writes += 1;
+        if (writes === 1) {
+            setImmediate(() => socket.emit('drain'));
+            return false;
+        }
+        return true;
+    };
+    socket.destroy = () => {
+        socket.destroyed = true;
+    };
+    session.socket = socket;
+
+    scheduleAsyncCheck(
+        'ASPA backpressure drain',
+        session
+            .writeAspaListData(
+                [new RpkiAspa(65000, [65001], 0), new RpkiAspa(65002, [65003], 0)],
+                RpkiConst.RPKI_FLAGS.UPDATE
+            )
+            .then(completed => {
+                assert(completed, 'ASPA full-table send completes after drain');
+                assertEq(writes, 1, 'small ASPA records are written as one bounded chunk');
+                assertEq(sentBuffers[0].length, 32, 'ASPA chunk contains both 16-byte PDUs');
+                assertEq(sentBuffers[0][1], RpkiConst.RPKI_MSG_TYPE.ASPA, 'first ASPA PDU is present in chunk');
+                assertEq(sentBuffers[0][17], RpkiConst.RPKI_MSG_TYPE.ASPA, 'second ASPA PDU is present in chunk');
+            })
+    );
+}
+
+section('Reset snapshot timeout releases slow clients');
+{
+    const { session, rpkiWorker } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    const socket = new EventEmitter();
+    socket.destroyed = false;
+    socket.write = () => false;
+    socket.destroy = () => {
+        if (!socket.destroyed) {
+            socket.destroyed = true;
+            socket.emit('close');
+        }
+    };
+    session.socket = socket;
+    session.getResetSnapshotTimeoutMs = () => 20;
+    let snapshotClosed = false;
+    rpkiWorker.closeDataSnapshot = () => {
+        snapshotClosed = true;
+    };
+
+    session.handleResetQuery({ version: 2, type: 2, reserved: 0, length: 8 }, Buffer.alloc(8));
+    scheduleAsyncCheck(
+        'slow Reset Query snapshot timeout',
+        session.sendQueue.then(() => {
+            assert(socket.destroyed, 'snapshot timeout closes a client that never drains');
+            assert(snapshotClosed, 'snapshot timeout releases the SQLite read snapshot');
+        })
+    );
 }
 
 section('Buffered message reassembly');

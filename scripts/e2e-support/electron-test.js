@@ -86,12 +86,14 @@ if (process.env.E2E_TARGET === 'browser') {
             const testTitle = Array.isArray(testInfo.titlePath)
                 ? testInfo.titlePath.join(' > ')
                 : testInfo.title || 'unknown e2e test';
+            const appEnvironment = { ...process.env };
+            delete appEnvironment.ELECTRON_RUN_AS_NODE;
 
             const electronApp = await electron.launch({
                 executablePath,
                 cwd: projectRoot,
                 env: {
-                    ...process.env,
+                    ...appEnvironment,
                     ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
                     NETNEXUS_E2E: '1',
                     NETNEXUS_E2E_TEST: testTitle

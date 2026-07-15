@@ -44,6 +44,7 @@ class BmpApp {
         this.ipcMain.handle('bmp:startBmp', this.handleStartBmp.bind(this));
         this.ipcMain.handle('bmp:stopBmp', this.handleStopBmp.bind(this));
         this.ipcMain.handle('bmp:getClientList', this.handleGetClientList.bind(this));
+        this.ipcMain.handle('bmp:deleteClientData', this.handleDeleteClientData.bind(this));
         this.ipcMain.handle('bmp:getRouteLens', this.handleGetRouteLens.bind(this));
         this.ipcMain.handle('bmp:getRouteAssurance', this.handleGetRouteAssurance.bind(this));
         this.ipcMain.handle('bmp:setRouteAssuranceEnabled', this.handleSetRouteAssuranceEnabled.bind(this));
@@ -556,6 +557,24 @@ class BmpApp {
             return result;
         } catch (error) {
             logger.error('Error getting client list:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleDeleteClientData(event, request = {}) {
+        if (null === this.worker) {
+            return errorResponse('请先启动 BMP 服务后删除离线客户端');
+        }
+
+        try {
+            const deleteRequest = {
+                sourceId: typeof request?.sourceId === 'string' ? request.sourceId.trim() : '',
+                remoteIp: typeof request?.remoteIp === 'string' ? request.remoteIp.trim() : ''
+            };
+            const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.DELETE_CLIENT_DATA, deleteRequest);
+            return successResponse(result.data, result.msg || 'BMP客户端关联数据删除成功');
+        } catch (error) {
+            logger.error('Error deleting BMP client data:', error.message);
             return errorResponse(error.message);
         }
     }

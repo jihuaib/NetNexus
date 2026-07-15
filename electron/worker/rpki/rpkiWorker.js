@@ -18,14 +18,18 @@ class RpkiWorker {
         this.rpkiConfigData = null; // rpki配置数据
 
         this.rpkiSessionMap = new Map(); // rpki会话map
-        this.rpkiRoaMap = new Map(); // rpki roa map
         this.rpkiRouterKeyMap = new Map(); // rpki router key map (v1+)
-        this.rpkiAspaMap = new Map(); // rpki aspa map (v2+)
+        this.rpkiDatabasePath = null;
+        this.rpkiStore = null;
         this.cacheSerial = 1; // RPKI-RTR cache serial number advertised in Notify/End of Data.
         this.serialHistory = [];
         this.serialHistoryOperationCount = 0;
+        this.serialHistoryBytes = 0;
         this.maxSerialHistoryEntries = 1024;
-        this.maxSerialHistoryOperations = 200000;
+        this.maxSerialHistoryOperations = 10000;
+        this.maxSerialHistoryBytes = 16 * 1024 * 1024;
+        this.activeDataSnapshots = 0;
+        this.maxConcurrentDataSnapshots = 4;
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler();
@@ -51,6 +55,156 @@ class RpkiWorker {
             RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA_BATCH,
             this.deleteAspaBatch.bind(this)
         );
+        this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DATASET_CHANGED, this.datasetChanged.bind(this));
+    }
+
+    getRpkiSqliteStoreClass() {
+        // Load the native dependency lazily so protocol-only unit tests can use
+        // createDataSnapshot()/iterateRoas()/iterateAspas() without opening a DB.
+        return require('./rpkiSqliteStore');
+    }
+
+    normalizeCacheSerial(value, fallback = this.cacheSerial) {
+        const candidate =
+            value && typeof value === 'object' ? (value.cacheSerial ?? value.cache_serial ?? value.serial) : value;
+        const number = Number(candidate);
+        if (!Number.isInteger(number) || number < 0) {
+            return Number(fallback) >>> 0;
+        }
+        return number >>> 0;
+    }
+
+    getStoreCacheSerial(store = this.rpkiStore) {
+        if (!store || typeof store.getCacheSerial !== 'function') {
+            return this.cacheSerial >>> 0;
+        }
+        return this.normalizeCacheSerial(store.getCacheSerial(), this.cacheSerial);
+    }
+
+    openRpkiStore(databasePath) {
+        const normalizedPath = typeof databasePath === 'string' ? databasePath.trim() : '';
+        if (!normalizedPath) {
+            throw new Error('RPKI SQLite database path is required');
+        }
+
+        this.closeRpkiStore();
+        const RpkiSqliteStore = this.getRpkiSqliteStoreClass();
+        const store = new RpkiSqliteStore({ dbPath: normalizedPath }).open();
+        this.rpkiDatabasePath = normalizedPath;
+        this.rpkiStore = store;
+        this.cacheSerial = this.getStoreCacheSerial(store);
+        return store;
+    }
+
+    closeRpkiStore() {
+        const store = this.rpkiStore;
+        this.rpkiStore = null;
+        this.rpkiDatabasePath = null;
+        if (store && typeof store.close === 'function') {
+            store.close();
+        }
+    }
+
+    restoreInitialRouterKeys(routerKeys) {
+        this.rpkiRouterKeyMap.clear();
+        for (const payload of Array.isArray(routerKeys) ? routerKeys : []) {
+            if (!payload || typeof payload !== 'object') {
+                continue;
+            }
+            const rk = new RpkiRouterKey(payload.ski, payload.asn, payload.spki);
+            this.rpkiRouterKeyMap.set(RpkiRouterKey.makeKey(rk.ski, rk.asn), rk);
+        }
+    }
+
+    createDataSnapshot() {
+        if (!this.rpkiDatabasePath) {
+            return {
+                store: null,
+                cacheSerial: this.cacheSerial >>> 0,
+                routerKeys: Array.from(this.rpkiRouterKeyMap.values()),
+                snapshotStarted: false
+            };
+        }
+
+        if (this.activeDataSnapshots >= this.maxConcurrentDataSnapshots) {
+            throw new Error(`RPKI并发数据快照已达到上限 ${this.maxConcurrentDataSnapshots}`);
+        }
+        this.activeDataSnapshots += 1;
+
+        let store = null;
+        let snapshotStarted = false;
+        try {
+            const RpkiSqliteStore = this.getRpkiSqliteStoreClass();
+            store = new RpkiSqliteStore({
+                dbPath: this.rpkiDatabasePath,
+                readOnly: true
+            }).open();
+            let snapshotMetadata = null;
+            if (typeof store.beginReadSnapshot === 'function') {
+                snapshotMetadata = store.beginReadSnapshot();
+                snapshotStarted = true;
+            }
+            return {
+                store,
+                cacheSerial: this.normalizeCacheSerial(snapshotMetadata, this.getStoreCacheSerial(store)),
+                roaCount: Number(snapshotMetadata?.roaCount) || 0,
+                aspaCount: Number(snapshotMetadata?.aspaCount) || 0,
+                routerKeys: Array.from(this.rpkiRouterKeyMap.values()),
+                snapshotStarted,
+                snapshotSlotActive: true,
+                closed: false
+            };
+        } catch (error) {
+            if (typeof store?.close === 'function') {
+                store.close();
+            }
+            this.activeDataSnapshots = Math.max(0, this.activeDataSnapshots - 1);
+            throw error;
+        }
+    }
+
+    iterateRoas(snapshot) {
+        const store = snapshot?.store || this.rpkiStore;
+        return store && typeof store.iterateRoas === 'function' ? store.iterateRoas() : [];
+    }
+
+    iterateAspas(snapshot) {
+        const store = snapshot?.store || this.rpkiStore;
+        return store && typeof store.iterateAspas === 'function' ? store.iterateAspas() : [];
+    }
+
+    closeDataSnapshot(snapshot) {
+        if (!snapshot || snapshot.closed) {
+            return;
+        }
+        snapshot.closed = true;
+        const store = snapshot?.store;
+        if (!store) {
+            return;
+        }
+        try {
+            if (snapshot.snapshotStarted && typeof store.endReadSnapshot === 'function') {
+                store.endReadSnapshot();
+            }
+        } finally {
+            try {
+                if (typeof store.close === 'function') {
+                    store.close();
+                }
+            } finally {
+                if (snapshot.snapshotSlotActive) {
+                    snapshot.snapshotSlotActive = false;
+                    this.activeDataSnapshots = Math.max(0, this.activeDataSnapshots - 1);
+                    if (this.activeDataSnapshots === 0 && typeof this.rpkiStore?.checkpoint === 'function') {
+                        try {
+                            this.rpkiStore.checkpoint('PASSIVE');
+                        } catch (error) {
+                            logger.debug(`RPKI SQLite快照结束后checkpoint未完成: ${error.message}`);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     createRpkiSession(socket, clientAddress, clientPort) {
@@ -261,12 +415,30 @@ class RpkiWorker {
             this.messageHandler.sendSuccessResponse(messageId, null, 'rpki协议启动成功');
         } catch (err) {
             logger.error(`Error starting TCP server: ${err.message}`);
+            this.closeRpkiStore();
             this.messageHandler.sendErrorResponse(messageId, 'rpki协议启动失败');
         }
     }
 
     async startRpki(messageId, rpkiConfigData) {
         this.rpkiConfigData = rpkiConfigData;
+        const configuredSnapshotLimit = Number(rpkiConfigData?.maxConcurrentSnapshots);
+        this.maxConcurrentDataSnapshots =
+            Number.isInteger(configuredSnapshotLimit) && configuredSnapshotLimit > 0
+                ? Math.min(configuredSnapshotLimit, 16)
+                : 4;
+
+        try {
+            this.openRpkiStore(rpkiConfigData?.rpkiDatabasePath);
+            this.restoreInitialRouterKeys(rpkiConfigData?.initialRouterKeys);
+            this.clearSerialHistory();
+        } catch (error) {
+            this.rpkiConfigData = null;
+            this.closeRpkiStore();
+            logger.error(`RPKI SQLite打开失败: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, `RPKI SQLite打开失败: ${error.message}`);
+            return;
+        }
 
         // 设置日志级别
         if (this.rpkiConfigData.logLevel) {
@@ -335,12 +507,13 @@ class RpkiWorker {
                 logger.info('Local RPKI server started, waiting for connections from proxy');
             } catch (error) {
                 logger.error(`Failed to setup SSH tunnel: ${error.message}`);
+                this.closeRpkiStore();
                 this.messageHandler.sendErrorResponse(messageId, `SSH隧道连接失败: ${error.message}`);
                 return;
             }
         } else {
             // 启动tcp服务器
-            this.startTcpServer(messageId);
+            await this.startTcpServer(messageId);
         }
     }
 
@@ -402,10 +575,10 @@ class RpkiWorker {
         });
         await Promise.all(closeSessionPromises);
         this.rpkiSessionMap.clear();
-        this.rpkiRoaMap.clear();
         this.rpkiRouterKeyMap.clear();
-        this.rpkiAspaMap.clear();
         this.clearSerialHistory();
+        this.closeRpkiStore();
+        this.rpkiDatabasePath = null;
         this.messageHandler.sendSuccessResponse(messageId, null, 'rpki协议停止成功');
     }
 
@@ -416,7 +589,11 @@ class RpkiWorker {
     }
 
     bumpCacheSerial() {
-        this.cacheSerial = (this.cacheSerial + 1) >>> 0;
+        if (this.rpkiStore && typeof this.rpkiStore.bumpCacheSerial === 'function') {
+            this.cacheSerial = this.normalizeCacheSerial(this.rpkiStore.bumpCacheSerial(), this.cacheSerial);
+        } else {
+            this.cacheSerial = (this.cacheSerial + 1) >>> 0;
+        }
         logger.info(`RPKI cache serial updated: ${this.cacheSerial}`);
         return this.cacheSerial;
     }
@@ -427,43 +604,124 @@ class RpkiWorker {
         }
     }
 
-    bumpSerialAndNotify(changed) {
-        if (!changed) {
-            return;
-        }
-        this.bumpCacheSerial();
-        this.sendSerialNotify();
-    }
-
     trimSerialHistory() {
         while (
             this.serialHistory.length > this.maxSerialHistoryEntries ||
-            this.serialHistoryOperationCount > this.maxSerialHistoryOperations
+            this.serialHistoryOperationCount > this.maxSerialHistoryOperations ||
+            this.serialHistoryBytes > this.maxSerialHistoryBytes
         ) {
             const removed = this.serialHistory.shift();
             this.serialHistoryOperationCount -= removed?.operations?.length || 0;
+            this.serialHistoryBytes -= removed?.bytes || 0;
         }
     }
 
     clearSerialHistory() {
         this.serialHistory = [];
         this.serialHistoryOperationCount = 0;
+        this.serialHistoryBytes = 0;
     }
 
-    recordSerialDeltaAndNotify(operations) {
-        const serialOperations = (operations || []).filter(Boolean);
-        if (serialOperations.length === 0) {
-            return;
+    estimateSerialOperationsBytes(operations) {
+        try {
+            return Buffer.byteLength(JSON.stringify(operations));
+        } catch (_) {
+            return this.maxSerialHistoryBytes + 1;
+        }
+    }
+
+    isSerialNewer(candidate, reference) {
+        const distance = (this.normalizeCacheSerial(candidate) - this.normalizeCacheSerial(reference)) >>> 0;
+        return distance !== 0 && distance < 0x80000000;
+    }
+
+    resolveMutationSerial(cacheSerial) {
+        const previousSerial = this.cacheSerial >>> 0;
+        const hasProvidedSerial = cacheSerial !== undefined && cacheSerial !== null && cacheSerial !== '';
+        const providedSerial = hasProvidedSerial ? this.normalizeCacheSerial(cacheSerial, previousSerial) : null;
+        const storeSerial = this.getStoreCacheSerial();
+        let serial = previousSerial;
+
+        if (this.isSerialNewer(storeSerial, serial)) {
+            serial = storeSerial;
+        }
+        if (providedSerial !== null && this.isSerialNewer(providedSerial, serial)) {
+            serial = providedSerial;
         }
 
-        const serial = this.bumpCacheSerial();
-        this.serialHistory.push({
+        // A delayed notification can arrive after a Router Key mutation has
+        // already advanced the shared DB serial. Never move backwards; create a
+        // fresh reset boundary so clients that queried the intermediate serial
+        // are notified again.
+        const providedIsNext = providedSerial === null || providedSerial === (previousSerial + 1) >>> 0;
+        if (serial === previousSerial) {
+            serial = this.bumpCacheSerial();
+        }
+
+        return {
             serial,
-            operations: serialOperations
-        });
-        this.serialHistoryOperationCount += serialOperations.length;
-        this.trimSerialHistory();
-        this.sendSerialNotify();
+            forceInvalidate: !providedIsNext || serial !== (previousSerial + 1) >>> 0
+        };
+    }
+
+    recordSerialDeltaAndNotify(operations, options = {}) {
+        const previousSerial = this.cacheSerial >>> 0;
+        const resolvedSerial = this.resolveMutationSerial(options.cacheSerial);
+        const serial = resolvedSerial.serial;
+        const rawOperations = Array.isArray(operations) ? operations : [];
+        const serialOperations = rawOperations.filter(Boolean);
+        const operationBytes = this.estimateSerialOperationsBytes(serialOperations);
+        const invalidated =
+            options.invalidate === true ||
+            resolvedSerial.forceInvalidate ||
+            serialOperations.length > this.maxSerialHistoryOperations ||
+            operationBytes > this.maxSerialHistoryBytes ||
+            serial !== (previousSerial + 1) >>> 0;
+
+        this.cacheSerial = serial;
+        if (invalidated) {
+            this.clearSerialHistory();
+        } else {
+            if (serialOperations.length > 0) {
+                this.serialHistory.push({ serial, operations: serialOperations, bytes: operationBytes });
+                this.serialHistoryOperationCount += serialOperations.length;
+                this.serialHistoryBytes += operationBytes;
+                this.trimSerialHistory();
+            }
+        }
+
+        if (serial !== previousSerial || options.notifyOnSameSerial === true) {
+            logger.info(
+                `RPKI dataset serial applied: previous=${previousSerial}, current=${serial}, ` +
+                    `operations=${invalidated ? 0 : rawOperations.length}, invalidated=${invalidated}`
+            );
+            this.sendSerialNotify();
+        }
+        return { cacheSerial: serial, invalidated };
+    }
+
+    datasetChanged(messageId, payload = {}) {
+        try {
+            const result = this.recordSerialDeltaAndNotify(payload.operations, {
+                cacheSerial: payload.cacheSerial,
+                invalidate: payload.invalidate === true
+            });
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                {
+                    ...result,
+                    operationCount: result.invalidated
+                        ? 0
+                        : Array.isArray(payload.operations)
+                          ? payload.operations.length
+                          : 0
+                },
+                'RPKI数据集更新已同步'
+            );
+        } catch (error) {
+            logger.error(`RPKI数据集更新同步失败: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
     }
 
     getDeltaOperationsSince(serial) {
@@ -521,100 +779,57 @@ class RpkiWorker {
         }
     }
 
-    addRoa(messageId, roa) {
-        const key = RpkiRoa.makeKey(roa.ip, roa.mask, roa.asn, roa.maxLength);
-        if (this.rpkiRoaMap.has(key)) {
-            logger.error(`RPKI ROA配置已存在: ${key}`);
-            this.messageHandler.sendErrorResponse(messageId, 'RPKI ROA配置已存在');
-            return;
-        }
+    addRoa(messageId, payload) {
+        const roa = payload?.roa || payload?.data || payload;
         const rpkiRoa = new RpkiRoa(roa.ip, roa.mask, roa.asn, roa.maxLength, roa.ipType);
-        this.rpkiRoaMap.set(key, rpkiRoa);
-
-        this.recordSerialDeltaAndNotify([{ type: 'roa', action: 'announce', data: rpkiRoa }]);
-
-        this.messageHandler.sendSuccessResponse(messageId, null, 'RPKI ROA配置添加成功');
+        const result = this.recordSerialDeltaAndNotify([{ type: 'roa', action: 'announce', data: rpkiRoa }], {
+            cacheSerial: payload?.cacheSerial
+        });
+        this.messageHandler.sendSuccessResponse(messageId, result, 'RPKI ROA配置添加成功');
     }
 
     addRoaBatch(messageId, payload) {
         const roas = Array.isArray(payload) ? payload : payload?.roas || [];
         const announce = Boolean(payload?.announce);
-        let added = 0;
-        let skipped = 0;
-        const addedRoas = [];
-
-        for (const roa of roas) {
-            const key = RpkiRoa.makeKey(roa.ip, roa.mask, roa.asn, roa.maxLength);
-            if (this.rpkiRoaMap.has(key)) {
-                skipped += 1;
-                continue;
-            }
-
-            const rpkiRoa = new RpkiRoa(roa.ip, roa.mask, roa.asn, roa.maxLength, roa.ipType);
-            this.rpkiRoaMap.set(key, rpkiRoa);
-            added += 1;
-            addedRoas.push(rpkiRoa);
-        }
-
         if (announce) {
-            this.recordSerialDeltaAndNotify(
-                addedRoas.map(rpkiRoa => ({ type: 'roa', action: 'announce', data: rpkiRoa }))
-            );
+            this.recordSerialDeltaAndNotify([], {
+                cacheSerial: payload?.cacheSerial,
+                invalidate: true
+            });
         }
 
         this.messageHandler.sendSuccessResponse(
             messageId,
-            { added, skipped, total: this.rpkiRoaMap.size },
+            {
+                added: Number(payload?.added ?? roas.length) || 0,
+                skipped: Number(payload?.skipped) || 0,
+                total: payload?.total ?? null
+            },
             'RPKI ROA批量添加成功'
         );
     }
 
-    deleteRoa(messageId, roa) {
-        const key = RpkiRoa.makeKey(roa.ip, roa.mask, roa.asn, roa.maxLength);
-        if (!this.rpkiRoaMap.has(key)) {
-            logger.error(`RPKI ROA配置不存在: ${key}`);
-            this.messageHandler.sendErrorResponse(messageId, 'RPKI ROA配置不存在');
-            return;
-        }
-
-        const rpkiRoa = this.rpkiRoaMap.get(key);
-
-        this.rpkiRoaMap.delete(key);
-        this.recordSerialDeltaAndNotify([{ type: 'roa', action: 'withdraw', data: rpkiRoa }]);
-        this.messageHandler.sendSuccessResponse(messageId, null, 'RPKI ROA配置删除成功');
+    deleteRoa(messageId, payload) {
+        const roa = payload?.roa || payload?.data || payload;
+        const rpkiRoa = new RpkiRoa(roa.ip, roa.mask, roa.asn, roa.maxLength, roa.ipType);
+        const result = this.recordSerialDeltaAndNotify([{ type: 'roa', action: 'withdraw', data: rpkiRoa }], {
+            cacheSerial: payload?.cacheSerial
+        });
+        this.messageHandler.sendSuccessResponse(messageId, result, 'RPKI ROA配置删除成功');
     }
 
     deleteRoaBatch(messageId, payload) {
-        const deleteAll = Boolean(payload?.all);
         const inputRoas = Array.isArray(payload?.roas) ? payload.roas : [];
-        let deletedRoas = [];
-        let notFound = 0;
-
-        if (deleteAll) {
-            deletedRoas = Array.from(this.rpkiRoaMap.values());
-            this.rpkiRoaMap.clear();
-        } else {
-            for (const roa of inputRoas) {
-                const key = RpkiRoa.makeKey(roa.ip, roa.mask, roa.asn, roa.maxLength);
-                const rpkiRoa = this.rpkiRoaMap.get(key);
-                if (!rpkiRoa) {
-                    notFound += 1;
-                    continue;
-                }
-                deletedRoas.push(rpkiRoa);
-                this.rpkiRoaMap.delete(key);
-            }
-        }
-
-        this.recordSerialDeltaAndNotify(
-            deletedRoas.map(rpkiRoa => ({ type: 'roa', action: 'withdraw', data: rpkiRoa }))
-        );
+        this.recordSerialDeltaAndNotify([], {
+            cacheSerial: payload?.cacheSerial,
+            invalidate: true
+        });
         this.messageHandler.sendSuccessResponse(
             messageId,
             {
-                deleted: deletedRoas.length,
-                notFound,
-                total: this.rpkiRoaMap.size
+                deleted: Number(payload?.deleted ?? inputRoas.length) || 0,
+                notFound: Number(payload?.notFound) || 0,
+                total: payload?.total ?? null
             },
             'RPKI ROA批量删除成功'
         );
@@ -654,8 +869,14 @@ class RpkiWorker {
         }
         const rk = new RpkiRouterKey(payload.ski, payload.asn, payload.spki);
         this.rpkiRouterKeyMap.set(key, rk);
-        this.recordSerialDeltaAndNotify([{ type: 'routerKey', action: 'announce', data: rk }]);
-        this.messageHandler.sendSuccessResponse(messageId, null, 'RouterKey添加成功');
+        let result;
+        try {
+            result = this.recordSerialDeltaAndNotify([{ type: 'routerKey', action: 'announce', data: rk }]);
+        } catch (error) {
+            this.rpkiRouterKeyMap.delete(key);
+            throw error;
+        }
+        this.messageHandler.sendSuccessResponse(messageId, result, 'RouterKey添加成功');
     }
 
     deleteRouterKey(messageId, payload) {
@@ -667,8 +888,14 @@ class RpkiWorker {
         }
         const rk = this.rpkiRouterKeyMap.get(key);
         this.rpkiRouterKeyMap.delete(key);
-        this.recordSerialDeltaAndNotify([{ type: 'routerKey', action: 'withdraw', data: rk }]);
-        this.messageHandler.sendSuccessResponse(messageId, null, 'RouterKey删除成功');
+        let result;
+        try {
+            result = this.recordSerialDeltaAndNotify([{ type: 'routerKey', action: 'withdraw', data: rk }]);
+        } catch (error) {
+            this.rpkiRouterKeyMap.set(key, rk);
+            throw error;
+        }
+        this.messageHandler.sendSuccessResponse(messageId, result, 'RouterKey删除成功');
     }
 
     // ASPA (v2+)
@@ -738,67 +965,51 @@ class RpkiWorker {
     }
 
     addAspa(messageId, payload) {
-        const key = RpkiAspa.makeKey(payload.customerAsn);
-        const oldAspa = this.rpkiAspaMap.get(key);
-        const aspa = new RpkiAspa(payload.customerAsn, payload.providerAsns, payload.afiFlags);
-        this.rpkiAspaMap.set(key, aspa);
-        this.recordSerialDeltaAndNotify([
-            oldAspa
-                ? { type: 'aspa', action: 'replace', oldData: oldAspa, newData: aspa }
-                : { type: 'aspa', action: 'announce', data: aspa }
-        ]);
-        this.messageHandler.sendSuccessResponse(messageId, null, oldAspa ? 'ASPA覆盖成功' : 'ASPA添加成功');
+        const aspaPayload = payload?.aspa || payload?.data || payload;
+        const previousPayload = payload?.previousAspa || payload?.oldAspa || null;
+        const previousAspa = previousPayload
+            ? new RpkiAspa(previousPayload.customerAsn, previousPayload.providerAsns, previousPayload.afiFlags)
+            : null;
+        const aspa = new RpkiAspa(aspaPayload.customerAsn, aspaPayload.providerAsns, aspaPayload.afiFlags);
+        const result = this.recordSerialDeltaAndNotify(
+            [
+                previousAspa
+                    ? { type: 'aspa', action: 'replace', oldData: previousAspa, newData: aspa }
+                    : { type: 'aspa', action: 'announce', data: aspa }
+            ],
+            { cacheSerial: payload?.cacheSerial }
+        );
+        this.messageHandler.sendSuccessResponse(messageId, result, previousAspa ? 'ASPA覆盖成功' : 'ASPA添加成功');
     }
 
     addAspaBatch(messageId, payload) {
         const aspas = Array.isArray(payload) ? payload : payload?.aspas || [];
         const announce = Boolean(payload?.announce);
-        let added = 0;
-        let overwritten = 0;
-        const operations = [];
-
-        for (const payloadAspa of aspas) {
-            const key = RpkiAspa.makeKey(payloadAspa.customerAsn);
-            const oldAspa = this.rpkiAspaMap.get(key);
-            const aspa = new RpkiAspa(payloadAspa.customerAsn, payloadAspa.providerAsns, payloadAspa.afiFlags);
-            this.rpkiAspaMap.set(key, aspa);
-
-            if (oldAspa) {
-                overwritten += 1;
-            } else {
-                added += 1;
-            }
-            operations.push({ oldAspa, newAspa: aspa });
-        }
-
         if (announce) {
-            this.recordSerialDeltaAndNotify(
-                operations.map(operation =>
-                    operation.oldAspa
-                        ? { type: 'aspa', action: 'replace', oldData: operation.oldAspa, newData: operation.newAspa }
-                        : { type: 'aspa', action: 'announce', data: operation.newAspa }
-                )
-            );
+            this.recordSerialDeltaAndNotify([], {
+                cacheSerial: payload?.cacheSerial,
+                invalidate: true
+            });
         }
 
         this.messageHandler.sendSuccessResponse(
             messageId,
-            { added, overwritten, total: this.rpkiAspaMap.size },
+            {
+                added: Number(payload?.added ?? aspas.length) || 0,
+                overwritten: Number(payload?.overwritten) || 0,
+                total: payload?.total ?? null
+            },
             'ASPA批量添加成功'
         );
     }
 
     deleteAspa(messageId, payload) {
-        const key = RpkiAspa.makeKey(payload.customerAsn);
-        if (!this.rpkiAspaMap.has(key)) {
-            logger.error(`RPKI ASPA不存在: ${key}`);
-            this.messageHandler.sendErrorResponse(messageId, 'ASPA不存在');
-            return;
-        }
-        const aspa = this.rpkiAspaMap.get(key);
-        this.rpkiAspaMap.delete(key);
-        this.recordSerialDeltaAndNotify([{ type: 'aspa', action: 'withdraw', data: aspa }]);
-        this.messageHandler.sendSuccessResponse(messageId, null, 'ASPA删除成功');
+        const aspaPayload = payload?.aspa || payload?.previousAspa || payload?.data || payload;
+        const aspa = new RpkiAspa(aspaPayload.customerAsn, aspaPayload.providerAsns, aspaPayload.afiFlags);
+        const result = this.recordSerialDeltaAndNotify([{ type: 'aspa', action: 'withdraw', data: aspa }], {
+            cacheSerial: payload?.cacheSerial
+        });
+        this.messageHandler.sendSuccessResponse(messageId, result, 'ASPA删除成功');
     }
 
     deleteAspaBatch(messageId, payload) {
@@ -808,14 +1019,14 @@ class RpkiWorker {
             return;
         }
 
-        const deletedAspas = Array.from(this.rpkiAspaMap.values());
-        this.rpkiAspaMap.clear();
-
-        this.recordSerialDeltaAndNotify(deletedAspas.map(aspa => ({ type: 'aspa', action: 'withdraw', data: aspa })));
+        this.recordSerialDeltaAndNotify([], {
+            cacheSerial: payload?.cacheSerial,
+            invalidate: true
+        });
 
         this.messageHandler.sendSuccessResponse(
             messageId,
-            { deleted: deletedAspas.length, total: this.rpkiAspaMap.size },
+            { deleted: Number(payload?.deleted) || 0, total: payload?.total ?? 0 },
             'ASPA批量删除成功'
         );
     }

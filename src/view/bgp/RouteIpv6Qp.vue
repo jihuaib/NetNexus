@@ -159,6 +159,7 @@
                 :data-source="sentRoutes"
                 :columns="routeColumns"
                 :pagination="pagination"
+                :loading="routeListLoading"
                 size="small"
                 :row-key="record => `${record.dqpn}-${record.ip}-${record.mask}`"
                 :scroll="{ x: 'max-content', y: '100%' }"
@@ -209,6 +210,7 @@
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
     import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
+    import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
     import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from '../../ui/icons';
 
@@ -265,6 +267,8 @@
     });
 
     const sentRoutes = ref([]);
+    const routeListLoading = ref(false);
+    let routeListRequestId = 0;
     const hasRoutes = computed(() => pagination.value.total > 0);
     const routesGenerating = ref(false);
     const deleteAllLoading = ref(false);
@@ -349,18 +353,43 @@
     };
 
     const refreshRoutes = async () => {
-        const result = await window.bgpApi.getRoutes(
-            BGP_ADDR_FAMILY.IPV6_QP,
-            pagination.value.current,
-            pagination.value.pageSize
-        );
-        if (result.status === 'success') {
-            sentRoutes.value = result.data.list;
-            pagination.value.total = result.data.total;
-        } else {
-            console.error(result.msg);
-            sentRoutes.value = [];
+        const requestId = ++routeListRequestId;
+        const current = pagination.value.current;
+        const pageSize = pagination.value.pageSize;
+        routeListLoading.value = true;
+
+        try {
+            const result = await window.bgpApi.getRoutes(BGP_ADDR_FAMILY.IPV6_QP, current, pageSize);
+            if (requestId !== routeListRequestId) {
+                return;
+            }
+
+            if (result.status === 'success') {
+                sentRoutes.value = result.data.list;
+                pagination.value.total = result.data.total;
+            } else {
+                console.error(result.msg);
+                sentRoutes.value = [];
+                pagination.value.total = 0;
+            }
+        } catch (e) {
+            if (requestId === routeListRequestId) {
+                console.error(e);
+                sentRoutes.value = [];
+                pagination.value.total = 0;
+            }
+        } finally {
+            if (requestId === routeListRequestId) {
+                routeListLoading.value = false;
+            }
         }
+    };
+
+    const refreshRoutesAfterSingleDelete = async () => {
+        const remainingTotal = Math.max(0, pagination.value.total - 1);
+        const lastPage = Math.max(1, Math.ceil(remainingTotal / pagination.value.pageSize));
+        pagination.value.current = Math.min(pagination.value.current, lastPage);
+        await refreshRoutes();
     };
 
     const generateRoutes = async () => {
@@ -404,24 +433,37 @@
     };
 
     const deleteAllRoutes = async () => {
-        if (deleteAllLoading.value) {
-            return;
-        }
-
-        deleteAllLoading.value = true;
         try {
-            const result = await window.bgpApi.deleteAllRoutesByFamily(BGP_ADDR_FAMILY.IPV6_QP);
-            if (result.status === 'success') {
-                notify.success(`${result.msg}`);
-                pagination.value.current = 1;
-                await refreshRoutes();
-            } else {
-                notify.error(`${result.msg}`);
-            }
+            dialog.confirm({
+                title: '确认删除',
+                content: `确定要删除所有 ${pagination.value.total} 条IPv6-QP路由吗？此操作不可恢复。`,
+                okText: '确定',
+                cancelText: '取消',
+                okType: 'danger',
+                onOk: async () => {
+                    if (deleteAllLoading.value) {
+                        return;
+                    }
+
+                    deleteAllLoading.value = true;
+                    try {
+                        const result = await window.bgpApi.deleteAllRoutesByFamily(BGP_ADDR_FAMILY.IPV6_QP);
+                        if (result.status === 'success') {
+                            notify.success(`${result.msg}`);
+                            pagination.value.current = 1;
+                            await refreshRoutes();
+                        } else {
+                            notify.error(`${result.msg}`);
+                        }
+                    } catch (e) {
+                        notify.error(`IPv6-QP路由删除失败: ${e.message}`);
+                    } finally {
+                        deleteAllLoading.value = false;
+                    }
+                }
+            });
         } catch (e) {
             notify.error(`IPv6-QP路由删除失败: ${e.message}`);
-        } finally {
-            deleteAllLoading.value = false;
         }
     };
 
@@ -466,7 +508,7 @@
 
             if (result.status === 'success') {
                 notify.success(`${result.msg}`);
-                await refreshRoutes();
+                await refreshRoutesAfterSingleDelete();
             } else {
                 notify.error(`路由删除失败: ${result.msg}`);
             }

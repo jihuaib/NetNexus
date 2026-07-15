@@ -5,7 +5,6 @@ const path = require('path');
 const Module = require('module');
 
 process.env.NODE_ENV = 'test';
-
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bgp-routes-'));
 const electronMock = {
     app: {
@@ -15,9 +14,7 @@ const electronMock = {
             return tempDir;
         }
     },
-    shell: {
-        openExternal() {}
-    },
+    shell: { openExternal() {} },
     dialog: {
         async showOpenDialog() {
             return { canceled: true, filePaths: [] };
@@ -27,34 +24,25 @@ const electronMock = {
 
 const originalLoad = Module._load;
 Module._load = function mockElectron(request, parent, isMain) {
-    if (request === 'electron') {
-        return electronMock;
-    }
+    if (request === 'electron') return electronMock;
     return originalLoad.call(this, request, parent, isMain);
 };
-
 let BgpApp;
 try {
-    BgpApp = require(path.join(__dirname, '..', '..', 'electron', 'app', 'bgpApp.js'));
+    BgpApp = require('../../electron/app/bgpApp');
 } finally {
     Module._load = originalLoad;
 }
 
-const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
-const { countBgpRoutes, readBgpRouteJsonlPage } = require(
-    path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpRouteStorage.js')
-);
+const BgpConst = require('../../electron/const/bgpConst');
+const BgpInstance = require('../../electron/worker/bgp/bgpInstance');
+const BgpRoute = require('../../electron/worker/bgp/bgpRoute');
+const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
+const { getAfiAndSafi } = require('../../electron/utils/bgpUtils');
 
 function makeStore() {
-    const data = new Map();
-    return {
-        get(key) {
-            return data.get(key);
-        },
-        set(key, value) {
-            data.set(key, value);
-        }
-    };
+    const values = new Map();
+    return { get: key => values.get(key), set: (key, value) => values.set(key, value) };
 }
 
 function makeIpc() {
@@ -66,220 +54,121 @@ function makeIpc() {
     };
 }
 
-function makeWorkerRecorder(resolvers = {}) {
+function makeWorkerRecorder(resolver) {
     const calls = [];
     return {
         calls,
         async sendRequest(op, payload) {
             calls.push({ op, payload });
-            if (typeof resolvers[op] === 'function') {
-                return resolvers[op](payload, calls);
-            }
-            return { status: 'success', msg: 'ok', data: null };
+            return resolver(op, payload, calls);
         }
     };
 }
 
+function instanceKey(addressFamily) {
+    const { afi, safi } = getAfiAndSafi(addressFamily);
+    return BgpInstance.makeKey(0, afi, safi);
+}
+
 (async () => {
     const app = new BgpApp(makeIpc(), makeStore());
-
-    const ipv4Config = {
-        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
-        prefix: '192.0.2.1',
-        mask: 32,
-        count: 2,
-        customAttr: 'origin igp',
-        rt: ''
-    };
-
-    const noWorkerGenerateResult = await app.handleGenerateIpv4Routes(null, ipv4Config);
-    assert.strictEqual(noWorkerGenerateResult.status, 'error');
-    assert.strictEqual(noWorkerGenerateResult.msg, 'bgp协议没有运行');
-    assert.deepStrictEqual(app.store.get('ipv4-unc-route-config'), ipv4Config);
-
-    const routeFilePath = await app.ensureBgpRouteFileStorage(BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
-    assert.strictEqual(await countBgpRoutes(routeFilePath), 0, 'rejected route generation must not update storage');
-
-    const stoppedPage = await app.handleGetRoutes(null, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, 1, 10);
-    assert.strictEqual(stoppedPage.status, 'success');
-    assert.deepStrictEqual(stoppedPage.data, { list: [], total: 0 });
-
-    const workerRoutes = [
+    assert.strictEqual(app.getBgpRouteDatabasePath(), path.join(tempDir, 'bgp', 'bgp.sqlite3'));
+    const db = new BgpRouteSqliteStore({ dbPath: app.getBgpRouteDatabasePath() }).open();
+    assert.equal(fs.statSync(path.join(tempDir, 'bgp')).isDirectory(), true);
+    const addressFamily = BgpConst.BGP_ADDR_FAMILY.IPV4_UNC;
+    const key = instanceKey(addressFamily);
+    const labelFamily = BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
+    db.upsertRoutes(key, [
         {
-            addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
-            ip: '192.0.2.1',
-            mask: 32
+            routeKey: BgpRoute.makeUnicastKey(0, '0:0', '192.0.2.1', 32),
+            route: { ip: '192.0.2.1', mask: 32, rd: '0:0', pathId: 0 },
+            attr: { nextHop: '198.51.100.1', asPath: '65000 65001' }
         },
         {
-            addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
-            ip: '192.0.2.2',
-            mask: 32
-        }
-    ];
-    const worker = makeWorkerRecorder({
-        [BgpConst.BGP_REQ_TYPES.GET_ROUTES]: () => ({
-            status: 'success',
-            msg: 'ok',
-            data: {
-                list: workerRoutes,
-                total: workerRoutes.length
-            }
-        }),
-        [BgpConst.BGP_REQ_TYPES.DELETE_ALL_ROUTES_BY_FAMILY]: () => ({
-            status: 'success',
-            msg: '成功删除所有 2 条路由',
-            data: {
-                deleted: 2
-            }
-        })
-    });
-    app.worker = worker;
-    app.startedAddressFamilies = new Set([BgpConst.BGP_ADDR_FAMILY.IPV4_UNC]);
-
-    const ipv6Config = {
-        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV6_UNC,
-        prefix: '2001:db8::1',
-        mask: 128,
-        count: 1,
-        customAttr: '',
-        rt: ''
-    };
-    const ipv6GenerateResult = await app.handleGenerateIpv6Routes(null, ipv6Config);
-    assert.strictEqual(ipv6GenerateResult.status, 'error');
-    assert.strictEqual(ipv6GenerateResult.msg, '地址族未启动，请先在BGP配置中使能该地址族');
-    assert.strictEqual(worker.calls.length, 0, 'routes for non-started address family must not be sent to worker');
-    assert.strictEqual(await countBgpRoutes(routeFilePath), 0, 'non-started address family must not update storage');
-
-    const ipv4GenerateResult = await app.handleGenerateIpv4Routes(null, ipv4Config);
-    assert.strictEqual(ipv4GenerateResult.status, 'success');
-    assert.strictEqual(ipv4GenerateResult.data.added, 2);
-    assert.strictEqual(ipv4GenerateResult.data.total, 2);
-    assert.strictEqual(worker.calls.length, 1);
-    assert.strictEqual(worker.calls[0].op, BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_ROUTES);
-    assert.deepStrictEqual(
-        worker.calls[0].payload.routes.map(route => route.pathId),
-        [0, 0],
-        'ordinary unicast generation should use path-id 0'
-    );
-
-    const repeatIpv4GenerateResult = await app.handleGenerateIpv4Routes(null, ipv4Config);
-    assert.strictEqual(repeatIpv4GenerateResult.status, 'success');
-    assert.strictEqual(repeatIpv4GenerateResult.data.added, 0);
-    assert.strictEqual(repeatIpv4GenerateResult.data.total, 2);
-    assert.strictEqual(worker.calls.length, 2);
-    assert.strictEqual(worker.calls[1].op, BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_ROUTES);
-
-    const firstPage = await app.handleGetRoutes(null, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, 1, 10);
-    assert.strictEqual(firstPage.status, 'success');
-    assert.strictEqual(firstPage.data.total, 2);
-    assert.deepStrictEqual(
-        firstPage.data.list.map(route => route.ip),
-        ['192.0.2.1', '192.0.2.2']
-    );
-    assert.strictEqual(worker.calls[2].op, BgpConst.BGP_REQ_TYPES.GET_ROUTES);
-
-    const loadResult = await app.loadBgpRouteStorageToWorker(false, new Set([BgpConst.BGP_ADDR_FAMILY.IPV4_UNC]));
-    assert.strictEqual(loadResult.loaded, 2);
-    assert.strictEqual(worker.calls.length, 4);
-    assert.strictEqual(worker.calls[3].op, BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES);
-    assert.strictEqual(worker.calls[3].payload.addressFamily, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
-    assert.strictEqual(worker.calls[3].payload.routes.length, 2);
-    assert(worker.calls[3].payload.routes.every(route => route.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC));
-
-    const deleteResult = await app.handleDeleteAllRoutesByFamily(null, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
-    assert.strictEqual(deleteResult.status, 'success');
-    assert.strictEqual(deleteResult.data.deleted, 2);
-    assert.strictEqual(deleteResult.data.total, 0);
-    assert.strictEqual(worker.calls.length, 5);
-    assert.strictEqual(worker.calls[4].op, BgpConst.BGP_REQ_TYPES.DELETE_ALL_ROUTES_BY_FAMILY);
-    assert.deepStrictEqual(worker.calls[4].payload, {
-        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC
-    });
-    assert.strictEqual(await countBgpRoutes(routeFilePath), 0);
-
-    const addPathGenerateResult = await app.handleGenerateIpv4Routes(null, {
-        ...ipv4Config,
-        prefix: '198.51.100.10',
-        count: 2,
-        addPathEnabled: true,
-        addPathCount: 3
-    });
-    assert.strictEqual(addPathGenerateResult.status, 'success');
-    assert.strictEqual(addPathGenerateResult.data.added, 6);
-    assert.strictEqual(addPathGenerateResult.data.total, 6);
-    assert.strictEqual(worker.calls.length, 6);
-    assert.deepStrictEqual(
-        worker.calls[5].payload.routes.map(route => `${route.ip}|${route.pathId}`),
-        [
-            '198.51.100.10|0',
-            '198.51.100.10|1',
-            '198.51.100.10|2',
-            '198.51.100.11|0',
-            '198.51.100.11|1',
-            '198.51.100.11|2'
-        ],
-        'ADD-PATH generation should create addPathCount paths for each prefix starting at path-id 0'
-    );
-    const addPathPage = await readBgpRouteJsonlPage(routeFilePath, BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, 1, 10);
-    assert.deepStrictEqual(
-        addPathPage.items.map(route => `${route.ip}|${route.pathId}`),
-        [
-            '198.51.100.10|0',
-            '198.51.100.10|1',
-            '198.51.100.10|2',
-            '198.51.100.11|0',
-            '198.51.100.11|1',
-            '198.51.100.11|2'
-        ],
-        'ADD-PATH routes should be persisted with per-prefix path identifiers'
-    );
-
-    const tooManyAddPathGenerateResult = await app.handleGenerateIpv4Routes(null, {
-        ...ipv4Config,
-        prefix: '198.51.101.10',
-        count: 1,
-        addPathEnabled: true,
-        addPathCount: 256
-    });
-    assert.strictEqual(tooManyAddPathGenerateResult.status, 'error');
-    assert.match(tooManyAddPathGenerateResult.msg, /1 ~ 255/);
-    assert.strictEqual(worker.calls.length, 6, 'invalid ADD-PATH count must not be sent to worker');
-    assert.strictEqual(await countBgpRoutes(routeFilePath), 6, 'invalid ADD-PATH count must not update route storage');
-
-    const normalizedImportedRoutes = app.normalizeImportedUnicastRouteDefaults(BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, [
-        { addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, ip: '203.0.113.1', mask: 24 },
-        { addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, ip: '203.0.113.1', mask: 24 },
-        {
-            addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
-            ip: '203.0.113.1',
-            mask: 24,
-            rd: '65000:1',
-            pathId: 5
+            routeKey: BgpRoute.makeUnicastKey(0, '0:0', '192.0.2.2', 32),
+            route: { ip: '192.0.2.2', mask: 32, rd: '0:0', pathId: 0 },
+            attr: { nextHop: '198.51.100.1', asPath: '65000 65001' }
         }
     ]);
+    db.upsertRoutes(instanceKey(labelFamily), [
+        {
+            routeKey: BgpRoute.makeKey('198.18.0.0', 24),
+            route: { ip: '198.18.0.0', mask: 24, label: 16000 },
+            attr: { nextHop: '198.51.100.1' }
+        }
+    ]);
+    db.close();
+
+    const stoppedPage = await app.handleGetRoutes(null, addressFamily, 1, 25);
+    assert.strictEqual(stoppedPage.status, 'success');
+    assert.strictEqual(stoppedPage.data.total, 2, 'stopped BGP must still expose persisted routes');
     assert.deepStrictEqual(
-        normalizedImportedRoutes.map(route => `${route.rd}|${route.pathId}|${route.ip}/${route.mask}`),
-        ['0:0|0|203.0.113.1/24', '0:0|0|203.0.113.1/24', '65000:1|5|203.0.113.1/24'],
-        'imported unicast routes should default to RD 0:0 and path-id 0 unless path-id is explicit'
+        stoppedPage.data.list.map(route => route.ip),
+        ['192.0.2.1', '192.0.2.2']
     );
+    const stoppedDetail = await app.handleGetRouteDetail(null, addressFamily, stoppedPage.data.list[0]);
+    assert.strictEqual(stoppedDetail.status, 'success');
+    assert.strictEqual(stoppedDetail.data.asPath, '65000 65001');
+    assert.strictEqual(stoppedDetail.data.attrRefCount, 2);
+    const stoppedLabelPage = await app.handleGetRoutes(null, labelFamily, 1, 25);
+    const stoppedLabelDetail = await app.handleGetRouteDetail(null, labelFamily, stoppedLabelPage.data.list[0]);
+    assert.strictEqual(stoppedLabelDetail.status, 'success');
+    assert.strictEqual(stoppedLabelDetail.data.label, 16000);
+
+    const worker = makeWorkerRecorder((op, payload) => {
+        if (op === BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_ROUTES) {
+            assert.ok(
+                !Object.prototype.hasOwnProperty.call(payload, 'routes'),
+                'main must not materialize generated routes'
+            );
+            return { status: 'success', msg: '路由生成成功', data: { added: 3, updated: 0, unchanged: 0, total: 5 } };
+        }
+        if (op === BgpConst.BGP_REQ_TYPES.DELETE_IPV4_ROUTES) {
+            return { status: 'success', msg: '路由删除成功', data: { deleted: 3, total: 2 } };
+        }
+        if (op === BgpConst.BGP_REQ_TYPES.DELETE_ALL_ROUTES_BY_FAMILY) {
+            return { status: 'success', msg: '全部删除成功', data: { deleted: 2, total: 0 } };
+        }
+        if (op === BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES) {
+            return {
+                status: 'success',
+                msg: '路由导入成功',
+                data: { added: payload.routes.length, updated: 0, unchanged: 0, total: payload.routes.length }
+            };
+        }
+        return { status: 'success', msg: 'ok', data: { list: [], total: 0 } };
+    });
+    app.worker = worker;
+    app.startedAddressFamilies = new Set([addressFamily]);
+    const disabledFamilyPage = await app.handleGetRoutes(null, labelFamily, 1, 25);
+    assert.strictEqual(disabledFamilyPage.data.total, 1, 'disabled family must remain visible from SQLite');
+    const config = { addressFamily, prefix: '203.0.113.1', mask: 32, count: 3, customAttr: '', rt: '' };
+    const generated = await app.handleGenerateIpv4Routes(null, config);
+    assert.deepStrictEqual(generated.data, { added: 3, updated: 0, unchanged: 0, total: 5 });
+    const deleted = await app.handleDeleteIpv4Routes(null, config);
+    assert.deepStrictEqual(deleted.data, { deleted: 3, total: 2 });
+    const cleared = await app.handleDeleteAllRoutesByFamily(null, addressFamily);
+    assert.deepStrictEqual(cleared.data, { deleted: 2, total: 0 });
+    app.startedAddressFamilies.add(BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN);
+    await app.handleDeleteAllRoutesByFamily(null, BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN, { routeType: 3 });
+    assert.deepStrictEqual(worker.calls.at(-1).payload, {
+        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN,
+        routeType: 3
+    });
 
     const importResult = await app.handleImportRouteViewsData(
         null,
         path.join(__dirname, '..', '..', 'scripts', 'test-data', 'test_routes_100.mrt'),
         5,
-        BgpConst.BGP_ADDR_FAMILY.IPV4_UNC
+        addressFamily
     );
     assert.strictEqual(importResult.status, 'success');
-    assert.strictEqual(worker.calls.length, 7);
-    assert.strictEqual(worker.calls[6].op, BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES);
-    assert.strictEqual(worker.calls[6].payload.routes.length, 5);
-    assert.ok(
-        worker.calls[6].payload.routes.every(route => route.rd === '0:0' && route.pathId === 0),
-        'MRT import should send ordinary public routes with path-id 0 by default'
-    );
+    assert.strictEqual(importResult.data.imported, 5);
+    const mrtCall = worker.calls.find(call => call.op === BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES);
+    assert.ok(mrtCall.payload.routes.every(route => route.rd === '0:0' && route.pathId === 0));
 
     fs.rmSync(tempDir, { recursive: true, force: true });
-    console.log('BGP route storage tests passed');
+    console.log('BGP SQLite route integration tests passed');
 })().catch(error => {
     fs.rmSync(tempDir, { recursive: true, force: true });
     console.error(error);

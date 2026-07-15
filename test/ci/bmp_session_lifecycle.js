@@ -24,6 +24,7 @@ function makeWorker() {
     const events = [];
 
     worker.bmpSessionMap = new Map();
+    worker.clientDeleteRemoteIpGates = new Map();
     worker.bmpConfigData = { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 };
     worker.messageHandler = {
         sendEvent(type, payload) {

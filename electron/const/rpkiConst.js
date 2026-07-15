@@ -100,7 +100,8 @@ const RPKI_REQ_TYPES = {
     ADD_ROA_BATCH: 10,
     DELETE_ROA_BATCH: 11,
     DELETE_ASPA_BATCH: 12,
-    ADD_ASPA_BATCH: 13
+    ADD_ASPA_BATCH: 13,
+    DATASET_CHANGED: 14
 };
 
 module.exports = {

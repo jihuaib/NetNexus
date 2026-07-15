@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const Database = require('better-sqlite3');
 
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
@@ -82,7 +83,7 @@ try {
 
     store = new BmpPersistenceStore({ dbPath }).open();
     assert.equal(store.getStatus().journalMode, 'wal');
-    assert.equal(store.getStatus().schemaVersion, 8);
+    assert.equal(store.getStatus().schemaVersion, BmpPersistenceStore.SCHEMA_VERSION);
 
     const connectionOpen = buildConnectionMutation(bmpSession, 'connection_open', { eventAtMs: oldTimestamp });
     const scopeOpen = buildScopeMutation(bmpSession, owner, 1, 1, 2, 'scope_open', {
@@ -123,6 +124,18 @@ try {
 
     let routes = store.queryRoutes({ routeState: 'all', pageSize: 10 });
     assert.equal(routes.total, 2);
+    assert.equal(
+        store.db.prepare('SELECT COUNT(*) AS count FROM bmp_current_routes_peer_ipv4_unicast').get().count,
+        2,
+        'IPv4 unicast peer routes must be written to their fixed physical partition'
+    );
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM bmp_current_routes_peer_other').get().count, 0);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM bmp_current_routes_all').get().count, 2);
+    assert.equal(
+        store.db.prepare('SELECT COUNT(*) AS count FROM bmp_route_payloads').get().count,
+        1,
+        'identity and current-state fields must not prevent ordinary routes from sharing one compact payload'
+    );
     assert.equal(
         routes.list.every(route => route.routeState === 'active'),
         true
@@ -352,6 +365,11 @@ try {
     );
     assert.equal(events.list[0].eventType, 'withdraw');
     assert.ok(store.queryEvents({ afi: 1, safi: 1, prefix: '203.0.113', fromMs: null }).total > 0);
+    assert.equal(
+        store.queryEvents({ afi: 1, safi: 1, pageSize: 100 }).list.some(event => event.eventType === 'scope_open'),
+        true,
+        'scope-only events must retain their address-family partition'
+    );
     assert.equal(store.queryEvents({ afi: 2, safi: 1 }).total, 0);
     const firstEventCursorPage = store.queryEvents({ pageSize: 2, includeTotal: false });
     assert.equal(firstEventCursorPage.total, null);
@@ -1068,132 +1086,67 @@ try {
     assert.equal(directPurgeEvents.list[0].reason, 'ci-direct-purge');
     directPurgeStore.close();
 
-    const migrationDbPath = path.join(tempDir, 'migration.sqlite3');
-    const migrationContext = makeContext();
-    const migrationRoute = makeRoute(migrationContext.owner, '198.24.0.0', 9, '192.0.2.50');
-    const migrationStatisticsReport = {
-        client: { remoteIp: migrationContext.bmpSession.remoteIp },
-        session: { sessionType: 0, sessionRd: '0:0', sessionIp: '198.51.100.9', sessionAs: 65009 },
-        statistics: [{ type: 0, value: 99 }],
-        tlvs: [],
-        updatedAt: '2026-01-02T00:00:00.000Z'
-    };
-    let migrationStore = new BmpPersistenceStore({ dbPath: migrationDbPath }).open();
-    const migrationStatistics = makeStatisticsMutation(
-        migrationContext.bmpSession,
-        migrationStatisticsReport,
-        oldTimestamp
-    );
-    migrationStore.applyBatch(
-        batch('migration-route', [
-            buildRouteUpsertMutation(migrationContext.bmpSession, migrationContext.owner, migrationRoute, 1, 1, 2, {
-                kind: 'peer',
-                scopeState: 'syncing',
-                isNewRoute: true
-            })
-        ])
-    );
-    migrationStore.applyBatch(batch('migration-statistics', [migrationStatistics]));
-    migrationStore.db.pragma('foreign_keys = OFF');
-    migrationStore.db.exec(`
-        DROP INDEX idx_bmp_current_routes_connection;
-        CREATE TABLE bmp_current_routes_legacy (
+    const legacyDbPath = path.join(tempDir, 'legacy-v8.sqlite3');
+    const legacyDb = new Database(legacyDbPath);
+    legacyDb.exec(`
+        CREATE TABLE bmp_current_routes (
             scope_id TEXT NOT NULL,
             route_id TEXT NOT NULL,
-            route_key_json TEXT NOT NULL,
-            route_identity_json TEXT NOT NULL,
-            route_key_version INTEGER NOT NULL,
-            legacy_route_key TEXT,
-            afi INTEGER NOT NULL,
-            safi INTEGER NOT NULL,
-            path_id INTEGER NOT NULL,
-            rd TEXT,
-            prefix TEXT,
-            prefix_length INTEGER,
-            nlri_kind TEXT,
-            nlri_json TEXT NOT NULL,
-            attr_id TEXT,
             route_json TEXT NOT NULL,
-            rib_epoch INTEGER NOT NULL,
-            explicit_state TEXT NOT NULL DEFAULT 'active',
-            first_seen_ms INTEGER NOT NULL,
-            last_seen_ms INTEGER NOT NULL,
-            source_timestamp_ms INTEGER,
-            last_event_id INTEGER NOT NULL,
-            PRIMARY KEY (scope_id, route_id),
-            FOREIGN KEY (scope_id) REFERENCES bmp_rib_scopes(scope_id),
-            FOREIGN KEY (attr_id) REFERENCES bmp_route_attributes(attr_id),
-            FOREIGN KEY (last_event_id) REFERENCES bmp_route_events(event_id)
+            PRIMARY KEY (scope_id, route_id)
         ) WITHOUT ROWID;
-        INSERT INTO bmp_current_routes_legacy(
-            scope_id, route_id, route_key_json, route_identity_json, route_key_version,
-            legacy_route_key, afi, safi, path_id, rd, prefix, prefix_length, nlri_kind,
-            nlri_json, attr_id, route_json, rib_epoch, explicit_state, first_seen_ms,
-            last_seen_ms, source_timestamp_ms, last_event_id
-        )
-        SELECT scope_id, route_id, route_key_json, route_identity_json, route_key_version,
-               legacy_route_key, afi, safi, path_id, rd, prefix, prefix_length, nlri_kind,
-               nlri_json, attr_id, route_json, rib_epoch, explicit_state, first_seen_ms,
-               last_seen_ms, source_timestamp_ms, last_event_id
-          FROM bmp_current_routes;
-        DROP TABLE bmp_current_routes;
-        ALTER TABLE bmp_current_routes_legacy RENAME TO bmp_current_routes;
-
-        DROP INDEX idx_bmp_scopes_refresh_since;
-        DROP INDEX idx_bmp_scopes_cleanup_pending;
-        ALTER TABLE bmp_rib_scopes DROP COLUMN refresh_started_ms;
-        ALTER TABLE bmp_rib_scopes DROP COLUMN cleanup_pending_epoch;
-
-        DROP TABLE bmp_statistics_latest;
-        CREATE TABLE bmp_statistics_samples_legacy (
-            sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_id TEXT NOT NULL,
-            connection_id TEXT NOT NULL,
-            scope_id TEXT,
-            observed_at_ms INTEGER NOT NULL,
-            source_timestamp_ms INTEGER,
-            statistics_json TEXT NOT NULL,
-            FOREIGN KEY (source_id) REFERENCES bmp_sources(source_id),
-            FOREIGN KEY (connection_id) REFERENCES bmp_connections(connection_id),
-            FOREIGN KEY (scope_id) REFERENCES bmp_rib_scopes(scope_id)
-        );
-        INSERT INTO bmp_statistics_samples_legacy(
-            sample_id, source_id, connection_id, scope_id, observed_at_ms, source_timestamp_ms, statistics_json
-        )
-        SELECT sample_id, source_id, connection_id, scope_id, observed_at_ms, source_timestamp_ms, statistics_json
-          FROM bmp_statistics_samples;
-        DROP TABLE bmp_statistics_samples;
-        ALTER TABLE bmp_statistics_samples_legacy RENAME TO bmp_statistics_samples;
-        PRAGMA user_version = 4;
+        INSERT INTO bmp_current_routes(scope_id, route_id, route_json)
+        VALUES ('legacy-scope', 'legacy-route', '{"ip":"198.24.0.0"}');
+        PRAGMA user_version = 8;
     `);
-    migrationStore.close();
+    legacyDb.close();
+
+    for (const readOnly of [true, false]) {
+        assert.throws(
+            () => new BmpPersistenceStore({ dbPath: legacyDbPath, readOnly }).open(),
+            error => error.code === 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE',
+            `schema v8 must be rejected in ${readOnly ? 'read-only' : 'writable'} mode`
+        );
+    }
+    const unchangedLegacyDb = new Database(legacyDbPath, { readonly: true });
+    assert.equal(unchangedLegacyDb.pragma('user_version', { simple: true }), 8);
+    assert.deepEqual(unchangedLegacyDb.prepare('SELECT * FROM bmp_current_routes').get(), {
+        scope_id: 'legacy-scope',
+        route_id: 'legacy-route',
+        route_json: '{"ip":"198.24.0.0"}'
+    });
+    unchangedLegacyDb.close();
+
+    const nonEmptyV0DbPath = path.join(tempDir, 'non-empty-v0.sqlite3');
+    const nonEmptyV0Db = new Database(nonEmptyV0DbPath);
+    nonEmptyV0Db.exec(`
+        CREATE TABLE sentinel (value TEXT NOT NULL);
+        INSERT INTO sentinel(value) VALUES ('preserve-me');
+    `);
+    nonEmptyV0Db.close();
     assert.throws(
-        () => new BmpPersistenceStore({ dbPath: migrationDbPath, readOnly: true }).open(),
-        error => error.code === 'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED'
+        () => new BmpPersistenceStore({ dbPath: nonEmptyV0DbPath }).open(),
+        error => error.code === 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE'
     );
-    migrationStore = new BmpPersistenceStore({ dbPath: migrationDbPath }).open();
-    assert.equal(migrationStore.getStatus().schemaVersion, 8);
-    assert.equal(migrationStore.queryRoutes({ routeState: 'all' }).total, 1);
-    assert.deepEqual(
-        migrationStore.queryStatisticsReports({ sourceId: migrationStatistics.source.id, kind: 'session' }),
-        [migrationStatisticsReport],
-        'migration must safely classify existing statistics JSON and rebuild the latest projection'
-    );
-    assert.equal(
-        migrationStore.db.prepare('SELECT connection_id FROM bmp_current_routes').get().connection_id,
-        migrationStore.db.prepare('SELECT connection_id FROM bmp_route_events LIMIT 1').get().connection_id
-    );
-    const migratedIndexes = new Set(
-        migrationStore.db
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
-            .all()
-            .map(row => row.name)
-    );
-    assert.equal(migratedIndexes.has('idx_bmp_scopes_refresh_since'), true);
-    assert.equal(migratedIndexes.has('idx_bmp_scopes_cleanup_pending'), true);
-    assert.equal(migratedIndexes.has('idx_bmp_current_routes_connection'), true);
-    assert.equal(migratedIndexes.has('idx_bmp_statistics_report_time'), true);
-    migrationStore.close();
+    const unchangedV0Db = new Database(nonEmptyV0DbPath, { readonly: true });
+    assert.equal(unchangedV0Db.pragma('user_version', { simple: true }), 0);
+    assert.equal(unchangedV0Db.prepare('SELECT value FROM sentinel').get().value, 'preserve-me');
+    unchangedV0Db.close();
+
+    const futureDbPath = path.join(tempDir, 'future-v10.sqlite3');
+    const futureDb = new Database(futureDbPath);
+    futureDb.exec(`
+        CREATE TABLE sentinel (value TEXT NOT NULL);
+        INSERT INTO sentinel(value) VALUES ('future-data');
+        PRAGMA user_version = 10;
+    `);
+    futureDb.close();
+    for (const readOnly of [true, false]) {
+        assert.throws(
+            () => new BmpPersistenceStore({ dbPath: futureDbPath, readOnly }).open(),
+            error => error.code === 'BMP_PERSISTENCE_SCHEMA_TOO_NEW'
+        );
+    }
 
     const invalidSchemaDbPath = path.join(tempDir, 'invalid-schema.sqlite3');
     const invalidSchemaStore = new BmpPersistenceStore({ dbPath: invalidSchemaDbPath }).open();

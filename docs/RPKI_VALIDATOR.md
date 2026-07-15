@@ -77,7 +77,7 @@ JSON 导入支持常见 ROA/VRP 结构：
 - Prefix：`prefix`、`IP Prefix`。
 - Max Length：`maxLength`、`max_length`、`maxPrefixLength`。
 
-导入时会跳过重复 ROA，并将主机地址归一化为网络地址。ROA 数据以 JSONL 文件保存，查询时使用运行时索引加速。
+导入时会跳过重复 ROA，并将主机地址归一化为网络地址。ROA 与 ASPA 数据统一保存在 SQLite 中，分页、精确 Prefix、ASN 和 IP 类型查询直接使用数据库索引，不再为全部记录维护运行时内存索引。
 
 ### Router Key
 
@@ -130,8 +130,15 @@ ASPA 页面用于维护 RPKI-RTR v2 的 ASPA PDU 数据。
 性能相关：
 
 - Provider AS 列表会保留用户输入顺序和重复项。
+- ROA 和 ASPA 支持各百万级记录；导入、分页和 RPKI-RTR 全量响应均使用有界批次，不会把完整数据集加载到内存。
+- JSON 导入先写入磁盘临时表，解析完整成功后才原子合并到正式表；截断或无效文件不会留下半批数据。
+- 大批量导入或清空会建立新的 cache 边界，客户端通过 Cache Reset 获取 SQLite 一致性快照。
+- SQLite 多写连接使用即时事务；全量响应最多同时保持 4 个只读快照，单快照默认最长 120 秒且使用 4 MiB page cache，避免慢客户端无限钉住 WAL 或放大内存。
+- 主版本升级按不兼容升级处理：用户确认清理后会删除已有 RPKI SQLite 数据，不迁移旧版 JSONL 或旧数据库 schema；同一主版本内的正常重启会保留当前数据。
 - 一条 ASPA 记录包含大量 Provider AS 时，发送和日志量都会随 Provider 数增长。
 - 如果只是日常调试，不建议在 debug/info 日志下反复发送超大 ASPA 记录。
+
+可用 `npm run benchmark:rpki-sqlite` 执行默认的 100 万 ROA + 100 万 ASPA 容量验证；脚本会检查批量写入、分页、索引查询、有界全表迭代和关闭重开后的数据一致性。
 
 ## 使用步骤
 

@@ -420,6 +420,14 @@ class BmpPersistenceClient {
         return this.sendRequest(BMP_PERSISTENCE_OP.QUERY_STATISTICS_REPORTS, query);
     }
 
+    async purgeSource({ sourceId } = {}) {
+        if (this.readOnly) {
+            throw new Error('Cannot purge a source through a read-only BMP persistence client');
+        }
+        await this.fence();
+        return this.sendRequest(BMP_PERSISTENCE_OP.PURGE_SOURCE, { sourceId });
+    }
+
     async purgeStaleRoutes(query = {}) {
         if (!this.readOnly) {
             await this.fence();

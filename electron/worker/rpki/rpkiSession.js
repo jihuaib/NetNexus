@@ -4,6 +4,11 @@ const BgpConst = require('../../const/bgpConst');
 const { ipToBytes } = require('../../utils/ipUtils');
 
 const ROA_WRITE_CHUNK_SIZE = 1024 * 1024;
+const DEFAULT_RESET_SNAPSHOT_TIMEOUT_MS = 120000;
+
+function yieldToIoLoop() {
+    return new Promise(resolve => setImmediate(resolve));
+}
 
 class RpkiSession {
     constructor(messageHandler, rpkiWorker) {
@@ -205,6 +210,14 @@ class RpkiSession {
             : RpkiConst.RPKI_MAX_SUPPORTED_VERSION;
     }
 
+    getResetSnapshotTimeoutMs() {
+        const configured = Number(this.rpkiWorker?.rpkiConfigData?.resetSnapshotTimeoutMs);
+        if (!Number.isFinite(configured) || configured <= 0) {
+            return DEFAULT_RESET_SNAPSHOT_TIMEOUT_MS;
+        }
+        return Math.min(Math.max(Math.floor(configured), 1000), 10 * 60 * 1000);
+    }
+
     // 协商协议版本：取客户端请求版本与服务端最高配置版本的较小者
     negotiateVersion(clientVersion) {
         const maxSupportedVersion = this.getMaxSupportedVersion();
@@ -229,28 +242,72 @@ class RpkiSession {
             data: this.getClientInfo()
         });
 
-        if (this.rpkiWorker.rpkiRoaMap.size === 0) {
-            this.sendCacheResponse();
-            if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
-                this.sendRouterKeyData();
-            }
-            if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
-                this.sendAspaData();
-            }
-            this.sendEndOfData();
-            return;
-        }
+        this.sendResetQueryResponse();
+    }
 
+    sendResetQueryResponse() {
         this.enqueueSend(async () => {
-            await this.writeBuffer(this.buildCacheResponsePdu());
-            await this.sendRoaData();
-            if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
-                this.sendRouterKeyData();
+            let snapshot = null;
+            let snapshotTimeout = null;
+            try {
+                snapshot =
+                    typeof this.rpkiWorker?.createDataSnapshot === 'function'
+                        ? await this.rpkiWorker.createDataSnapshot()
+                        : { cacheSerial: this.getCurrentSerial() };
+                snapshotTimeout = setTimeout(() => {
+                    logger.warn(
+                        `RPKI Reset Query快照超过${this.getResetSnapshotTimeoutMs()}ms，关闭慢客户端 ` +
+                            `${this.remoteIp}:${this.remotePort}`
+                    );
+                    this.closeSession().catch(error => logger.debug(`关闭RPKI慢客户端失败: ${error.message}`));
+                }, this.getResetSnapshotTimeoutMs());
+                snapshotTimeout.unref?.();
+                const snapshotSerial = this.normalizeSerial(snapshot?.cacheSerial, this.getCurrentSerial());
+                const roas =
+                    typeof this.rpkiWorker?.iterateRoas === 'function'
+                        ? this.rpkiWorker.iterateRoas(snapshot)
+                        : snapshot?.roas || [];
+
+                if (!(await this.writeBuffer(this.buildCacheResponsePdu()))) {
+                    return;
+                }
+                if (!(await this.writeRoaListData(roas, RpkiConst.RPKI_FLAGS.UPDATE))) {
+                    return;
+                }
+                if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
+                    if (!(await this.writeRouterKeyData(snapshot?.routerKeys))) {
+                        return;
+                    }
+                }
+                if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
+                    const aspas =
+                        typeof this.rpkiWorker?.iterateAspas === 'function'
+                            ? this.rpkiWorker.iterateAspas(snapshot)
+                            : snapshot?.aspas || [];
+                    if (!(await this.writeAspaListData(aspas, RpkiConst.RPKI_FLAGS.UPDATE))) {
+                        return;
+                    }
+                }
+                await this.writeBuffer(this.buildEndOfDataPdu(snapshotSerial));
+            } catch (error) {
+                logger.error(`RPKI Reset Query snapshot send failed: ${error.message}`);
+                if (this.canWrite()) {
+                    await this.writeBuffer(this.buildErrorReportPdu(RpkiConst.RPKI_ERROR_CODE.INTERNAL_ERROR));
+                }
+            } finally {
+                if (snapshotTimeout) {
+                    clearTimeout(snapshotTimeout);
+                }
+                try {
+                    if (snapshot && typeof this.rpkiWorker?.closeDataSnapshot === 'function') {
+                        await this.rpkiWorker.closeDataSnapshot(snapshot);
+                    } else if (snapshot && typeof snapshot.close === 'function') {
+                        await snapshot.close();
+                    }
+                } catch (error) {
+                    logger.warn(`RPKI SQLite snapshot close failed: ${error.message}`);
+                }
             }
-            if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V2) {
-                this.sendAspaData();
-            }
-            await this.writeBuffer(this.buildEndOfDataPdu());
         });
     }
 
@@ -280,7 +337,7 @@ class RpkiSession {
             return;
         }
 
-        this.sendSerialQueryResponse(deltaOperations || []);
+        this.sendSerialQueryResponse(deltaOperations || [], currentSerial);
     }
 
     handleErrorReport(message) {
@@ -296,7 +353,7 @@ class RpkiSession {
     }
 
     sendMessage(buffer) {
-        if (!this.socket || this.socket.destroyed) {
+        if (!this.canWrite()) {
             logger.error(`Cannot send message: socket is closed or destroyed`);
             return;
         }
@@ -316,17 +373,20 @@ class RpkiSession {
         return this.sendQueue;
     }
 
+    canWrite() {
+        return !this.closing && !this.closed && Boolean(this.socket) && !this.socket.destroyed;
+    }
+
     async writeBuffer(buffer) {
         if (!buffer || buffer.length === 0) {
             return false;
         }
-        if (!this.socket || this.socket.destroyed) {
-            logger.error(`Cannot send message: socket is closed or destroyed`);
+        if (!this.canWrite()) {
             return false;
         }
 
         try {
-            if (!this.socket.write(buffer)) {
+            if (this.socket.write(buffer) === false) {
                 await this.waitForDrain();
             }
             logger.debug(`Sent message to ${this.remoteIp}:${this.remotePort}, length ${buffer.length}`);
@@ -384,6 +444,11 @@ class RpkiSession {
 
     sendCacheResponse() {
         this.sendMessage(this.buildCacheResponsePdu());
+    }
+
+    normalizeSerial(value, fallback = 1) {
+        const number = Number(value);
+        return Number.isInteger(number) && number >= 0 ? number >>> 0 : Number(fallback) >>> 0;
     }
 
     getCurrentSerial() {
@@ -685,20 +750,29 @@ class RpkiSession {
     async writeDeltaOperations(operations) {
         for (const operation of operations || []) {
             for (const buffer of this.buildDeltaOperationBuffers(operation)) {
-                await this.writeBuffer(buffer);
+                if (!(await this.writeBuffer(buffer))) {
+                    return false;
+                }
             }
         }
+        return true;
     }
 
-    sendSerialQueryResponse(operations) {
+    sendSerialQueryResponse(operations, serial = this.getCurrentSerial()) {
+        const responseSerial = this.normalizeSerial(serial, this.getCurrentSerial());
         this.enqueueSend(async () => {
-            await this.writeBuffer(this.buildCacheResponsePdu());
-            await this.writeDeltaOperations(operations);
-            await this.writeBuffer(this.buildEndOfDataPdu());
+            if (!(await this.writeBuffer(this.buildCacheResponsePdu()))) {
+                return;
+            }
+            if (!(await this.writeDeltaOperations(operations))) {
+                return;
+            }
+            await this.writeBuffer(this.buildEndOfDataPdu(responseSerial));
         });
     }
 
-    buildEndOfDataPdu() {
+    buildEndOfDataPdu(serial = this.getCurrentSerial()) {
+        const endOfDataSerial = this.normalizeSerial(serial, this.getCurrentSerial());
         if (this.protocolVersion >= RpkiConst.RPKI_PROTOCOL_VERSION.V1) {
             // RFC 8210 §5.8: Header(8, sessionID in bytes 2-3) + Serial(4) + Refresh(4) + Retry(4) + Expire(4)
             // Total = 24
@@ -710,7 +784,7 @@ class RpkiSession {
             buffer.writeUInt16BE(this.sessionId, 2);
             buffer.writeUInt32BE(totalLen, 4);
 
-            buffer.writeUInt32BE(this.getCurrentSerial(), RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
+            buffer.writeUInt32BE(endOfDataSerial, RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
             buffer.writeUInt32BE(3600, RpkiConst.RPKI_HEADER_LENGTH + 4); // Refresh
             buffer.writeUInt32BE(600, RpkiConst.RPKI_HEADER_LENGTH + 8); // Retry
             buffer.writeUInt32BE(7200, RpkiConst.RPKI_HEADER_LENGTH + 12); // Expire
@@ -725,14 +799,14 @@ class RpkiSession {
             buffer[1] = RpkiConst.RPKI_MSG_TYPE.END_OF_DATA;
             buffer.writeUInt16BE(this.sessionId, 2);
             buffer.writeUInt32BE(totalLen, 4);
-            buffer.writeUInt32BE(this.getCurrentSerial(), RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
+            buffer.writeUInt32BE(endOfDataSerial, RpkiConst.RPKI_HEADER_LENGTH); // Serial Number
 
             return buffer;
         }
     }
 
-    sendEndOfData() {
-        this.sendMessage(this.buildEndOfDataPdu());
+    sendEndOfData(serial = this.getCurrentSerial()) {
+        this.sendMessage(this.buildEndOfDataPdu(serial));
     }
 
     sendCacheReset() {
@@ -798,40 +872,83 @@ class RpkiSession {
         }
     }
 
-    async writeRoaListData(roas, flags) {
+    async writeChunkedPduList(items, buildPdus, description) {
         let chunkBuffers = [];
         let chunkBytes = 0;
         let count = 0;
 
         const flush = async () => {
             if (chunkBytes === 0) {
-                return;
+                return true;
             }
 
             const buffer = Buffer.concat(chunkBuffers, chunkBytes);
             chunkBuffers = [];
             chunkBytes = 0;
-            await this.writeBuffer(buffer);
+            const written = await this.writeBuffer(buffer);
+            if (written) {
+                await yieldToIoLoop();
+            }
+            return written;
         };
 
-        for (const roa of roas) {
-            const isIpv6 = roa.ipType !== BgpConst.IP_TYPE.IPV4;
-            const pdu = this.buildPrefixPdu(roa, flags, isIpv6);
-            if (chunkBytes > 0 && chunkBytes + pdu.length > ROA_WRITE_CHUNK_SIZE) {
-                await flush();
+        for (const item of items || []) {
+            if (!this.canWrite()) {
+                return false;
             }
+            const built = buildPdus(item);
+            const pdus = Array.isArray(built) ? built : built ? [built] : [];
+            for (const pdu of pdus) {
+                if (!Buffer.isBuffer(pdu) || pdu.length === 0) {
+                    continue;
+                }
+                if (chunkBytes > 0 && chunkBytes + pdu.length > ROA_WRITE_CHUNK_SIZE) {
+                    if (!(await flush())) {
+                        return false;
+                    }
+                }
 
-            chunkBuffers.push(pdu);
-            chunkBytes += pdu.length;
+                if (pdu.length > ROA_WRITE_CHUNK_SIZE) {
+                    if (!(await this.writeBuffer(pdu))) {
+                        return false;
+                    }
+                    await yieldToIoLoop();
+                } else {
+                    chunkBuffers.push(pdu);
+                    chunkBytes += pdu.length;
+                }
+            }
             count += 1;
         }
 
-        await flush();
-        logger.info(`RPKI ROA批量发送完成: count=${count}, flags=${flags}`);
+        if (!(await flush())) {
+            return false;
+        }
+        logger.info(`RPKI ${description}批量发送完成: count=${count}`);
+        return true;
     }
 
-    async sendRoaData() {
-        await this.writeRoaListData(this.rpkiWorker.rpkiRoaMap.values(), RpkiConst.RPKI_FLAGS.UPDATE);
+    async writeRoaListData(roas, flags) {
+        return this.writeChunkedPduList(
+            roas,
+            roa => {
+                const isIpv6 = roa.ipType !== BgpConst.IP_TYPE.IPV4;
+                return this.buildPrefixPdu(roa, flags, isIpv6);
+            },
+            `ROA flags=${flags} `
+        );
+    }
+
+    async writeRouterKeyData(routerKeys = this.rpkiWorker?.rpkiRouterKeyMap?.values?.() || []) {
+        return this.writeChunkedPduList(
+            routerKeys,
+            rk => this.buildRouterKeyPdu(rk, RpkiConst.RPKI_FLAGS.UPDATE),
+            'Router Key '
+        );
+    }
+
+    async writeAspaListData(aspas, flags) {
+        return this.writeChunkedPduList(aspas, aspa => this.buildAspaPdus(aspa, flags), `ASPA flags=${flags} `);
     }
 
     sendRouterKeyData() {
@@ -840,14 +957,16 @@ class RpkiSession {
         }
     }
 
-    sendAspaData() {
-        for (const aspa of this.rpkiWorker.rpkiAspaMap.values()) {
-            this.sendAspa(aspa);
-        }
+    sendAspaData(aspas = []) {
+        return this.enqueueSend(() => this.writeAspaListData(aspas, RpkiConst.RPKI_FLAGS.UPDATE));
     }
 
-    async withdrawRoaData() {
-        await this.writeRoaListData(this.rpkiWorker.rpkiRoaMap.values(), RpkiConst.RPKI_FLAGS.WITHDRAWAL);
+    async sendRoaData(roas = []) {
+        return this.writeRoaListData(roas, RpkiConst.RPKI_FLAGS.UPDATE);
+    }
+
+    async withdrawRoaData(roas = []) {
+        return this.writeRoaListData(roas, RpkiConst.RPKI_FLAGS.WITHDRAWAL);
     }
 
     sendRoaBatchData(roas) {

@@ -1,5 +1,5 @@
 <template>
-    <div class="nn-container bgp-route-page">
+    <div class="nn-container bgp-route-page" data-testid="bgp-route-mvpn-page">
         <nn-card title="IPv4-MVPN路由配置" class="bgp-route-card">
             <nn-form :model="ipv4MvpnData" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <nn-row>
@@ -194,21 +194,28 @@
                     @click="deleteRoutes"
                 >
                     <template #icon><DeleteOutlined /></template>
-                    删除所有
+                    删除当前类型全部
                 </nn-button>
             </template>
 
             <!-- 按路由类型分组显示 -->
-            <nn-tabs v-model:active-key="activeMvpnTab" type="card" class="mvpn-route-tabs">
+            <nn-tabs
+                v-model:active-key="activeMvpnTab"
+                type="card"
+                class="mvpn-route-tabs"
+                @change="handleMvpnTabChange"
+            >
                 <nn-tab-pane v-for="group in groupedMvpnRoutes" :key="group.type" :tab="group.typeName">
                     <nn-table
+                        :data-testid="`bgp-mvpn-route-table-${group.type}`"
                         :data-source="group.routes"
                         :columns="getRouteColumns(group.type)"
                         :pagination="pagination"
+                        :loading="routeListLoading"
                         size="small"
                         :row-key="
                             record =>
-                                `${record.rd}-${record.routeType}-${record.sourceIp || ''}-${record.groupIp || ''}-${record.originatingRouterIp || ''}`
+                                `${record.rd}-${record.routeType}-${record.sourceAs || ''}-${record.sourceIp || ''}-${record.groupIp || ''}-${record.originatingRouterIp || ''}`
                         "
                         :scroll="{ y: '100%' }"
                         class="bgp-route-table"
@@ -347,8 +354,10 @@
     ];
 
     const sentRoutes = ref([]);
+    const routeListLoading = ref(false);
+    let routeListRequestId = 0;
     const hasRoutes = computed(() => pagination.value.total > 0);
-    const activeMvpnTab = ref(null);
+    const activeMvpnTab = ref(mvpnRouteTypeOptions[0].value);
     const routesGenerating = ref(false);
     const deleteAllLoading = ref(false);
     const routeDetailVisible = ref(false);
@@ -412,32 +421,21 @@
         return columns;
     };
 
-    // 计算属性：按路由类型分组MVPN路由
+    // 所有Tab共享当前路由类型的服务端分页结果
     const groupedMvpnRoutes = computed(() => {
-        if (!sentRoutes.value) {
-            return [];
-        }
-        // 遍历所有定义的路由类型选项
-        return mvpnRouteTypeOptions.map(option => {
-            const routes = sentRoutes.value.filter(route => route.routeType === option.value);
-            return {
-                type: option.value,
-                typeName: option.label,
-                routes: routes || []
-            };
-        });
+        return mvpnRouteTypeOptions.map(option => ({
+            type: option.value,
+            typeName: option.label,
+            routes: option.value === activeMvpnTab.value ? sentRoutes.value : []
+        }));
     });
 
-    // 默认选中第一个Tab
-    watch(
-        activeMvpnTab,
-        newVal => {
-            if (!newVal && mvpnRouteTypeOptions.length > 0) {
-                activeMvpnTab.value = mvpnRouteTypeOptions[0].value;
-            }
-        },
-        { immediate: true }
-    );
+    const handleMvpnTabChange = routeType => {
+        activeMvpnTab.value = routeType;
+        pagination.value.current = 1;
+        sentRoutes.value = [];
+        refreshRoutes();
+    };
 
     onMounted(async () => {
         // Load MVPN Config
@@ -454,18 +452,44 @@
     });
 
     const refreshRoutes = async () => {
-        const result = await window.bgpApi.getRoutes(
-            BGP_ADDR_FAMILY.IPV4_MVPN,
-            pagination.value.current,
-            pagination.value.pageSize
-        );
-        if (result.status === 'success') {
-            sentRoutes.value = result.data.list;
-            pagination.value.total = result.data.total;
-        } else {
-            console.error(result.msg);
-            sentRoutes.value = [];
+        const requestId = ++routeListRequestId;
+        const current = pagination.value.current;
+        const pageSize = pagination.value.pageSize;
+        const routeType = activeMvpnTab.value;
+        routeListLoading.value = true;
+
+        try {
+            const result = await window.bgpApi.getRoutes(BGP_ADDR_FAMILY.IPV4_MVPN, current, pageSize, { routeType });
+            if (requestId !== routeListRequestId) {
+                return;
+            }
+
+            if (result.status === 'success') {
+                sentRoutes.value = result.data.list;
+                pagination.value.total = result.data.total;
+            } else {
+                console.error(result.msg);
+                sentRoutes.value = [];
+                pagination.value.total = 0;
+            }
+        } catch (e) {
+            if (requestId === routeListRequestId) {
+                console.error(e);
+                sentRoutes.value = [];
+                pagination.value.total = 0;
+            }
+        } finally {
+            if (requestId === routeListRequestId) {
+                routeListLoading.value = false;
+            }
         }
+    };
+
+    const refreshRoutesAfterSingleDelete = async () => {
+        const remainingTotal = Math.max(0, pagination.value.total - 1);
+        const lastPage = Math.max(1, Math.ceil(remainingTotal / pagination.value.pageSize));
+        pagination.value.current = Math.min(pagination.value.current, lastPage);
+        await refreshRoutes();
     };
 
     const handleTableChange = (pag, _filters, _sorter) => {
@@ -523,6 +547,7 @@
 
             if (result.status === 'success') {
                 notify.success(`${result.msg}`);
+                activeMvpnTab.value = ipv4MvpnData.value.routeType;
                 pagination.value.current = 1;
                 await refreshRoutes();
             } else {
@@ -539,7 +564,7 @@
         try {
             dialog.confirm({
                 title: '确认删除',
-                content: `确定要删除所有 ${pagination.value.total} 条MVPN路由吗？此操作不可恢复。`,
+                content: `确定要删除当前类型的全部 ${pagination.value.total} 条MVPN路由吗？此操作不可恢复。`,
                 okText: '确定',
                 cancelText: '取消',
                 okType: 'danger',
@@ -550,7 +575,9 @@
 
                     deleteAllLoading.value = true;
                     try {
-                        const result = await window.bgpApi.deleteAllRoutesByFamily(BGP_ADDR_FAMILY.IPV4_MVPN);
+                        const result = await window.bgpApi.deleteAllRoutesByFamily(BGP_ADDR_FAMILY.IPV4_MVPN, {
+                            routeType: activeMvpnTab.value
+                        });
 
                         if (result.status === 'success') {
                             notify.success(`${result.msg}`);
@@ -616,7 +643,7 @@
 
             if (result.status === 'success') {
                 notify.success(`${result.msg}`);
-                await refreshRoutes();
+                await refreshRoutesAfterSingleDelete();
             } else {
                 notify.error(`路由删除失败: ${result.msg}`);
             }

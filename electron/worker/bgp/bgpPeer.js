@@ -13,6 +13,8 @@ const CommonUtils = require('../../utils/commonUtils');
 const { canonicalizeAttr } = require('./bgpPathAttrStore');
 const BgpRoute = require('./bgpRoute');
 
+const MAX_PENDING_ROUTE_STREAM_ROUTES = 2000;
+
 function parseRouteAsPath(asPathStr, use4ByteAsn = true) {
     if (!asPathStr || typeof asPathStr !== 'string') return null;
     const asNumbers = asPathStr
@@ -106,6 +108,9 @@ class BgpPeer {
         );
 
         this.peerState = state;
+        if (state === BgpConst.BGP_PEER_STATE.ESTABLISHED) {
+            this.resyncRequested = false;
+        }
 
         const peerInfo = this.getPeerInfo();
 
@@ -235,12 +240,13 @@ class BgpPeer {
         const withdrawnRoutes = new Map();
         routes.forEach(route => {
             const prefixKey = this.getRouteUnicastPrefixKey(route);
-            let hasRemainingRoute = false;
-            this.instance.routeMap.forEach(existingRoute => {
-                if (this.getRouteUnicastPrefixKey(existingRoute) === prefixKey) {
-                    hasRemainingRoute = true;
-                }
+            const remaining = this.instance.routeMap.queryPrefix(route.ip, {
+                prefixLength: route.mask,
+                rd: BgpRoute.normalizeRd(route.rd),
+                pageSize: 1,
+                includeTotal: false
             });
+            const hasRemainingRoute = remaining.list.length > 0;
             if (!hasRemainingRoute && !withdrawnRoutes.has(prefixKey)) {
                 withdrawnRoutes.set(prefixKey, route);
             }
@@ -613,7 +619,7 @@ class BgpPeer {
             const includePathId = this.shouldSendAddPath();
             let routeNlri = this.buildIpPrefixNlri(route, includePathId);
             let nlriLen = routeNlri.length;
-            while (msgLen + nlriLen < BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
+            while (msgLen + nlriLen <= BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
                 attr.push(...routeNlri);
 
                 routeIndex++;
@@ -722,7 +728,7 @@ class BgpPeer {
             const includePathId = this.shouldSendAddPath();
             let routeNlri = this.buildIpPrefixNlri(route, includePathId);
             let nlriLen = routeNlri.length;
-            while (msgLen + nlriLen < BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
+            while (msgLen + nlriLen <= BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
                 attr.push(...routeNlri);
 
                 routeIndex++;
@@ -810,7 +816,7 @@ class BgpPeer {
             const includePathId = this.shouldSendAddPath();
             let routeNlri = this.buildIpPrefixNlri(curRoute, includePathId);
             let nlriLen = routeNlri.length;
-            while (msgLen + nlriLen < BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
+            while (msgLen + nlriLen <= BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
                 nlri.push(...routeNlri);
 
                 routeIndex++;
@@ -861,7 +867,7 @@ class BgpPeer {
             const includePathId = this.shouldSendAddPath();
             let routeNlri = this.buildIpPrefixNlri(route, includePathId);
             let nlriLen = routeNlri.length;
-            while (msgLen + nlriLen < BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
+            while (msgLen + nlriLen <= BgpConst.BGP_MAX_PKT_SIZE && routeIndex < routes.length) {
                 withdrawNlri.push(...routeNlri);
 
                 routeIndex++;
@@ -939,10 +945,20 @@ class BgpPeer {
         }
     }
 
-    sendRouteGroup(routes) {
-        let routeIndex = 0;
-        if (!routes || routes.length === 0) return;
+    sendBuiltRouteLoop(routes, builder, routeIndex = 0) {
+        while (routeIndex < routes.length) {
+            const result = builder(routes, routeIndex);
+            if (!result.status) return null;
+            routeIndex = result.index;
+            const pending = this.session.sendRoute(result.buffer);
+            if (pending && typeof pending.then === 'function') {
+                return pending.then(() => this.sendBuiltRouteLoop(routes, builder, routeIndex));
+            }
+        }
+        return null;
+    }
 
+    getRouteGroupBuilder() {
         const ipType = getIpType(this.session.peerIp);
 
         if (
@@ -950,99 +966,365 @@ class BgpPeer {
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
         ) {
             if (CommonUtils.BIT_TEST(this.session.localCapFlags, BgpConst.BGP_CAP_FLAGS.EXTENDED_NEXT_HOP_ENCODING)) {
-                while (routeIndex < routes.length) {
-                    const result = this.buildUpdateMpMsg(routes, routeIndex);
-                    if (result.status) {
-                        this.session.sendRoute(result.buffer);
-                        routeIndex = result.index;
-                    } else {
-                        break;
-                    }
-                }
+                return this.buildUpdateMpMsg.bind(this);
             } else if (ipType === BgpConst.IP_TYPE.IPV4) {
                 // 没使能EXTENDED_NEXT_HOP_ENCODING的话，需要ipv4邻居才发送
-                while (routeIndex < routes.length) {
-                    const result = this.buildUpdateMsgIpv4(routes, routeIndex);
-                    if (result.status) {
-                        this.session.sendRoute(result.buffer);
-                        routeIndex = result.index;
-                    } else {
-                        break;
-                    }
-                }
+                return this.buildUpdateMsgIpv4.bind(this);
             }
         } else if (
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 &&
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
         ) {
-            while (routeIndex < routes.length) {
-                const result = this.buildUpdateMpMsg(routes, routeIndex);
-                if (result.status) {
-                    this.session.sendRoute(result.buffer);
-                    routeIndex = result.index;
-                } else {
-                    break;
-                }
-            }
+            return this.buildUpdateMpMsg.bind(this);
         } else if (
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN
         ) {
-            while (routeIndex < routes.length) {
-                const result = this.buildUpdateMpMsg(routes, routeIndex);
-                if (result.status) {
-                    this.session.sendRoute(result.buffer);
-                    routeIndex = result.index;
-                } else {
-                    break;
-                }
-            }
+            return this.buildUpdateMpMsg.bind(this);
         } else if (
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
         ) {
-            while (routeIndex < routes.length) {
-                const result = this.buildUpdateMpMsg(routes, routeIndex);
-                if (result.status) {
-                    this.session.sendRoute(result.buffer);
-                    routeIndex = result.index;
-                } else {
-                    break;
+            return this.buildUpdateMpMsg.bind(this);
+        } else if (this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
+            return this.buildUpdateMpMsg.bind(this);
+        }
+        return null;
+    }
+
+    sendRouteGroup(routes) {
+        if (!routes || routes.length === 0) return null;
+        const builder = this.getRouteGroupBuilder();
+        return builder ? this.sendBuiltRouteLoop(routes, builder) : null;
+    }
+
+    getSelectedRoutesForBatch(routes) {
+        if (!this.isIpUnicastFamily() || this.shouldSendAddPath()) return routes;
+        const selected = new Map();
+        routes.forEach(route => {
+            const prefixKey = this.getRouteUnicastPrefixKey(route);
+            const current = selected.get(prefixKey);
+            if (!current || this.getRoutePathId(route) < this.getRoutePathId(current)) {
+                selected.set(prefixKey, route);
+            }
+        });
+        const result = [];
+        for (const route of selected.values()) {
+            if (this.getRoutePathId(route) === 0) {
+                result.push(route);
+                continue;
+            }
+            const best = this.instance.routeMap.queryPrefix(route.ip, {
+                prefixLength: route.mask,
+                rd: BgpRoute.normalizeRd(route.rd),
+                bestPathOnly: true,
+                pageSize: 1,
+                includeTotal: false
+            }).list[0];
+            if (best) result.push(best);
+        }
+        return result;
+    }
+
+    sendRouteBatchNow(routes) {
+        if (this.peerState !== BgpConst.BGP_PEER_STATE.ESTABLISHED) {
+            return null;
+        }
+        const groups = new Map();
+        this.getSelectedRoutesForBatch(routes).forEach(route => {
+            const key = this.getOutboundRouteAttrGroupKey(route);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(route);
+        });
+        const routeGroups = Array.from(groups.values());
+        const sendNext = index => {
+            while (index < routeGroups.length) {
+                const pending = this.sendRouteGroup(routeGroups[index]);
+                index += 1;
+                if (pending && typeof pending.then === 'function') {
+                    return pending.then(() => sendNext(index));
                 }
             }
-        } else if (this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
-            while (routeIndex < routes.length) {
-                const result = this.buildUpdateMpMsg(routes, routeIndex);
-                if (result.status) {
-                    this.session.sendRoute(result.buffer);
-                    routeIndex = result.index;
-                } else {
-                    break;
+            return null;
+        };
+        return sendNext(0);
+    }
+
+    abandonRouteBatchStream(state, needsResend = false) {
+        state.abandoned = true;
+        state.needsResend = state.needsResend || needsResend;
+        state.pendingGroups.clear();
+        state.pendingPrefixes?.clear();
+        state.pendingRouteCount = 0;
+    }
+
+    unindexPendingRouteBatchStreamRoutes(state, routes) {
+        if (!state.pendingPrefixes) return;
+        routes.forEach(route => {
+            const prefixKey = this.getRouteUnicastPrefixKey(route);
+            if (state.pendingPrefixes.get(prefixKey)?.route === route) {
+                state.pendingPrefixes.delete(prefixKey);
+            }
+        });
+    }
+
+    sendCompleteRouteBatchStreamPackets(state, routes) {
+        while (routes.length > 0) {
+            const result = state.builder(routes, 0);
+            if (!result.status || result.index <= 0) {
+                this.requestPeerResync('route batch stream packetization failed');
+                this.abandonRouteBatchStream(state);
+                return null;
+            }
+
+            // The builder consumed every available route, so this may still be
+            // a partial UPDATE. Keep it until another chunk supplies the
+            // look-ahead route, or until the API operation explicitly ends.
+            if (result.index >= routes.length) return null;
+
+            const consumedRoutes = routes.splice(0, result.index);
+            this.unindexPendingRouteBatchStreamRoutes(state, consumedRoutes);
+            state.pendingRouteCount -= consumedRoutes.length;
+            const pending = this.session.sendRoute(result.buffer);
+            if (pending && typeof pending.then === 'function') {
+                if (state.abandonOnBackpressure) {
+                    const tracked = this.trackRouteSend(pending);
+                    this.abandonRouteBatchStream(state, true);
+                    return tracked;
                 }
+                return pending.then(() => this.sendCompleteRouteBatchStreamPackets(state, routes));
             }
         }
+        return null;
+    }
+
+    flushOldestRouteBatchStreamGroup(state) {
+        const oldest = state.pendingGroups.entries().next();
+        if (oldest.done) return null;
+        const [key, routes] = oldest.value;
+        state.pendingGroups.delete(key);
+        state.pendingRouteCount -= routes.length;
+        this.unindexPendingRouteBatchStreamRoutes(state, routes);
+        const pending = this.sendBuiltRouteLoop(routes, state.builder);
+        if (pending && typeof pending.then === 'function') {
+            if (state.abandonOnBackpressure) {
+                const tracked = this.trackRouteSend(pending);
+                this.abandonRouteBatchStream(state, true);
+                return tracked;
+            }
+            return pending;
+        }
+        return null;
+    }
+
+    appendRouteBatchStreamGroup(state, key, group) {
+        const pendingRoutes = state.pendingGroups.get(key) || [];
+        group.forEach(route => {
+            if (state.pendingPrefixes) {
+                const prefixKey = this.getRouteUnicastPrefixKey(route);
+                const previous = state.pendingPrefixes.get(prefixKey);
+                if (previous) {
+                    const previousRoutes = state.pendingGroups.get(previous.groupKey);
+                    const previousIndex = previousRoutes?.indexOf(previous.route) ?? -1;
+                    if (previousIndex >= 0) {
+                        previousRoutes.splice(previousIndex, 1);
+                        state.pendingRouteCount -= 1;
+                        if (previousRoutes.length === 0) {
+                            state.pendingGroups.delete(previous.groupKey);
+                        }
+                    }
+                    state.pendingPrefixes.delete(prefixKey);
+                }
+                state.pendingPrefixes.set(prefixKey, { groupKey: key, route });
+            }
+            pendingRoutes.push(route);
+            state.pendingRouteCount += 1;
+        });
+
+        // Refresh insertion order so the global bound evicts the least
+        // recently extended attribute group first.
+        state.pendingGroups.delete(key);
+        state.pendingGroups.set(key, pendingRoutes);
+
+        const enforceBound = () => {
+            while (state.pendingRouteCount > MAX_PENDING_ROUTE_STREAM_ROUTES) {
+                const flushPending = this.flushOldestRouteBatchStreamGroup(state);
+                if (flushPending) {
+                    if (state.abandoned) return flushPending;
+                    return flushPending.then(enforceBound);
+                }
+                if (state.abandoned) return null;
+            }
+            return null;
+        };
+
+        const pending = this.sendCompleteRouteBatchStreamPackets(state, pendingRoutes);
+        if (pending) {
+            if (state.abandoned) return pending;
+            return pending.then(enforceBound);
+        }
+        if (state.abandoned) return null;
+        return enforceBound();
+    }
+
+    writeRouteBatchStream(state, routes) {
+        if (state.ended || state.abandoned || !routes || routes.length === 0) return null;
+
+        const groups = new Map();
+        this.getSelectedRoutesForBatch(routes).forEach(route => {
+            const key = this.getOutboundRouteAttrGroupKey(route);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(route);
+        });
+
+        const groupEntries = Array.from(groups.entries());
+        const sendNext = index => {
+            while (index < groupEntries.length) {
+                const [key, group] = groupEntries[index];
+                const pending = this.appendRouteBatchStreamGroup(state, key, group);
+                index += 1;
+                if (pending) {
+                    if (state.abandoned) return pending;
+                    return pending.then(() => sendNext(index));
+                }
+                if (state.abandoned) return null;
+            }
+            return null;
+        };
+        return sendNext(0);
+    }
+
+    endRouteBatchStream(state) {
+        if (state.ended) return this.activeSendPromise;
+        state.ended = true;
+
+        if (state.abandoned) {
+            if (!state.needsResend) return this.activeSendPromise;
+            if (this.activeSendPromise) {
+                this.resendRequested = true;
+                return this.activeSendPromise;
+            }
+            return this.sendRoute();
+        }
+
+        const routeGroups = Array.from(state.pendingGroups.values());
+        state.pendingGroups.clear();
+        state.pendingPrefixes?.clear();
+        state.pendingRouteCount = 0;
+        const sendNext = index => {
+            while (index < routeGroups.length) {
+                const pending = this.sendBuiltRouteLoop(routeGroups[index], state.builder);
+                index += 1;
+                if (pending && typeof pending.then === 'function') {
+                    return pending.then(() => sendNext(index));
+                }
+            }
+            return null;
+        };
+        const pending = sendNext(0);
+        return state.trackSends ? this.trackRouteSend(pending) : pending;
+    }
+
+    createRouteBatchStream(options = {}) {
+        const state = {
+            builder: this.getRouteGroupBuilder(),
+            pendingGroups: new Map(),
+            pendingPrefixes: this.isIpUnicastFamily() && !this.shouldSendAddPath() ? new Map() : null,
+            pendingRouteCount: 0,
+            abandoned: false,
+            needsResend: false,
+            ended: false,
+            abandonOnBackpressure: options.abandonOnBackpressure !== false,
+            trackSends: options.trackSends !== false
+        };
+
+        if (this.peerState !== BgpConst.BGP_PEER_STATE.ESTABLISHED || !state.builder) {
+            state.abandoned = true;
+        } else if (this.activeWithdrawPromise) {
+            this.requestPeerResync('announcement stream while a withdraw stream is backpressured');
+            state.abandoned = true;
+        } else if (this.activeSendPromise) {
+            state.abandoned = true;
+            state.needsResend = true;
+        }
+
+        return {
+            write: routes => this.writeRouteBatchStream(state, routes),
+            end: () => this.endRouteBatchStream(state)
+        };
+    }
+
+    sendRoutePage(cursor = null, routeBatchStream = null) {
+        const stream =
+            routeBatchStream ||
+            this.createRouteBatchStream({
+                abandonOnBackpressure: false,
+                trackSends: false
+            });
+        const page = this.instance.routeMap.queryPage({
+            pageSize: 2000,
+            afterRouteId: cursor,
+            includeTotal: false,
+            bestPathOnly: this.isIpUnicastFamily() && !this.shouldSendAddPath()
+        });
+        if (page.list.length === 0) return stream.end();
+        const pending = stream.write(page.list);
+        const next = () => (page.nextCursor === null ? stream.end() : this.sendRoutePage(page.nextCursor, stream));
+        return pending && typeof pending.then === 'function' ? pending.then(next) : next();
+    }
+
+    trackRouteSend(pending) {
+        if (!pending || typeof pending.then !== 'function') return null;
+        this.activeSendPromise = pending
+            .catch(error => logger.error(`BGP route stream failed: ${error.message}`))
+            .finally(() => {
+                this.activeSendPromise = null;
+                if (this.resendRequested) {
+                    this.resendRequested = false;
+                    this.sendRoute();
+                }
+            });
+        return this.activeSendPromise;
+    }
+
+    sendRouteBatch(routes) {
+        if (this.activeWithdrawPromise) {
+            // Announcements must not race a backpressured withdraw stream. Do
+            // not retain this batch: resetting the session makes the next
+            // establishment advertise a bounded snapshot from SQLite.
+            this.requestPeerResync('announcement while a withdraw stream is backpressured');
+            return this.activeWithdrawPromise;
+        }
+        if (this.activeSendPromise) {
+            // Do not retain subsequent batches while the socket is congested.
+            // A bounded full-table stream will reconcile the peer afterwards.
+            this.resendRequested = true;
+            return this.activeSendPromise;
+        }
+        return this.trackRouteSend(this.sendRouteBatchNow(routes));
     }
 
     sendRoute() {
-        if (this.peerState !== BgpConst.BGP_PEER_STATE.ESTABLISHED) {
-            return;
+        if (this.peerState !== BgpConst.BGP_PEER_STATE.ESTABLISHED) return null;
+        if (this.activeWithdrawPromise) {
+            this.requestPeerResync('route refresh while a withdraw stream is backpressured');
+            return this.activeWithdrawPromise;
         }
-
-        for (const routes of this.getOutboundRouteGroups()) {
-            this.sendRouteGroup(routes);
+        if (this.activeSendPromise) {
+            this.resendRequested = true;
+            return this.activeSendPromise;
         }
+        return this.trackRouteSend(this.sendRoutePage());
     }
 
-    withdrawRoute(withdrawnRoutes) {
-        let routeIndex = 0;
-
+    withdrawRouteNow(withdrawnRoutes) {
         if (this.peerState !== BgpConst.BGP_PEER_STATE.ESTABLISHED) {
-            return;
+            return null;
         }
 
         withdrawnRoutes = this.getWithdrawnRoutes(withdrawnRoutes || []);
         if (withdrawnRoutes.length === 0) {
-            return;
+            return null;
         }
 
         if (
@@ -1050,76 +1332,57 @@ class BgpPeer {
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
         ) {
             if (CommonUtils.BIT_TEST(this.session.localCapFlags, BgpConst.BGP_CAP_FLAGS.EXTENDED_NEXT_HOP_ENCODING)) {
-                while (routeIndex < withdrawnRoutes.length) {
-                    const result = this.buildWithdrawMpMsg(withdrawnRoutes, routeIndex);
-                    if (result.status) {
-                        this.session.sendRoute(result.buffer);
-                        routeIndex = result.index;
-                    } else {
-                        break;
-                    }
-                }
+                return this.sendBuiltRouteLoop(withdrawnRoutes, this.buildWithdrawMpMsg.bind(this));
             } else {
-                while (routeIndex < withdrawnRoutes.length) {
-                    const result = this.buildWithdrawMsgIpv4(withdrawnRoutes, routeIndex);
-                    if (result.status) {
-                        this.session.sendRoute(result.buffer);
-                        routeIndex = result.index;
-                    } else {
-                        break;
-                    }
-                }
+                return this.sendBuiltRouteLoop(withdrawnRoutes, this.buildWithdrawMsgIpv4.bind(this));
             }
         } else if (
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 &&
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
         ) {
-            while (routeIndex < withdrawnRoutes.length) {
-                const result = this.buildWithdrawMpMsg(withdrawnRoutes, routeIndex);
-                if (result.status) {
-                    this.session.sendRoute(result.buffer);
-                    routeIndex = result.index;
-                } else {
-                    break;
-                }
-            }
+            return this.sendBuiltRouteLoop(withdrawnRoutes, this.buildWithdrawMpMsg.bind(this));
         } else if (
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN
         ) {
-            while (routeIndex < withdrawnRoutes.length) {
-                const result = this.buildWithdrawMpMsg(withdrawnRoutes, routeIndex);
-                if (result.status) {
-                    this.session.sendRoute(result.buffer);
-                    routeIndex = result.index;
-                } else {
-                    break;
-                }
-            }
+            return this.sendBuiltRouteLoop(withdrawnRoutes, this.buildWithdrawMpMsg.bind(this));
         } else if (
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
         ) {
-            while (routeIndex < withdrawnRoutes.length) {
-                const result = this.buildWithdrawMpMsg(withdrawnRoutes, routeIndex);
-                if (result.status) {
-                    this.session.sendRoute(result.buffer);
-                    routeIndex = result.index;
-                } else {
-                    break;
-                }
-            }
+            return this.sendBuiltRouteLoop(withdrawnRoutes, this.buildWithdrawMpMsg.bind(this));
         } else if (this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
-            while (routeIndex < withdrawnRoutes.length) {
-                const result = this.buildWithdrawMpMsg(withdrawnRoutes, routeIndex);
-                if (result.status) {
-                    this.session.sendRoute(result.buffer);
-                    routeIndex = result.index;
-                } else {
-                    break;
-                }
-            }
+            return this.sendBuiltRouteLoop(withdrawnRoutes, this.buildWithdrawMpMsg.bind(this));
         }
+        return null;
+    }
+
+    requestPeerResync(reason) {
+        if (this.resyncRequested) return;
+        this.resyncRequested = true;
+        logger.warn(`Resetting BGP peer ${this.session.peerIp} for bounded route resync: ${reason}`);
+        if (typeof this.session.resetSession === 'function') {
+            this.session.resetSession();
+        }
+    }
+
+    withdrawRoute(withdrawnRoutes) {
+        if (this.activeSendPromise) {
+            this.requestPeerResync('withdraw while an announcement stream is backpressured');
+            return this.activeSendPromise;
+        }
+        if (this.activeWithdrawPromise) {
+            this.requestPeerResync('bulk withdraw exceeded socket backpressure');
+            return this.activeWithdrawPromise;
+        }
+        const pending = this.withdrawRouteNow(withdrawnRoutes);
+        if (!pending || typeof pending.then !== 'function') return null;
+        this.activeWithdrawPromise = pending
+            .catch(error => logger.warn(`BGP withdraw stream stopped: ${error.message}`))
+            .finally(() => {
+                this.activeWithdrawPromise = null;
+            });
+        return this.activeWithdrawPromise;
     }
 
     buildLabeledUnicastNlri(route) {

@@ -377,7 +377,7 @@
     const confirmDeleteAllRoa = () => {
         dialog.confirm({
             title: '确认批量删除ROA？',
-            content: `将删除全部 ${roaStorageTotal.value} 条 ROA。RPKI服务运行时会向客户端批量发送撤销报文。`,
+            content: `将删除全部 ${roaStorageTotal.value} 条 ROA。RPKI服务运行时会通知客户端重新同步缓存。`,
             okText: '删除',
             okType: 'danger',
             cancelText: '取消',

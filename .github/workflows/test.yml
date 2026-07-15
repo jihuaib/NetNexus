@@ -9,7 +9,7 @@ on:
 
 jobs:
     frr-bmp-e2e:
-        name: FRR BMP Interoperability E2E
+        name: FRR BMP/BGP Interoperability E2E
         runs-on: ubuntu-24.04
         timeout-minutes: 30
         env:
@@ -40,19 +40,18 @@ jobs:
             - name: Run FRR BMP interoperability E2E
               run: npm run test:e2e:frr
 
+            - name: Install Playwright Chromium
+              run: npx playwright install --with-deps chromium
+
+            - name: Run BGP/FRR route and page parity E2E
+              run: npm run test:e2e:bgp-frr
+
     e2e-macos:
-        name: macOS ${{ matrix.arch }} Tests and Packaged E2E
-        strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    - arch: arm64
-                      runner: macos-15
-                      bmpAssuranceFirstBuildBudgetMs: '15000'
-        runs-on: ${{ matrix.runner }}
+        name: macOS arm64 Tests and Packaged E2E
+        runs-on: macos-15
         env:
             NODE_VERSION: '16.20.2'
-            BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS: ${{ matrix.bmpAssuranceFirstBuildBudgetMs }}
+            BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS: '15000'
 
         steps:
             - name: Checkout
@@ -93,13 +92,13 @@ jobs:
             - name: Verify packaged BMP SQLite
               run: npm run test:packaged:sqlite
               env:
-                  PACKAGED_SQLITE_EXPECTED_ARCH: ${{ matrix.arch }}
+                  PACKAGED_SQLITE_EXPECTED_ARCH: arm64
 
             - name: Upload Playwright report
               if: ${{ always() }}
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-report-macos-${{ matrix.arch }}
+                  name: playwright-report-macos-arm64
                   path: |
                       playwright-report/
                       test-results/

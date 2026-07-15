@@ -17,8 +17,46 @@ const DUPLICATED_ROUTE_ATTRIBUTE_FIELDS = [
     'communities',
     'otc',
     'prefixSid',
-    'attrRefCount'
+    'attrId',
+    'attrRefCount',
+    'routeState',
+    'ribEpoch',
+    'staleEpoch',
+    'lastSeenAt',
+    'staleAt',
+    'staleReason'
 ];
+const ROUTE_IDENTITY_PAYLOAD_FIELDS = [
+    'routeKey',
+    'addrFamilyType',
+    'afi',
+    'safi',
+    'ip',
+    'prefix',
+    'mask',
+    'length',
+    'rd',
+    'pathId',
+    'rawNlri',
+    'nlriDetail'
+];
+const ZERO_VALUE_PAYLOAD_FIELDS = new Set(['parseStatus', 'pathStatusUnknownBits', 'routeTlvCount']);
+
+function compactRoutePayload(routeInfo) {
+    const payload = { ...routeInfo };
+    [...DUPLICATED_ROUTE_ATTRIBUTE_FIELDS, ...ROUTE_IDENTITY_PAYLOAD_FIELDS].forEach(field => delete payload[field]);
+    Object.entries(payload).forEach(([field, value]) => {
+        if (
+            value === null ||
+            (Array.isArray(value) && value.length === 0) ||
+            (value && value.constructor === Object && Object.keys(value).length === 0) ||
+            (value === 0 && ZERO_VALUE_PAYLOAD_FIELDS.has(field))
+        ) {
+            delete payload[field];
+        }
+    });
+    return payload;
+}
 
 function nextConnectionGeneration() {
     const wallClockGeneration = Date.now() * 1000;
@@ -112,6 +150,9 @@ function buildConnection(bmpSession) {
 
 function buildScope(bmpSession, owner, afi, safi, ribType, options = {}) {
     const source = buildSource(bmpSession);
+    if (options.kind !== 'peer' && options.kind !== 'loc-rib') {
+        throw new Error(`Unsupported BMP route scope kind: ${options.kind}`);
+    }
     const isInstance = options.kind === 'loc-rib';
     const peerType = isInstance ? owner.instanceType : owner.sessionType;
     const peerRd = isInstance ? owner.instanceRd : owner.sessionRd;
@@ -161,8 +202,7 @@ function buildScope(bmpSession, owner, afi, safi, ribType, options = {}) {
 
 function buildRoute(owner, route, afi, safi) {
     const routeInfo = typeof route.getRouteInfo === 'function' ? route.getRouteInfo() : { ...route };
-    const compactRouteInfo = { ...routeInfo };
-    DUPLICATED_ROUTE_ATTRIBUTE_FIELDS.forEach(field => delete compactRouteInfo[field]);
+    const compactRouteInfo = compactRoutePayload(routeInfo);
     const key = createRouteKey({
         afi,
         safi,
@@ -234,16 +274,18 @@ function buildWithdrawRoute(owner, withdrawn, afi, safi, existingRoute = null) {
         nlriJson: stringify(withdrawn),
         attrId: null,
         attrJson: null,
-        routeJson: stringify({
-            routeKey: legacyRouteKey,
-            afi: route.afi,
-            safi: route.safi,
-            pathId: route.pathId,
-            rd: route.rd,
-            ip: route.ip,
-            mask: route.mask,
-            nlriDetail: withdrawn
-        })
+        routeJson: stringify(
+            compactRoutePayload({
+                routeKey: legacyRouteKey,
+                afi: route.afi,
+                safi: route.safi,
+                pathId: route.pathId,
+                rd: route.rd,
+                ip: route.ip,
+                mask: route.mask,
+                nlriDetail: withdrawn
+            })
+        )
     };
 }
 

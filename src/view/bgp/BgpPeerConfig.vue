@@ -467,6 +467,7 @@
                                     </nn-tag>
                                 </div>
                                 <nn-table
+                                    data-testid="bgp-ipv4-qp-peer-table"
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv4QpPeerList"
                                     :row-key="
@@ -1265,7 +1266,9 @@
 
     .bgp-peer-info-header-text {
         margin-right: 8px;
+        font-size: 12px;
         font-weight: 500;
+        line-height: 18px;
     }
 
     .bgp-peer-table,
@@ -1287,6 +1290,7 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
+        font-size: 12px;
     }
 
     .bgp-peer-table :deep(.nn-table-container),
@@ -1313,6 +1317,7 @@
     .bgp-peer-table :deep(.nn-pagination) {
         flex: 0 0 auto;
         margin: 10px 0 0;
+        font-size: 12px;
     }
 
     .bgp-peer-table :deep(.nn-table-thead > tr > th) {

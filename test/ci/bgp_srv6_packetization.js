@@ -302,7 +302,7 @@ const ADD_PATH_PARSE_CONTEXT = {
         'ADD-PATH SRv6 generation should create addPathCount routes for each prefix'
     );
     assert.strictEqual(
-        instance.attrStore.attrMap.size,
+        instance.getAttributeGroupCount(),
         ADD_PATH_SRV6_ROUTE_COUNT * ADD_PATH_SRV6_PATH_COUNT,
         'incremental SRv6 SID with ADD-PATH should keep one attribute per generated path'
     );
@@ -370,7 +370,7 @@ const ADD_PATH_PARSE_CONTEXT = {
         'fixed SRv6 ADD-PATH generation should create addPathCount routes for each prefix'
     );
     assert.strictEqual(
-        instance.attrStore.attrMap.size,
+        instance.getAttributeGroupCount(),
         1,
         'fixed SRv6 ADD-PATH routes should share one outbound attribute group'
     );
@@ -647,7 +647,7 @@ const ADD_PATH_PARSE_CONTEXT = {
     }
 
     assert.strictEqual(
-        instance.attrStore.attrMap.size,
+        instance.getAttributeGroupCount(),
         INCREMENTAL_SRV6_ROUTE_COUNT,
         'incremental SRv6 SID routes should have one stored attribute per SID'
     );
@@ -679,7 +679,7 @@ const ADD_PATH_PARSE_CONTEXT = {
         addSrv6Route(instance, ipv6Address('520', index), fixedSid);
     }
 
-    assert.strictEqual(instance.attrStore.attrMap.size, 1, 'fixed SRv6 SID routes should share one stored attribute');
+    assert.strictEqual(instance.getAttributeGroupCount(), 1, 'fixed SRv6 SID routes should share one stored attribute');
 
     peer.sendRoute();
     assertPacketLengths(sentBuffers);

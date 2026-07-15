@@ -943,10 +943,7 @@
     });
 
     onActivated(async () => {
-        clientList.value = [];
-        activeClientKey.value = '';
-        bgpSessionList.value = [];
-        resetSessionAndRouteSelection();
+        const previousActiveClientKey = activeClientKey.value;
 
         EventBus.on('bmp:sessionUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onSessionUpdate);
         EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onClientListUpdate);
@@ -954,6 +951,10 @@
         EventBus.on('bmp:routeUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onRouteUpdate);
 
         await loadClientList();
+        // activeClientKey 变化时 watcher 会负责加载；缓存回切且选择未变时在后台刷新当前数据。
+        if (activeClientKey.value && activeClientKey.value === previousActiveClientKey) {
+            await loadBgpSessionList();
+        }
     });
 
     onDeactivated(() => {

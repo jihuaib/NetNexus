@@ -179,6 +179,31 @@
                                     >
                                         详情
                                     </nn-button>
+                                    <nn-tooltip :title="getClientDeleteDisabledReason(record)">
+                                        <span>
+                                            <nn-popconfirm
+                                                title="确认删除该客户端的全部数据？"
+                                                description="将删除数据库和内存中的所有关联数据，此操作不可恢复。"
+                                                ok-text="确认删除"
+                                                cancel-text="取消"
+                                                :disabled="!canDeleteClientData(record)"
+                                                @confirm="deleteClientData(record)"
+                                            >
+                                                <nn-button
+                                                    type="link"
+                                                    danger
+                                                    data-testid="bmp-client-delete-data-button"
+                                                    :loading="deletingClientKey === getClientKey(record)"
+                                                    :disabled="
+                                                        !canDeleteClientData(record) ||
+                                                        deletingClientKey === getClientKey(record)
+                                                    "
+                                                >
+                                                    删除数据
+                                                </nn-button>
+                                            </nn-popconfirm>
+                                        </span>
+                                    </nn-tooltip>
                                 </template>
                             </template>
                         </nn-table>
@@ -254,6 +279,7 @@
 
     // Initiation messages list
     const clientList = ref([]);
+    const deletingClientKey = ref('');
     const clientColumns = [
         {
             title: '客户端IP',
@@ -316,7 +342,9 @@
         },
         {
             title: '操作',
-            key: 'action'
+            key: 'action',
+            width: 180,
+            align: 'center'
         }
     ];
 
@@ -413,6 +441,60 @@
     const closeDetailsDrawer = () => {
         detailsDrawerVisible.value = false;
         currentDetails.value = null;
+    };
+
+    const getStableClientSourceId = record => record?.persistentSourceId || record?.sourceId || '';
+
+    const hasDeleteClientDataApi = () => typeof window.bmpApi?.deleteClientData === 'function';
+
+    const hasValidClientSourceId = record => /^[0-9a-f]{64}$/i.test(getStableClientSourceId(record));
+
+    const canDeleteClientData = record =>
+        hasDeleteClientDataApi() && !record?.isOnline && hasValidClientSourceId(record);
+
+    const getClientDeleteDisabledReason = record => {
+        if (!hasDeleteClientDataApi()) {
+            return '删除接口尚未加载，请完全重启 NetNexus 后重试';
+        }
+        if (record?.isOnline) {
+            return '在线客户端不可删除，请先断开连接';
+        }
+        if (!hasValidClientSourceId(record)) {
+            return '客户端 sourceId 无效，无法安全删除';
+        }
+        return '';
+    };
+
+    const deleteClientData = async record => {
+        const clientKey = getClientKey(record);
+        if (!canDeleteClientData(record) || deletingClientKey.value === clientKey) {
+            return;
+        }
+
+        const deleteRequest = {
+            sourceId: getStableClientSourceId(record),
+            remoteIp: typeof record?.remoteIp === 'string' ? record.remoteIp : ''
+        };
+
+        deletingClientKey.value = clientKey;
+        try {
+            const result = await window.bmpApi.deleteClientData(deleteRequest);
+            if (result.status === 'success') {
+                await loadClientList();
+                if (currentDetails.value && getClientKey(currentDetails.value) === clientKey) {
+                    closeDetailsDrawer();
+                }
+                notify.success(result.msg || '客户端数据删除成功');
+            } else {
+                notify.error(result.msg || '客户端数据删除失败');
+            }
+        } catch (error) {
+            notify.error(`客户端数据删除失败: ${error.message}`);
+        } finally {
+            if (deletingClientKey.value === clientKey) {
+                deletingClientKey.value = '';
+            }
+        }
     };
 
     const onInitiationHandler = result => {

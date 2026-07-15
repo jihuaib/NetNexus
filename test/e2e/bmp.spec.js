@@ -908,6 +908,9 @@ test.describe('BMP pages', () => {
     test('keeps persisted BGP session history when the live BMP client disconnects', async ({ page }) => {
         const bmpPort = await BmpE2eController.getFreePort();
         const expectedSessionTabName = 'global | 192.0.2.2 | 65000';
+        let persistedClient;
+        let persistedSession;
+        let persistedInstance;
 
         await test.step('Start BMP server and connect mock client', async () => {
             await recordStep(`Input: route=/#/bmp/bmp-config, port=${bmpPort}, routes=${MOCK_BASE_ROUTE_COUNT}`);
@@ -919,11 +922,26 @@ test.describe('BMP pages', () => {
             await expect(page.getByTestId('bmp-stop-button')).toBeEnabled();
 
             await controller.startMockClient({ routes: MOCK_BASE_ROUTE_COUNT, interval: 0 });
-            await controller.waitForMockData({ routes: EXPECTED_MOCK_READY_ROUTE_COUNT });
+            ({
+                client: persistedClient,
+                ipv4Session: persistedSession,
+                locRibInstance: persistedInstance
+            } = await controller.waitForMockData({ routes: EXPECTED_MOCK_READY_ROUTE_COUNT }));
 
             await expect(page.getByTestId('bmp-client-table')).toContainText(EXPECTED_CLIENT_NAME, {
                 timeout: 10000
             });
+
+            const clientTable = page.getByTestId('bmp-client-table');
+            const onlineClientRow = clientTable.locator('.nn-table-tbody > .nn-table-row', {
+                hasText: EXPECTED_CLIENT_NAME
+            });
+            await expect(onlineClientRow).toContainText('在线');
+            await expect(onlineClientRow.getByTestId('bmp-client-delete-data-button')).toBeDisabled();
+
+            const onlineDeleteResult = await controller.call('deleteClientData', persistedClient);
+            expect(onlineDeleteResult.status).toBe('error');
+            expect(onlineDeleteResult.msg).toContain('在线BMP客户端不能删除');
 
             await recordStep('Output: BMP mock client visible in config page');
         });
@@ -979,9 +997,82 @@ test.describe('BMP pages', () => {
             });
             await expect(persistedClientRow).toContainText(EXPECTED_CLIENT_NAME, { timeout: 10000 });
             await expect(persistedClientRow).toContainText('已断开');
+            await expect(persistedClientRow.getByTestId('bmp-client-delete-data-button')).toBeEnabled();
 
             await recordStep(
                 'Output: live BMP connection is closed, while the persisted client and BGP session remain disconnected with stale routes'
+            );
+        });
+
+        await test.step('Delete all data for the offline BMP client', async () => {
+            await recordStep('Input: delete the disconnected BMP client data and confirm the irreversible action');
+
+            const clientTable = page.getByTestId('bmp-client-table');
+            const persistedClientRow = clientTable.locator('.nn-table-tbody > .nn-table-row', {
+                hasText: EXPECTED_CLIENT_NAME
+            });
+            const deleteButton = persistedClientRow.getByTestId('bmp-client-delete-data-button');
+
+            await expect(persistedClientRow).toContainText('已断开');
+            await expect(deleteButton).toBeEnabled();
+            await deleteButton.click();
+
+            const confirmButton = page.getByRole('button', { name: '确认删除', exact: true });
+            await expect(confirmButton).toBeVisible();
+            await confirmButton.click();
+            await expect(persistedClientRow).toHaveCount(0);
+
+            const clientsAfterDelete = await controller.call('getClientList');
+            const sessionsAfterDelete = await controller.call('getBgpSessions', persistedClient);
+            const instancesAfterDelete = await controller.call('getBgpInstances', persistedClient);
+            const sessionRoutesAfterDelete = await controller.call('getBgpRoutes', {
+                client: persistedClient,
+                session: persistedSession,
+                af: persistedSession.enabledAddrFamilyTypes[0],
+                ribType: persistedSession.ribTypes[0],
+                page: 1,
+                pageSize: 25,
+                routeState: 'all',
+                prefixFilter: ''
+            });
+            const instanceRoutesAfterDelete = await controller.call('getBgpInstanceRoutes', {
+                client: persistedClient,
+                instance: persistedInstance,
+                page: 1,
+                pageSize: 25,
+                routeState: 'all',
+                prefixFilter: ''
+            });
+            const persistenceStatusAfterDelete = await controller.worker.persistence.getStatus({
+                includeCounts: true
+            });
+
+            expect(clientsAfterDelete).toMatchObject({ status: 'success', data: [] });
+            expect(sessionsAfterDelete).toMatchObject({ status: 'success', data: [] });
+            expect(instancesAfterDelete).toMatchObject({ status: 'success', data: [] });
+            expect(sessionRoutesAfterDelete).toMatchObject({
+                status: 'success',
+                data: { list: [], total: 0 }
+            });
+            expect(instanceRoutesAfterDelete).toMatchObject({
+                status: 'success',
+                data: { list: [], total: 0 }
+            });
+            expect(persistenceStatusAfterDelete.e2eTableCounts).toEqual({
+                sources: 0,
+                connections: 0,
+                scopes: 0,
+                currentRoutes: 0,
+                routeEvents: 0,
+                statisticsSamples: 0,
+                statisticsLatest: 0,
+                routeAttributes: 0,
+                ingestBatches: 0
+            });
+            expect(persistenceStatusAfterDelete.e2eForeignKeyViolations).toEqual([]);
+
+            await recordStep(
+                'Output: the offline client row, worker views, and all nine related persistence tables are empty with valid foreign keys'
             );
         });
     });

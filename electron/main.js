@@ -11,6 +11,8 @@ let splashWindow = null;
 let systemApp = null;
 let tray = null;
 let splashProgress = 0;
+let allowQuitAfterStorageClose = false;
+let storageCloseForQuitPromise = null;
 
 app.commandLine.appendSwitch('lang', 'zh-CN');
 
@@ -299,10 +301,33 @@ if (!hasSingleInstanceLock) {
         });
 }
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
     if (tray) {
         tray.destroy();
         tray = null;
+    }
+
+    const rpkiApp = systemApp?.rpkiApp;
+    if (allowQuitAfterStorageClose) {
+        allowQuitAfterStorageClose = false;
+        storageCloseForQuitPromise = null;
+        return;
+    }
+    if (!rpkiApp?.closeStorage) {
+        return;
+    }
+
+    event.preventDefault();
+    if (!storageCloseForQuitPromise) {
+        storageCloseForQuitPromise = rpkiApp
+            .closeStorage()
+            .catch(error => {
+                logger.warn(`关闭RPKI SQLite存储失败: ${error.message}`);
+            })
+            .finally(() => {
+                allowQuitAfterStorageClose = true;
+                app.quit();
+            });
     }
 });
 

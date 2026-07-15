@@ -4,105 +4,120 @@ const BgpConst = require('../const/bgpConst');
 const { ipv4BufferToString, ipv6BufferToString } = require('./ipUtils');
 const { parsePathAttributes } = require('./bgpPacketParser');
 
+// Protect the streaming parser from retaining an unbounded buffer when a
+// corrupt MRT header advertises an implausibly large record.
+const MAX_MRT_RECORD_LENGTH = 64 * 1024 * 1024;
+
 /**
- * Parses a local MRT file (.bz2 or .gz) and returns BGP routes.
+ * Streams BGP routes from a local MRT file without retaining the full result set.
  * @param {string} filePath - Path to the local MRT file.
  * @param {number} limit - Maximum number of routes to import.
  * @param {number} targetAfi - BGP AFI (IPv4 or IPv6).
  * @param {function} onProgress - Progress callback.
  */
-async function importMrtFile(filePath, limit = 10000, targetAfi, onProgress) {
+async function* iterateMrtRoutes(filePath, limit = 10000, targetAfi, onProgress) {
+    if (!fs.existsSync(filePath)) {
+        throw new Error(`文件不存在: ${filePath}`);
+    }
+
+    const numericLimit = Number(limit);
+    const routeLimit = Number.isFinite(numericLimit) ? Math.max(0, Math.floor(numericLimit)) : 10000;
+    if (onProgress) onProgress('正在准备解析 MRT 文件...');
+    if (routeLimit === 0) {
+        return;
+    }
+
+    const readStream = fs.createReadStream(filePath);
+    let input = readStream;
+    let readError = null;
+    let forwardReadError = null;
+
+    if (filePath.endsWith('.gz')) {
+        input = zlib.createGunzip();
+        forwardReadError = error => {
+            readError = error;
+            input.destroy(error);
+        };
+        readStream.on('error', forwardReadError);
+        readStream.pipe(input);
+    }
+
+    let buffer = Buffer.alloc(0);
+    let count = 0;
+    let lastReportedCount = 0;
+
     try {
-        if (!fs.existsSync(filePath)) {
-            return { status: 'error', msg: `文件不存在: ${filePath}` };
-        }
+        for await (const chunk of input) {
+            buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
 
-        if (onProgress) onProgress('正在准备解析 MRT 文件...');
+            while (buffer.length >= 12 && count < routeLimit) {
+                const length = buffer.readUInt32BE(8);
+                if (length > MAX_MRT_RECORD_LENGTH) {
+                    throw new Error(`MRT 记录长度异常: ${length}`);
+                }
+                const recordLength = 12 + length;
+                if (buffer.length < recordLength) {
+                    break;
+                }
 
-        return new Promise((resolve, reject) => {
-            const readStream = fs.createReadStream(filePath);
-            let decompressor;
+                const type = buffer.readUInt16BE(4);
+                const subtype = buffer.readUInt16BE(6);
+                const recordData = buffer.subarray(12, recordLength);
+                buffer = buffer.subarray(recordLength);
 
-            if (filePath.endsWith('.gz')) {
-                decompressor = zlib.createGunzip();
-                readStream.pipe(decompressor);
-            } else {
-                decompressor = readStream;
+                let parsedRoutes = [];
+                try {
+                    if (
+                        type === 13 &&
+                        ((targetAfi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && subtype === 2) ||
+                            (targetAfi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && subtype === 4))
+                    ) {
+                        parsedRoutes = parseRibEntry(recordData, targetAfi);
+                    } else if (
+                        type === 12 &&
+                        ((targetAfi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && subtype === 1) ||
+                            (targetAfi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && subtype === 2))
+                    ) {
+                        const route = parseTableDump(recordData, targetAfi);
+                        if (route) {
+                            parsedRoutes = [route];
+                        }
+                    }
+                } catch (error) {
+                    console.error('MRT Parsing Error:', error);
+                }
+
+                for (const route of parsedRoutes) {
+                    if (count >= routeLimit) {
+                        break;
+                    }
+                    count += 1;
+                    if (count - lastReportedCount >= 500) {
+                        if (onProgress) onProgress(`已解析 ${count} 条路由...`);
+                        lastReportedCount = count;
+                    }
+                    yield route;
+                }
             }
 
-            const routes = [];
-            let buffer = Buffer.alloc(0);
-            let count = 0;
-            let lastReportedCount = 0;
+            if (count >= routeLimit) {
+                return;
+            }
+        }
 
-            decompressor.on('data', chunk => {
-                buffer = Buffer.concat([buffer, chunk]);
-                try {
-                    while (buffer.length >= 12) {
-                        const length = buffer.readUInt32BE(8);
-                        if (buffer.length < 12 + length) break;
-
-                        const type = buffer.readUInt16BE(4);
-                        const subtype = buffer.readUInt16BE(6);
-                        const recordData = buffer.subarray(12, 12 + length);
-
-                        if (type === 13) {
-                            // TABLE_DUMP_V2
-                            if (
-                                (targetAfi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && subtype === 2) ||
-                                (targetAfi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && subtype === 4)
-                            ) {
-                                const parsed = parseRibEntry(recordData, targetAfi);
-                                for (const r of parsed) {
-                                    if (count < limit) {
-                                        routes.push(r);
-                                        count++;
-                                    }
-                                }
-                            }
-                        } else if (type === 12) {
-                            // TABLE_DUMP
-                            if (
-                                (targetAfi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && subtype === 1) ||
-                                (targetAfi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 && subtype === 2)
-                            ) {
-                                const parsed = parseTableDump(recordData, targetAfi);
-                                if (parsed && count < limit) {
-                                    routes.push(parsed);
-                                    count++;
-                                }
-                            }
-                        }
-
-                        if (count >= limit) {
-                            readStream.destroy();
-                            if (decompressor.destroy) decompressor.destroy();
-                            resolve({ status: 'success', data: routes });
-                            return;
-                        }
-
-                        if (count - lastReportedCount >= 500) {
-                            if (onProgress) onProgress(`已解析 ${count} 条路由...`);
-                            lastReportedCount = count;
-                        }
-                        buffer = buffer.subarray(12 + length);
-                    }
-                } catch (e) {
-                    console.error('MRT Parsing Error:', e);
-                    // Continue parsing if possible
-                    buffer = buffer.subarray(12);
-                }
-            });
-
-            decompressor.on('end', () => {
-                resolve({ status: 'success', data: routes });
-            });
-
-            readStream.on('error', reject);
-            decompressor.on('error', reject);
-        });
-    } catch (e) {
-        return { status: 'error', msg: `解析失败: ${e.message}` };
+        if (readError) {
+            throw readError;
+        }
+    } finally {
+        if (forwardReadError) {
+            readStream.removeListener('error', forwardReadError);
+        }
+        if (!readStream.destroyed) {
+            readStream.destroy();
+        }
+        if (input !== readStream && !input.destroyed) {
+            input.destroy();
+        }
     }
 }
 
@@ -229,5 +244,5 @@ function parseBgpAttributes(buffer, asnSize = 4) {
 }
 
 module.exports = {
-    importMrtFile
+    iterateMrtRoutes
 };

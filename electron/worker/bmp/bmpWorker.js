@@ -42,6 +42,8 @@ class BmpWorker {
         this.persistenceSweepCatchupTimer = null;
         this.persistenceSweepRequestTimer = null;
         this.persistenceSweepRunning = false;
+        this.clientDataDeleteInProgress = new Set();
+        this.clientDeleteRemoteIpGates = new Map();
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler({
@@ -53,6 +55,10 @@ class BmpWorker {
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.START_BMP, this.startBmp.bind(this));
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.STOP_BMP, this.stopBmp.bind(this));
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST, this.getClientList.bind(this));
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.DELETE_CLIENT_DATA,
+            this.deleteClientData.bind(this)
+        );
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_BGP_SESSIONS, this.getBgpSessions.bind(this));
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTES, this.getBgpRoutes.bind(this));
         this.messageHandler.registerHandler(
@@ -108,6 +114,10 @@ class BmpWorker {
     }
 
     createBmpSession(socket, clientAddress, clientPort) {
+        if (this.clientDeleteRemoteIpGates.has(String(clientAddress || ''))) {
+            socket.destroy();
+            return null;
+        }
         if (this.persistenceFailure || this.persistence?.failure) {
             socket.destroy();
             return null;
@@ -1031,6 +1041,61 @@ class BmpWorker {
         } catch (error) {
             logger.error(`Error getting BMP clients: ${error.message}`);
             this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async deleteClientData(messageId, client = {}) {
+        const sourceId = String(this.getPersistentSourceId(client) || '').trim();
+        const remoteIp = typeof client?.remoteIp === 'string' ? client.remoteIp.trim() : '';
+
+        if (!sourceId) {
+            this.messageHandler.sendErrorResponse(messageId, '删除BMP客户端数据需要稳定sourceId');
+            return;
+        }
+        if (!remoteIp) {
+            this.messageHandler.sendErrorResponse(messageId, 'BMP客户端缺少远端IP，无法安全删除');
+            return;
+        }
+        if (!this.persistence) {
+            this.messageHandler.sendErrorResponse(messageId, '请先启动 BMP 服务后删除离线客户端');
+            return;
+        }
+        if (this.clientDataDeleteInProgress.has(sourceId)) {
+            this.messageHandler.sendErrorResponse(messageId, '该BMP客户端数据正在删除');
+            return;
+        }
+        if (this.findLiveBmpSession({ persistentSourceId: sourceId })) {
+            this.messageHandler.sendErrorResponse(messageId, '在线BMP客户端不能删除，请先断开连接');
+            return;
+        }
+
+        this.clientDataDeleteInProgress.add(sourceId);
+        this.clientDeleteRemoteIpGates.set(remoteIp, (this.clientDeleteRemoteIpGates.get(remoteIp) || 0) + 1);
+        try {
+            const persistence = this.persistence;
+            await persistence.fence();
+            if (this.persistence !== persistence) {
+                throw new Error('BMP服务状态已变化，请重试');
+            }
+            if (this.findLiveBmpSession({ persistentSourceId: sourceId })) {
+                throw new Error('在线BMP客户端不能删除，请先断开连接');
+            }
+
+            const result = await persistence.purgeSource({ sourceId });
+            this.routeUpdateAggregator.deleteSource(sourceId);
+            this.invalidateRouteAssurance('client-data-delete');
+            this.messageHandler.sendSuccessResponse(messageId, result, 'BMP客户端关联数据删除成功');
+        } catch (error) {
+            logger.error(`Error deleting BMP client data: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        } finally {
+            this.clientDataDeleteInProgress.delete(sourceId);
+            const gateCount = (this.clientDeleteRemoteIpGates.get(remoteIp) || 1) - 1;
+            if (gateCount > 0) {
+                this.clientDeleteRemoteIpGates.set(remoteIp, gateCount);
+            } else {
+                this.clientDeleteRemoteIpGates.delete(remoteIp);
+            }
         }
     }
 

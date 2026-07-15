@@ -890,9 +890,7 @@
     });
 
     onActivated(async () => {
-        clientList.value = [];
-        activeClientKey.value = '';
-        bgpInstances.value = [];
+        const previousActiveClientKey = activeClientKey.value;
 
         EventBus.on('bmp:instanceUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB, onInstanceUpdate);
         EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB, onClientListUpdate);
@@ -900,8 +898,8 @@
         EventBus.on('bmp:instanceRouteUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB, onInstanceRouteUpdate);
 
         await loadClientList();
-        // 如果有选中的客户端，则加载对应的BGP会话列表
-        if (activeClientKey.value) {
+        // activeClientKey 变化时 watcher 会负责加载；缓存回切且选择未变时只刷新一次。
+        if (activeClientKey.value && activeClientKey.value === previousActiveClientKey) {
             await loadBgpInstances();
         }
     });

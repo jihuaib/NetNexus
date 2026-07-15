@@ -103,6 +103,19 @@ class RouteUpdateAggregator {
         return updates;
     }
 
+    deleteSource(sourceId) {
+        let deleted = 0;
+        [this.pendingRouteUpdates, this.pendingInstanceRouteUpdates].forEach(updates => {
+            for (const [key, update] of updates) {
+                if (this.getSourceId(update) === sourceId) {
+                    updates.delete(key);
+                    deleted += 1;
+                }
+            }
+        });
+        return deleted;
+    }
+
     clear() {
         this.pendingRouteUpdates.clear();
         this.pendingInstanceRouteUpdates.clear();

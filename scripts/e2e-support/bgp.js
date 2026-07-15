@@ -1,7 +1,17 @@
 const { successResponse } = require('./common');
 
-const bgpBrowserMockScript =
+let bgpBrowserMockScript =
     "(function installBgpApiMocks() {\n    const unifiedCallbacks = [];\n\n    window.__bgpE2eEmit = (type, data) => {\n        unifiedCallbacks.forEach(callback => callback({ type, data }));\n    };\n\n    window.commonApi = {\n        onUnifiedEvent: callback => {\n            unifiedCallbacks.push(callback);\n            return () => {\n                const index = unifiedCallbacks.indexOf(callback);\n                if (index >= 0) {\n                    unifiedCallbacks.splice(index, 1);\n                }\n            };\n        },\n        notifyRendererReady: () => {},\n        getServerDeploymentStatus: async () => ({\n            status: 'success',\n            data: { success: true }\n        }),\n        openDeveloperOptions: () => {},\n        openSoftwareInfo: () => {}\n    };\n\n    window.bgpApi = {\n        saveBgpConfig: config => window.__bgpE2eCall('saveBgpConfig', config),\n        loadBgpConfig: () => window.__bgpE2eCall('loadBgpConfig'),\n        saveIpv4PeerConfig: config => window.__bgpE2eCall('saveIpv4PeerConfig', config),\n        loadIpv4PeerConfig: () => window.__bgpE2eCall('loadIpv4PeerConfig'),\n        saveIpv6PeerConfig: config => window.__bgpE2eCall('saveIpv6PeerConfig', config),\n        loadIpv6PeerConfig: () => window.__bgpE2eCall('loadIpv6PeerConfig'),\n        saveIpv4UNCRouteConfig: config => window.__bgpE2eCall('saveIpv4UNCRouteConfig', config),\n        loadIpv4UNCRouteConfig: () => window.__bgpE2eCall('loadIpv4UNCRouteConfig'),\n        saveIpv6UNCRouteConfig: config => window.__bgpE2eCall('saveIpv6UNCRouteConfig', config),\n        loadIpv6UNCRouteConfig: () => window.__bgpE2eCall('loadIpv6UNCRouteConfig'),\n        saveIpv4MvpnRouteConfig: config => window.__bgpE2eCall('saveIpv4MvpnRouteConfig', config),\n        loadIpv4MvpnRouteConfig: () => window.__bgpE2eCall('loadIpv4MvpnRouteConfig'),\n        saveIpv4QpRouteConfig: config => window.__bgpE2eCall('saveIpv4QpRouteConfig', config),\n        loadIpv4QpRouteConfig: () => window.__bgpE2eCall('loadIpv4QpRouteConfig'),\n        saveIpv6QpRouteConfig: config => window.__bgpE2eCall('saveIpv6QpRouteConfig', config),\n        loadIpv6QpRouteConfig: () => window.__bgpE2eCall('loadIpv6QpRouteConfig'),\n\n        startBgp: config => window.__bgpE2eCall('startBgp', config),\n        stopBgp: () => window.__bgpE2eCall('stopBgp'),\n        configIpv4Peer: config => window.__bgpE2eCall('configIpv4Peer', config),\n        configIpv6Peer: config => window.__bgpE2eCall('configIpv6Peer', config),\n        getPeerInfo: () => window.__bgpE2eCall('getPeerInfo'),\n        deletePeer: peer => window.__bgpE2eCall('deletePeer', peer),\n\n        generateIpv4Routes: config => window.__bgpE2eCall('generateIpv4Routes', config),\n        generateIpv6Routes: config => window.__bgpE2eCall('generateIpv6Routes', config),\n        generateIpv4MvpnRoutes: config => window.__bgpE2eCall('generateIpv4MvpnRoutes', config),\n        generateIpv4QpRoutes: config => window.__bgpE2eCall('generateIpv4QpRoutes', config),\n        generateIpv6QpRoutes: config => window.__bgpE2eCall('generateIpv6QpRoutes', config),\n        deleteIpv4Routes: config => window.__bgpE2eCall('deleteIpv4Routes', config),\n        deleteIpv6Routes: config => window.__bgpE2eCall('deleteIpv6Routes', config),\n        deleteIpv4MvpnRoutes: config => window.__bgpE2eCall('deleteIpv4MvpnRoutes', config),\n        deleteIpv4QpRoutes: config => window.__bgpE2eCall('deleteIpv4QpRoutes', config),\n        deleteIpv6QpRoutes: config => window.__bgpE2eCall('deleteIpv6QpRoutes', config),\n        deleteAllRoutesByFamily: addressFamily => window.__bgpE2eCall('deleteAllRoutesByFamily', addressFamily),\n        getRoutes: (addressFamily, page, pageSize) => window.__bgpE2eCall('getRoutes', addressFamily, page, pageSize),\n        getRouteDetail: (addressFamily, route) => window.__bgpE2eCall('getRouteDetail', addressFamily, route),\n\n        selectMrtFile: () =>\n            Promise.resolve({\n                status: 'success',\n                data: null,\n                msg: 'E2E does not select MRT files'\n            }),\n        importRouteViewsData: (filePath, limit, addressFamily) =>\n            window.__bgpE2eCall('importRouteViewsData', filePath, limit, addressFamily),\n        openExternal: url => window.__bgpE2eCall('openExternal', url),\n        getInstanceInfo: () => window.__bgpE2eCall('getInstanceInfo'),\n        getDefaultMrtFiles: () => window.__bgpE2eCall('getDefaultMrtFiles')\n    };\n})();\n";
+bgpBrowserMockScript = bgpBrowserMockScript
+    .replace(
+        "deleteAllRoutesByFamily: addressFamily => window.__bgpE2eCall('deleteAllRoutesByFamily', addressFamily)",
+        "deleteAllRoutesByFamily: (addressFamily, options = {}) => window.__bgpE2eCall('deleteAllRoutesByFamily', addressFamily, options)"
+    )
+    .replace(
+        "getRoutes: (addressFamily, page, pageSize) => window.__bgpE2eCall('getRoutes', addressFamily, page, pageSize)",
+        "getRoutes: (addressFamily, page, pageSize, options = {}) => window.__bgpE2eCall('getRoutes', addressFamily, page, pageSize, options)"
+    );
+
 const bgpPageApiScript =
     "    window.bgpApi = {\n        loadIpv6UNCRouteConfig: () => call('bgp.loadIpv6UNCRouteConfig'),\n        saveIpv6UNCRouteConfig: config => call('bgp.saveIpv6UNCRouteConfig', config),\n        generateIpv6Routes: config => call('bgp.generateRoutes', config),\n        loadIpv4MvpnRouteConfig: () => call('bgp.loadIpv4MvpnRouteConfig'),\n        saveIpv4MvpnRouteConfig: config => call('bgp.saveIpv4MvpnRouteConfig', config),\n        generateIpv4MvpnRoutes: config => call('bgp.generateRoutes', config),\n        loadIpv4QpRouteConfig: () => call('bgp.loadIpv4QpRouteConfig'),\n        saveIpv4QpRouteConfig: config => call('bgp.saveIpv4QpRouteConfig', config),\n        generateIpv4QpRoutes: config => call('bgp.generateRoutes', config),\n        loadIpv6QpRouteConfig: () => call('bgp.loadIpv6QpRouteConfig'),\n        saveIpv6QpRouteConfig: config => call('bgp.saveIpv6QpRouteConfig', config),\n        generateIpv6QpRoutes: config => call('bgp.generateRoutes', config),\n        getRoutes: (addressFamily, page, pageSize) => call('bgp.getRoutes', addressFamily, page, pageSize),\n        getRouteDetail: (addressFamily, route) => call('bgp.getRouteDetail', addressFamily, route),\n        deleteAllRoutesByFamily: addressFamily => call('bgp.deleteAllRoutesByFamily', addressFamily),\n        deleteIpv6Routes: config => call('bgp.deleteRoutes', config),\n        deleteIpv4MvpnRoutes: config => call('bgp.deleteRoutes', config),\n        deleteIpv4QpRoutes: config => call('bgp.deleteRoutes', config),\n        deleteIpv6QpRoutes: config => call('bgp.deleteRoutes', config),\n        getDefaultMrtFiles: () => call('bgp.getDefaultMrtFiles'),\n        selectMrtFile: () => call('bgp.selectMrtFile'),\n        importRouteViewsData: (filePath, limit, addressFamily) => call('bgp.importRouteViewsData', filePath, limit, addressFamily),\n        openExternal: url => call('bgp.openExternal', url)\n    };";
 
@@ -58,6 +68,7 @@ const BgpE2eController = (() => {
     const BgpSession = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpSession'));
     const BgpInstance = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpInstance'));
     const BgpRoute = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpRoute'));
+    const { parseBgpPacket } = require(path.join(projectRoot, 'electron', 'utils', 'bgpPacketParser'));
 
     const BGP_EVENT_TYPE_TO_RENDERER_TYPE = {
         [BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE]: 'bgp:peerChange'
@@ -181,8 +192,11 @@ const BgpE2eController = (() => {
     }
 
     class BgpE2eController {
-        constructor() {
+        constructor(options = {}) {
             this.bgpPort = null;
+            this.listenHost = options.listenHost || '127.0.0.1';
+            this.ipv6ListenHost = options.ipv6ListenHost || '::1';
+            this.advertisedNextHop = options.advertisedNextHop || null;
             this.server = null;
             this.ipv6Server = null;
             this.mockClient = null;
@@ -198,6 +212,7 @@ const BgpE2eController = (() => {
             this.savedConfigs = new Map();
             this.timeline = [];
             this.eventListeners = new Set();
+            this.capturedBgpPackets = [];
             this.worker = this.createWorker();
             this.record('BGP controller initialized');
         }
@@ -216,6 +231,11 @@ const BgpE2eController = (() => {
         setBgpPort(port) {
             this.bgpPort = Number(port);
             this.record('allocated BGP port', { port: this.bgpPort });
+        }
+
+        setAdvertisedNextHop(address) {
+            this.advertisedNextHop = address || null;
+            this.record('configured E2E advertised next hop', { address: this.advertisedNextHop });
         }
 
         createWorker() {
@@ -475,12 +495,13 @@ const BgpE2eController = (() => {
                 case 'deleteIpv6QpRoutes':
                     return this.invokeWorker('deleteQpRoute', args[0]);
                 case 'deleteAllRoutesByFamily':
-                    return this.invokeWorker('deleteAllRoutesByFamily', { addressFamily: args[0] });
+                    return this.invokeWorker('deleteAllRoutesByFamily', { addressFamily: args[0], ...(args[1] || {}) });
                 case 'getRoutes':
                     return this.invokeWorker('getRoutes', {
                         addressFamily: args[0],
                         page: args[1],
-                        pageSize: args[2]
+                        pageSize: args[2],
+                        ...(args[3] || {})
                     });
                 case 'getRouteDetail':
                     return this.invokeWorker('getRouteDetail', {
@@ -609,6 +630,12 @@ const BgpE2eController = (() => {
                             });
                         });
 
+                        const originalWrite = socket.write.bind(socket);
+                        socket.write = (chunk, ...args) => {
+                            this.captureBgpPacket(socket, chunk);
+                            return originalWrite(chunk, ...args);
+                        };
+
                         const session = this.worker.bgpSessionMap.get(BgpSession.makeKey(0, socket.remoteAddress));
                         if (!session) {
                             this.record('BGP TCP connection rejected because peer is not configured', {
@@ -619,6 +646,9 @@ const BgpE2eController = (() => {
                         }
 
                         session.tcpConnectSuccess(socket);
+                        if (this.advertisedNextHop) {
+                            session.localIp = this.advertisedNextHop;
+                        }
                     });
 
                 this.server = createServer('ipv4');
@@ -626,12 +656,15 @@ const BgpE2eController = (() => {
 
                 await new Promise((resolve, reject) => {
                     this.server.once('error', reject);
-                    this.server.listen(this.bgpPort, '127.0.0.1', resolve);
+                    this.server.listen(this.bgpPort, this.listenHost, resolve);
                 });
                 try {
                     await new Promise((resolve, reject) => {
                         this.ipv6Server.once('error', reject);
-                        this.ipv6Server.listen({ port: this.bgpPort, host: '::1', ipv6Only: true }, resolve);
+                        this.ipv6Server.listen(
+                            { port: this.bgpPort, host: this.ipv6ListenHost, ipv6Only: true },
+                            resolve
+                        );
                     });
                 } catch (error) {
                     this.record('BGP IPv6 TCP server start skipped', { error: error.message });
@@ -641,8 +674,8 @@ const BgpE2eController = (() => {
                 this.worker.server = this.server;
                 this.worker.ipv6Server = this.ipv6Server;
                 this.record('BGP TCP server started', {
-                    host: '127.0.0.1',
-                    ipv6Host: this.ipv6Server ? '::1' : null,
+                    host: this.listenHost,
+                    ipv6Host: this.ipv6Server ? this.ipv6ListenHost : null,
                     port: this.bgpPort
                 });
                 this.worker.messageHandler.sendSuccessResponse(messageId, null, 'bgp协议启动成功');
@@ -652,6 +685,58 @@ const BgpE2eController = (() => {
                 this.worker.server = null;
                 this.worker.messageHandler.sendErrorResponse(messageId, `bgp协议启动失败: ${error.message}`);
             }
+        }
+
+        captureBgpPacket(socket, chunk) {
+            const buffer = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk || '');
+            if (buffer.length < BgpConst.BGP_HEAD_LEN) return;
+            if (!buffer.subarray(0, BgpConst.BGP_MARKER_LEN).every(value => value === 0xff)) return;
+
+            const length = buffer.readUInt16BE(BgpConst.BGP_MARKER_LEN);
+            const type = buffer.readUInt8(BgpConst.BGP_MARKER_LEN + 2);
+            const captured = {
+                at: Date.now(),
+                peerIp: socket.remoteAddress,
+                type,
+                length,
+                wireLength: buffer.length,
+                validLength: length === buffer.length
+            };
+
+            if (type === BgpConst.BGP_PACKET_TYPE.UPDATE) {
+                try {
+                    const session = this.worker.bgpSessionMap.get(BgpSession.makeKey(0, socket.remoteAddress));
+                    const parsed = parseBgpPacket(buffer, session || null);
+                    const mpReach = (parsed.pathAttributes || []).find(attribute => attribute.mpReach)?.mpReach;
+                    const nlri = mpReach?.nlri || parsed.nlri || [];
+                    captured.valid = parsed.valid !== false;
+                    captured.afi = mpReach?.afi ?? BgpConst.BGP_AFI_TYPE.AFI_IPV4;
+                    captured.safi = mpReach?.safi ?? BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST;
+                    captured.nlriCount = nlri.length;
+                    captured.nlri = nlri.map(route => ({
+                        prefix: route.prefix,
+                        length: route.length,
+                        pathId: route.pathId ?? 0,
+                        label: route.labels?.[0]?.label ?? route.label?.label ?? route.label ?? null
+                    }));
+                    captured.error = parsed.error || '';
+                } catch (error) {
+                    captured.valid = false;
+                    captured.parseError = error.message;
+                }
+            }
+
+            this.capturedBgpPackets.push(captured);
+        }
+
+        clearCapturedBgpPackets() {
+            this.capturedBgpPackets = [];
+        }
+
+        getCapturedBgpPackets(type = null) {
+            return this.capturedBgpPackets
+                .filter(packet => type === null || packet.type === type)
+                .map(packet => ({ ...packet }));
         }
 
         async stopBgp() {
@@ -863,10 +948,11 @@ const BgpE2eController = (() => {
                 instance.setRoute(key, route, { nextHop: index % 2 === 0 ? nextHopA : nextHopB });
             }
 
+            const attributeGroupCount = instance.getAttributeGroupCount();
             return {
                 routeCount: instance.routeMap.size,
-                attrCount: instance.attrStore.attrMap.size,
-                attrGroupCount: instance.attrRouteIndex.size
+                attrCount: attributeGroupCount,
+                attrGroupCount: attributeGroupCount
             };
         }
 

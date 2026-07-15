@@ -1,9 +1,6 @@
 const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
 const RpkiAspa = require('../worker/rpki/rpkiAspa');
 const RpkiConst = require('../const/rpkiConst');
-const { ensureParentDir, writeLine, closeWriteStream, renameWithRetry } = require('./rpkiRoaImport');
 
 const ASPA_ARRAY_KEYS = new Set([
     'aspas',
@@ -16,14 +13,6 @@ const ASPA_ARRAY_KEYS = new Set([
     'items',
     'records'
 ]);
-
-function getAspaDataFilePath(userDataPath) {
-    return path.join(userDataPath, 'rpki-aspa.jsonl');
-}
-
-function makeAspaStorageKey(aspa) {
-    return RpkiAspa.makeKey(aspa.customerAsn);
-}
 
 function pickField(object, names) {
     for (const name of names) {
@@ -222,146 +211,6 @@ async function closeReadStream(input) {
     });
 }
 
-async function fileExists(filePath) {
-    try {
-        await fs.promises.access(filePath, fs.constants.F_OK);
-        return true;
-    } catch (_) {
-        return false;
-    }
-}
-
-async function* iterateJsonlAspas(filePath) {
-    if (!(await fileExists(filePath))) {
-        return;
-    }
-
-    const input = fs.createReadStream(filePath, { encoding: 'utf8' });
-    const rl = readline.createInterface({
-        input,
-        crlfDelay: Infinity
-    });
-
-    try {
-        for await (const line of rl) {
-            const trimmed = line.trim();
-            if (!trimmed) {
-                continue;
-            }
-            const parsed = safeJsonParse(trimmed);
-            const aspa = normalizeAspaObject(parsed);
-            if (aspa) {
-                yield aspa;
-            }
-        }
-    } finally {
-        rl.close();
-        await closeReadStream(input);
-    }
-}
-
-async function readAspaJsonlPage(filePath, page, pageSize) {
-    const safePage = Math.max(1, Number(page) || 1);
-    const safePageSize = Math.min(1000, Math.max(1, Number(pageSize) || 20));
-    const startIndex = (safePage - 1) * safePageSize;
-    const endIndex = startIndex + safePageSize;
-    const items = [];
-    let index = 0;
-
-    for await (const aspa of iterateJsonlAspas(filePath)) {
-        if (index >= startIndex && index < endIndex) {
-            items.push(aspa);
-        }
-        index += 1;
-        if (index >= endIndex) {
-            break;
-        }
-    }
-
-    return items;
-}
-
-async function countJsonlAspas(filePath) {
-    let count = 0;
-    for await (const _aspa of iterateJsonlAspas(filePath)) {
-        count += 1;
-    }
-    return count;
-}
-
-async function writeAspasToJsonl(filePath, aspas) {
-    await ensureParentDir(filePath);
-    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
-    const latestByKey = new Map();
-    const order = [];
-    let sequence = 0;
-
-    try {
-        for (const item of aspas || []) {
-            const aspa = normalizeAspaObject(item);
-            if (!aspa) {
-                continue;
-            }
-            const key = makeAspaStorageKey(aspa);
-            sequence += 1;
-            latestByKey.set(key, { aspa, sequence });
-            order.push({ key, sequence });
-        }
-
-        let count = 0;
-        for (const item of order) {
-            const latest = latestByKey.get(item.key);
-            if (!latest || latest.sequence !== item.sequence) {
-                continue;
-            }
-            await writeLine(stream, JSON.stringify(latest.aspa));
-            count += 1;
-        }
-
-        await closeWriteStream(stream);
-        await renameWithRetry(tempPath, filePath);
-        return count;
-    } catch (error) {
-        stream.destroy();
-        await fs.promises.unlink(tempPath).catch(() => {});
-        throw error;
-    }
-}
-
-async function removeAspaFromJsonl(filePath, customerAsn) {
-    await ensureParentDir(filePath);
-    const tempPath = `${filePath}.${process.pid}.${Date.now()}.delete.tmp`;
-    const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
-    const targetKey = RpkiAspa.makeKey(customerAsn);
-    let deletedAspa = null;
-    let deleted = 0;
-    let total = 0;
-
-    try {
-        for await (const aspa of iterateJsonlAspas(filePath)) {
-            if (makeAspaStorageKey(aspa) === targetKey) {
-                if (!deletedAspa) {
-                    deletedAspa = aspa;
-                }
-                deleted += 1;
-                continue;
-            }
-
-            await writeLine(stream, JSON.stringify(aspa));
-            total += 1;
-        }
-
-        await closeWriteStream(stream);
-        await renameWithRetry(tempPath, filePath);
-        return { deleted, deletedAspa, total };
-    } catch (error) {
-        stream.destroy();
-        await fs.promises.unlink(tempPath).catch(() => {});
-        throw error;
-    }
-}
-
 async function parseAspaJsonFile(filePath, onAspa) {
     const stats = {
         objects: 0,
@@ -535,7 +384,7 @@ async function parseAspaJsonFile(filePath, onAspa) {
         await closeReadStream(input);
     }
 
-    if (!stopped && (collecting || inString || collectInString)) {
+    if (!stopped && (collecting || inString || collectInString || stack.length > 0)) {
         throw new Error('ASPA JSON文件不完整或格式错误');
     }
 
@@ -543,14 +392,6 @@ async function parseAspaJsonFile(filePath, onAspa) {
 }
 
 module.exports = {
-    getAspaDataFilePath,
-    makeAspaStorageKey,
     normalizeAspaObject,
-    fileExists,
-    iterateJsonlAspas,
-    readAspaJsonlPage,
-    countJsonlAspas,
-    writeAspasToJsonl,
-    removeAspaFromJsonl,
     parseAspaJsonFile
 };

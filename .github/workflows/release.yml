@@ -77,15 +77,8 @@ jobs:
                   retention-days: 7
 
     build-macos:
-        name: Build macOS ${{ matrix.arch }}
-            strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    - arch: arm64
-                      runner: macos-15
-                      dist_script: dist:mac:arm64
-        runs-on: ${{ matrix.runner }}
+        name: Build macOS arm64
+        runs-on: macos-15
         steps:
             - name: Checkout
               uses: actions/checkout@v4
@@ -122,17 +115,17 @@ jobs:
               run: npm run build
 
             - name: Build macOS packages
-              run: npm run ${{ matrix.dist_script }} -- --publish never
+              run: npm run dist:mac:arm64 -- --publish never
 
             - name: Verify packaged BMP SQLite
               run: npm run test:packaged:sqlite
               env:
-                  PACKAGED_SQLITE_EXPECTED_ARCH: ${{ matrix.arch }}
+                  PACKAGED_SQLITE_EXPECTED_ARCH: arm64
 
             - name: Upload macOS artifacts
               uses: actions/upload-artifact@v4
               with:
-                  name: macos-${{ matrix.arch }}
+                  name: macos-arm64
                   path: |
                       release/*.dmg
                       release/*.zip

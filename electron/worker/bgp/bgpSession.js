@@ -839,15 +839,48 @@ class BgpSession {
     }
 
     sendRoute(buffer) {
-        this.socket.write(buffer);
+        if (!this.socket || this.socket.destroyed) {
+            return null;
+        }
+        const socket = this.socket;
+        const accepted = socket.write(buffer);
         const parsedPacket = parseBgpPacket(buffer, this.getAddPathSendParseContext());
-        logger.info(`${this.peerIp} send route msg ${getBgpPacketSummary(parsedPacket)}`);
+        logger.debug(`${this.peerIp} send route msg ${getBgpPacketSummary(parsedPacket)}`);
+        if (accepted !== false) {
+            return null;
+        }
+        return new Promise((resolve, reject) => {
+            const cleanup = () => {
+                socket.off('drain', onDrain);
+                socket.off('close', onClose);
+                socket.off('error', onError);
+            };
+            const onDrain = () => {
+                cleanup();
+                resolve();
+            };
+            const onClose = () => {
+                cleanup();
+                reject(new Error('BGP socket closed while waiting for route backpressure'));
+            };
+            const onError = error => {
+                cleanup();
+                reject(error);
+            };
+            socket.once('drain', onDrain);
+            socket.once('close', onClose);
+            socket.once('error', onError);
+        });
     }
 
     withdrawRoute(buffer) {
-        this.socket.write(buffer);
+        if (!this.socket || this.socket.destroyed) {
+            return null;
+        }
+        const accepted = this.socket.write(buffer);
         const parsedPacket = parseBgpPacket(buffer, this.getAddPathSendParseContext());
-        logger.info(`${this.peerIp} withdraw route msg ${getBgpPacketSummary(parsedPacket)}`);
+        logger.debug(`${this.peerIp} withdraw route msg ${getBgpPacketSummary(parsedPacket)}`);
+        return accepted;
     }
 }
 

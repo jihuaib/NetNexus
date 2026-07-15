@@ -152,10 +152,7 @@ const firstStartedAt = performance.now();
 const firstPage = service.query(sessionMap, { page: 1, pageSize: 25 });
 const firstBuildMs = performance.now() - firstStartedAt;
 const maxRss = process.resourceUsage().maxRSS;
-const currentRssBytes = process.memoryUsage().rss;
-const peakRssBytes = [maxRss, maxRss * 1024]
-    .filter(candidate => candidate >= currentRssBytes)
-    .sort((left, right) => left - right)[0];
+const peakRssBytes = process.platform === 'darwin' ? maxRss : maxRss * 1024;
 global.gc();
 const retainedHeapBytes = process.memoryUsage().heapUsed - heapBefore;
 const iterationsAfterFirstBuild = totalSourceIterations();

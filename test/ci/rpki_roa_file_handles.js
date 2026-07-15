@@ -5,9 +5,7 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const { parseRoaJsonFile, readJsonlPage, renameWithRetry, writeRoasToJsonl } = require(
-    path.join(__dirname, '..', '..', 'electron', 'utils', 'rpkiRoaImport.js')
-);
+const { parseRoaJsonFile } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'rpkiRoaImport.js'));
 
 function makeRoa(index) {
     return {
@@ -21,34 +19,6 @@ async function main() {
     const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'netnexus-rpki-handles-'));
 
     try {
-        const jsonlPath = path.join(tempDir, 'rpki-roa.jsonl');
-        const replacementPath = path.join(tempDir, 'rpki-roa.jsonl.tmp');
-
-        await writeRoasToJsonl(
-            jsonlPath,
-            Array.from({ length: 50 }, (_, index) => makeRoa(index))
-        );
-
-        const firstPage = await readJsonlPage(jsonlPath, 1, 10);
-        assert.strictEqual(firstPage.length, 10, 'readJsonlPage should return the requested page size');
-
-        await fs.promises.writeFile(replacementPath, `${JSON.stringify(makeRoa(99))}\n`, 'utf8');
-        await renameWithRetry(replacementPath, jsonlPath, { retries: 2, delayMs: 1 });
-
-        const replacedPage = await readJsonlPage(jsonlPath, 1, 20);
-        assert.strictEqual(replacedPage.length, 1, 'JSONL should be replaceable immediately after page read');
-
-        await writeRoasToJsonl(
-            jsonlPath,
-            Array.from({ length: 5 }, (_, index) => makeRoa(index))
-        );
-        await writeRoasToJsonl(
-            jsonlPath,
-            Array.from({ length: 6 }, (_, index) => makeRoa(index))
-        );
-        const overwrittenPage = await readJsonlPage(jsonlPath, 1, 20);
-        assert.strictEqual(overwrittenPage.length, 6, 'JSONL should be overwritable repeatedly');
-
         const importJsonPath = path.join(tempDir, 'import-roas.json');
         const movedJsonPath = path.join(tempDir, 'import-roas.moved.json');
         await fs.promises.writeFile(
@@ -77,6 +47,17 @@ async function main() {
             true,
             'import JSON should be movable immediately after early stop'
         );
+
+        const truncatedJsonPath = path.join(tempDir, 'truncated-roas.json');
+        const movedTruncatedJsonPath = path.join(tempDir, 'truncated-roas.moved.json');
+        await fs.promises.writeFile(truncatedJsonPath, `{"roas":[${JSON.stringify(makeRoa(1))}`, 'utf8');
+
+        await assert.rejects(
+            parseRoaJsonFile(truncatedJsonPath, async () => true),
+            /ROA JSON文件不完整或格式错误/,
+            'parseRoaJsonFile should reject an unclosed wrapper after a complete ROA object'
+        );
+        await fs.promises.rename(truncatedJsonPath, movedTruncatedJsonPath);
 
         console.log('RPKI ROA file handle tests passed');
     } finally {

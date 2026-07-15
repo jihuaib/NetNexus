@@ -10,7 +10,6 @@ const {
     LOG_REQ_TYPES
 } = require('../const/toolsConst');
 const { API_ACCESS_MODE, DEFAULT_API_SETTINGS } = require('../const/apiConst');
-const fs = require('fs');
 const path = require('path');
 const { getIconPath } = require('../utils/iconUtils');
 const BgpApp = require('./bgpApp');
@@ -31,6 +30,7 @@ const ExternalApiServer = require('./externalApiServer');
 const createBmpApiRoutes = require('./bmpApiRoutes');
 const CliAccessServer = require('./cli');
 const WiresharkPluginInstaller = require('./wiresharkPluginInstaller');
+const { clearMajorVersionData } = require('../utils/majorVersionDataCleanup');
 /**
  * 用于系统菜单处理
  */
@@ -141,7 +141,7 @@ class SystemApp {
                     type: 'warning',
                     title: '版本不兼容',
                     message: `检测到主版本升级（${storedVersion} -> ${currentVersion}），需要清除旧数据。`,
-                    detail: '将删除程序数据和设置数据，点击确定继续。',
+                    detail: '将删除本地配置、JSON 数据和路由数据库，点击确定继续。',
                     buttons: ['确定', '取消'],
                     defaultId: 0,
                     cancelId: 1,
@@ -176,32 +176,43 @@ class SystemApp {
             logger.warn('清除不兼容数据');
             const userData = app.getPath('userData');
 
-            // 删除 Program Data
-            const programDataPath = path.join(userData, 'Program Data.json');
-            if (fs.existsSync(programDataPath)) {
-                fs.unlinkSync(programDataPath);
-                logger.warn('已删除 Program Data.json');
-            }
-
-            // 删除 Settings Data
-            const settingsDataPath = path.join(userData, 'Settings Data.json');
-            if (fs.existsSync(settingsDataPath)) {
-                fs.unlinkSync(settingsDataPath);
-                logger.warn('已删除 Settings Data.json');
-            }
+            // 主版本升级不迁移旧配置或路由数据，下一次打开时统一从空库和默认配置开始。
+            const cleanup = clearMajorVersionData(userData);
+            logger.warn(`已删除 ${cleanup.removedJsonFiles} 个本地 JSON 数据文件`);
 
             // 重新初始化 Store
             this.store = new Store({
                 name: 'Settings Data',
                 fileExtension: 'json',
-                cwd: app.getPath('userData')
+                cwd: userData
             });
 
             this.programStore = new Store({
                 name: 'Program Data',
                 fileExtension: 'json',
-                cwd: app.getPath('userData')
+                cwd: userData
             });
+
+            // 各模块在 SystemApp 构造时已经拿到了旧 Store 实例，清理后统一切换到
+            // 新实例，避免本次启动继续通过旧引用写入已经清除的程序数据。
+            [
+                this.bgpApp,
+                this.bmpApp,
+                this.rpkiApp,
+                this.ftpApp,
+                this.snmpApp,
+                this.dhcpApp,
+                this.ntpApp,
+                this.radiusApp,
+                this.tftpApp,
+                this.syslogApp,
+                this.toolsApp
+            ].forEach(appInstance => {
+                if (appInstance) {
+                    appInstance.store = this.programStore;
+                }
+            });
+            return true;
         } catch (error) {
             logger.error('清除不兼容数据时出错:', error.message);
             dialog.showMessageBoxSync({
@@ -212,6 +223,7 @@ class SystemApp {
                 buttons: ['确定'],
                 icon: getIconPath()
             });
+            throw error;
         }
     }
 
@@ -842,6 +854,7 @@ class SystemApp {
                 }
 
                 await this.bmpApp.closeOfflinePersistenceReader();
+                await this.rpkiApp.closeStorage();
 
                 return true;
             }
@@ -852,6 +865,7 @@ class SystemApp {
             await this.cliAccessServer.stop();
         }
         await this.bmpApp.closeOfflinePersistenceReader();
+        await this.rpkiApp.closeStorage();
         return true;
     }
 

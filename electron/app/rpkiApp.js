@@ -1,60 +1,38 @@
-const fs = require('fs');
+const path = require('path');
 const { app, BrowserWindow, dialog } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
 const WorkerWithPromise = require('../worker/core/workerWithPromise');
-const { getNetworkAddress } = require('../utils/ipUtils');
 const RpkiConst = require('../const/rpkiConst');
 const RpkiAspa = require('../worker/rpki/rpkiAspa');
+const RpkiSqliteStore = require('../worker/rpki/rpkiSqliteStore');
 const EventDispatcher = require('../utils/eventDispatcher');
-const {
-    getRoaDataFilePath,
-    makeRoaStorageKey,
-    normalizeRoaObject,
-    fileExists,
-    ensureParentDir,
-    writeLine,
-    closeWriteStream,
-    renameWithRetry,
-    iterateJsonlRoas,
-    readJsonlPage,
-    countJsonlRows,
-    writeRoasToJsonl,
-    parseRoaJsonFile
-} = require('../utils/rpkiRoaImport');
-const {
-    getAspaDataFilePath,
-    makeAspaStorageKey,
-    normalizeAspaObject,
-    iterateJsonlAspas,
-    readAspaJsonlPage,
-    countJsonlAspas,
-    writeAspasToJsonl,
-    removeAspaFromJsonl,
-    parseAspaJsonFile
-} = require('../utils/rpkiAspaImport');
-const RpkiRoaQueryIndex = require('../utils/rpkiRoaQueryIndex');
+const { normalizeRoaObject, parseRoaJsonFile } = require('../utils/rpkiRoaImport');
+const { normalizeAspaObject, parseAspaJsonFile } = require('../utils/rpkiAspaImport');
+
+const STORAGE_BATCH_SIZE = 5000;
+
+function yieldToEventLoop() {
+    return new Promise(resolve => setImmediate(resolve));
+}
 
 class RpkiApp {
     constructor(ipcMain, store) {
         this.ipcMain = ipcMain;
         this.store = store;
         this.rpkiConfigFileKey = 'rpki-config';
-        this.rpkiRoaFileKey = 'rpki-roa';
-        this.rpkiRoaMetaFileKey = 'rpki-roa-meta';
         this.rpkiRouterKeyFileKey = 'rpki-router-key';
-        this.rpkiAspaFileKey = 'rpki-aspa';
-        this.rpkiAspaMetaFileKey = 'rpki-aspa-meta';
         this.worker = null;
-        this.eventDispatcher = null; // 添加事件发送器
-
+        this.eventDispatcher = null;
         this.serverDeploymentConfig = null;
-
         this.logLevel = null;
-
         this.rpkiClientConnectionHandler = null;
-        this.roaQueryIndex = new RpkiRoaQueryIndex();
+        this.rpkiSqliteStore = null;
+        this.rpkiStoragePromise = null;
+        this.storageMutationQueue = Promise.resolve();
+        this.storageClosing = false;
+        this.storageClosePromise = null;
 
         this.registerHandlers();
     }
@@ -66,7 +44,6 @@ class RpkiApp {
         this.ipcMain.handle('rpki:stopRpki', this.handleStopRpki.bind(this));
         this.ipcMain.handle('rpki:getClientList', this.handleGetClientList.bind(this));
 
-        // roa
         this.ipcMain.handle('rpki:addRoa', this.handleAddRoa.bind(this));
         this.ipcMain.handle('rpki:deleteRoa', this.handleDeleteRoa.bind(this));
         this.ipcMain.handle('rpki:deleteAllRoa', this.handleDeleteAllRoa.bind(this));
@@ -74,12 +51,10 @@ class RpkiApp {
         this.ipcMain.handle('rpki:selectRoaJsonFile', this.handleSelectRoaJsonFile.bind(this));
         this.ipcMain.handle('rpki:importRoaJson', this.handleImportRoaJson.bind(this));
 
-        // router key (v1+)
         this.ipcMain.handle('rpki:addRouterKey', this.handleAddRouterKey.bind(this));
         this.ipcMain.handle('rpki:deleteRouterKey', this.handleDeleteRouterKey.bind(this));
         this.ipcMain.handle('rpki:getRouterKeyList', this.handleGetRouterKeyList.bind(this));
 
-        // aspa (v2+)
         this.ipcMain.handle('rpki:addAspa', this.handleAddAspa.bind(this));
         this.ipcMain.handle('rpki:deleteAspa', this.handleDeleteAspa.bind(this));
         this.ipcMain.handle('rpki:deleteAllAspa', this.handleDeleteAllAspa.bind(this));
@@ -110,303 +85,169 @@ class RpkiApp {
             return errorResponse(error.message);
         }
     }
+
     setServerDeploymentConfig(config) {
         this.serverDeploymentConfig = config;
     }
 
-    async handleStartRpki(event, rpkiConfigData) {
-        const webContents = event.sender;
+    getRpkiDatabasePath() {
+        return path.join(app.getPath('userData'), 'rpki', 'rpki.sqlite3');
+    }
+
+    async ensureRpkiStorage() {
+        if (this.storageClosing) {
+            throw new Error('RPKI SQLite存储正在关闭');
+        }
+        if (this.rpkiSqliteStore) {
+            return this.rpkiSqliteStore;
+        }
+        if (this.rpkiStoragePromise) {
+            return this.rpkiStoragePromise;
+        }
+
+        this.rpkiStoragePromise = this.initializeRpkiStorage();
         try {
-            if (null !== this.worker) {
-                logger.error(`rpki协议已经启动`);
+            return await this.rpkiStoragePromise;
+        } catch (error) {
+            this.rpkiStoragePromise = null;
+            throw error;
+        }
+    }
+
+    async initializeRpkiStorage() {
+        const sqliteStore = new RpkiSqliteStore({ dbPath: this.getRpkiDatabasePath() }).open();
+        this.rpkiSqliteStore = sqliteStore;
+        return sqliteStore;
+    }
+
+    runStorageMutation(task) {
+        if (this.storageClosing) {
+            return Promise.reject(new Error('RPKI SQLite存储正在关闭'));
+        }
+        const pending = this.storageMutationQueue.then(task, task);
+        this.storageMutationQueue = pending.catch(() => {});
+        return pending;
+    }
+
+    async notifyDatasetChanged(cacheSerial, operations = [], invalidate = false) {
+        const worker = this.worker;
+        if (!worker) {
+            return;
+        }
+        try {
+            const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DATASET_CHANGED, {
+                cacheSerial,
+                operations,
+                invalidate
+            });
+            if (result.status !== 'success') {
+                throw new Error(result.msg || 'worker拒绝了数据版本更新');
+            }
+        } catch (error) {
+            await this.handleWorkerSyncFailure(error, worker);
+        }
+    }
+
+    async handleWorkerSyncFailure(error, worker = this.worker) {
+        if (this.worker === worker) {
+            this.worker = null;
+        }
+        if (worker) {
+            try {
+                worker.removeEventListener?.(
+                    RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION,
+                    this.rpkiClientConnectionHandler
+                );
+                await worker.terminate?.();
+            } catch (terminateError) {
+                logger.warn(`停止失步的RPKI worker失败: ${terminateError.message}`);
+            }
+        }
+        this.eventDispatcher?.cleanup();
+        this.eventDispatcher = null;
+        const message = `数据已写入SQLite，但运行中的RPKI服务同步失败并已停止: ${error.message}`;
+        logger.error(message);
+        throw new Error(message);
+    }
+
+    async handleStartRpki(event, config) {
+        const webContents = event.sender;
+        let worker = null;
+        try {
+            if (this.worker) {
+                logger.error('rpki协议已经启动');
                 return errorResponse('rpki协议已经启动');
             }
 
-            logger.info(`${JSON.stringify(rpkiConfigData)}`);
-
-            // 获取日志级别配置
+            const sqliteStore = await this.ensureRpkiStorage();
+            const rpkiConfigData = {
+                ...config,
+                rpkiDatabasePath: sqliteStore.dbPath,
+                initialRouterKeys: this.store.get(this.rpkiRouterKeyFileKey) || []
+            };
             if (this.logLevel) {
                 rpkiConfigData.logLevel = this.logLevel;
             }
-
-            const workerPath = resolveWorkerPath('rpki/rpkiWorker.js');
-
-            const workerFactory = new WorkerWithPromise(workerPath);
-            this.worker = workerFactory.createLongRunningWorker();
-
-            // 设置事件发送器的 webContents
-            this.eventDispatcher = new EventDispatcher();
-            this.eventDispatcher.setWebContents(webContents);
-
-            // 注册事件监听
-            this.rpkiClientConnectionHandler = data => {
-                this.eventDispatcher.emit('rpki:clientConnection', successResponse(data));
-            };
-
-            this.worker.addEventListener(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, this.rpkiClientConnectionHandler);
-
-            // 加载 ROA 配置。百万级 ROA 不能逐条 IPC，必须按批次灌入 worker。
-            await this.loadRoaStorageToWorker(false);
-
-            // 加载 router key 配置 (v1+)
-            const rkList = await this.handleGetRouterKeyList();
-            if (rkList.status === 'success') {
-                for (const rk of rkList.data) {
-                    const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY, rk);
-                    if (result.status !== 'success') {
-                        logger.error(`worker RPKI RouterKey恢复失败: ${result.msg}`);
-                    }
-                }
-            }
-
-            // 加载 ASPA 配置。ASPA 也按批次灌入 worker，避免百万级数据逐条 IPC。
-            await this.loadAspaStorageToWorker(false);
-
             if (rpkiConfigData.enableAuth) {
-                // 设置 SSH 部署配置
                 rpkiConfigData.serverAddress = this.serverDeploymentConfig.serverAddress;
                 rpkiConfigData.sshUsername = this.serverDeploymentConfig.sshUsername;
                 rpkiConfigData.sshPassword = this.serverDeploymentConfig.sshPassword;
             }
 
-            const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.START_RPKI, rpkiConfigData);
+            logger.info(`${JSON.stringify({ ...rpkiConfigData, initialRouterKeys: undefined })}`);
+            const workerPath = resolveWorkerPath('rpki/rpkiWorker.js');
+            worker = new WorkerWithPromise(workerPath).createLongRunningWorker();
+            this.worker = worker;
+            this.eventDispatcher = new EventDispatcher();
+            this.eventDispatcher.setWebContents(webContents);
+            this.rpkiClientConnectionHandler = data => {
+                this.eventDispatcher.emit('rpki:clientConnection', successResponse(data));
+            };
+            worker.addEventListener(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, this.rpkiClientConnectionHandler);
 
-            // 这里肯定是启动成功了，如果失败，会抛出异常
+            const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.START_RPKI, rpkiConfigData);
             logger.info(`rpki启动成功 result: ${JSON.stringify(result)}`);
             return successResponse(null, result.msg);
         } catch (error) {
-            this.worker.removeEventListener(
-                RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION,
-                this.rpkiClientConnectionHandler
-            );
-            await this.worker.terminate();
-            this.worker = null;
-            this.eventDispatcher.cleanup(); // 清理事件发送器
+            if (worker) {
+                worker.removeEventListener(
+                    RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION,
+                    this.rpkiClientConnectionHandler
+                );
+                await worker.terminate();
+                if (this.worker === worker) {
+                    this.worker = null;
+                }
+            }
+            this.eventDispatcher?.cleanup();
             this.eventDispatcher = null;
             logger.error('Error starting RPKI:', error.message);
             return errorResponse(error.message);
         }
     }
 
-    getRoaDataFilePath() {
-        return getRoaDataFilePath(app.getPath('userData'));
-    }
-
-    async ensureRoaFileStorage() {
-        const filePath = this.getRoaDataFilePath();
-        await ensureParentDir(filePath);
-
-        if (await fileExists(filePath)) {
-            const meta = this.store.get(this.rpkiRoaMetaFileKey);
-            if (!meta || typeof meta.count !== 'number') {
-                await this.updateRoaMeta(await countJsonlRows(filePath));
-            }
-            return filePath;
-        }
-
-        const legacyList = this.store.get(this.rpkiRoaFileKey);
-        if (Array.isArray(legacyList) && legacyList.length > 0) {
-            const count = await writeRoasToJsonl(filePath, legacyList);
-            await this.updateRoaMeta(count);
-            logger.info(`旧版 RPKI ROA 配置已迁移到 JSONL: ${count}`);
-            return filePath;
-        }
-
-        await fs.promises.writeFile(filePath, '', 'utf8');
-        await this.updateRoaMeta(0);
-        return filePath;
-    }
-
-    async updateRoaMeta(count) {
-        this.store.set(this.rpkiRoaMetaFileKey, {
-            storageVersion: 2,
-            count,
-            updatedAt: new Date().toISOString()
-        });
-    }
-
-    async getRoaTotalCount(filePath) {
-        const meta = this.store.get(this.rpkiRoaMetaFileKey);
-        if (meta && typeof meta.count === 'number') {
-            return meta.count;
-        }
-
-        const count = await countJsonlRows(filePath);
-        await this.updateRoaMeta(count);
-        return count;
-    }
-
-    async loadRoaFileToWorker(filePath, announce = false) {
-        if (!this.worker) {
-            return { added: 0, skipped: 0 };
-        }
-
-        const batchSize = 5000;
-        let batch = [];
-        let added = 0;
-        let skipped = 0;
-
-        const flush = async () => {
-            if (batch.length === 0) {
-                return;
-            }
-            const currentBatch = batch;
-            batch = [];
-            const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROA_BATCH, {
-                roas: currentBatch,
-                announce
-            });
-            added += result.data?.added || 0;
-            skipped += result.data?.skipped || 0;
-        };
-
-        for await (const roa of iterateJsonlRoas(filePath)) {
-            batch.push(roa);
-            if (batch.length >= batchSize) {
-                await flush();
-            }
-        }
-        await flush();
-
-        logger.info(`worker RPKI ROA批量加载完成: added=${added}, skipped=${skipped}, announce=${announce}`);
-        return { added, skipped };
-    }
-
-    async loadRoaStorageToWorker(announce = false) {
-        const filePath = await this.ensureRoaFileStorage();
-        return this.loadRoaFileToWorker(filePath, announce);
-    }
-
-    getAspaDataFilePath() {
-        return getAspaDataFilePath(app.getPath('userData'));
-    }
-
-    async ensureAspaFileStorage() {
-        const filePath = this.getAspaDataFilePath();
-        await ensureParentDir(filePath);
-
-        if (await fileExists(filePath)) {
-            const meta = this.store.get(this.rpkiAspaMetaFileKey);
-            if (!meta || typeof meta.count !== 'number') {
-                await this.updateAspaMeta(await countJsonlAspas(filePath));
-            }
-            return filePath;
-        }
-
-        const legacyList = this.store.get(this.rpkiAspaFileKey);
-        if (Array.isArray(legacyList) && legacyList.length > 0) {
-            const count = await writeAspasToJsonl(filePath, legacyList);
-            await this.updateAspaMeta(count);
-            logger.info(`旧版 RPKI ASPA 配置已迁移到 JSONL: ${count}`);
-            return filePath;
-        }
-
-        await fs.promises.writeFile(filePath, '', 'utf8');
-        await this.updateAspaMeta(0);
-        return filePath;
-    }
-
-    async updateAspaMeta(count) {
-        this.store.set(this.rpkiAspaMetaFileKey, {
-            storageVersion: 2,
-            count,
-            updatedAt: new Date().toISOString()
-        });
-    }
-
-    async getAspaTotalCount(filePath) {
-        const meta = this.store.get(this.rpkiAspaMetaFileKey);
-        if (meta && typeof meta.count === 'number') {
-            return meta.count;
-        }
-
-        const count = await countJsonlAspas(filePath);
-        await this.updateAspaMeta(count);
-        return count;
-    }
-
-    async loadAspaFileToWorker(filePath, announce = false) {
-        if (!this.worker) {
-            return { added: 0, overwritten: 0 };
-        }
-
-        const batchSize = 5000;
-        let batch = [];
-        let added = 0;
-        let overwritten = 0;
-
-        const flush = async () => {
-            if (batch.length === 0) {
-                return;
-            }
-            const currentBatch = batch;
-            batch = [];
-            const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA_BATCH, {
-                aspas: currentBatch,
-                announce
-            });
-            added += result.data?.added || 0;
-            overwritten += result.data?.overwritten || 0;
-        };
-
-        for await (const aspa of iterateJsonlAspas(filePath)) {
-            batch.push(aspa);
-            if (batch.length >= batchSize) {
-                await flush();
-            }
-        }
-        await flush();
-
-        logger.info(`worker RPKI ASPA批量加载完成: added=${added}, overwritten=${overwritten}, announce=${announce}`);
-        return { added, overwritten };
-    }
-
-    async loadAspaStorageToWorker(announce = false) {
-        const filePath = await this.ensureAspaFileStorage();
-        return this.loadAspaFileToWorker(filePath, announce);
-    }
-
     async handleStopRpki() {
-        if (null === this.worker) {
+        const worker = this.worker;
+        if (!worker) {
             logger.error('RPKI未启动');
             return errorResponse('RPKI未启动');
         }
 
         try {
-            const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.STOP_RPKI, null);
+            const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.STOP_RPKI, null);
             return successResponse(null, result.msg);
         } catch (error) {
             logger.error('Error stopping RPKI:', error.message);
             return errorResponse(error.message);
         } finally {
-            this.worker.removeEventListener(
-                RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION,
-                this.rpkiClientConnectionHandler
-            );
-            await this.worker.terminate();
-            this.worker = null;
-            this.eventDispatcher.cleanup(); // 清理事件发送器
-            this.eventDispatcher = null;
+            worker.removeEventListener(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, this.rpkiClientConnectionHandler);
+            await worker.terminate();
+            if (this.worker === worker) {
+                this.worker = null;
+                this.eventDispatcher?.cleanup();
+                this.eventDispatcher = null;
+            }
         }
-    }
-
-    isRoaSame(roa1, roa2) {
-        if (roa1.asn !== roa2.asn) {
-            return false;
-        }
-
-        if (roa1.maxLength !== roa2.maxLength) {
-            return false;
-        }
-
-        if (roa1.ipType !== roa2.ipType) {
-            return false;
-        }
-
-        const net1 = getNetworkAddress(roa1.ip, roa1.mask);
-        const net2 = getNetworkAddress(roa2.ip, roa2.mask);
-
-        return net1 === net2;
     }
 
     async handleAddRoa(event, roa) {
@@ -416,30 +257,17 @@ class RpkiApp {
                 return errorResponse('RPKI ROA配置格式无效');
             }
 
-            const filePath = await this.ensureRoaFileStorage();
-            logger.info(`handleAddRoa: ${JSON.stringify(normalizedRoa)}`);
-
-            // 检查是否已经存在
-            if (await this.roaQueryIndex.hasRoa(filePath, normalizedRoa)) {
-                return errorResponse('RPKI ROA配置已经存在');
-            }
-
-            if (this.worker) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROA, normalizedRoa);
-                if (result.status === 'success') {
-                    logger.info(`worker RPKI ROA配置添加成功`);
-                } else {
-                    logger.error(`worker RPKI ROA配置添加失败: ${result.msg}`);
+            return await this.runStorageMutation(async () => {
+                const sqliteStore = await this.ensureRpkiStorage();
+                const result = sqliteStore.addRoa(normalizedRoa);
+                if (!(result.inserted || result.added)) {
+                    return errorResponse('RPKI ROA配置已经存在');
                 }
-            }
-
-            const appendOffset = (await fs.promises.stat(filePath)).size;
-            const line = JSON.stringify(normalizedRoa);
-            await fs.promises.appendFile(filePath, `${line}\n`, 'utf8');
-            const total = await this.getRoaTotalCount(filePath);
-            await this.updateRoaMeta(total + 1);
-            await this.roaQueryIndex.markAppended(filePath, normalizedRoa, appendOffset, Buffer.byteLength(line));
-            return successResponse(null, 'RPKI ROA配置文件保存成功');
+                await this.notifyDatasetChanged(result.cacheSerial, [
+                    { type: 'roa', action: 'announce', data: result.current || result.roa || normalizedRoa }
+                ]);
+                return successResponse(null, 'RPKI ROA配置保存成功');
+            });
         } catch (error) {
             logger.error('Error adding ROA:', error.message);
             return errorResponse(error.message);
@@ -453,44 +281,21 @@ class RpkiApp {
                 return errorResponse('RPKI ROA配置格式无效');
             }
 
-            const filePath = await this.ensureRoaFileStorage();
-            const tempPath = `${filePath}.${process.pid}.${Date.now()}.delete.tmp`;
-            const targetKey = makeRoaStorageKey(normalizedRoa);
-            const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
-            let removed = false;
-            let count = 0;
-
-            logger.info(`handleDeleteRoa: ${JSON.stringify(normalizedRoa)}`);
-
-            try {
-                for await (const item of iterateJsonlRoas(filePath)) {
-                    if (makeRoaStorageKey(item) === targetKey) {
-                        removed = true;
-                        continue;
+            return await this.runStorageMutation(async () => {
+                const sqliteStore = await this.ensureRpkiStorage();
+                const result = sqliteStore.deleteRoa(normalizedRoa);
+                if (!result.deleted) {
+                    return errorResponse('RPKI ROA配置不存在');
+                }
+                await this.notifyDatasetChanged(result.cacheSerial, [
+                    {
+                        type: 'roa',
+                        action: 'withdraw',
+                        data: result.previous || result.deletedItem || result.roa || normalizedRoa
                     }
-                    await writeLine(stream, JSON.stringify(item));
-                    count += 1;
-                }
-                await closeWriteStream(stream);
-                await renameWithRetry(tempPath, filePath);
-            } catch (error) {
-                stream.destroy();
-                await fs.promises.unlink(tempPath).catch(() => {});
-                throw error;
-            }
-
-            if (this.worker && removed) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA, normalizedRoa);
-                if (result.status === 'success') {
-                    logger.info(`worker RPKI ROA删除成功`);
-                } else {
-                    logger.error(`worker RPKI ROA删除失败: ${result.msg}`);
-                }
-            }
-
-            await this.updateRoaMeta(count);
-            this.roaQueryIndex.invalidate();
-            return successResponse(null, 'RPKI ROA配置文件保存成功');
+                ]);
+                return successResponse(null, 'RPKI ROA配置删除成功');
+            });
         } catch (error) {
             logger.error('Error deleting ROA:', error.message);
             return errorResponse(error.message);
@@ -499,71 +304,29 @@ class RpkiApp {
 
     async handleDeleteAllRoa() {
         try {
-            const filePath = await this.ensureRoaFileStorage();
-            const total = await this.getRoaTotalCount(filePath);
-
-            if (this.worker && total > 0) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA_BATCH, {
-                    all: true
-                });
-                logger.info(`worker RPKI ROA批量删除成功: ${JSON.stringify(result.data)}`);
-            }
-
-            await fs.promises.writeFile(filePath, '', 'utf8');
-            await this.updateRoaMeta(0);
-            this.roaQueryIndex.invalidate();
-            return successResponse({ deleted: total }, 'RPKI ROA批量删除成功');
+            return await this.runStorageMutation(async () => {
+                const sqliteStore = await this.ensureRpkiStorage();
+                const result = sqliteStore.clearRoas();
+                if (result.deleted > 0) {
+                    await this.notifyDatasetChanged(result.cacheSerial, [], true);
+                }
+                return successResponse({ deleted: result.deleted }, 'RPKI ROA批量删除成功');
+            });
         } catch (error) {
             logger.error('Error deleting all ROA:', error.message);
             return errorResponse(error.message);
         }
     }
 
-    hasRoaListFilters(options) {
-        return Boolean(
-            String(options?.ipType || '').trim() ||
-                String(options?.asn || '').trim() ||
-                String(options?.prefixFilter || '').trim()
-        );
-    }
-
     async handleGetRoaList(event, options = null) {
         try {
-            const filePath = await this.ensureRoaFileStorage();
-            const total = await this.getRoaTotalCount(filePath);
-
-            if (options && typeof options === 'object') {
-                const page = Math.max(1, Number(options.page) || 1);
-                const pageSize = Math.min(1000, Math.max(1, Number(options.pageSize) || 10));
-                const result = this.hasRoaListFilters(options)
-                    ? await this.roaQueryIndex.query(filePath, {
-                          ...options,
-                          page,
-                          pageSize
-                      })
-                    : {
-                          items: await readJsonlPage(filePath, page, pageSize),
-                          total,
-                          page,
-                          pageSize
-                      };
-                return successResponse(
-                    {
-                        items: result.items,
-                        total: result.total,
-                        page: result.page,
-                        pageSize: result.pageSize,
-                        storageTotal: total
-                    },
-                    'RPKI ROA配置文件加载成功'
-                );
+            const sqliteStore = await this.ensureRpkiStorage();
+            const queryOptions = options && typeof options === 'object' ? options : { page: 1, pageSize: 1000 };
+            const result = sqliteStore.queryRoaPage(queryOptions);
+            if (!options || typeof options !== 'object') {
+                return successResponse(result.items, 'RPKI ROA配置加载成功');
             }
-
-            const currentRoaList = [];
-            for await (const roa of iterateJsonlRoas(filePath)) {
-                currentRoaList.push(roa);
-            }
-            return successResponse(currentRoaList, 'RPKI ROA配置文件加载成功');
+            return successResponse(result, 'RPKI ROA配置加载成功');
         } catch (error) {
             logger.error('Error getting ROA list:', error.message);
             return errorResponse(error.message);
@@ -586,11 +349,9 @@ class RpkiApp {
     async handleSelectRoaJsonFile(event) {
         try {
             const result = await this.showRoaJsonOpenDialog(event);
-
             if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
                 return successResponse(null, '已取消选择');
             }
-
             return successResponse(result.filePaths[0], 'ROA JSON文件选择成功');
         } catch (error) {
             logger.error('Error selecting ROA JSON:', error.message);
@@ -600,10 +361,7 @@ class RpkiApp {
 
     normalizeRoaImportLimit(limit) {
         const value = Number(limit);
-        if (!Number.isFinite(value) || value <= 0) {
-            return null;
-        }
-        return Math.floor(value);
+        return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
     }
 
     async handleImportRoaJson(event, importOptions = {}) {
@@ -611,14 +369,11 @@ class RpkiApp {
             let importFilePath = importOptions?.filePath;
             if (!importFilePath) {
                 const result = await this.showRoaJsonOpenDialog(event);
-
                 if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
                     return successResponse({ cancelled: true }, '已取消导入');
                 }
-
                 importFilePath = result.filePaths[0];
             }
-
             const stats = await this.importRoaJsonFile(importFilePath, {
                 limit: this.normalizeRoaImportLimit(importOptions?.limit)
             });
@@ -629,100 +384,91 @@ class RpkiApp {
         }
     }
 
-    async importRoaJsonFile(importFilePath, options = {}) {
-        const filePath = await this.ensureRoaFileStorage();
-        const tempPath = `${filePath}.${process.pid}.${Date.now()}.import.tmp`;
-        const importedOnlyPath = `${filePath}.${process.pid}.${Date.now()}.imported.tmp`;
-        const stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
-        const importedOnlyStream = fs.createWriteStream(importedOnlyPath, { encoding: 'utf8' });
-        const existingKeys = new Set();
-        const importLimit = this.normalizeRoaImportLimit(options.limit);
-        const stats = {
-            filePath: importFilePath,
-            limit: importLimit,
-            existing: 0,
-            parsed: 0,
-            imported: 0,
-            duplicate: 0,
-            invalid: 0,
-            total: 0
-        };
+    importRoaJsonFile(importFilePath, options = {}) {
+        return this.runStorageMutation(async () => {
+            const sqliteStore = await this.ensureRpkiStorage();
+            const importLimit = this.normalizeRoaImportLimit(options.limit);
+            const stats = {
+                filePath: importFilePath,
+                limit: importLimit,
+                existing: sqliteStore.getRoaCount(),
+                parsed: 0,
+                imported: 0,
+                duplicate: 0,
+                invalid: 0,
+                total: 0
+            };
+            let batch = [];
+            let candidates = 0;
 
-        try {
-            for await (const roa of iterateJsonlRoas(filePath)) {
-                const key = makeRoaStorageKey(roa);
-                if (existingKeys.has(key)) {
-                    continue;
-                }
-                existingKeys.add(key);
-                await writeLine(stream, JSON.stringify(roa));
-                stats.existing += 1;
-            }
+            sqliteStore.beginRoaImport();
 
-            const parseStats = await parseRoaJsonFile(importFilePath, async roa => {
-                const key = makeRoaStorageKey(roa);
-                if (existingKeys.has(key)) {
-                    stats.duplicate += 1;
+            const flush = async () => {
+                if (batch.length === 0) {
                     return;
                 }
-
-                existingKeys.add(key);
-                const line = JSON.stringify(roa);
-                await writeLine(stream, line);
-                await writeLine(importedOnlyStream, line);
-                stats.imported += 1;
-
-                if (importLimit && stats.imported >= importLimit) {
-                    return false;
+                const result = sqliteStore.stageRoaBatch(batch, { countCandidates: Boolean(importLimit) });
+                if (result.candidates !== null) {
+                    candidates = result.candidates;
                 }
-            });
+                stats.duplicate += result.skipped || 0;
+                batch = [];
+                await yieldToEventLoop();
+            };
 
-            stats.parsed = parseStats.valid;
-            stats.invalid = parseStats.invalid;
-            stats.total = stats.existing + stats.imported;
-
-            await closeWriteStream(stream);
-            await closeWriteStream(importedOnlyStream);
-            await renameWithRetry(tempPath, filePath);
-            await this.updateRoaMeta(stats.total);
-            this.roaQueryIndex.invalidate();
-
-            if (this.worker && stats.imported > 0) {
-                await this.loadRoaFileToWorker(importedOnlyPath, true);
+            try {
+                const parseStats = await parseRoaJsonFile(importFilePath, async roa => {
+                    batch.push(roa);
+                    if (batch.length >= STORAGE_BATCH_SIZE) {
+                        await flush();
+                    }
+                    if (importLimit && candidates >= importLimit) {
+                        return false;
+                    }
+                    return undefined;
+                });
+                await flush();
+                const result = sqliteStore.commitRoaImport({ maxInserted: importLimit });
+                stats.parsed = parseStats.valid;
+                stats.invalid = parseStats.invalid;
+                stats.imported = result.inserted || result.added || 0;
+                stats.duplicate += Math.max(0, result.staged - result.candidates);
+                stats.ignoredByLimit = result.ignoredByLimit || 0;
+                stats.total = result.total;
+                if (stats.imported > 0) {
+                    await this.notifyDatasetChanged(result.cacheSerial, [], true);
+                }
+                logger.info(`ROA JSON导入完成: ${JSON.stringify(stats)}`);
+                return stats;
+            } catch (error) {
+                sqliteStore.abortRoaImport();
+                throw error;
             }
-
-            await fs.promises.unlink(importedOnlyPath).catch(() => {});
-            logger.info(`ROA JSON导入完成: ${JSON.stringify(stats)}`);
-            return stats;
-        } catch (error) {
-            stream.destroy();
-            importedOnlyStream.destroy();
-            await fs.promises.unlink(tempPath).catch(() => {});
-            await fs.promises.unlink(importedOnlyPath).catch(() => {});
-            throw error;
-        }
+        });
     }
 
-    // ============ Router Key (v1+) ============
     async handleAddRouterKey(event, rk) {
         try {
-            let currentList = this.store.get(this.rpkiRouterKeyFileKey) || [];
-            const index = currentList.findIndex(item => item.ski === rk.ski && item.asn === rk.asn);
-            if (index !== -1) {
-                return errorResponse('RouterKey已存在');
-            }
-
-            if (this.worker) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY, rk);
-                if (result.status !== 'success') {
-                    logger.error(`worker RouterKey添加失败: ${result.msg}`);
-                    return errorResponse(result.msg);
+            return await this.runStorageMutation(async () => {
+                const currentList = this.store.get(this.rpkiRouterKeyFileKey) || [];
+                if (currentList.some(item => item.ski === rk.ski && item.asn === rk.asn)) {
+                    return errorResponse('RouterKey已存在');
                 }
-            }
-
-            currentList.push(rk);
-            this.store.set(this.rpkiRouterKeyFileKey, currentList);
-            return successResponse(null, 'RouterKey保存成功');
+                currentList.push(rk);
+                this.store.set(this.rpkiRouterKeyFileKey, currentList);
+                const worker = this.worker;
+                if (worker) {
+                    try {
+                        const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY, rk);
+                        if (result.status !== 'success') {
+                            throw new Error(result.msg || 'worker拒绝RouterKey更新');
+                        }
+                    } catch (workerError) {
+                        await this.handleWorkerSyncFailure(workerError, worker);
+                    }
+                }
+                return successResponse(null, 'RouterKey保存成功');
+            });
         } catch (error) {
             logger.error('Error adding RouterKey:', error.message);
             return errorResponse(error.message);
@@ -731,21 +477,26 @@ class RpkiApp {
 
     async handleDeleteRouterKey(event, rk) {
         try {
-            let currentList = this.store.get(this.rpkiRouterKeyFileKey) || [];
-            const index = currentList.findIndex(item => item.ski === rk.ski && item.asn === rk.asn);
-            if (index !== -1) {
-                currentList.splice(index, 1);
-            }
-
-            if (this.worker) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROUTER_KEY, rk);
-                if (result.status !== 'success') {
-                    logger.error(`worker RouterKey删除失败: ${result.msg}`);
+            return await this.runStorageMutation(async () => {
+                const currentList = this.store.get(this.rpkiRouterKeyFileKey) || [];
+                const index = currentList.findIndex(item => item.ski === rk.ski && item.asn === rk.asn);
+                if (index !== -1) {
+                    currentList.splice(index, 1);
                 }
-            }
-
-            this.store.set(this.rpkiRouterKeyFileKey, currentList);
-            return successResponse(null, 'RouterKey删除成功');
+                this.store.set(this.rpkiRouterKeyFileKey, currentList);
+                const worker = this.worker;
+                if (worker && index !== -1) {
+                    try {
+                        const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROUTER_KEY, rk);
+                        if (result.status !== 'success') {
+                            throw new Error(result.msg || 'worker拒绝RouterKey删除');
+                        }
+                    } catch (workerError) {
+                        await this.handleWorkerSyncFailure(workerError, worker);
+                    }
+                }
+                return successResponse(null, 'RouterKey删除成功');
+            });
         } catch (error) {
             logger.error('Error deleting RouterKey:', error.message);
             return errorResponse(error.message);
@@ -754,76 +505,42 @@ class RpkiApp {
 
     async handleGetRouterKeyList() {
         try {
-            const list = this.store.get(this.rpkiRouterKeyFileKey) || [];
-            return successResponse(list, 'RouterKey列表加载成功');
+            return successResponse(this.store.get(this.rpkiRouterKeyFileKey) || [], 'RouterKey列表加载成功');
         } catch (error) {
             logger.error('Error getting RouterKey list:', error.message);
             return errorResponse(error.message);
         }
     }
 
-    // ============ ASPA (v2+) ============
+    normalizeStoredAspa(aspa) {
+        return normalizeAspaObject({
+            ...aspa,
+            providerAsns: RpkiAspa.parseProviderAsns(aspa?.providerAsns)
+        });
+    }
+
     async handleAddAspa(event, aspa) {
-        let tempPath = null;
-        let stream = null;
         try {
-            const filePath = await this.ensureAspaFileStorage();
-            tempPath = `${filePath}.${process.pid}.${Date.now()}.add.tmp`;
-            stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
-            const storedAspa = normalizeAspaObject({
-                ...aspa,
-                providerAsns: RpkiAspa.parseProviderAsns(aspa.providerAsns)
-            });
+            const storedAspa = this.normalizeStoredAspa(aspa);
             if (!storedAspa) {
-                throw new Error('ASPA配置无效');
+                return errorResponse('ASPA配置无效');
             }
 
-            const key = makeAspaStorageKey(storedAspa);
-            let replaced = false;
-            let total = 0;
-
-            for await (const item of iterateJsonlAspas(filePath)) {
-                const itemKey = makeAspaStorageKey(item);
-                if (itemKey === key) {
-                    if (!replaced) {
-                        await writeLine(stream, JSON.stringify(storedAspa));
-                        replaced = true;
-                        total += 1;
-                    }
-                    continue;
+            return await this.runStorageMutation(async () => {
+                const sqliteStore = await this.ensureRpkiStorage();
+                const result = sqliteStore.upsertAspa(storedAspa);
+                const previous = result.previous || result.oldAspa || null;
+                const current = result.current || result.newAspa || result.aspa || storedAspa;
+                if (!result.changed) {
+                    return successResponse(null, 'ASPA配置未变化');
                 }
-
-                await writeLine(stream, JSON.stringify(item));
-                total += 1;
-            }
-
-            if (!replaced) {
-                await writeLine(stream, JSON.stringify(storedAspa));
-                total += 1;
-            }
-
-            await closeWriteStream(stream);
-            stream = null;
-
-            if (this.worker) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, storedAspa);
-                if (result.status !== 'success') {
-                    logger.error(`worker ASPA添加失败: ${result.msg}`);
-                    return errorResponse(result.msg);
-                }
-            }
-
-            await renameWithRetry(tempPath, filePath);
-            tempPath = null;
-            await this.updateAspaMeta(total);
-            return successResponse(null, replaced ? 'ASPA覆盖成功' : 'ASPA保存成功');
+                const operation = previous
+                    ? { type: 'aspa', action: 'replace', oldData: previous, newData: current }
+                    : { type: 'aspa', action: 'announce', data: current };
+                await this.notifyDatasetChanged(result.cacheSerial, [operation]);
+                return successResponse(null, previous ? 'ASPA覆盖成功' : 'ASPA保存成功');
+            });
         } catch (error) {
-            if (stream) {
-                stream.destroy();
-            }
-            if (tempPath) {
-                await fs.promises.unlink(tempPath).catch(() => {});
-            }
             logger.error('Error adding ASPA:', error.message);
             return errorResponse(error.message);
         }
@@ -831,23 +548,21 @@ class RpkiApp {
 
     async handleDeleteAspa(event, aspa) {
         try {
-            const filePath = await this.ensureAspaFileStorage();
-            const { deleted, deletedAspa, total } = await removeAspaFromJsonl(filePath, aspa.customerAsn);
-            await this.updateAspaMeta(total);
-
-            if (deleted === 0) {
-                return errorResponse('ASPA不存在');
-            }
-
-            if (this.worker && deletedAspa) {
-                try {
-                    await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, deletedAspa);
-                } catch (workerError) {
-                    logger.warn(`worker ASPA删除同步失败: ${workerError.message}`);
+            return await this.runStorageMutation(async () => {
+                const sqliteStore = await this.ensureRpkiStorage();
+                const result = sqliteStore.deleteAspa(aspa?.customerAsn);
+                if (!result.deleted) {
+                    return errorResponse('ASPA不存在');
                 }
-            }
-
-            return successResponse({ deleted }, 'ASPA删除成功');
+                await this.notifyDatasetChanged(result.cacheSerial, [
+                    {
+                        type: 'aspa',
+                        action: 'withdraw',
+                        data: result.previous || result.deletedItem || result.oldAspa || result.aspa
+                    }
+                ]);
+                return successResponse({ deleted: result.deleted }, 'ASPA删除成功');
+            });
         } catch (error) {
             logger.error('Error deleting ASPA:', error.message);
             return errorResponse(error.message);
@@ -856,21 +571,14 @@ class RpkiApp {
 
     async handleDeleteAllAspa() {
         try {
-            const filePath = await this.ensureAspaFileStorage();
-            const total = await this.getAspaTotalCount(filePath);
-
-            if (this.worker && total > 0) {
-                const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA_BATCH, {
-                    all: true
-                });
-                if (result.status !== 'success') {
-                    logger.error(`worker ASPA批量删除失败: ${result.msg}`);
+            return await this.runStorageMutation(async () => {
+                const sqliteStore = await this.ensureRpkiStorage();
+                const result = sqliteStore.clearAspas();
+                if (result.deleted > 0) {
+                    await this.notifyDatasetChanged(result.cacheSerial, [], true);
                 }
-            }
-
-            await fs.promises.writeFile(filePath, '', 'utf8');
-            await this.updateAspaMeta(0);
-            return successResponse({ deleted: total }, 'ASPA批量删除成功');
+                return successResponse({ deleted: result.deleted }, 'ASPA批量删除成功');
+            });
         } catch (error) {
             logger.error('Error deleting all ASPA:', error.message);
             return errorResponse(error.message);
@@ -893,11 +601,9 @@ class RpkiApp {
     async handleSelectAspaJsonFile(event) {
         try {
             const result = await this.showAspaJsonOpenDialog(event);
-
             if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
                 return successResponse(null, '已取消选择');
             }
-
             return successResponse(result.filePaths[0], 'ASPA JSON文件选择成功');
         } catch (error) {
             logger.error('Error selecting ASPA JSON:', error.message);
@@ -907,10 +613,7 @@ class RpkiApp {
 
     normalizeAspaImportLimit(limit) {
         const value = Number(limit);
-        if (!Number.isFinite(value) || value <= 0) {
-            return null;
-        }
-        return Math.floor(value);
+        return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
     }
 
     async handleImportAspaJson(event, importOptions = {}) {
@@ -918,14 +621,11 @@ class RpkiApp {
             let importFilePath = importOptions?.filePath;
             if (!importFilePath) {
                 const result = await this.showAspaJsonOpenDialog(event);
-
                 if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
                     return successResponse({ cancelled: true }, '已取消导入');
                 }
-
                 importFilePath = result.filePaths[0];
             }
-
             const stats = await this.importAspaJsonFile(importFilePath, {
                 limit: this.normalizeAspaImportLimit(importOptions?.limit)
             });
@@ -936,130 +636,75 @@ class RpkiApp {
         }
     }
 
-    async importAspaJsonFile(importFilePath, options = {}) {
-        const filePath = await this.ensureAspaFileStorage();
-        const tempPath = `${filePath}.${process.pid}.${Date.now()}.import.tmp`;
-        const importedOpsPath = `${filePath}.${process.pid}.${Date.now()}.imported.tmp`;
-        const importLimit = this.normalizeAspaImportLimit(options.limit);
-        const importedOpsStream = fs.createWriteStream(importedOpsPath, { encoding: 'utf8' });
-        let stream = null;
-        const existingKeys = new Set();
-        const touchedKeys = new Set();
-        const latestImportedByKey = new Map();
-        const importedOrder = [];
-        let importSequence = 0;
-        const stats = {
-            filePath: importFilePath,
-            limit: importLimit,
-            existing: 0,
-            parsed: 0,
-            imported: 0,
-            overwritten: 0,
-            invalid: 0,
-            total: 0
-        };
+    importAspaJsonFile(importFilePath, options = {}) {
+        return this.runStorageMutation(async () => {
+            const sqliteStore = await this.ensureRpkiStorage();
+            const importLimit = this.normalizeAspaImportLimit(options.limit);
+            const stats = {
+                filePath: importFilePath,
+                limit: importLimit,
+                existing: sqliteStore.getAspaCount(),
+                parsed: 0,
+                imported: 0,
+                overwritten: 0,
+                invalid: 0,
+                total: 0
+            };
+            let batch = [];
+            let parsedCount = 0;
 
-        try {
-            for await (const aspa of iterateJsonlAspas(filePath)) {
-                const key = makeAspaStorageKey(aspa);
-                if (existingKeys.has(key)) {
-                    continue;
+            sqliteStore.beginAspaImport();
+
+            const flush = async () => {
+                if (batch.length === 0) {
+                    return;
                 }
-                existingKeys.add(key);
-                stats.existing += 1;
-            }
+                sqliteStore.stageAspaBatch(batch);
+                batch = [];
+                await yieldToEventLoop();
+            };
 
-            const parseStats = await parseAspaJsonFile(importFilePath, async aspa => {
-                const key = makeAspaStorageKey(aspa);
-                if (existingKeys.has(key) || touchedKeys.has(key)) {
-                    stats.overwritten += 1;
-                } else {
-                    stats.imported += 1;
+            try {
+                const parseStats = await parseAspaJsonFile(importFilePath, async aspa => {
+                    batch.push(aspa);
+                    parsedCount += 1;
+                    if (batch.length >= STORAGE_BATCH_SIZE || (importLimit && parsedCount >= importLimit)) {
+                        await flush();
+                    }
+                    if (importLimit && parsedCount >= importLimit) {
+                        return false;
+                    }
+                    return undefined;
+                });
+                await flush();
+                const result = sqliteStore.commitAspaImport();
+                stats.parsed = parseStats.valid;
+                stats.invalid = parseStats.invalid;
+                stats.imported = result.inserted || result.added || 0;
+                stats.overwritten = result.overwritten || 0;
+                stats.unchanged = result.skipped || 0;
+                stats.total = result.total;
+                if (result.changed > 0) {
+                    await this.notifyDatasetChanged(result.cacheSerial, [], true);
                 }
-
-                touchedKeys.add(key);
-                importSequence += 1;
-                latestImportedByKey.set(key, { aspa, sequence: importSequence });
-                importedOrder.push({ key, sequence: importSequence });
-                await writeLine(importedOpsStream, JSON.stringify(aspa));
-
-                if (importLimit && importSequence >= importLimit) {
-                    return false;
-                }
-            });
-
-            stats.parsed = parseStats.valid;
-            stats.invalid = parseStats.invalid;
-
-            await closeWriteStream(importedOpsStream);
-
-            stream = fs.createWriteStream(tempPath, { encoding: 'utf8' });
-            let finalTotal = 0;
-            for await (const aspa of iterateJsonlAspas(filePath)) {
-                const key = makeAspaStorageKey(aspa);
-                if (touchedKeys.has(key)) {
-                    continue;
-                }
-                await writeLine(stream, JSON.stringify(aspa));
-                finalTotal += 1;
+                logger.info(`ASPA JSON导入完成: ${JSON.stringify(stats)}`);
+                return stats;
+            } catch (error) {
+                sqliteStore.abortAspaImport();
+                throw error;
             }
-
-            for (const item of importedOrder) {
-                const latest = latestImportedByKey.get(item.key);
-                if (!latest || latest.sequence !== item.sequence) {
-                    continue;
-                }
-                await writeLine(stream, JSON.stringify(latest.aspa));
-                finalTotal += 1;
-            }
-
-            stats.total = finalTotal;
-            await closeWriteStream(stream);
-            stream = null;
-            await renameWithRetry(tempPath, filePath);
-            await this.updateAspaMeta(stats.total);
-
-            if (this.worker && importSequence > 0) {
-                await this.loadAspaFileToWorker(importedOpsPath, true);
-            }
-
-            await fs.promises.unlink(importedOpsPath).catch(() => {});
-            logger.info(`ASPA JSON导入完成: ${JSON.stringify(stats)}`);
-            return stats;
-        } catch (error) {
-            importedOpsStream.destroy();
-            if (stream) {
-                stream.destroy();
-            }
-            await fs.promises.unlink(tempPath).catch(() => {});
-            await fs.promises.unlink(importedOpsPath).catch(() => {});
-            throw error;
-        }
+        });
     }
 
     async handleGetAspaList(event, options = null) {
         try {
-            const filePath = await this.ensureAspaFileStorage();
-            const total = await this.getAspaTotalCount(filePath);
-
-            if (options && typeof options === 'object') {
-                const page = Math.max(1, Number(options.page) || 1);
-                const pageSize = Math.min(1000, Math.max(1, Number(options.pageSize) || 20));
-                const items = await readAspaJsonlPage(filePath, page, pageSize);
-                return successResponse(
-                    {
-                        items,
-                        total,
-                        page,
-                        pageSize,
-                        storageTotal: total
-                    },
-                    'ASPA列表加载成功'
-                );
+            const sqliteStore = await this.ensureRpkiStorage();
+            const queryOptions = options && typeof options === 'object' ? options : { page: 1, pageSize: 1000 };
+            const result = sqliteStore.queryAspaPage(queryOptions);
+            if (!options || typeof options !== 'object') {
+                return successResponse(result.items, 'ASPA列表加载成功');
             }
-
-            const items = await readAspaJsonlPage(filePath, 1, Math.min(total || 20, 1000));
-            return successResponse(items, 'ASPA列表加载成功');
+            return successResponse(result, 'ASPA列表加载成功');
         } catch (error) {
             logger.error('Error getting ASPA list:', error.message);
             return errorResponse(error.message);
@@ -1067,13 +712,11 @@ class RpkiApp {
     }
 
     async handleGetClientList() {
-        if (null === this.worker) {
+        if (!this.worker) {
             return successResponse([], 'RPKI未启动');
         }
-
         try {
             const result = await this.worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.GET_CLIENT_LIST, null);
-            logger.info(`获取客户端列表成功 result: ${JSON.stringify(result)}`);
             return successResponse(result.data, '获取客户端列表成功');
         } catch (error) {
             logger.error('Error getting client list:', error.message);
@@ -1081,8 +724,41 @@ class RpkiApp {
         }
     }
 
+    closeStorage() {
+        if (this.storageClosePromise) {
+            return this.storageClosePromise;
+        }
+        this.storageClosing = true;
+        this.storageClosePromise = (async () => {
+            try {
+                try {
+                    await this.storageMutationQueue;
+                } catch (error) {
+                    logger.warn(`等待RPKI SQLite写入队列失败: ${error.message}`);
+                }
+
+                if (this.rpkiStoragePromise) {
+                    try {
+                        await this.rpkiStoragePromise;
+                    } catch (_) {
+                        // Initialization already reports the original error to its caller.
+                    }
+                }
+
+                const sqliteStore = this.rpkiSqliteStore;
+                this.rpkiSqliteStore = null;
+                this.rpkiStoragePromise = null;
+                sqliteStore?.close();
+            } finally {
+                this.storageClosing = false;
+                this.storageClosePromise = null;
+            }
+        })();
+        return this.storageClosePromise;
+    }
+
     getRpkiRunning() {
-        return null !== this.worker;
+        return this.worker !== null;
     }
 }
 

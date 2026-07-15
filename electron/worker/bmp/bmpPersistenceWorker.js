@@ -78,6 +78,9 @@ function handleMessage(message) {
             case BMP_PERSISTENCE_OP.QUERY_STATISTICS_REPORTS:
                 success(messageId, requireStore().queryStatisticsReports(data));
                 break;
+            case BMP_PERSISTENCE_OP.PURGE_SOURCE:
+                success(messageId, requireStore().purgeSource(data));
+                break;
             case BMP_PERSISTENCE_OP.PURGE_STALE_ROUTES:
                 success(messageId, requireStore().purgeStaleRoutes(data));
                 break;

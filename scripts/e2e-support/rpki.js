@@ -164,9 +164,9 @@ const RpkiE2eController = (() => {
             worker.sshTunnel = null;
             worker.rpkiConfigData = null;
             worker.rpkiSessionMap = new Map();
-            worker.rpkiRoaMap = new Map();
             worker.rpkiRouterKeyMap = new Map();
-            worker.rpkiAspaMap = new Map();
+            worker.rpkiDatabasePath = null;
+            worker.rpkiStore = null;
             worker.cacheSerial = 1;
             worker.serialHistory = [];
             worker.serialHistoryOperationCount = 0;

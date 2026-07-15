@@ -5,14 +5,9 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const {
-    countJsonlAspas,
-    readAspaJsonlPage,
-    normalizeAspaObject,
-    parseAspaJsonFile,
-    writeAspasToJsonl,
-    removeAspaFromJsonl
-} = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'rpkiAspaImport.js'));
+const { normalizeAspaObject, parseAspaJsonFile } = require(
+    path.join(__dirname, '..', '..', 'electron', 'utils', 'rpkiAspaImport.js')
+);
 
 async function main() {
     const normalized = normalizeAspaObject({
@@ -54,53 +49,6 @@ async function main() {
     const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'netnexus-rpki-aspa-import-'));
 
     try {
-        const jsonlPath = path.join(tempDir, 'rpki-aspa.jsonl');
-        await writeAspasToJsonl(jsonlPath, [
-            { customerAsn: 65000, providerAsns: [65002, 65001, 65001], afiFlags: 3 },
-            { customerAsn: 65010, providerAsns: [65011], afiFlags: 1 },
-            { customerAsn: 65000, providerAsns: [65003], afiFlags: 2 }
-        ]);
-
-        const jsonlPage = await readAspaJsonlPage(jsonlPath, 1, 20);
-        assert.strictEqual(
-            await countJsonlAspas(jsonlPath),
-            2,
-            'writeAspasToJsonl should keep one ASPA per Customer ASN'
-        );
-        assert.strictEqual(
-            jsonlPage[0].customerAsn,
-            '65010',
-            'writeAspasToJsonl should remove overwritten old position'
-        );
-        assert.deepStrictEqual(
-            jsonlPage[1],
-            {
-                customerAsn: '65000',
-                providerAsns: [65003],
-                afiFlags: 2
-            },
-            'writeAspasToJsonl should keep the latest ASPA for repeated Customer ASN'
-        );
-
-        const largeJsonlPath = path.join(tempDir, 'large-rpki-aspa.jsonl');
-        const largeProviderAsns = Array.from({ length: 1024 }, (_, index) => 65000 + index);
-        await writeAspasToJsonl(largeJsonlPath, [
-            { customerAsn: 65200, providerAsns: largeProviderAsns, afiFlags: 3 },
-            { customerAsn: 65210, providerAsns: [65211], afiFlags: 1 }
-        ]);
-
-        const deleteResult = await removeAspaFromJsonl(largeJsonlPath, 65200);
-        const largeJsonlPage = await readAspaJsonlPage(largeJsonlPath, 1, 20);
-        assert.strictEqual(deleteResult.deleted, 1, 'removeAspaFromJsonl should delete one large ASPA record');
-        assert.strictEqual(
-            deleteResult.deletedAspa.providerAsns.length,
-            1024,
-            'removeAspaFromJsonl should return the deleted ASPA with all Provider ASNs'
-        );
-        assert.strictEqual(deleteResult.total, 1, 'removeAspaFromJsonl should report the remaining total');
-        assert.strictEqual(await countJsonlAspas(largeJsonlPath), 1, 'large ASPA delete should update JSONL storage');
-        assert.strictEqual(largeJsonlPage[0].customerAsn, '65210', 'large ASPA delete should keep unrelated records');
-
         const wrappedJsonPath = path.join(tempDir, 'wrapped-aspas.json');
         await fs.promises.writeFile(
             wrappedJsonPath,
@@ -177,6 +125,21 @@ async function main() {
             true,
             'ASPA import JSON should be movable immediately after early stop'
         );
+
+        const truncatedJsonPath = path.join(tempDir, 'truncated-aspas.json');
+        const movedTruncatedJsonPath = path.join(tempDir, 'truncated-aspas.moved.json');
+        await fs.promises.writeFile(
+            truncatedJsonPath,
+            `{"data":[${JSON.stringify({ customerAsn: 65120, providerAsns: [65121], afiFlags: 3 })}`,
+            'utf8'
+        );
+
+        await assert.rejects(
+            parseAspaJsonFile(truncatedJsonPath, async () => true),
+            /ASPA JSON文件不完整或格式错误/,
+            'parseAspaJsonFile should reject an unclosed wrapper after a complete ASPA object'
+        );
+        await fs.promises.rename(truncatedJsonPath, movedTruncatedJsonPath);
 
         console.log('RPKI ASPA JSON import tests passed');
     } finally {

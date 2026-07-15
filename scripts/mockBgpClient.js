@@ -25,6 +25,10 @@ const ADDRESS_FAMILY_CAPS = {
         afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
         safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
     },
+    'ipv4-mvpn': {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_MVPN
+    },
     'ipv4-qp': {
         afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
         safi: BgpConst.BGP_SAFI_TYPE.SAFI_QP
@@ -203,6 +207,9 @@ function summarizeNlri(route) {
     return {
         prefix: route.prefix,
         length: route.length,
+        nlriLength: route.nlriLength,
+        routeType: route.routeType,
+        rawNlri: route.rawNlri,
         pathId: route.pathId ?? 0,
         labels: route.labels || undefined,
         warnings: route.warnings || undefined

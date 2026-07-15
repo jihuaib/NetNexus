@@ -1,5 +1,5 @@
 <template>
-    <div class="nn-container bgp-route-page">
+    <div class="nn-container bgp-route-page" data-testid="bgp-route-ipv6-page">
         <nn-card title="IPv6-UNC路由配置" class="bgp-route-card">
             <nn-form :model="ipv6Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
                 <div class="config-section">
@@ -186,9 +186,11 @@
             </template>
 
             <nn-table
+                data-testid="bgp-ipv6-route-table"
                 :data-source="sentRoutes"
                 :columns="routeColumns"
                 :pagination="pagination"
+                :loading="routeListLoading"
                 size="small"
                 :row-key="record => `${record.rd || '0:0'}-${record.pathId ?? 0}-${record.ip}-${record.mask}`"
                 :scroll="{ y: '100%' }"
@@ -318,6 +320,8 @@
     });
 
     const sentRoutes = ref([]);
+    const routeListLoading = ref(false);
+    let routeListRequestId = 0;
     const hasRoutes = computed(() => pagination.value.total > 0);
     const routesGenerating = ref(false);
     const deleteAllLoading = ref(false);
@@ -439,18 +443,43 @@
     };
 
     const refreshRoutes = async () => {
-        const result = await window.bgpApi.getRoutes(
-            BGP_ADDR_FAMILY.IPV6_UNC,
-            pagination.value.current,
-            pagination.value.pageSize
-        );
-        if (result.status === 'success') {
-            sentRoutes.value = result.data.list;
-            pagination.value.total = result.data.total;
-        } else {
-            console.error(result.msg);
-            sentRoutes.value = [];
+        const requestId = ++routeListRequestId;
+        const current = pagination.value.current;
+        const pageSize = pagination.value.pageSize;
+        routeListLoading.value = true;
+
+        try {
+            const result = await window.bgpApi.getRoutes(BGP_ADDR_FAMILY.IPV6_UNC, current, pageSize);
+            if (requestId !== routeListRequestId) {
+                return;
+            }
+
+            if (result.status === 'success') {
+                sentRoutes.value = result.data.list;
+                pagination.value.total = result.data.total;
+            } else {
+                console.error(result.msg);
+                sentRoutes.value = [];
+                pagination.value.total = 0;
+            }
+        } catch (e) {
+            if (requestId === routeListRequestId) {
+                console.error(e);
+                sentRoutes.value = [];
+                pagination.value.total = 0;
+            }
+        } finally {
+            if (requestId === routeListRequestId) {
+                routeListLoading.value = false;
+            }
         }
+    };
+
+    const refreshRoutesAfterSingleDelete = async () => {
+        const remainingTotal = Math.max(0, pagination.value.total - 1);
+        const lastPage = Math.max(1, Math.ceil(remainingTotal / pagination.value.pageSize));
+        pagination.value.current = Math.min(pagination.value.current, lastPage);
+        await refreshRoutes();
     };
 
     const generateRoutes = async () => {
@@ -532,7 +561,7 @@
 
             if (result.status === 'success') {
                 notify.success(`${result.msg}`);
-                await refreshRoutes();
+                await refreshRoutesAfterSingleDelete();
             } else {
                 notify.error(`路由删除失败: ${result.msg}`);
             }

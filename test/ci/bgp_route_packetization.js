@@ -12,8 +12,8 @@ const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', '
 const { parseBgpPacket } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpPacketParser.js'));
 
 const ROUTE_COUNT = 5000;
-const IPV4_UNICAST_ROUTES_PER_FULL_PACKET = 808;
-const IPV4_UNICAST_FULL_PACKET_LEN = 4091;
+const IPV4_UNICAST_ROUTES_PER_FULL_PACKET = 809;
+const IPV4_UNICAST_FULL_PACKET_LEN = 4096;
 const QP_ROUTES_PER_FULL_PACKET = 402;
 const QP_FULL_PACKET_LEN = 4089;
 const QP_FIXED_DQPN = 7;
@@ -146,9 +146,12 @@ function assertPacketLengths(buffers) {
     }
 }
 
-function assertAttrStoreSize(instance, expectedSize) {
-    assert.strictEqual(instance.attrStore.attrMap.size, expectedSize, 'attr store entry count should match groups');
-    assert.strictEqual(instance.attrRouteIndex.size, expectedSize, 'attr route index group count should match attrs');
+function assertAttributeGroupCount(instance, expectedSize) {
+    assert.strictEqual(
+        instance.getAttributeGroupCount(),
+        expectedSize,
+        'SQLite attribute group count should match expected groups'
+    );
 }
 
 function assertPathAttrTypes(packet, expectedTypes) {
@@ -439,7 +442,7 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
         srv6EndpointBehavior: BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6
     });
 
-    assertAttrStoreSize(instance, 1);
+    assertAttributeGroupCount(instance, 1);
     peer.sendRoute();
     assertPacketLengths(sentBuffers);
     assert.strictEqual(
@@ -482,7 +485,7 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
         srv6EndpointBehavior: BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6
     });
 
-    assertAttrStoreSize(instance, 2);
+    assertAttributeGroupCount(instance, 2);
     peer.sendRoute();
     assertPacketLengths(sentBuffers);
     assert.strictEqual(sentBuffers.length, 2, 'IPv6 SRv6 routes with different SIDs should use separate UPDATEs');
@@ -603,7 +606,7 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
         srv6EndpointBehavior: BgpConst.BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT6
     });
 
-    assertAttrStoreSize(instance, 2);
+    assertAttributeGroupCount(instance, 2);
     enabledPeer.sendRoute();
     disabledPeer.sendRoute();
     assertPacketLengths(enabledBuffers);
@@ -633,6 +636,127 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
         getMpReach(disabledPacket).nlri.map(route => route.prefix),
         ['2001:db8:400::1', '2001:db8:400::2'],
         'peer with SRv6 disabled should receive both IPv6 routes in one UPDATE'
+    );
+}
+
+{
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const sentBuffers = [];
+    const peer = createPeer(instance, sentBuffers);
+    instance.peerMap.set(peer.session.peerIp, peer);
+    const worker = Object.create(BgpWorker.prototype);
+    worker.bgpInstanceMap = new Map([[instance.instanceKey, instance]]);
+    const responses = [];
+    worker.messageHandler = {
+        sendSuccessResponse: (messageId, data, msg) => responses.push({ messageId, data, msg }),
+        sendErrorResponse: (_messageId, msg) => assert.fail(msg)
+    };
+
+    worker.generateRoutes('stream-across-persistence-batches', {
+        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+        prefix: '10.90.0.1',
+        mask: 32,
+        count: ROUTE_COUNT,
+        customAttr: '',
+        rt: ''
+    });
+
+    assert.strictEqual(responses.length, 1, 'streamed route generation should report success');
+    const packets = sentBuffers.map(buffer => parseBgpPacket(buffer));
+    const counts = packets.map(packet => packet.nlri.length);
+    assert.deepStrictEqual(
+        counts,
+        expectedPacketCounts(ROUTE_COUNT, IPV4_UNICAST_ROUTES_PER_FULL_PACKET),
+        'one generate API call should preserve packetizer state across 2000-route SQLite batches'
+    );
+
+    sentBuffers.length = 0;
+    worker.generateRoutes('stream-single-route', {
+        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+        prefix: '10.110.0.1',
+        mask: 32,
+        count: 1,
+        customAttr: '',
+        rt: ''
+    });
+    assert.strictEqual(sentBuffers.length, 1, 'a count=1 generate API call should flush its UPDATE immediately');
+    assert.strictEqual(parseBgpPacket(sentBuffers[0]).nlri.length, 1);
+}
+
+{
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const sentBuffers = [];
+    const peer = createPeer(instance, sentBuffers);
+    const routes = Array.from({ length: 2500 }, (_, index) => {
+        const route = new BgpRoute(instance);
+        route.ip = ipv4FromNumber((10 << 24) + (120 << 16) + index + 1);
+        route.mask = 32;
+        route._routeAttr = instance.makeRouteAttr(null, { asPath: String(64512 + index) });
+        return route;
+    });
+    const stream = peer.createRouteBatchStream();
+    stream.write(routes.slice(0, 2000));
+    assert.strictEqual(sentBuffers.length, 0, 'the bounded stream may retain one 2000-route persistence chunk');
+    stream.write(routes.slice(2000));
+    assert.strictEqual(
+        sentBuffers.length,
+        500,
+        'unique attribute groups beyond the global pending bound should flush oldest partial groups'
+    );
+    stream.end();
+    assert.strictEqual(
+        sentBuffers.length,
+        routes.length,
+        'bounded attribute-group eviction must still send every route'
+    );
+}
+
+{
+    const prefixCount = 1000;
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const sentBuffers = [];
+    const peer = createPeer(instance, sentBuffers);
+    instance.peerMap.set(peer.session.peerIp, peer);
+    const worker = Object.create(BgpWorker.prototype);
+    worker.bgpInstanceMap = new Map([[instance.instanceKey, instance]]);
+    worker.messageHandler = {
+        sendSuccessResponse: () => {},
+        sendErrorResponse: (_messageId, msg) => assert.fail(msg)
+    };
+
+    worker.generateRoutes('non-add-path-cross-persistence-batches', {
+        addressFamily: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+        prefix: '10.130.0.1',
+        mask: 32,
+        count: prefixCount,
+        addPathEnabled: true,
+        addPathCount: 3,
+        customAttr: '',
+        rt: ''
+    });
+
+    const advertisedPrefixes = sentBuffers.flatMap(buffer => parseBgpPacket(buffer).nlri.map(route => route.prefix));
+    assert.strictEqual(instance.routeMap.size, prefixCount * 3, 'SQLite should retain every generated ADD-PATH path');
+    assert.strictEqual(
+        advertisedPrefixes.length,
+        prefixCount,
+        'a non-ADD-PATH peer must receive exactly one NLRI per prefix across 2000-route persistence batches'
+    );
+    assert.strictEqual(
+        new Set(advertisedPrefixes).size,
+        prefixCount,
+        'a prefix split across persistence batches must not be duplicated in one announcement stream'
+    );
+    const splitPrefix = instance.routeMap.queryPrefix('10.130.2.155', {
+        prefixLength: 32,
+        bestPathOnly: true,
+        pageSize: 1,
+        includeTotal: false
+    }).list[0];
+    assert.strictEqual(
+        splitPrefix.pathId,
+        0,
+        'the split prefix should resolve to SQLite best path before announcement'
     );
 }
 
@@ -801,7 +925,7 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
         addIpv4UnicastRoute(instance, ipv4FromNumber(baseIp + index));
     }
 
-    assertAttrStoreSize(instance, 1);
+    assertAttributeGroupCount(instance, 1);
     peer.sendRoute();
     assertPacketLengths(sentBuffers);
 
@@ -810,7 +934,7 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
     assert.deepStrictEqual(
         counts,
         expectedPacketCounts(ROUTE_COUNT, IPV4_UNICAST_ROUTES_PER_FULL_PACKET),
-        'continuous IPv4 routes should be packed to full UPDATEs before the tail packet'
+        'continuous IPv4 routes should stay fully packed across 2000-route SQLite pages'
     );
     assert.strictEqual(
         counts.reduce((sum, count) => sum + count, 0),
@@ -842,7 +966,7 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
         addQpRoute(instance, ipv4FromNumber(baseIp + index), nextHop);
     }
 
-    assertAttrStoreSize(instance, 1);
+    assertAttributeGroupCount(instance, 1);
     peer.sendRoute();
     assertPacketLengths(sentBuffers);
 
@@ -886,7 +1010,7 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
         addQpRoute(instance, ipv4FromNumber(baseIp + index), index % 2 === 0 ? nextHopA : nextHopB);
     }
 
-    assertAttrStoreSize(instance, 2);
+    assertAttributeGroupCount(instance, 2);
     peer.sendRoute();
     assertPacketLengths(sentBuffers);
 
@@ -944,4 +1068,44 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
     }
 }
 
-console.log('BGP route packetization tests passed');
+async function testFullSyncBackpressureAcrossSqlitePages() {
+    const routeCount = 4100;
+    const instance = new BgpInstance(0, BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+    const sentBuffers = [];
+    let writeCount = 0;
+    const peer = createPeer(
+        instance,
+        sentBuffers,
+        {},
+        {
+            sendRoute: buffer => {
+                sentBuffers.push(Buffer.from(buffer));
+                writeCount += 1;
+                return writeCount % 3 === 0 ? Promise.resolve() : null;
+            }
+        }
+    );
+    const baseIp = (10 << 24) + (192 << 16) + 1;
+    for (let index = 0; index < routeCount; index++) {
+        addIpv4UnicastRoute(instance, ipv4FromNumber(baseIp + index));
+    }
+
+    const pending = peer.sendRoute();
+    assert.ok(pending && typeof pending.then === 'function', 'full sync should expose socket backpressure');
+    await pending;
+
+    assertPacketLengths(sentBuffers);
+    const counts = sentBuffers.map(buffer => parseBgpPacket(buffer).nlri.length);
+    assert.deepStrictEqual(
+        counts,
+        expectedPacketCounts(routeCount, IPV4_UNICAST_ROUTES_PER_FULL_PACKET),
+        'drain recovery should preserve packetizer state across SQLite page boundaries'
+    );
+}
+
+testFullSyncBackpressureAcrossSqlitePages()
+    .then(() => console.log('BGP route packetization tests passed'))
+    .catch(error => {
+        console.error(error);
+        process.exitCode = 1;
+    });

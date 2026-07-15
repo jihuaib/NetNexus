@@ -1,5 +1,7 @@
 const BgpPeer = require('./bgpPeer');
-const { BgpPathAttrStore } = require('./bgpPathAttrStore');
+const BgpRoute = require('./bgpRoute');
+const BgpRouteSqliteStore = require('./bgpRouteSqliteStore');
+const { canonicalizeAttr } = require('./bgpPathAttrStore');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
 
 const ROUTE_ATTR_FIELDS = [
@@ -29,18 +31,22 @@ const ROUTE_NLRI_FIELDS = [
 ];
 
 class BgpInstance {
-    constructor(vrfIndex, afi, safi) {
+    constructor(vrfIndex, afi, safi, routeStore = null) {
         this.vrfIndex = vrfIndex;
         this.afi = afi;
         this.safi = safi;
+        this.instanceKey = BgpInstance.makeKey(vrfIndex, afi, safi);
 
         this.peerMap = new Map();
-        this.routeMap = new Map();
-        this.attrStore = new BgpPathAttrStore();
-        this.attrRouteIndex = new Map();
-        // 自定义属性,
+        this.routeStore = routeStore || new BgpRouteSqliteStore();
+        this.ownsRouteStore = !routeStore;
+        this.routeStore.open();
+        this.routeMap = this.routeStore.createRouteMap(this.instanceKey, {
+            serialize: this.serializeRoute.bind(this),
+            hydrate: this.hydrateRoute.bind(this)
+        });
+
         this.customAttr = '';
-        // 扩展团体属性
         this.rt = '';
     }
 
@@ -74,23 +80,37 @@ class BgpInstance {
                 attr[field] = source[field];
             }
         }
-
         if (source.formatted !== undefined) {
             attr.customAttr = source.formatted;
         }
-
         return attr;
     }
 
-    makeRouteAttr(route, overrides = {}) {
-        const currentAttr = route?.attrId ? this.attrStore.get(route.attrId) || {} : {};
+    serializeRoute(route) {
+        const serialized = {};
+        this.copyRouteNlriFields(serialized, route);
         return {
-            nextHop: overrides.nextHop !== undefined ? overrides.nextHop : currentAttr.nextHop,
-            origin: overrides.origin !== undefined ? overrides.origin : currentAttr.origin,
-            asPath: overrides.asPath !== undefined ? overrides.asPath : currentAttr.asPath,
-            med: overrides.med !== undefined ? overrides.med : currentAttr.med,
-            localPref: overrides.localPref !== undefined ? overrides.localPref : currentAttr.localPref,
-            communities: overrides.communities !== undefined ? overrides.communities : currentAttr.communities,
+            route: serialized,
+            attr: this.getRouteAttr(route)
+        };
+    }
+
+    hydrateRoute(storedRoute) {
+        if (!storedRoute) return null;
+        const route = new BgpRoute(this);
+        this.copyRouteNlriFields(route, storedRoute);
+        route.routeKey = storedRoute.routeKey;
+        route.persistentRouteId = storedRoute.persistentRouteId;
+        route.attrId = storedRoute.attrId || null;
+        route._routeAttr = canonicalizeAttr(storedRoute.routeAttr || this.extractRouteAttr(storedRoute));
+        return route;
+    }
+
+    makeRouteAttr(route, overrides = {}) {
+        const currentAttr = route ? this.getRouteAttr(route) : {};
+        return canonicalizeAttr({
+            ...currentAttr,
+            ...overrides,
             customAttr:
                 overrides.customAttr !== undefined
                     ? overrides.customAttr
@@ -102,150 +122,168 @@ class BgpInstance {
                     ? overrides.rt
                     : currentAttr.rt !== undefined && currentAttr.rt !== null
                       ? currentAttr.rt
-                      : this.rt,
-            srv6Sid: overrides.srv6Sid !== undefined ? overrides.srv6Sid : currentAttr.srv6Sid,
-            srv6EndpointBehavior:
-                overrides.srv6EndpointBehavior !== undefined
-                    ? overrides.srv6EndpointBehavior
-                    : currentAttr.srv6EndpointBehavior
-        };
+                      : this.rt
+        });
     }
 
     setRoute(routeKey, route, attr = null) {
-        const existingRoute = this.routeMap.get(routeKey);
-        if (existingRoute) {
-            this.removeRouteFromAttrIndex(routeKey, existingRoute);
+        route._routeAttr = canonicalizeAttr(attr || this.makeRouteAttr(route));
+        this.routeMap.setWithAttr(routeKey, route, route._routeAttr);
+        const stored = this.routeMap.get(routeKey);
+        if (stored) {
+            route.attrId = stored.attrId;
+            route.persistentRouteId = stored.persistentRouteId;
         }
+        return route;
+    }
 
-        this.routeMap.set(routeKey, route);
-        this.assignRouteAttr(routeKey, this.makeRouteAttr(route, attr || {}));
+    upsertRouteBatch(entries) {
+        const serialized = (entries || []).map(entry => {
+            const routeKey = entry.routeKey || entry.key;
+            const route = entry.route || entry.value;
+            const attr = canonicalizeAttr(entry.attr || this.makeRouteAttr(route));
+            route._routeAttr = attr;
+            return { routeKey, ...this.serializeRoute(route), attr };
+        });
+        return this.routeMap.upsertMany(serialized);
     }
 
     deleteRoute(routeKey) {
         const route = this.routeMap.get(routeKey);
-        if (!route) {
-            return null;
-        }
-
-        this.removeRouteFromAttrIndex(routeKey, route);
+        if (!route) return null;
         this.routeMap.delete(routeKey);
         return route;
     }
 
+    deleteRouteBatch(routeKeys) {
+        return this.routeMap.deleteMany(routeKeys);
+    }
+
     clearRoutes() {
-        this.routeMap.clear();
-        this.attrRouteIndex.clear();
-        this.attrStore.clear();
+        return this.routeStore.clearInstance(this.instanceKey);
     }
 
     assignRouteAttr(routeKey, attr) {
-        const route = this.routeMap.get(routeKey);
-        if (!route) {
+        const canonical = canonicalizeAttr(attr);
+        if (!this.routeMap.setRouteAttr(routeKey, canonical)) {
             return null;
         }
-
-        const nextAttrId = this.attrStore.intern(attr);
-        const prevAttrId = route.attrId;
-
-        if (prevAttrId === nextAttrId) {
-            this.attrStore.release(nextAttrId);
-            return nextAttrId;
-        }
-
-        if (prevAttrId) {
-            this.removeRouteFromAttrIndex(routeKey, route);
-        }
-
-        route.attrId = nextAttrId;
-        if (!this.attrRouteIndex.has(nextAttrId)) {
-            this.attrRouteIndex.set(nextAttrId, new Set());
-        }
-        this.attrRouteIndex.get(nextAttrId).add(routeKey);
-
-        return nextAttrId;
+        const route = this.routeMap.get(routeKey);
+        return route?.attrId || null;
     }
 
-    removeRouteFromAttrIndex(routeKey, route) {
-        const attrId = route.attrId;
-        if (!attrId) {
-            return;
-        }
-
-        const routeKeys = this.attrRouteIndex.get(attrId);
-        if (routeKeys) {
-            routeKeys.delete(routeKey);
-            if (routeKeys.size === 0) {
-                this.attrRouteIndex.delete(attrId);
-            }
-        }
-
-        this.attrStore.release(attrId);
-        route.attrId = null;
+    removeRouteFromAttrIndex() {
+        // Attributes and reference counts are maintained transactionally by SQLite.
     }
 
     refreshRouteAttrs(filter = null, overrides = {}) {
-        this.routeMap.forEach((route, routeKey) => {
-            if (typeof filter === 'function' && !filter(route, routeKey)) {
-                return;
+        let updated = 0;
+        let cursor = null;
+        do {
+            const page = this.routeMap.queryPage({
+                pageSize: 2000,
+                afterRouteId: cursor,
+                includeTotal: false
+            });
+            const entries = [];
+            for (const route of page.list) {
+                const routeKey = route.routeKey;
+                if (typeof filter === 'function' && !filter(route, routeKey)) continue;
+                entries.push({ routeKey, route, attr: this.makeRouteAttr(route, overrides) });
             }
-            this.assignRouteAttr(routeKey, this.makeRouteAttr(route, overrides));
-        });
+            if (entries.length > 0) {
+                updated += this.upsertRouteBatch(entries).updated;
+            }
+            cursor = page.nextCursor;
+        } while (cursor !== null);
+        return updated;
     }
 
     getRouteAttr(route) {
-        return this.attrStore.get(route.attrId) || this.makeRouteAttr(route);
+        if (route?._routeAttr) return route._routeAttr;
+        return canonicalizeAttr(this.extractRouteAttr(route || {}));
     }
 
     getRouteAttrEntry(route) {
-        return this.attrStore.getEntry(route.attrId);
+        if (!route?.attrId) return null;
+        return {
+            id: route.attrId,
+            attr: this.getRouteAttr(route),
+            refCount: this.routeStore.getAttributeRefCount(this.instanceKey, route.attrId)
+        };
+    }
+
+    getAttributeGroupCount() {
+        return this.routeStore.getInstanceAttributeCount(this.instanceKey);
     }
 
     getRoutesByAttrGroups() {
-        const groups = [];
-        this.attrRouteIndex.forEach((routeKeys, attrId) => {
-            const routes = [];
-            routeKeys.forEach(routeKey => {
-                const route = this.routeMap.get(routeKey);
-                if (route) {
-                    routes.push(route);
-                }
-            });
+        return Array.from(this.routeMap.iterateAttrGroups({ batchSize: 10000 })).map(group => ({
+            attrId: group.attrId,
+            attr: group.attr,
+            routes: group.routes
+        }));
+    }
 
-            if (routes.length > 0) {
-                groups.push({
-                    attrId,
-                    attr: this.attrStore.get(attrId),
-                    routes
-                });
-            }
-        });
-        return groups;
+    queryRoutePage(options = {}) {
+        const result = this.routeMap.queryPage(options);
+        return {
+            ...result,
+            list: result.list.map(route => route.getRouteInfo(this.getRouteAttr(route)))
+        };
     }
 
     changePeerState(peerIp, sessionState) {
         const peer = this.peerMap.get(peerIp);
-        if (peer) {
-            peer.changePeerState(sessionState);
-        }
+        if (peer) peer.changePeerState(sessionState);
     }
 
     resetPeer(peerIp) {
         const peer = this.peerMap.get(peerIp);
-        if (peer) {
-            peer.resetPeer();
-        }
+        if (peer) peer.resetPeer();
     }
 
     sendRoute() {
-        this.peerMap.forEach((peer, _) => {
-            peer.sendRoute();
+        this.peerMap.forEach(peer => peer.sendRoute());
+    }
+
+    sendRouteBatch(routes) {
+        if (!routes || routes.length === 0) return;
+        this.peerMap.forEach(peer => peer.sendRouteBatch(routes));
+    }
+
+    createRouteBatchStream() {
+        const peerStreams = [];
+        this.peerMap.forEach(peer => {
+            if (typeof peer.createRouteBatchStream === 'function') {
+                peerStreams.push(peer.createRouteBatchStream());
+            }
         });
+        let ended = false;
+        return {
+            write(routes) {
+                if (ended || !routes || routes.length === 0) return;
+                peerStreams.forEach(stream => stream.write(routes));
+            },
+            end() {
+                if (ended) return;
+                ended = true;
+                peerStreams.forEach(stream => stream.end());
+            }
+        };
     }
 
     withdrawRoute(withdrawnRoutes) {
-        this.peerMap.forEach((peer, _) => {
-            peer.withdrawRoute(withdrawnRoutes);
+        const pending = [];
+        this.peerMap.forEach(peer => {
+            const result = peer.withdrawRoute(withdrawnRoutes);
+            if (result && typeof result.then === 'function') pending.push(result);
         });
+        return pending.length > 0 ? Promise.all(pending) : null;
+    }
+
+    close() {
+        if (this.ownsRouteStore) this.routeStore.close();
     }
 }
 

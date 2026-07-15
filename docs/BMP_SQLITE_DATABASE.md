@@ -1,848 +1,692 @@
 # BMP SQLite 数据库说明
 
-本文档说明 NetNexus 当前 BMP SQLite 数据库的定位、表结构、字段用途、表间关联，以及启动、写入、重连、EOR、过期、清理和崩溃恢复时的自动行为。
+本文档说明 NetNexus BMP SQLite schema v9 的定位、固定路由分区、全局路由对象、引用计数、scope 计数，以及启动、写入、查询、清理和崩溃恢复行为。
 
 实现依据：
 
-- 数据库建表、迁移、查询和清理：electron/worker/bmp/bmpPersistenceStore.js
-- 稳定 ID：electron/utils/bmpPersistentRouteKey.js
-- mutation 构造：electron/worker/bmp/bmpPersistenceMutation.js
-- 异步批量写入：electron/worker/bmp/bmpPersistenceClient.js
-- BMP 生命周期：electron/worker/bmp/bmpSession.js
-- Worker 启停和定时清理：electron/worker/bmp/bmpWorker.js
+- Schema、事务、查询和清理：`electron/worker/bmp/bmpPersistenceStore.js`
+- 固定分区清单和安全路由：`electron/worker/bmp/bmpRoutePartitionManifest.js`
+- 稳定 source、scope、route ID：`electron/utils/bmpPersistentRouteKey.js`
+- Mutation 构造：`electron/worker/bmp/bmpPersistenceMutation.js`
+- 异步批量写入：`electron/worker/bmp/bmpPersistenceClient.js`
+- BMP 生命周期：`electron/worker/bmp/bmpSession.js`
+- Worker 启停和定时清理：`electron/worker/bmp/bmpWorker.js`
 
 ## 1. 数据库定位
 
-当前 SQLite 是 BMP RIB 的权威数据源，不再只是内存路由的历史副本。
+SQLite 是 BMP RIB 的权威数据源，不是可选的历史副本。
 
-- 完整路由保存在 SQLite。
-- 内存只保留真实在线连接、协议解析上下文、scope 元数据和少量摘要。
+- 完整 current RIB、路由事件和 Statistics Report 保存在 SQLite。
+- 内存只保留在线连接、协议解析上下文、scope 元数据、少量摘要和页面增量状态。
 - BGP Session、Loc-RIB Instance 和路由页面可在 BMP Worker 重启后从 SQLite 恢复。
-- 离线恢复不会创建假的 BmpSession；页面看到的是从数据库重建的离线拓扑。
-- 数据库无法打开或 Writer 失败时，BMP 会 fail-closed，停止继续接收数据，避免内存状态领先于数据库。
+- 数据库无法打开或 Writer 失败时，BMP 会 fail-closed，暂停继续接收数据，避免内存状态领先于数据库。
 
 数据库基本信息：
 
-| 项目 | 当前值 |
+| 项目 | schema v9 的值 |
 | --- | --- |
-| 数据库文件 | 通常为 Electron userData 目录下的 bmp/bmp.sqlite3 |
-| 数据库 schema version | 8，保存在 PRAGMA user_version |
-| 稳定键 schema version | 1 |
+| 数据库文件 | 通常为 Electron `userData/bmp/bmp.sqlite3` |
+| Schema version | `9`，保存在 `PRAGMA user_version` |
+| 稳定键 schema version | `1` |
 | 稳定键算法 | SHA-256 |
 | Journal 模式 | WAL |
-| 外键 | foreign_keys = ON |
-| 同步级别 | synchronous = NORMAL |
+| 外键 | `foreign_keys = ON` |
+| 同步级别 | `synchronous = NORMAL` |
 | Busy timeout | 5000 ms |
+| 临时存储 | MEMORY |
 | WAL 自动 checkpoint | 2000 页 |
 
-注意：数据库 schema version 8 和稳定键 schema version 1 是两个不同概念。前者描述表结构，后者描述 source_id、scope_id、route_id 的生成规则。
+WAL 模式运行时，数据库目录还可能存在：
 
-WAL 模式运行时，数据库目录还可能出现：
+- `bmp.sqlite3-wal`：尚未 checkpoint 回主文件的已提交 WAL 页面。
+- `bmp.sqlite3-shm`：WAL 共享内存索引。
 
-- bmp.sqlite3-wal：尚未 checkpoint 回主文件的已提交 WAL 页面。
-- bmp.sqlite3-shm：WAL 共享内存索引。
+## 2. Schema v9 的核心变化
 
-## 2. 表总览
+v9 不再把所有 current route 放在一张 `bmp_current_routes` 大表中。新的结构有四个重点：
 
-当前有 9 张应用业务表：
+1. current route 固定拆成 `2 × 18 = 36` 张物理分区表。
+2. Route identity/NLRI、扩展展示 payload 和 path attributes 分开全局去重，分区表只保留当前路径状态和外键。
+3. `current_ref_count`、`event_ref_count` 和 scope route counters 由 SQLite trigger 在事务内维护。
+4. v9 只支持空库初始化，不包含 v8 或更早版本的数据迁移和兼容表。
 
-| 表 | 主要职责 | 是否自动清理 |
+这种设计把高频的 scope 内分页、upsert、withdraw 和 epoch 清理限制在一张较小的分区表中，同时避免把较大的 NLRI JSON、route JSON 和 attribute JSON 复制到每个 scope。
+
+## 3. 数据库对象总览
+
+### 3.1 全局业务表
+
+| 表 | 主要职责 |
+| --- | --- |
+| `bmp_sources` | BMP 上报设备的稳定身份 |
+| `bmp_connections` | 每次 TCP/BMP 连接历史 |
+| `bmp_rib_scopes` | Peer/Loc-RIB 的 AFI、SAFI、RIB 生命周期和分区归属 |
+| `bmp_scope_route_counts` | 按 scope、connection、epoch、显式状态维护 current route 数量 |
+| `bmp_route_attributes` | 全局去重的 BGP Path Attributes |
+| `bmp_route_identities` | 全局去重的 canonical NLRI identity |
+| `bmp_route_payloads` | 全局去重的 route 扩展展示字段 JSON；普通路由可以共享 `{}` |
+| `bmp_ingest_batches` | 批量写入幂等记录 |
+| `bmp_route_events` | 带固定分区归属的连接、scope、路由和统计事件流水 |
+| `bmp_statistics_samples` | Statistics Report 历史样本 |
+| `bmp_statistics_latest` | 每个逻辑 Statistics Report 的最新样本投影 |
+
+### 3.2 Current-route 分区
+
+`bmpRoutePartitionManifest.js` 固定声明 36 张 current-route 表：
+
+```text
+bmp_current_routes_{peer|loc_rib}_{family_token}
+```
+
+每个分区使用相同字段、索引和 trigger，仅 `partition_id`、`scope_kind` 和允许的 AFI/SAFI 不同。
+
+### 3.3 统一视图
+
+`bmp_current_routes_all` 是 36 张分区的只读 `UNION ALL` 视图。视图会关联：
+
+- 当前路径分区行；
+- `bmp_route_identities`；
+- `bmp_route_payloads`。
+
+视图恢复出与逻辑 current route 接近的展开字段，供跨分区查询、运维检查和通用代码使用。属性 JSON 仍需通过 `attr_id` 关联 `bmp_route_attributes`。
+
+SQLite 还会自动创建 `sqlite_sequence`，用于记录 `bmp_route_events.event_id` 和 `bmp_statistics_samples.sample_id` 的 AUTOINCREMENT 进度。不要手工修改该表。
+
+## 4. 固定分区清单
+
+### 4.1 Scope kind
+
+物理分区只接受两个 `scope_kind`：
+
+| scope_kind | Owner | BMP peer type | 表名 token |
+| --- | --- | --- | --- |
+| `peer` | `BmpBgpSession` | Global、L3VPN、Local，即 0、1、2 | `peer` |
+| `loc-rib` | `BmpBgpInstance` | Local RIB，即 3 | `loc_rib` |
+
+`bmp_rib_scopes.scope_kind` 有 `CHECK(scope_kind IN ('peer', 'loc-rib'))`。`session`、`instance`、`loc_rib` 等文本不是数据库合法值。
+
+### 4.2 地址族和 partition ID
+
+| `familyId` | family key | token | AFI | SAFI | peer partition | loc-rib partition |
+| ---: | --- | --- | ---: | ---: | ---: | ---: |
+| 1 | `ipv4-unicast` | `ipv4_unicast` | 1 | 1 | 101 | 201 |
+| 2 | `ipv6-unicast` | `ipv6_unicast` | 2 | 1 | 102 | 202 |
+| 3 | `ipv4-multicast` | `ipv4_multicast` | 1 | 2 | 103 | 203 |
+| 4 | `ipv6-multicast` | `ipv6_multicast` | 2 | 2 | 104 | 204 |
+| 5 | `ipv4-labeled-unicast` | `ipv4_labeled_unicast` | 1 | 4 | 105 | 205 |
+| 6 | `ipv6-labeled-unicast` | `ipv6_labeled_unicast` | 2 | 4 | 106 | 206 |
+| 7 | `ipv4-mvpn` | `ipv4_mvpn` | 1 | 5 | 107 | 207 |
+| 8 | `ipv6-mvpn` | `ipv6_mvpn` | 2 | 5 | 108 | 208 |
+| 9 | `l2vpn-evpn` | `l2vpn_evpn` | 25 | 70 | 109 | 209 |
+| 10 | `vpnv4` | `vpnv4` | 1 | 128 | 110 | 210 |
+| 11 | `vpnv6` | `vpnv6` | 2 | 128 | 111 | 211 |
+| 12 | `ipv4-flowspec` | `ipv4_flowspec` | 1 | 133 | 112 | 212 |
+| 13 | `ipv6-flowspec` | `ipv6_flowspec` | 2 | 133 | 113 | 213 |
+| 14 | `ipv4-qp` | `ipv4_qp` | 1 | 241 | 114 | 214 |
+| 15 | `ipv6-qp` | `ipv6_qp` | 2 | 241 | 115 | 215 |
+| 16 | `bgp-ls` | `bgp_ls` | 16388 | 71 | 116 | 216 |
+| 17 | `bgp-ls-vpn` | `bgp_ls_vpn` | 16388 | 72 | 117 | 217 |
+| 18 | `other` | `other` | 任意其他合法值 | 任意其他合法值 | 118 | 218 |
+
+例如：
+
+- Peer IPv4 Unicast：`bmp_current_routes_peer_ipv4_unicast`
+- Loc-RIB EVPN：`bmp_current_routes_loc_rib_l2vpn_evpn`
+- Peer 未知地址族：`bmp_current_routes_peer_other`
+
+`familyId` 是 manifest 中显式固定且全局唯一的稳定编号，不依赖数组顺序。当前 `partition_id` 按 `100 + familyId`（peer）或 `200 + familyId`（loc-rib）生成，并同时持久化在 scope、current route 和带 scope 的 event 中。已发布的 `familyId` 不得重编号或复用；不要从数组位置或外部输入自行推导分区，应始终使用 manifest。
+
+### 4.3 `other` 分区
+
+AFI 必须是 0 到 65535 的整数，SAFI 必须是 0 到 255 的整数。
+
+- 格式合法但不属于前述 17 组的组合进入对应 owner 的 `other` 分区。
+- 缺失、负数、小数或越界值直接拒绝，不会进入 `other`。
+- `other` 行仍通过 `bmp_route_identities` 保存实际 AFI 和 SAFI。
+
+### 4.4 安全路由
+
+分区表名不能由 API 参数直接拼接。写入过程必须：
+
+1. 验证 `scope_kind`、AFI 和 SAFI。
+2. 通过固定 manifest 解析 descriptor。
+3. 将 descriptor 的 `partition_id` 保存到 `bmp_rib_scopes`。
+4. 只使用 descriptor 中预先校验的表名准备 SQL。
+5. 校验 route 的 AFI/SAFI 与 scope 完全一致。
+
+数据库内还有连续的校验链：
+
+- Scope insert/update trigger 验证 `(partition_id, scope_kind, afi, safi)` 必须与 manifest 中的某个 descriptor 匹配：known-family 必须精确匹配，`other` 必须排除 17 个已知组合；AFI/SAFI 的类型和取值范围由进入数据库前的 manifest resolver 校验。
+- 每张分区表的 `partition_id` 有固定值 `CHECK`，并通过 `(scope_id, partition_id)` 复合外键指向 `bmp_rib_scopes`。
+- 分区 insert trigger 同时关联 scope 和 route identity，验证 scope 的 partition、kind、AFI/SAFI、identity 的 AFI/SAFI 与目标分区一致。
+- 分区行一旦建立，`scope_id`、`partition_id` 和 `route_pk` 不可更新，避免绕过上述校验把路径移动到另一个 scope、分区或 identity。
+
+## 5. 表关联图
+
+```text
+bmp_sources
+  ├── 1:N ── bmp_connections
+  ├── 1:N ── bmp_rib_scopes
+  ├── 1:N ── bmp_route_events
+  ├── 1:N ── bmp_statistics_samples
+  └── 1:N ── bmp_statistics_latest
+
+bmp_connections
+  ├── 1:N ── bmp_rib_scopes.last_connection_id
+  ├── 1:N ── 36 张 current-route 分区.connection_id
+  ├── 1:N ── bmp_scope_route_counts.connection_id
+  ├── 1:N ── bmp_route_events.connection_id
+  └── 1:N ── bmp_statistics_samples.connection_id
+
+bmp_rib_scopes
+  ├── 1:N ── 所属的一张 current-route 分区
+  ├── 1:N ── bmp_scope_route_counts
+  ├── 1:N ── bmp_route_events.(scope_id, partition_id)，复合引用可整体为空
+  └── 1:N ── bmp_statistics_samples.scope_id，可为空
+
+bmp_route_identities
+  ├── 1:N ── current-route 分区.route_pk
+  └── 1:N ── bmp_route_events.route_pk
+
+bmp_route_payloads
+  ├── 1:N ── current-route 分区.payload_id
+  └── 1:N ── bmp_route_events.payload_id
+
+bmp_route_attributes
+  ├── 1:N ── current-route 分区.attr_id，可为空
+  └── 1:N ── bmp_route_events.attr_id，可为空
+
+bmp_statistics_samples
+  └── 1:0..1 ── bmp_statistics_latest.sample_id
+```
+
+`bmp_ingest_batches.batch_id` 与 `bmp_route_events.batch_id` 是逻辑关联，没有外键。分区表的 `last_event_id` 也是用于排序和版本保护的逻辑引用，不声明指向 event 的外键。
+
+## 6. Source、connection 和 scope
+
+### 6.1 `bmp_sources`
+
+一行代表一个稳定 BMP 上报源。主要字段：
+
+| 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| bmp_sources | BMP 设备的稳定身份 | 否 |
-| bmp_connections | 每次 TCP/BMP 连接历史 | 否 |
-| bmp_rib_scopes | Peer/Loc-RIB 的 AFI、SAFI、RIB 分区及状态 | 否 |
-| bmp_route_attributes | 去重后的 BGP Path Attributes | 是，无引用且超过保留期后删除 |
-| bmp_route_events | 连接、scope、路由、统计等事件流水 | 是，默认保留 7 天 |
-| bmp_current_routes | 当前 RIB 路由投影，页面路由的权威来源 | 是，按 epoch、连接和 stale 保留策略删除 |
-| bmp_ingest_batches | 批量写入幂等记录 | 是，默认保留 7 天 |
-| bmp_statistics_samples | Statistics Report 历史样本 | 是，默认保留 7 天 |
-| bmp_statistics_latest | 每个 source、Session/Instance 的最新 Statistics Report 投影 | 否，随新样本原位更新 |
+| `source_id` | TEXT PK | 规范化 source identity 的 SHA-256 十六进制值 |
+| `source_key_json` | TEXT NOT NULL | 键版本、算法和 keyHex |
+| `source_identity_json` | TEXT NOT NULL | 生成 source ID 的规范化身份 |
+| `remote_ip` | TEXT NULL | 最近已知的 BMP 发起端地址 |
+| `sys_name`、`sys_desc` | TEXT NULL | BMP Initiation 元数据 |
+| `first_seen_ms`、`last_seen_ms` | INTEGER NOT NULL | 首次和最近观察时间 |
+| `metadata_json` | TEXT NULL | BMP version、v4 TLV draft 等扩展元数据 |
 
-SQLite 还会自动创建 sqlite_sequence，用于记录 bmp_route_events.event_id 和 bmp_statistics_samples.sample_id 的 AUTOINCREMENT 进度。它是 SQLite 内部表，不是业务数据表，不应手工修改。
+设备重连时复用稳定 `source_id`，但会创建新的 connection。
 
-数据库没有单独的 bgp_sessions 或 bgp_instances 表：
+### 6.2 `bmp_connections`
 
-- Peer scope 按 source_id + owner_key 聚合为页面上的 BGP Session。
-- scope_kind = loc-rib 的 scope 重建为页面上的 Loc-RIB Instance。
+一行代表一次 TCP/BMP 连接。主要字段包括 `connection_id`、`source_id`、单调的 `connection_generation`、本地/远端地址和端口、打开/关闭时间、关闭原因及 `connection_state`。
 
-## 3. 表关联图
+`idx_bmp_connections_source_time(source_id, opened_at_ms DESC)` 用于查某 source 的连接历史。
 
-    bmp_sources
-      ├── 1:N ── bmp_connections
-      ├── 1:N ── bmp_rib_scopes
-      ├── 1:N ── bmp_route_events
-      ├── 1:N ── bmp_statistics_samples
-      └── 1:N ── bmp_statistics_latest
+### 6.3 `bmp_rib_scopes`
 
-    bmp_connections
-      ├── 1:N ── bmp_rib_scopes.last_connection_id
-      ├── 1:N ── bmp_current_routes.connection_id
-      ├── 1:N ── bmp_route_events.connection_id
-      └── 1:N ── bmp_statistics_samples.connection_id
+一个 scope 表示一个明确路由空间：
 
-    bmp_rib_scopes
-      ├── 1:N ── bmp_current_routes
-      ├── 1:N ── bmp_route_events.scope_id，可为空
-      └── 1:N ── bmp_statistics_samples.scope_id，可为空
+```text
+source
+  + peer 或 loc-rib 身份
+  + AFI
+  + SAFI
+  + RIB stage
+```
 
-    bmp_route_attributes
-      ├── 1:N ── bmp_current_routes.attr_id，可为空
-      └── 1:N ── bmp_route_events.attr_id，可为空
+主要字段：
 
-    bmp_route_events
-      └── 1:N ── bmp_current_routes.last_event_id
-          业务上通常是一条 event 对应零或一条当前路由，
-          但数据库没有给 last_event_id 增加 UNIQUE。
-
-    bmp_statistics_samples
-      └── 1:0..1 ── bmp_statistics_latest.sample_id
-          latest 只引用每个逻辑报告当前最新的样本。
-
-    bmp_ingest_batches
-      ┄┄ 逻辑关联 ┄┄ bmp_route_events.batch_id
-          batch_id 没有声明 FOREIGN KEY。
-
-所有数据库外键都没有 ON DELETE CASCADE，使用 SQLite 默认的 NO ACTION。删除仍被子表引用的父记录会失败，正常清理必须由应用按顺序执行。
-
-当前 schema 没有 trigger，也没有 view。文档中所说的“自动行为”全部由应用写入事务、启动恢复逻辑和定时 sweep 实现，不是 SQLite trigger 在后台执行。
-
-## 4. bmp_sources
-
-### 4.1 用途
-
-一行代表一个稳定 BMP 上报源或设备。设备重连时复用同一个 source_id；每次连接历史记录在 bmp_connections。
-
-source_id 当前优先根据 BMP Initiation 的 sysName 加 source address 生成；没有 sysName 时退化为 source address。身份规范化后计算 SHA-256。
-
-因此需要注意：
-
-- 同一 sysName 且地址相同，重连会命中同一 source。
-- 同一设备的 sysName 或地址发生变化，可能生成新的 source。
-- 两台设备如果使用相同 sysName 且从相同地址上报，当前规则无法区分。
-
-### 4.2 字段
-
-| 字段 | 类型和约束 | 作用及自动行为 |
+| 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| source_id | TEXT PRIMARY KEY | 稳定 source ID，规范化 source identity 的 SHA-256 十六进制值。 |
-| source_key_json | TEXT NOT NULL | 保存键版本、算法和 keyHex，用于解释 source_id 如何生成。 |
-| source_identity_json | TEXT NOT NULL | 生成 source_id 的规范化身份 JSON。 |
-| remote_ip | TEXT NULL | 最近已知 BMP 发起端地址。source upsert 时用新非空值更新。 |
-| sys_name | TEXT NULL | BMP Initiation 的 System Name。空字符串不会覆盖已有值。 |
-| sys_desc | TEXT NULL | BMP Initiation 的 System Description。空字符串不会覆盖已有值。 |
-| first_seen_ms | INTEGER NOT NULL | 第一次观察到该 source 的 Unix epoch 毫秒。upsert 时不覆盖。 |
-| last_seen_ms | INTEGER NOT NULL | 最近一次观察时间。upsert 时取原值和新值的最大值。 |
-| metadata_json | TEXT NULL | 扩展元数据，目前保存 bmpVersion、bmpV4TlvDraft 等。 |
+| `scope_id` | TEXT PK | 规范化 scope identity 的 SHA-256 |
+| `source_id` | TEXT NOT NULL，FK | 所属 source |
+| `partition_id` | INTEGER NOT NULL | manifest 中的固定物理分区 ID |
+| `scope_key_json`、`scope_identity_json` | TEXT NOT NULL | 稳定键信息和完整 canonical identity |
+| `scope_kind` | TEXT NOT NULL，CHECK | 仅 `peer` 或 `loc-rib` |
+| `owner_key` | TEXT NULL | 聚合为 Session 或标识 Loc-RIB owner 的业务键 |
+| `peer_type`、`peer_rd`、`peer_ip`、`peer_as` | TEXT NULL | Peer/Instance 身份和展示信息 |
+| `vrf_name` | TEXT NULL | VRF/Table Name |
+| `afi`、`safi` | INTEGER NOT NULL | 地址族 |
+| `rib_type` | TEXT NOT NULL | Peer RIB stage，或 `loc-rib` |
+| `current_epoch` | INTEGER NOT NULL | 当前全量刷新代次 |
+| `eor_epoch` | INTEGER NULL | 最近完成 EOR 的 epoch |
+| `scope_state` | TEXT NOT NULL | `syncing`、`ready`、`stale` 或 `down` |
+| `stale_reason`、`stale_since_ms` | 可空 | stale/down 原因和起始时间 |
+| `refresh_started_ms` | INTEGER NULL | 当前刷新开始时间 |
+| `cleanup_pending_epoch` | INTEGER NULL | 等待清理旧路径的 epoch |
+| `last_connection_id` | TEXT NULL，FK | 当前接管 scope 的连接 |
+| `created_at_ms`、`updated_at_ms` | INTEGER NOT NULL | 创建和更新时间 |
 
-### 4.3 自动行为
+`UNIQUE(scope_id, partition_id)` 为分区表的复合外键提供目标。Scope 的 insert/update trigger 还会根据固定 manifest 验证 `partition_id`、`scope_kind`、AFI 和 SAFI 的组合；一个 scope 的 `partition_id` 在其生命周期内必须稳定。
 
-- 每个 mutation 都会确保 source 已 upsert，因此 source 元数据可随 Initiation 和后续消息刷新。
-- source_id 不随 TCP 端口变化。
-- 当前 sweep 不删除 source，因此它长期保留，供离线拓扑恢复。
-- 本表使用 WITHOUT ROWID，没有额外普通索引。
+## 7. 全局路由对象
 
-## 5. bmp_connections
+### 7.1 `bmp_route_identities`
 
-### 5.1 用途
+该表保存“这是什么路由”，跨 source、scope 和 RIB stage 全局复用。
 
-保存每次 TCP/BMP 连接。一台稳定 source 可以有多条连接记录，因此 connection_id 不能当作设备身份。
-
-### 5.2 字段
-
-| 字段 | 类型和约束 | 作用及自动行为 |
+| 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| connection_id | TEXT PRIMARY KEY | 单次连接 ID，优先使用 UUID。每次新连接重新生成。 |
-| source_id | TEXT NOT NULL，FK | 所属 bmp_sources.source_id。 |
-| connection_generation | INTEGER NOT NULL | 连接代次，用于判断新连接是否可以接管旧 scope。通常基于当前毫秒时间并保证单进程单调递增。 |
-| local_ip | TEXT NULL | 收集器本地地址。 |
-| local_port | INTEGER NULL | 收集器监听端口。 |
-| remote_ip | TEXT NULL | BMP 发起端地址。 |
-| remote_port | INTEGER NULL | BMP 发起端临时端口。重连时通常会变化。 |
-| opened_at_ms | INTEGER NOT NULL | 连接创建时间。 |
-| closed_at_ms | INTEGER NULL | 连接关闭时间；open 时为空。 |
-| close_reason | TEXT NULL | 关闭原因，例如 bmp-session-close、connection-close、collector-restart。 |
-| connection_state | TEXT NOT NULL | 当前使用 open 或 closed。 |
+| `route_pk` | INTEGER PK | 数据库内部短键，供分区和 event 引用 |
+| `route_id` | TEXT NOT NULL UNIQUE | Canonical route identity 的稳定 SHA-256 ID |
+| `route_key_json` | TEXT NOT NULL | 稳定键版本、算法和 keyHex |
+| `route_identity_json` | TEXT NOT NULL | 完整 canonical route identity |
+| `route_key_version` | INTEGER NOT NULL | Route key schema version |
+| `legacy_route_key` | TEXT NULL | 兼容页面/API 的旧 route key |
+| `afi`、`safi` | INTEGER NOT NULL | 地址族，也是分区验证依据 |
+| `path_id` | INTEGER NOT NULL | ADD-PATH Path Identifier |
+| `rd` | TEXT NULL | VPN、EVPN、BGP-LS VPN 等 RD |
+| `prefix`、`prefix_length` | 可空 | 可索引普通前缀；复杂 NLRI 可以为空 |
+| `nlri_kind` | TEXT NULL | `ip-prefix`、`vpn-prefix`、`evpn`、`raw-nlri` 等 |
+| `nlri_json` | TEXT NOT NULL | 完整解析后的 NLRI |
+| `first_seen_ms`、`last_seen_ms` | INTEGER NOT NULL | 生命周期时间 |
+| `current_ref_count` | INTEGER NOT NULL | 36 张 current 分区中的引用数 |
+| `event_ref_count` | INTEGER NOT NULL | event 中的引用数 |
 
-### 5.3 自动行为
-
-- Initiation/首个持久化 mutation 会写入 open 连接。
-- 正常 TCP 断开或 BMP Termination 会改为 closed，并记录关闭时间和原因。
-- 关闭连接时，该连接当前拥有的 scope 会统一变为 down。
-- 如果进程崩溃，下一次打开数据库时会把遗留 open 连接改为 closed，原因写为 collector-restart。
-- 当前 sweep 不删除连接历史。
+同一个 `route_id` 在多个 peer、RIB stage 或 Loc-RIB 中出现时只保存一份 identity/NLRI JSON。
 
 索引：
 
-| 索引 | 用途 |
-| --- | --- |
-| idx_bmp_connections_source_time(source_id, opened_at_ms DESC) | 查某 source 的连接历史。 |
+- `(afi, safi, prefix, prefix_length, route_pk)`：前缀查询。
+- `(prefix, prefix_length, route_pk)`：已定向到 scope/分区后的精确前缀反查。
+- `(legacy_route_key, route_pk)`：旧 route key 查询。
+- `(current_ref_count, event_ref_count, last_seen_ms, route_pk)`：无引用对象清理。
 
-## 6. bmp_rib_scopes
+### 7.2 `bmp_route_payloads`
 
-### 6.1 用途
+该表不是完整 route snapshot，只保存不属于 identity/NLRI、Path Attributes 或 current-state 的扩展展示字段。写入前会删除 route key、AFI/SAFI、prefix、RD、path ID、`nlriDetail` 等 identity 字段，删除可从 `bmp_route_attributes` 取得的属性字段，删除 route state、epoch 和 stale 时间等 current-state 字段，并省略空值、空集合及可重建的默认值。
 
-这是拓扑和 RIB 生命周期的核心表。一个 scope 表示一个明确的路由空间：
-
-    source
-      + peer 或 loc-rib 身份
-      + AFI
-      + SAFI
-      + RIB stage
-
-Peer scope 的 RIB stage 可以是 Pre Adj-RIB-In、Adj-RIB-In、AS Path、Adj-RIB-Out、Post Adj-RIB-Out；Loc-RIB scope 的 rib_type 为 loc-rib。
-
-scope_id 是稳定 ID，重连后复用。last_connection_id 则指向当前接管该 scope 的最新连接。
-
-### 6.2 字段
-
-| 字段 | 类型和约束 | 作用及自动行为 |
+| 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| scope_id | TEXT PRIMARY KEY | 规范化 scope identity 的 SHA-256。 |
-| source_id | TEXT NOT NULL，FK | 所属 bmp_sources.source_id。 |
-| scope_key_json | TEXT NOT NULL | 保存 scope 键版本、算法和 keyHex。 |
-| scope_identity_json | TEXT NOT NULL | 完整规范化 scope identity。 |
-| scope_kind | TEXT NOT NULL | peer 或 loc-rib。 |
-| owner_key | TEXT NULL | 将多个 peer scope 聚合成一个 Session，或标识 Loc-RIB owner 的业务键。 |
-| peer_type | TEXT NULL | BMP Peer/Instance Type。数据库存 TEXT 以兼容数值或文本。 |
-| peer_rd | TEXT NULL | Peer/Instance RD 的展示值。 |
-| peer_ip | TEXT NULL | Peer 地址；部分 Loc-RIB 记录可为空。 |
-| peer_as | TEXT NULL | Peer AS。使用 TEXT 避免 ASN 精度和格式问题。 |
-| vrf_name | TEXT NULL | VRF/Table Name。 |
-| afi | INTEGER NOT NULL | Address Family Identifier。 |
-| safi | INTEGER NOT NULL | Subsequent Address Family Identifier。 |
-| rib_type | TEXT NOT NULL | Peer RIB 类型编号的文本形式，或 loc-rib。 |
-| current_epoch | INTEGER NOT NULL DEFAULT 0 | 当前全量刷新代次。新一轮刷新或 stale 生命周期会推进 epoch。 |
-| eor_epoch | INTEGER NULL | 最近成功完成 EOR 的 epoch。 |
-| scope_state | TEXT NOT NULL DEFAULT syncing | 当前使用 syncing、ready、stale、down。 |
-| stale_reason | TEXT NULL | stale/down/timeout 原因。 |
-| stale_since_ms | INTEGER NULL | 进入 stale 或 down 的起始时间，用于保留期清理。 |
-| refresh_started_ms | INTEGER NULL | 当前 syncing 刷新开始时间，用于 EOR 超时处理。 |
-| cleanup_pending_epoch | INTEGER NULL | EOR 或 refresh timeout 后等待清理旧 epoch/旧连接路由的标记。 |
-| last_connection_id | TEXT NULL，FK | 当前接管该 scope 的 bmp_connections.connection_id。 |
-| created_at_ms | INTEGER NOT NULL | scope 首次创建时间。 |
-| updated_at_ms | INTEGER NOT NULL | scope 最近一次有效状态更新时间。 |
+| `payload_id` | INTEGER PK | 数据库内部短键 |
+| `payload_hash` | BLOB NOT NULL UNIQUE | `route_json` 的内容哈希 |
+| `route_json` | TEXT NOT NULL | 仅含扩展展示字段的 JSON object；允许为 `{}` |
+| `first_seen_ms`、`last_seen_ms` | INTEGER NOT NULL | 首次和最近使用时间 |
+| `current_ref_count`、`event_ref_count` | INTEGER NOT NULL | current/event 引用数 |
 
-### 6.3 状态机
+内容相同的 payload 在不同 route identity、scope、刷新和 event 之间共享一行。普通 IP prefix 路由如果没有额外展示字段，payload 就是 `{}`；所有这类 current row 和 route event 可以引用同一个 `payload_id`。
 
-    Peer Up / 新一轮刷新
-              │
-              ▼
-          syncing
-           │     │
-      收到 EOR   超过 refresh timeout
-           │     │
-           └──┬──┘
-              ▼
-            ready
+### 7.3 `bmp_route_attributes`
 
-    Peer Down ───────────────► stale
-    TCP 断开 / collector 崩溃 ► down
-    重连并开始新刷新 ─────────► syncing
+该表保存 canonicalized BGP Path Attributes。
 
-状态说明：
-
-| 状态 | 含义 |
-| --- | --- |
-| syncing | 正在接收一轮新的全量 RIB，旧 connection/epoch 路由会按计算显示为 stale。 |
-| ready | 当前 epoch 已收到 EOR，或 refresh timeout 已完成兜底清理。 |
-| stale | Peer Down 或刷新替换导致该 scope 的路由暂时过期。 |
-| down | BMP TCP 连接已关闭或 collector 上次异常退出。 |
-
-### 6.4 自动行为
-
-- Peer Up 为协商出的 AFI/SAFI/RIB 创建或更新 scope，并进入 syncing。
-- 同一 peer 再次 Peer Up 时，旧 scope 先变 stale，epoch 加一，再开始新一轮 syncing。
-- 有效 EOR 将 scope 设为 ready，并设置 eor_epoch 和 cleanup_pending_epoch。
-- Peer Down 只更新 scope 和 epoch，不逐条 UPDATE 路由。
-- TCP 断开将该连接拥有的 scope 设为 down。
-- 新连接只能在 connection_generation 更新，或旧连接已 closed 且新连接 open 时接管 scope。
-- 延迟到达的旧连接、旧 epoch mutation 不能把新状态回滚。
-- 当前 sweep 不删除 scope，所以即使路由已清空，拓扑节点仍可保留。
-
-索引：
-
-| 索引 | 用途 |
-| --- | --- |
-| idx_bmp_scopes_source_af(source_id, afi, safi, rib_type) | 按设备、地址族和 RIB 查 scope。 |
-| idx_bmp_scopes_state(scope_state, updated_at_ms) | 按状态扫描。 |
-| idx_bmp_scopes_stale_since(scope_state, stale_since_ms, scope_id) | stale/down 保留期清理。 |
-| idx_bmp_scopes_connection(last_connection_id, scope_id) | 连接关闭和接管。 |
-| idx_bmp_scopes_refresh_since(scope_state, refresh_started_ms, scope_id) | refresh timeout 扫描。 |
-| idx_bmp_scopes_cleanup_pending(cleanup_pending_epoch, scope_id) | EOR 后旧 epoch 清理。 |
-
-## 7. bmp_route_attributes
-
-### 7.1 用途
-
-保存去重后的 BGP Path Attributes。相同的 ORIGIN、AS_PATH、NEXT_HOP、MED、LOCAL_PREF、Community、OTC、Prefix-SID 等组合只存一次，路由和事件通过 attr_id 引用。
-
-### 7.2 字段
-
-| 字段 | 类型和约束 | 作用及自动行为 |
+| 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| attr_id | TEXT PRIMARY KEY | 规范化 attr_json 的 SHA-256。 |
-| attr_json | TEXT NOT NULL | 完整、规范化的 Path Attributes JSON。 |
-| first_seen_ms | INTEGER NOT NULL | 该属性组合第一次出现时间。 |
-| last_seen_ms | INTEGER NOT NULL | 最近被使用时间；重复 attr_id upsert 时只推进该时间。 |
+| `attr_id` | TEXT PK | Canonical attribute JSON 的 SHA-256 ID |
+| `attr_json` | TEXT NOT NULL | 去重后的属性 JSON |
+| `first_seen_ms`、`last_seen_ms` | INTEGER NOT NULL | 首次和最近使用时间 |
+| `current_ref_count`、`event_ref_count` | INTEGER NOT NULL | current/event 引用数 |
 
-### 7.3 自动行为
+Identity、payload 和 attributes 分离后，route 更新属性时无需复制 NLRI；同一组属性也不会在数百万条 route 中重复保存。
 
-- 写 route 之前先 canonicalize 属性并计算 attr_id。
-- 同一属性组合不会重复保存大 JSON。
-- 只有同时不被 bmp_current_routes 和 bmp_route_events 引用，且超过事件保留期后，sweep 才会删除。
-- 本表使用 WITHOUT ROWID。
+读取 current route 或 route event 时，应用按以下来源重建 route 投影：
 
-索引：
+1. `bmp_route_identities` 的 AFI/SAFI、prefix、RD、path ID 和 `nlri_json` 构造 identity/NLRI 基础字段及默认展示值，`nlri_json` 恢复为 `nlriDetail`。
+2. `bmp_route_payloads.route_json` 叠加少量扩展展示字段；`{}` 不影响基础投影。
+3. `bmp_route_attributes.attr_json` 叠加 canonical BGP Path Attributes，再由 current/event 行的 `attr_id` 恢复 `attrId`。
+4. Current-route 查询再从物理分区、scope 和 connection 补充 `routeState`、epoch、stale 原因和观察时间；event 查询则在 route 投影之外返回事件元数据。
 
-| 索引 | 用途 |
+### 7.4 引用计数
+
+三张全局对象表都分别维护：
+
+- `current_ref_count`：当前 36 张分区的引用数。
+- `event_ref_count`：`bmp_route_events` 的引用数。
+
+计数由 trigger 维护：
+
+| 动作 | 自动变化 |
 | --- | --- |
-| idx_bmp_route_attributes_last_seen(last_seen_ms, attr_id) | 找超过保留期的无引用属性。 |
+| 分区 INSERT | identity、payload，以及非空 attribute 的 current 引用 `+1` |
+| 分区 DELETE | 对应 current 引用 `-1` |
+| 分区 `payload_id` / `attr_id` UPDATE | 变化时旧引用 `-1`、新引用 `+1`；`route_pk` 不允许更新 |
+| Event INSERT | 对应 event 引用 `+1` |
+| Event DELETE | 对应 event 引用 `-1` |
 
-## 8. bmp_route_events
+引用字段比较使用 SQLite 的 NULL-safe `IS NOT`：可空的 `attr_id` 从 `NULL` 变为非空、从非空变为 `NULL`，或在两个 ID 之间切换时，计数都能正确更新；值未变化时不会重复增减。
 
-### 8.1 用途
+只有 `current_ref_count = 0` 且 `event_ref_count = 0`，并超过保留时间的对象才可被 GC。应用代码不应手工修正这些计数。
 
-保存发生过什么，是追加式事件流水。它不只是“路由事件表”，连接、source、scope 和 statistics mutation 也会先写一条 event。
+## 8. Current-route 分区表
 
-bmp_current_routes 表示现在是什么；bmp_route_events 表示过去发生过什么。
+36 张表使用同一结构：
 
-### 8.2 字段
-
-| 字段 | 类型和约束 | 作用及自动行为 |
+| 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| event_id | INTEGER PRIMARY KEY AUTOINCREMENT | 全库递增事件 ID，由 sqlite_sequence 维护。 |
-| batch_id | TEXT NOT NULL | 所属 ingest batch。与 bmp_ingest_batches 是逻辑关联，没有 FK。 |
-| source_id | TEXT NOT NULL，FK | 所属 bmp_sources.source_id。 |
-| connection_id | TEXT NOT NULL，FK | 事件来自哪次连接。 |
-| source_sequence | INTEGER NOT NULL | 该连接内的 mutation 序号；正常协议事件为递增正数，人工 purge 使用负数 synthetic sequence。 |
-| scope_id | TEXT NULL，FK | 所属 scope。source、connection、statistics 等事件可以为空。 |
-| route_id | TEXT NULL | 稳定 route ID。不是 FK，因为 current route 可以被 withdraw/purge 删除。 |
-| event_type | TEXT NOT NULL | 事件最终分类。 |
-| observed_at_ms | INTEGER NOT NULL | collector 观察或处理该事件的时间。 |
-| source_timestamp_ms | INTEGER NULL | BMP 消息携带的原始时间戳。 |
-| rib_epoch | INTEGER NULL | 事件对应的 RIB epoch。 |
-| attr_id | TEXT NULL，FK | 该事件引用的属性组合。 |
-| reason | TEXT NULL | stale、close、purge 等原因。 |
-| afi | INTEGER NULL | 冗余 AFI，便于不 join current route 直接查历史。 |
-| safi | INTEGER NULL | 冗余 SAFI。 |
-| prefix | TEXT NULL | 冗余 prefix，复杂 NLRI 或非路由事件可为空。 |
-| legacy_route_key | TEXT NULL | 兼容旧 UI/API 的 route key。 |
-| route_json | TEXT NULL | 事件时刻的紧凑 route snapshot，属性主体通过 attr_id 关联。 |
+| `path_pk` | INTEGER PK | 当前路径行的短主键 |
+| `partition_id` | INTEGER NOT NULL，CHECK | 该表固定 partition ID |
+| `scope_id` | TEXT NOT NULL，复合 FK | 所属 scope |
+| `route_pk` | INTEGER NOT NULL，FK | 指向全局 route identity |
+| `payload_id` | INTEGER NOT NULL，FK | 指向全局 route payload |
+| `attr_id` | TEXT NULL，FK | 指向全局 Path Attributes |
+| `connection_id` | TEXT NOT NULL，FK | 当前版本来自哪次连接 |
+| `rib_epoch` | INTEGER NOT NULL | 当前版本所属刷新 epoch |
+| `explicit_state` | TEXT NOT NULL | 默认 `active` |
+| `first_seen_ms`、`last_seen_ms` | INTEGER NOT NULL | 该 scope/path 首次和最近出现时间 |
+| `source_timestamp_ms` | INTEGER NULL | 最近 BMP source timestamp |
+| `last_event_id` | INTEGER NOT NULL | 最新事件序号，用于版本保护和排序 |
 
-唯一约束：
+业务唯一约束为：
 
-| 约束 | 作用 |
-| --- | --- |
-| UNIQUE(connection_id, source_sequence) | 保证同一连接内同一个 mutation 重放时不会重复插入。 |
+```text
+UNIQUE(scope_id, route_pk)
+```
 
-常见 event_type：
+同一个 canonical route 可以出现在多个 scope；同一 scope 内只保留一个 current 版本。
 
-| 类别 | event_type |
-| --- | --- |
-| 连接/source | connection_open、source_update、connection_close |
-| scope | scope_open、scope_stale、scope_eor、scope_timeout |
-| 路由写入结果 | announce、replace、refresh、upsert-noop |
-| 路由删除结果 | withdraw、withdraw-noop、purge |
-| 统计 | statistics |
+每张分区有六个二级索引：
 
-路由 mutation 初始可叫 upsert、delete 或 withdraw，但落库后会根据是否真正改变 current projection 重新分类。
-
-### 8.3 自动行为
-
-- 每个 mutation 都会插入 event；source、connection、scope、attribute 以及 route/statistics 投影在同一事务中完成。current route 要先取得 event_id，才能写入 last_event_id。
-- 旧连接或旧 epoch 的延迟 UPDATE 仍可保留 event，但不能覆盖 current route，最终分类为 upsert-noop。
-- 旧连接或错误 epoch 的 Withdraw 不删除 current route，最终分类为 withdraw-noop。
-- 默认删除 7 天前且未被 bmp_current_routes.last_event_id 引用的 event。
-- 自动 sweep 删除路由时不写 purge event；只有页面人工清理 stale 才写 purge event。
-- 崩溃恢复直接修正 connection/scope 状态，不补偿写 event。
-
-索引：
-
-| 索引 | 用途 |
-| --- | --- |
-| idx_bmp_route_events_scope_time(scope_id, observed_at_ms DESC, event_id DESC) | 查某 scope 的时间线。 |
-| idx_bmp_route_events_route_time(scope_id, route_id, observed_at_ms DESC, event_id DESC) | 查某 scope 内某路由历史。 |
-| idx_bmp_route_events_type_time(event_type, observed_at_ms DESC) | 按事件类型查询。 |
-| idx_bmp_route_events_observed(observed_at_ms, event_id) | 保留期清理。 |
-| idx_bmp_route_events_attr(attr_id) | 属性引用检查。 |
-| idx_bmp_route_events_source_time(source_id, observed_at_ms DESC, event_id DESC) | 查某设备事件。 |
-| idx_bmp_route_events_route_global_time(route_id, observed_at_ms DESC, event_id DESC) | 跨 scope 查同一 route_id。 |
-| idx_bmp_route_events_legacy_time(legacy_route_key, observed_at_ms DESC, event_id DESC) | 兼容旧 route key 查询。 |
-| idx_bmp_route_events_af_prefix_time(afi, safi, prefix, observed_at_ms DESC, event_id DESC) | 按地址族和 prefix 查历史。 |
-| idx_bmp_route_events_prefix_time(prefix, observed_at_ms DESC, event_id DESC) | 跨地址族按 prefix 查历史。 |
-
-## 9. bmp_current_routes
-
-### 9.1 用途
-
-这是当前 RIB 投影，也是 Session/Loc-RIB 路由列表、详情和路由摘要的权威来源。
-
-一行表示某个 scope 内某个稳定 route 的当前版本：
-
-    业务主键 = scope_id + route_id
-
-route_id 本身不包含 scope，所以相同 NLRI 可以同时存在于多个 peer、多个 RIB stage 或多个 Loc-RIB。
-
-route_id 由 AFI、SAFI、pathId 和 canonical NLRI 生成。普通前缀、VPN、EVPN、FlowSpec、BGP-LS 等 NLRI 使用各自的规范化身份，Path Attributes 不参与 route_id。
-
-### 9.2 字段
-
-| 字段 | 类型和约束 | 作用及自动行为 |
+| 索引后缀 | 字段 | 用途 |
 | --- | --- | --- |
-| scope_id | TEXT NOT NULL，复合 PK，FK | 所属 bmp_rib_scopes.scope_id。 |
-| route_id | TEXT NOT NULL，复合 PK | AFI、SAFI、pathId、canonical NLRI 的 SHA-256。 |
-| route_key_json | TEXT NOT NULL | 保存 route key 版本、算法和 keyHex。 |
-| route_identity_json | TEXT NOT NULL | 完整规范化 route identity。 |
-| route_key_version | INTEGER NOT NULL | 稳定 route key schema version，当前为 1。 |
-| legacy_route_key | TEXT NULL | 兼容旧页面/API 的 pathId、RD、prefix、mask 组合键。 |
-| afi | INTEGER NOT NULL | AFI。 |
-| safi | INTEGER NOT NULL | SAFI。 |
-| path_id | INTEGER NOT NULL | ADD-PATH Path Identifier，未启用时为 0。 |
-| rd | TEXT NULL | VPN/EVPN 等地址族的 RD。 |
-| prefix | TEXT NULL | 普通可索引前缀；复杂 NLRI 可以为空。 |
-| prefix_length | INTEGER NULL | 前缀长度；复杂 NLRI 可以为空。 |
-| nlri_kind | TEXT NULL | canonical NLRI 类型，例如 ip-prefix、vpn-prefix、evpn、raw-nlri、structured-nlri。 |
-| nlri_json | TEXT NOT NULL | 完整解析后的 NLRI JSON。 |
-| attr_id | TEXT NULL，FK | 去重 Path Attributes 的 ID。Withdraw 构造的 route 信息可为空。 |
-| route_json | TEXT NOT NULL | 不重复保存 Path Attributes 的紧凑 route 主体。查询详情时再 join attr_json。 |
-| connection_id | TEXT NOT NULL，FK | 当前版本来自哪次连接。 |
-| rib_epoch | INTEGER NOT NULL | 当前版本来自哪个 RIB 刷新 epoch。 |
-| explicit_state | TEXT NOT NULL DEFAULT active | 显式状态。当前正常 upsert 固定写 active，实际 stale 主要动态计算。 |
-| first_seen_ms | INTEGER NOT NULL | 该 scope/route 投影第一次出现时间。更新时保留。 |
-| last_seen_ms | INTEGER NOT NULL | 最近 announce、replace 或 refresh 时间。 |
-| source_timestamp_ms | INTEGER NULL | 最近一次 BMP source timestamp。 |
-| last_event_id | INTEGER NOT NULL，FK | 生成当前版本的最新 bmp_route_events.event_id。 |
+| `scope_first_seen` | `(scope_id, first_seen_ms, path_pk)` | Scope 页面稳定分页 |
+| `scope_epoch` | `(scope_id, connection_id, rib_epoch, path_pk)` | 接管、epoch 和 stale 清理 |
+| `route` | `(route_pk, scope_id)` | 跨 scope 定位同一路由 |
+| `attr` | `(attr_id)` | 属性关联和诊断 |
+| `payload` | `(payload_id)` | Payload 引用定位、删除诊断和引用完整性检查 |
+| `connection` | `(connection_id, scope_id)` | 按连接清理或定位其 current route |
 
-### 9.3 自动写入和删除
+分区 trigger 负责三类不变量：insert 时校验 scope、partition 和 family；update 时禁止改变 `scope_id`、`partition_id`、`route_pk`；insert/delete/update 时事务内维护 scope counter 和全局对象的 current ref count。
 
-Announce/Replace/Refresh：
+### 8.1 为什么分区表保持窄行
 
-1. 插入 route event。
-2. 只有 mutation 的 connection_id 等于 scope.last_connection_id，且 epoch 等于 scope.current_epoch 时，才允许 upsert current route。
-3. 同一个 scope_id + route_id 已存在时更新 NLRI、属性、连接、epoch 和 last_event_id。
-4. 旧 connection、旧 epoch 或更旧 event_id 不能覆盖新投影。
+分区行不再保存 `route_identity_json`、`nlri_json`、`route_json` 或 `attr_json`。这样可以：
 
-Withdraw：
+- 提高 B-tree 页扇出和缓存命中率；
+- 缩小高频索引；
+- 降低 upsert、withdraw 和 sweep 的写放大；
+- 让全局重复对象只存一份。
 
-1. 插入 event。
-2. 只有 connection 和 epoch 都仍是 scope 当前值时，才删除 current route。
+## 9. Scope route counters
 
-人工 Purge：
+`bmp_scope_route_counts` 的主键是：
 
-1. 只选择有效状态为 stale 的 current route。
-2. 删除 current route。
-3. 写 purge event 和人工 batch。
+```text
+(scope_id, connection_id, rib_epoch, explicit_state)
+```
 
-### 9.4 active/stale 的真实计算
+字段 `route_count` 表示 36 张 current 分区中属于该组合的物理行数。分区 insert/delete/update trigger 会同步增减计数，并删除降到 0 的 counter 行。
 
-routeState 不是只看 explicit_state。查询时满足任意条件即为 stale：
+该表用于避免拓扑恢复、Session/Instance 摘要和普通 scope 页面每次都扫描 route 分区。
 
-    route.explicit_state = 'stale'
-    或 scope.scope_state IN ('stale', 'down')
-    或 route.connection_id != scope.last_connection_id
-    或 route.rib_epoch < scope.current_epoch
+有效状态仍由 scope 和路径组合计算：
 
-    否则为 active
+```text
+explicit_state = 'stale'
+或 scope_state IN ('stale', 'down')
+或 connection_id != last_connection_id
+或 rib_epoch < current_epoch
+    => stale
 
-这带来几个重要结果：
+否则 => active
+```
 
-- Peer Down 或 TCP 断开只需更新一行 scope，即可让该 scope 下所有路由显示 stale。
-- 新连接接管后，旧 connection 路由自动 stale。
-- 新 epoch 开始后，尚未重新上报的旧 epoch 路由自动 stale。
-- ready 只表示当前 scope 刷新结束；旧 connection/epoch 路由在被 sweep 删除前仍可能存在，但仍是 stale。
+因此摘要可以从 counter 分组求得：
 
-### 9.5 索引
+- `total`：该 scope 所有 counter 的总和。
+- `active`：显式 active、属于当前 connection 且 epoch 不旧的 counter 总和，并受 scope state 约束。
+- `stale`：`total - active`。
 
-| 索引 | 用途 |
-| --- | --- |
-| idx_bmp_current_routes_prefix(afi, safi, prefix, prefix_length) | 地址族和精确前缀查询。 |
-| idx_bmp_current_routes_epoch(scope_id, rib_epoch, last_seen_ms) | epoch 清理。 |
-| idx_bmp_current_routes_attr(attr_id) | 属性关联。 |
-| idx_bmp_current_routes_last_seen(last_seen_ms DESC, scope_id, route_id) | 最近观察排序和扫描。 |
-| idx_bmp_current_routes_last_event(last_event_id) | event 引用保护。 |
-| idx_bmp_current_routes_route_id(route_id, scope_id) | 跨 scope 查 route_id。 |
-| idx_bmp_current_routes_legacy_key(legacy_route_key, scope_id) | 页面详情兼容查询。 |
-| idx_bmp_current_routes_prefix_global(prefix, scope_id, route_id) | 跨地址族/跨 scope 的 prefix 查询。 |
-| idx_bmp_current_routes_connection(scope_id, connection_id, rib_epoch, last_seen_ms) | 连接接管和 epoch 清理。 |
+Peer Down 或新 epoch 开始时仍只需更新 scope，不需要逐条改写 route。
 
-## 10. bmp_ingest_batches
+## 10. Route events 和批次
 
-### 10.1 用途
+### 10.1 `bmp_route_events`
 
-保存 persistence Writer 的批次幂等记录。Writer 重试同一个 batch_id 时，整批不会再次执行。
+Event 表继续保持全局时间线，但不再重复保存 route JSON、AFI、SAFI、prefix 和 legacy key，而是引用全局 route 对象。
 
-### 10.2 字段
-
-| 字段 | 类型和约束 | 作用及自动行为 |
+| 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| batch_id | TEXT PRIMARY KEY | Writer 生成的批次 ID。 |
-| created_at_ms | INTEGER NOT NULL | 批次创建时间。 |
-| mutation_count | INTEGER NOT NULL | 批次包含的 mutation 数量。 |
+| `event_id` | INTEGER PK AUTOINCREMENT | 全库递增事件 ID |
+| `batch_id` | TEXT NOT NULL | 所属 ingest batch，逻辑关联 |
+| `source_id`、`connection_id` | TEXT NOT NULL，FK | 来源设备和连接 |
+| `source_sequence` | INTEGER NOT NULL | 连接内 mutation 序号 |
+| `scope_id` | TEXT NULL，复合 FK | 可选 scope；与 `partition_id` 同空或同非空 |
+| `partition_id` | INTEGER NULL，复合 FK | Event 所属固定分区；与 `scope_id` 共同引用 `bmp_rib_scopes` |
+| `route_pk` | INTEGER NULL，FK | 可选 route identity |
+| `payload_id` | INTEGER NULL，FK | 可选 route payload |
+| `event_type` | TEXT NOT NULL | 事件最终分类 |
+| `observed_at_ms` | INTEGER NOT NULL | Collector 观察时间 |
+| `source_timestamp_ms` | INTEGER NULL | BMP 原始时间戳 |
+| `rib_epoch` | INTEGER NULL | 对应 RIB epoch |
+| `attr_id` | TEXT NULL，FK | 可选 Path Attributes |
+| `reason` | TEXT NULL | stale、close、purge 等原因 |
 
-### 10.3 自动行为
+`scope_id` 和 `partition_id` 受 CHECK 约束，必须同时为 `NULL` 或同时非空；非空时通过 `(scope_id, partition_id)` 复合外键保证事件分区与 scope 分区一致。Route event 必须同时有 `route_pk` 和 `payload_id`；非 route event 两者同时为空。`UNIQUE(connection_id, source_sequence)` 保证重放幂等。
 
-- 每批先执行 INSERT OR IGNORE。
-- batch_id 已存在时，整批直接返回 duplicate。
-- 一批中的 source、connection、scope、attribute、event、route 和 statistics 修改在一个 SQLite 事务中提交；任一步失败会整批回滚。
-- 默认删除 7 天前的 batch 记录。
-- bmp_route_events.batch_id 没有外键，因此 batch 记录可以先于仍需保留的 event 删除。
+Event 创建后，`scope_id`、`partition_id`、`route_pk`、`payload_id` 和 `attr_id` 不可更新，确保分区归属、event ref count 与不可变的历史记录保持一致；需要不同引用时应写入新事件。
 
-索引：
+`idx_bmp_route_events_partition_time(partition_id, observed_at_ms DESC, event_id DESC)` 支持按分区和时间倒序读取历史。事件查询带 `scopeKind`、AFI 或 SAFI 条件时，会先通过固定 manifest 解析候选 `partition_id`，添加 `e.partition_id IN (...)` 进行剪枝，再用 scope/identity 的 AFI/SAFI 条件做最终精确过滤。AFI/SAFI 均给出时，已知 family 在指定 owner 下缩小到一个分区，未指定 owner 时缩小到 peer 和 loc-rib 两个分区；未知组合则命中相应 `other` 分区。
 
-| 索引 | 用途 |
-| --- | --- |
-| idx_bmp_ingest_batches_created(created_at_ms) | 按保留期清理。 |
+常见 `event_type`：
 
-## 11. bmp_statistics_samples
+- 连接/source：`connection_open`、`source_update`、`connection_close`
+- Scope：`scope_open`、`scope_stale`、`scope_eor`、`scope_timeout`
+- Route：`announce`、`replace`、`refresh`、`upsert-noop`、`withdraw`、`withdraw-noop`、`purge`
+- Statistics：`statistics`
 
-### 11.1 用途
+### 10.2 `bmp_ingest_batches`
 
-保存 BMP Statistics Report 历史样本，不参与 current RIB 投影。统计页面通过
-`bmp_statistics_latest` 读取每个逻辑报告的最新样本，再叠加当前在线内存数据和连接状态，因此断开或重启后仍可恢复统计页面。
+`bmp_ingest_batches(batch_id, created_at_ms, mutation_count)` 保存 Writer 批次幂等记录。同一个 `batch_id` 重试时整批不会重复执行。
 
-### 11.2 字段
+一批中的 source、connection、scope、全局路由对象、event、current projection、counter 和 statistics 修改在一个 SQLite transaction 中提交。
 
-| 字段 | 类型和约束 | 作用及自动行为 |
-| --- | --- | --- |
-| sample_id | INTEGER PRIMARY KEY AUTOINCREMENT | 样本 ID，由 sqlite_sequence 维护。 |
-| source_id | TEXT NOT NULL，FK | 所属 bmp_sources.source_id。 |
-| connection_id | TEXT NOT NULL，FK | 来自哪次连接。 |
-| scope_id | TEXT NULL，FK | 可选 scope。当前 persistStatistics 使用 connection mutation，生产写入通常为空。 |
-| report_kind | TEXT NULL | `session` 或 `instance`；无法识别的损坏/旧样本可为空。 |
-| report_key | TEXT NULL | Session 使用 type/RD/IP/AS，Instance 使用 type/RD 形成的稳定逻辑键。 |
-| observed_at_ms | INTEGER NOT NULL | collector 收到样本的时间。 |
-| source_timestamp_ms | INTEGER NULL | BMP 消息携带的 source timestamp。 |
-| statistics_json | TEXT NOT NULL | 完整 Statistics Report JSON。 |
+## 11. Statistics tables
 
-### 11.3 自动行为
+`bmp_statistics_samples` 保存历史样本，字段包括 source、connection、可选 scope、`report_kind`、`report_key`、观察时间、source timestamp 和完整 `statistics_json`。
 
-- statistics mutation 会同时写一条 bmp_route_events 事件和一条 statistics sample。
-- 每次写入会同步更新 `bmp_statistics_latest`；时间相同则以较大的 sample_id 为准。
-- 默认删除 7 天前的历史样本；仍被 latest 投影引用的最后一个样本会保留，直到同一逻辑报告出现更新样本。
-- 不参与 BGP Session、Loc-RIB Instance 或 routeState 计算。
+`bmp_statistics_latest` 的主键是：
 
-索引：
+```text
+(source_id, report_kind, report_key)
+```
 
-| 索引 | 用途 |
-| --- | --- |
-| idx_bmp_statistics_scope_time(scope_id, observed_at_ms DESC) | 查某 scope 的统计历史。 |
-| idx_bmp_statistics_observed(observed_at_ms, sample_id) | 按保留期清理。 |
-| idx_bmp_statistics_report_time(source_id, report_kind, report_key, observed_at_ms DESC, sample_id DESC) | 按 source 和逻辑报告定位最新样本。 |
+它引用每个逻辑 Session/Instance 报告的最新 sample。统计页面读取该小投影，不需要扫描全部历史样本。
 
-### 11.4 bmp_statistics_latest
+`report_kind` 只允许 `session` 或 `instance`。
 
-这是 Statistics Report 的最新值投影，主键是 `(source_id, report_kind, report_key)`：
+## 12. 写入链路
 
-| 字段 | 类型和约束 | 作用 |
-| --- | --- | --- |
-| source_id | TEXT NOT NULL，FK | 所属稳定 BMP source。 |
-| report_kind | TEXT NOT NULL | `session` 或 `instance`。 |
-| report_key | TEXT NOT NULL | 逻辑报告身份。 |
-| sample_id | INTEGER NOT NULL，FK | 指向当前最新的 `bmp_statistics_samples.sample_id`。 |
-| observed_at_ms | INTEGER NOT NULL | 用于比较新旧样本和结果排序。 |
-
-统计页面只需读取这张小投影并关联 sample，不会扫描 7 天历史。损坏的 statistics JSON 会被忽略，不影响其他报告。
-
-## 12. 自动写入链路
-
-    BMP 报文
-       │
-       ▼
-    BmpSession 解析协议动作
-       │
-       ▼
-    构造 mutation
-       │
-       ▼
-    BmpPersistenceClient 内存队列
-       │
-       ├─ 达到 2000 个 mutation
-       ├─ 达到 2 MiB
-       └─ 或等待 20 ms
-       ▼
-    独立 SQLite Writer Worker
-       │
-       ▼
-    单个 SQLite transaction
-       ├─ bmp_ingest_batches：批次幂等
-       ├─ bmp_sources：设备 upsert
-       ├─ bmp_connections：连接 upsert/close
-       ├─ bmp_rib_scopes：scope upsert/state
-       ├─ bmp_route_attributes：属性去重
-       ├─ bmp_route_events：追加事件
-       ├─ bmp_current_routes：更新当前投影
-       └─ bmp_statistics_samples：写统计样本
+```text
+BMP 报文
+   │
+   ▼
+BmpSession 构造 mutation
+   │
+   ▼
+BmpPersistenceClient 有界队列
+   │
+   ▼
+SQLite Writer transaction
+   ├─ ingest batch 幂等
+   ├─ source / connection upsert
+   ├─ 解析 manifest 并 upsert scope.partition_id
+   ├─ 拆分并 upsert 全局 route 对象
+   │    ├─ identity + nlri_json
+   │    ├─ 扩展展示 payload（普通路由可为 {}）
+   │    └─ path attributes
+   ├─ insert event；带 scope 的事件同时写入 partition_id，trigger 更新 event_ref_count
+   ├─ upsert/delete 一张 current-route 分区
+   │    ├─ trigger 校验 family
+   │    ├─ trigger 更新 scope counters
+   │    └─ trigger 更新 current_ref_count
+   └─ statistics sample/latest（如有）
+```
 
 默认批量和背压参数：
 
-| 参数 | 默认值 | 自动行为 |
-| --- | --- | --- |
-| batchSize | 2000 mutations | 达到后立即 flush。 |
-| batchBytes | 2 MiB | 达到后立即 flush。 |
-| flushMs | 20 ms | 未达到阈值时的最大等待时间。 |
-| highWatermark | 64 MiB | 队列达到后暂停 BMP socket。 |
-| lowWatermark | 32 MiB | 队列下降后恢复 BMP socket。 |
-| batchRetryLimit | 3 | 单批失败的最大重试次数。 |
-| batchRetryDelay | 25 ms 起 | 指数退避重试。 |
+| 参数 | 默认值 |
+| --- | ---: |
+| Batch size | 2000 mutations |
+| Batch bytes | 2 MiB |
+| Flush interval | 20 ms |
+| High watermark | 64 MiB |
+| Low watermark | 32 MiB |
+| Stale retention | 24 小时 |
+| Refresh timeout | 10 分钟 |
+| Event retention | 7 天 |
+| 最大数据库逻辑大小 | 20 GiB |
 
-读取页面数据前，Worker 会执行 writer fence，等待查询调用之前已进入队列的 mutation 全部提交，再从独立只读连接查询。只读连接失败时自动退回 Writer 查询；Writer 失败则停止 BMP 摄入。
+页面读取前会执行 writer fence，等待调用前已入队的 mutation 提交，再从独立只读连接查询。只读连接失败时可回退 Writer；Writer 失败则停止 BMP 摄入。
 
-## 13. 协议动作与表变化
+## 13. Route 生命周期
 
-| 协议或系统动作 | 自动修改 |
+### 13.1 Announce、replace 和 refresh
+
+1. 解析并校验 scope 的物理 partition。
+2. 将 route 拆成 identity/NLRI、扩展展示 payload 和 attributes 后分别 upsert；普通路由 payload 可以复用全局 `{}` 行。
+3. 插入 route event。
+4. 只有 mutation connection 等于 scope 当前 connection，且 epoch 等于 scope 当前 epoch，才允许更新 current projection。
+5. 同一 `(scope_id, route_pk)` 已存在时更新 payload、attribute、时间和 `last_event_id`。
+6. 根据是否新增、属性变化或仅刷新，将 event 分类为 `announce`、`replace`、`refresh` 或 `upsert-noop`。
+
+### 13.2 Withdraw
+
+1. Upsert/定位 route identity 和 payload，并写 event。
+2. 只有 connection 和 epoch 仍有效时，才从目标分区删除 current row。
+3. Trigger 自动减少 scope count 和 current reference counts。
+4. 旧 connection 或错误 epoch 不删除 current row，event 分类为 `withdraw-noop`。
+
+### 13.3 EOR 和旧 epoch
+
+Peer Up 或新一轮刷新会推进 `current_epoch` 并进入 `syncing`。EOR 将 scope 设为 `ready`，记录 `eor_epoch` 并设置 `cleanup_pending_epoch`。
+
+旧 connection/epoch 路径在删除前通过有效状态公式显示为 stale。Sweep 从 scope 对应的单一分区中分批删除旧路径，避免全库大事务。
+
+## 14. 定时 sweep 和引用对象 GC
+
+Worker 默认周期性执行小批量 sweep：
+
+1. 找到需要清理的 scope。
+2. 根据 scope 的 `partition_id` 只访问对应 current-route 表。
+3. 分批删除旧 epoch、旧 connection 或超过 stale 保留期的路径。
+4. 分批删除超过事件保留期的 event；event delete trigger 自动减少 event 引用。
+5. 清理未被 latest 引用的旧 statistics sample 和旧 ingest batch。
+6. 删除 `current_ref_count = 0 AND event_ref_count = 0` 且超过保留期的 identity、payload 和 attributes。
+
+删除 current row 和 event 后不要绕过 trigger，否则引用计数和 scope counters 会失真。
+
+## 15. 正常停止与崩溃恢复
+
+### 15.1 正常停止
+
+正常停止会：
+
+1. 关闭 BMP socket，不再接收新报文。
+2. 写 connection close/scope down 状态。
+3. Drain persistence queue。
+4. 运行一次 sweep。
+5. 执行 passive WAL checkpoint。
+6. 关闭 reader 和 writer。
+
+### 15.2 崩溃恢复
+
+数据库重新打开时，遗留 `open` connection 会改为 `closed`，关闭原因为 `collector-restart`；其当前 scope 会进入 `down`。Current rows 不需要批量更新，通过 scope state 自动显示 stale。
+
+## 16. Schema v9 初始化和版本规则
+
+v9 明确不支持旧库迁移。
+
+Writer 只接受以下两种数据库：
+
+1. 已经是完整 schema v9 的数据库。
+2. `PRAGMA user_version = 0` 且没有任何非 SQLite 内部对象的空数据库。
+
+其他情况直接失败：
+
+| 情况 | 结果 |
 | --- | --- |
-| BMP Initiation | 生成稳定 source_id；upsert bmp_sources；插入 open connection；写 connection_open 和 source_update event。 |
-| Peer Up | 创建或更新 scope；开始新 epoch；scope 进入 syncing；记录 refresh_started_ms。 |
-| Route Announce | 写 attribute；写 event；upsert current route。 |
-| 相同属性重复上报 | event 分类为 refresh；刷新 last_seen_ms。 |
-| 属性发生变化 | event 分类为 replace；current route 指向新 attr_id。 |
-| Withdraw | 写 event；若 connection/epoch 有效则删除 current route，否则为 withdraw-noop。 |
-| EOR | scope 进入 ready；写 eor_epoch；设置 cleanup_pending_epoch；触发快速 sweep。 |
-| Peer Down | scope 进入 stale、epoch 前进；current route 保留但动态显示 stale。 |
-| TCP 断开/Termination | connection 进入 closed；关联 scope 进入 down；current route 保留并显示 stale。 |
-| 人工清理 stale | 删除 current route；写 purge event 和人工 batch。 |
-| 正常停止 BMP | 关闭连接、drain 队列、运行 sweep、PASSIVE checkpoint、关闭 reader/writer。 |
-| Collector 崩溃后重启 | 遗留 open connection 改 closed；scope 改 down/collector-restart；不补偿写 event。 |
+| v1 到 v8 | `BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE` |
+| `user_version = 0` 但已有业务表、索引、view 或 trigger | `BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE` |
+| 高于 v9 | `BMP_PERSISTENCE_SCHEMA_TOO_NEW` |
+| Read-only 打开非 v9 | 拒绝读取 |
 
-## 14. EOR、epoch 和旧路由清理
+不能通过手工把旧库 `user_version` 改成 0 来升级，因为初始化还会检查数据库是否为空。
 
-epoch 用于区分同一 scope 的多轮全量刷新。
+升级到使用 v9 的版本前，如需保留旧库用于审计，应先停止 BMP 并备份整个 SQLite/WAL 文件组；应用使用 v9 时需要创建新的空数据库。旧 current route、event 和 statistics 不会自动导入。
 
-    旧 epoch = 1，已有 100 条路由
-              │
-              │ Peer Up / 新刷新
-              ▼
-    current_epoch = 2，scope = syncing
-              │
-              ├─ 新一轮已重新上报的路由写 rib_epoch = 2，显示 active
-              └─ 仍为 rib_epoch = 1 的旧路由显示 stale
-              │
-              │ EOR
-              ▼
-    scope = ready，eor_epoch = 2，cleanup_pending_epoch = 2
-              │
-              │ sweep
-              ▼
-    删除 rib_epoch < 2 或旧 connection 的 current routes
+## 17. 运维查询示例
 
-如果没有收到 EOR：
+建议停止 BMP 后执行人工一致性检查。运行中检查应使用 read-only 连接或 SQLite 在线备份能力。
 
-- scope 默认允许 syncing 10 分钟。
-- 超时后 sweep 分批删除旧 connection/epoch 路由。
-- 本轮已经重新上报的当前 epoch 路由保留。
-- 旧路由清理完后 scope 进入 ready，stale_reason 为 refresh-timeout。
-- 当前生产路径由 sweep 直接完成，不一定生成 scope_timeout event。
+### 17.1 Schema 和对象数量
 
-## 15. 定时 sweep 和保留期
+```sql
+PRAGMA user_version;
+PRAGMA journal_mode;
+PRAGMA foreign_key_check;
 
-默认每 30 秒运行一次 sweep；EOR 等事件还会在约 250 ms 后请求快速 sweep。
+SELECT type, COUNT(*) AS objects
+  FROM sqlite_master
+ WHERE name NOT LIKE 'sqlite_%'
+ GROUP BY type
+ ORDER BY type;
+```
 
-| 数据 | 默认保留或阈值 | 清理行为 |
-| --- | --- | --- |
-| stale/down current routes | 24 小时 | 删除达到保留期的路由。 |
-| 旧 epoch/旧 connection routes | EOR 或 refresh timeout 后 | 分批删除。 |
-| route events | 7 天 | 未被 current_routes.last_event_id 引用时删除。 |
-| statistics samples | 7 天 | 按 observed_at_ms 删除，但保留 latest 投影仍引用的最后一个样本。 |
-| ingest batches | 7 天 | 按 created_at_ms 删除。 |
-| 无引用 route attributes | 7 天 | current routes 和 events 都不引用时删除。 |
-| syncing refresh timeout | 10 分钟 | 清理旧路由并将 scope 置 ready。 |
-| 最大逻辑数据库大小 | 20 GiB | 超限时临时将 stale/history 截止时间缩短到当前时间。 |
+### 17.2 各分区路由量
 
-sweep 的执行顺序：
+```sql
+SELECT partition_id, COUNT(*) AS routes
+  FROM bmp_current_routes_all
+ GROUP BY partition_id
+ ORDER BY partition_id;
+```
 
-1. 删除可安全清理的 current routes。
-2. 清除已完成的 cleanup_pending_epoch。
-3. 完成 refresh timeout scope。
-4. 删除不再被 current route 引用的旧 events。
-5. 删除旧 statistics samples。
-6. 删除旧 ingest batches。
-7. 删除完全无引用的旧 attributes。
+### 17.3 Scope counters
 
-sweep 不会：
+```sql
+SELECT scope_id, connection_id, rib_epoch, explicit_state, route_count
+  FROM bmp_scope_route_counts
+ ORDER BY scope_id, connection_id, rib_epoch, explicit_state;
+```
 
-- 删除 source。
-- 删除 connection 历史。
-- 删除 scope。
-- 给自动 aging 删除的路由写 purge event。
-- 执行 VACUUM。
+### 17.4 引用计数诊断
 
-所以删除后 SQLite 文件物理大小可能不会立刻缩小，空闲页进入 freelist，后续写入会复用。getStatus 返回 reclaimableBytes 和 logicalSize，用于判断可复用空间和存储压力。
+```sql
+SELECT 'identity' AS kind, COUNT(*) AS unreferenced
+  FROM bmp_route_identities
+ WHERE current_ref_count = 0 AND event_ref_count = 0
+UNION ALL
+SELECT 'payload', COUNT(*)
+  FROM bmp_route_payloads
+ WHERE current_ref_count = 0 AND event_ref_count = 0
+UNION ALL
+SELECT 'attribute', COUNT(*)
+  FROM bmp_route_attributes
+ WHERE current_ref_count = 0 AND event_ref_count = 0;
+```
 
-## 16. 正常停止与崩溃恢复
+### 17.5 某 scope 的展开路由
 
-### 16.1 正常停止
+```sql
+SELECT r.scope_id, r.route_id, r.afi, r.safi, r.prefix, r.prefix_length,
+       r.connection_id, r.rib_epoch, r.explicit_state, r.last_seen_ms,
+       r.nlri_json, a.attr_json, r.route_json AS extension_payload_json
+  FROM bmp_current_routes_all r
+  LEFT JOIN bmp_route_attributes a ON a.attr_id = r.attr_id
+ WHERE r.scope_id = ?
+ ORDER BY r.first_seen_ms, r.path_pk
+ LIMIT 100;
+```
 
-停止 BMP 时自动执行：
+这里的 `extension_payload_json` 不是完整 route；应用读取会把 identity/NLRI、该 payload、attributes 和 current-state 合并成 route 投影。生产查询已知 scope 时应通过 manifest 直接命中一张物理表；统一 view 更适合诊断和真正的跨分区查询。
 
-1. 停止接收新数据并暂停 socket。
-2. 关闭每个 BMP Session，写 connection_close。
-3. 将关联 scope 设为 down。
-4. drain 全部 mutation 队列。
-5. 运行一次 sweep。
-6. 执行 PASSIVE WAL checkpoint。
-7. 关闭只读和写入 Worker。
+## 18. SQL 调试日志
 
-### 16.2 异常退出
+在“设置 → 通用设置”中把日志级别切换为 `debug` 并保存后，BMP SQLite writer、只读 reader 和离线 reader 会输出 SQL 跟踪。切回 `info`、`warn`、`error` 或 `off` 会立即停止跟踪。
 
-WAL 能保证已经提交的 SQLite transaction 在下次打开时恢复；尚在 JavaScript 内存队列、尚未提交的 mutation 在硬崩溃时可能丢失。
+SQL 跟踪包括执行方式、耗时、受影响行数或返回行数，以及归一化后的 SQL。BMP 写入频率高，`debug` 会产生大量日志，只应临时启用。
 
-下次 Writer 打开数据库时会在一个事务内：
+## 19. 运维注意事项
 
-1. 找出 connection_state = open 的连接。
-2. 将它们改为 closed。
-3. closed_at_ms 为空时写入恢复时间。
-4. close_reason 为空时写 collector-restart。
-5. 将这些连接拥有的 scope 改为 down。
-6. stale_reason 写 collector-restart。
-7. 清除 refresh_started_ms 和 cleanup_pending_epoch。
-
-这次恢复直接修正 connection/scope，不额外生成补偿 event。
-
-## 17. 页面如何从数据库恢复
-
-BMP 启动后，queryTopology 在一个读取事务内：
-
-1. 读取每个 source generation 最新的 connection。
-2. 读取所有 scope。
-3. 联合 current routes 计算每个 scope 的 active/stale/total。
-4. Peer scope 按 source_id + owner_key 聚合成 BGP Session。
-5. Loc-RIB scope重建成 Instance。
-6. Worker 再叠加真正存在的在线 BmpSession。
-
-所以：
-
-- 没有设备重连时，页面仍可显示已持久化的客户端、Session、Instance 和 stale 路由。
-- 设备重连后，按 source_id、owner_key、scope_id 合并，不生成重复页面节点。
-- 收到当前 epoch 的 UPDATE 和 EOR 后，路由恢复 active。
-- 从未创建过任何 scope 的零路由 peer，无法仅依靠当前 schema 完整重建。
-- 完整 Peer flags、router-id、TLV 等协议元数据没有全部进入 scope 表，离线页只能恢复数据库实际保存的字段。
-- Statistics 页面可从 latest 投影恢复离线样本，并用当前 topology 覆盖“已连接/已断开”状态；在线内存报告仍优先于同键数据库样本。
-
-## 18. 迁移规则
-
-打开可写数据库时自动执行迁移：
-
-1. user_version 大于 8：拒绝打开，避免新版本数据库被旧代码破坏。
-2. user_version 等于 8：直接校验关键表和字段。
-3. user_version 小于 8：在单个 transaction 内补齐当前 schema。
-4. 完成后设置 PRAGMA user_version = 8。
-
-当前迁移会自动：
-
-- 补 bmp_connections.connection_generation。
-- 补 bmp_rib_scopes.refresh_started_ms 和 cleanup_pending_epoch。
-- 补 bmp_route_events.afi、safi、prefix、legacy_route_key。
-- 补 bmp_current_routes.connection_id。
-- 补 bmp_statistics_samples.report_kind 和 report_key。
-- 创建 bmp_statistics_latest，并安全解析旧 statistics JSON 重建最新投影。
-- 从 last_event_id 对应 event 回填 route connection_id。
-- 从 scope 回填 event 的 AFI/SAFI。
-- 从 route_json 回填 event 的 prefix/legacy key。
-- 给旧 connection 按 opened_at_ms 和 connection_id 回填 generation。
-- 创建缺失索引。
-
-如果 current route 的 connection_id 无法从 last_event_id 恢复，迁移会失败，不会继续使用不可信投影。
-
-只读连接要求 schema 已经精确等于 version 8。如果只读打开发现旧版本，主进程会暂时打开可写 migrator，迁移后重新创建只读连接。
-
-## 19. 运维查询示例
-
-建议在停止 BMP 后执行人工检查。运行中直接复制数据库时，应同时处理 WAL/SHM，或使用 SQLite 在线备份能力。
-
-查看 schema 版本和表：
-
-    PRAGMA user_version;
-    PRAGMA foreign_keys;
-    SELECT name, type
-      FROM sqlite_master
-     WHERE type IN ('table', 'index')
-     ORDER BY type, name;
-
-查看各业务表数量：
-
-    SELECT 'sources' AS item, COUNT(*) AS count FROM bmp_sources
-    UNION ALL
-    SELECT 'connections', COUNT(*) FROM bmp_connections
-    UNION ALL
-    SELECT 'scopes', COUNT(*) FROM bmp_rib_scopes
-    UNION ALL
-    SELECT 'current_routes', COUNT(*) FROM bmp_current_routes
-    UNION ALL
-    SELECT 'route_events', COUNT(*) FROM bmp_route_events
-    UNION ALL
-    SELECT 'route_attributes', COUNT(*) FROM bmp_route_attributes
-    UNION ALL
-    SELECT 'statistics_samples', COUNT(*) FROM bmp_statistics_samples
-    UNION ALL
-    SELECT 'statistics_latest', COUNT(*) FROM bmp_statistics_latest
-    UNION ALL
-    SELECT 'ingest_batches', COUNT(*) FROM bmp_ingest_batches;
-
-查看仍标记 open 的连接：
-
-    SELECT connection_id, source_id, remote_ip, remote_port, opened_at_ms
-      FROM bmp_connections
-     WHERE connection_state = 'open'
-     ORDER BY connection_generation DESC;
-
-查看 scope 状态和 epoch：
-
-    SELECT source_id, scope_kind, owner_key, afi, safi, rib_type,
-           current_epoch, eor_epoch, scope_state, stale_reason,
-           last_connection_id
-      FROM bmp_rib_scopes
-     ORDER BY source_id, owner_key, afi, safi, rib_type;
-
-查看按数据库实际规则计算的 active/stale 数量：
-
-    SELECT
-        CASE
-            WHEN r.explicit_state = 'stale'
-              OR s.scope_state IN ('stale', 'down')
-              OR r.connection_id <> s.last_connection_id
-              OR r.rib_epoch < s.current_epoch
-            THEN 'stale'
-            ELSE 'active'
-        END AS route_state,
-        COUNT(*) AS route_count
-      FROM bmp_current_routes r
-      JOIN bmp_rib_scopes s ON s.scope_id = r.scope_id
-     GROUP BY route_state;
-
-查看最近事件：
-
-    SELECT event_id, observed_at_ms, source_id, connection_id,
-           scope_id, route_id, event_type, reason
-      FROM bmp_route_events
-     ORDER BY event_id DESC
-     LIMIT 100;
-
-## 20. SQL 调试日志
-
-在“设置 → 通用设置”中把日志级别切换为 `debug` 并保存后，BMP SQLite 的 writer、只读 reader 和离线 reader 会开始输出 SQL 跟踪；运行中切回 `info`、`warn`、`error` 或 `off` 会立即停止 SQL 跟踪，不需要重启 BMP。
-
-SQL 跟踪遵循以下规则：
-
-- 记录原始 SQL 模板、调用类型、执行耗时以及行数或变更数等结果摘要。
-- 绑定参数不会展开；Prefix、路由属性、Statistics JSON 和其他业务值不会出现在 SQL 日志中。
-- 多行 SQL 会压缩为空白分隔的单行，超长模板会截断，避免单条日志无限增长。
-- 跟踪由应用在 SQLite 调用层动态控制，没有常驻启用 `better-sqlite3 verbose`，因此非 `debug` 模式不会承担参数展开开销。
-- BMP 路由写入频率高，`debug` 会产生大量 SQL 日志，只建议在定位数据库查询或写入问题时临时启用。
-
-日志中的 SQL 使用占位符是预期行为。例如：
-
-    [BMP SQLite] run 0.120ms changes=1 sql=INSERT INTO bmp_current_routes (...) VALUES (?, ?, ...)
-
-## 21. 运维注意事项
-
-- 所有以 _ms 结尾的时间字段都是 Unix epoch 毫秒，不是 SQLite datetime 文本。
-- 所有以 _json 结尾的列都是 TEXT，应用负责 JSON 编解码。
-- 不要只备份 bmp.sqlite3 而忽略正在使用的 bmp.sqlite3-wal。
-- 最稳妥的离线备份方式是先停止 BMP，使写队列 drain 并 checkpoint，再复制数据库文件。
-- 不要手工修改 source_id、scope_id、route_id、attr_id，它们是内容寻址或规范化身份哈希。
-- 不要把 connection_id 当设备 ID；设备稳定身份是 source_id。
-- 不要把 route_id 单独当全局业务主键；完整主键是 scope_id + route_id。
-- 不要直接根据 explicit_state 判断 routeState，应使用 scope、connection、epoch 联合规则。
-- 不要直接删除仍被引用的 event、attribute、connection、scope 或 source。
-- 自动 retention 不会删除 active current routes。
-- 数据库达到容量阈值时会优先缩短 stale 和 history 的保留，不会删除 active 路由。
+- 不要手工向分区表写入错误的 `partition_id`，也不要绕过 family validation trigger。
+- 不要手工修改 scope counters 或任何 ref-count 字段。
+- 不要根据外部输入拼接物理表名，表名必须来自固定 manifest。
+- 不要只备份 `bmp.sqlite3` 而忽略正在使用的 WAL/SHM。
+- 最稳妥的离线备份方式是先停止 BMP，让队列 drain 并 checkpoint，再复制数据库文件。
+- 大量删除后文件不会自动缩小；`freelist_count` 表示可复用页，是否执行 `VACUUM` 应由运维窗口和可用磁盘空间决定。
+- `bmp_current_routes_all` 是只读统一视图，不应作为写入目标。
+- v9 没有旧库兼容层；发现 schema 不匹配时应备份旧库并创建空库，不要直接修改 `user_version` 或表结构。

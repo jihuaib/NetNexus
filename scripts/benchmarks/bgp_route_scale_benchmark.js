@@ -1,190 +1,130 @@
-const BgpConst = require('../../electron/const/bgpConst');
-const BgpInstance = require('../../electron/worker/bgp/bgpInstance');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+if (!process.versions.electron) {
+    const result = spawnSync(require('electron'), [__filename, ...process.argv.slice(2)], {
+        stdio: 'inherit',
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+    });
+    if (result.error) throw result.error;
+    process.exit(result.status || 0);
+}
+
+const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
 const BgpRoute = require('../../electron/worker/bgp/bgpRoute');
-const { forEachGeneratedRouteIp } = require('../../electron/utils/ipUtils');
 
 const DEFAULT_ROUTE_COUNT = 1_000_000;
-const DEFAULT_PAGE_SIZE = 10;
-const AFI = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
-const SAFI = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST;
+const DEFAULT_PAGE_SIZE = 25;
+const BATCH_SIZE = 5000;
+const INSTANCE_KEY = '0|1|1';
 
 function getArgValue(name, defaultValue) {
     const prefix = `--${name}=`;
     const arg = process.argv.find(item => item.startsWith(prefix));
-    if (!arg) {
-        return defaultValue;
-    }
-
+    if (!arg) return defaultValue;
     const value = Number(arg.slice(prefix.length));
-    return Number.isFinite(value) && value > 0 ? value : defaultValue;
-}
-
-function hasArg(name) {
-    return process.argv.includes(`--${name}`);
-}
-
-function formatMs(ms) {
-    return `${ms.toFixed(2)} ms`;
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : defaultValue;
 }
 
 function formatBytes(bytes) {
     const units = ['B', 'KB', 'MB', 'GB'];
     let value = bytes;
-    let index = 0;
-    while (value >= 1024 && index < units.length - 1) {
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
         value /= 1024;
-        index += 1;
+        unit += 1;
     }
-    return `${value.toFixed(2)} ${units[index]}`;
+    return `${value.toFixed(2)} ${units[unit]}`;
 }
 
-function printMemory(label) {
+function memory(label) {
     const usage = process.memoryUsage();
-    console.log(
-        `${label}: rss=${formatBytes(usage.rss)}, heapUsed=${formatBytes(usage.heapUsed)}, heapTotal=${formatBytes(
-            usage.heapTotal
-        )}, external=${formatBytes(usage.external)}`
-    );
+    console.log(`${label}: rss=${formatBytes(usage.rss)}, heapUsed=${formatBytes(usage.heapUsed)}`);
+    return usage;
 }
 
-function timeStep(label, fn) {
-    const start = process.hrtime.bigint();
+function timed(label, fn) {
+    const started = process.hrtime.bigint();
     const result = fn();
-    const end = process.hrtime.bigint();
-    const ms = Number(end - start) / 1e6;
-    console.log(`${label}: ${formatMs(ms)}`);
-    return { result, ms };
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    console.log(`${label}: ${elapsedMs.toFixed(2)} ms`);
+    return result;
 }
 
 function ipFromIndex(index) {
-    const second = (index >>> 16) & 0xff;
-    const third = (index >>> 8) & 0xff;
-    const fourth = index & 0xff;
-    return `10.${second}.${third}.${fourth}`;
+    const value = (10 * 2 ** 24 + index) >>> 0;
+    return `${value >>> 24}.${(value >>> 16) & 0xff}.${(value >>> 8) & 0xff}.${value & 0xff}`;
 }
 
-function buildInstance(routeCount) {
-    const instance = new BgpInstance(0, AFI, SAFI);
-    const generatedCount = forEachGeneratedRouteIp(BgpConst.IP_TYPE.IPV4, '10.0.0.0', 32, routeCount, route => {
-        const bgpRoute = new BgpRoute(instance);
-        bgpRoute.ip = route.ip;
-        bgpRoute.mask = route.mask;
-        bgpRoute.asPath = '65000 65001';
-        bgpRoute.med = 0;
-        bgpRoute.localPref = 100;
-        bgpRoute.nextHop = '192.0.2.1';
-        bgpRoute.origin = 'IGP';
-
-        instance.routeMap.set(BgpRoute.makeKey(route.ip, route.mask), bgpRoute);
-    });
-
-    if (generatedCount !== routeCount || instance.routeMap.size !== routeCount) {
-        throw new Error(`unexpected route count: generated=${generatedCount}, stored=${instance.routeMap.size}`);
-    }
-
-    return instance;
-}
-
-function getPagedRoutes(instance, page, pageSize) {
-    const currentPage = Math.max(1, parseInt(page, 10) || 1);
-    const currentPageSize = Math.max(1, parseInt(pageSize, 10) || 10);
-    const total = instance.routeMap.size;
-    const startIndex = (currentPage - 1) * currentPageSize;
-    const list = [];
-
-    let index = 0;
-    for (const route of instance.routeMap.values()) {
-        if (index >= startIndex) {
-            list.push(route.getRouteInfo());
-            if (list.length >= currentPageSize) {
-                break;
-            }
-        }
-        index += 1;
-    }
-
-    return { list, total };
-}
-
-function getPagedRoutesLegacy(instance, page, pageSize) {
-    const routes = [];
-    instance.routeMap.forEach(route => {
-        routes.push(route.getRouteInfo());
-    });
-
+function makeEntry(index) {
+    const ip = ipFromIndex(index);
     return {
-        list: routes.slice((page - 1) * pageSize, page * pageSize),
-        total: routes.length
+        routeKey: BgpRoute.makeUnicastKey(0, '0:0', ip, 32),
+        route: { ip, mask: 32, rd: '0:0', pathId: 0 },
+        attr: {
+            nextHop: '192.0.2.1',
+            origin: 'IGP',
+            asPath: '65000 65001',
+            med: 0,
+            localPref: 100
+        }
     };
 }
 
-function assertPage(result, routeCount, page, pageSize) {
-    const expectedLength = Math.max(0, Math.min(pageSize, routeCount - (page - 1) * pageSize));
-    if (result.total !== routeCount || result.list.length !== expectedLength) {
-        throw new Error(
-            `unexpected page result: page=${page}, total=${result.total}, list=${result.list.length}, expected=${expectedLength}`
-        );
-    }
-}
-
-function deleteRoutes(instance, routeCount) {
-    const deletedCount = forEachGeneratedRouteIp(BgpConst.IP_TYPE.IPV4, '10.0.0.0', 32, routeCount, route => {
-        instance.routeMap.delete(BgpRoute.makeKey(route.ip, route.mask));
-    });
-
-    if (deletedCount !== routeCount || instance.routeMap.size !== 0) {
-        throw new Error(`unexpected delete result: deleted=${deletedCount}, stored=${instance.routeMap.size}`);
+function assertPage(store, page, pageSize, routeCount) {
+    const result = store.queryPage(INSTANCE_KEY, { page, pageSize });
+    const expected = Math.max(0, Math.min(pageSize, routeCount - (page - 1) * pageSize));
+    if (result.total !== routeCount || result.list.length !== expected) {
+        throw new Error(`unexpected page ${page}: total=${result.total}, rows=${result.list.length}`);
     }
 }
 
 function main() {
     const routeCount = getArgValue('routes', DEFAULT_ROUTE_COUNT);
     const pageSize = getArgValue('pageSize', DEFAULT_PAGE_SIZE);
-    const firstPage = 1;
-    const lastPage = Math.ceil(routeCount / pageSize);
-    const middlePage = Math.max(firstPage, Math.floor(lastPage / 2));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bgp-sqlite-benchmark-'));
+    const dbPath = path.join(tempDir, 'bgp-routes.sqlite3');
+    const store = new BgpRouteSqliteStore({ dbPath }).open();
 
-    console.log(`BGP route scale benchmark: routes=${routeCount}, pageSize=${pageSize}`);
-    console.log('Note: this measures local routeMap storage and pagination, not peer UPDATE encoding/sending.');
-    printMemory('before');
-
-    const { result: instance } = timeStep('stream-generate routes into routeMap', () => buildInstance(routeCount));
-    printMemory('after build');
-
-    timeStep('first page serialization', () => {
-        const result = getPagedRoutes(instance, firstPage, pageSize);
-        assertPage(result, routeCount, firstPage, pageSize);
-    });
-
-    timeStep(`middle page serialization (page ${middlePage})`, () => {
-        const result = getPagedRoutes(instance, middlePage, pageSize);
-        assertPage(result, routeCount, middlePage, pageSize);
-    });
-
-    timeStep(`last page serialization (page ${lastPage})`, () => {
-        const result = getPagedRoutes(instance, lastPage, pageSize);
-        assertPage(result, routeCount, lastPage, pageSize);
-    });
-
-    timeStep('route detail serialization by key', () => {
-        const key = BgpRoute.makeKey(ipFromIndex(Math.floor(routeCount / 2)), 32);
-        const route = instance.routeMap.get(key);
-        if (!route) {
-            throw new Error(`route not found: ${key}`);
+    console.log(`BGP SQLite scale benchmark: routes=${routeCount}, batch=${BATCH_SIZE}, db=${dbPath}`);
+    const before = memory('before');
+    timed('batched SQLite upsert', () => {
+        for (let start = 0; start < routeCount; start += BATCH_SIZE) {
+            const end = Math.min(routeCount, start + BATCH_SIZE);
+            const entries = [];
+            for (let index = start; index < end; index++) entries.push(makeEntry(index));
+            store.upsertRoutes(INSTANCE_KEY, entries);
         }
-        route.getRouteInfo();
+    });
+    const after = memory('after insert');
+
+    if (store.getRouteCount(INSTANCE_KEY) !== routeCount) {
+        throw new Error(`route count mismatch: ${store.getRouteCount(INSTANCE_KEY)}`);
+    }
+    const lastPage = Math.ceil(routeCount / pageSize);
+    timed('first page', () => assertPage(store, 1, pageSize, routeCount));
+    timed('middle page', () => assertPage(store, Math.max(1, Math.floor(lastPage / 2)), pageSize, routeCount));
+    timed('last page', () => assertPage(store, lastPage, pageSize, routeCount));
+    timed('route detail', () => {
+        const route = makeEntry(Math.floor(routeCount / 2));
+        if (!store.queryDetail(INSTANCE_KEY, route.routeKey)) throw new Error('detail route missing');
     });
 
-    if (hasArg('legacy')) {
-        timeStep('legacy full-list serialization + slice', () => {
-            const result = getPagedRoutesLegacy(instance, firstPage, pageSize);
-            assertPage(result, routeCount, firstPage, pageSize);
-        });
-        printMemory('after legacy page');
-    }
+    const status = store.getStatus();
+    store.close();
+    timed('read-only reopen and count', () => {
+        const reader = new BgpRouteSqliteStore({ dbPath, readOnly: true }).open();
+        if (reader.getRouteCount(INSTANCE_KEY) !== routeCount) throw new Error('restart count mismatch');
+        reader.close();
+    });
 
-    timeStep('stream-delete generated routes from routeMap', () => deleteRoutes(instance, routeCount));
-    printMemory('after delete');
+    console.log(
+        `database=${formatBytes(status.totalSize)}, rssDelta=${formatBytes(Math.max(0, after.rss - before.rss))}, ` +
+            `heapDelta=${formatBytes(Math.max(0, after.heapUsed - before.heapUsed))}`
+    );
+    if (!process.argv.includes('--keep')) fs.rmSync(tempDir, { recursive: true, force: true });
 }
 
 main();
