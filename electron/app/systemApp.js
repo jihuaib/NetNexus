@@ -112,7 +112,7 @@ class SystemApp {
     }
 
     // 添加版本兼容性检查方法
-    checkVersionCompatibility() {
+    checkVersionCompatibility(dialogParent = this.win) {
         try {
             // 获取当前版本
             const currentVersion = packageJson.version;
@@ -124,7 +124,7 @@ class SystemApp {
 
             // 如果是首次运行或版本信息丢失，保存当前版本并退出
             if (!storedVersion) {
-                this.clearIncompatibleData();
+                this.clearIncompatibleData(dialogParent);
                 this.store.set(this.appVersionFileKey, currentVersion);
                 return true;
             }
@@ -137,7 +137,7 @@ class SystemApp {
                 logger.warn(`检测到不兼容升级: ${storedVersion} -> ${currentVersion}`);
 
                 // 显示确认对话框
-                const result = dialog.showMessageBoxSync({
+                const result = dialog.showMessageBoxSync(dialogParent, {
                     type: 'warning',
                     title: '版本不兼容',
                     message: `检测到主版本升级（${storedVersion} -> ${currentVersion}），需要清除旧数据。`,
@@ -150,7 +150,7 @@ class SystemApp {
 
                 if (result === 0) {
                     // 用户选择确定，清除数据
-                    this.clearIncompatibleData();
+                    this.clearIncompatibleData(dialogParent);
                     // 更新存储的版本
                     this.store.set(this.appVersionFileKey, currentVersion);
                     return true;
@@ -171,7 +171,7 @@ class SystemApp {
     }
 
     // 添加清除不兼容数据的方法
-    clearIncompatibleData() {
+    clearIncompatibleData(dialogParent = this.win) {
         try {
             logger.warn('清除不兼容数据');
             const userData = app.getPath('userData');
@@ -215,7 +215,7 @@ class SystemApp {
             return true;
         } catch (error) {
             logger.error('清除不兼容数据时出错:', error.message);
-            dialog.showMessageBoxSync({
+            dialog.showMessageBoxSync(dialogParent, {
                 type: 'error',
                 title: '错误',
                 message: '清除数据时出错',

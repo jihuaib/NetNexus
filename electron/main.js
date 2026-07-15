@@ -267,7 +267,7 @@ async function startApplication() {
 
     // 兼容性检查
     updateSplashProgress(40, '正在检查版本兼容性...');
-    const checkVersionOk = systemApp.checkVersionCompatibility();
+    const checkVersionOk = systemApp.checkVersionCompatibility(splashWindow);
     if (!checkVersionOk) {
         if (splashWindow) splashWindow.close();
         app.quit();
