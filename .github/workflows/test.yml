@@ -10,7 +10,7 @@ on:
 jobs:
     frr-bmp-e2e:
         name: FRR BMP/BGP Interoperability E2E
-        runs-on: ubuntu-24.04
+        runs-on: ubuntu-22.04
         timeout-minutes: 30
         env:
             NODE_VERSION: '16.20.2'
