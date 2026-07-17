@@ -4,6 +4,7 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const ipaddr = require('ipaddr.js');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
+const { getSessionStatisticsReportIdentityParts } = require('../../utils/bmpStatistics');
 const { installBmpSqlTrace } = require('./bmpSqlTrace');
 const {
     BMP_ROUTE_FAMILIES,
@@ -84,17 +85,9 @@ function makeStatisticsReportIdentity(report) {
 
     const stringifyPart = value => String(value ?? '');
     if (hasSession) {
-        const session = report.session;
         return {
             kind: 'session',
-            key: JSON.stringify(
-                [
-                    session.sessionType,
-                    session.sessionRdRaw || session.sessionRd,
-                    session.sessionIp,
-                    session.sessionAs
-                ].map(stringifyPart)
-            )
+            key: JSON.stringify(getSessionStatisticsReportIdentityParts(report).map(stringifyPart))
         };
     }
 
@@ -1419,8 +1412,11 @@ class BmpPersistenceStore {
         };
     }
 
-    buildApplyBatchResult(duplicate, applied, deltas) {
+    buildApplyBatchResult(duplicate, applied, deltas, includeDeltas = true) {
         const result = { duplicate, applied };
+        if (!includeDeltas) {
+            return result;
+        }
         // Keep the historic enumerable response shape for strict callers while exposing
         // committed deltas to direct store consumers. The worker explicitly serializes it.
         Object.defineProperty(result, 'deltas', {
@@ -1432,12 +1428,13 @@ class BmpPersistenceStore {
         return result;
     }
 
-    applyMutation(batchId, mutation, batchCache = null) {
+    applyMutation(batchId, mutation, batchCache = null, options = {}) {
         const source = mutation.source;
         const connection = mutation.connection;
         const scope = mutation.scope || null;
         const route = mutation.route || null;
         const eventAtMs = finiteNumber(mutation.eventAtMs, Date.now());
+        const includeDeltas = options.includeDeltas !== false;
 
         if (!source?.id || !connection?.id) {
             throw new Error('BMP persistence mutation requires source and connection identities');
@@ -1598,7 +1595,7 @@ class BmpPersistenceStore {
             route && scope && (isRouteUpsert || isRouteDelete)
                 ? routeStatements.findCurrentRoute.get({ scopeId: scope.id, routeId: route.id })
                 : null;
-        const previousRoute = this.mapDeltaRouteRow(previousRow);
+        const previousRoute = includeDeltas ? this.mapDeltaRouteRow(previousRow) : null;
 
         const eventResult = this.statements.insertEvent.run({
             batchId,
@@ -1648,13 +1645,15 @@ class BmpPersistenceStore {
                         : 'announce'
                     : 'upsert-noop';
                 this.statements.updateEventType.run({ eventId, eventType: classification });
-                delta = this.buildCommittedRouteDelta(mutation, eventId, {
-                    action: 'upsert',
-                    classification,
-                    projectionChanged,
-                    previous: previousRoute,
-                    current: projectionChanged ? this.mapDeltaMutationRoute(mutation) : previousRoute
-                });
+                if (includeDeltas) {
+                    delta = this.buildCommittedRouteDelta(mutation, eventId, {
+                        action: 'upsert',
+                        classification,
+                        projectionChanged,
+                        previous: previousRoute,
+                        current: projectionChanged ? this.mapDeltaMutationRoute(mutation) : previousRoute
+                    });
+                }
                 break;
             }
             case 'delete':
@@ -1674,13 +1673,15 @@ class BmpPersistenceStore {
                         : 'withdraw'
                     : 'withdraw-noop';
                 this.statements.updateEventType.run({ eventId, eventType: classification });
-                delta = this.buildCommittedRouteDelta(mutation, eventId, {
-                    action: 'delete',
-                    classification,
-                    projectionChanged,
-                    previous: previousRoute,
-                    current: projectionChanged ? null : previousRoute
-                });
+                if (includeDeltas) {
+                    delta = this.buildCommittedRouteDelta(mutation, eventId, {
+                        action: 'delete',
+                        classification,
+                        projectionChanged,
+                        previous: previousRoute,
+                        current: projectionChanged ? null : previousRoute
+                    });
+                }
                 break;
             }
             case 'scope_eor':
@@ -1753,6 +1754,7 @@ class BmpPersistenceStore {
 
         const mutations = Array.isArray(batch.mutations) ? batch.mutations : [];
         const batchId = String(batch.batchId || '');
+        const includeDeltas = batch.includeDeltas !== false;
         if (!batchId) {
             throw new Error('BMP persistence batchId is required');
         }
@@ -1764,11 +1766,11 @@ class BmpPersistenceStore {
                 mutationCount: mutations.length
             });
             if (batchResult.changes === 0) {
-                return this.buildApplyBatchResult(true, 0, []);
+                return this.buildApplyBatchResult(true, 0, includeDeltas ? [] : null, includeDeltas);
             }
 
             let applied = 0;
-            const deltas = [];
+            const deltas = includeDeltas ? [] : null;
             const batchCache = {
                 sources: new Map(),
                 connections: new Set(),
@@ -1778,15 +1780,15 @@ class BmpPersistenceStore {
                 routePayloads: new Map()
             };
             mutations.forEach(mutation => {
-                const mutationResult = this.applyMutation(batchId, mutation, batchCache);
+                const mutationResult = this.applyMutation(batchId, mutation, batchCache, { includeDeltas });
                 if (mutationResult.applied) {
                     applied += 1;
                 }
-                if (mutationResult.delta) {
+                if (includeDeltas && mutationResult.delta) {
                     deltas.push(mutationResult.delta);
                 }
             });
-            return this.buildApplyBatchResult(false, applied, deltas);
+            return this.buildApplyBatchResult(false, applied, deltas, includeDeltas);
         });
 
         return transaction();
@@ -3209,32 +3211,64 @@ class BmpPersistenceStore {
         const auxiliaryLimit = positiveInteger(options.auxiliaryLimit, eventLimit, 50000);
         const staleBeforeMs = finiteNumber(options.staleBeforeMs, Date.now() - 24 * 60 * 60 * 1000);
         const eventsBeforeMs = finiteNumber(options.eventsBeforeMs, Date.now() - 7 * 24 * 60 * 60 * 1000);
-        const refreshTimeoutBeforeMs = finiteNumber(options.refreshTimeoutBeforeMs, Date.now() - 10 * 60 * 1000);
+        const refreshTimeoutBeforeMs = finiteNumber(options.refreshTimeoutBeforeMs, Date.now() - 30 * 60 * 1000);
         const result = this.db.transaction(() => {
             const candidateScopes = this.db
                 .prepare(
                     `
-                    SELECT scope_id, partition_id, last_connection_id, current_epoch,
+                    WITH single_open_connections AS (
+                        SELECT source_id,
+                               MIN(connection_id) AS connection_id,
+                               MIN(connection_generation) AS connection_generation,
+                               MIN(opened_at_ms) AS opened_at_ms
+                          FROM bmp_connections
+                         WHERE connection_state = 'open'
+                         GROUP BY source_id
+                        HAVING COUNT(*) = 1
+                    ), reconnect_candidates AS (
+                        SELECT scope.scope_id, replacement.opened_at_ms AS refresh_started_ms
+                          FROM bmp_rib_scopes scope
+                          JOIN bmp_connections previous
+                            ON previous.connection_id = scope.last_connection_id
+                          JOIN single_open_connections replacement
+                            ON replacement.source_id = scope.source_id
+                         WHERE scope.scope_state IN ('stale', 'down')
+                           AND COALESCE(scope.stale_reason, '') <> 'reconnect-refresh-timeout'
+                           AND previous.connection_state = 'closed'
+                           AND replacement.connection_generation > previous.connection_generation
+                    )
+                    SELECT scope.scope_id, scope.source_id, scope.partition_id, scope.scope_kind,
+                           scope.owner_key, scope.afi, scope.safi, scope.rib_type,
+                           scope.last_connection_id, scope.current_epoch,
                            CASE
-                               WHEN scope_state IN ('stale', 'down')
-                                AND stale_since_ms <= @staleBeforeMs
+                               WHEN (
+                                   scope.scope_state IN ('stale', 'down')
+                                   AND scope.stale_since_ms <= @staleBeforeMs
+                               ) OR reconnect.refresh_started_ms <= @refreshTimeoutBeforeMs
                                THEN 1 ELSE 0
-                           END AS purge_all
-                      FROM bmp_rib_scopes
-                     WHERE cleanup_pending_epoch >= current_epoch
+                           END AS purge_all,
+                           CASE
+                               WHEN reconnect.refresh_started_ms <= @refreshTimeoutBeforeMs
+                               THEN 1 ELSE 0
+                           END AS reconnect_timeout
+                      FROM bmp_rib_scopes scope
+                      LEFT JOIN reconnect_candidates reconnect ON reconnect.scope_id = scope.scope_id
+                     WHERE scope.cleanup_pending_epoch >= scope.current_epoch
                         OR (
-                            scope_state = 'syncing'
-                            AND refresh_started_ms <= @refreshTimeoutBeforeMs
+                            scope.scope_state = 'syncing'
+                            AND scope.refresh_started_ms <= @refreshTimeoutBeforeMs
                         )
                         OR (
-                            scope_state IN ('stale', 'down')
-                            AND stale_since_ms <= @staleBeforeMs
+                            scope.scope_state IN ('stale', 'down')
+                            AND scope.stale_since_ms <= @staleBeforeMs
                         )
-                     ORDER BY scope_id
+                        OR reconnect.refresh_started_ms <= @refreshTimeoutBeforeMs
+                     ORDER BY scope.scope_id
                 `
                 )
                 .all({ staleBeforeMs, refreshTimeoutBeforeMs });
             const candidateStatements = new Map();
+            const affectedScopes = new Map();
             let routes = 0;
             for (const scope of candidateScopes) {
                 if (routes >= routeLimit) {
@@ -3265,10 +3299,26 @@ class BmpPersistenceStore {
                     limit: routeLimit - routes
                 });
                 candidates.forEach(candidate => {
-                    routes += this.getPartitionStatements(partition).deleteRoute.run({
+                    const deleted = this.getPartitionStatements(partition).deleteRoute.run({
                         scopeId: scope.scope_id,
                         routePk: candidate.route_pk
                     }).changes;
+                    routes += deleted;
+                    if (deleted > 0) {
+                        const affected = affectedScopes.get(scope.scope_id) || {
+                            sourceId: scope.source_id,
+                            scopeId: scope.scope_id,
+                            scopeKind: scope.scope_kind,
+                            ownerKey: scope.owner_key,
+                            afi: Number(scope.afi),
+                            safi: Number(scope.safi),
+                            ribType: scope.rib_type,
+                            deletedRoutes: 0,
+                            reason: scope.reconnect_timeout === 1 ? 'reconnect-refresh-timeout' : 'persistence-sweep'
+                        };
+                        affected.deletedRoutes += deleted;
+                        affectedScopes.set(scope.scope_id, affected);
+                    }
                 });
             }
             const finalizedCleanupScopes = this.db
@@ -3307,6 +3357,41 @@ class BmpPersistenceStore {
                                   count.connection_id IS NOT scope.last_connection_id
                                   OR count.rib_epoch < scope.current_epoch
                               )
+                       )
+                `
+                )
+                .run({ refreshTimeoutBeforeMs, finalizedAtMs: Date.now() }).changes;
+            const reconnectTimeoutScopes = this.db
+                .prepare(
+                    `
+                    WITH single_open_connections AS (
+                        SELECT source_id,
+                               MIN(connection_generation) AS connection_generation,
+                               MIN(opened_at_ms) AS opened_at_ms
+                          FROM bmp_connections
+                         WHERE connection_state = 'open'
+                         GROUP BY source_id
+                        HAVING COUNT(*) = 1
+                    )
+                    UPDATE bmp_rib_scopes AS scope
+                       SET stale_reason = 'reconnect-refresh-timeout',
+                           updated_at_ms = MAX(updated_at_ms, @finalizedAtMs)
+                     WHERE scope.scope_state IN ('stale', 'down')
+                       AND COALESCE(scope.stale_reason, '') <> 'reconnect-refresh-timeout'
+                       AND EXISTS (
+                           SELECT 1
+                             FROM bmp_connections previous
+                             JOIN single_open_connections replacement
+                               ON replacement.source_id = previous.source_id
+                            WHERE previous.connection_id = scope.last_connection_id
+                              AND previous.connection_state = 'closed'
+                              AND replacement.connection_generation > previous.connection_generation
+                              AND replacement.opened_at_ms <= @refreshTimeoutBeforeMs
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM bmp_scope_route_counts count
+                            WHERE count.scope_id = scope.scope_id
                        )
                 `
                 )
@@ -3407,6 +3492,38 @@ class BmpPersistenceStore {
                 `
                 )
                 .run({ eventsBeforeMs, auxiliaryLimit }).changes;
+            const nextRefresh = this.db
+                .prepare(
+                    `
+                    WITH single_open_connections AS (
+                        SELECT source_id,
+                               MIN(connection_generation) AS connection_generation,
+                               MIN(opened_at_ms) AS opened_at_ms
+                          FROM bmp_connections
+                         WHERE connection_state = 'open'
+                         GROUP BY source_id
+                        HAVING COUNT(*) = 1
+                    ), refresh_starts AS (
+                        SELECT refresh_started_ms AS started_at_ms
+                          FROM bmp_rib_scopes
+                         WHERE scope_state = 'syncing'
+                           AND refresh_started_ms IS NOT NULL
+                        UNION ALL
+                        SELECT replacement.opened_at_ms AS started_at_ms
+                          FROM bmp_rib_scopes scope
+                          JOIN bmp_connections previous
+                            ON previous.connection_id = scope.last_connection_id
+                          JOIN single_open_connections replacement
+                            ON replacement.source_id = scope.source_id
+                         WHERE scope.scope_state IN ('stale', 'down')
+                           AND COALESCE(scope.stale_reason, '') <> 'reconnect-refresh-timeout'
+                           AND previous.connection_state = 'closed'
+                           AND replacement.connection_generation > previous.connection_generation
+                    )
+                    SELECT MIN(started_at_ms) AS started_at_ms FROM refresh_starts
+                `
+                )
+                .get();
             return {
                 routes,
                 events,
@@ -3417,6 +3534,9 @@ class BmpPersistenceStore {
                 identities,
                 finalizedCleanupScopes,
                 refreshTimeoutScopes,
+                reconnectTimeoutScopes,
+                affectedScopes: Array.from(affectedScopes.values()),
+                nextRefreshStartedMs: finiteNumber(nextRefresh?.started_at_ms),
                 effectiveLimits: { routeLimit, eventLimit, auxiliaryLimit },
                 hasMore:
                     routes >= routeLimit ||

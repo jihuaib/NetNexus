@@ -15,7 +15,9 @@ const { BMP_PERSISTENCE_OP } = require('../../electron/worker/bmp/bmpPersistence
 async function main() {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-client-'));
     const dbPath = path.join(tempDir, 'bmp.sqlite3');
+    const noDeltasDbPath = path.join(tempDir, 'bmp-no-deltas.sqlite3');
     let client;
+    let noDeltasClient;
     try {
         const bmpSession = {
             localIp: '127.0.0.1',
@@ -102,6 +104,10 @@ async function main() {
         assert.equal(client.getWatermark().bufferedBytes, 0);
         assert.equal((await client.queryRoutes({ routeState: 'all' })).total, 1);
         const committedDeltas = committedBatches.flatMap(entry => entry.result.deltas);
+        committedBatches.forEach(entry => {
+            assert.equal(entry.committedBatch.includeDeltas, true);
+            assert.equal(Object.prototype.hasOwnProperty.call(entry.result, 'deltas'), true);
+        });
         assert.equal(committedDeltas.length, 1);
         assert.equal(committedDeltas[0].classification, 'announce');
         assert.equal(committedDeltas[0].current.ip, '198.51.100.0');
@@ -124,6 +130,45 @@ async function main() {
         assert.equal(routes.total, 1);
         assert.equal(routes.list[0].canonicalRouteKey.keyHex.length, 64);
         await offline.close();
+
+        const noDeltasCommittedBatches = [];
+        noDeltasClient = new BmpPersistenceClient({
+            dbPath: noDeltasDbPath,
+            batchSize: 1,
+            flushMs: 1000,
+            includeCommittedDeltas: false,
+            onCommittedBatch: (result, committedBatch) => {
+                noDeltasCommittedBatches.push({ result, committedBatch });
+            }
+        });
+        await noDeltasClient.open();
+        noDeltasClient.enqueue(buildConnectionMutation(bmpSession, 'connection_open'));
+        noDeltasClient.enqueue(
+            buildRouteUpsertMutation(bmpSession, owner, route, 1, 1, 2, {
+                kind: 'peer',
+                state: 'syncing',
+                scopeState: 'syncing',
+                isNewRoute: true
+            })
+        );
+        await noDeltasClient.drain();
+        assert.equal(noDeltasCommittedBatches.length, 2);
+        noDeltasCommittedBatches.forEach(entry => {
+            assert.equal(entry.committedBatch.includeDeltas, false);
+            assert.equal(Object.prototype.hasOwnProperty.call(entry.result, 'deltas'), false);
+        });
+        assert.equal((await noDeltasClient.queryRoutes({ routeState: 'all' })).total, 1);
+        await noDeltasClient.close();
+        noDeltasClient = null;
+
+        let includeDynamicDeltas = false;
+        const dynamicDeltasClient = new BmpPersistenceClient({
+            dbPath: 'synthetic-dynamic-deltas.sqlite3',
+            includeCommittedDeltas: () => includeDynamicDeltas
+        });
+        assert.equal(dynamicDeltasClient.makeBatch([{ mutation: { eventType: 'synthetic' } }]).includeDeltas, false);
+        includeDynamicDeltas = true;
+        assert.equal(dynamicDeltasClient.makeBatch([{ mutation: { eventType: 'synthetic' } }]).includeDeltas, true);
 
         const retryClient = new BmpPersistenceClient({
             dbPath: 'synthetic-retry.sqlite3',
@@ -216,6 +261,7 @@ async function main() {
         console.log('BMP persistence client drain/backpressure tests passed');
     } finally {
         await client?.close().catch(() => {});
+        await noDeltasClient?.close().catch(() => {});
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 }

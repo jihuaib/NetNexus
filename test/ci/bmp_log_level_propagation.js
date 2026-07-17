@@ -168,8 +168,13 @@ async function testBmpWorkerPropagation() {
     assert.equal(created.length, 2);
     assert.equal(created[0].logLevel, 'debug');
     assert.equal(created[0].readOnly, undefined);
+    assert.equal(typeof created[0].includeCommittedDeltas, 'function');
+    assert.equal(created[0].includeCommittedDeltas(), false);
+    worker.routeAssuranceService = { enabled: true };
+    assert.equal(created[0].includeCommittedDeltas(), true);
     assert.equal(created[1].logLevel, 'debug');
     assert.equal(created[1].readOnly, true);
+    assert.equal(created[1].includeCommittedDeltas, undefined);
 
     await worker.handleLogLevelChange('info');
     assert.deepEqual(forwarded, [

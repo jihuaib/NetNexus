@@ -13,41 +13,73 @@
                             <nn-tab-pane v-for="client in clientList" :key="getClientKey(client)">
                                 <template #tab>
                                     <span class="client-tab-label" data-testid="bmp-statistics-client-tab-label">
-                                        <span class="client-tab-address">{{ formatClientTab(client) }}</span>
+                                        <nn-tooltip
+                                            class="client-tab-tooltip"
+                                            :title="formatClientTab(client)"
+                                            placement="right"
+                                        >
+                                            <span
+                                                class="client-tab-address"
+                                                data-testid="bmp-statistics-client-address"
+                                            >
+                                                {{ formatClientTab(client) }}
+                                            </span>
+                                        </nn-tooltip>
                                         <span
-                                            class="client-tab-status"
-                                            :class="{ offline: !isClientOnline(client) }"
+                                            class="client-connection-state"
+                                            :class="isRecordOnline(client) ? 'is-online' : 'is-offline'"
                                             data-testid="bmp-statistics-client-status"
                                         >
-                                            {{ formatClientConnectionState(client) }}
+                                            {{ formatConnectionState(client) }}
                                         </span>
                                     </span>
                                 </template>
-                                <div v-if="getClientReports(client).length > 0" class="bmp-inner-tabs-shell">
+                                <div v-if="getClientSessionGroups(client).length > 0" class="bmp-inner-tabs-shell">
                                     <nn-tabs class="bmp-inner-tabs">
                                         <nn-tab-pane
-                                            v-for="report in getClientReports(client)"
-                                            :key="report.key"
-                                            :tab="formatSessionTab(report)"
+                                            v-for="group in getClientSessionGroups(client)"
+                                            :key="group.key"
+                                            :tab="formatSessionTab(group.session)"
                                         >
                                             <div class="report-header">
-                                                <nn-space>
-                                                    <nn-tag color="blue">{{ report.session.sessionIp }}</nn-tag>
-                                                    <nn-tag>AS {{ report.session.sessionAs }}</nn-tag>
-                                                    <nn-tag>TLV {{ getReportTlvCount(report) }}</nn-tag>
+                                                <nn-select
+                                                    :value="group.activeRibType"
+                                                    style="width: 220px"
+                                                    data-testid="bmp-statistics-rib-type-select"
+                                                    @update:value="value => setActiveRibType(group.key, value)"
+                                                >
+                                                    <nn-select-option
+                                                        v-for="report in group.reports"
+                                                        :key="report.ribType"
+                                                        :value="report.ribType"
+                                                    >
+                                                        {{ formatRibType(report.ribType) }}
+                                                    </nn-select-option>
+                                                </nn-select>
+                                                <nn-space v-if="group.activeReport">
+                                                    <nn-tag color="blue">{{ group.session.sessionIp }}</nn-tag>
+                                                    <nn-tag>AS {{ group.session.sessionAs }}</nn-tag>
+                                                    <nn-tag
+                                                        :color="getRibTypeColor(group.activeReport.ribType)"
+                                                        data-testid="bmp-statistics-rib-type"
+                                                    >
+                                                        {{ formatRibType(group.activeReport.ribType) }}
+                                                    </nn-tag>
+                                                    <nn-tag>TLV {{ getReportTlvCount(group.activeReport) }}</nn-tag>
                                                     <nn-button
                                                         type="link"
                                                         size="small"
-                                                        @click="viewReportDetails(report)"
+                                                        @click="viewReportDetails(group.activeReport)"
                                                     >
                                                         详情
                                                     </nn-button>
                                                 </nn-space>
                                             </div>
                                             <nn-table
+                                                v-if="group.activeReport"
                                                 class="report-table"
                                                 :columns="columns"
-                                                :data-source="report.statistics"
+                                                :data-source="group.activeReport.statistics"
                                                 :pagination="{
                                                     pageSize: 20,
                                                     showSizeChanger: false,
@@ -102,8 +134,9 @@
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
     import { notify } from '../../utils/notify';
+    import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import EventBus from '../../utils/eventBus';
-    import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
+    import { BMP_BGP_RIB_TYPE, BMP_EVENT_PAGE_ID, BMP_SESSION_FLAGS, BMP_STATS_TYPE } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME, getAddrFamilyType } from '../../const/bgpConst';
 
     defineOptions({
@@ -120,21 +153,21 @@
     };
 
     const formatClientTab = client => {
-        return client.remoteIp || '-';
+        return formatBmpClientLabel(client);
     };
 
-    const getClientOnlineState = client => {
-        if (typeof client?.isOnline === 'boolean') return client.isOnline;
-        if (typeof client?.online === 'boolean') return client.online;
-        const state = String(client?.connectionState || '').toLowerCase();
+    const getRecordOnlineState = record => {
+        if (typeof record?.isOnline === 'boolean') return record.isOnline;
+        if (typeof record?.online === 'boolean') return record.online;
+        const state = String(record?.connectionState || '').toLowerCase();
         if (['offline', 'disconnected', 'closed', 'down'].includes(state)) return false;
         if (['online', 'connected', 'open', 'up'].includes(state)) return true;
         return null;
     };
 
-    const isClientOnline = client => getClientOnlineState(client) ?? true;
+    const isRecordOnline = record => getRecordOnlineState(record) ?? true;
 
-    const formatClientConnectionState = client => (isClientOnline(client) ? '已连接' : '已断开');
+    const formatConnectionState = record => (isRecordOnline(record) ? '在线' : '已断开');
 
     const columns = [
         {
@@ -167,8 +200,9 @@
     // 客户端
     const clientList = ref([]);
     const activeClientKey = ref('');
-    const clientTabBarStyle = { width: '128px', flex: '0 0 128px' };
+    const clientTabBarStyle = { width: '148px', flex: '0 0 148px' };
     const reportMap = ref(new Map());
+    const activeRibTypeMap = ref(new Map());
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
     const currentDetails = ref(null);
@@ -209,14 +243,175 @@
         return `${session.sessionType}|${session.sessionRdRaw || session.sessionRd}|${session.sessionIp}|${session.sessionAs}`;
     };
 
+    const SESSION_RIB_TYPES = [
+        BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
+        BMP_BGP_RIB_TYPE.ADJ_RIB_IN,
+        BMP_BGP_RIB_TYPE.ADJ_RIB_OUT,
+        BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT
+    ];
+    const SESSION_RIB_TYPE_SET = new Set(SESSION_RIB_TYPES);
+    const SESSION_RIB_TYPE_ORDER = new Map(SESSION_RIB_TYPES.map((ribType, index) => [ribType, index]));
+    const SESSION_RIB_TYPE_NAME = {
+        [BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN]: 'Pre Adj RIB In',
+        [BMP_BGP_RIB_TYPE.ADJ_RIB_IN]: 'Post Adj RIB In',
+        [BMP_BGP_RIB_TYPE.ADJ_RIB_OUT]: 'Pre Adj RIB Out',
+        [BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT]: 'Post Adj RIB Out'
+    };
+
+    const makeStatTypeSet = values => new Set(values.filter(Number.isInteger));
+    const EXPLICIT_PRE_RIB_IN_STAT_TYPES = makeStatTypeSet([
+        BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_IN,
+        BMP_STATS_TYPE.NUM_PER_AFI_SAFI_PRE_POLICY_ADJ_RIB_IN
+    ]);
+    const EXPLICIT_POST_RIB_IN_STAT_TYPES = makeStatTypeSet([
+        BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_IN,
+        BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_IN
+    ]);
+    const PRE_RIB_OUT_STAT_TYPES = makeStatTypeSet([
+        BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT,
+        BMP_STATS_TYPE.NUM_PER_AFI_SAFI_PRE_POLICY_ADJ_RIB_OUT
+    ]);
+    const POST_RIB_OUT_STAT_TYPES = makeStatTypeSet([
+        BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT,
+        BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_OUT
+    ]);
+
+    const normalizeRibType = ribType => {
+        const normalized = Number(ribType);
+        return SESSION_RIB_TYPE_SET.has(normalized) ? normalized : null;
+    };
+
+    const getReportPeerFlags = report => {
+        const candidates = [
+            report?.statisticsFlags,
+            report?.effectiveSessionFlags,
+            report?.sessionFlags,
+            report?.effectivePeerFlags,
+            report?.peerFlags,
+            report?.rawSessionFlags,
+            report?.rawPeerFlags,
+            report?.session?.sessionFlags,
+            report?.session?.rawSessionFlags
+        ];
+        for (const candidate of candidates) {
+            if (candidate === null || candidate === undefined || candidate === '') continue;
+            const flags = Number(candidate);
+            if (Number.isInteger(flags)) return flags;
+        }
+        return 0;
+    };
+
+    const getReportFallbackRibType = report => {
+        const explicitRibType = normalizeRibType(report?.ribType);
+        if (explicitRibType !== null) return explicitRibType;
+
+        const flags = getReportPeerFlags(report);
+        const postPolicy = (flags & BMP_SESSION_FLAGS.POST_POLICY) !== 0;
+        const adjRibOut = (flags & BMP_SESSION_FLAGS.ADJ_RIB_OUT) !== 0;
+        if (report?.ribDirection === 'rib-out' || adjRibOut) {
+            return postPolicy ? BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT : BMP_BGP_RIB_TYPE.ADJ_RIB_OUT;
+        }
+        return postPolicy ? BMP_BGP_RIB_TYPE.ADJ_RIB_IN : BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN;
+    };
+
+    const getStatisticRibType = (statistic, fallbackRibType) => {
+        const statType = Number(statistic?.type);
+        if (EXPLICIT_PRE_RIB_IN_STAT_TYPES.has(statType)) return BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN;
+        if (EXPLICIT_POST_RIB_IN_STAT_TYPES.has(statType)) return BMP_BGP_RIB_TYPE.ADJ_RIB_IN;
+        if (PRE_RIB_OUT_STAT_TYPES.has(statType)) return BMP_BGP_RIB_TYPE.ADJ_RIB_OUT;
+        if (POST_RIB_OUT_STAT_TYPES.has(statType)) return BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT;
+        return fallbackRibType;
+    };
+
+    const getReportRibType = report => normalizeRibType(report?.ribType) ?? getReportFallbackRibType(report);
+
+    const splitReportByRibType = report => {
+        const statistics = Array.isArray(report?.statistics) ? report.statistics : [];
+        const fallbackRibType = getReportFallbackRibType(report);
+        if (statistics.length === 0) {
+            return [{ ...report, ribType: fallbackRibType, statistics }];
+        }
+
+        const groups = new Map();
+        statistics.forEach(statistic => {
+            const ribType = getStatisticRibType(statistic, fallbackRibType);
+            if (!groups.has(ribType)) groups.set(ribType, []);
+            groups.get(ribType).push(statistic);
+        });
+
+        return Array.from(groups, ([ribType, groupedStatistics]) => ({
+            ...report,
+            ribType,
+            statistics: groupedStatistics
+        }));
+    };
+
+    const getReportKey = (clientKey, report) =>
+        `${clientKey}|${getSessionKey(report.session)}|${getReportRibType(report)}`;
+
     const getClientReports = client => {
         const clientKey = getClientKey(client);
         return Array.from(reportMap.value.values()).filter(report => report.clientKey === clientKey);
     };
 
-    const formatSessionTab = report => {
-        return `${report.session.sessionIp} | AS ${report.session.sessionAs}`;
+    const getClientSessionGroups = client => {
+        const clientKey = getClientKey(client);
+        const groups = new Map();
+        getClientReports(client).forEach(report => {
+            const sessionKey = getSessionKey(report.session);
+            const groupKey = `${clientKey}|${sessionKey}`;
+            if (!groups.has(groupKey)) {
+                groups.set(groupKey, { key: groupKey, session: report.session, reports: [] });
+            }
+            groups.get(groupKey).reports.push(report);
+        });
+
+        return Array.from(groups.values())
+            .sort((left, right) => getSessionKey(left.session).localeCompare(getSessionKey(right.session)))
+            .map(group => {
+                group.reports.sort(
+                    (left, right) =>
+                        (SESSION_RIB_TYPE_ORDER.get(getReportRibType(left)) ?? Number.MAX_SAFE_INTEGER) -
+                        (SESSION_RIB_TYPE_ORDER.get(getReportRibType(right)) ?? Number.MAX_SAFE_INTEGER)
+                );
+                const requestedRibType = normalizeRibType(activeRibTypeMap.value.get(group.key));
+                const activeReport =
+                    group.reports.find(report => getReportRibType(report) === requestedRibType) || group.reports[0];
+                return {
+                    ...group,
+                    activeRibType: getReportRibType(activeReport),
+                    activeReport
+                };
+            });
     };
+
+    const setActiveRibType = (groupKey, ribType) => {
+        const normalized = normalizeRibType(ribType);
+        if (normalized === null) return;
+        const nextMap = new Map(activeRibTypeMap.value);
+        nextMap.set(groupKey, normalized);
+        activeRibTypeMap.value = nextMap;
+    };
+
+    const getSessionVrfTableNames = session =>
+        Array.isArray(session?.vrfTableNames) ? session.vrfTableNames.filter(Boolean) : [];
+
+    const formatSessionVrfOrRd = session => {
+        const vrfTableNames = getSessionVrfTableNames(session);
+        if (vrfTableNames.length > 0) return vrfTableNames.join(', ');
+        return session?.sessionRd === '0:0' ? 'global' : session?.sessionRd || '-';
+    };
+
+    const formatSessionTab = session => {
+        return `${formatSessionVrfOrRd(session)} | ${session.sessionIp} | ${session.sessionAs}`;
+    };
+
+    const formatRibType = ribType => SESSION_RIB_TYPE_NAME[normalizeRibType(ribType)] || `RIB ${ribType}`;
+
+    const getRibTypeColor = ribType =>
+        [BMP_BGP_RIB_TYPE.ADJ_RIB_OUT, BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT].includes(normalizeRibType(ribType))
+            ? 'orange'
+            : 'green';
 
     const getReportTlvCount = report => {
         return (report.tlvs || []).length;
@@ -224,7 +419,7 @@
 
     const viewReportDetails = report => {
         currentDetails.value = report;
-        detailsDrawerTitle.value = `统计详情: ${report.session.sessionIp}`;
+        detailsDrawerTitle.value = `统计详情: ${report.session.sessionIp} · ${formatRibType(report.ribType)}`;
         detailsDrawerVisible.value = true;
     };
 
@@ -238,7 +433,7 @@
         const nextMap = new Map(reportMap.value);
         for (const [key, report] of Array.from(nextMap.entries())) {
             if (report.clientKey !== previousClientKey) continue;
-            const nextKey = `${nextClientKey}|${getSessionKey(report.session)}`;
+            const nextKey = getReportKey(nextClientKey, report);
             nextMap.delete(key);
             nextMap.set(nextKey, {
                 ...report,
@@ -248,9 +443,20 @@
             });
         }
         reportMap.value = nextMap;
+
+        if (previousClientKey !== nextClientKey) {
+            const nextActiveRibTypes = new Map(activeRibTypeMap.value);
+            for (const [groupKey, ribType] of Array.from(nextActiveRibTypes.entries())) {
+                const previousPrefix = `${previousClientKey}|`;
+                if (!groupKey.startsWith(previousPrefix)) continue;
+                nextActiveRibTypes.delete(groupKey);
+                nextActiveRibTypes.set(`${nextClientKey}|${groupKey.slice(previousPrefix.length)}`, ribType);
+            }
+            activeRibTypeMap.value = nextActiveRibTypes;
+        }
     };
 
-    const upsertReport = (data, fallbackClient = null) => {
+    const upsertSingleReport = (data, fallbackClient = null) => {
         if (data && data.client && data.session && data.statistics) {
             const sourceId = getClientSourceId(data.client) || getClientSourceId(fallbackClient);
             const client = {
@@ -259,19 +465,31 @@
                 ...(sourceId ? { persistentSourceId: sourceId, sourceId } : {})
             };
             const clientKey = getClientKey(client);
-            const key = `${clientKey}|${getSessionKey(data.session)}`;
+            const key = getReportKey(clientKey, data);
             const nextMap = new Map(reportMap.value);
             nextMap.set(key, {
                 key,
                 clientKey,
                 client,
                 session: data.session,
+                ribType: getReportRibType(data),
                 statistics: data.statistics,
                 tlvs: data.tlvs || [],
                 updatedAt: data.updatedAt || new Date().toISOString()
             });
             reportMap.value = nextMap;
+
+            const groupKey = `${clientKey}|${getSessionKey(data.session)}`;
+            if (!activeRibTypeMap.value.has(groupKey)) {
+                const nextActiveRibTypes = new Map(activeRibTypeMap.value);
+                nextActiveRibTypes.set(groupKey, getReportRibType(data));
+                activeRibTypeMap.value = nextActiveRibTypes;
+            }
         }
+    };
+
+    const upsertReport = (data, fallbackClient = null) => {
+        splitReportByRibType(data).forEach(report => upsertSingleReport(report, fallbackClient));
     };
 
     const onStatisticsReport = result => {
@@ -450,6 +668,10 @@
 
     .report-header {
         flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
         margin-bottom: 8px;
     }
 
@@ -506,29 +728,49 @@
 
     .client-tab-label {
         display: flex;
+        width: 100%;
+        max-width: 132px;
+        min-width: 0;
         flex-direction: column;
         align-items: center;
         gap: 2px;
-        max-width: 112px;
+        font-size: 14px;
+        line-height: 22px;
         overflow: hidden;
     }
 
     .client-tab-address {
         display: block;
+        width: 100%;
         max-width: 100%;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    .client-tab-status {
-        color: var(--nn-color-success);
-        font-size: 11px;
-        line-height: 16px;
+    .client-tab-tooltip {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
     }
 
-    .client-tab-status.offline {
-        color: var(--nn-color-text-muted);
+    .client-tab-tooltip :deep(.nn-tooltip-trigger) {
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    .client-connection-state {
+        font-size: 12px;
+        line-height: 1;
+    }
+
+    .client-connection-state.is-online {
+        color: #389e0d;
+    }
+
+    .client-connection-state.is-offline {
+        color: #d46b08;
     }
 
     .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {

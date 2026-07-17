@@ -381,14 +381,14 @@ class BmpApp {
                 persistenceHighWatermarkBytes: Number(bmpConfigData.persistenceHighWatermarkBytes) || 64 * 1024 * 1024,
                 persistenceLowWatermarkBytes: Number(bmpConfigData.persistenceLowWatermarkBytes) || 32 * 1024 * 1024,
                 persistenceStaleRetentionMs: Number(bmpConfigData.persistenceStaleRetentionMs) || 24 * 60 * 60 * 1000,
-                persistenceRefreshTimeoutMs: Number(bmpConfigData.persistenceRefreshTimeoutMs) || 10 * 60 * 1000,
+                persistenceRefreshTimeoutMs: Number(bmpConfigData.persistenceRefreshTimeoutMs) || 30 * 60 * 1000,
                 persistenceEventRetentionMs:
                     Number(bmpConfigData.persistenceEventRetentionMs) || 7 * 24 * 60 * 60 * 1000,
                 persistenceMaxDbBytes: Number(bmpConfigData.persistenceMaxDbBytes) || 20 * 1024 * 1024 * 1024
             };
             await this.closeOfflinePersistenceReader();
             this.runningPersistenceEnabled = true;
-            logger.info(`${JSON.stringify({ ...bmpConfigData, persistenceDbPath: '[user-data]/bmp/bmp.sqlite3' })}`);
+            logger.info('BMP config:', { ...bmpConfigData, persistenceDbPath: '[user-data]/bmp/bmp.sqlite3' });
 
             // 获取日志级别配置
             if (this.logLevel) {
@@ -455,7 +455,7 @@ class BmpApp {
             const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.START_BMP, bmpConfigData);
 
             // 这里肯定是启动成功了，如果失败，会抛出异常
-            logger.info(`bmp启动成功 result: ${JSON.stringify(result)}`);
+            logger.info('bmp启动成功 result:', result);
             return successResponse(null, result.msg);
         } catch (error) {
             const worker = this.worker;
@@ -553,7 +553,7 @@ class BmpApp {
     async handleGetClientList() {
         try {
             const result = await this.queryClientList();
-            logger.info(`获取客户端列表成功 result: ${JSON.stringify(result)}`);
+            logger.info('获取客户端列表成功 count:', result?.data?.length || 0);
             return result;
         } catch (error) {
             logger.error('Error getting client list:', error.message);
@@ -607,11 +607,11 @@ class BmpApp {
     }
 
     async handleGetBgpSessions(event, client) {
-        logger.info(`获取BGP会话列表 client: ${JSON.stringify(client)}`);
+        logger.info('获取BGP会话列表 client:', client);
 
         try {
             const result = await this.queryBgpSessions(client);
-            logger.info(`获取BGP会话列表成功 result: ${JSON.stringify(result)}`);
+            logger.info('获取BGP会话列表成功 count:', result?.data?.length || 0);
             return result;
         } catch (error) {
             logger.error('Error getting bgp sessions:', error.message);
@@ -638,9 +638,15 @@ class BmpApp {
     }
 
     async handleGetBgpRoutes(event, client, session, af, ribType, page, pageSize, routeState, prefixFilter) {
-        logger.info(
-            `获取路由列表 client: ${JSON.stringify(client)} session: ${JSON.stringify(session)} af: ${JSON.stringify(af)} ribType: ${JSON.stringify(ribType)} page: ${JSON.stringify(page)} pageSize: ${JSON.stringify(pageSize)} prefixFilter: ${JSON.stringify(prefixFilter)}`
-        );
+        logger.info('获取路由列表:', {
+            sourceId: client?.persistentSourceId || client?.sourceId,
+            scopeId: session?.persistentScopeId || session?.scopeId,
+            af,
+            ribType,
+            page,
+            pageSize,
+            prefixFilter
+        });
 
         try {
             const result = await this.queryBgpRoutes({
@@ -653,7 +659,10 @@ class BmpApp {
                 routeState,
                 prefixFilter
             });
-            logger.info(`获取路由列表成功 result: ${JSON.stringify(result)}`);
+            logger.info('获取路由列表成功:', {
+                total: Number(result?.data?.total) || 0,
+                displayed: result?.data?.list?.length || 0
+            });
             return result;
         } catch (error) {
             logger.error('Error getting routes:', error.message);
@@ -677,9 +686,13 @@ class BmpApp {
     }
 
     async handleGetBgpInstanceRoutes(event, client, instance, page, pageSize, routeState, prefixFilter) {
-        logger.info(
-            `获取BGP实例路由列表 client: ${JSON.stringify(client)} instance: ${JSON.stringify(instance)} page: ${JSON.stringify(page)} pageSize: ${JSON.stringify(pageSize)} prefixFilter: ${JSON.stringify(prefixFilter)}`
-        );
+        logger.info('获取BGP实例路由列表:', {
+            sourceId: client?.persistentSourceId || client?.sourceId,
+            scopeId: instance?.persistentScopeId || instance?.scopeId,
+            page,
+            pageSize,
+            prefixFilter
+        });
 
         try {
             const result = await this.queryBgpInstanceRoutes({
@@ -690,7 +703,10 @@ class BmpApp {
                 routeState,
                 prefixFilter
             });
-            logger.info(`获取BGP实例路由列表成功 result: ${JSON.stringify(result)}`);
+            logger.info('获取BGP实例路由列表成功:', {
+                total: Number(result?.data?.total) || 0,
+                displayed: result?.data?.list?.length || 0
+            });
             return result;
         } catch (error) {
             logger.error('Error getting routes:', error.message);
@@ -748,11 +764,11 @@ class BmpApp {
     }
 
     async handleGetBgpInstances(event, client) {
-        logger.info(`获取BGP实例列表 client: ${JSON.stringify(client)}`);
+        logger.info('获取BGP实例列表 client:', client);
 
         try {
             const result = await this.queryBgpInstances(client);
-            logger.info(`获取BGP实例列表成功 result: ${JSON.stringify(result)}`);
+            logger.info('获取BGP实例列表成功 count:', result?.data?.length || 0);
             return result;
         } catch (error) {
             logger.error('Error getting BGP instances:', error.message);

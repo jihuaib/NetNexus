@@ -13,7 +13,13 @@
                             <nn-tab-pane v-for="client in clientList" :key="getClientKey(client)">
                                 <template #tab>
                                     <span class="client-tab-label">
-                                        <span class="client-tab-address">{{ formatClientTab(client) }}</span>
+                                        <nn-tooltip
+                                            class="client-tab-tooltip"
+                                            :title="formatClientTab(client)"
+                                            placement="right"
+                                        >
+                                            <span class="client-tab-address">{{ formatClientTab(client) }}</span>
+                                        </nn-tooltip>
                                         <span
                                             class="client-connection-state"
                                             :class="isRecordOnline(client) ? 'is-online' : 'is-offline'"
@@ -190,6 +196,7 @@
 <script setup>
     import { ref, onActivated, watch, onDeactivated } from 'vue';
     import { notify } from '../../utils/notify';
+    import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import { ProfileOutlined } from '../../ui/icons';
     import {
         BMP_SESSION_TYPE_NAME,
@@ -286,7 +293,7 @@
     const getRouteRowKey = record => `${record.addrFamilyType}|${getRouteKey(record)}`;
 
     const formatClientTab = client => {
-        return client.remoteIp || '-';
+        return formatBmpClientLabel(client);
     };
 
     const getInstanceIdentityKey = instance =>
@@ -305,15 +312,6 @@
             return leftScopeId === rightScopeId;
         }
         return getInstanceIdentityKey(left) === getInstanceIdentityKey(right);
-    };
-
-    const isSameInstanceScope = (left, right) => {
-        const leftScopeId = getInstanceScopeId(left);
-        const rightScopeId = getInstanceScopeId(right);
-        if (leftScopeId || rightScopeId) {
-            return Boolean(leftScopeId && rightScopeId && leftScopeId === rightScopeId);
-        }
-        return isSameInstance(left, right);
     };
 
     const formatVrfTableName = instance => {
@@ -471,11 +469,41 @@
 
     const onInstanceRouteUpdate = result => {
         if (result.status !== 'success' || !result.data) return;
-        const update = result.data;
-
-        if (!isSameClient(update.client, getActiveClient())) return;
+        const updates = Array.isArray(result.data.updates) ? result.data.updates : [result.data];
+        const activeClient = getActiveClient();
         const activeInstance = getActiveInstance();
-        if (!activeInstance || !isSameInstanceScope(update.instance, activeInstance)) return;
+        if (!activeClient || !activeInstance) return;
+
+        const activeSourceId = activeClient.persistentSourceId || activeClient.sourceId || null;
+        const activeScopeId = getInstanceScopeId(activeInstance);
+        const shouldRefresh = updates.some(update => {
+            if (!update) return false;
+            const updateSourceId =
+                update.sourceId ||
+                update.persistentSourceId ||
+                update.client?.sourceId ||
+                update.client?.persistentSourceId ||
+                null;
+            const sourceMatches =
+                activeSourceId && updateSourceId
+                    ? activeSourceId === updateSourceId
+                    : getClientKey(update.client) === activeClientKey.value;
+            if (!sourceMatches) return false;
+
+            const updateScopeId =
+                update.scopeId ||
+                update.persistentScopeId ||
+                update.instance?.scopeId ||
+                update.instance?.persistentScopeId ||
+                null;
+            if (activeScopeId && updateScopeId) {
+                return activeScopeId === updateScopeId;
+            }
+
+            return getInstanceKey(update.instance) === activeInstanceKey.value;
+        });
+
+        if (!shouldRefresh) return;
 
         const selection = captureRouteSelection();
         if (selection) scheduleRouteRefresh(selection);
@@ -1015,19 +1043,36 @@
 
     .client-tab-label {
         display: flex;
+        width: 100%;
         max-width: 132px;
+        min-width: 0;
         flex-direction: column;
         align-items: center;
         gap: 2px;
+        font-size: 14px;
+        line-height: 22px;
         overflow: hidden;
     }
 
     .client-tab-address {
         display: block;
+        width: 100%;
         max-width: 100%;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .client-tab-tooltip {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    .client-tab-tooltip :deep(.nn-tooltip-trigger) {
+        max-width: 100%;
+        min-width: 0;
     }
 
     .client-connection-state {

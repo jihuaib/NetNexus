@@ -1,6 +1,10 @@
 const BgpConst = require('../../const/bgpConst');
 const BmpConst = require('../../const/bmpConst');
 const { DEFAULT_API_SETTINGS } = require('../../const/apiConst');
+const {
+    getSessionStatisticsReportRibType,
+    getSessionStatisticsReportIdentityParts
+} = require('../../utils/bmpStatistics');
 const { CliCommandError } = require('./errors');
 const { formatDate, formatJson, formatPrefix, formatTable } = require('./formatters');
 
@@ -475,6 +479,11 @@ class CliHandlers {
                 formatter: row => `${row.session?.sessionIp || '-'} AS ${row.session?.sessionAs || '-'}`
             },
             {
+                key: 'ribType',
+                title: 'RIB',
+                formatter: row => formatKeyword(getSessionStatisticsReportRibType(row), BMP_RIB_TYPE_LABELS)
+            },
+            {
                 key: 'statistics',
                 title: 'Stats',
                 formatter: row => (Array.isArray(row.statistics) ? row.statistics.length : 0)
@@ -703,7 +712,9 @@ function getInstanceKey(instance) {
 }
 
 function getSessionStatisticsKey(report) {
-    return report && report.session ? getSessionKey(report.session) : joinKeyParts([report.updatedAt, 'session']);
+    return report && report.session
+        ? joinKeyParts(getSessionStatisticsReportIdentityParts(report))
+        : joinKeyParts([report.updatedAt, 'session']);
 }
 
 function getInstanceStatisticsKey(report) {

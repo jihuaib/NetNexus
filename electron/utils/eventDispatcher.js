@@ -30,7 +30,7 @@ class EventDispatcher {
 
         try {
             // 使用统一的事件格式发送
-            logger.info(`EventDispatcher type:${eventType}, data:${JSON.stringify(data)}`);
+            logger.info('EventDispatcher type:', eventType);
             this.webContents.send('unified-event', {
                 type: eventType,
                 data: data

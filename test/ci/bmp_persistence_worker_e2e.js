@@ -94,6 +94,14 @@ async function waitForRoutes(request, minimum = 1) {
     throw new Error(`timed out waiting for ${minimum} persisted BMP routes`);
 }
 
+function withTimeout(promise, timeoutMs, message) {
+    let timeout;
+    const timeoutPromise = new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+    return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout));
+}
+
 async function main() {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-worker-e2e-'));
     const dbPath = path.join(tempDir, 'bmp.sqlite3');
@@ -223,11 +231,16 @@ async function main() {
         });
         assert.ok(instanceRoutes.data.total > 0);
 
-        bmpSocket.end();
-        await new Promise(resolve => bmpSocket.once('close', resolve));
+        const bmpSocketClosed = new Promise(resolve => bmpSocket.once('close', resolve));
+        await withTimeout(
+            request(BmpConst.BMP_REQ_TYPES.STOP_BMP),
+            5000,
+            'timed out stopping BMP worker with an active client connection'
+        );
+        await withTimeout(bmpSocketClosed, 2000, 'BMP worker stop did not close the active client connection');
+        assert.equal(bmpSocket.destroyed, true);
         bmpSocket = null;
 
-        await request(BmpConst.BMP_REQ_TYPES.STOP_BMP);
         await worker.terminate();
 
         offlineClient = new BmpPersistenceClient({ dbPath, readOnly: true });

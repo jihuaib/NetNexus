@@ -38,6 +38,10 @@ class BmpBgpSession {
         this.addPathReceiveMap = new Map();
         this.addPathSendMap = new Map();
         this.addPathMap = new Map();
+        // Peer Up can be split into multiple per-AF messages. Keep the AFs that
+        // were explicitly announced in this live peer generation separate from
+        // address families learned opportunistically from Route Monitoring.
+        this.peerUpAddressFamilyKeys = new Set();
 
         // Route payloads live exclusively in SQLite. Keep only one small record per
         // observed RIB scope so packet parsing and Peer Up/Down lifecycle handling do
@@ -294,6 +298,7 @@ class BmpBgpSession {
         this.addPathReceiveMap.clear();
         this.addPathSendMap.clear();
         this.addPathMap.clear();
+        this.peerUpAddressFamilyKeys.clear();
         this.ribEpochMap.clear();
         this.ribStaleMetadataMap.clear();
     }

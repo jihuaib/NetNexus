@@ -13,13 +13,24 @@
                             <nn-tab-pane v-for="client in clientList" :key="getClientKey(client)">
                                 <template #tab>
                                     <span class="client-tab-label" data-testid="bmp-statistics-client-tab-label">
-                                        <span class="client-tab-address">{{ formatClientTab(client) }}</span>
+                                        <nn-tooltip
+                                            class="client-tab-tooltip"
+                                            :title="formatClientTab(client)"
+                                            placement="right"
+                                        >
+                                            <span
+                                                class="client-tab-address"
+                                                data-testid="bmp-statistics-client-address"
+                                            >
+                                                {{ formatClientTab(client) }}
+                                            </span>
+                                        </nn-tooltip>
                                         <span
-                                            class="client-tab-status"
-                                            :class="{ offline: !isClientOnline(client) }"
+                                            class="client-connection-state"
+                                            :class="isRecordOnline(client) ? 'is-online' : 'is-offline'"
                                             data-testid="bmp-statistics-client-status"
                                         >
-                                            {{ formatClientConnectionState(client) }}
+                                            {{ formatConnectionState(client) }}
                                         </span>
                                     </span>
                                 </template>
@@ -107,6 +118,7 @@
 <script setup>
     import { ref, onActivated, onDeactivated } from 'vue';
     import { notify } from '../../utils/notify';
+    import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import EventBus from '../../utils/eventBus';
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME, getAddrFamilyType } from '../../const/bgpConst';
@@ -125,21 +137,21 @@
     };
 
     const formatClientTab = client => {
-        return client.remoteIp || '-';
+        return formatBmpClientLabel(client);
     };
 
-    const getClientOnlineState = client => {
-        if (typeof client?.isOnline === 'boolean') return client.isOnline;
-        if (typeof client?.online === 'boolean') return client.online;
-        const state = String(client?.connectionState || '').toLowerCase();
+    const getRecordOnlineState = record => {
+        if (typeof record?.isOnline === 'boolean') return record.isOnline;
+        if (typeof record?.online === 'boolean') return record.online;
+        const state = String(record?.connectionState || '').toLowerCase();
         if (['offline', 'disconnected', 'closed', 'down'].includes(state)) return false;
         if (['online', 'connected', 'open', 'up'].includes(state)) return true;
         return null;
     };
 
-    const isClientOnline = client => getClientOnlineState(client) ?? true;
+    const isRecordOnline = record => getRecordOnlineState(record) ?? true;
 
-    const formatClientConnectionState = client => (isClientOnline(client) ? '已连接' : '已断开');
+    const formatConnectionState = record => (isRecordOnline(record) ? '在线' : '已断开');
 
     const columns = [
         {
@@ -172,7 +184,7 @@
     // 客户端
     const clientList = ref([]);
     const activeClientKey = ref('');
-    const clientTabBarStyle = { width: '128px', flex: '0 0 128px' };
+    const clientTabBarStyle = { width: '148px', flex: '0 0 148px' };
     const reportMap = ref(new Map());
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
@@ -518,29 +530,49 @@
 
     .client-tab-label {
         display: flex;
+        width: 100%;
+        max-width: 132px;
+        min-width: 0;
         flex-direction: column;
         align-items: center;
         gap: 2px;
-        max-width: 112px;
+        font-size: 14px;
+        line-height: 22px;
         overflow: hidden;
     }
 
     .client-tab-address {
         display: block;
+        width: 100%;
         max-width: 100%;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    .client-tab-status {
-        color: var(--nn-color-success);
-        font-size: 11px;
-        line-height: 16px;
+    .client-tab-tooltip {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
     }
 
-    .client-tab-status.offline {
-        color: var(--nn-color-text-muted);
+    .client-tab-tooltip :deep(.nn-tooltip-trigger) {
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    .client-connection-state {
+        font-size: 12px;
+        line-height: 1;
+    }
+
+    .client-connection-state.is-online {
+        color: #389e0d;
+    }
+
+    .client-connection-state.is-offline {
+        color: #d46b08;
     }
 
     .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {

@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
+const BmpConst = require('../../electron/const/bmpConst');
 
 const BmpWorker = loadBmpWorkerClass(__dirname, module);
 
@@ -28,11 +29,27 @@ const instance = {
     instanceRd: '0:0',
     instanceRdRaw: 'raw:0000000000000000'
 };
-const persistedSessionReport = {
+const persistedPreInReport = {
     client: { ...client, connectionState: 'open', isOnline: true },
     session: { ...session },
-    statistics: [{ type: 0, typeName: 'Prefixes rejected', value: 10 }],
+    statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN, value: 10 }],
     updatedAt: '2026-07-15T00:00:00.000Z'
+};
+const persistedPostInReport = {
+    client: { ...client, connectionState: 'open', isOnline: true },
+    session: { ...session },
+    effectiveSessionFlags: BmpConst.BMP_SESSION_FLAGS.POST_POLICY,
+    statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN, value: 20 }],
+    updatedAt: '2026-07-15T00:00:01.000Z'
+};
+const persistedMixedOutReport = {
+    client: { ...client, connectionState: 'open', isOnline: true },
+    session: { ...session },
+    statistics: [
+        { type: BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT, value: 30 },
+        { type: BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT, value: 40 }
+    ],
+    updatedAt: '2026-07-15T00:00:02.000Z'
 };
 const persistedInstanceReport = {
     client: { ...client, connectionState: 'open', isOnline: true },
@@ -58,7 +75,9 @@ async function main() {
         assert.equal(method, 'queryStatisticsReports');
         assert.equal(query.sourceId, sourceId);
         assert.equal(options.fence, false);
-        return query.kind === 'instance' ? [persistedInstanceReport] : [persistedSessionReport];
+        return query.kind === 'instance'
+            ? [persistedInstanceReport]
+            : [persistedMixedOutReport, persistedPostInReport, persistedPreInReport];
     };
 
     const responses = new Map();
@@ -74,11 +93,23 @@ async function main() {
     await worker.getBgpStatisticsReports('offline-session', client);
     const offlineSession = responses.get('offline-session');
     assert.equal(offlineSession.status, 'success');
-    assert.equal(offlineSession.data.length, 1);
-    assert.equal(offlineSession.data[0].statistics[0].value, 10);
-    assert.equal(offlineSession.data[0].client.connectionState, 'closed');
-    assert.equal(offlineSession.data[0].client.isOnline, false);
-    assert.equal(offlineSession.data[0].session.isOnline, false);
+    assert.equal(offlineSession.data.length, 4);
+    const offlinePreIn = offlineSession.data.find(
+        report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+    );
+    const offlinePostIn = offlineSession.data.find(report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN);
+    const offlinePreOut = offlineSession.data.find(report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT);
+    const offlinePostOut = offlineSession.data.find(
+        report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT
+    );
+    assert.equal(offlinePreIn.statistics[0].value, 10);
+    assert.equal(offlinePostIn.statistics[0].value, 20);
+    assert.equal(offlinePreOut.statistics[0].value, 30);
+    assert.equal(offlinePostOut.statistics[0].value, 40);
+    assert.equal(offlinePreIn.client.connectionState, 'closed');
+    assert.equal(offlinePreIn.client.isOnline, false);
+    assert.equal(offlinePreIn.session.isOnline, false);
+    assert.equal(offlinePostOut.session.isOnline, false);
 
     await worker.getBgpInstanceStatisticsReports('offline-instance', client);
     const offlineInstance = responses.get('offline-instance');
@@ -88,9 +119,10 @@ async function main() {
     assert.equal(offlineInstance.data[0].instance.isOnline, false);
 
     const liveSessionReport = {
-        ...persistedSessionReport,
-        statistics: [{ type: 0, typeName: 'Prefixes rejected', value: 11 }],
-        updatedAt: '2026-07-15T00:00:02.000Z'
+        ...persistedPreInReport,
+        ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
+        statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_IN, value: 11 }],
+        updatedAt: '2026-07-15T00:00:03.000Z'
     };
     const liveBmpSession = {
         getPersistentSourceId: () => sourceId,
@@ -103,11 +135,19 @@ async function main() {
     await worker.getBgpStatisticsReports('live-session', client);
     const liveSession = responses.get('live-session');
     assert.equal(liveSession.status, 'success');
-    assert.equal(liveSession.data.length, 1, 'live report must replace the persisted sample for the same peer');
-    assert.equal(liveSession.data[0].statistics[0].value, 11);
-    assert.equal(liveSession.data[0].client.remotePort, 50001);
-    assert.equal(liveSession.data[0].client.connectionState, 'open');
-    assert.equal(liveSession.data[0].client.isOnline, true);
+    assert.equal(liveSession.data.length, 4, 'a live pre-in report must not replace the other three RIB stages');
+    const livePreIn = liveSession.data.find(report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN);
+    const livePostIn = liveSession.data.find(report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN);
+    const livePreOut = liveSession.data.find(report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT);
+    const livePostOut = liveSession.data.find(report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT);
+    assert.equal(livePreIn.statistics[0].value, 11);
+    assert.equal(livePostIn.statistics[0].value, 20);
+    assert.equal(livePreOut.statistics[0].value, 30);
+    assert.equal(livePostOut.statistics[0].value, 40);
+    assert.equal(livePreIn.client.remotePort, 50001);
+    assert.equal(livePreIn.client.connectionState, 'open');
+    assert.equal(livePreIn.client.isOnline, true);
+    assert.equal(livePostOut.session.isOnline, false);
 
     console.log('BMP persisted statistics worker tests passed');
 }

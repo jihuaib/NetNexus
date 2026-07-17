@@ -1,16 +1,52 @@
 const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { BmpE2eController, getBrowserMockScript } = require('../../scripts/e2e-support');
+const BgpConst = require('../../electron/const/bgpConst');
 
 const MOCK_BASE_ROUTE_COUNT = 26;
 const EXPECTED_PUBLIC_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT + 3;
 const EXPECTED_LOC_RIB_ROUTE_COUNT = Math.max(8, Math.min(25, MOCK_BASE_ROUTE_COUNT)) + 2;
 const EXPECTED_MOCK_READY_ROUTE_COUNT = EXPECTED_LOC_RIB_ROUTE_COUNT;
-const EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT = MOCK_BASE_ROUTE_COUNT;
 const EXPECTED_CLIENT_NAME = 'demo-bmp-router';
 const EXPECTED_CLIENT_DESCRIPTION = 'NetNexus local BMP demo data';
+const EXPECTED_SESSION_RIB_STATISTICS = [
+    {
+        label: 'Pre Adj RIB In',
+        typeName: 'Pre-Policy Adj-RIB-In 中的路由数',
+        value: MOCK_BASE_ROUTE_COUNT
+    },
+    {
+        label: 'Post Adj RIB In',
+        typeName: 'Post-Policy Adj-RIB-In 中的路由数',
+        value: MOCK_BASE_ROUTE_COUNT - 1
+    },
+    {
+        label: 'Pre Adj RIB Out',
+        typeName: 'Pre-Policy Adj-RIB-Out 中的路由数',
+        value: MOCK_BASE_ROUTE_COUNT + 2
+    },
+    {
+        label: 'Post Adj RIB Out',
+        typeName: 'Post-Policy Adj-RIB-Out 中的路由数',
+        value: MOCK_BASE_ROUTE_COUNT + 1
+    }
+];
 
 async function recordStep(title) {
     await test.step(title, async () => {});
+}
+
+async function selectStatisticsRibType(page, panel, label) {
+    const select = panel.getByTestId('bmp-statistics-rib-type-select');
+    await select.click();
+    await page.getByRole('option', { name: label, exact: true }).click();
+    await expect(select.locator('.nn-select-single-value')).toHaveText(label);
+}
+
+async function expectStatisticsValue(panel, typeName, value) {
+    const table = panel.locator('.report-table');
+    const typeCell = table.getByRole('cell', { name: typeName, exact: true });
+    await expect(typeCell).toHaveCount(1);
+    await expect(typeCell.locator('..')).toContainText(String(value));
 }
 
 function formatRouteStep(route, index) {
@@ -212,6 +248,8 @@ test.describe('BMP pages', () => {
 
     test('starts BMP server, ingests mock client data, and renders BMP tabs', async ({ page }) => {
         let bmpPort;
+        let liveClient;
+        let liveIpv4Session;
 
         await test.step('Allocate a free BMP port and open the BMP config page', async () => {
             await recordStep('Input: route=/#/bmp/bmp-config, bindHost=127.0.0.1, port=auto');
@@ -241,12 +279,48 @@ test.describe('BMP pages', () => {
             );
 
             await controller.startMockClient({ routes: MOCK_BASE_ROUTE_COUNT, interval: 0 });
-            await controller.waitForMockData({ routes: EXPECTED_MOCK_READY_ROUTE_COUNT });
+            ({ client: liveClient, ipv4Session: liveIpv4Session } = await controller.waitForMockData({
+                routes: EXPECTED_MOCK_READY_ROUTE_COUNT
+            }));
 
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
             await recordStep(
                 `Output: client=${snapshot.adjRib.client.sysName}, sessionRoutes=${snapshot.adjRib.total}, locRibRoutes=${snapshot.locRib.total}`
+            );
+        });
+
+        await test.step('Keep IPv4 routes active when the same peer reports an IPv6-only Peer Up', async () => {
+            const firstPeerUpIndex = controller.mockClientOutput.indexOf('sent peer-up-ipv4');
+            const lastIpv4RouteIndex = controller.mockClientOutput.indexOf(`sent ipv4-route-${MOCK_BASE_ROUTE_COUNT}`);
+            const splitIpv6PeerUpIndex = controller.mockClientOutput.indexOf('sent peer-up-ipv6-split');
+            expect(firstPeerUpIndex).toBeGreaterThanOrEqual(0);
+            expect(lastIpv4RouteIndex).toBeGreaterThan(firstPeerUpIndex);
+            expect(splitIpv6PeerUpIndex).toBeGreaterThan(lastIpv4RouteIndex);
+            expect(liveIpv4Session.enabledAddrFamilyTypes).toEqual(
+                expect.arrayContaining([BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, BgpConst.BGP_ADDR_FAMILY.IPV6_UNC])
+            );
+
+            const routesAfterSplitPeerUp = await controller.call('getBgpRoutes', {
+                client: liveClient,
+                session: liveIpv4Session,
+                af: BgpConst.BGP_ADDR_FAMILY.IPV4_UNC,
+                ribType: liveIpv4Session.ribTypes[0],
+                page: 1,
+                pageSize: 50,
+                routeState: 'all',
+                prefixFilter: ''
+            });
+            expect(routesAfterSplitPeerUp.status).toBe('success');
+            expect(routesAfterSplitPeerUp.data.summary).toEqual({
+                active: EXPECTED_PUBLIC_ROUTE_COUNT,
+                stale: 0,
+                total: EXPECTED_PUBLIC_ROUTE_COUNT
+            });
+            expect(routesAfterSplitPeerUp.data.list.find(route => route.ip === '10.10.0.0')?.routeState).toBe('active');
+
+            await recordStep(
+                `Output: packetOrder=IPv4-PU→${MOCK_BASE_ROUTE_COUNT}-IPv4-routes→IPv6-PU, IPv4 active=${routesAfterSplitPeerUp.data.summary.active}, stale=0`
             );
         });
 
@@ -295,13 +369,17 @@ test.describe('BMP pages', () => {
             await expect(sessionRouteTable).toContainText('10.10.0.0', { timeout: 10000 });
             await expect(sessionRouteTable).toContainText('192.0.2.254');
             await expect(sessionRouteTable).toContainText('65000 65100');
+            await expect(sessionRouteTable.locator('tr.route-stale-row', { hasText: '10.10.0.0' })).toHaveCount(0);
             await expect(expectedSessionPanel.getByText(`当前 ${EXPECTED_PUBLIC_ROUTE_COUNT}`)).toBeVisible();
             await expectBmpRouteLayout(page, 'bmp-session-page', 'bmp-session-table', 'bmp-session-route-table');
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
             expect(snapshot.adjRib.total).toBe(EXPECTED_PUBLIC_ROUTE_COUNT);
+            expect(snapshot.adjRib.session.enabledAddrFamilyTypes).toEqual(
+                expect.arrayContaining([BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, BgpConst.BGP_ADDR_FAMILY.IPV6_UNC])
+            );
             await recordStep(
-                `Output: session=${snapshot.adjRib.session.sessionIp} AS ${snapshot.adjRib.session.sessionAs}, totalRoutes=${snapshot.adjRib.total}`
+                `Output: session=${snapshot.adjRib.session.sessionIp} AS ${snapshot.adjRib.session.sessionAs}, splitPeerUpAFs=IPv4+IPv6, totalRoutes=${snapshot.adjRib.total}`
             );
 
             for (const [index, route] of snapshot.adjRib.routes.entries()) {
@@ -841,49 +919,66 @@ test.describe('BMP pages', () => {
         });
 
         await test.step('Verify BGP session statistics page', async () => {
-            await recordStep('Input: route=/#/bmp/bgp-session-statis-report, expectedSession=192.0.2.2 | AS 65000');
+            await recordStep(
+                'Input: route=/#/bmp/bgp-session-statis-report, expectedSession=global | 192.0.2.2 | 65000'
+            );
 
             await page.goto('/#/bmp/bgp-session-statis-report');
             const statisticsPage = page.getByTestId('bmp-session-statistics-page');
             const statisticsTab = statisticsPage.getByRole('tab', {
-                name: '192.0.2.2 | AS 65000',
+                name: 'global | 192.0.2.2 | 65000',
                 exact: true
             });
             await expect(statisticsTab).toBeVisible({ timeout: 10000 });
             await statisticsTab.click();
             const statisticsPanel = statisticsPage.getByRole('tabpanel', {
-                name: '192.0.2.2 | AS 65000',
+                name: 'global | 192.0.2.2 | 65000',
                 exact: true
             });
             await expect(statisticsPanel).toBeVisible();
-            await expect(
-                statisticsPanel
-                    .locator('.report-table')
-                    .getByRole('cell', { name: String(EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT), exact: true })
-                    .first()
-            ).toBeVisible();
+            await expect(statisticsTab).toHaveCount(1);
 
-            await recordStep(`Output: session statistics visible, routeCount=${EXPECTED_ADJ_RIB_STATS_ROUTE_COUNT}`);
+            for (const expected of EXPECTED_SESSION_RIB_STATISTICS) {
+                await selectStatisticsRibType(page, statisticsPanel, expected.label);
+                await expectStatisticsValue(statisticsPanel, expected.typeName, expected.value);
+            }
+
+            await recordStep(
+                `Output: one session tab exposes four stable RIB statistics stages, values=${EXPECTED_SESSION_RIB_STATISTICS.map(item => item.value).join('/')}`
+            );
         });
 
         await test.step('Verify BGP Loc-RIB statistics page', async () => {
-            await recordStep('Input: route=/#/bmp/bgp-loc-rib-statis-report, expectedInstance=global-evpn');
+            await recordStep(
+                'Input: route=/#/bmp/bgp-loc-rib-statis-report, expected RDs=0:0/65000:100/65000:120/65000:102'
+            );
 
             await page.goto('/#/bmp/bgp-loc-rib-statis-report');
             const statisticsPage = page.getByTestId('bmp-loc-rib-statistics-page');
-            const statisticsTab = statisticsPage.getByRole('tab', { name: 'global-evpn', exact: true });
-            await expect(statisticsTab).toBeVisible({ timeout: 10000 });
-            await statisticsTab.click();
-            const statisticsPanel = statisticsPage.getByRole('tabpanel', { name: 'global-evpn', exact: true });
-            await expect(statisticsPanel).toBeVisible();
-            await expect(
-                statisticsPanel
-                    .locator('.report-table')
-                    .getByRole('cell', { name: String(EXPECTED_LOC_RIB_ROUTE_COUNT), exact: true })
-                    .first()
-            ).toBeVisible();
+            const expectedReports = [
+                { tabText: 'global-evpn', exact: false, rd: '0:0', value: EXPECTED_LOC_RIB_ROUTE_COUNT },
+                { tabText: 'vrf-blue', exact: true, rd: '65000:100', value: 1 },
+                { tabText: 'route-lens-lab', exact: true, rd: '65000:120', value: 4 },
+                { tabText: 'vrf-label', exact: true, rd: '65000:102', value: 2 }
+            ];
 
-            await recordStep(`Output: Loc-RIB statistics visible, routeCount=${EXPECTED_LOC_RIB_ROUTE_COUNT}`);
+            for (const expected of expectedReports) {
+                const statisticsTab = expected.exact
+                    ? statisticsPage.getByRole('tab', { name: expected.tabText, exact: true })
+                    : statisticsPage.getByRole('tab').filter({ hasText: expected.tabText });
+                await expect(statisticsTab).toHaveCount(1);
+                await expect(statisticsTab).toBeVisible({ timeout: 10000 });
+                const tabName = (await statisticsTab.textContent()).trim();
+                await statisticsTab.click();
+                const statisticsPanel = statisticsPage.getByRole('tabpanel', { name: tabName, exact: true });
+                await expect(statisticsPanel).toBeVisible();
+                await expect(statisticsPanel.getByText(`RD ${expected.rd}`, { exact: true })).toBeVisible();
+                await expectStatisticsValue(statisticsPanel, 'Loc-RIB 中的路由数', expected.value);
+            }
+
+            await recordStep(
+                `Output: Loc-RIB statistics remain isolated across four RDs, values=${expectedReports.map(item => item.value).join('/')}`
+            );
         });
 
         await test.step('Stop BMP server from UI and verify the mock client is disconnected', async () => {

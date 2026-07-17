@@ -114,7 +114,7 @@
                                     html-type="submit"
                                     data-testid="bmp-start-button"
                                     :loading="serverLoading"
-                                    :disabled="serverRunning"
+                                    :disabled="serverRunning || serverStopping"
                                 >
                                     启动服务器
                                 </nn-button>
@@ -122,7 +122,8 @@
                                     type="primary"
                                     danger
                                     data-testid="bmp-stop-button"
-                                    :disabled="!serverRunning"
+                                    :loading="serverStopping"
+                                    :disabled="!serverRunning || serverStopping"
                                     @click="stopBmp"
                                 >
                                     停止服务器
@@ -258,6 +259,7 @@
 
     const serverLoading = ref(false);
     const serverRunning = ref(false);
+    const serverStopping = ref(false);
 
     const getClientTlvCount = record => {
         return (record.rawTlvs || []).length + (record.terminationTlvs || []).length;
@@ -418,6 +420,11 @@
     };
 
     const stopBmp = async () => {
+        if (serverStopping.value) {
+            return;
+        }
+
+        serverStopping.value = true;
         try {
             const result = await window.bmpApi.stopBmp();
             if (result.status === 'success') {
@@ -429,6 +436,8 @@
             }
         } catch (error) {
             notify.error(`BMP服务器停止出错: ${error.message}`);
+        } finally {
+            serverStopping.value = false;
         }
     };
 

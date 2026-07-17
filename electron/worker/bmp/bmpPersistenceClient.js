@@ -34,6 +34,10 @@ class BmpPersistenceClient {
         this.onResume = typeof options.onResume === 'function' ? options.onResume : null;
         this.onError = typeof options.onError === 'function' ? options.onError : null;
         this.onCommittedBatch = typeof options.onCommittedBatch === 'function' ? options.onCommittedBatch : null;
+        this.includeCommittedDeltas =
+            typeof options.includeCommittedDeltas === 'function'
+                ? options.includeCommittedDeltas
+                : options.includeCommittedDeltas !== false;
 
         this.worker = null;
         this.workerAlive = false;
@@ -222,11 +226,16 @@ class BmpPersistenceClient {
 
     makeBatch(entries) {
         this.batchSequence += 1;
-        return {
+        const batch = {
             batchId: `bmp-${process.pid}-${Date.now()}-${this.batchSequence}`,
             createdAtMs: Date.now(),
             mutations: entries.map(entry => entry.mutation)
         };
+        batch.includeDeltas =
+            typeof this.includeCommittedDeltas === 'function'
+                ? this.includeCommittedDeltas(batch) !== false
+                : this.includeCommittedDeltas;
+        return batch;
     }
 
     flushNextBatch() {

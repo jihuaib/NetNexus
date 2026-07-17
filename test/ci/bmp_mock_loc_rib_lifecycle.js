@@ -51,6 +51,80 @@ try {
     buildScenario(options).forEach(message => session.processMessage(message.data));
     assert.deepEqual(persistenceFailures, []);
 
+    const globalSessionReports = Array.from(session.bgpStatisticsReportMap.values()).filter(
+        report =>
+            report.session.sessionType === BmpConst.BMP_PEER_TYPE.GLOBAL &&
+            report.session.sessionRd === '0:0' &&
+            report.session.sessionIp === '192.0.2.2' &&
+            report.session.sessionAs === 65000
+    );
+    assert.equal(globalSessionReports.length, 4, 'mock must expose four independent session RIB statistics stages');
+    const globalSessionReportsByRibType = new Map(globalSessionReports.map(report => [report.ribType, report]));
+    const expectedSessionStatistics = new Map([
+        [
+            BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
+            { globalType: BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_IN, value: options.routes }
+        ],
+        [
+            BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN,
+            { globalType: BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_IN, value: Math.max(0, options.routes - 1) }
+        ],
+        [
+            BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT,
+            { globalType: BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT, value: options.routes + 2 }
+        ],
+        [
+            BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT,
+            { globalType: BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT, value: options.routes + 1 }
+        ]
+    ]);
+    expectedSessionStatistics.forEach(({ globalType, value }, ribType) => {
+        const report = globalSessionReportsByRibType.get(ribType);
+        assert.ok(report, `mock must contain session statistics for ribType ${ribType}`);
+        assert.equal(report.statistics.length, 2);
+        const globalStatistic = report.statistics.find(statistic => statistic.type === globalType);
+        const perAfStatistic = report.statistics.find(
+            statistic =>
+                statistic.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&
+                statistic.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        );
+        assert.equal(globalStatistic.value, value);
+        assert.equal(globalStatistic.valueHex.length, 16, 'global Gauge mock values must use the RFC 8-byte format');
+        assert.equal(perAfStatistic.value, value);
+        assert.equal(perAfStatistic.valueHex.length, 22, 'per-AFI/SAFI Gauge mock values must use 11 bytes');
+    });
+
+    const locRibStatisticsReports = Array.from(session.bgpInstanceStatisticsReportMap.values());
+    const locRibStatisticsByRd = new Map(locRibStatisticsReports.map(report => [report.instance.instanceRd, report]));
+    assert.deepEqual(
+        Array.from(locRibStatisticsByRd.keys()).sort(),
+        ['0:0', '65000:100', '65000:102', '65000:120'],
+        'mock must report Loc-RIB statistics for the global table and three distinct private RDs'
+    );
+    const expectedLocRibCounts = new Map([
+        ['0:0', Math.max(8, Math.min(25, options.routes)) + 2],
+        ['65000:100', 1],
+        ['65000:102', 2],
+        ['65000:120', 4]
+    ]);
+    expectedLocRibCounts.forEach((value, instanceRd) => {
+        const report = locRibStatisticsByRd.get(instanceRd);
+        const globalStatistic = report.statistics.find(
+            statistic => statistic.type === BmpConst.BMP_STATS_TYPE.NUM_LOC_RIB
+        );
+        assert.equal(globalStatistic.value, value, `unexpected Loc-RIB statistics value for RD ${instanceRd}`);
+        assert.equal(globalStatistic.valueHex.length, 16, 'Loc-RIB Gauge mock values must use the RFC 8-byte format');
+    });
+    assert.deepEqual(
+        locRibStatisticsByRd
+            .get('65000:102')
+            .statistics.filter(statistic => statistic.type === BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_LOC_RIB)
+            .map(statistic => statistic.safi)
+            .sort((left, right) => left - right),
+        [BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST, BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST],
+        'RD 65000:102 must report both IPv4 unicast and labeled-unicast Loc-RIB statistics'
+    );
+
     const defaultIpv4Instance = Array.from(session.bgpInstanceMap.values()).find(
         instance =>
             instance.instanceType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB &&
@@ -66,7 +140,7 @@ try {
                 Number(family.safi) === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
         ),
         true,
-        'the later default-RD EVPN Peer Up must retain IPv4 unicast in its full AF snapshot'
+        'the combined default-RD Peer Up must advertise IPv4 unicast'
     );
     assert.equal(
         defaultIpv4Instance.enabledAddressFamilies.some(
@@ -75,7 +149,7 @@ try {
                 Number(family.safi) === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN
         ),
         true,
-        'the full default-RD Loc-RIB snapshot must also advertise EVPN'
+        'the combined default-RD Peer Up must also advertise EVPN'
     );
 
     const scopeId = session.getPersistenceScopeId(
@@ -122,7 +196,7 @@ try {
     assert.equal(staleRemovalEvents.length, 0);
 
     console.log(
-        `BMP mock Loc-RIB lifecycle regression passed: active=${summary.active}, stale=${summary.stale}, scope=${summary.scopes[0].scopeState}`
+        `BMP mock statistics and Loc-RIB lifecycle regression passed: active=${summary.active}, stale=${summary.stale}, scope=${summary.scopes[0].scopeState}`
     );
 } finally {
     store.close();

@@ -12,6 +12,11 @@ const BmpConst = require('../../const/bmpConst');
 const RouteUpdateAggregator = require('../../utils/routeUpdateAggregator');
 const BmpRouteAssuranceService = require('../../utils/bmpRouteAssuranceService');
 const {
+    splitSessionStatisticsReport,
+    getSessionStatisticsEntityIdentityParts,
+    getSessionStatisticsReportIdentityParts
+} = require('../../utils/bmpStatistics');
+const {
     MAX_RESULT_LIMIT: MAX_ROUTE_LENS_RESULT_LIMIT,
     buildBmpRouteLensFromPersistedRoutes,
     parseRouteLensQuery
@@ -41,7 +46,9 @@ class BmpWorker {
         this.persistenceSweepTimer = null;
         this.persistenceSweepCatchupTimer = null;
         this.persistenceSweepRequestTimer = null;
+        this.persistenceSweepDeadlineTimer = null;
         this.persistenceSweepRunning = false;
+        this.persistenceSweepPending = false;
         this.clientDataDeleteInProgress = new Set();
         this.clientDeleteRemoteIpGates = new Map();
 
@@ -189,12 +196,16 @@ class BmpWorker {
         const routeUpdates = this.routeUpdateAggregator.flushRouteUpdates();
         const instanceRouteUpdates = this.routeUpdateAggregator.flushInstanceRouteUpdates();
 
-        routeUpdates.forEach(update => {
-            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE, { data: update });
-        });
-        instanceRouteUpdates.forEach(update => {
-            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE, { data: update });
-        });
+        if (routeUpdates.length > 0) {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE, {
+                data: { batch: true, updates: routeUpdates }
+            });
+        }
+        if (instanceRouteUpdates.length > 0) {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE, {
+                data: { batch: true, updates: instanceRouteUpdates }
+            });
+        }
     }
 
     clearRouteUpdateAggregation() {
@@ -381,12 +392,16 @@ class BmpWorker {
     createPersistedRoutePageLoader(filters = {}) {
         const routeState = filters.routeState || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE;
         return cursor =>
-            this.readPersistence('queryRoutes', {
-                routeState,
-                pageSize: 5000,
-                includeTotal: false,
-                cursor
-            });
+            this.readPersistence(
+                'queryRoutes',
+                {
+                    routeState,
+                    pageSize: 5000,
+                    includeTotal: false,
+                    cursor
+                },
+                { fence: false }
+            );
     }
 
     async handleLogLevelChange(logLevel) {
@@ -445,6 +460,7 @@ class BmpWorker {
             onError: error => {
                 this.handlePersistenceFailure(error);
             },
+            includeCommittedDeltas: () => this.routeAssuranceService?.enabled === true,
             onCommittedBatch: result => this.handleCommittedPersistenceResult(result)
         });
         const status = await this.persistence.open();
@@ -491,6 +507,34 @@ class BmpWorker {
             clearTimeout(this.persistenceSweepRequestTimer);
             this.persistenceSweepRequestTimer = null;
         }
+        if (this.persistenceSweepDeadlineTimer) {
+            clearTimeout(this.persistenceSweepDeadlineTimer);
+            this.persistenceSweepDeadlineTimer = null;
+        }
+        this.persistenceSweepPending = false;
+    }
+
+    getPersistenceRefreshTimeoutMs() {
+        const configuredFloor = Number(this.bmpConfigData?.persistenceRefreshTimeoutFloorMs);
+        const allowTestFloor = process.env.NODE_ENV === 'test' || process.env.NETNEXUS_E2E === '1';
+        const floorMs = allowTestFloor && Number.isFinite(configuredFloor) ? Math.max(0, configuredFloor) : 60000;
+        return Math.max(floorMs, Number(this.bmpConfigData?.persistenceRefreshTimeoutMs) || 30 * 60 * 1000);
+    }
+
+    schedulePersistenceRefreshDeadline(refreshStartedMs, refreshTimeoutMs = this.getPersistenceRefreshTimeoutMs()) {
+        if (this.persistenceSweepDeadlineTimer) {
+            clearTimeout(this.persistenceSweepDeadlineTimer);
+            this.persistenceSweepDeadlineTimer = null;
+        }
+        const startedAtMs = Number(refreshStartedMs);
+        if (!this.persistence || !Number.isFinite(startedAtMs)) {
+            return;
+        }
+        const delayMs = Math.min(0x7fffffff, Math.max(25, startedAtMs + refreshTimeoutMs - Date.now()));
+        this.persistenceSweepDeadlineTimer = setTimeout(() => {
+            this.persistenceSweepDeadlineTimer = null;
+            this.runPersistenceSweep();
+        }, delayMs);
     }
 
     requestPersistenceSweep() {
@@ -505,12 +549,20 @@ class BmpWorker {
     }
 
     async runPersistenceSweep() {
-        if (!this.persistence || this.persistenceSweepRunning) {
+        if (!this.persistence) {
+            return;
+        }
+        if (this.persistenceSweepRunning) {
+            this.persistenceSweepPending = true;
             return;
         }
         this.persistenceSweepRunning = true;
         let shouldCatchUp = false;
         let routeProjectionChanged = false;
+        let sweepCompleted = false;
+        let nextRefreshStartedMs = null;
+        const affectedScopes = new Map();
+        const refreshTimeoutMs = this.getPersistenceRefreshTimeoutMs();
         try {
             // Scope EOR/timeout mutations determine which epoch is safe to age.
             // Fence the writer queue before calculating retention candidates.
@@ -523,10 +575,6 @@ class BmpWorker {
             const eventRetentionMs = Math.max(
                 60000,
                 Number(this.bmpConfigData?.persistenceEventRetentionMs) || 7 * 24 * 60 * 60 * 1000
-            );
-            const refreshTimeoutMs = Math.max(
-                60000,
-                Number(this.bmpConfigData?.persistenceRefreshTimeoutMs) || 10 * 60 * 1000
             );
             const routeLimit = Number(this.bmpConfigData?.persistenceSweepRouteLimit) || 5000;
             const eventLimit = Number(this.bmpConfigData?.persistenceSweepEventLimit) || 20000;
@@ -557,27 +605,79 @@ class BmpWorker {
                 routeProjectionChanged =
                     routeProjectionChanged ||
                     Number(result.routes || 0) > 0 ||
-                    Number(result.refreshTimeoutScopes || 0) > 0;
+                    Number(result.refreshTimeoutScopes || 0) > 0 ||
+                    Number(result.reconnectTimeoutScopes || 0) > 0;
+                nextRefreshStartedMs = result.nextRefreshStartedMs ?? null;
+                (Array.isArray(result.affectedScopes) ? result.affectedScopes : []).forEach(scope => {
+                    if (!scope?.scopeId) {
+                        return;
+                    }
+                    const existing = affectedScopes.get(scope.scopeId);
+                    if (existing) {
+                        existing.deletedRoutes += Number(scope.deletedRoutes || 0);
+                    } else {
+                        affectedScopes.set(scope.scopeId, {
+                            ...scope,
+                            deletedRoutes: Number(scope.deletedRoutes || 0)
+                        });
+                    }
+                });
                 shouldCatchUp = result.hasMore === true;
                 if (!shouldCatchUp || Date.now() - sweepStartedAt >= timeBudgetMs) {
                     break;
                 }
             }
+            sweepCompleted = true;
         } catch (error) {
             logger.error(`BMP persistence sweep failed: ${error.message}`);
         } finally {
             this.persistenceSweepRunning = false;
+            if (sweepCompleted) {
+                this.schedulePersistenceRefreshDeadline(nextRefreshStartedMs, refreshTimeoutMs);
+            }
             if (routeProjectionChanged) {
                 this.invalidateRouteAssurance('persistence-sweep');
             }
-            if (shouldCatchUp && this.persistence && !this.persistenceSweepCatchupTimer) {
-                const delayMs = Math.max(250, Number(this.bmpConfigData?.persistenceSweepCatchupDelayMs) || 1000);
+            if (affectedScopes.size > 0) {
+                this.emitPersistenceSweepRouteUpdates(Array.from(affectedScopes.values()));
+            }
+            const rerunRequested = this.persistenceSweepPending;
+            this.persistenceSweepPending = false;
+            if ((shouldCatchUp || rerunRequested) && this.persistence && !this.persistenceSweepCatchupTimer) {
+                const delayMs = rerunRequested
+                    ? 25
+                    : Math.max(250, Number(this.bmpConfigData?.persistenceSweepCatchupDelayMs) || 1000);
                 this.persistenceSweepCatchupTimer = setTimeout(() => {
                     this.persistenceSweepCatchupTimer = null;
                     this.runPersistenceSweep();
                 }, delayMs);
             }
         }
+    }
+
+    emitPersistenceSweepRouteUpdates(scopes) {
+        scopes.forEach(scope => {
+            const update = {
+                type: BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_DELETE,
+                persistentSourceId: scope.sourceId,
+                sourceId: scope.sourceId,
+                persistentOwnerKey: scope.ownerKey || null,
+                ownerKey: scope.ownerKey || null,
+                persistentScopeId: scope.scopeId,
+                scopeId: scope.scopeId,
+                af: getAddrFamilyType(Number(scope.afi), Number(scope.safi)),
+                ribType: scope.ribType,
+                changedCount: Number(scope.deletedRoutes || 0),
+                reason: scope.reason || 'persistence-sweep',
+                projectionReset: true,
+                assuranceIncremental: true
+            };
+            if (scope.scopeKind === 'loc-rib') {
+                this.enqueueInstanceRouteUpdateEvent(update);
+            } else {
+                this.enqueueRouteUpdateEvent(update);
+            }
+        });
     }
 
     async startTcpServer(messageId) {
@@ -862,7 +962,11 @@ class BmpWorker {
             this.sshTunnel = null;
         }
 
-        await this.closeTcpServers();
+        // Stop accepting new connections immediately, but do not wait for the
+        // listeners to close until the existing long-lived BMP sockets have
+        // been destroyed below. net.Server.close() only completes after all
+        // active connections are closed.
+        const tcpServersClosed = this.closeTcpServers();
 
         // 发送全局终止事件通知前端
         this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: null });
@@ -872,6 +976,7 @@ class BmpWorker {
             session.closeSession();
         });
         this.bmpSessionMap.clear();
+        await tcpServersClosed;
         this.routeAssuranceService?.setEnabled?.(false);
 
         let persistenceError = null;
@@ -886,6 +991,8 @@ class BmpWorker {
             persistenceError = error;
             logger.error(`BMP persistence drain failed: ${error.message}`);
         } finally {
+            this.clearPersistenceSweepTimer();
+            this.clearRouteUpdateAggregation();
             this.persistenceReader = null;
             this.persistence = null;
             if (persistenceReader) {
@@ -917,7 +1024,6 @@ class BmpWorker {
             return;
         }
         try {
-            await this.persistence.fence();
             let status;
             if (this.persistenceReader) {
                 const reader = this.persistenceReader;
@@ -1008,7 +1114,7 @@ class BmpWorker {
 
     async queryClientTopology(client = null) {
         const sourceId = this.getPersistentSourceId(client || {});
-        const topology = await this.readPersistence('queryTopology', sourceId ? { sourceId } : {});
+        const topology = await this.readPersistence('queryTopology', sourceId ? { sourceId } : {}, { fence: false });
         return {
             topology,
             client: client ? this.findTopologyClient(topology, client) : null
@@ -1114,7 +1220,7 @@ class BmpWorker {
             } else {
                 query.routeIdentityText = parsedQuery.normalized;
             }
-            const rows = await this.readPersistence('queryRoutes', query);
+            const rows = await this.readPersistence('queryRoutes', query, { fence: false });
             const result = buildBmpRouteLensFromPersistedRoutes(rows, data);
             this.messageHandler.sendSuccessResponse(messageId, result, '路由追踪查询成功');
         } catch (error) {
@@ -1172,6 +1278,10 @@ class BmpWorker {
             let status;
             if (enabled) {
                 this.routeAssuranceFilters = this.getRouteAssuranceAnalysisFilters(data.filters || {});
+                // Establish one consistency boundary before enabling incremental deltas. The
+                // paged snapshot then reads committed WAL state without chasing a continuously
+                // growing writer queue on every page.
+                await this.persistence.fence();
                 status = await this.routeAssuranceService.bootstrapFromPersistedRoutes(
                     this.createPersistedRoutePageLoader(this.routeAssuranceFilters),
                     this.routeAssuranceFilters
@@ -1302,7 +1412,7 @@ class BmpWorker {
     }
 
     getStatisticsSessionKey(session = {}) {
-        return [session.sessionType, session.sessionRdRaw || session.sessionRd, session.sessionIp, session.sessionAs]
+        return getSessionStatisticsEntityIdentityParts(session)
             .map(value => String(value ?? ''))
             .join('|');
     }
@@ -1314,9 +1424,12 @@ class BmpWorker {
     }
 
     getStatisticsReportKey(kind, report = {}) {
-        return kind === 'instance'
-            ? this.getStatisticsInstanceKey(report.instance)
-            : this.getStatisticsSessionKey(report.session);
+        if (kind === 'instance') {
+            return this.getStatisticsInstanceKey(report.instance);
+        }
+        return getSessionStatisticsReportIdentityParts(report)
+            .map(value => String(value ?? ''))
+            .join('|');
     }
 
     findStatisticsTopologyEntity(kind, report, topologyClient) {
@@ -1324,11 +1437,15 @@ class BmpWorker {
         if (!Array.isArray(items)) {
             return null;
         }
-        const expectedKey = this.getStatisticsReportKey(kind, report);
+        const expectedKey =
+            kind === 'instance'
+                ? this.getStatisticsInstanceKey(report.instance)
+                : this.getStatisticsSessionKey(report.session);
         return (
             items.find(item => {
-                const candidate = kind === 'instance' ? { instance: item } : { session: item };
-                return this.getStatisticsReportKey(kind, candidate) === expectedKey;
+                const candidateKey =
+                    kind === 'instance' ? this.getStatisticsInstanceKey(item) : this.getStatisticsSessionKey(item);
+                return candidateKey === expectedKey;
             }) || null
         );
     }
@@ -1387,9 +1504,16 @@ class BmpWorker {
                   isOnline: true
               }
             : topologyClient || client || {};
+        const normalizeReports = reports =>
+            kind === 'session'
+                ? Array.from(reports || []).flatMap(report => splitSessionStatisticsReport(report))
+                : Array.from(reports || []);
         const reportMap = new Map();
-        (persistedReports || []).forEach(report => {
-            reportMap.set(this.getStatisticsReportKey(kind, report), report);
+        normalizeReports(persistedReports).forEach(report => {
+            const key = this.getStatisticsReportKey(kind, report);
+            if (!reportMap.has(key)) {
+                reportMap.set(key, report);
+            }
         });
 
         const liveReports =
@@ -1397,7 +1521,7 @@ class BmpWorker {
                 ? bmpSession?.bgpInstanceStatisticsReportMap?.values?.()
                 : bmpSession?.bgpStatisticsReportMap?.values?.();
         if (liveReports) {
-            for (const report of liveReports) {
+            for (const report of normalizeReports(liveReports)) {
                 reportMap.set(this.getStatisticsReportKey(kind, report), report);
             }
         }
@@ -1593,17 +1717,21 @@ class BmpWorker {
     }
 
     async queryRouteScope(lookup, options = {}) {
-        const snapshot = await this.readPersistence('queryRouteScope', {
-            routeQuery: {
-                scopeId: lookup.scopeId,
-                page: options.page,
-                pageSize: options.pageSize,
-                routeState: options.routeState || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
-                prefixFilter: options.prefixFilter,
-                orderBy: 'firstSeen'
+        const snapshot = await this.readPersistence(
+            'queryRouteScope',
+            {
+                routeQuery: {
+                    scopeId: lookup.scopeId,
+                    page: options.page,
+                    pageSize: options.pageSize,
+                    routeState: options.routeState || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
+                    prefixFilter: options.prefixFilter,
+                    orderBy: 'firstSeen'
+                },
+                summaryQuery: { scopeId: lookup.scopeId }
             },
-            summaryQuery: { scopeId: lookup.scopeId }
-        });
+            { fence: false }
+        );
         const routes = snapshot?.routes;
         const summaryResult = snapshot?.summary;
         const summary = {
@@ -1619,12 +1747,16 @@ class BmpWorker {
     }
 
     async queryRouteDetail(lookup, routeKey) {
-        const result = await this.readPersistence('queryRoutes', {
-            scopeId: lookup.scopeId,
-            legacyRouteKey: routeKey,
-            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL,
-            pageSize: 1
-        });
+        const result = await this.readPersistence(
+            'queryRoutes',
+            {
+                scopeId: lookup.scopeId,
+                legacyRouteKey: routeKey,
+                routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL,
+                pageSize: 1
+            },
+            { fence: false }
+        );
         return result?.list?.[0] || null;
     }
 

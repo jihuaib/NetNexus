@@ -4,9 +4,11 @@ const os = require('os');
 const path = require('path');
 const Database = require('better-sqlite3');
 
+const BmpConst = require('../../electron/const/bmpConst');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
+const { getSessionStatisticsReportRibType } = require('../../electron/utils/bmpStatistics');
 const {
     buildConnectionMutation,
     buildScopeMutation,
@@ -418,28 +420,67 @@ try {
         },
         tlvs: []
     };
-    const firstSessionReport = {
+    const peerSession = {
+        sessionType: 0,
+        sessionRd: '0:0',
+        sessionRdRaw: 'raw:0000000000000000',
+        sessionIp: '198.51.100.1',
+        sessionAs: 65001
+    };
+    const firstPreInSessionReport = {
         ...statisticsBase,
-        session: {
-            sessionType: 0,
-            sessionRd: '0:0',
-            sessionRdRaw: 'raw:0000000000000000',
-            sessionIp: '198.51.100.1',
-            sessionAs: 65001
-        },
-        statistics: [{ type: 0, value: 10 }],
+        session: peerSession,
+        ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN,
+        statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_IN, value: 10 }],
         updatedAt: '2026-01-01T00:00:00.000Z'
     };
-    const latestSessionReport = {
-        ...firstSessionReport,
-        statistics: [{ type: 0, value: 20 }],
+    const latestPreInSessionReport = {
+        ...firstPreInSessionReport,
+        statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_IN, value: 20 }],
+        updatedAt: '2026-01-01T00:00:01.000Z'
+    };
+    const firstPostInSessionReport = {
+        ...statisticsBase,
+        session: peerSession,
+        effectiveSessionFlags: BmpConst.BMP_SESSION_FLAGS.POST_POLICY,
+        statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN, value: 30 }],
         updatedAt: '2026-01-01T00:00:02.000Z'
+    };
+    const latestPostInSessionReport = {
+        ...firstPostInSessionReport,
+        ribType: BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN,
+        statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_IN, value: 31 }],
+        updatedAt: '2026-01-01T00:00:03.000Z'
+    };
+    const firstPreOutSessionReport = {
+        ...statisticsBase,
+        session: peerSession,
+        statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT, value: 40 }],
+        updatedAt: '2026-01-01T00:00:04.000Z'
+    };
+    const latestPreOutSessionReport = {
+        ...statisticsBase,
+        session: peerSession,
+        ribDirection: 'rib-out',
+        statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_PREFIXES_REJECTED, value: 50 }],
+        updatedAt: '2026-01-01T00:00:05.000Z'
+    };
+    const firstPostOutSessionReport = {
+        ...statisticsBase,
+        session: peerSession,
+        statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT, value: 60 }],
+        updatedAt: '2026-01-01T00:00:06.000Z'
+    };
+    const latestPostOutSessionReport = {
+        ...firstPostOutSessionReport,
+        statistics: [{ type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_OUT, value: 70 }],
+        updatedAt: '2026-01-01T00:00:07.000Z'
     };
     const otherSessionReport = {
         ...statisticsBase,
         session: { sessionType: 0, sessionRd: '0:0', sessionIp: '198.51.100.2', sessionAs: 65002 },
         statistics: [{ type: 0, value: 30 }],
-        updatedAt: '2026-01-01T00:00:03.000Z'
+        updatedAt: '2026-01-01T00:00:08.000Z'
     };
     const instanceReport = {
         ...statisticsBase,
@@ -450,30 +491,41 @@ try {
             vrfTableNames: ['blue']
         },
         statistics: [{ type: 14, value: 40 }],
-        updatedAt: '2026-01-01T00:00:04.000Z'
+        updatedAt: '2026-01-01T00:00:09.000Z'
     };
     store.applyBatch(
         batch('statistics-latest', [
-            makeStatisticsMutation(bmpSession, firstSessionReport, oldTimestamp + 1000),
-            makeStatisticsMutation(bmpSession, latestSessionReport, oldTimestamp + 2000),
-            makeStatisticsMutation(bmpSession, otherSessionReport, oldTimestamp + 3000),
-            makeStatisticsMutation(bmpSession, instanceReport, oldTimestamp + 4000)
+            makeStatisticsMutation(bmpSession, firstPreInSessionReport, oldTimestamp + 1000),
+            makeStatisticsMutation(bmpSession, latestPreInSessionReport, oldTimestamp + 2000),
+            makeStatisticsMutation(bmpSession, firstPostInSessionReport, oldTimestamp + 3000),
+            makeStatisticsMutation(bmpSession, latestPostInSessionReport, oldTimestamp + 4000),
+            makeStatisticsMutation(bmpSession, firstPreOutSessionReport, oldTimestamp + 5000),
+            makeStatisticsMutation(bmpSession, latestPreOutSessionReport, oldTimestamp + 6000),
+            makeStatisticsMutation(bmpSession, firstPostOutSessionReport, oldTimestamp + 7000),
+            makeStatisticsMutation(bmpSession, latestPostOutSessionReport, oldTimestamp + 8000),
+            makeStatisticsMutation(bmpSession, otherSessionReport, oldTimestamp + 9000),
+            makeStatisticsMutation(bmpSession, instanceReport, oldTimestamp + 10000)
         ])
     );
-    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM bmp_statistics_samples').get().count, 4);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM bmp_statistics_samples').get().count, 10);
     assert.equal(
         store.db.prepare("SELECT COUNT(*) AS count FROM bmp_statistics_latest WHERE report_kind = 'session'").get()
             .count,
-        2,
-        'the latest projection must contain one row per logical report key'
+        5,
+        'the latest projection must contain one row per peer and exact RIB stage'
     );
     const sessionReports = store.queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'session' });
-    assert.equal(sessionReports.length, 2);
-    assert.equal(
-        sessionReports.find(report => report.session.sessionIp === '198.51.100.1').statistics[0].value,
-        20,
-        'a newer sample must replace the previous sample for the same logical report key'
+    assert.equal(sessionReports.length, 5);
+    const peerReportsByRibType = new Map(
+        sessionReports
+            .filter(report => report.session.sessionIp === '198.51.100.1')
+            .map(report => [getSessionStatisticsReportRibType(report), report])
     );
+    assert.equal(peerReportsByRibType.size, 4);
+    assert.equal(peerReportsByRibType.get(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN).statistics[0].value, 20);
+    assert.equal(peerReportsByRibType.get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN).statistics[0].value, 31);
+    assert.equal(peerReportsByRibType.get(BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT).statistics[0].value, 50);
+    assert.equal(peerReportsByRibType.get(BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT).statistics[0].value, 70);
     assert.equal(sessionReports.find(report => report.session.sessionIp === '198.51.100.2').statistics[0].value, 30);
     assert.deepEqual(store.queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'instance' }), [
         instanceReport
@@ -494,7 +546,7 @@ try {
         .run({
             sourceId: connectionOpen.source.id,
             connectionId: connectionOpen.connection.id,
-            observedAtMs: oldTimestamp + 5000
+            observedAtMs: oldTimestamp + 11000
         });
     store.db
         .prepare(
@@ -504,11 +556,11 @@ try {
         .run({
             sourceId: connectionOpen.source.id,
             sampleId: Number(corruptSample.lastInsertRowid),
-            observedAtMs: oldTimestamp + 5000
+            observedAtMs: oldTimestamp + 11000
         });
     assert.equal(
         store.queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'session' }).length,
-        2,
+        5,
         'malformed historical JSON must be ignored without failing the whole query'
     );
     const expectedEventCountBeforeReopen = store.getStatus({ includeCounts: true }).routeEvents;
@@ -521,7 +573,11 @@ try {
     assert.equal(
         reopened
             .queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'session' })
-            .find(report => report.session.sessionIp === '198.51.100.1').statistics[0].value,
+            .find(
+                report =>
+                    report.session.sessionIp === '198.51.100.1' &&
+                    getSessionStatisticsReportRibType(report) === BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+            ).statistics[0].value,
         20,
         'latest statistics reports must remain queryable after closing and reopening the database'
     );

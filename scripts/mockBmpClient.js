@@ -491,6 +491,15 @@ function pathMarkingValue(status, reason = null) {
     return Buffer.concat([u32(status), u16(reason)]);
 }
 
+const U64_STATS_TYPES = new Set([
+    BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN,
+    BmpConst.BMP_STATS_TYPE.NUM_LOC_RIB,
+    BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT,
+    BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT,
+    BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_IN,
+    BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_IN
+]);
+
 function statsRecords(records) {
     return Buffer.concat([
         u32(records.length),
@@ -498,6 +507,8 @@ function statsRecords(records) {
             let value;
             if (record.afi !== undefined && record.safi !== undefined) {
                 value = Buffer.concat([u16(record.afi), Buffer.from([record.safi]), u64(record.value)]);
+            } else if (U64_STATS_TYPES.has(record.type)) {
+                value = u64(record.value);
             } else {
                 value = u32(record.value);
             }
@@ -799,9 +810,9 @@ function buildScenario(options) {
             addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
         }
     ];
-    // A Peer Up is a complete capability snapshot for one Loc-RIB RD. Keep
-    // IPv4 unicast in the default-RD snapshot when adding EVPN, otherwise the
-    // collector correctly treats the omitted IPv4 AF as removed/stale.
+    // This scenario advertises IPv4 unicast and EVPN together so each default-RD
+    // instance exposes the combined capability set. The collector also accepts
+    // devices that report the same set across multiple per-AF Peer Up messages.
     const defaultLocRibEvpnAddPathFamilies = [
         {
             afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -861,6 +872,14 @@ function buildScenario(options) {
     const locRibLabelUnicastLabeledPrefix = '10.102.2.0';
     const locRibLabelUnicastNoLabelPrefix = '10.102.0.0';
     const publicLocRibRouteCount = locRibPrefixes.length + 2;
+    const routeLensLocRibRouteCount = 4;
+    const privateLabelLocRibRouteCount = 2;
+    const sessionStatisticsRouteCounts = {
+        preIn: ipv4Prefixes.length,
+        postIn: Math.max(0, ipv4Prefixes.length - 1),
+        preOut: ipv4Prefixes.length + 2,
+        postOut: ipv4Prefixes.length + 1
+    };
 
     const messages = [
         { name: 'initiation', data: initiationMessage() },
@@ -885,16 +904,63 @@ function buildScenario(options) {
         });
     });
 
+    // Some devices emit one Peer Up per AF. Send IPv6 only after the IPv4
+    // routes so end-to-end tests catch any accidental IPv4 refresh/stale sweep.
+    messages.push({
+        name: 'peer-up-ipv6-split',
+        data: bmpMessage(
+            BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+            peerUpPayload({
+                ...ipv4Peer,
+                afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+                safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+            })
+        )
+    });
+
     messages.push(
         {
             name: 'statistics-ipv4',
             data: statisticsReportMessage(ipv4Peer, [
-                { type: BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN, value: ipv4Prefixes.length },
                 {
-                    type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_ADJ_RIB_IN,
+                    type: BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_IN,
+                    value: sessionStatisticsRouteCounts.preIn
+                },
+                {
+                    type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_PRE_POLICY_ADJ_RIB_IN,
                     afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
                     safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
-                    value: ipv4Prefixes.length
+                    value: sessionStatisticsRouteCounts.preIn
+                },
+                {
+                    type: BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_IN,
+                    value: sessionStatisticsRouteCounts.postIn
+                },
+                {
+                    type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_IN,
+                    afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                    value: sessionStatisticsRouteCounts.postIn
+                },
+                {
+                    type: BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT,
+                    value: sessionStatisticsRouteCounts.preOut
+                },
+                {
+                    type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_PRE_POLICY_ADJ_RIB_OUT,
+                    afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                    value: sessionStatisticsRouteCounts.preOut
+                },
+                {
+                    type: BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT,
+                    value: sessionStatisticsRouteCounts.postOut
+                },
+                {
+                    type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_OUT,
+                    afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                    value: sessionStatisticsRouteCounts.postOut
                 }
             ])
         },
@@ -1715,6 +1781,38 @@ function buildScenario(options) {
                 type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_LOC_RIB,
                 afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
                 safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                value: 1
+            }
+        ])
+    });
+
+    messages.push({
+        name: 'statistics-route-lens-loc-rib',
+        data: statisticsReportMessage(routeLensLocRibPeer, [
+            { type: BmpConst.BMP_STATS_TYPE.NUM_LOC_RIB, value: routeLensLocRibRouteCount },
+            {
+                type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_LOC_RIB,
+                afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                value: routeLensLocRibRouteCount
+            }
+        ])
+    });
+
+    messages.push({
+        name: 'statistics-private-label-loc-rib',
+        data: statisticsReportMessage(privateLabelLocRibPeer, [
+            { type: BmpConst.BMP_STATS_TYPE.NUM_LOC_RIB, value: privateLabelLocRibRouteCount },
+            {
+                type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_LOC_RIB,
+                afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+                value: 1
+            },
+            {
+                type: BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_LOC_RIB,
+                afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST,
                 value: 1
             }
         ])

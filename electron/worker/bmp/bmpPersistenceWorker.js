@@ -60,7 +60,10 @@ function handleMessage(message) {
             case BMP_PERSISTENCE_OP.APPLY_BATCH:
                 {
                     const result = requireStore().applyBatch(data);
-                    success(messageId, { ...result, deltas: result.deltas || [] });
+                    success(
+                        messageId,
+                        data.includeDeltas === false ? result : { ...result, deltas: result.deltas || [] }
+                    );
                 }
                 break;
             case BMP_PERSISTENCE_OP.QUERY_ROUTES:

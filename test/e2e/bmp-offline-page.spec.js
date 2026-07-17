@@ -12,6 +12,7 @@ const CLIENT = {
     remotePort: 49152,
     sysName: 'offline-router'
 };
+const CLIENT_LABEL = `${CLIENT.sysName} · ${CLIENT.remoteIp}`;
 
 const SESSION_SCOPE = {
     persistentScopeId: 'peer-scope',
@@ -72,6 +73,29 @@ function staleRoute(ip, scopeId) {
 
 function success(data) {
     return { status: 'success', data };
+}
+
+async function expectClientLabel(page, root) {
+    const address = root.locator('.client-tab-address').first();
+    await expect(address).toHaveText(CLIENT_LABEL);
+
+    const presentation = await address.evaluate(element => {
+        const style = window.getComputedStyle(element);
+        return {
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+            textOverflow: style.textOverflow,
+            whiteSpace: style.whiteSpace
+        };
+    });
+    expect(presentation.textOverflow).toBe('ellipsis');
+    expect(presentation.whiteSpace).toBe('nowrap');
+    expect(presentation.scrollWidth).toBeGreaterThan(presentation.clientWidth);
+
+    await address.hover();
+    await expect(page.getByRole('tooltip')).toHaveText(CLIENT_LABEL);
+    await page.mouse.move(0, 0);
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
 }
 
 async function expectScrollOnlyScrollbar(locator, axis) {
@@ -155,6 +179,7 @@ test('restores offline BGP and Loc-RIB pages through persistent scope selectors'
 
     await page.goto('/#/bmp/bgp-session');
     const sessionPage = page.getByTestId('bmp-session-page');
+    await expectClientLabel(page, sessionPage);
     await expect(sessionPage).toContainText('192.0.2.2');
     await expect(sessionPage).toContainText('已断开');
     await expect(sessionPage).toContainText('203.0.113.0');
@@ -184,6 +209,7 @@ test('restores offline BGP and Loc-RIB pages through persistent scope selectors'
 
     await page.goto('/#/bmp/bgp-loc-rib');
     const locRibPage = page.getByTestId('bmp-loc-rib-page');
+    await expectClientLabel(page, locRibPage);
     await expect(locRibPage).toContainText('global');
     await expect(locRibPage).toContainText('已断开');
     await expect(locRibPage).toContainText('198.51.100.0');

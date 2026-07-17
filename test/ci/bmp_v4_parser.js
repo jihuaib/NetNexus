@@ -978,6 +978,217 @@ staleRefreshRoutes = queryBgpRoutes(
 assert.equal(staleRefreshRoutes.length, 1);
 assert.equal(staleRefreshRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
 
+const { session: splitPeerUpSession } = makeSession();
+splitPeerUpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        peerUpPayload(0, {
+            recvAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY,
+            sendAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+        })
+    )
+);
+splitPeerUpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdateAddPath('203.0.131.0', 131))
+        ])
+    )
+);
+const splitPeerUpBgpSession = Array.from(splitPeerUpSession.bgpSessionMap.values())[0];
+const splitPeerUpIpv4Epoch = splitPeerUpBgpSession.getRibEpoch(
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+const splitPeerUpIpv4AddPathKey = `${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`;
+let splitPeerUpIpv4Routes = queryBgpRoutes(
+    splitPeerUpSession,
+    splitPeerUpBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.equal(splitPeerUpIpv4Routes.length, 1);
+assert.equal(splitPeerUpIpv4Routes[0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
+assert.equal(splitPeerUpIpv4Routes[0].pathId, 131);
+
+splitPeerUpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        peerUpPayloadForAf(BgpConst.BGP_AFI_TYPE.AFI_IPV6, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST)
+    )
+);
+const splitPeerUpBgpSessionAfterIpv6 = Array.from(splitPeerUpSession.bgpSessionMap.values())[0];
+assert.strictEqual(
+    splitPeerUpBgpSessionAfterIpv6,
+    splitPeerUpBgpSession,
+    'split Peer Up messages must update the same BGP session owner'
+);
+splitPeerUpIpv4Routes = queryBgpRoutes(
+    splitPeerUpSession,
+    splitPeerUpBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.equal(splitPeerUpIpv4Routes.length, 1);
+assert.equal(
+    splitPeerUpIpv4Routes[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.ACTIVE,
+    'an IPv6-only Peer Up must not make existing IPv4 routes stale'
+);
+assert.equal(splitPeerUpIpv4Routes[0].pathId, 131);
+assert.equal(
+    splitPeerUpBgpSession.getRibEpoch(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+    ),
+    splitPeerUpIpv4Epoch,
+    'an IPv6-only Peer Up must not advance the IPv4 RIB epoch'
+);
+assert.equal(splitPeerUpBgpSession.addPathReceiveMap.get(splitPeerUpIpv4AddPathKey), true);
+assert.equal(splitPeerUpBgpSession.recvAddPathMap.has(splitPeerUpIpv4AddPathKey), true);
+const expectedSplitPeerUpAfKeys = [
+    `${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`,
+    `${BgpConst.BGP_AFI_TYPE.AFI_IPV6}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`
+].sort();
+['enabledAddressFamilies', 'recvAddressFamilies', 'sendAddressFamilies'].forEach(field => {
+    assert.deepEqual(
+        splitPeerUpBgpSession[field].map(family => `${family.afi}|${family.safi}`).sort(),
+        expectedSplitPeerUpAfKeys,
+        `split Peer Up messages must merge ${field}`
+    );
+});
+splitPeerUpSession.processMessage(
+    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+);
+splitPeerUpIpv4Routes = queryBgpRoutes(
+    splitPeerUpSession,
+    splitPeerUpBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.equal(
+    splitPeerUpIpv4Routes[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE,
+    'a repeated IPv4 Peer Up must refresh the IPv4 scope'
+);
+assert.ok(
+    splitPeerUpBgpSession.getRibEpoch(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+    ) > splitPeerUpIpv4Epoch
+);
+['recvAddPathMap', 'sendAddPathMap', 'addPathReceiveMap', 'addPathSendMap', 'addPathMap'].forEach(field => {
+    assert.equal(
+        splitPeerUpBgpSession[field].has(splitPeerUpIpv4AddPathKey),
+        false,
+        `a repeated IPv4 Peer Up without ADD-PATH must clear ${field} only for IPv4`
+    );
+});
+['enabledAddressFamilies', 'recvAddressFamilies', 'sendAddressFamilies'].forEach(field => {
+    assert.deepEqual(
+        splitPeerUpBgpSession[field].map(family => `${family.afi}|${family.safi}`).sort(),
+        expectedSplitPeerUpAfKeys,
+        `refreshing IPv4 must retain the accumulated IPv6 ${field}`
+    );
+});
+
+const { session: splitLocRibPeerUpSession } = makeSession();
+splitLocRibPeerUpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED)
+    )
+);
+const splitLocRibIpv4 = addLocRibRoute(
+    splitLocRibPeerUpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    '198.51.103.0',
+    24
+);
+const splitLocRibIpv4Epoch = splitLocRibIpv4.instance.getRibEpoch();
+const splitLocRibIpv6Families = [
+    {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    }
+];
+splitLocRibPeerUpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, {
+            recvAddressFamilies: splitLocRibIpv6Families,
+            sendAddressFamilies: splitLocRibIpv6Families
+        })
+    )
+);
+const splitLocRibIpv4Routes = queryLocRibRoutes(splitLocRibPeerUpSession, splitLocRibIpv4.instance);
+assert.equal(splitLocRibIpv4Routes.length, 1);
+assert.equal(
+    splitLocRibIpv4Routes[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.ACTIVE,
+    'an IPv6-only Loc-RIB Peer Up must not make the IPv4 instance stale'
+);
+assert.equal(splitLocRibIpv4.instance.instanceState, BmpConst.BMP_SESSION_STATE.PEER_UP);
+assert.equal(splitLocRibIpv4.instance.getRibEpoch(), splitLocRibIpv4Epoch);
+assert.ok(
+    Array.from(splitLocRibPeerUpSession.bgpInstanceMap.values()).some(
+        instance =>
+            Number(instance.afi) === BgpConst.BGP_AFI_TYPE.AFI_IPV6 &&
+            Number(instance.safi) === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+    ),
+    'the later IPv6 Loc-RIB Peer Up must still create its own instance'
+);
+
+const { session: lazyLocRibPeerUpSession } = makeSession();
+const lazyLocRibIpv4 = addLocRibRoute(
+    lazyLocRibPeerUpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    '198.51.104.0',
+    24
+);
+const lazyLocRibIpv4Epoch = lazyLocRibIpv4.instance.getRibEpoch();
+lazyLocRibPeerUpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED)
+    )
+);
+assert.equal(
+    queryLocRibRoutes(lazyLocRibPeerUpSession, lazyLocRibIpv4.instance)[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.ACTIVE,
+    'the first real Loc-RIB Peer Up must not stale an instance lazily created by Route Monitoring'
+);
+assert.equal(lazyLocRibIpv4.instance.getRibEpoch(), lazyLocRibIpv4Epoch);
+lazyLocRibPeerUpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED)
+    )
+);
+assert.equal(
+    queryLocRibRoutes(lazyLocRibPeerUpSession, lazyLocRibIpv4.instance)[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE,
+    'a repeated Loc-RIB Peer Up for the same AF must still start a refresh epoch'
+);
+assert.ok(lazyLocRibIpv4.instance.getRibEpoch() > lazyLocRibIpv4Epoch);
+
 session.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -1306,6 +1517,20 @@ assert.equal(locRibStatsEvent.payload.data.statistics[0].safi, BgpConst.BGP_SAFI
 assert.equal(locRibStatsEvent.payload.data.statistics[0].value, 7);
 
 const { session: locRibPeerDownSession } = makeSession();
+const locRibPeerDownAddressFamilies = [
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST },
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST }
+];
+locRibPeerDownSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, {
+            recvAddressFamilies: locRibPeerDownAddressFamilies,
+            sendAddressFamilies: locRibPeerDownAddressFamilies
+        })
+    )
+);
 const ipv4LocRib = addLocRibRoute(
     locRibPeerDownSession,
     BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -1337,6 +1562,8 @@ assert.equal(ipv4LocRibRoutes.length, 1);
 assert.equal(ipv6LocRibRoutes.length, 1);
 assert.equal(ipv4LocRibRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
 assert.equal(ipv6LocRibRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
+const ipv4LocRibPeerDownEpoch = ipv4LocRib.instance.getRibEpoch();
+const ipv6LocRibPeerDownEpoch = ipv6LocRib.instance.getRibEpoch();
 locRibPeerDownSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -1348,8 +1575,28 @@ ipv4LocRibRoutes = queryLocRibRoutes(locRibPeerDownSession, ipv4LocRib.instance)
 ipv6LocRibRoutes = queryLocRibRoutes(locRibPeerDownSession, ipv6LocRib.instance);
 assert.equal(ipv4LocRibRoutes.length, 1);
 assert.equal(ipv6LocRibRoutes.length, 1);
+assert.equal(ipv4LocRibRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
+assert.equal(ipv6LocRibRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
+assert.equal(ipv4LocRib.instance.getRibEpoch(), ipv4LocRibPeerDownEpoch);
+assert.equal(ipv6LocRib.instance.getRibEpoch(), ipv6LocRibPeerDownEpoch);
+assert.equal(ipv4LocRib.instance.instanceState, BmpConst.BMP_SESSION_STATE.PEER_UP);
+assert.equal(ipv6LocRib.instance.instanceState, BmpConst.BMP_SESSION_STATE.PEER_DOWN);
 
 const { session: peerUpRefreshSession } = makeSession();
+const peerUpRefreshAddressFamilies = [
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST },
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST }
+];
+peerUpRefreshSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        peerUpPayloadForAddressFamilies(0, {
+            recvAddressFamilies: peerUpRefreshAddressFamilies,
+            sendAddressFamilies: peerUpRefreshAddressFamilies
+        })
+    )
+);
 const ipv4BgpRoute = addBgpSessionRoute(
     peerUpRefreshSession,
     BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -1385,10 +1632,12 @@ const refreshedIpv6Routes = queryBgpRoutes(
 assert.equal(refreshedIpv4Routes.length, 1);
 assert.equal(refreshedIpv6Routes.length, 1);
 assert.equal(refreshedIpv4Routes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
-assert.equal(refreshedIpv6Routes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
-assert.deepEqual(refreshedBgpSession.enabledAddressFamilies, [
-    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST }
-]);
+assert.equal(
+    refreshedIpv6Routes[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.ACTIVE,
+    'an IPv4-only Peer Up must not refresh an omitted IPv6 route scope'
+);
+assert.deepEqual(refreshedBgpSession.enabledAddressFamilies, peerUpRefreshAddressFamilies);
 peerUpRefreshSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -1520,6 +1769,32 @@ assert.equal(peerDownIpv6Routes.length, 1);
 assert.equal(peerDownPostPolicyRoutes.length, 1);
 
 const { session: peerDownNotificationMultiAfSession } = makeSession();
+const peerDownNotificationRecvFamilies = [
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST },
+    {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        addPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY
+    }
+];
+const peerDownNotificationSendFamilies = [
+    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST },
+    {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        addPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+    }
+];
+peerDownNotificationMultiAfSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        peerUpPayloadForAddressFamilies(0, {
+            recvAddressFamilies: peerDownNotificationRecvFamilies,
+            sendAddressFamilies: peerDownNotificationSendFamilies
+        })
+    )
+);
 const peerDownNotificationIpv4Route = addBgpSessionRoute(
     peerDownNotificationMultiAfSession,
     BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -1534,9 +1809,8 @@ const peerDownNotificationIpv6Route = addBgpSessionRoute(
     '2001:db8:121::',
     64
 );
-peerDownNotificationIpv4Route.bgpSession.enabledAddressFamilies = [
-    { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST }
-];
+const peerDownNotificationIpv6AddPathKey = `${BgpConst.BGP_AFI_TYPE.AFI_IPV6}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`;
+assert.equal(peerDownNotificationIpv4Route.bgpSession.addPathReceiveMap.get(peerDownNotificationIpv6AddPathKey), true);
 peerDownNotificationMultiAfSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
@@ -1563,6 +1837,16 @@ assert.equal(
     )[0].routeState,
     BmpConst.BMP_ROUTE_STATE.STALE
 );
+assert.equal(
+    queryBgpRoutes(
+        peerDownNotificationMultiAfSession,
+        notificationOwner,
+        BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        peerDownNotificationIpv6Route.ribType
+    )[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE
+);
 const notificationEpoch = notificationOwner.getRibEpoch(
     BgpConst.BGP_AFI_TYPE.AFI_IPV4,
     BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
@@ -1580,13 +1864,43 @@ assert.equal(
     notificationOwner,
     'Peer Up on the same BMP connection must retain the owner epoch generation'
 );
-assert.ok(
+assert.equal(
     notificationOwner.getRibEpoch(
         BgpConst.BGP_AFI_TYPE.AFI_IPV4,
         BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
         peerDownNotificationIpv4Route.ribType
-    ) > notificationEpoch
+    ),
+    notificationEpoch,
+    'the first Peer Up after Peer Down must not advance an already stale epoch again'
 );
+assert.equal(
+    queryBgpRoutes(
+        peerDownNotificationMultiAfSession,
+        notificationOwner,
+        BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+        peerDownNotificationIpv4Route.ribType
+    )[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE,
+    'opening the new generation must not reactivate a route made stale by Peer Down'
+);
+const expectedNewGenerationAddressFamilies = [
+    `${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`
+];
+['enabledAddressFamilies', 'recvAddressFamilies', 'sendAddressFamilies'].forEach(field => {
+    assert.deepEqual(
+        notificationOwner[field].map(family => `${family.afi}|${family.safi}`),
+        expectedNewGenerationAddressFamilies,
+        `the first Peer Up after Peer Down must reset old-generation ${field}`
+    );
+});
+['recvAddPathMap', 'sendAddPathMap', 'addPathReceiveMap', 'addPathSendMap', 'addPathMap'].forEach(field => {
+    assert.equal(
+        notificationOwner[field].has(peerDownNotificationIpv6AddPathKey),
+        false,
+        `the first Peer Up after Peer Down must reset old-generation ${field}`
+    );
+});
 
 const { session: addPathSession } = makeSession();
 addPathSession.processMessage(
@@ -2766,10 +3080,34 @@ statsTypeSession.processMessage(
             tlv(
                 BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS,
                 Buffer.concat([
-                    u32(2),
+                    u32(8),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_IN),
+                    u16(8),
+                    Buffer.from('0000000000000012', 'hex'),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_PRE_POLICY_ADJ_RIB_IN),
+                    u16(11),
+                    u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+                    Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST]),
+                    Buffer.from('0000000000000019', 'hex'),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_IN),
+                    u16(8),
+                    Buffer.from('0000000000000014', 'hex'),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_IN),
+                    u16(11),
+                    u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+                    Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST]),
+                    Buffer.from('0000000000000021', 'hex'),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT),
+                    u16(8),
+                    Buffer.from('000000000000000e', 'hex'),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_PRE_POLICY_ADJ_RIB_OUT),
+                    u16(11),
+                    u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
+                    Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST]),
+                    Buffer.from('0000000000000016', 'hex'),
                     u16(BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT),
-                    u16(4),
-                    u32(15),
+                    u16(8),
+                    Buffer.from('000000000000000f', 'hex'),
                     u16(BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_OUT),
                     u16(11),
                     u16(BgpConst.BGP_AFI_TYPE.AFI_IPV4),
@@ -2780,11 +3118,126 @@ statsTypeSession.processMessage(
         ])
     )
 );
-const statsTypeEvent = statsTypeEvents.find(event => event.type === BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT);
-assert.equal(statsTypeEvent.payload.data.statistics[0].typeName, 'Post-Policy Adj-RIB-Out 中的路由数');
-assert.equal(statsTypeEvent.payload.data.statistics[1].typeName, '每 AFI/SAFI Post-Policy Adj-RIB-Out 中的路由数');
-assert.equal(statsTypeEvent.payload.data.statistics[1].afi, BgpConst.BGP_AFI_TYPE.AFI_IPV4);
-assert.equal(statsTypeEvent.payload.data.statistics[1].safi, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+const statsTypeReports = statsTypeEvents
+    .filter(event => event.type === BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT)
+    .map(event => event.payload.data);
+assert.equal(statsTypeReports.length, 4, 'RFC 9972 Statistics Report must split into four exact RIB stages');
+assert.equal(statsTypeSession.bgpStatisticsReportMap.size, 4);
+const explicitPreInReport = statsTypeReports.find(
+    report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+const explicitPostInReport = statsTypeReports.find(report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN);
+const explicitPreOutReport = statsTypeReports.find(report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT);
+const explicitPostOutReport = statsTypeReports.find(
+    report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT
+);
+assert.deepEqual(
+    explicitPreInReport.statistics.map(statistic => statistic.type),
+    [BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_IN, BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_PRE_POLICY_ADJ_RIB_IN]
+);
+assert.deepEqual(
+    explicitPostInReport.statistics.map(statistic => statistic.type),
+    [
+        BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_IN,
+        BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_IN
+    ]
+);
+assert.deepEqual(
+    explicitPreOutReport.statistics.map(statistic => statistic.type),
+    [
+        BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT,
+        BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_PRE_POLICY_ADJ_RIB_OUT
+    ]
+);
+assert.deepEqual(
+    explicitPostOutReport.statistics.map(statistic => statistic.type),
+    [
+        BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT,
+        BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_POST_POLICY_ADJ_RIB_OUT
+    ]
+);
+assert.equal(explicitPreInReport.statistics[1].typeName, '每 AFI/SAFI Pre-Policy Adj-RIB-In 中的路由数');
+assert.equal(explicitPreInReport.statistics[1].afi, BgpConst.BGP_AFI_TYPE.AFI_IPV4);
+assert.equal(explicitPreInReport.statistics[1].safi, BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST);
+assert.equal(explicitPostInReport.statistics[1].typeName, '每 AFI/SAFI Post-Policy Adj-RIB-In 中的路由数');
+assert.equal(explicitPostInReport.statistics[1].value, 33);
+assert.equal(explicitPreOutReport.statistics[1].value, 22);
+assert.equal(explicitPostOutReport.statistics[1].value, 23);
+
+const { session: mixedStatsSession, events: mixedStatsEvents } = makeSession();
+mixedStatsSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.STATISTICS_REPORT,
+        Buffer.concat([
+            peerHeader(BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS),
+            tlv(
+                BmpConst.BMP_STATS_REPORT_TLV_TYPE.EXTENDED_FLAGS,
+                Buffer.from([BmpConst.BMP_SESSION_FLAGS.POST_POLICY])
+            ),
+            tlv(
+                BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS,
+                Buffer.concat([
+                    u32(3),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN),
+                    u16(4),
+                    u32(12),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT),
+                    u16(4),
+                    u32(14),
+                    u16(BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT),
+                    u16(4),
+                    u32(15)
+                ])
+            )
+        ])
+    )
+);
+const mixedStatisticsEvents = mixedStatsEvents.filter(event => event.type === BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT);
+assert.equal(mixedStatisticsEvents.length, 3, 'a mixed Statistics Report must emit one event per exact RIB stage');
+assert.equal(mixedStatsSession.bgpStatisticsReportMap.size, 3);
+const mixedPostInReport = mixedStatisticsEvents.find(
+    event => event.payload.data.ribType === BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN
+).payload.data;
+const mixedPreOutReport = mixedStatisticsEvents.find(
+    event => event.payload.data.ribType === BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT
+).payload.data;
+const mixedPostOutReport = mixedStatisticsEvents.find(
+    event => event.payload.data.ribType === BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT
+).payload.data;
+assert.equal(mixedPostInReport.rawSessionFlags, BmpConst.BMP_SESSION_FLAGS.EXTENDED_FLAGS);
+assert.equal(mixedPostInReport.effectiveSessionFlags, BmpConst.BMP_SESSION_FLAGS.POST_POLICY);
+assert.deepEqual(
+    mixedPostInReport.statistics.map(statistic => statistic.type),
+    [BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN]
+);
+assert.deepEqual(
+    mixedPreOutReport.statistics.map(statistic => statistic.type),
+    [BmpConst.BMP_STATS_TYPE.NUM_PRE_POLICY_ADJ_RIB_OUT]
+);
+assert.deepEqual(
+    mixedPostOutReport.statistics.map(statistic => statistic.type),
+    [BmpConst.BMP_STATS_TYPE.NUM_POST_POLICY_ADJ_RIB_OUT]
+);
+mixedStatsSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.STATISTICS_REPORT,
+        Buffer.concat([
+            peerHeader(),
+            tlv(
+                BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS,
+                Buffer.concat([u32(1), u16(BmpConst.BMP_STATS_TYPE.NUM_ADJ_RIB_IN), u16(4), u32(7)])
+            )
+        ])
+    )
+);
+assert.equal(mixedStatsSession.bgpStatisticsReportMap.size, 4, 'pre/post in/out reports must not overwrite each other');
+const mixedPreInReport = Array.from(mixedStatsSession.bgpStatisticsReportMap.values()).find(
+    report => report.ribType === BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.equal(mixedPreInReport.statistics[0].value, 7);
+assert.equal(mixedPostInReport.statistics[0].value, 12);
 
 const huaweiDraft19Frame = bytesFromDump(`
 0000   00 50 56 c0 00 03 fa a9 61 f7 00 10 08 00 45 00

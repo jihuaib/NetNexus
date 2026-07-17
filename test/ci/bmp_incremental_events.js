@@ -1,4 +1,5 @@
 const assert = require('assert');
+const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
 const BgpConst = require('../../electron/const/bgpConst');
 const BmpConst = require('../../electron/const/bmpConst');
@@ -7,6 +8,8 @@ const RouteUpdateAggregator = require('../../electron/utils/routeUpdateAggregato
 const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
+
+const BmpWorker = loadBmpWorkerClass(__dirname, module);
 
 const emitted = [];
 const routeUpdates = [];
@@ -147,6 +150,8 @@ aggregator.enqueueRouteUpdate({
     ...routeUpdates[0],
     type: BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_DELETE,
     changedCount: 1,
+    reason: 'reconnect-refresh-timeout',
+    projectionReset: true,
     client: { ...routeUpdates[0].client, remotePort: 50001 }
 });
 aggregator.enqueueRouteUpdate({
@@ -164,6 +169,8 @@ assert.deepEqual(primaryScopeUpdate.types, [
     BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_UPDATE,
     BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_DELETE
 ]);
+assert.equal(primaryScopeUpdate.reason, 'reconnect-refresh-timeout');
+assert.equal(primaryScopeUpdate.projectionReset, true);
 
 aggregator.enqueueInstanceRouteUpdate({
     ...instanceRouteUpdates[0],
@@ -183,5 +190,45 @@ assert.deepEqual(aggregatedInstanceRoutes[0].types, [
     BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_DELETE,
     BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_UPDATE
 ]);
+
+const flushedEvents = [];
+const worker = Object.create(BmpWorker.prototype);
+worker.bmpConfigData = {};
+assert.equal(worker.getPersistenceRefreshTimeoutMs(), 30 * 60 * 1000);
+const instanceFlushUpdates = [
+    ...aggregatedInstanceRoutes,
+    {
+        ...aggregatedInstanceRoutes[0],
+        persistentScopeId: 'another-instance-scope',
+        scopeId: 'another-instance-scope',
+        instance: {
+            ...aggregatedInstanceRoutes[0].instance,
+            persistentScopeId: 'another-instance-scope',
+            scopeId: 'another-instance-scope'
+        }
+    }
+];
+worker.routeUpdateFlushTimer = null;
+worker.routeUpdateAggregator = {
+    flushRouteUpdates: () => aggregatedRoutes,
+    flushInstanceRouteUpdates: () => instanceFlushUpdates
+};
+worker.messageHandler = {
+    sendEvent(type, payload) {
+        flushedEvents.push({ type, payload });
+    }
+};
+
+worker.flushRouteUpdateEvents();
+
+assert.equal(flushedEvents.length, 2, 'one worker flush must emit at most one event per route update kind');
+assert.equal(flushedEvents[0].type, BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE);
+assert.deepEqual(flushedEvents[0].payload, {
+    data: { batch: true, updates: aggregatedRoutes }
+});
+assert.equal(flushedEvents[1].type, BmpConst.BMP_EVT_TYPES.INSTANCE_ROUTE_UPDATE);
+assert.deepEqual(flushedEvents[1].payload, {
+    data: { batch: true, updates: instanceFlushUpdates }
+});
 
 console.log('BMP incremental event tests passed');

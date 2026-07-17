@@ -74,6 +74,12 @@ class RouteUpdateAggregator {
         if (!existing.types.includes(update.type)) {
             existing.types.push(update.type);
         }
+        if (Object.prototype.hasOwnProperty.call(update, 'reason')) {
+            existing.reason = update.reason;
+        }
+        if (Object.prototype.hasOwnProperty.call(update, 'projectionReset')) {
+            existing.projectionReset = update.projectionReset;
+        }
         existing.changedCount += this.normalizeChangedCount(update.changedCount);
         existing.updatedAt = updatedAt;
     }

@@ -526,11 +526,13 @@ SQLite Writer transaction
 | High watermark | 64 MiB |
 | Low watermark | 32 MiB |
 | Stale retention | 24 小时 |
-| Refresh timeout | 10 分钟 |
+| Refresh timeout | 30 分钟 |
 | Event retention | 7 天 |
 | 最大数据库逻辑大小 | 20 GiB |
 
-页面读取前会执行 writer fence，等待调用前已入队的 mutation 提交，再从独立只读连接查询。只读连接失败时可回退 Writer；Writer 失败则停止 BMP 摄入。
+默认未开启 Route Assurance 时，Writer 不构造也不跨 Worker 回传完整 committed route delta；开启分析时在一次 writer fence 后启用 delta，用于衔接初始快照之后的增量变化。
+
+页面列表、分页和详情查询从独立只读连接读取最新已提交的 WAL 快照，不等待持续增长的 Writer 队列。因此高速摄入时页面可能短暂滞后于尚未提交的 batch，但不会读到半个事务。停止、删除、清理和 Route Assurance 初始快照边界仍执行 writer fence。只读连接失败时可回退 Writer；Writer 失败则停止 BMP 摄入。
 
 ## 13. Route 生命周期
 
@@ -552,9 +554,11 @@ SQLite Writer transaction
 
 ### 13.3 EOR 和旧 epoch
 
-Peer Up 或新一轮刷新会推进 `current_epoch` 并进入 `syncing`。EOR 将 scope 设为 `ready`，记录 `eor_epoch` 并设置 `cleanup_pending_epoch`。
+同一 BMP 连接内，重复上报某 AF 的 Peer Up（该 AF 的新一轮刷新）会推进该 AF scope 的 `current_epoch` 并进入 `syncing`；分批 Peer Up 中首次出现的新 AF 只打开自身 scope，不影响已经存在的其他 AF。Peer Down 已推进全部已跟踪 scope 的 epoch，因此其后的首个 Peer Up 复用该 epoch，不重复推进。EOR 将精确的 AF/RIB scope 设为 `ready`，记录 `eor_epoch` 并设置 `cleanup_pending_epoch`。
 
 旧 connection/epoch 路径在删除前通过有效状态公式显示为 stale。Sweep 从 scope 对应的单一分区中分批删除旧路径，避免全库大事务。
+
+如果新连接已经用 Peer Up 打开 scope、但一直没有 EOR，refresh timeout 到期后只保留该连接实际重新上报的路径，并删除旧 connection/epoch 路径。若同一设备重连后某个历史 scope 连 Peer Up 都没有再次出现，Collector 在确认该 source 只有一个更高代的在线连接后，也从新连接建立时间开始使用同一 refresh timeout 清空该 scope 的旧路径；scope 仍保持 `down`，不会伪装为在线或 `ready`。同一 source 存在多个并发在线连接时不执行这项整 scope 清理，避免不同 feed 互相删除。
 
 ## 14. 定时 sweep 和引用对象 GC
 
@@ -566,6 +570,8 @@ Worker 默认周期性执行小批量 sweep：
 4. 分批删除超过事件保留期的 event；event delete trigger 自动减少 event 引用。
 5. 清理未被 latest 引用的旧 statistics sample 和旧 ingest batch。
 6. 删除 `current_ref_count = 0 AND event_ref_count = 0` 且超过保留期的 identity、payload 和 attributes。
+
+除默认周期 sweep 外，Worker 会为最早的 scope refresh 维护单一 deadline timer；到期清理完成后，按受影响的 `source_id/scope_id` 发送路由刷新事件，使已打开的页面重新查询 SQLite，而不是继续显示清理前的列表缓存。
 
 删除 current row 和 event 后不要绕过 trigger，否则引用计数和 scope counters 会失真。
 

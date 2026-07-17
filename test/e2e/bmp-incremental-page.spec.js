@@ -105,9 +105,13 @@ function success(data) {
 
 test.describe('BMP incremental route pages', () => {
     let calls;
+    let sessionRoutesAvailable;
+    let instanceRoutesAvailable;
 
     test.beforeEach(async ({ page }) => {
         calls = [];
+        sessionRoutesAvailable = true;
+        instanceRoutesAvailable = true;
         await page.exposeFunction('__bmpE2eCall', async (method, ...args) => {
             calls.push({ method, args });
             switch (method) {
@@ -119,9 +123,11 @@ test.describe('BMP incremental route pages', () => {
                     const request = args[0];
                     const scopeId = request.session.persistentScopeId;
                     return success({
-                        list: [route(scopeId, request.page)],
-                        total: 60,
-                        summary: { active: 60, stale: 0, total: 60 }
+                        list: sessionRoutesAvailable ? [route(scopeId, request.page)] : [],
+                        total: sessionRoutesAvailable ? 60 : 0,
+                        summary: sessionRoutesAvailable
+                            ? { active: 60, stale: 0, total: 60 }
+                            : { active: 0, stale: 0, total: 0 }
                     });
                 }
                 case 'getBgpInstances':
@@ -130,9 +136,11 @@ test.describe('BMP incremental route pages', () => {
                     const request = args[0];
                     const scopeId = request.instance.persistentScopeId;
                     return success({
-                        list: [route(scopeId, request.page)],
-                        total: 60,
-                        summary: { active: 60, stale: 0, total: 60 }
+                        list: instanceRoutesAvailable ? [route(scopeId, request.page)] : [],
+                        total: instanceRoutesAvailable ? 60 : 0,
+                        summary: instanceRoutesAvailable
+                            ? { active: 60, stale: 0, total: 60 }
+                            : { active: 0, stale: 0, total: 0 }
                     });
                 }
                 default:
@@ -196,13 +204,25 @@ test.describe('BMP incremental route pages', () => {
         expect(calls.filter(call => call.method === 'getBgpRoutes').length).toBe(routeCallsBefore);
 
         await page.evaluate(
-            ({ client, activeSession }) => {
+            ({ sourceId, scopeId }) => {
                 window.__bmpE2eEmit('bmp:routeUpdate', {
                     status: 'success',
-                    data: { client, session: activeSession, af: 1, ribType: 2, scopeId: activeSession.scopeId }
+                    data: {
+                        batch: true,
+                        updates: [
+                            {
+                                sourceId,
+                                scopeId,
+                                af: 1,
+                                ribType: 2,
+                                reason: 'reconnect-refresh-timeout',
+                                projectionReset: true
+                            }
+                        ]
+                    }
                 });
             },
-            { client: CLIENT, activeSession: SESSION_A }
+            { sourceId: CLIENT.persistentSourceId, scopeId: SESSION_A.routeScopes[0].persistentScopeId }
         );
         await expect
             .poll(() => calls.filter(call => call.method === 'getBgpRoutes').length)
@@ -225,6 +245,28 @@ test.describe('BMP incremental route pages', () => {
         await originalTab.click();
         await expect(originalTab).toHaveAttribute('aria-selected', 'true');
         await expect(page.getByTestId('bmp-session-route-table')).toHaveCount(1);
+
+        sessionRoutesAvailable = false;
+        await page.evaluate(
+            ({ sourceId, scopeId }) => {
+                window.__bmpE2eEmit('bmp:routeUpdate', {
+                    status: 'success',
+                    data: {
+                        batch: true,
+                        updates: [
+                            {
+                                sourceId,
+                                scopeId,
+                                reason: 'reconnect-refresh-timeout',
+                                projectionReset: true
+                            }
+                        ]
+                    }
+                });
+            },
+            { sourceId: CLIENT.persistentSourceId, scopeId: SESSION_A.routeScopes[0].persistentScopeId }
+        );
+        await expect(routeTable).not.toContainText('10.0.25.0');
     });
 
     test('upserts Loc-RIB tabs and ignores inactive instance route events', async ({ page }) => {
@@ -281,13 +323,24 @@ test.describe('BMP incremental route pages', () => {
         expect(calls.filter(call => call.method === 'getBgpInstanceRoutes').length).toBe(routeCallsBefore);
 
         await page.evaluate(
-            ({ client, activeInstance }) => {
+            ({ sourceId, scopeId }) => {
                 window.__bmpE2eEmit('bmp:instanceRouteUpdate', {
                     status: 'success',
-                    data: { client, instance: activeInstance, af: 1, scopeId: activeInstance.scopeId }
+                    data: {
+                        batch: true,
+                        updates: [
+                            {
+                                sourceId,
+                                scopeId,
+                                af: 1,
+                                reason: 'reconnect-refresh-timeout',
+                                projectionReset: true
+                            }
+                        ]
+                    }
                 });
             },
-            { client: CLIENT, activeInstance: INSTANCE_A }
+            { sourceId: CLIENT.persistentSourceId, scopeId: INSTANCE_A.persistentScopeId }
         );
         await expect
             .poll(() => calls.filter(call => call.method === 'getBgpInstanceRoutes').length)
@@ -310,5 +363,27 @@ test.describe('BMP incremental route pages', () => {
         await originalTab.click();
         await expect(originalTab).toHaveAttribute('aria-selected', 'true');
         await expect(page.getByTestId('bmp-loc-rib-route-table')).toHaveCount(1);
+
+        instanceRoutesAvailable = false;
+        await page.evaluate(
+            ({ sourceId, scopeId }) => {
+                window.__bmpE2eEmit('bmp:instanceRouteUpdate', {
+                    status: 'success',
+                    data: {
+                        batch: true,
+                        updates: [
+                            {
+                                sourceId,
+                                scopeId,
+                                reason: 'reconnect-refresh-timeout',
+                                projectionReset: true
+                            }
+                        ]
+                    }
+                });
+            },
+            { sourceId: CLIENT.persistentSourceId, scopeId: INSTANCE_A.persistentScopeId }
+        );
+        await expect(routeTable).not.toContainText('10.0.25.0');
     });
 });

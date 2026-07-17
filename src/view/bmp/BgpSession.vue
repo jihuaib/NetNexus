@@ -13,7 +13,13 @@
                             <nn-tab-pane v-for="client in clientList" :key="getClientKey(client)">
                                 <template #tab>
                                     <span class="client-tab-label">
-                                        <span class="client-tab-address">{{ formatClientTab(client) }}</span>
+                                        <nn-tooltip
+                                            class="client-tab-tooltip"
+                                            :title="formatClientTab(client)"
+                                            placement="right"
+                                        >
+                                            <span class="client-tab-address">{{ formatClientTab(client) }}</span>
+                                        </nn-tooltip>
                                         <span
                                             class="client-connection-state"
                                             :class="isRecordOnline(client) ? 'is-online' : 'is-offline'"
@@ -232,6 +238,7 @@
 <script setup>
     import { ref, watch, onActivated, onDeactivated } from 'vue';
     import { notify } from '../../utils/notify';
+    import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import { ProfileOutlined } from '../../ui/icons';
     import {
         BMP_SESSION_TYPE_NAME,
@@ -601,7 +608,7 @@
     };
 
     const formatClientTab = client => {
-        return client.remoteIp || '-';
+        return formatBmpClientLabel(client);
     };
 
     const getSessionVrfTableNames = session => {
@@ -660,19 +667,51 @@
 
     const onRouteUpdate = result => {
         if (result.status !== 'success' || !result.data) return;
-        const update = result.data;
-
-        if (!isSameClient(update.client, getActiveClient())) return;
-
+        const updates = Array.isArray(result.data.updates) ? result.data.updates : [result.data];
+        const activeClient = getActiveClient();
         const activeSession = getActiveSession();
-        if (isSameSession(update.session, activeSession)) {
-            if (
+        if (!activeClient || !activeSession) return;
+
+        const activeSourceId = activeClient.persistentSourceId || activeClient.sourceId || null;
+        const activeScope = getSelectedSessionRouteScope(activeSession, activeLocRibAf.value, activeLocRibType.value);
+        const activeScopeId =
+            activeScope?.persistentScopeId ||
+            activeScope?.scopeId ||
+            activeSession.persistentScopeId ||
+            activeSession.scopeId ||
+            null;
+        const shouldRefresh = updates.some(update => {
+            if (!update) return false;
+            const updateSourceId =
+                update.sourceId ||
+                update.persistentSourceId ||
+                update.client?.sourceId ||
+                update.client?.persistentSourceId ||
+                null;
+            const sourceMatches =
+                activeSourceId && updateSourceId
+                    ? activeSourceId === updateSourceId
+                    : getClientKey(update.client) === activeClientKey.value;
+            if (!sourceMatches) return false;
+
+            const updateScopeId =
+                update.scopeId ||
+                update.persistentScopeId ||
+                update.session?.scopeId ||
+                update.session?.persistentScopeId ||
+                null;
+            if (activeScopeId && updateScopeId) {
+                return activeScopeId === updateScopeId;
+            }
+
+            return (
+                getSessionKey(update.session) === activeBgpSessionKey.value &&
                 sameSelectorValue(update.af, activeLocRibAf.value) &&
                 sameSelectorValue(update.ribType, activeLocRibType.value)
-            ) {
-                scheduleRouteRefresh();
-            }
-        }
+            );
+        });
+
+        if (shouldRefresh) scheduleRouteRefresh();
     };
 
     const onSessionUpdate = result => {
@@ -1236,19 +1275,36 @@
 
     .client-tab-label {
         display: flex;
+        width: 100%;
         max-width: 132px;
+        min-width: 0;
         flex-direction: column;
         align-items: center;
         gap: 2px;
+        font-size: 14px;
+        line-height: 22px;
         overflow: hidden;
     }
 
     .client-tab-address {
         display: block;
+        width: 100%;
         max-width: 100%;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .client-tab-tooltip {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    .client-tab-tooltip :deep(.nn-tooltip-trigger) {
+        max-width: 100%;
+        min-width: 0;
     }
 
     .client-connection-state {

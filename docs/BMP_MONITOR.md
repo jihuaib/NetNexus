@@ -119,7 +119,7 @@ Loc-RIB 使用 instance 维度查询，支持路由列表、路由详情和 stal
 
 统计报告页展示 BMP Statistics Report 当前内存数据：
 
-- session statistics
+- session statistics（同一 peer 使用唯一会话页签，在 Pre/Post Adj-RIB-In/Out 四个 RIB 阶段间切换）
 - Loc-RIB statistics
 - BMPv4 TLV 信息
 - per-AFI/SAFI 统计项

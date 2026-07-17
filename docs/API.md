@@ -31,6 +31,8 @@ node scripts/mockBmpClient.js --host 127.0.0.1 --port 11019 --routes 25 --interv
 
 mock 脚本发送 BMPv4 draft-20 TLV 格式。BMP 页面里的 `v4 TLV格式` 需要与之保持一致，否则 Route Monitoring 可能无法解析出 `BGP Message TLV`。
 
+会话 Statistics Report 会在同一帧中上报 Pre/Post Adj-RIB-In/Out 四个阶段。当 `--routes=N` 时，四类全局统计值分别为 `N` / `max(0,N-1)` / `N+2` / `N+1`，并同时携带 IPv4 Unicast 的 per-AFI/SAFI 统计。Loc-RIB Statistics Report 覆盖 RD `0:0`、`65000:100`、`65000:120` 和 `65000:102`；其中 `65000:102` 同时上报 IPv4 Unicast 与 IPv4 Labeled Unicast。
+
 ## 通用规则
 
 | 项目 | 规则 |
@@ -630,6 +632,7 @@ curl http://127.0.0.1:18080/api/v1/bmp/clients
 | --- | --- | --- |
 | `client` | Client 扩展对象 | BMP 客户端信息 |
 | `session` | Session 扩展对象 | BGP session 信息 |
+| `ribType` | integer | RIB 阶段：`1` Pre Adj-RIB-In、`2` Post Adj-RIB-In、`4` Pre Adj-RIB-Out、`5` Post Adj-RIB-Out |
 | `statistics` | Statistics Item[] | 统计项 |
 | `tlvs` | TLV Item[] | BMPv4 Statistics Report TLV |
 | `updatedAt` | string | 报表更新时间 ISO 字符串 |

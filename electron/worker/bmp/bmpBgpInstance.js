@@ -37,6 +37,9 @@ class BmpBgpInstance {
         this.addPathReceiveMap = new Map();
         this.addPathSendMap = new Map();
         this.isAddPath = false;
+        // Route Monitoring may lazily create an instance before its first real
+        // Peer Up. This flag distinguishes that case from a repeated AF refresh.
+        this.peerUpSeen = false;
 
         // Full Loc-RIB route payloads are persisted in SQLite. The instance keeps
         // only lifecycle metadata and a small cached summary.
@@ -194,6 +197,7 @@ class BmpBgpInstance {
         this.addPathReceiveMap.clear();
         this.addPathSendMap.clear();
         this.isAddPath = false;
+        this.peerUpSeen = false;
         this.ribEpoch = 0;
         this.ribStaleMetadata = null;
     }
