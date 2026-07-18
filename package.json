@@ -46,6 +46,10 @@
     "scripts": {
         "install-deps:arch": "electron-builder install-app-deps",
         "build": "vite build",
+        "libyang:build:unix": "bash scripts/build-libyang-runtime.sh",
+        "libyang:build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-libyang-runtime.ps1",
+        "libyang:smoke": "node scripts/smoke-libyang-runtime.js",
+        "libyang:verify": "node scripts/verify-libyang-runtime.js",
         "start": "vite",
         "dev": "concurrently -k \"cross-env BROWSER=none npm start\" \"wait-port 3000 && electron .\"",
         "pack": "electron-builder --win --x64 --dir",
@@ -96,6 +100,7 @@
         "appId": "NetNexus",
         "productName": "NetNexus",
         "copyright": "Copyright © 2026 ${author}",
+        "beforePack": "scripts/verify-libyang-runtime.js",
         "files": [
             "dist/**/*",
             "electron/**/*",
@@ -115,6 +120,10 @@
             {
                 "from": "THIRD_PARTY_NOTICES.md",
                 "to": "THIRD_PARTY_NOTICES.md"
+            },
+            {
+                "from": "resources/libyang",
+                "to": "libyang"
             }
         ],
         "electronLanguages": [
@@ -233,6 +242,7 @@
         "electron-log": "^5.3.3",
         "electron-store": "^8.2.0",
         "electron-updater": "^6.1.7",
+        "fast-xml-parser": "^5.10.1",
         "iconv-lite": "^0.6.3",
         "ipaddr.js": "^2.1.0",
         "net-snmp": "^3.26.3",

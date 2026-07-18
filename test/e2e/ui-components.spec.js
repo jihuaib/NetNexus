@@ -366,6 +366,7 @@ test.describe('Custom UI component interactions', () => {
             'FTP服务器',
             '外部API',
             '服务器部署',
+            '运行时诊断',
             '应用更新'
         ]);
         expect(new Set(Object.values(settingsIconShapes)).size).toBe(Object.keys(settingsIconShapes).length);

@@ -39,6 +39,11 @@ const SnmpMain = () => import('../view/snmp/SnmpMain.vue');
 const SnmpConfig = () => import('../view/snmp/SnmpConfig.vue');
 const SnmpMib = () => import('../view/snmp/SnmpMib.vue');
 const SnmpTrap = () => import('../view/snmp/SnmpTrap.vue');
+const YangMain = () => import('../view/yang/YangMain.vue');
+const YangConnection = () => import('../view/yang/YangConnection.vue');
+const YangModules = () => import('../view/yang/YangModules.vue');
+const YangWorkspace = () => import('../view/yang/YangWorkspace.vue');
+const YangOperations = () => import('../view/yang/YangOperations.vue');
 const DhcpMain = () => import('../view/dhcp/DhcpMain.vue');
 const DhcpConfig = () => import('../view/dhcp/DhcpConfig.vue');
 const DhcpLeaseList = () => import('../view/dhcp/DhcpLeaseList.vue');
@@ -300,6 +305,39 @@ const routes = [
                         path: 'snmp-trap',
                         name: 'SnmpTrap',
                         component: SnmpTrap,
+                        meta: { keepAlive: true }
+                    }
+                ]
+            },
+            {
+                path: '/yang',
+                name: 'YangMain',
+                component: YangMain,
+                meta: { keepAlive: true },
+                redirect: '/yang/yang-connection',
+                children: [
+                    {
+                        path: 'yang-connection',
+                        name: 'YangConnection',
+                        component: YangConnection,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'yang-modules',
+                        name: 'YangModules',
+                        component: YangModules,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'yang-workspace',
+                        name: 'YangWorkspace',
+                        component: YangWorkspace,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'yang-operations',
+                        name: 'YangOperations',
+                        component: YangOperations,
                         meta: { keepAlive: true }
                     }
                 ]

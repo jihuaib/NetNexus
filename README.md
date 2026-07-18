@@ -15,6 +15,7 @@ NetNexus 是一个基于 Vue 3、自研 NetNexus UI 和 Electron 的本地网络
 - [BMP 监控器](docs/BMP_MONITOR.md)：BMP v3/v4 接收、BGP Session、Loc-RIB、五阶段路由矩阵、路由追踪、包含已撤销/非 IP NLRI 的路由轨迹、统计报告和只读 HTTP API。
 - [RPKI RTR 服务](docs/RPKI_VALIDATOR.md)：RPKI-RTR 服务端、ROA、Router Key、ASPA 数据管理和 JSON 导入。
 - [SNMP 工具](docs/SNMP_MANAGER.md)：Trap 接收、Trap 历史、MIB 导入/编译、OID 树、OID 解析和基础 SNMP 查询操作。
+- [NETCONF / YANG 工作台](docs/NETCONF_YANG.md)：NETCONF 连接管理、设备 YANG Library 发现与下载、内置 libyang 权威编译、本地 Schema 浏览和常用 RPC 操作。
 - [FTP 服务器](docs/FTP_SERVER.md)：本地 FTP 服务、用户目录配置、客户端连接列表。
 - [DHCP 服务器](docs/DHCP_SERVER.md)：DHCPv4/DHCPv6 地址分配、租约列表和测试脚本。
 - [NTP 服务器](docs/NTP_SERVER.md)：本地 NTP 响应、时间参数配置和请求日志。
@@ -125,6 +126,7 @@ NetNexus/
 - [BMP SQLite 数据库说明](docs/BMP_SQLITE_DATABASE.md)
 - [RPKI RTR 服务](docs/RPKI_VALIDATOR.md)
 - [SNMP 工具](docs/SNMP_MANAGER.md)
+- [NETCONF / YANG 工作台](docs/NETCONF_YANG.md)
 - [FTP 服务器](docs/FTP_SERVER.md)
 - [DHCP 服务器](docs/DHCP_SERVER.md)
 - [NTP 服务器](docs/NTP_SERVER.md)

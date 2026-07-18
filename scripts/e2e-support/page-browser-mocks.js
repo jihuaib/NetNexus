@@ -10,6 +10,7 @@ const { snmpPageApiScript } = require('./snmp');
 const { syslogPageApiScript } = require('./syslog');
 const { tftpPageApiScript } = require('./tftp');
 const { toolsPageApiScript } = require('./tools');
+const { yangPageApiScript } = require('./yang');
 
 const featurePageBrowserMockScript = buildFeaturePageBrowserMockScript([
     toolsPageApiScript,
@@ -22,7 +23,8 @@ const featurePageBrowserMockScript = buildFeaturePageBrowserMockScript([
     radiusPageApiScript,
     tftpPageApiScript,
     syslogPageApiScript,
-    bgpPageApiScript
+    bgpPageApiScript,
+    yangPageApiScript
 ]);
 
 module.exports = {

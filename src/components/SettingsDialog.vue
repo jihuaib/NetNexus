@@ -32,6 +32,10 @@
                         <template #icon><component :is="settingsNavigationIcons.serverDeployment" /></template>
                         <span>服务器部署</span>
                     </nn-menu-item>
+                    <nn-menu-item key="runtime">
+                        <template #icon><component :is="settingsNavigationIcons.runtime" /></template>
+                        <span>运行时诊断</span>
+                    </nn-menu-item>
                     <nn-menu-item key="update">
                         <template #icon><component :is="settingsNavigationIcons.update" /></template>
                         <span>应用更新</span>
@@ -59,6 +63,7 @@
     import FtpSettings from '../view/settings/FtpSettings.vue';
     import ServerDeployment from '../view/settings/ServerDeployment.vue';
     import ApiSettings from '../view/settings/ApiSettings.vue';
+    import RuntimeSettings from '../view/settings/RuntimeSettings.vue';
 
     const props = defineProps({
         open: {
@@ -103,6 +108,8 @@
                 return ApiSettings;
             case 'server-deployment':
                 return ServerDeployment;
+            case 'runtime':
+                return RuntimeSettings;
             case 'update':
                 return UpdateSettings;
             default:
@@ -189,6 +196,7 @@
     .settings-content :deep(.ftp-settings),
     .settings-content :deep(.api-settings),
     .settings-content :deep(.server-deployment-container),
+    .settings-content :deep(.runtime-settings),
     .settings-content :deep(.update-settings) {
         flex: 1 1 0;
         min-width: 0;

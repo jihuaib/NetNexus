@@ -19,6 +19,7 @@ function main() {
         path.join(userDataPath, 'rpki', 'rpki.sqlite3'),
         path.join(userDataPath, 'rpki', 'rpki.sqlite3-wal'),
         path.join(userDataPath, 'rpki', 'rpki.sqlite3-shm'),
+        path.join(userDataPath, 'yang', 'yang.sqlite3'),
         path.join(userDataPath, 'bgp-routes.sqlite3'),
         path.join(userDataPath, 'bgp-routes.sqlite3-wal'),
         path.join(userDataPath, 'bgp-routes.sqlite3-shm'),
@@ -50,6 +51,7 @@ function main() {
         }
         assert.equal(fs.existsSync(path.join(userDataPath, 'bgp')), false);
         assert.equal(fs.existsSync(path.join(userDataPath, 'rpki')), false);
+        assert.equal(fs.existsSync(path.join(userDataPath, 'yang')), false);
         for (const filePath of preservedFiles) {
             assert.equal(fs.existsSync(filePath), true, `${filePath} should be preserved`);
         }

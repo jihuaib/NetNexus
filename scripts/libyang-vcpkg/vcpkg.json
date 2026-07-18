@@ -1,0 +1,18 @@
+{
+    "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+    "name": "netnexus-libyang-windows-build",
+    "version-string": "1",
+    "builtin-baseline": "4e82e29f14eac2b3422f18f72c7524d04f19924e",
+    "dependencies": ["dirent", "pthreads"],
+    "overrides": [
+        {
+            "name": "dirent",
+            "version": "1.26"
+        },
+        {
+            "name": "pthreads",
+            "version": "3.0.0",
+            "port-version": 14
+        }
+    ]
+}

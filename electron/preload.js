@@ -265,6 +265,40 @@ contextBridge.exposeInMainWorld('snmpApi', {
     listOidInstances: request => ipcRenderer.invoke('snmp:listOidInstances', request)
 });
 
+// NETCONF 连接与设备操作
+contextBridge.exposeInMainWorld('netconfApi', {
+    listProfiles: () => ipcRenderer.invoke('netconf:listProfiles'),
+    saveProfile: profile => ipcRenderer.invoke('netconf:saveProfile', profile),
+    deleteProfile: profileId => ipcRenderer.invoke('netconf:deleteProfile', profileId),
+    selectPrivateKey: () => ipcRenderer.invoke('netconf:selectPrivateKey'),
+    testConnection: profile => ipcRenderer.invoke('netconf:testConnection', profile),
+    connect: profileId => ipcRenderer.invoke('netconf:connect', profileId),
+    disconnect: profileId => ipcRenderer.invoke('netconf:disconnect', profileId),
+    getSessionState: profileId => ipcRenderer.invoke('netconf:getSessionState', profileId),
+    discoverModules: profileId => ipcRenderer.invoke('netconf:discoverModules', profileId),
+    downloadModules: request => ipcRenderer.invoke('netconf:downloadModules', request),
+    executeOperation: request => ipcRenderer.invoke('netconf:executeOperation', request),
+    sendRpc: request => ipcRenderer.invoke('netconf:sendRpc', request)
+});
+
+// YANG 本地仓库与编译
+contextBridge.exposeInMainWorld('yangApi', {
+    listModules: query => ipcRenderer.invoke('yang:listModules', query),
+    selectFiles: () => ipcRenderer.invoke('yang:selectFiles'),
+    selectDirectory: () => ipcRenderer.invoke('yang:selectDirectory'),
+    importFiles: filePaths => ipcRenderer.invoke('yang:importFiles', filePaths),
+    importDirectory: directoryPath => ipcRenderer.invoke('yang:importDirectory', directoryPath),
+    getCompilerStatus: options => ipcRenderer.invoke('yang:getCompilerStatus', options),
+    compile: options => ipcRenderer.invoke('yang:compile', options),
+    clearWorkspace: () => ipcRenderer.invoke('yang:clearWorkspace'),
+    getWorkspace: () => ipcRenderer.invoke('yang:getWorkspace'),
+    getSchemaRoots: query => ipcRenderer.invoke('yang:getSchemaRoots', query),
+    getSchemaChildren: request => ipcRenderer.invoke('yang:getSchemaChildren', request),
+    getSchemaNode: request => ipcRenderer.invoke('yang:getSchemaNode', request),
+    getModuleSource: request => ipcRenderer.invoke('yang:getModuleSource', request),
+    getDiagnostics: query => ipcRenderer.invoke('yang:getDiagnostics', query)
+});
+
 // ntp模块
 contextBridge.exposeInMainWorld('ntpApi', {
     saveNtpConfig: config => ipcRenderer.invoke('ntp:saveNtpConfig', config),

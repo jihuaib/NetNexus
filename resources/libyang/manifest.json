@@ -1,0 +1,33 @@
+{
+    "schemaVersion": 1,
+    "libyangVersion": "5.8.6",
+    "tag": "v5.8.6",
+    "libyangCommit": "47351e59e2965e350f9d4098f15ecbe6b3850f6f",
+    "source": "https://github.com/CESNET/libyang",
+    "pcre2Version": "10.47",
+    "pcre2Tag": "pcre2-10.47",
+    "pcre2Commit": "f454e231fe5006dd7ff8f4693fd2b8eb94333429",
+    "pcre2Source": "https://github.com/PCRE2Project/pcre2",
+    "license": "BSD-3-Clause",
+    "buildMode": "static",
+    "interactive": false,
+    "windowsDependencies": {
+        "vcpkgBaseline": "4e82e29f14eac2b3422f18f72c7524d04f19924e",
+        "getopt": {
+            "version": "f46459cbe64b",
+            "commit": "f46459cbe64b8b05ef617f59b576e81f7ec8ed9c",
+            "source": "https://github.com/matveyt/getopt",
+            "license": "Unlicense"
+        },
+        "pthreads": {
+            "version": "3.0.0#14",
+            "source": "https://sourceforge.net/projects/pthreads4w/",
+            "license": "Apache-2.0"
+        },
+        "dirent": {
+            "version": "1.26",
+            "source": "https://github.com/tronkko/dirent",
+            "license": "MIT"
+        }
+    }
+}

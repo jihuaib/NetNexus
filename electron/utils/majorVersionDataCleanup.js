@@ -45,6 +45,7 @@ function clearMajorVersionData(userDataPath) {
     const removedJsonFiles = removeJsonDataFiles(resolvedUserDataPath);
     clearRpkiPersistentData(resolvedUserDataPath);
     fs.rmSync(path.join(resolvedUserDataPath, 'bgp'), { recursive: true, force: true });
+    fs.rmSync(path.join(resolvedUserDataPath, 'yang'), { recursive: true, force: true });
     for (const fileName of LEGACY_BGP_DATABASE_FILES) {
         fs.rmSync(path.join(resolvedUserDataPath, fileName), { force: true });
     }

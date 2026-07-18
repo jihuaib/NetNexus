@@ -69,6 +69,7 @@
         <!-- 更新通知 -->
         <UpdateNotification />
         <MibCompileNotification />
+        <YangTaskNotification />
     </div>
 </template>
 
@@ -87,6 +88,7 @@
 
     import SettingsDialog from '../components/SettingsDialog.vue';
     import MibCompileNotification from '../components/MibCompileNotification.vue';
+    import YangTaskNotification from '../components/YangTaskNotification.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
     import modalResizeHandler from '../utils/modalResizeHandler';
 
@@ -141,6 +143,13 @@
             label: 'SNMP服务器',
             title: 'SNMP服务器',
             route: '/snmp'
+        },
+        {
+            key: 'NETCONF/YANG',
+            icon: h(moduleNavigationIcons.yang),
+            label: 'NETCONF/YANG',
+            title: 'NETCONF/YANG',
+            route: '/yang'
         },
         {
             key: 'DHCP服务器',

@@ -23,6 +23,8 @@ const NtpApp = require('./ntpApp');
 const RadiusApp = require('./radiusApp');
 const TftpApp = require('./tftpApp');
 const SyslogApp = require('./syslogApp');
+const YangApp = require('./yangApp');
+const NetconfApp = require('./netconfApp');
 const AppUpdater = require('./updater');
 const NativeApp = require('./nativeApp');
 const FtpConst = require('../const/ftpConst');
@@ -72,6 +74,8 @@ class SystemApp {
         this.radiusApp = new RadiusApp(ipc, this.programStore);
         this.tftpApp = new TftpApp(ipc, this.programStore);
         this.syslogApp = new SyslogApp(ipc, this.programStore);
+        this.yangApp = new YangApp(ipc, this.programStore);
+        this.netconfApp = new NetconfApp(ipc, this.programStore, { yangApp: this.yangApp });
         this.updaterApp = new AppUpdater(ipc, win);
         this.nativeApp = new NativeApp(ipc);
         this.toolsApp = new ToolsApp(ipc, this.programStore);
@@ -206,12 +210,15 @@ class SystemApp {
                 this.radiusApp,
                 this.tftpApp,
                 this.syslogApp,
-                this.toolsApp
+                this.toolsApp,
+                this.yangApp,
+                this.netconfApp
             ].forEach(appInstance => {
                 if (appInstance) {
                     appInstance.store = this.programStore;
                 }
             });
+            this.yangApp.invalidateCompilation();
             return true;
         } catch (error) {
             logger.error('清除不兼容数据时出错:', error.message);
@@ -651,7 +658,9 @@ class SystemApp {
             this.ntpApp,
             this.radiusApp,
             this.tftpApp,
-            this.syslogApp
+            this.syslogApp,
+            this.yangApp,
+            this.netconfApp
         ].forEach(appInstance => this.applyLogLevelToApp(appInstance));
     }
 
@@ -790,6 +799,8 @@ class SystemApp {
         const isRadiusRunning = this.radiusApp.getRadiusRunning();
         const isTftpRunning = this.tftpApp.getTftpRunning();
         const isSyslogRunning = this.syslogApp.getSyslogRunning();
+        const isNetconfRunning = this.netconfApp.getRunning();
+        const isYangRunning = this.yangApp.getRunning();
         const isApiRunning = this.externalApiServer.getRunning();
         const isCliRunning = this.cliAccessServer.getRunning();
 
@@ -803,6 +814,8 @@ class SystemApp {
             isRadiusRunning ||
             isTftpRunning ||
             isSyslogRunning ||
+            isNetconfRunning ||
+            isYangRunning ||
             isApiRunning ||
             isCliRunning
         ) {
@@ -853,8 +866,10 @@ class SystemApp {
                     await this.cliAccessServer.stop();
                 }
 
+                await this.netconfApp.closeAll();
                 await this.bmpApp.closeOfflinePersistenceReader();
                 await this.rpkiApp.closeStorage();
+                await this.yangApp.close();
 
                 return true;
             }
@@ -866,6 +881,8 @@ class SystemApp {
         }
         await this.bmpApp.closeOfflinePersistenceReader();
         await this.rpkiApp.closeStorage();
+        await this.netconfApp.closeAll();
+        await this.yangApp.close();
         return true;
     }
 

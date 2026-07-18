@@ -6,6 +6,7 @@ import {
     CloudServerOutlined,
     ClusterOutlined,
     CodeOutlined,
+    FileSearchOutlined,
     FileTextOutlined,
     FolderOutlined,
     KeyOutlined,
@@ -13,6 +14,7 @@ import {
     SafetyOutlined,
     SettingOutlined,
     SwapOutlined,
+    ToolOutlined,
     WifiOutlined
 } from './icons';
 
@@ -23,6 +25,7 @@ export const moduleNavigationIcons = Object.freeze({
     rpki: SafetyOutlined,
     ftp: FolderOutlined,
     snmp: CodeOutlined,
+    yang: FileSearchOutlined,
     dhcp: WifiOutlined,
     ntp: ClockCircleOutlined,
     radius: KeyOutlined,
@@ -36,5 +39,6 @@ export const settingsNavigationIcons = Object.freeze({
     ftp: moduleNavigationIcons.ftp,
     externalApi: ApiOutlined,
     serverDeployment: CloudServerOutlined,
+    runtime: ToolOutlined,
     update: CloudDownloadOutlined
 });

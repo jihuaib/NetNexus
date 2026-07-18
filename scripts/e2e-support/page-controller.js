@@ -11,6 +11,7 @@ const snmp = require('./snmp');
 const syslog = require('./syslog');
 const tftp = require('./tftp');
 const tools = require('./tools');
+const yang = require('./yang');
 const { errorResponse, getFreeTcpPort, getFreeUdpPort, successResponse, timestamp } = require('./common');
 
 const projectRoot = path.join(__dirname, '..', '..');
@@ -26,7 +27,8 @@ const featureHandlers = {
     snmp,
     syslog,
     tftp,
-    tools
+    tools,
+    yang
 };
 
 class FeaturePageE2eController {
@@ -51,7 +53,8 @@ class FeaturePageE2eController {
             snmp: snmp.createSnmpPageState(),
             syslog: syslog.createSyslogPageState(now),
             tftp: tftp.createTftpPageState(),
-            tools: tools.createToolsPageState()
+            tools: tools.createToolsPageState(),
+            yang: yang.createYangPageState()
         };
     }
 
