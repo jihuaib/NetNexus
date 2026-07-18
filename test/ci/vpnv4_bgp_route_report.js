@@ -183,9 +183,14 @@ async function makeWorker() {
 }
 
 async function closeWorker(worker) {
-    await worker.persistence?.drain();
-    await worker.persistenceReader?.close();
-    await worker.persistence?.close();
+    const persistence = worker.persistence;
+    const persistenceReader = worker.persistenceReader;
+    worker.persistence = null;
+    worker.persistenceReader = null;
+    worker.clearPersistenceSweepTimer?.();
+    await persistence?.drain();
+    await persistenceReader?.close();
+    await persistence?.close();
     fs.rmSync(worker.tempDir, { recursive: true, force: true });
 }
 

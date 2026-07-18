@@ -185,6 +185,7 @@ class BmpWorker {
         this.routeUpdateFlushTimer = setTimeout(() => {
             this.flushRouteUpdateEvents();
         }, this.routeUpdateFlushIntervalMs);
+        this.routeUpdateFlushTimer.unref?.();
     }
 
     flushRouteUpdateEvents() {
@@ -492,6 +493,7 @@ class BmpWorker {
         }
         const intervalMs = Math.max(1000, Number(this.bmpConfigData?.persistenceSweepIntervalMs) || 30000);
         this.persistenceSweepTimer = setInterval(() => this.runPersistenceSweep(), intervalMs);
+        this.persistenceSweepTimer.unref?.();
     }
 
     clearPersistenceSweepTimer() {
@@ -535,6 +537,7 @@ class BmpWorker {
             this.persistenceSweepDeadlineTimer = null;
             this.runPersistenceSweep();
         }, delayMs);
+        this.persistenceSweepDeadlineTimer.unref?.();
     }
 
     requestPersistenceSweep() {
@@ -545,6 +548,7 @@ class BmpWorker {
             this.persistenceSweepRequestTimer = null;
             this.runPersistenceSweep();
         }, 250);
+        this.persistenceSweepRequestTimer.unref?.();
         return true;
     }
 
@@ -651,6 +655,7 @@ class BmpWorker {
                     this.persistenceSweepCatchupTimer = null;
                     this.runPersistenceSweep();
                 }, delayMs);
+                this.persistenceSweepCatchupTimer.unref?.();
             }
         }
     }

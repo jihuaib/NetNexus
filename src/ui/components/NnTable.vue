@@ -715,11 +715,13 @@
         background: transparent;
     }
 
+    .nn-table-content:hover::-webkit-scrollbar-thumb:horizontal,
     .nn-table-content.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal,
     .nn-table-content.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical {
         background: var(--nn-color-text-placeholder);
     }
 
+    .nn-table-content:hover::-webkit-scrollbar-thumb:horizontal:hover,
     .nn-table-content.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal:hover,
     .nn-table-content.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical:hover {
         background: var(--nn-color-text-muted);

@@ -241,16 +241,19 @@
         background: transparent;
     }
 
+    .nn-tabs-nav-wrap:hover,
     .nn-tabs-nav-wrap.nn-scrollbar-x-active,
     .nn-tabs-nav-wrap.nn-scrollbar-y-active {
         scrollbar-color: var(--nn-color-text-placeholder) transparent;
     }
 
+    .nn-tabs-nav-wrap:hover::-webkit-scrollbar-thumb:horizontal,
     .nn-tabs-nav-wrap.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal,
     .nn-tabs-nav-wrap.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical {
         background: var(--nn-color-text-placeholder);
     }
 
+    .nn-tabs-nav-wrap:hover::-webkit-scrollbar-thumb:horizontal:hover,
     .nn-tabs-nav-wrap.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal:hover,
     .nn-tabs-nav-wrap.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical:hover {
         background: var(--nn-color-text-muted);
