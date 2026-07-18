@@ -139,7 +139,7 @@ else console.log(JSON.stringify(args));
         assert.equal(discovered.engine, 'libyang');
         assert.equal(discovered.executable, 'yanglint');
         assert.equal(discovered.version, '5.8.6');
-        assert.equal(discovered.path, fs.realpathSync(bundledExecutable));
+        assert.equal(discovered.path, await fs.promises.realpath(bundledExecutable));
         assert.equal(discovered.source, 'bundled');
         assert.equal(discovered.moduleSearchPath, moduleSearchPath);
         assert.equal(discovered.capabilities.schemaValidation, true);
