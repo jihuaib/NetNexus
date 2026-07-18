@@ -31,6 +31,72 @@ NETCONF / YANG 工作台用于连接支持 NETCONF over SSH 的网络设备，�
 | Schema 工作区 | 编译全部本地模型，浏览 Schema 树和节点属性，查看模块源码与编译诊断。 |
 | 设备操作 | 根据当前 Capability 执行 NETCONF 操作，预览请求 XML，并查看完整响应。 |
 
+## 使用本地 NETCONF Mock 完整联调
+
+项目提供独立的 NETCONF-over-SSH Mock Server。它不是浏览器接口桩，而是使用真实 SSH 密码认证、SSH `netconf` subsystem、NETCONF `hello` 交换和 NETCONF 1.0/1.1 framing，因此可以在没有网络设备时验证从连接到配置提交的完整链路。
+
+先在两个终端中分别启动 Mock 设备和 NetNexus：
+
+```bash
+# 终端 1：启动 Mock 设备
+npm run mock:netconf
+
+# 终端 2：启动 NetNexus
+npm run dev
+```
+
+Mock 启动后会打印监听地址、SSH Host Key 指纹和 Profile 参数。默认参数如下：
+
+| Profile 字段 | 默认值 |
+| --- | --- |
+| Profile 名称 | `本地 NETCONF Mock` |
+| 设备地址 | `127.0.0.1` |
+| 端口 | `8830` |
+| 认证方式 | 密码 |
+| 用户名 | `netconf` |
+| 密码 | `netconf` |
+| Host Key 指纹 | 可复制启动日志中的 `SHA256:` 指纹；首次连接也可以留空 |
+| 自动重连 | 关闭 |
+
+进入“NETCONF/YANG → 连接设置”新建普通 Profile，填入上表参数，然后依次点击“测试连接 → 保存 → 连接”。这个 Profile 与真实设备 Profile 使用相同的连接流程，不需要开启页面专用的 Mock 模式。
+
+连接成功后，可以按以下顺序验证完整流程：
+
+1. 进入“模型列表”，点击“读取设备列表”，确认发现 `netnexus-mock-device` 和 `netnexus-mock-types`。
+2. 选择并下载这两个模型。`netnexus-mock-device` 会通过 `import` 引用 `netnexus-mock-types`，可用于验证 `get-schema` 和依赖处理。
+3. 选择下载后的模型执行“编译所选”，或进入“Schema 工作区”执行“编译工作区”，确认 libyang 编译成功并能浏览 `system`、`interfaces` 和 `state` 节点。
+4. 进入“设备操作”，执行 `get` 或对 `running` 执行 `get-config`，确认初始 hostname 为 `netnexus-mock`。
+5. 选择 `edit-config`，目标 datastore 设为 `candidate`，`default-operation` 设为 `merge`，在“config XML”中粘贴下面的内容并执行：
+
+```xml
+<system xmlns="urn:netnexus:params:xml:ns:yang:mock-device">
+  <hostname>netnexus-lab-router</hostname>
+  <location>local-integration-test</location>
+</system>
+<interfaces xmlns="urn:netnexus:params:xml:ns:yang:mock-device">
+  <interface>
+    <name>eth0</name>
+    <description>Updated from NetNexus</description>
+    <enabled>true</enabled>
+    <mtu>9000</mtu>
+  </interface>
+</interfaces>
+```
+
+6. 对 `candidate` 执行 `validate`，再执行 `commit`。最后对 `running` 执行 `get-config`，确认 hostname、location、接口描述和 MTU 已更新。
+7. 还可以继续验证 `copy-config`、`delete-config`、`lock`、`unlock`、`discard-changes`、原始 RPC、通知和 Mock 模型中定义的 `reboot` RPC。服务端收到的 RPC 及 datastore revision 会实时输出到启动 Mock 的终端。
+
+Mock datastore 只保存在当前进程内存中，重启服务会恢复初始配置。在 Mock 终端中可使用 `/status`、`/show running`、`/show candidate`、`/reset`、`/notify <message>` 和 `/quit` 辅助观察或重置状态。查看完整启动参数：
+
+```bash
+npm run mock:netconf -- --help
+
+# 自定义端口和账号
+npm run mock:netconf -- --port 18830 --username demo --password secret
+```
+
+Mock 默认只监听 `127.0.0.1`。默认账号、密码以及仓库中的固定 SSH Host Key 都是公开的测试材料，不应部署到生产环境或不可信网络；固定 Key 仅用于让本地 Profile 在多次启动之间保持同一个指纹。
+
 ## 快速开始
 
 ### 1. 创建连接

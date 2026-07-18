@@ -84,6 +84,7 @@
         "benchmark:rpki-sqlite": "cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/benchmarks/rpki_sqlite_scale_benchmark.js",
         "mock:bgp": "node scripts/mockBgpClient.js",
         "mock:bmp": "node scripts/mockBmpClient.js",
+        "mock:netconf": "node scripts/mockNetconfServer.js",
         "mock:radius": "node scripts/mockRadiusClient.js",
         "mock:ftp": "node scripts/mockFtpClient.js",
         "mock:tftp": "node scripts/mockTftpClient.js",

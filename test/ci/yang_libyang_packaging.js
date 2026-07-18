@@ -84,6 +84,20 @@ function verifyScriptSyntax() {
     assert.match(powershellSource, /Assert-WindowsSystemDependencies/);
     assert.match(powershellSource, /dumpbin\.exe/);
     assert.match(powershellSource, /--x-install-root=/);
+    assert.match(powershellSource, /Test-VcpkgBaselineAvailable/);
+    assert.match(powershellSource, /cat-file -e "\$\{Baseline\}:versions\/baseline\.json"/);
+    assert.match(
+        powershellSource,
+        /git -C \$Path fetch --no-tags https:\/\/github\.com\/microsoft\/vcpkg\.git \$Baseline/
+    );
+    assert.doesNotMatch(powershellSource, /git -C \$Path fetch[^\r\n]*--depth/);
+    const baselinePreflight = 'Ensure-VcpkgBaseline -Path $VcpkgRoot -Baseline $VcpkgBaseline';
+    const baselinePreflightIndex = powershellSource.lastIndexOf(baselinePreflight);
+    const vcpkgInstallIndex = powershellSource.indexOf('& $Vcpkg install');
+    assert(
+        baselinePreflightIndex >= 0 && baselinePreflightIndex < vcpkgInstallIndex,
+        'the pinned vcpkg baseline must be available before manifest installation starts'
+    );
     assert.doesNotMatch(powershellSource, /vcpkg install pthreads dirent getopt-win32/);
     for (const generatedLicense of [
         'LICENSE.libyang',

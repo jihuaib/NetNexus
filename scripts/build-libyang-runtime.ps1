@@ -14,10 +14,11 @@ $VcpkgRoot = if ($env:VCPKG_ROOT) {
 $Vcpkg = Join-Path $VcpkgRoot 'vcpkg.exe'
 $VcpkgManifestRoot = Join-Path $ProjectRoot 'scripts/libyang-vcpkg'
 $VcpkgManifest = Get-Content (Join-Path $VcpkgManifestRoot 'vcpkg.json') -Raw | ConvertFrom-Json
+$VcpkgBaseline = $VcpkgManifest.'builtin-baseline'
 if (-not (Test-Path $Vcpkg -PathType Leaf)) {
     throw "vcpkg was not found at $Vcpkg. Set VCPKG_ROOT to a bootstrapped vcpkg checkout."
 }
-if ($VcpkgManifest.'builtin-baseline' -ne $Release.windowsDependencies.vcpkgBaseline) {
+if ($VcpkgBaseline -ne $Release.windowsDependencies.vcpkgBaseline) {
     throw 'The Windows vcpkg baseline does not match the bundled runtime release manifest.'
 }
 $VcpkgDependencyNames = @($VcpkgManifest.dependencies | Sort-Object)
@@ -56,6 +57,36 @@ function Assert-GitCommit {
     $Actual = (& git -C $Path rev-parse HEAD | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $Actual -ne $Expected) {
         throw "Pinned dependency commit mismatch in ${Path}: expected $Expected, got $Actual."
+    }
+}
+
+function Test-VcpkgBaselineAvailable {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Baseline
+    )
+    & git -C $Path cat-file -e "${Baseline}^{commit}" 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    & git -C $Path cat-file -e "${Baseline}:versions/baseline.json" 2>$null
+    return $LASTEXITCODE -eq 0
+}
+
+function Ensure-VcpkgBaseline {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Baseline
+    )
+    if (Test-VcpkgBaselineAvailable -Path $Path -Baseline $Baseline) { return }
+
+    Write-Host "Fetching pinned vcpkg baseline $Baseline..."
+    # Keep the existing checkout's full history: vcpkg version records can refer
+    # to port tree objects older than the selected baseline.
+    & git -C $Path fetch --no-tags https://github.com/microsoft/vcpkg.git $Baseline
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to fetch pinned vcpkg baseline $Baseline."
+    }
+    if (-not (Test-VcpkgBaselineAvailable -Path $Path -Baseline $Baseline)) {
+        throw "Pinned vcpkg baseline $Baseline does not contain versions/baseline.json."
     }
 }
 
@@ -127,6 +158,7 @@ function Assert-WindowsSystemDependencies {
 }
 
 try {
+    Ensure-VcpkgBaseline -Path $VcpkgRoot -Baseline $VcpkgBaseline
     & $Vcpkg install `
         "--x-manifest-root=$VcpkgManifestRoot" `
         "--x-install-root=$VcpkgInstalled" `

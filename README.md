@@ -45,6 +45,7 @@ npm run lint
 npm test
 npm run test:e2e:frr
 npm run frr:bmp:lab -- --help
+npm run mock:netconf
 npm run mock:bmp
 npm run docs:screenshots
 npm run docs:pdf
@@ -52,11 +53,37 @@ npm run docs:pdf
 
 说明：
 
+- `npm run mock:netconf` 会在 `127.0.0.1:8830` 启动一个真实的 NETCONF-over-SSH 测试设备，默认用户名和密码均为 `netconf`。它支持模型发现、`get-schema`、配置 datastore 和常用 RPC，可用于完整验证 NETCONF/YANG 工作台。
 - `npm run mock:bmp` 会向本机 BMP 服务发送模拟数据，用于查看 BMP 页面布局和接口返回。
 - `npm run test:e2e:frr` 会通过 Docker 启动两台固定为 `FRR 10.5.4` 的路由器，使用真实 BMPv3 客户端验证 Initiation、Peer Up/Down、pre/post-policy Route Monitoring、Loc-RIB、Statistics 和 SQLite 查询链路。测试覆盖 FRR BMP Route Monitoring 支持的 7 个地址族：IPv4/IPv6 Unicast、IPv4/IPv6 Multicast、VPNv4、VPNv6 和 L2VPN EVPN；默认在 5 个可伸缩地址族各生成 1024 条路由，Multicast 每族生成一条 default，共 5122 条源路由、15366 条三视图持久化路由。可通过 `FRR_BMP_ROUTES_PER_FAMILY` 调整每个可伸缩地址族的路由量；Labeled Unicast 和 Flowspec 不属于 FRR BMP Route Monitoring 支持范围，继续由 mock/解析器测试覆盖。运行前需要启动 Docker。
 - `npm run docs:screenshots` 会打开本地页面并更新 `docs/images` 下的文档截图，需要先启动 `npm start` 或设置 `NETNEXUS_DOCS_URL`；截图视口默认不小于 `1920x1200`，可用 `NETNEXUS_DOCS_WINDOW_WIDTH`、`NETNEXUS_DOCS_WINDOW_HEIGHT` 覆盖，也可用 `NETNEXUS_DOCS_SCREENSHOT_SCOPE=bmp` 只重拍某个图片目录、用 `NETNEXUS_DOCS_SCREENSHOT_MATCH=route-history` 继续缩小到文件名片段。脚本会自动启动 BGP、BMP、RPKI、FTP、DHCP、SNMP、NTP、RADIUS、TFTP、Syslog 和 TCP/UDP 工具 mock 服务，并为 BMP 注入五阶段矩阵/追踪数据以及 IPv4、EVPN、BGP-LS、FlowSpec 路由生命周期数据。
 - `npm run docs:pdf` 会合并 `docs` 目录下的功能文档，生成带目录且展开全部截图的 `output/pdf/netnexus-docs.pdf`。README 和外部 API 参考不进入功能 PDF。
 - 标准端口如 `67`、`69`、`123` 在部分系统上需要管理员/root 权限，联调时可以改用高位端口。
+
+### 本地 NETCONF Mock 手工联调
+
+不接入真实设备时，可以用项目自带的独立 Mock Server 验证真实 SSH、NETCONF framing、YANG 下载和配置操作链路：
+
+```bash
+# 终端 1：启动本地 NETCONF 测试设备
+npm run mock:netconf
+
+# 终端 2：启动 NetNexus
+npm run dev
+```
+
+在“NETCONF/YANG → 连接设置”中新建普通 Profile：
+
+| 字段 | 值 |
+| --- | --- |
+| Profile 名称 | `本地 NETCONF Mock` |
+| 设备地址 | `127.0.0.1` |
+| 端口 | `8830` |
+| 用户名 | `netconf` |
+| 密码 | `netconf` |
+| 认证方式 | 密码 |
+
+依次点击“测试连接 → 保存 → 连接”，然后进入“模型列表”读取设备列表并下载 `netnexus-mock-device` 与 `netnexus-mock-types`，即可继续验证 libyang 编译、`get`、`get-config`、`edit-config`、`validate` 和 `commit`。完整操作和可直接粘贴的配置 XML 见 [NETCONF / YANG 工作台文档](docs/NETCONF_YANG.md#使用本地-netconf-mock-完整联调)。Mock 默认仅监听回环地址，固定 SSH Host Key 和默认凭据均只用于本地开发测试。
 
 ### 本地 FRR BMP 手工联调
 
