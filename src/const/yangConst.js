@@ -62,8 +62,7 @@ export const YANG_ROUTE = Object.freeze({
 export const YANG_TABS = Object.freeze([
     { key: 'yang-connection', label: '连接设置', route: YANG_ROUTE.CONNECTION },
     { key: 'yang-modules', label: '模型列表', route: YANG_ROUTE.MODULES },
-    { key: 'yang-workspace', label: 'Schema 工作区', route: YANG_ROUTE.WORKSPACE },
-    { key: 'yang-operations', label: '设备操作', route: YANG_ROUTE.OPERATIONS }
+    { key: 'yang-workspace', label: 'Schema 工作区', route: YANG_ROUTE.WORKSPACE }
 ]);
 
 export const NETCONF_SESSION_STATUS = Object.freeze({

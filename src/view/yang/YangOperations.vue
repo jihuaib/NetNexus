@@ -1,6 +1,6 @@
 <template>
-    <div class="nn-container yang-operations-page">
-        <div class="operation-session-bar">
+    <div class="yang-operations-page" :class="{ 'nn-container': !embedded, 'yang-operations-embedded': embedded }">
+        <div v-if="!embedded" class="operation-session-bar">
             <div class="session-summary">
                 <span class="session-indicator" :class="{ 'session-indicator-online': connected }" />
                 <div>
@@ -26,21 +26,47 @@
             </nn-space>
         </div>
 
-        <div class="operations-layout">
-            <nn-card title="操作" class="operation-nav-card">
+        <div v-else class="operation-context-bar">
+            <div class="operation-context-main">
+                <span class="session-indicator" :class="{ 'session-indicator-online': connected }" />
+                <div class="operation-context-copy">
+                    <div class="operation-context-title">
+                        {{ contextNode?.name || contextNode?.title || '当前设备' }}
+                        <nn-tag :color="connected ? 'success' : 'default'">
+                            {{ connected ? 'NETCONF 已连接' : 'NETCONF 未连接' }}
+                        </nn-tag>
+                    </div>
+                    <nn-typography-text v-if="contextNode?.path" copyable class="operation-context-path">
+                        {{ contextNode.path }}
+                    </nn-typography-text>
+                    <span v-else class="operation-context-path">设备级操作</span>
+                </div>
+            </div>
+            <nn-space>
+                <nn-button size="small" :disabled="!connected" @click="capabilityDrawerOpen = true">
+                    Capability {{ capabilities.length }}
+                </nn-button>
+                <nn-button v-if="!connected" size="small" type="primary" @click="goToConnections">
+                    前往连接设置
+                </nn-button>
+            </nn-space>
+        </div>
+
+        <div class="operations-layout" :class="{ 'operations-layout-embedded': embedded }">
+            <nn-card v-if="!embedded" title="操作" class="operation-nav-card">
                 <div class="operation-nav">
                     <div class="operation-group-title">读取</div>
-                    <template v-for="operation in readOperations" :key="operation.key">
-                        <nn-tooltip :title="operationDisabledReason(operation.key)">
+                    <template v-for="operationItem in readOperations" :key="operationItem.key">
+                        <nn-tooltip :title="operationDisabledReason(operationItem.key)">
                             <span class="operation-nav-wrap">
                                 <button
                                     type="button"
                                     class="operation-nav-item"
-                                    :class="{ 'operation-nav-item-active': activeOperation === operation.key }"
-                                    :disabled="!isOperationSupported(operation.key)"
-                                    @click="activeOperation = operation.key"
+                                    :class="{ 'operation-nav-item-active': activeOperation === operationItem.key }"
+                                    :disabled="!isOperationSupported(operationItem.key)"
+                                    @click="activeOperation = operationItem.key"
                                 >
-                                    <span>{{ operation.label }}</span>
+                                    <span>{{ operationItem.label }}</span>
                                     <span class="operation-kind">READ</span>
                                 </button>
                             </span>
@@ -48,19 +74,19 @@
                     </template>
 
                     <div class="operation-group-title">配置与事务</div>
-                    <template v-for="operation in writeOperations" :key="operation.key">
-                        <nn-tooltip :title="operationDisabledReason(operation.key)">
+                    <template v-for="operationItem in writeOperations" :key="operationItem.key">
+                        <nn-tooltip :title="operationDisabledReason(operationItem.key)">
                             <span class="operation-nav-wrap">
                                 <button
                                     type="button"
                                     class="operation-nav-item"
-                                    :class="{ 'operation-nav-item-active': activeOperation === operation.key }"
-                                    :disabled="!isOperationSupported(operation.key)"
-                                    @click="activeOperation = operation.key"
+                                    :class="{ 'operation-nav-item-active': activeOperation === operationItem.key }"
+                                    :disabled="!isOperationSupported(operationItem.key)"
+                                    @click="activeOperation = operationItem.key"
                                 >
-                                    <span>{{ operation.label }}</span>
-                                    <span :class="['operation-kind', `operation-kind-${operation.category}`]">
-                                        {{ operation.category === 'danger' ? 'RISK' : 'WRITE' }}
+                                    <span>{{ operationItem.label }}</span>
+                                    <span :class="['operation-kind', `operation-kind-${operationItem.category}`]">
+                                        {{ operationItem.category === 'danger' ? 'RISK' : 'WRITE' }}
                                     </span>
                                 </button>
                             </span>
@@ -68,17 +94,17 @@
                     </template>
 
                     <div class="operation-group-title">高级</div>
-                    <template v-for="operation in advancedOperations" :key="operation.key">
-                        <nn-tooltip :title="operationDisabledReason(operation.key)">
+                    <template v-for="operationItem in advancedOperations" :key="operationItem.key">
+                        <nn-tooltip :title="operationDisabledReason(operationItem.key)">
                             <span class="operation-nav-wrap">
                                 <button
                                     type="button"
                                     class="operation-nav-item"
-                                    :class="{ 'operation-nav-item-active': activeOperation === operation.key }"
-                                    :disabled="!isOperationSupported(operation.key)"
-                                    @click="activeOperation = operation.key"
+                                    :class="{ 'operation-nav-item-active': activeOperation === operationItem.key }"
+                                    :disabled="!isOperationSupported(operationItem.key)"
+                                    @click="activeOperation = operationItem.key"
                                 >
-                                    <span>{{ operation.label }}</span>
+                                    <span>{{ operationItem.label }}</span>
                                     <span class="operation-kind operation-kind-danger">RAW</span>
                                 </button>
                             </span>
@@ -130,7 +156,7 @@
                         <nn-row :gutter="12">
                             <nn-col :span="12">
                                 <nn-form-item label="目标 datastore" required>
-                                    <nn-select v-model:value="form.target" :options="writeDatastoreOptions" />
+                                    <nn-select v-model:value="form.target" :options="editDatastoreOptions" />
                                 </nn-form-item>
                             </nn-col>
                             <nn-col :span="12">
@@ -148,7 +174,7 @@
                                     <nn-select
                                         v-model:value="form.testOption"
                                         :options="testOptionOptions"
-                                        :disabled="!hasCapability('validate')"
+                                        :disabled="!supportsTestOption"
                                     />
                                 </nn-form-item>
                             </nn-col>
@@ -166,6 +192,13 @@
                                 class="xml-editor xml-editor-large"
                             />
                         </nn-form-item>
+                        <nn-alert
+                            v-if="form.config.includes('NETNEXUS_REQUIRED')"
+                            type="warning"
+                            show-icon
+                            message="XML 草稿还不能执行"
+                            description="请替换所有 NETNEXUS_REQUIRED 占位注释，并为每个祖先 list 填写完整 key。"
+                        />
                     </template>
 
                     <template v-else-if="activeOperation === 'copy-config'">
@@ -173,7 +206,7 @@
                             <nn-select v-model:value="form.copySource" :options="readDatastoreOptions" />
                         </nn-form-item>
                         <nn-form-item label="目标 datastore" required>
-                            <nn-select v-model:value="form.copyTarget" :options="writeDatastoreOptions" />
+                            <nn-select v-model:value="form.copyTarget" :options="copyTargetDatastoreOptions" />
                         </nn-form-item>
                     </template>
 
@@ -185,7 +218,7 @@
                             type="warning"
                             show-icon
                             message="高风险操作"
-                            description="delete-config 会删除整个目标 datastore。running 不允许被删除。"
+                            description="标准 delete-config 只删除整个 startup datastore，不是删除当前 Schema 节点。"
                         />
                     </template>
 
@@ -262,7 +295,11 @@
                             type="warning"
                             show-icon
                             message="原始 RPC 不受 Schema 表单保护"
-                            description="请检查命名空间、目标 datastore 与操作影响；发送前会再次确认。"
+                            :description="
+                                form.rawRpc.includes('NETNEXUS_REQUIRED')
+                                    ? '请先补全或移除 NETNEXUS_REQUIRED 参数占位，再检查命名空间和操作影响。'
+                                    : '请检查命名空间、目标 datastore 与操作影响；发送前会再次确认。'
+                            "
                         />
                     </template>
                 </nn-form>
@@ -321,6 +358,32 @@
         </div>
 
         <nn-modal
+            v-model:open="confirmationOpen"
+            :title="`确认执行 ${activeOperationMeta.label}`"
+            :footer="null"
+            width="520px"
+            :z-index="1300"
+        >
+            <nn-alert
+                :type="activeOperationMeta.category === 'danger' ? 'warning' : 'info'"
+                show-icon
+                :message="confirmationDescription"
+                description="请再次确认目标设备、datastore 和参数无误。"
+            />
+            <div class="operation-confirmation-footer">
+                <nn-button @click="confirmationOpen = false">取消</nn-button>
+                <nn-button
+                    type="primary"
+                    :danger="activeOperationMeta.category === 'danger'"
+                    :loading="executing"
+                    @click="confirmAndExecute"
+                >
+                    确认执行
+                </nn-button>
+            </div>
+        </nn-modal>
+
+        <nn-modal
             v-model:open="previewOpen"
             :title="`${activeOperationMeta.label} 请求预览`"
             :footer="null"
@@ -354,12 +417,38 @@
         YANG_ROUTE
     } from '../../const/yangConst';
     import EventBus from '../../utils/eventBus';
-    import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
     import { EyeOutlined, ReloadOutlined, SendOutlined } from '../../ui/icons';
     import { clonePlain, invokeBridge, normalizeCapability, normalizeSessionEvent, unwrapArray } from './yangUiUtils';
 
     defineOptions({ name: 'YangOperations' });
+
+    const props = defineProps({
+        embedded: {
+            type: Boolean,
+            default: false
+        },
+        operation: {
+            type: String,
+            default: 'get'
+        },
+        contextNode: {
+            type: Object,
+            default: null
+        },
+        contextSubtree: {
+            type: String,
+            default: ''
+        },
+        contextConfig: {
+            type: String,
+            default: ''
+        },
+        contextRawRpc: {
+            type: String,
+            default: ''
+        }
+    });
 
     const router = useRouter();
     const labelCol = { style: { width: '132px' } };
@@ -367,6 +456,7 @@
     const sessionLoading = ref(false);
     const executing = ref(false);
     const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, capabilities: [] });
+    const confirmationOpen = ref(false);
     const previewOpen = ref(false);
     const capabilityDrawerOpen = ref(false);
     const capabilityQuery = ref('');
@@ -447,6 +537,9 @@
     const capabilityIncludes = hint =>
         capabilities.value.some(capability => capability.toLowerCase().includes(hint.toLowerCase()));
     const hasCapability = name => capabilityIncludes(NETCONF_CAPABILITY_HINTS[name] || name);
+    const supportsTestOption = computed(() =>
+        capabilities.value.some(capability => /:validate:1\.1(?:[?&]|$)/iu.test(capability))
+    );
 
     const readDatastoreOptions = computed(() => {
         const options = [{ label: 'running', value: 'running' }];
@@ -454,15 +547,19 @@
         if (hasCapability('startup')) options.push({ label: 'startup', value: 'startup' });
         return options;
     });
-    const writeDatastoreOptions = computed(() => {
+    const editDatastoreOptions = computed(() => {
         const options = [];
         if (hasCapability('candidate')) options.push({ label: 'candidate', value: 'candidate' });
         if (hasCapability('writableRunning')) options.push({ label: 'running', value: 'running' });
+        return options;
+    });
+    const copyTargetDatastoreOptions = computed(() => {
+        const options = [...editDatastoreOptions.value];
         if (hasCapability('startup')) options.push({ label: 'startup', value: 'startup' });
         return options;
     });
     const deletableDatastoreOptions = computed(() =>
-        writeDatastoreOptions.value.filter(option => option.value !== 'running')
+        hasCapability('startup') ? [{ label: 'startup', value: 'startup' }] : []
     );
     const lockDatastoreOptions = computed(() => {
         const values = new Set(['running', ...readDatastoreOptions.value.map(option => option.value)]);
@@ -486,12 +583,14 @@
 
     const operationDisabledReason = operation => {
         if (!connected.value) return '请先建立 NETCONF 会话';
-        if (operation === 'edit-config' && writeDatastoreOptions.value.length === 0) {
-            return '设备未声明 :candidate、:writable-running 或 :startup 能力';
+        if (operation === 'edit-config' && editDatastoreOptions.value.length === 0) {
+            return '设备未声明 :candidate 或 :writable-running 能力';
         }
-        if (operation === 'copy-config' && writeDatastoreOptions.value.length === 0) return '没有可写的目标 datastore';
+        if (operation === 'copy-config' && copyTargetDatastoreOptions.value.length === 0) {
+            return '没有可复制的目标 datastore';
+        }
         if (operation === 'delete-config' && deletableDatastoreOptions.value.length === 0) {
-            return '设备没有允许删除的 candidate/startup datastore';
+            return '设备未声明 :startup 能力';
         }
         if (operation === 'validate' && !hasCapability('validate')) return '设备未声明 :validate 能力';
         if (['commit', 'discard-changes'].includes(operation) && !hasCapability('candidate')) {
@@ -511,13 +610,17 @@
         if (activeOperation.value === 'edit-config') {
             if (!form.target) return '请选择目标 datastore';
             if (!form.config.trim()) return '请输入 config XML';
+            if (form.config.includes('NETNEXUS_REQUIRED')) return '请补全 XML 草稿中的必填值和 list key';
         }
         if (activeOperation.value === 'copy-config' && (!form.copySource || !form.copyTarget))
             return '请选择源和目标 datastore';
         if (activeOperation.value === 'delete-config' && !form.deleteTarget) return '请选择要删除的 datastore';
         if (['lock', 'unlock'].includes(activeOperation.value) && !form.lockTarget) return '请选择目标 datastore';
         if (activeOperation.value === 'validate' && !form.validateSource) return '请选择校验源';
-        if (activeOperation.value === 'raw-rpc' && !form.rawRpc.trim()) return '请输入 RPC XML';
+        if (activeOperation.value === 'raw-rpc') {
+            if (!form.rawRpc.trim()) return '请输入 RPC XML';
+            if (form.rawRpc.includes('NETNEXUS_REQUIRED')) return '请补全 RPC 草稿中的必填参数';
+        }
         return '';
     };
     const executeDisabledReason = computed(() => (executing.value ? '操作执行中' : validateOperation()));
@@ -551,7 +654,7 @@
             case 'edit-config':
                 return `<edit-config>\n<target>${datastoreElement(form.target)}</target>\n<default-operation>${
                     form.defaultOperation
-                }</default-operation>${hasCapability('validate') ? `\n<test-option>${form.testOption}</test-option>` : ''}\n<error-option>${
+                }</default-operation>${supportsTestOption.value ? `\n<test-option>${form.testOption}</test-option>` : ''}\n<error-option>${
                     form.errorOption
                 }</error-option>\n${makeConfigXml()}\n</edit-config>`;
             case 'copy-config':
@@ -589,11 +692,14 @@
 
     const buildPayload = () => {
         const payload = { operation: activeOperation.value };
+        const subtree = form.subtree.trim();
         const filter =
             form.filterType === 'xpath'
                 ? { type: 'xpath', select: form.xpath }
                 : form.filterType === 'subtree'
-                  ? { type: 'subtree', content: form.subtree }
+                  ? /^<filter[\s>]/i.test(subtree)
+                      ? subtree
+                      : { type: 'subtree', content: subtree }
                   : undefined;
         if (activeOperation.value === 'get') {
             payload.filter = filter;
@@ -606,7 +712,7 @@
             Object.assign(payload, {
                 target: form.target,
                 defaultOperation: form.defaultOperation,
-                testOption: hasCapability('validate') ? form.testOption : undefined,
+                testOption: supportsTestOption.value ? form.testOption : undefined,
                 errorOption: form.errorOption,
                 config: form.config
             });
@@ -647,14 +753,12 @@
             executeOperation();
             return;
         }
-        dialog.confirm({
-            title: `确认执行 ${activeOperationMeta.value.label}`,
-            content: `${confirmationDescription.value} 请确认目标设备和参数无误。`,
-            okText: '确认执行',
-            cancelText: '取消',
-            okType: activeOperationMeta.value.category === 'danger' ? 'danger' : 'primary',
-            onOk: executeOperation
-        });
+        confirmationOpen.value = true;
+    };
+
+    const confirmAndExecute = () => {
+        confirmationOpen.value = false;
+        executeOperation();
     };
 
     const resultText = data => {
@@ -726,10 +830,25 @@
         });
     };
 
+    const applyOperationContext = () => {
+        if (!props.embedded) return;
+        activeOperation.value = NETCONF_OPERATIONS.some(item => item.key === props.operation) ? props.operation : 'get';
+        form.filterType = props.contextSubtree ? 'subtree' : 'none';
+        form.xpath = '';
+        form.subtree = props.contextSubtree || '';
+        form.config = props.contextConfig || '';
+        if (props.contextRawRpc) form.rawRpc = props.contextRawRpc;
+        confirmationOpen.value = false;
+        previewOpen.value = false;
+        clearResult();
+    };
+
     const goToConnections = () => router.push(YANG_ROUTE.CONNECTION);
 
-    watch(writeDatastoreOptions, options => {
+    watch(editDatastoreOptions, options => {
         if (!options.some(option => option.value === form.target)) form.target = options[0]?.value || '';
+    });
+    watch(copyTargetDatastoreOptions, options => {
         if (!options.some(option => option.value === form.copyTarget)) form.copyTarget = options[0]?.value || '';
     });
     watch(deletableDatastoreOptions, options => {
@@ -746,6 +865,19 @@
             form.errorOption = 'stop-on-error';
         }
     });
+    watch(
+        () => [
+            props.embedded,
+            props.operation,
+            props.contextNode?.id,
+            props.contextNode?.path,
+            props.contextSubtree,
+            props.contextConfig,
+            props.contextRawRpc
+        ],
+        applyOperationContext,
+        { immediate: true }
+    );
 
     onMounted(() => {
         EventBus.on(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.OPERATIONS, handleSessionEvent);
@@ -765,6 +897,53 @@
         min-height: 0;
         flex-direction: column;
         gap: 8px;
+    }
+
+    .yang-operations-embedded {
+        height: 100%;
+    }
+
+    .operation-context-bar {
+        display: flex;
+        min-width: 0;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 10px;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+        background: var(--nn-color-bg-muted);
+    }
+
+    .operation-context-main,
+    .operation-context-title {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .operation-context-copy {
+        min-width: 0;
+    }
+
+    .operation-context-title {
+        color: var(--nn-color-text-strong);
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    .operation-context-path {
+        display: block;
+        max-width: 560px;
+        overflow: hidden;
+        color: var(--nn-color-text-muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 10px;
+        line-height: 18px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .operation-session-bar {
@@ -816,6 +995,12 @@
         grid-template-columns: 190px minmax(450px, 1fr) minmax(340px, 42%);
         gap: 8px;
         align-items: stretch;
+    }
+
+    .operations-layout-embedded {
+        min-height: 0;
+        flex: 1;
+        grid-template-columns: minmax(480px, 3fr) minmax(320px, 2fr);
     }
 
     .operation-nav-card,
@@ -960,6 +1145,13 @@
         border-top: 1px solid var(--nn-color-border-light);
     }
 
+    .operation-confirmation-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 16px;
+    }
+
     .operation-execute-wrap {
         display: inline-flex;
     }
@@ -1056,6 +1248,15 @@
         .operation-result-card {
             min-height: 420px;
             grid-column: 1 / -1;
+        }
+
+        .operations-layout-embedded {
+            grid-template-columns: minmax(440px, 3fr) minmax(300px, 2fr);
+        }
+
+        .operations-layout-embedded .operation-result-card {
+            min-height: 0;
+            grid-column: auto;
         }
     }
 </style>

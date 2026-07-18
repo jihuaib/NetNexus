@@ -43,7 +43,6 @@ const YangMain = () => import('../view/yang/YangMain.vue');
 const YangConnection = () => import('../view/yang/YangConnection.vue');
 const YangModules = () => import('../view/yang/YangModules.vue');
 const YangWorkspace = () => import('../view/yang/YangWorkspace.vue');
-const YangOperations = () => import('../view/yang/YangOperations.vue');
 const DhcpMain = () => import('../view/dhcp/DhcpMain.vue');
 const DhcpConfig = () => import('../view/dhcp/DhcpConfig.vue');
 const DhcpLeaseList = () => import('../view/dhcp/DhcpLeaseList.vue');
@@ -337,8 +336,7 @@ const routes = [
                     {
                         path: 'yang-operations',
                         name: 'YangOperations',
-                        component: YangOperations,
-                        meta: { keepAlive: true }
+                        redirect: '/yang/yang-workspace'
                     }
                 ]
             },

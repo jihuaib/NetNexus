@@ -1,8 +1,11 @@
 <template>
-    <div class="nn-container yang-workspace-page">
-        <nn-card title="Schema 工作区" class="workspace-card">
+    <div class="nn-container yang-workspace-page" @click="hideContextMenu">
+        <nn-card title="Schema 与设备操作" class="workspace-card">
             <template #extra>
                 <nn-space>
+                    <nn-tag :color="connected ? 'success' : 'default'">
+                        NETCONF {{ connected ? '已连接' : '未连接' }}
+                    </nn-tag>
                     <nn-tag v-if="compileId && compileSucceeded" color="success">libyang 已编译</nn-tag>
                     <nn-tag v-else-if="compileId" color="error">libyang 编译失败</nn-tag>
                     <nn-tag v-else color="default">未编译</nn-tag>
@@ -47,10 +50,11 @@
             <div class="workspace-layout" :class="{ 'workspace-layout-empty': !compileId }">
                 <section class="schema-panel">
                     <div class="panel-header">
-                        <div>
+                        <div class="panel-heading">
                             <span class="panel-title">Schema 索引</span>
                             <span class="panel-meta">
-                                {{ schemaAuthoritative ? 'libyang effective schema' : '结构预览（非权威）' }}
+                                {{ schemaAuthoritative ? 'libyang effective schema' : '结构预览（非权威）' }} ·
+                                右键当前设备或节点执行操作
                             </span>
                         </div>
                         <nn-input-search
@@ -70,6 +74,7 @@
                                 block-node
                                 @expand="handleTreeExpand"
                                 @select="handleTreeSelect"
+                                @right-click="handleTreeRightClick"
                             >
                                 <template #title="node">
                                     <span class="schema-node-title">
@@ -192,20 +197,175 @@
                 </section>
             </div>
         </nn-card>
+
+        <div
+            v-if="contextMenu.visible"
+            ref="contextMenuRef"
+            class="schema-context-menu"
+            :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+            @click.stop
+        >
+            <div class="schema-context-menu-title">
+                <span>{{ contextMenu.node?.name || contextMenu.node?.title || 'Schema 节点' }}</span>
+                <span class="schema-context-menu-keyword">
+                    {{ contextMenu.node?.keyword || contextMenu.node?.kind || '-' }}
+                </span>
+            </div>
+            <div class="schema-context-menu-path" :title="contextMenu.node?.path">
+                {{ contextMenu.node?.path || '设备级操作' }}
+            </div>
+            <nn-menu class="schema-context-menu-list" :selectable="false" @click="handleContextMenuClick">
+                <nn-menu-item key="copy-path" :disabled="!contextMenu.node?.path">
+                    <template #icon><CopyOutlined /></template>
+                    复制 Schema 路径
+                </nn-menu-item>
+                <nn-menu-item key="view-source" :disabled="!contextMenu.node?.module">
+                    <template #icon><FileSearchOutlined /></template>
+                    查看所属 YANG 源码
+                </nn-menu-item>
+                <nn-menu-divider />
+                <nn-menu-item key="get" :disabled="Boolean(operationDisabledReason('get', contextMenu.node))">
+                    <template #icon><ApiOutlined /></template>
+                    {{ isDataNode(contextMenu.node) ? '读取当前节点（get）' : '读取全部数据（get）' }}
+                </nn-menu-item>
+                <nn-menu-item
+                    key="get-config"
+                    :disabled="Boolean(operationDisabledReason('get-config', contextMenu.node))"
+                >
+                    <template #icon><FileSearchOutlined /></template>
+                    {{ isConfigDataNode(contextMenu.node) ? '读取节点配置（get-config）' : '读取配置（get-config）' }}
+                </nn-menu-item>
+                <nn-menu-item
+                    key="edit-config"
+                    :disabled="Boolean(operationDisabledReason('edit-config', contextMenu.node))"
+                >
+                    <template #icon><EditOutlined /></template>
+                    编辑当前节点（edit-config）
+                </nn-menu-item>
+                <nn-menu-divider />
+                <nn-menu-item key="copy-config" :disabled="Boolean(operationDisabledReason('copy-config'))">
+                    <template #icon><CopyOutlined /></template>
+                    复制配置存储（copy-config）
+                </nn-menu-item>
+                <nn-menu-item key="delete-config" :disabled="Boolean(operationDisabledReason('delete-config'))">
+                    <template #icon><DeleteOutlined /></template>
+                    删除整个配置存储（delete-config）
+                </nn-menu-item>
+                <nn-menu-item key="lock" :disabled="Boolean(operationDisabledReason('lock'))">
+                    <template #icon><SafetyOutlined /></template>
+                    锁定配置存储（lock）
+                </nn-menu-item>
+                <nn-menu-item key="unlock" :disabled="Boolean(operationDisabledReason('unlock'))">
+                    <template #icon><SafetyOutlined /></template>
+                    解锁配置存储（unlock）
+                </nn-menu-item>
+                <nn-menu-item key="validate" :disabled="Boolean(operationDisabledReason('validate'))">
+                    <template #icon><CodeOutlined /></template>
+                    校验配置（validate）
+                </nn-menu-item>
+                <nn-menu-item key="commit" :disabled="Boolean(operationDisabledReason('commit'))">
+                    <template #icon><SendOutlined /></template>
+                    提交 candidate（commit）
+                </nn-menu-item>
+                <nn-menu-item key="discard-changes" :disabled="Boolean(operationDisabledReason('discard-changes'))">
+                    <template #icon><DeleteOutlined /></template>
+                    放弃 candidate 修改
+                </nn-menu-item>
+                <nn-menu-divider />
+                <nn-menu-item key="raw-rpc" :disabled="Boolean(operationDisabledReason('raw-rpc'))">
+                    <template #icon><CodeOutlined /></template>
+                    {{ isRpcNode(contextMenu.node) ? `执行 ${contextMenu.node.keyword}` : '原始 RPC' }}
+                </nn-menu-item>
+                <nn-menu-item key="capabilities" :disabled="!connected">
+                    <template #icon><EyeOutlined /></template>
+                    查看 Capability
+                </nn-menu-item>
+                <nn-menu-item v-if="!connected" key="connection">
+                    <template #icon><ApiOutlined /></template>
+                    前往连接设置
+                </nn-menu-item>
+            </nn-menu>
+            <div class="schema-context-menu-hint">
+                {{ contextMenuHint }}
+            </div>
+        </div>
+
+        <nn-modal
+            v-model:open="operationModalOpen"
+            :title="operationModalTitle"
+            :footer="null"
+            width="1120px"
+            height="calc(100vh - 64px)"
+            :body-style="{ padding: '8px', overflow: 'hidden' }"
+            wrap-class-name="yang-operation-modal"
+        >
+            <YangOperations
+                v-if="operationModalOpen"
+                embedded
+                :operation="operationContext.operation"
+                :context-node="operationContext.node"
+                :context-subtree="operationContext.subtree"
+                :context-config="operationContext.config"
+                :context-raw-rpc="operationContext.rawRpc"
+            />
+        </nn-modal>
+
+        <nn-modal v-model:open="capabilityModalOpen" title="设备 Capability" :footer="null" width="760px">
+            <nn-input-search v-model:value="capabilityQuery" allow-clear placeholder="筛选 capability URI" />
+            <div class="workspace-capability-list">
+                <div v-for="capability in filteredCapabilities" :key="capability" class="workspace-capability-row">
+                    <nn-typography-text copyable>{{ capability }}</nn-typography-text>
+                </div>
+                <nn-empty v-if="filteredCapabilities.length === 0" description="暂无 Capability" />
+            </div>
+        </nn-modal>
     </div>
 </template>
 
 <script setup>
-    import { computed, onActivated, onBeforeUnmount, onMounted, ref } from 'vue';
-    import { YANG_EVENT, YANG_EVENT_PAGE_ID } from '../../const/yangConst';
+    import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from 'vue';
+    import { useRouter } from 'vue-router';
+    import {
+        NETCONF_CAPABILITY_HINTS,
+        NETCONF_SESSION_STATUS,
+        YANG_EVENT,
+        YANG_EVENT_PAGE_ID,
+        YANG_ROUTE
+    } from '../../const/yangConst';
     import EventBus from '../../utils/eventBus';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { CodeOutlined, DeleteOutlined, LoadingOutlined, ReloadOutlined } from '../../ui/icons';
+    import {
+        ApiOutlined,
+        CodeOutlined,
+        CopyOutlined,
+        DeleteOutlined,
+        EditOutlined,
+        EyeOutlined,
+        FileSearchOutlined,
+        LoadingOutlined,
+        ReloadOutlined,
+        SafetyOutlined,
+        SendOutlined
+    } from '../../ui/icons';
+    import YangOperations from './YangOperations.vue';
     import { useYangCompilerStatus } from './yangCompilerStatus';
-    import { fileBaseName, getTaskId, invokeBridge, isTaskTerminal, unwrapArray } from './yangUiUtils';
+    import {
+        fileBaseName,
+        getTaskId,
+        invokeBridge,
+        isTaskTerminal,
+        normalizeCapability,
+        normalizeSessionEvent,
+        unwrapArray
+    } from './yangUiUtils';
 
     defineOptions({ name: 'YangWorkspace' });
+
+    const router = useRouter();
+    const DATA_NODE_KEYWORDS = new Set(['container', 'list', 'leaf', 'leaf-list', 'anydata', 'anyxml']);
+    const RPC_NODE_KEYWORDS = new Set(['rpc', 'action']);
+    const CONTEXT_MENU_MARGIN = 8;
 
     const loading = ref(false);
     const compiling = ref(false);
@@ -229,6 +389,14 @@
     const sourceText = ref('');
     const diagnosticFilter = ref('all');
     const schemaAuthoritative = ref(false);
+    const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] });
+    const contextMenuRef = ref(null);
+    const contextMenu = reactive({ visible: false, x: 0, y: 0, node: null });
+    const operationModalOpen = ref(false);
+    const operationContext = reactive({ operation: 'get', node: null, subtree: '', config: '', rawRpc: '' });
+    const capabilityModalOpen = ref(false);
+    const capabilityQuery = ref('');
+    let contextMenuOpenRequest = 0;
     const { compilerAvailable, refreshCompilerStatus } = useYangCompilerStatus();
     const compilerUnavailableMessage = 'YANG 编译暂不可用，请在“设置 → 运行时诊断”中检查';
 
@@ -257,13 +425,20 @@
     const normalizeNode = (node, index = 0) => {
         const id = node?.id || node?.nodeId || node?.key || `${node?.path || node?.name || 'node'}-${index}`;
         const hasChildren = Boolean(node?.hasChildren || Number(node?.childCount || 0) > 0 || node?.children?.length);
+        const keyword = node?.keyword || node?.kind || '';
+        const schemaKey =
+            node?.schemaKey ||
+            node?.listKey ||
+            node?.listKeys ||
+            (keyword === 'list' && node?.id ? node?.key || '' : '');
         return {
             ...node,
             id,
             key: id,
             title: node?.title || node?.name || node?.keyword || id,
             name: node?.name || node?.title || '',
-            keyword: node?.keyword || node?.kind || '',
+            keyword,
+            schemaKey,
             isLeaf: !hasChildren,
             children: Array.isArray(node?.children) ? node.children.map(normalizeNode) : [],
             childrenLoaded: Array.isArray(node?.children) && node.children.length > 0,
@@ -277,6 +452,32 @@
             value: module._key
         }))
     );
+    const capabilities = computed(() => {
+        const values = session.value.capabilities || session.value.serverCapabilities || [];
+        return [...new Set(unwrapArray(values).map(normalizeCapability).filter(Boolean))];
+    });
+    const connected = computed(() => {
+        const status = session.value.status || session.value.state;
+        return session.value.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
+    });
+    const filteredCapabilities = computed(() => {
+        const query = capabilityQuery.value.trim().toLowerCase();
+        return query
+            ? capabilities.value.filter(capability => capability.toLowerCase().includes(query))
+            : capabilities.value;
+    });
+    const operationModalTitle = computed(() => {
+        const label = operationContext.operation === 'raw-rpc' ? '原始 RPC' : operationContext.operation;
+        const nodeName = operationContext.node?.name || operationContext.node?.title;
+        return nodeName ? `${label} · ${nodeName}` : label;
+    });
+    const contextMenuHint = computed(() => {
+        if (!connected.value) return '设备未连接；Schema 仍可查看，设备操作需先建立连接';
+        const node = contextMenu.node;
+        if (node?.config === false) return 'state 节点只允许 get；datastore 操作作用于整个配置存储';
+        if (isRpcNode(node)) return `${node.keyword} 将以原始 RPC 草稿打开，请确认实例路径和参数`;
+        return '节点操作会自动预填 XML 草稿；delete-config 删除的是整个 datastore';
+    });
     const diagnosticErrorCount = computed(
         () => diagnostics.value.filter(item => ['error', 'fatal'].includes(item.severity)).length
     );
@@ -293,9 +494,20 @@
         }
         return diagnostics.value.filter(item => !['error', 'fatal', 'warning', 'warn'].includes(item.severity));
     });
+    const deviceOperationRoot = computed(() => ({
+        id: 'netconf-device-root',
+        key: 'netconf-device-root',
+        title: `当前设备：${session.value.profileName || session.value.host || 'NETCONF'}`,
+        name: session.value.profileName || session.value.host || '当前设备',
+        keyword: 'device',
+        virtualDevice: true,
+        selectable: false,
+        isLeaf: true,
+        children: []
+    }));
     const displayTree = computed(() => {
         const query = treeQuery.value.trim().toLowerCase();
-        if (!query) return treeData.value;
+        if (!query) return [deviceOperationRoot.value, ...treeData.value];
         const filterNodes = nodes =>
             nodes.flatMap(node => {
                 const children = filterNodes(node.children || []);
@@ -303,7 +515,7 @@
                 if (haystack.includes(query) || children.length) return [{ ...node, children }];
                 return [];
             });
-        return filterNodes(treeData.value);
+        return [deviceOperationRoot.value, ...filterNodes(treeData.value)];
     });
     const applyWorkspace = data => {
         const workspace = data?.workspace || data || {};
@@ -416,6 +628,256 @@
             if (found) return found;
         }
         return null;
+    };
+
+    const findNodeChain = (nodes, key, ancestors = []) => {
+        for (const node of nodes) {
+            const chain = [...ancestors, node];
+            if (node.key === key) return chain;
+            const found = findNodeChain(node.children || [], key, chain);
+            if (found.length) return found;
+        }
+        return [];
+    };
+
+    const isDataNode = node => DATA_NODE_KEYWORDS.has(String(node?.keyword || node?.kind || '').toLowerCase());
+    const isConfigDataNode = node => isDataNode(node) && node?.config !== false;
+    const isRpcNode = node => RPC_NODE_KEYWORDS.has(String(node?.keyword || node?.kind || '').toLowerCase());
+    const capabilityIncludes = hint =>
+        capabilities.value.some(capability => capability.toLowerCase().includes(hint.toLowerCase()));
+    const hasCapability = name => capabilityIncludes(NETCONF_CAPABILITY_HINTS[name] || name);
+
+    const operationDisabledReason = (operation, node = null) => {
+        if (!connected.value) return '请先建立 NETCONF 会话';
+        if (operation === 'get-config' && isDataNode(node) && node?.config === false) {
+            return 'state 节点不属于配置 datastore';
+        }
+        if (operation === 'edit-config' && !isConfigDataNode(node)) {
+            return '只有 config 数据节点可以编辑';
+        }
+        const hasEditableDatastore = hasCapability('candidate') || hasCapability('writableRunning');
+        const hasCopyTarget = hasEditableDatastore || hasCapability('startup');
+        if (operation === 'edit-config' && !hasEditableDatastore) {
+            return '设备未声明 :candidate 或 :writable-running 能力';
+        }
+        if (operation === 'copy-config' && !hasCopyTarget) return '设备没有可复制的目标 datastore';
+        if (operation === 'delete-config' && !hasCapability('startup')) {
+            return '标准 delete-config 需要设备声明 :startup 能力';
+        }
+        if (operation === 'validate' && !hasCapability('validate')) return '设备未声明 :validate 能力';
+        if (['commit', 'discard-changes'].includes(operation) && !hasCapability('candidate')) {
+            return '设备未声明 :candidate 能力';
+        }
+        return '';
+    };
+
+    const moduleForNode = node =>
+        workspaceModules.value.find(module => module.name === node?.module || module.id === node?.moduleId);
+
+    const namespaceForNode = node =>
+        node?.namespace || moduleForNode(node)?.namespace || moduleForNode(node)?.metadata?.namespace || '';
+
+    const escapeXmlAttribute = value =>
+        String(value || '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('"', '&quot;')
+            .replaceAll('<', '&lt;');
+
+    const schemaPathSegments = node => {
+        const path = String(node?.path || '');
+        const segments = path
+            .split('/')
+            .filter(Boolean)
+            .map(segment => segment.replace(/\[[^\]]*\]$/u, ''));
+        if (segments[0] === node?.module) segments.shift();
+        return segments
+            .map(segment => (segment.includes(':') ? segment.slice(segment.lastIndexOf(':') + 1) : segment))
+            .filter(segment => /^[A-Za-z_][\w.-]*$/u.test(segment));
+    };
+
+    const schemaNodeChain = node => {
+        const loadedChain = findNodeChain(treeData.value, node?.key).filter(isDataNode);
+        if (loadedChain.length) return loadedChain;
+        const segments = schemaPathSegments(node);
+        return segments.map((name, index) => ({
+            ...node,
+            name,
+            title: name,
+            keyword: index === segments.length - 1 ? node?.keyword : 'container'
+        }));
+    };
+
+    const buildNodeXml = (node, mode = 'filter') => {
+        if (!isDataNode(node)) return '';
+        const chain = schemaNodeChain(node);
+        if (chain.length === 0) return '';
+        const render = (index, depth) => {
+            const current = chain[index];
+            const name = String(current?.name || current?.title || 'node');
+            const indentation = '  '.repeat(depth);
+            const parent = chain[index - 1];
+            const namespace = namespaceForNode(current);
+            const namespaceAttribute =
+                namespace && (index === 0 || current?.module !== parent?.module)
+                    ? ` xmlns="${escapeXmlAttribute(namespace)}"`
+                    : '';
+            const keyword = String(current?.keyword || '').toLowerCase();
+            const isLast = index === chain.length - 1;
+            if (mode === 'filter' && isLast) return `${indentation}<${name}${namespaceAttribute}/>`;
+
+            const body = [];
+            if (mode === 'config' && keyword === 'list') {
+                const rawKeys = Array.isArray(current?.schemaKey)
+                    ? current.schemaKey
+                    : String(current?.schemaKey || '').split(/\s+/u);
+                const keys = rawKeys
+                    .map(value => (value.includes(':') ? value.slice(value.lastIndexOf(':') + 1) : value))
+                    .filter(value => /^[A-Za-z_][\w.-]*$/u.test(value));
+                const nextName = chain[index + 1]?.name;
+                if (keys.length) {
+                    keys.filter(key => key !== nextName).forEach(key => {
+                        body.push(
+                            `${'  '.repeat(depth + 1)}<${key}><!-- NETNEXUS_REQUIRED: 输入 list key 值 --></${key}>`
+                        );
+                    });
+                } else {
+                    body.push(`${'  '.repeat(depth + 1)}<!-- NETNEXUS_REQUIRED: 补充 list "${name}" 的所有 key -->`);
+                }
+            }
+            if (!isLast) {
+                body.push(render(index + 1, depth + 1));
+            } else if (mode === 'config' && ['leaf', 'leaf-list'].includes(keyword)) {
+                const valueHint = typeof current?.type === 'string' && current.type ? `${current.type} 值` : '值';
+                return `${indentation}<${name}${namespaceAttribute}><!-- NETNEXUS_REQUIRED: 输入${valueHint} --></${name}>`;
+            } else if (mode === 'config' && keyword !== 'list') {
+                body.push(`${'  '.repeat(depth + 1)}<!-- NETNEXUS_REQUIRED: 在此补充配置 -->`);
+            }
+            return `${indentation}<${name}${namespaceAttribute}>\n${body.join('\n')}\n${indentation}</${name}>`;
+        };
+        return render(0, 0);
+    };
+
+    const buildRawRpcDraft = node => {
+        if (!isRpcNode(node)) {
+            return '<get>\n  <filter type="subtree">\n    <!-- subtree filter -->\n  </filter>\n</get>';
+        }
+        const name = String(node?.name || node?.title || node?.keyword || 'rpc').replace(/[^\w.-]/gu, '');
+        const namespace = namespaceForNode(node);
+        const namespaceAttribute = namespace ? ` xmlns="${escapeXmlAttribute(namespace)}"` : '';
+        return `<${name}${namespaceAttribute}>\n  <!-- NETNEXUS_REQUIRED: 根据 YANG input 补充参数；无参数时删除本注释 -->\n</${name}>`;
+    };
+
+    const getContextMenuPosition = (anchor, menuRect) => {
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const maxX = Math.max(CONTEXT_MENU_MARGIN, viewportWidth - menuRect.width - CONTEXT_MENU_MARGIN);
+        const maxY = Math.max(CONTEXT_MENU_MARGIN, viewportHeight - menuRect.height - CONTEXT_MENU_MARGIN);
+        return {
+            x: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientX), maxX),
+            y: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientY), maxY)
+        };
+    };
+
+    const handleTreeRightClick = async ({ event, node }) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        const openRequest = ++contextMenuOpenRequest;
+        const key = node?.key || node?.eventKey || node?.dataRef?.key;
+        const matchedNode = findNode(treeData.value, key) || node?.dataRef || node;
+        if (!matchedNode?.key) return;
+
+        selectedKeys.value = [matchedNode.key];
+        if (!matchedNode.virtualDevice) {
+            selectedNode.value = matchedNode;
+            inspectorTab.value = 'detail';
+        }
+        contextMenu.node = matchedNode;
+        const anchor = {
+            clientX: Number.isFinite(event?.clientX) ? event.clientX : CONTEXT_MENU_MARGIN,
+            clientY: Number.isFinite(event?.clientY) ? event.clientY : CONTEXT_MENU_MARGIN
+        };
+        contextMenu.x = Math.max(CONTEXT_MENU_MARGIN, anchor.clientX);
+        contextMenu.y = Math.max(CONTEXT_MENU_MARGIN, anchor.clientY);
+        contextMenu.visible = true;
+
+        await nextTick();
+        if (!contextMenuRef.value) await new Promise(resolve => window.requestAnimationFrame(resolve));
+        if (!contextMenu.visible || openRequest !== contextMenuOpenRequest || !contextMenuRef.value) return;
+        const position = getContextMenuPosition(anchor, contextMenuRef.value.getBoundingClientRect());
+        contextMenu.x = position.x;
+        contextMenu.y = position.y;
+    };
+
+    const hideContextMenu = () => {
+        contextMenuOpenRequest += 1;
+        contextMenu.visible = false;
+    };
+
+    const copyText = async (value, successMessage) => {
+        if (!value) return;
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+            await navigator.clipboard.writeText(value);
+            notify.success(successMessage);
+        } catch (_error) {
+            notify.warning('系统剪贴板不可用，请从节点详情中手动复制');
+        }
+    };
+
+    const showNodeSource = node => {
+        const module = moduleForNode(node);
+        if (!module) {
+            notify.warning('没有找到该节点所属的本地 YANG 模块');
+            return;
+        }
+        sourceModuleKey.value = module._key;
+        inspectorTab.value = 'source';
+        loadSource();
+    };
+
+    const openOperation = operation => {
+        const node = contextMenu.node;
+        const disabledReason = operationDisabledReason(operation, node);
+        if (disabledReason) {
+            notify.warning(disabledReason);
+            return;
+        }
+        Object.assign(operationContext, {
+            operation,
+            node,
+            subtree: ['get', 'get-config'].includes(operation) ? buildNodeXml(node, 'filter') : '',
+            config: operation === 'edit-config' ? buildNodeXml(node, 'config') : '',
+            rawRpc: operation === 'raw-rpc' ? buildRawRpcDraft(node) : ''
+        });
+        operationModalOpen.value = true;
+    };
+
+    const handleContextMenuClick = ({ key }) => {
+        const node = contextMenu.node;
+        if (key === 'copy-path') copyText(node?.path, 'Schema 路径已复制');
+        else if (key === 'view-source') showNodeSource(node);
+        else if (key === 'capabilities') capabilityModalOpen.value = true;
+        else if (key === 'connection') router.push(YANG_ROUTE.CONNECTION);
+        else openOperation(key);
+        hideContextMenu();
+    };
+
+    const loadSession = async () => {
+        try {
+            const { data } = await invokeBridge('netconfApi', 'getSessionState');
+            session.value = { ...session.value, ...(data || {}) };
+        } catch (error) {
+            session.value = {
+                status: NETCONF_SESSION_STATUS.DISCONNECTED,
+                connected: false,
+                capabilities: []
+            };
+            console.warn('Unable to load NETCONF session state:', error.message);
+        }
+    };
+
+    const handleSessionEvent = payload => {
+        session.value = normalizeSessionEvent(payload, session.value);
     };
 
     const handleTreeExpand = async (_keys, info) => {
@@ -590,16 +1052,41 @@
         return '信息';
     };
 
+    const handleContextMenuKeydown = event => {
+        if (event.key === 'Escape') hideContextMenu();
+    };
+
+    const handleWorkspaceScroll = event => {
+        if (event.target instanceof Node && contextMenuRef.value?.contains(event.target)) return;
+        hideContextMenu();
+    };
+
+    const handleWorkspaceDeactivated = () => {
+        hideContextMenu();
+        operationModalOpen.value = false;
+        capabilityModalOpen.value = false;
+    };
+
     onMounted(() => {
         EventBus.on(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE, handleCompileProgress);
+        EventBus.on(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`, handleSessionEvent);
+        document.addEventListener('keydown', handleContextMenuKeydown);
+        window.addEventListener('resize', hideContextMenu);
+        window.addEventListener('scroll', handleWorkspaceScroll, true);
         refreshCompilerStatus();
-        loadWorkspace();
+        Promise.all([loadWorkspace(), loadSession()]);
     });
 
-    onActivated(() => Promise.all([loadWorkspace(), refreshCompilerStatus()]));
+    onActivated(() => Promise.all([loadWorkspace(), loadSession(), refreshCompilerStatus()]));
+
+    onDeactivated(handleWorkspaceDeactivated);
 
     onBeforeUnmount(() => {
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE);
+        EventBus.off(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`);
+        document.removeEventListener('keydown', handleContextMenuKeydown);
+        window.removeEventListener('resize', hideContextMenu);
+        window.removeEventListener('scroll', handleWorkspaceScroll, true);
     });
 </script>
 
@@ -698,6 +1185,10 @@
         font-weight: 600;
     }
 
+    .panel-heading {
+        min-width: 0;
+    }
+
     .panel-meta {
         margin-left: 6px;
         color: var(--nn-color-text-muted);
@@ -713,6 +1204,100 @@
         flex: 1;
         overflow: auto;
         padding: 6px;
+    }
+
+    .schema-context-menu {
+        position: fixed;
+        z-index: 1200;
+        width: 276px;
+        max-width: calc(100vw - 16px);
+        max-height: calc(100vh - 16px);
+        padding: 4px 0;
+        overflow-y: auto;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+        background: var(--nn-color-bg-elevated);
+        box-shadow: var(--nn-shadow-elevated);
+    }
+
+    .schema-context-menu-title {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 5px 12px 0;
+        color: var(--nn-color-text-strong);
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    .schema-context-menu-title > span:first-child,
+    .schema-context-menu-path {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .schema-context-menu-keyword {
+        flex: 0 0 auto;
+        color: var(--nn-color-primary);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 10px;
+        font-weight: 500;
+    }
+
+    .schema-context-menu-path {
+        padding: 1px 12px 6px;
+        color: var(--nn-color-text-muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 10px;
+        border-bottom: 1px solid var(--nn-color-border-light);
+    }
+
+    .schema-context-menu-list {
+        border-inline-end: 0;
+    }
+
+    .schema-context-menu-list :deep(.nn-menu-item) {
+        height: 30px;
+        min-height: 30px;
+        margin: 2px 4px;
+        padding-block: 3px;
+        border-radius: 4px;
+        line-height: 24px;
+    }
+
+    .schema-context-menu-list :deep(.nn-menu-divider) {
+        margin: 4px 0;
+    }
+
+    .schema-context-menu-hint {
+        padding: 6px 12px 4px;
+        color: var(--nn-color-text-muted);
+        font-size: 11px;
+        line-height: 17px;
+        border-top: 1px solid var(--nn-color-border-light);
+    }
+
+    .workspace-capability-list {
+        max-height: calc(100vh - 210px);
+        margin-top: 10px;
+        overflow-y: auto;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+    }
+
+    .workspace-capability-row {
+        padding: 7px 9px;
+        border-bottom: 1px solid var(--nn-color-border-light);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        overflow-wrap: anywhere;
+    }
+
+    .workspace-capability-row:last-child {
+        border-bottom: 0;
     }
 
     .schema-node-title {

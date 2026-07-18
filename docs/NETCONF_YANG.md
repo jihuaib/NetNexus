@@ -28,8 +28,7 @@ NETCONF / YANG 工作台用于连接支持 NETCONF over SSH 的网络设备，�
 | --- | --- |
 | 连接设置 | 新建、编辑、测试和删除连接 Profile；连接或断开 NETCONF 会话；查看服务端 Capability。 |
 | 模型列表 | 读取设备模型清单、下载模型、导入本地文件或目录、筛选模型、编译所选模型和查看源码。 |
-| Schema 工作区 | 编译全部本地模型，浏览 Schema 树和节点属性，查看模块源码与编译诊断。 |
-| 设备操作 | 根据当前 Capability 执行 NETCONF 操作，预览请求 XML，并查看完整响应。 |
+| Schema 工作区 | 编译并浏览 Schema；右键节点执行 NETCONF 操作，在弹窗中编辑请求、预览 XML 并查看响应。 |
 
 ## 使用本地 NETCONF Mock 完整联调
 
@@ -65,8 +64,8 @@ Mock 启动后会打印监听地址、SSH Host Key 指纹和 Profile 参数。�
 1. 进入“模型列表”，点击“读取设备列表”，确认发现 `netnexus-mock-device` 和 `netnexus-mock-types`。
 2. 选择并下载这两个模型。`netnexus-mock-device` 会通过 `import` 引用 `netnexus-mock-types`，可用于验证 `get-schema` 和依赖处理。
 3. 选择下载后的模型执行“编译所选”，或进入“Schema 工作区”执行“编译工作区”，确认 libyang 编译成功并能浏览 `system`、`interfaces` 和 `state` 节点。
-4. 进入“设备操作”，执行 `get` 或对 `running` 执行 `get-config`，确认初始 hostname 为 `netnexus-mock`。
-5. 选择 `edit-config`，目标 datastore 设为 `candidate`，`default-operation` 设为 `merge`，在“config XML”中粘贴下面的内容并执行：
+4. 在 Schema 树中右键 `system` 或其他数据节点，执行 `get` 或 `get-config`，确认初始 hostname 为 `netnexus-mock`。
+5. 右键 config 数据节点选择 `edit-config`，目标 datastore 设为 `candidate`，`default-operation` 设为 `merge`，在“config XML”中粘贴下面的内容并执行：
 
 ```xml
 <system xmlns="urn:netnexus:params:xml:ns:yang:mock-device">
@@ -178,22 +177,22 @@ NETNEXUS_YANGLINT_PATH=/absolute/path/to/yanglint npm run dev
 - 查看模块原始 YANG 源码。
 - 按错误、警告和信息筛选诊断，并从诊断定位到模块源码。
 
-进入“设备操作”可以执行下列操作：
+Schema 树顶部始终提供“当前设备”入口，即使尚未编译模型也能右键执行全量和 datastore 操作；右键普通 Schema 节点则会预填 subtree/config XML 草稿。`delete-config` 等 datastore 操作仍明确作用于整个配置存储：
 
 | 操作 | 说明 | 典型 Capability |
 | --- | --- | --- |
 | `get` | 读取配置和状态数据，支持 subtree 或 XPath filter。 | XPath filter 需要 `:xpath`。 |
 | `get-config` | 从 running、candidate 或 startup 读取配置。 | datastore 必须由服务端声明。 |
-| `edit-config` | 发送配置 XML，支持 default/test/error-option。 | candidate、writable-running、validate 等。 |
+| `edit-config` | 发送配置 XML，支持 default/test/error-option；自动草稿必须补全 list key 和必填值后才能执行。 | candidate、writable-running、validate 等。 |
 | `copy-config` | 在 datastore 之间复制配置。 | 取决于源和目标 datastore。 |
-| `delete-config` | 删除 candidate 或 startup datastore。 | 不允许删除 running。 |
+| `delete-config` | 删除整个 startup datastore，不用于删除 Schema 节点或 candidate。 | `:startup`。 |
 | `lock` / `unlock` | 锁定或解锁指定 datastore。 | NETCONF base。 |
 | `validate` | 让设备校验 datastore。 | `:validate`。 |
 | `commit` | 将 candidate 提交到 running，可选 confirmed commit。 | `:candidate`、`:confirmed-commit`。 |
 | `discard-changes` | 放弃 candidate 中尚未提交的修改。 | `:candidate`。 |
 | 原始 RPC | 发送完整 `<rpc>` XML，用于厂商 RPC、action 或尚未做成表单的操作。 | 由 RPC 本身决定。 |
 
-页面会依据服务端 Capability 禁用明显不可用的结构化操作。原始 RPC 不做 Capability 推断，执行前需要自行确认命名空间、目标 datastore 和操作风险。
+页面会依据节点的 `config` 属性和服务端 Capability 禁用明显不可用的结构化操作。所有表单、请求预览和 RPC 结果都显示在操作弹窗中；原始 RPC 不做 Capability 推断，执行前需要自行确认命名空间、目标 datastore 和操作风险。旧的 `/yang/yang-operations` 地址会自动跳转到 Schema 工作区。
 
 ## 安全设计
 

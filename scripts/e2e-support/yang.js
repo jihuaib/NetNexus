@@ -152,6 +152,7 @@ function createSchemaNodes() {
             name: 'interface',
             title: 'interface',
             keyword: 'list',
+            key: 'name',
             module: 'ietf-interfaces',
             path: '/ietf-interfaces:interfaces/interface',
             config: true,
