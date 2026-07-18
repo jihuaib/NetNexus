@@ -158,6 +158,16 @@ function verifyScriptSyntax() {
     assertVcpkgBaselinePreflightContract(powershellSource);
     assert.match(powershellSource, /CMAKE_FIND_LIBRARY_SUFFIXES \.lib/);
     assert.match(powershellSource, /pcre2-8-static/);
+    assert.match(
+        powershellSource,
+        /Replace-PinnedSourceText\s+`\r?\n\s+\(Join-Path \$SourceDir 'src\/ly_config\.h\.in'\)\s+`\r?\n\s+\$LibyangMsvcApiBlock\s+`\r?\n\s+\$LibyangMsvcStaticApiBlock/,
+        'the Windows build must patch the pinned libyang API macro template'
+    );
+    assert.match(
+        powershellSource,
+        /#  else\r?\n#    define LIBYANG_API_DEF\r?\n#    define LIBYANG_API_DECL\r?\n#  endif/,
+        'static MSVC builds must use undecorated libyang declarations and definitions'
+    );
     assert.match(powershellSource, /Assert-GitCommit/);
     assert.match(powershellSource, /netnexus_getopt/);
     assert.match(powershellSource, /Assert-WindowsSystemDependencies/);

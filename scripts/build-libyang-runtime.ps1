@@ -286,6 +286,42 @@ try {
         (Join-Path $SourceDir 'CMakeModules/FindPCRE2.cmake') `
         "NAMES`n            pcre2-8" `
         "NAMES`n            pcre2-8-static`n            pcre2-8"
+
+    # libyang 5.8.6 leaves its API decoration macros undefined for static MSVC
+    # builds. Patch the pinned template so both the library and its consumers
+    # see undecorated declarations and definitions when STATIC is enabled.
+    $LibyangMsvcApiBlock = @'
+#ifdef _MSC_VER
+#  ifndef STATIC
+#    define LIBYANG_API_DEF __declspec(dllexport)
+#    ifdef LIBYANG_BUILD
+#      define LIBYANG_API_DECL __declspec(dllexport)
+#    else
+#      define LIBYANG_API_DECL __declspec(dllimport)
+#    endif
+#  endif
+#else
+'@
+    $LibyangMsvcStaticApiBlock = @'
+#ifdef _MSC_VER
+#  ifndef STATIC
+#    define LIBYANG_API_DEF __declspec(dllexport)
+#    ifdef LIBYANG_BUILD
+#      define LIBYANG_API_DECL __declspec(dllexport)
+#    else
+#      define LIBYANG_API_DECL __declspec(dllimport)
+#    endif
+#  else
+#    define LIBYANG_API_DEF
+#    define LIBYANG_API_DECL
+#  endif
+#else
+'@
+    Replace-PinnedSourceText `
+        (Join-Path $SourceDir 'src/ly_config.h.in') `
+        $LibyangMsvcApiBlock `
+        $LibyangMsvcStaticApiBlock
+
     $GetoptFindBlock = @'
 if(WIN32)
     find_library(GETOPT_LIBRARY NAMES getopt REQUIRED)

@@ -1,219 +1,271 @@
 <template>
     <div class="nn-container yang-connection-page">
-        <div class="connection-layout">
-            <nn-card title="连接 Profile" class="profile-card">
-                <template #extra>
-                    <nn-button type="primary" size="small" @click="addProfile">
-                        <template #icon><PlusOutlined /></template>
-                        新建
-                    </nn-button>
-                </template>
+        <nn-card title="连接设置" class="connection-card">
+            <template #extra>
+                <nn-space>
+                    <nn-tag :color="sessionStatusMeta.color">NETCONF {{ sessionStatusMeta.text }}</nn-tag>
+                    <nn-tag color="blue">Profile {{ profiles.length }}</nn-tag>
+                    <nn-tag v-if="isConnected" color="cyan">Capability {{ capabilities.length }}</nn-tag>
+                </nn-space>
+            </template>
 
-                <nn-spin :spinning="profileLoading">
-                    <div class="profile-list">
-                        <button
-                            v-for="profile in profiles"
-                            :key="profile.id"
-                            type="button"
-                            class="profile-list-item"
-                            :class="{ 'profile-list-item-active': profile.id === selectedProfileId }"
-                            @click="selectProfile(profile)"
-                        >
-                            <span class="profile-avatar"><CloudServerOutlined /></span>
-                            <span class="profile-content">
-                                <span class="profile-name">{{ profile.name || '未命名连接' }}</span>
-                                <span class="profile-address">{{ profile.host || '-' }}:{{ profile.port || 830 }}</span>
-                            </span>
-                            <span
-                                v-if="isConnected && activeProfileId === profile.id"
-                                class="profile-online-dot"
-                                title="当前会话"
-                            />
-                        </button>
-                        <nn-empty v-if="!profileLoading && profiles.length === 0" description="暂无连接 Profile" />
-                    </div>
-                </nn-spin>
-            </nn-card>
-
-            <nn-card title="连接设置" class="profile-editor-card">
-                <template #extra>
-                    <nn-space>
-                        <nn-tag v-if="isDirty" color="warning">未保存</nn-tag>
-                        <nn-button :loading="testing" :disabled="!selectedProfileId" @click="testConnection">
-                            测试连接
-                        </nn-button>
-                        <nn-button type="primary" :loading="saving" :disabled="!selectedProfileId" @click="saveProfile">
-                            <template #icon><SaveOutlined /></template>
-                            保存
-                        </nn-button>
-                        <nn-button danger :disabled="!selectedProfileId" @click="deleteProfile">
-                            <template #icon><DeleteOutlined /></template>
-                            删除
-                        </nn-button>
-                    </nn-space>
-                </template>
-
-                <nn-empty v-if="!selectedProfileId" description="请选择或新建一个连接 Profile" />
-                <nn-form v-else :model="draft" :label-col="labelCol" class="profile-form">
-                    <nn-row :gutter="16">
-                        <nn-col :span="12">
-                            <nn-form-item label="Profile 名称" required>
-                                <nn-input v-model:value="draft.name" placeholder="例如：核心路由器" :maxlength="80" />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :span="12">
-                            <nn-form-item label="认证方式" required>
-                                <nn-select v-model:value="draft.authMethod" :options="NETCONF_AUTH_OPTIONS" />
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-
-                    <nn-row :gutter="16">
-                        <nn-col :span="16">
-                            <nn-form-item label="设备地址" required>
-                                <nn-input v-model:value="draft.host" placeholder="IP 地址或主机名" />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :span="8">
-                            <nn-form-item label="端口" required>
-                                <nn-input-number v-model:value="draft.port" :min="1" :max="65535" style="width: 100%" />
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-
-                    <nn-row :gutter="16">
-                        <nn-col :span="12">
-                            <nn-form-item label="用户名" required>
-                                <nn-input
-                                    v-model:value="draft.username"
-                                    autocomplete="off"
-                                    placeholder="NETCONF 用户名"
-                                />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col v-if="draft.authMethod === 'password'" :span="12">
-                            <nn-form-item label="密码" required>
-                                <nn-input-password
-                                    v-model:value="draft.password"
-                                    autocomplete="new-password"
-                                    placeholder="设备登录密码"
-                                />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col v-else :span="12">
-                            <nn-form-item label="私钥口令">
-                                <nn-input-password
-                                    v-model:value="draft.passphrase"
-                                    autocomplete="new-password"
-                                    placeholder="没有口令可留空"
-                                />
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-
-                    <nn-form-item v-if="draft.authMethod === 'privateKey'" label="私钥路径" required>
-                        <div class="private-key-picker">
-                            <nn-input v-model:value="draft.privateKeyPath" placeholder="本机私钥文件绝对路径" />
-                            <nn-button :loading="privateKeySelecting" @click="selectPrivateKey">选择文件</nn-button>
+            <div class="connection-status-bar">
+                <div class="connection-status-main">
+                    <span class="status-dot" :class="'status-dot-' + sessionStatus" />
+                    <div class="connection-status-content">
+                        <div class="connection-status-title">NETCONF 会话</div>
+                        <div class="connection-status-description">
+                            {{ sessionDescription }}
                         </div>
-                    </nn-form-item>
-
-                    <nn-form-item label="Host Key 指纹">
-                        <nn-input
-                            v-model:value="draft.hostKeyFingerprint"
-                            placeholder="首次连接可留空；确认后建议固定 SHA256 指纹"
-                        />
-                    </nn-form-item>
-
-                    <nn-row :gutter="16">
-                        <nn-col :span="12">
-                            <nn-form-item label="连接超时">
-                                <nn-input-number
-                                    v-model:value="draft.connectTimeout"
-                                    :min="1000"
-                                    :max="120000"
-                                    :step="1000"
-                                    addon-after="ms"
-                                    style="width: 100%"
-                                />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :span="12">
-                            <nn-form-item label="Keepalive">
-                                <nn-input-number
-                                    v-model:value="draft.keepaliveInterval"
-                                    :min="0"
-                                    :max="300000"
-                                    :step="1000"
-                                    addon-after="ms"
-                                    style="width: 100%"
-                                />
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-
-                    <nn-form-item label="自动重连">
-                        <div class="profile-options">
-                            <nn-checkbox v-model:checked="draft.rememberCredentials">
-                                使用系统安全存储保存凭据
-                            </nn-checkbox>
-                            <nn-checkbox v-model:checked="draft.autoReconnect">
-                                连接意外中断后自动尝试恢复会话
-                            </nn-checkbox>
-                        </div>
-                    </nn-form-item>
-                </nn-form>
-            </nn-card>
-        </div>
-
-        <div class="connection-status-bar">
-            <div class="connection-status-main">
-                <span class="status-dot" :class="`status-dot-${sessionStatus}`" />
-                <div>
-                    <div class="connection-status-title">
-                        NETCONF
-                        <nn-tag :color="sessionStatusMeta.color">{{ sessionStatusMeta.text }}</nn-tag>
-                    </div>
-                    <div class="connection-status-description">
-                        {{ sessionDescription }}
                     </div>
                 </div>
+                <nn-space wrap class="connection-status-actions">
+                    <nn-button :disabled="!isConnected" @click="capabilityModalOpen = true">
+                        设备 Capability {{ capabilities.length }}
+                    </nn-button>
+                    <nn-button
+                        v-if="!isConnected"
+                        type="primary"
+                        :loading="connecting"
+                        :disabled="!selectedProfileId"
+                        @click="connectProfile"
+                    >
+                        <template #icon><ApiOutlined /></template>
+                        连接
+                    </nn-button>
+                    <nn-button v-else danger :loading="disconnecting" @click="disconnectProfile">断开连接</nn-button>
+                </nn-space>
             </div>
-            <nn-space>
-                <nn-button :disabled="!isConnected" @click="capabilityModalOpen = true">
-                    设备 Capability {{ capabilities.length }}
-                </nn-button>
-                <nn-button
-                    v-if="!isConnected"
-                    type="primary"
-                    :loading="connecting"
-                    :disabled="!selectedProfileId"
-                    @click="connectProfile"
-                >
-                    <template #icon><ApiOutlined /></template>
-                    连接
-                </nn-button>
-                <nn-button v-else danger :loading="disconnecting" @click="disconnectProfile">断开连接</nn-button>
-            </nn-space>
-        </div>
 
-        <nn-card v-if="isConnected" title="当前会话" class="session-card">
-            <nn-descriptions :column="3" bordered size="small">
-                <nn-descriptions-item label="Profile">
-                    {{ session.profileName || selectedProfile?.name || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="远端">
-                    {{ session.host || selectedProfile?.host || '-' }}:{{
-                        session.port || selectedProfile?.port || 830
-                    }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="NETCONF Base">
-                    {{ session.baseVersion || session.version || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="Session ID">{{ session.sessionId || '-' }}</nn-descriptions-item>
-                <nn-descriptions-item label="连接时间">{{ formatDateTime(session.connectedAt) }}</nn-descriptions-item>
-                <nn-descriptions-item label="能力数量">{{ capabilities.length }}</nn-descriptions-item>
-            </nn-descriptions>
+            <div class="connection-layout">
+                <section class="connection-panel profile-card">
+                    <div class="connection-panel-header">
+                        <div class="connection-panel-heading">
+                            <span class="connection-panel-title">连接 Profile</span>
+                            <span class="connection-panel-meta">选择设备连接配置</span>
+                        </div>
+                        <nn-button type="primary" size="small" @click="addProfile">
+                            <template #icon><PlusOutlined /></template>
+                            新建
+                        </nn-button>
+                    </div>
+
+                    <div class="connection-panel-body profile-panel-body">
+                        <nn-spin :spinning="profileLoading">
+                            <div class="profile-list">
+                                <button
+                                    v-for="profile in profiles"
+                                    :key="profile.id"
+                                    type="button"
+                                    class="profile-list-item"
+                                    :class="{ 'profile-list-item-active': profile.id === selectedProfileId }"
+                                    @click="selectProfile(profile)"
+                                >
+                                    <span class="profile-avatar"><CloudServerOutlined /></span>
+                                    <span class="profile-content">
+                                        <span class="profile-name">{{ profile.name || '未命名连接' }}</span>
+                                        <span class="profile-address">
+                                            {{ profile.host || '-' }}:{{ profile.port || 830 }}
+                                        </span>
+                                    </span>
+                                    <span
+                                        v-if="isConnected && activeProfileId === profile.id"
+                                        class="profile-online-dot"
+                                        title="当前会话"
+                                    />
+                                </button>
+                                <nn-empty
+                                    v-if="!profileLoading && profiles.length === 0"
+                                    description="暂无连接 Profile"
+                                />
+                            </div>
+                        </nn-spin>
+                    </div>
+                </section>
+
+                <section class="connection-panel profile-editor-card">
+                    <div class="connection-panel-header profile-editor-header">
+                        <div class="connection-panel-heading">
+                            <span class="connection-panel-title">Profile 配置</span>
+                            <span class="connection-panel-meta">
+                                {{ selectedProfile?.name || '请选择或新建一个连接 Profile' }}
+                            </span>
+                        </div>
+                        <nn-space wrap class="profile-editor-actions">
+                            <nn-tag v-if="isDirty" color="warning">未保存</nn-tag>
+                            <nn-button :loading="testing" :disabled="!selectedProfileId" @click="testConnection">
+                                测试连接
+                            </nn-button>
+                            <nn-button
+                                type="primary"
+                                :loading="saving"
+                                :disabled="!selectedProfileId"
+                                @click="saveProfile"
+                            >
+                                <template #icon><SaveOutlined /></template>
+                                保存
+                            </nn-button>
+                            <nn-button danger :disabled="!selectedProfileId" @click="deleteProfile">
+                                <template #icon><DeleteOutlined /></template>
+                                删除
+                            </nn-button>
+                        </nn-space>
+                    </div>
+
+                    <div class="connection-panel-body profile-editor-body">
+                        <nn-empty v-if="!selectedProfileId" description="请选择或新建一个连接 Profile" />
+                        <nn-form v-else :model="draft" :label-col="labelCol" class="profile-form">
+                            <nn-row :gutter="16">
+                                <nn-col :span="12" :xs="24" :sm="12">
+                                    <nn-form-item label="Profile 名称" required>
+                                        <nn-input
+                                            v-model:value="draft.name"
+                                            placeholder="例如：核心路由器"
+                                            :maxlength="80"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                                <nn-col :span="12" :xs="24" :sm="12">
+                                    <nn-form-item label="认证方式" required>
+                                        <nn-select v-model:value="draft.authMethod" :options="NETCONF_AUTH_OPTIONS" />
+                                    </nn-form-item>
+                                </nn-col>
+                            </nn-row>
+
+                            <nn-row :gutter="16">
+                                <nn-col :span="12" :xs="24" :sm="12">
+                                    <nn-form-item label="设备地址" required>
+                                        <nn-input v-model:value="draft.host" placeholder="IP 地址或主机名" />
+                                    </nn-form-item>
+                                </nn-col>
+                                <nn-col :span="12" :xs="24" :sm="12">
+                                    <nn-form-item label="端口" required>
+                                        <nn-input-number
+                                            v-model:value="draft.port"
+                                            :min="1"
+                                            :max="65535"
+                                            style="width: 100%"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                            </nn-row>
+
+                            <nn-row :gutter="16">
+                                <nn-col :span="12" :xs="24" :sm="12">
+                                    <nn-form-item label="用户名" required>
+                                        <nn-input
+                                            v-model:value="draft.username"
+                                            autocomplete="off"
+                                            placeholder="NETCONF 用户名"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                                <nn-col v-if="draft.authMethod === 'password'" :span="12" :xs="24" :sm="12">
+                                    <nn-form-item label="密码" required>
+                                        <nn-input-password
+                                            v-model:value="draft.password"
+                                            autocomplete="new-password"
+                                            placeholder="设备登录密码"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                                <nn-col v-else :span="12" :xs="24" :sm="12">
+                                    <nn-form-item label="私钥口令">
+                                        <nn-input-password
+                                            v-model:value="draft.passphrase"
+                                            autocomplete="new-password"
+                                            placeholder="没有口令可留空"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                            </nn-row>
+
+                            <nn-form-item v-if="draft.authMethod === 'privateKey'" label="私钥路径" required>
+                                <div class="private-key-picker">
+                                    <nn-input v-model:value="draft.privateKeyPath" placeholder="本机私钥文件绝对路径" />
+                                    <nn-button :loading="privateKeySelecting" @click="selectPrivateKey">
+                                        选择文件
+                                    </nn-button>
+                                </div>
+                            </nn-form-item>
+
+                            <nn-form-item label="Host Key 指纹">
+                                <nn-input
+                                    v-model:value="draft.hostKeyFingerprint"
+                                    placeholder="首次连接可留空；确认后建议固定 SHA256 指纹"
+                                />
+                            </nn-form-item>
+
+                            <nn-row :gutter="16">
+                                <nn-col :span="12" :xs="24" :sm="12">
+                                    <nn-form-item label="连接超时">
+                                        <nn-input-number
+                                            v-model:value="draft.connectTimeout"
+                                            :min="1000"
+                                            :max="120000"
+                                            :step="1000"
+                                            addon-after="ms"
+                                            style="width: 100%"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                                <nn-col :span="12" :xs="24" :sm="12">
+                                    <nn-form-item label="Keepalive">
+                                        <nn-input-number
+                                            v-model:value="draft.keepaliveInterval"
+                                            :min="0"
+                                            :max="300000"
+                                            :step="1000"
+                                            addon-after="ms"
+                                            style="width: 100%"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                            </nn-row>
+
+                            <nn-form-item label="自动重连">
+                                <div class="profile-options">
+                                    <nn-checkbox v-model:checked="draft.rememberCredentials">
+                                        使用系统安全存储保存凭据
+                                    </nn-checkbox>
+                                    <nn-checkbox v-model:checked="draft.autoReconnect">
+                                        连接意外中断后自动尝试恢复会话
+                                    </nn-checkbox>
+                                </div>
+                            </nn-form-item>
+                        </nn-form>
+                    </div>
+                </section>
+            </div>
+
+            <section v-if="isConnected" class="connection-panel session-card">
+                <div class="connection-panel-header session-panel-header">
+                    <div class="connection-panel-heading">
+                        <span class="connection-panel-title">当前会话</span>
+                        <span class="connection-panel-meta">NETCONF 会话与服务端能力摘要</span>
+                    </div>
+                </div>
+                <div class="session-panel-body">
+                    <nn-descriptions :column="3" bordered size="small">
+                        <nn-descriptions-item label="Profile">
+                            {{ session.profileName || selectedProfile?.name || '-' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="远端">
+                            {{ session.host || selectedProfile?.host || '-' }}:{{
+                                session.port || selectedProfile?.port || 830
+                            }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="NETCONF Base">
+                            {{ session.baseVersion || session.version || '-' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="Session ID">{{ session.sessionId || '-' }}</nn-descriptions-item>
+                        <nn-descriptions-item label="连接时间">
+                            {{ formatDateTime(session.connectedAt) }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="能力数量">{{ capabilities.length }}</nn-descriptions-item>
+                    </nn-descriptions>
+                </div>
+            </section>
         </nn-card>
 
         <nn-modal v-model:open="capabilityModalOpen" title="设备 Capability" :footer="null" width="880px">
@@ -594,11 +646,24 @@
 </script>
 
 <style scoped>
-    .yang-connection-page {
+    .yang-connection-page,
+    .connection-card {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .connection-card {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .connection-card :deep(.nn-card-body) {
         display: flex;
         min-height: 0;
+        flex: 1;
         flex-direction: column;
         gap: 8px;
+        overflow-y: auto;
     }
 
     .connection-status-bar {
@@ -608,8 +673,8 @@
         gap: 16px;
         padding: 10px 14px;
         border: 1px solid var(--nn-color-border-light);
-        border-radius: 8px;
-        background: var(--nn-color-bg-surface);
+        border-radius: 6px;
+        background: var(--nn-color-bg-muted);
     }
 
     .connection-status-main {
@@ -617,6 +682,15 @@
         min-width: 0;
         align-items: center;
         gap: 12px;
+    }
+
+    .connection-status-content {
+        min-width: 0;
+    }
+
+    .connection-status-actions {
+        flex: 0 0 auto;
+        justify-content: flex-end;
     }
 
     .status-dot {
@@ -653,11 +727,8 @@
     }
 
     .connection-status-title {
-        display: flex;
-        align-items: center;
-        gap: 8px;
         color: var(--nn-color-text-strong);
-        font-size: 15px;
+        font-size: 13px;
         font-weight: 600;
     }
 
@@ -672,19 +743,89 @@
 
     .connection-layout {
         display: grid;
+        min-width: 0;
+        min-height: 0;
+        flex: 1;
         grid-template-columns: minmax(220px, 26%) minmax(0, 1fr);
         gap: 8px;
         align-items: stretch;
     }
 
+    .connection-panel {
+        display: flex;
+        min-width: 0;
+        min-height: 0;
+        flex-direction: column;
+        overflow: hidden;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+        background: var(--nn-color-bg-surface);
+    }
+
+    .connection-panel-header {
+        display: flex;
+        min-width: 0;
+        min-height: 42px;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 6px 9px;
+        border-bottom: 1px solid var(--nn-color-border-light);
+        background: var(--nn-color-bg-muted);
+    }
+
+    .connection-panel-heading {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+    }
+
+    .connection-panel-title,
+    .connection-panel-meta {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .connection-panel-title {
+        color: var(--nn-color-text-strong);
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    .connection-panel-meta {
+        color: var(--nn-color-text-muted);
+        font-size: 11px;
+    }
+
+    .connection-panel-body {
+        min-height: 0;
+        flex: 1;
+        padding: 10px;
+        overflow: auto;
+    }
+
     .profile-card,
     .profile-editor-card {
-        min-height: 430px;
+        min-height: 0;
+    }
+
+    .profile-panel-body {
+        overflow: hidden;
+    }
+
+    .profile-panel-body :deep(.nn-spin-nested-loading),
+    .profile-panel-body :deep(.nn-spin-container) {
+        height: 100%;
+        min-height: 0;
     }
 
     .profile-list {
         display: flex;
-        max-height: 506px;
+        height: 100%;
+        min-height: 0;
         flex-direction: column;
         gap: 5px;
         overflow-y: auto;
@@ -762,7 +903,8 @@
     }
 
     .profile-form {
-        max-width: 980px;
+        width: 100%;
+        max-width: none;
         padding-top: 2px;
     }
 
@@ -785,8 +927,16 @@
         gap: 8px 20px;
     }
 
-    .session-card :deep(.nn-card-body) {
-        padding: 8px !important;
+    .session-card {
+        flex: 0 0 auto;
+    }
+
+    .session-panel-header {
+        min-height: 38px;
+    }
+
+    .session-panel-body {
+        padding: 8px;
     }
 
     .capability-search {
@@ -822,11 +972,40 @@
         }
 
         .profile-card {
-            min-height: 0;
+            min-height: 180px;
         }
 
         .profile-list {
             max-height: 220px;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .connection-status-bar {
+            align-items: stretch;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .connection-status-actions {
+            width: 100%;
+            justify-content: flex-start;
+        }
+
+        .profile-editor-header {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .profile-editor-actions {
+            width: 100%;
+        }
+    }
+
+    @media (max-width: 575px) {
+        .private-key-picker {
+            align-items: stretch;
+            flex-direction: column;
         }
     }
 </style>

@@ -129,13 +129,29 @@
     const focus = options => textareaRef.value?.focus(options);
     const blur = () => textareaRef.value?.blur();
     const select = () => textareaRef.value?.select();
+    const setSelectionRange = (start, end = start, direction = 'none') => {
+        const textarea = textareaRef.value;
+        if (!textarea) return;
+        const valueLength = textarea.value.length;
+        const selectionStart = Math.max(0, Math.min(Number(start) || 0, valueLength));
+        const selectionEnd = Math.max(selectionStart, Math.min(Number(end) || selectionStart, valueLength));
+        textarea.focus({ preventScroll: true });
+        textarea.setSelectionRange(selectionStart, selectionEnd, direction);
+
+        const lineNumber = textarea.value.slice(0, selectionStart).split('\n').length;
+        const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 18;
+        const targetScrollTop = Math.max(0, (lineNumber - 3) * lineHeight);
+        textarea.scrollTop = targetScrollTop;
+        syncHighlightScroll({ target: textarea });
+    };
 
     defineExpose({
         textarea: textareaRef,
         highlight: highlightRef,
         focus,
         blur,
-        select
+        select,
+        setSelectionRange
     });
 </script>
 
@@ -221,6 +237,10 @@
         background: color-mix(in srgb, var(--nn-color-primary) 28%, transparent);
         color: transparent;
         -webkit-text-fill-color: transparent;
+    }
+
+    .xml-code-editor-status-error .xml-code-editor-input::selection {
+        background: color-mix(in srgb, var(--nn-color-error) 34%, transparent);
     }
 
     .xml-code-editor-disabled {
