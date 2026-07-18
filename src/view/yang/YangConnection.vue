@@ -181,7 +181,7 @@
             </div>
             <nn-space>
                 <nn-button :disabled="!isConnected" @click="capabilityModalOpen = true">
-                    能力 {{ capabilities.length }}
+                    设备 Capability {{ capabilities.length }}
                 </nn-button>
                 <nn-button
                     v-if="!isConnected"

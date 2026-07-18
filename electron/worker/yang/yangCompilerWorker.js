@@ -43,12 +43,18 @@ class YangCompilerWorker {
             compilerPath: data.compilerPath || null,
             compilerSource: data.compilerSource,
             compilerArgs: Array.isArray(data.compilerArgs) ? data.compilerArgs : [],
+            schemaHelperPath: data.schemaHelperPath || null,
+            schemaHelperArgs: Array.isArray(data.schemaHelperArgs) ? data.schemaHelperArgs : [],
             searchPaths: data.searchPaths || data.schemaSearchPaths,
             externalTimeout: data.externalTimeout,
             externalMaxBuffer: data.externalMaxBuffer,
             versionTimeout: data.versionTimeout,
             resourcesPath: data.resourcesPath,
-            isPackaged: data.isPackaged
+            appPath: data.appPath,
+            devResourcesPath: data.devResourcesPath,
+            isPackaged: data.isPackaged,
+            platform: data.platform,
+            arch: data.arch
         };
     }
 

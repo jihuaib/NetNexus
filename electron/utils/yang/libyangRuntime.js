@@ -10,6 +10,7 @@ const MAX_EXECUTION_TIMEOUT_MS = 10 * 60_000;
 const MAX_ALLOWED_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_ARGUMENT_BYTES = 4 * 1024 * 1024;
 const MINIMUM_LIBYANG_MAJOR = 2;
+const SCHEMA_HELPER_CONTRACT_VERSION = 1;
 
 function createRuntimeError(message, code, details = {}) {
     const error = new Error(message);
@@ -20,6 +21,10 @@ function createRuntimeError(message, code, details = {}) {
 
 function executableNameForPlatform(platform = process.platform) {
     return platform === 'win32' ? 'yanglint.exe' : 'yanglint';
+}
+
+function schemaExecutableNameForPlatform(platform = process.platform) {
+    return platform === 'win32' ? 'netnexus-libyang-schema.exe' : 'netnexus-libyang-schema';
 }
 
 function normalizeArchitecture(architecture = process.arch) {
@@ -48,7 +53,7 @@ function runtimeCandidates(root, options = {}) {
     if (!root) return [];
     const platform = options.platform || process.platform;
     const architecture = normalizeArchitecture(options.arch || process.arch);
-    const executableName = executableNameForPlatform(platform);
+    const executableName = options.executableName || executableNameForPlatform(platform);
     const pathApi = pathApiForPlatform(platform);
     const resolvedRoot = pathApi.resolve(root);
     const platformRoot = pathApi.join(resolvedRoot, `${platform}-${architecture}`);
@@ -71,6 +76,62 @@ function runtimeCandidates(root, options = {}) {
             runtimeRoot: resolvedRoot
         }
     ];
+}
+
+function getSchemaHelperCandidates(yanglintCandidate, options = {}) {
+    const platform = options.platform || process.platform;
+    const pathApi = pathApiForPlatform(platform);
+    const executableName = schemaExecutableNameForPlatform(platform);
+    const environment = options.env || process.env;
+    const candidates = [];
+    const seen = new Set();
+    const add = (candidate, source) => {
+        pushCandidate(candidates, seen, { ...candidate, source }, platform);
+    };
+    const addExplicit = (configuredPath, source) => {
+        if (!configuredPath || typeof configuredPath !== 'string' || !configuredPath.trim()) return;
+        const resolved = pathApi.resolve(options.cwd || process.cwd(), configuredPath.trim());
+        const directory = pathApi.dirname(resolved);
+        add(
+            {
+                path: resolved,
+                runtimeRoot: pathApi.basename(directory).toLowerCase() === 'bin' ? pathApi.dirname(directory) : null
+            },
+            source
+        );
+        add({ path: pathApi.join(resolved, 'bin', executableName), runtimeRoot: resolved }, source);
+        add({ path: pathApi.join(resolved, executableName), runtimeRoot: resolved }, source);
+    };
+
+    addExplicit(options.schemaExecutablePath || options.schemaHelperPath, 'explicit');
+    addExplicit(environment.NETNEXUS_LIBYANG_SCHEMA_PATH, 'environment');
+
+    if (yanglintCandidate?.runtimeRoot) {
+        for (const candidate of runtimeCandidates(yanglintCandidate.runtimeRoot, { platform, executableName })) {
+            add(candidate, yanglintCandidate.source);
+        }
+    }
+    if (yanglintCandidate?.path) {
+        add(
+            {
+                path: pathApi.join(pathApi.dirname(yanglintCandidate.path), executableName),
+                runtimeRoot: yanglintCandidate.runtimeRoot || null
+            },
+            yanglintCandidate.source
+        );
+    }
+
+    if (!options.isPackaged || options.allowPathFallback === true) {
+        const delimiter = options.pathDelimiter || (platform === 'win32' ? ';' : path.delimiter);
+        const pathValue = environment.PATH || environment.Path || environment.path || '';
+        for (const directory of String(pathValue)
+            .split(delimiter)
+            .map(value => value.trim().replace(/^"(.*)"$/, '$1'))
+            .filter(Boolean)) {
+            add({ path: pathApi.join(directory, executableName), runtimeRoot: null }, 'path');
+        }
+    }
+    return candidates;
 }
 
 function explicitCandidates(configuredPath, options = {}) {
@@ -296,14 +357,20 @@ function validateArguments(args) {
     return args;
 }
 
+function normalizeExecutableArguments(value) {
+    return Array.isArray(value) ? value.slice() : [];
+}
+
 function boundedPositiveInteger(value, fallback, maximum) {
     const number = Number(value);
     if (!Number.isFinite(number) || number <= 0) return fallback;
     return Math.min(maximum, Math.max(1, Math.floor(number)));
 }
 
-function executeYanglint(executablePath, args, options = {}) {
+function executeLibyangTool(executablePath, args, options = {}) {
     validateArguments(args);
+    const toolName = options.toolName || 'libyang tool';
+    const errorCodePrefix = options.errorCodePrefix || 'LIBYANG_TOOL';
     const timeoutMs = boundedPositiveInteger(options.timeoutMs, DEFAULT_EXECUTION_TIMEOUT_MS, MAX_EXECUTION_TIMEOUT_MS);
     const maxOutputBytes = boundedPositiveInteger(
         options.maxOutputBytes,
@@ -332,13 +399,13 @@ function executeYanglint(executablePath, args, options = {}) {
             let error = spawnError;
             if (outputLimitExceeded) {
                 error = createRuntimeError(
-                    `yanglint output exceeded the ${maxOutputBytes} byte limit`,
-                    'YANGLINT_OUTPUT_LIMIT'
+                    `${toolName} output exceeded the ${maxOutputBytes} byte limit`,
+                    `${errorCodePrefix}_OUTPUT_LIMIT`
                 );
             } else if (timedOut) {
-                error = createRuntimeError(`yanglint timed out after ${timeoutMs} ms`, 'YANGLINT_TIMEOUT');
+                error = createRuntimeError(`${toolName} timed out after ${timeoutMs} ms`, `${errorCodePrefix}_TIMEOUT`);
             } else if (aborted) {
-                error = createRuntimeError('yanglint execution was cancelled', 'YANGLINT_ABORTED');
+                error = createRuntimeError(`${toolName} execution was cancelled`, `${errorCodePrefix}_ABORTED`);
             }
 
             resolve({
@@ -383,7 +450,10 @@ function executeYanglint(executablePath, args, options = {}) {
                 stdio: ['ignore', 'pipe', 'pipe']
             });
         } catch (error) {
-            spawnError = createRuntimeError(`Cannot start yanglint: ${error.message}`, 'YANGLINT_SPAWN_FAILED');
+            spawnError = createRuntimeError(
+                `Cannot start ${toolName}: ${error.message}`,
+                `${errorCodePrefix}_SPAWN_FAILED`
+            );
             finish(null, null);
             return;
         }
@@ -411,9 +481,20 @@ function executeYanglint(executablePath, args, options = {}) {
             collect(stderrChunks, chunk);
         });
         child.once('error', error => {
-            spawnError = createRuntimeError(`Cannot start yanglint: ${error.message}`, 'YANGLINT_SPAWN_FAILED');
+            spawnError = createRuntimeError(
+                `Cannot start ${toolName}: ${error.message}`,
+                `${errorCodePrefix}_SPAWN_FAILED`
+            );
         });
         child.once('close', finish);
+    });
+}
+
+function executeYanglint(executablePath, args, options = {}) {
+    return executeLibyangTool(executablePath, args, {
+        ...options,
+        toolName: 'yanglint',
+        errorCodePrefix: 'YANGLINT'
     });
 }
 
@@ -424,6 +505,20 @@ function parseYanglintVersion(output) {
     return {
         version: match[1],
         major: Number(match[1].split('.')[0]),
+        output: text.split(/\r?\n/)[0].trim()
+    };
+}
+
+function parseSchemaHelperVersion(output) {
+    const text = String(output || '').trim();
+    const match = text.match(
+        /(?:^|\n)\s*netnexus-libyang-schema\s+(\d+)\s+\(libyang\s+v?(\d+(?:\.\d+){2}(?:[-+._A-Za-z0-9]*)?)\)\s*(?:\n|$)/i
+    );
+    if (!match) return null;
+    return {
+        contractVersion: Number(match[1]),
+        version: match[2],
+        major: Number(match[2].split('.')[0]),
         output: text.split(/\r?\n/)[0].trim()
     };
 }
@@ -444,15 +539,23 @@ function unavailableStatus(error, options = {}) {
         executable: 'yanglint',
         version: null,
         path: null,
+        schemaExecutable: schemaExecutableNameForPlatform(options.platform),
+        schemaPath: null,
+        schemaVersion: null,
+        schemaContractVersion: null,
         source: 'unavailable',
         error,
         installHint: installHintForPlatform(options.platform),
         capabilities: {
             schemaValidation: false,
+            schemaExport: false,
+            coreSchemaExport: false,
+            extensionSchemaExport: false,
             dataValidation: false,
             yang10: false,
             yang11: false,
             extensionsPlugins: false,
+            builtinExtensionPlugins: false,
             bundledModules: false
         }
     };
@@ -463,6 +566,15 @@ async function discoverLibyangRuntime(options = {}) {
     const failures = [];
     const minimumMajor = boundedPositiveInteger(options.minimumMajor, MINIMUM_LIBYANG_MAJOR, 100);
     const execute = options.execute || executeYanglint;
+    const executeSchema =
+        options.executeSchema ||
+        options.execute ||
+        ((executablePath, args, executionOptions) =>
+            executeLibyangTool(executablePath, args, {
+                ...executionOptions,
+                toolName: 'NetNexus libyang schema helper',
+                errorCodePrefix: 'LIBYANG_SCHEMA'
+            }));
 
     for (const candidate of candidates) {
         const validation = await validateExecutable(candidate, options);
@@ -499,6 +611,83 @@ async function discoverLibyangRuntime(options = {}) {
             continue;
         }
 
+        let schemaHelper = null;
+        for (const schemaCandidate of getSchemaHelperCandidates(executableCandidate, options)) {
+            const schemaValidation = await validateExecutable(schemaCandidate, options);
+            if (!schemaValidation.valid) {
+                failures.push(schemaValidation.error);
+                continue;
+            }
+            const resolvedSchemaCandidate = { ...schemaCandidate, path: schemaValidation.path };
+            const schemaEnvironment = buildLibyangEnvironment(
+                {
+                    ...resolvedSchemaCandidate,
+                    runtimeRoot: resolvedSchemaCandidate.runtimeRoot || executableCandidate.runtimeRoot
+                },
+                options
+            );
+            let schemaVersionResult;
+            try {
+                const schemaVersionArgs = normalizeExecutableArguments(options.schemaVersionArgs);
+                schemaVersionResult = await executeSchema(
+                    schemaValidation.path,
+                    schemaVersionArgs.length
+                        ? schemaVersionArgs
+                        : [...normalizeExecutableArguments(options.schemaHelperArgs), '--version'],
+                    {
+                        timeoutMs: options.discoveryTimeoutMs || DEFAULT_DISCOVERY_TIMEOUT_MS,
+                        maxOutputBytes: options.versionOutputBytes || DEFAULT_VERSION_OUTPUT_BYTES,
+                        env: schemaEnvironment
+                    }
+                );
+            } catch (error) {
+                failures.push(`${schemaCandidate.path}: schema helper version check failed: ${error.message}`);
+                continue;
+            }
+            const schemaVersion = parseSchemaHelperVersion(
+                `${schemaVersionResult.stdout}\n${schemaVersionResult.stderr}`
+            );
+            if (schemaVersionResult.error || schemaVersionResult.exitCode !== 0 || !schemaVersion) {
+                const reason =
+                    schemaVersionResult.error?.message ||
+                    `unexpected schema helper version output (exit ${schemaVersionResult.exitCode})`;
+                failures.push(`${schemaCandidate.path}: ${reason}`);
+                continue;
+            }
+            if (schemaVersion.major < minimumMajor) {
+                failures.push(
+                    `${schemaCandidate.path}: schema helper uses libyang ${schemaVersion.version}, older than required major ${minimumMajor}`
+                );
+                continue;
+            }
+            if (schemaVersion.contractVersion !== SCHEMA_HELPER_CONTRACT_VERSION) {
+                failures.push(
+                    `${schemaCandidate.path}: schema helper contract ${schemaVersion.contractVersion} does not match required contract ${SCHEMA_HELPER_CONTRACT_VERSION}`
+                );
+                continue;
+            }
+            if (schemaVersion.version !== version.version) {
+                failures.push(
+                    `${schemaCandidate.path}: schema helper libyang ${schemaVersion.version} does not match yanglint ${version.version}`
+                );
+                continue;
+            }
+            schemaHelper = {
+                path: schemaValidation.path,
+                source: schemaCandidate.source,
+                version: schemaVersion.version,
+                contractVersion: schemaVersion.contractVersion,
+                versionOutput: schemaVersion.output
+            };
+            break;
+        }
+        if (!schemaHelper) {
+            failures.push(
+                `${candidate.path}: required ${schemaExecutableNameForPlatform(options.platform)} schema helper is unavailable`
+            );
+            continue;
+        }
+
         const moduleSearchPath = getBundledModuleSearchPath(candidate.runtimeRoot);
 
         return {
@@ -509,15 +698,25 @@ async function discoverLibyangRuntime(options = {}) {
             version: version.version,
             versionOutput: version.output,
             path: validation.path,
+            schemaExecutable: schemaExecutableNameForPlatform(options.platform),
+            schemaPath: schemaHelper.path,
+            schemaSource: schemaHelper.source,
+            schemaVersion: schemaHelper.version,
+            schemaContractVersion: schemaHelper.contractVersion,
+            schemaVersionOutput: schemaHelper.versionOutput,
             source: candidate.source,
             runtimeRoot: candidate.runtimeRoot,
             moduleSearchPath,
             capabilities: {
                 schemaValidation: true,
+                schemaExport: true,
+                coreSchemaExport: true,
+                extensionSchemaExport: false,
                 dataValidation: true,
                 yang10: true,
                 yang11: true,
-                extensionsPlugins: (options.platform || process.platform) !== 'win32',
+                extensionsPlugins: false,
+                builtinExtensionPlugins: true,
                 bundledModules: Boolean(moduleSearchPath)
             }
         };
@@ -525,7 +724,7 @@ async function discoverLibyangRuntime(options = {}) {
 
     const meaningfulFailure = failures.find(failure => !/Cannot access/.test(failure));
     return unavailableStatus(
-        meaningfulFailure || 'The required bundled libyang/yanglint runtime was not found.',
+        meaningfulFailure || 'The required bundled libyang runtime and schema helper were not found.',
         options
     );
 }
@@ -576,6 +775,43 @@ class LibyangRuntime {
             })
         });
     }
+
+    async executeSchema(args, options = {}) {
+        validateArguments(args);
+        const status = await this.getStatus();
+        if (!status.available || !status.schemaPath) {
+            throw createRuntimeError(
+                status.error || 'The required NetNexus libyang schema helper is unavailable',
+                'LIBYANG_SCHEMA_UNAVAILABLE',
+                { status }
+            );
+        }
+        const candidate = {
+            path: status.schemaPath,
+            source: status.schemaSource || status.source,
+            runtimeRoot: status.runtimeRoot
+        };
+        const helperArgs = normalizeExecutableArguments(this.options.schemaHelperArgs);
+        const allArgs = [...helperArgs, ...args];
+        const hasBundledSearchPath = allArgs.some(
+            (argument, index) =>
+                (argument === '-p' || argument === '--path') && allArgs[index + 1] === status.moduleSearchPath
+        );
+        const executionArgs =
+            status.moduleSearchPath && !hasBundledSearchPath
+                ? [...helperArgs, '-p', status.moduleSearchPath, ...args]
+                : allArgs;
+        return executeLibyangTool(status.schemaPath, executionArgs, {
+            ...options,
+            toolName: 'NetNexus libyang schema helper',
+            errorCodePrefix: 'LIBYANG_SCHEMA',
+            env: buildLibyangEnvironment(candidate, {
+                ...this.options,
+                platform: this.options.platform || process.platform,
+                env: options.env || this.options.env || process.env
+            })
+        });
+    }
 }
 
 module.exports = {
@@ -583,15 +819,20 @@ module.exports = {
     DEFAULT_EXECUTION_TIMEOUT_MS,
     DEFAULT_MAX_OUTPUT_BYTES,
     MINIMUM_LIBYANG_MAJOR,
+    SCHEMA_HELPER_CONTRACT_VERSION,
     LibyangRuntime,
     buildLibyangEnvironment,
     discoverLibyangRuntime,
+    executeLibyangTool,
     executeYanglint,
     executableNameForPlatform,
     getBundledModuleSearchPath,
     getLibyangDiscoveryCandidates,
+    getSchemaHelperCandidates,
     getLibyangRuntimeStatus,
     installHintForPlatform,
+    parseSchemaHelperVersion,
     parseYanglintVersion,
+    schemaExecutableNameForPlatform,
     validateExecutable
 };

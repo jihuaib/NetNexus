@@ -50,9 +50,47 @@ function getRuntimeExecutable(options = {}) {
     return path.join(options.runtimeDirectory || getRuntimeDirectory(options), 'bin', executableName);
 }
 
+function getRuntimeSchemaExecutable(options = {}) {
+    const platform = normalizePlatform(options.platform);
+    const executableName = platform === 'win32' ? 'netnexus-libyang-schema.exe' : 'netnexus-libyang-schema';
+    return path.join(options.runtimeDirectory || getRuntimeDirectory(options), 'bin', executableName);
+}
+
 function parseYanglintVersion(output) {
     const match = String(output || '').match(/(?:^|\n)\s*yanglint\s+(?:version\s+)?v?(\d+\.\d+\.\d+)\b/i);
     return match ? match[1] : null;
+}
+
+function parseSchemaHelperVersion(output) {
+    const match = String(output || '').match(
+        /(?:^|\n)\s*netnexus-libyang-schema\s+(\d+)\s+\(libyang\s+v?(\d+\.\d+\.\d+)\)\s*(?:\n|$)/i
+    );
+    return match ? { contractVersion: Number(match[1]), libyangVersion: match[2] } : null;
+}
+
+function assertExecutable(executable, platform, label) {
+    let stats;
+    try {
+        stats = fs.lstatSync(executable);
+    } catch (_error) {
+        throw new Error(`Bundled libyang ${label} is missing: ${executable}`);
+    }
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new Error(`Bundled ${label} must be a regular non-symlink file: ${executable}`);
+    }
+    if (platform !== 'win32' && (stats.mode & 0o111) === 0) {
+        throw new Error(`Bundled ${label} is not executable: ${executable}`);
+    }
+}
+
+function executeVersionProbe(executable, args, options) {
+    return (options.spawnSync || childProcess.spawnSync)(executable, args, {
+        cwd: path.dirname(executable),
+        encoding: 'utf8',
+        timeout: Number(options.timeoutMs) || 10_000,
+        windowsHide: true,
+        env: { ...process.env, ...(options.env || {}) }
+    });
 }
 
 function verifyRuntime(options = {}) {
@@ -61,29 +99,21 @@ function verifyRuntime(options = {}) {
     const arch = normalizeArch(options.arch);
     const runtimeDirectory = options.runtimeDirectory || getRuntimeDirectory({ projectRoot, platform, arch });
     const executable = options.executable || getRuntimeExecutable({ runtimeDirectory, platform });
+    const schemaExecutable = options.schemaExecutable || getRuntimeSchemaExecutable({ runtimeDirectory, platform });
     const expectedVersion = options.expectedVersion || getReleaseManifest(projectRoot).libyangVersion;
-    let stats;
     try {
-        stats = fs.lstatSync(executable);
-    } catch (_error) {
-        throw new Error(
-            `Bundled libyang runtime is missing for ${platform}-${arch}: ${executable}. ` +
-                `Run the platform libyang build script before packaging.`
-        );
+        assertExecutable(executable, platform, 'yanglint');
+        assertExecutable(schemaExecutable, platform, 'Schema helper');
+    } catch (error) {
+        if (/ is missing:/.test(error.message)) {
+            throw new Error(
+                `Bundled libyang runtime is missing for ${platform}-${arch}: ${error.message}. ` +
+                    `Run the platform libyang build script before packaging.`
+            );
+        }
+        throw error;
     }
-    if (!stats.isFile() || stats.isSymbolicLink()) {
-        throw new Error(`Bundled yanglint must be a regular non-symlink file: ${executable}`);
-    }
-    if (platform !== 'win32' && (stats.mode & 0o111) === 0) {
-        throw new Error(`Bundled yanglint is not executable: ${executable}`);
-    }
-    const execution = (options.spawnSync || childProcess.spawnSync)(executable, ['--version'], {
-        cwd: path.dirname(executable),
-        encoding: 'utf8',
-        timeout: Number(options.timeoutMs) || 10_000,
-        windowsHide: true,
-        env: { ...process.env, ...(options.env || {}) }
-    });
+    const execution = executeVersionProbe(executable, ['--version'], options);
     if (execution.error || execution.status !== 0) {
         const detail = execution.error?.message || execution.stderr || `exit code ${execution.status}`;
         throw new Error(`Bundled yanglint cannot execute: ${String(detail).trim()}`);
@@ -94,6 +124,29 @@ function verifyRuntime(options = {}) {
     if (version !== expectedVersion) {
         throw new Error(`Bundled yanglint version ${version} does not match required libyang ${expectedVersion}`);
     }
+
+    const schemaExecution = executeVersionProbe(schemaExecutable, ['--version'], options);
+    if (schemaExecution.error || schemaExecution.status !== 0) {
+        const detail =
+            schemaExecution.error?.message || schemaExecution.stderr || `exit code ${schemaExecution.status}`;
+        throw new Error(`Bundled libyang Schema helper cannot execute: ${String(detail).trim()}`);
+    }
+    const schemaVersion = parseSchemaHelperVersion(`${schemaExecution.stdout || ''}\n${schemaExecution.stderr || ''}`);
+    if (!schemaVersion) {
+        throw new Error(
+            `Unable to read bundled libyang Schema helper version from: ${String(schemaExecution.stdout || '').trim()}`
+        );
+    }
+    if (schemaVersion.contractVersion !== 1) {
+        throw new Error(
+            `Bundled libyang Schema helper contract ${schemaVersion.contractVersion} does not match required contract 1`
+        );
+    }
+    if (schemaVersion.libyangVersion !== expectedVersion) {
+        throw new Error(
+            `Bundled libyang Schema helper uses libyang ${schemaVersion.libyangVersion}, expected ${expectedVersion}`
+        );
+    }
     return {
         available: true,
         required: true,
@@ -101,6 +154,9 @@ function verifyRuntime(options = {}) {
         executable: 'yanglint',
         version,
         path: executable,
+        schemaExecutable: 'netnexus-libyang-schema',
+        schemaPath: schemaExecutable,
+        schemaContractVersion: schemaVersion.contractVersion,
         source: 'bundled',
         platform,
         arch,
@@ -117,6 +173,8 @@ module.exports = {
     getReleaseManifest,
     getRuntimeDirectory,
     getRuntimeExecutable,
+    getRuntimeSchemaExecutable,
     parseYanglintVersion,
+    parseSchemaHelperVersion,
     verifyRuntime
 };

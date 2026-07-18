@@ -1,36 +1,16 @@
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
-const { parseYang, findChild, statementValue } = require('./yangParser');
+const { parseYang } = require('./yangParser');
 const { sha256, stableStringify, atomicWriteJson } = require('./yangRepository');
 const { LibyangRuntime } = require('./libyangRuntime');
 
-const COMPILE_CACHE_SCHEMA_VERSION = 2;
+const COMPILE_CACHE_SCHEMA_VERSION = 3;
+const LIBYANG_SCHEMA_OUTPUT_VERSION = 1;
 const DEFAULT_COMPILER_EXECUTABLE = 'yanglint';
 const DEFAULT_EXTERNAL_TIMEOUT = 60_000;
-const DEFAULT_EXTERNAL_MAX_BUFFER = 8 * 1024 * 1024;
+const DEFAULT_EXTERNAL_MAX_BUFFER = 64 * 1024 * 1024;
 const DEFAULT_VERSION_TIMEOUT = 5_000;
 const ROOT_NODE_ID = 'yang-schema-root';
-const SCHEMA_KEYWORDS = new Set([
-    'container',
-    'list',
-    'leaf',
-    'leaf-list',
-    'choice',
-    'case',
-    'rpc',
-    'action',
-    'notification',
-    'input',
-    'output'
-]);
-const SCHEMA_WRAPPER_KEYWORDS = new Set(['augment']);
-
-function normalizeBoolean(value) {
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-    return null;
-}
 
 function diagnosticKey(diagnostic) {
     return [
@@ -53,23 +33,6 @@ function deduplicateDiagnostics(diagnostics) {
     });
 }
 
-function runExecutable(executable, args, options = {}) {
-    return new Promise(resolve => {
-        execFile(
-            executable,
-            args,
-            {
-                cwd: options.cwd,
-                timeout: options.timeout || DEFAULT_EXTERNAL_TIMEOUT,
-                maxBuffer: options.maxBuffer || DEFAULT_EXTERNAL_MAX_BUFFER,
-                windowsHide: true,
-                env: options.env || process.env
-            },
-            (error, stdout, stderr) => resolve({ error, stdout: stdout || '', stderr: stderr || '' })
-        );
-    });
-}
-
 function normalizePositiveInteger(value, fallback, minimum = 1, maximum = Number.MAX_SAFE_INTEGER) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
@@ -86,17 +49,189 @@ function normalizeCacheValues(value) {
     return [...new Set(values.map(item => stableStringify(item)))].sort();
 }
 
+function normalizedPathKey(value) {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function schemaFileFingerprint(filePath) {
+    const resolvedPath = path.resolve(filePath);
+    try {
+        const stats = fs.statSync(resolvedPath);
+        if (!stats.isFile()) return { path: resolvedPath, type: 'not-file' };
+        return {
+            path: resolvedPath,
+            size: stats.size,
+            hash: sha256(fs.readFileSync(resolvedPath))
+        };
+    } catch (error) {
+        return { path: resolvedPath, error: error.code || error.message };
+    }
+}
+
+function schemaSearchPathFingerprint(searchPath) {
+    const resolvedPath = path.resolve(searchPath);
+    const entries = [];
+    const visitedDirectories = new Set();
+    const visit = (currentPath, relativePath) => {
+        let realPath;
+        let stats;
+        try {
+            realPath = fs.realpathSync(currentPath);
+            stats = fs.statSync(realPath);
+        } catch (error) {
+            entries.push({ path: relativePath, error: error.code || error.message });
+            return;
+        }
+        if (stats.isDirectory()) {
+            const directoryKey = normalizedPathKey(realPath);
+            if (visitedDirectories.has(directoryKey)) return;
+            visitedDirectories.add(directoryKey);
+            let names;
+            try {
+                names = fs.readdirSync(realPath).sort((left, right) => left.localeCompare(right));
+            } catch (error) {
+                entries.push({ path: relativePath, error: error.code || error.message });
+                return;
+            }
+            for (const name of names) {
+                visit(path.join(realPath, name), relativePath ? `${relativePath}/${name}` : name);
+            }
+            return;
+        }
+        if (!stats.isFile() || (!relativePath.endsWith('.yang') && !relativePath.endsWith('.yin'))) return;
+        try {
+            entries.push({ path: relativePath, size: stats.size, hash: sha256(fs.readFileSync(realPath)) });
+        } catch (error) {
+            entries.push({ path: relativePath, error: error.code || error.message });
+        }
+    };
+    visit(resolvedPath, '');
+    return { path: resolvedPath, entries };
+}
+
+function externalDeviationPaths(value) {
+    const deviations = Array.isArray(value) ? value : value ? [value] : [];
+    return deviations
+        .map(deviation => {
+            if (deviation && typeof deviation === 'object') return deviation.path || deviation.filePath || null;
+            if (typeof deviation !== 'string') return null;
+            return path.isAbsolute(deviation) ||
+                deviation.includes('/') ||
+                deviation.includes('\\') ||
+                /\.yang$/i.test(deviation)
+                ? deviation
+                : null;
+        })
+        .filter(Boolean);
+}
+
 function compilerUnavailableDiagnostic(status) {
     return {
         severity: 'error',
-        code: 'YANGLINT_UNAVAILABLE',
-        message: status.error || `Required libyang compiler ${status.executable} is not available`,
-        source: status.path || status.executable,
+        code: 'LIBYANG_RUNTIME_UNAVAILABLE',
+        message: status.error || 'Required libyang compiler and schema helper are not available',
+        source: status.schemaPath || status.path || status.executable,
         line: null,
         column: null,
         authoritative: true,
         installHint: status.installHint
     };
+}
+
+function emptySchemaIndex() {
+    return {
+        rootId: ROOT_NODE_ID,
+        roots: [],
+        nodes: {},
+        childIndex: { [ROOT_NODE_ID]: [] },
+        nodeCount: 0
+    };
+}
+
+function validateAuthoritativeSchemaTree(value) {
+    const fail = message => {
+        const error = new Error(`Invalid libyang schema output: ${message}`);
+        error.code = 'LIBYANG_SCHEMA_INVALID_OUTPUT';
+        throw error;
+    };
+    const isObject = item => Boolean(item) && typeof item === 'object' && !Array.isArray(item);
+    if (!isObject(value)) fail('root value must be an object');
+    if (value.schemaVersion !== LIBYANG_SCHEMA_OUTPUT_VERSION) {
+        fail(`schemaVersion must be ${LIBYANG_SCHEMA_OUTPUT_VERSION}`);
+    }
+    if (value.authoritative !== true) fail('authoritative must be true');
+    if (value.source !== 'libyang-effective') fail('source must be libyang-effective');
+    if (value.scope !== 'core-effective-schema') fail('scope must be core-effective-schema');
+    if (value.rootId !== ROOT_NODE_ID) fail(`rootId must be ${ROOT_NODE_ID}`);
+    if (!Array.isArray(value.roots) || !isObject(value.nodes) || !isObject(value.childIndex)) {
+        fail('roots, nodes, and childIndex are required');
+    }
+
+    const nodeIds = Object.keys(value.nodes);
+    if (!Number.isSafeInteger(value.nodeCount) || value.nodeCount < 0 || value.nodeCount !== nodeIds.length) {
+        fail('nodeCount does not match nodes');
+    }
+    const rootChildren = value.childIndex[ROOT_NODE_ID];
+    if (!Array.isArray(rootChildren) || rootChildren.length !== value.roots.length) {
+        fail('root child index does not match roots');
+    }
+    if (rootChildren.some((id, index) => id !== value.roots[index])) {
+        fail('roots must exactly match the root child index');
+    }
+
+    const referenced = new Set();
+    for (const [parentId, children] of Object.entries(value.childIndex)) {
+        if (parentId !== ROOT_NODE_ID && !Object.hasOwn(value.nodes, parentId)) {
+            fail(`childIndex contains unknown parent ${parentId}`);
+        }
+        if (!Array.isArray(children) || children.some(id => typeof id !== 'string' || !id)) {
+            fail(`childIndex entry ${parentId} must be an array of node IDs`);
+        }
+        if (new Set(children).size !== children.length) fail(`childIndex entry ${parentId} contains duplicates`);
+        for (const childId of children) {
+            if (!Object.hasOwn(value.nodes, childId)) fail(`childIndex references unknown node ${childId}`);
+            if (referenced.has(childId)) fail(`node ${childId} has more than one parent`);
+            referenced.add(childId);
+            if (value.nodes[childId].parentId !== parentId) {
+                fail(`node ${childId} parentId does not match childIndex`);
+            }
+        }
+    }
+
+    for (const nodeId of nodeIds) {
+        const node = value.nodes[nodeId];
+        if (!isObject(node) || node.id !== nodeId) fail(`node key ${nodeId} does not match its id`);
+        if (typeof node.parentId !== 'string' || !node.parentId) fail(`node ${nodeId} has no parentId`);
+        for (const field of ['name', 'keyword', 'path']) {
+            if (typeof node[field] !== 'string' || !node[field]) fail(`node ${nodeId} has no ${field}`);
+        }
+        if (node.presence !== null && typeof node.presence !== 'boolean') {
+            fail(`node ${nodeId} presence must be boolean or null`);
+        }
+        const children = value.childIndex[nodeId];
+        if (!Array.isArray(children)) fail(`node ${nodeId} has no childIndex entry`);
+        if (!Number.isSafeInteger(node.childCount) || node.childCount !== children.length) {
+            fail(`node ${nodeId} childCount does not match childIndex`);
+        }
+        if (node.hasChildren !== children.length > 0) fail(`node ${nodeId} hasChildren is inconsistent`);
+        if (!referenced.has(nodeId)) fail(`node ${nodeId} is not reachable from the schema root`);
+    }
+    if (new Set(value.roots).size !== value.roots.length) fail('roots contains duplicates');
+
+    const visited = new Set();
+    const visiting = new Set();
+    const visit = nodeId => {
+        if (visiting.has(nodeId)) fail(`schema contains a cycle at ${nodeId}`);
+        if (visited.has(nodeId)) return;
+        visiting.add(nodeId);
+        for (const childId of value.childIndex[nodeId] || []) visit(childId);
+        visiting.delete(nodeId);
+        visited.add(nodeId);
+    };
+    for (const rootId of value.roots) visit(rootId);
+    if (visited.size !== nodeIds.length) fail('not every node is reachable from roots');
+    return value;
 }
 
 class YangCompiler {
@@ -108,6 +243,8 @@ class YangCompiler {
         this.cacheDir = path.resolve(options.cacheDir || this.repository.paths.compiled);
         this.compilerPath = options.compilerPath || process.env.NETNEXUS_YANGLINT_PATH || DEFAULT_COMPILER_EXECUTABLE;
         this.compilerArgs = Array.isArray(options.compilerArgs) ? options.compilerArgs.slice() : [];
+        this.schemaHelperPath = options.schemaHelperPath || process.env.NETNEXUS_LIBYANG_SCHEMA_PATH || null;
+        this.schemaHelperArgs = Array.isArray(options.schemaHelperArgs) ? options.schemaHelperArgs.slice() : [];
         this.runtime = options.runtime || null;
         this.runtimeOptions = {
             resourcesPath: options.resourcesPath,
@@ -115,7 +252,9 @@ class YangCompiler {
             devResourcesPath: options.devResourcesPath,
             isPackaged: options.isPackaged,
             platform: options.platform,
-            arch: options.arch
+            arch: options.arch,
+            schemaExecutablePath: this.schemaHelperPath,
+            schemaHelperArgs: this.schemaHelperArgs
         };
         this.searchPaths = normalizeStringList(options.searchPaths || options.schemaSearchPaths);
         this.externalTimeout = normalizePositiveInteger(
@@ -157,8 +296,8 @@ class YangCompiler {
                 if (phase === 'completed') percent = 100;
                 else if (phase === 'parsing') percent = total ? Math.round((completed / total) * 55) : 55;
                 else if (phase === 'dependencies') percent = 65;
-                else if (phase === 'schema') percent = 78;
-                else if (phase === 'external') percent = 88;
+                else if (phase === 'external') percent = 78;
+                else if (phase === 'schema') percent = 88;
                 else if (phase === 'caching') percent = 97;
                 else percent = 0;
             }
@@ -182,16 +321,27 @@ class YangCompiler {
         if (options.runtime) return options.runtime;
         const compilerPath = options.compilerPath || this.compilerPath || DEFAULT_COMPILER_EXECUTABLE;
         const compilerArgs = Array.isArray(options.compilerArgs) ? options.compilerArgs : this.compilerArgs;
+        const schemaHelperPath = options.schemaHelperPath || this.schemaHelperPath;
+        const schemaHelperArgs = Array.isArray(options.schemaHelperArgs)
+            ? options.schemaHelperArgs
+            : this.schemaHelperArgs;
         const usesDefaultCompilerArgs =
             options.compilerArgs === undefined ||
             (compilerArgs.length === this.compilerArgs.length &&
                 compilerArgs.every((argument, index) => argument === this.compilerArgs[index]));
+        const usesDefaultSchemaArgs = options.schemaHelperArgs === undefined;
         const usesDefaultRuntime =
-            options.compilerPath === undefined && options.env === undefined && usesDefaultCompilerArgs;
+            options.compilerPath === undefined &&
+            options.schemaHelperPath === undefined &&
+            options.env === undefined &&
+            usesDefaultCompilerArgs &&
+            usesDefaultSchemaArgs;
         if (this.runtime && usesDefaultRuntime) return this.runtime;
         const runtime = new LibyangRuntime({
             ...this.runtimeOptions,
             executablePath: compilerPath,
+            schemaExecutablePath: schemaHelperPath,
+            schemaHelperArgs,
             env: options.env || process.env,
             discoveryTimeoutMs: normalizePositiveInteger(options.versionTimeout, this.versionTimeout, 100, 30_000),
             versionArgs: [...compilerArgs, '--version']
@@ -200,31 +350,41 @@ class YangCompiler {
         return runtime;
     }
 
-    getCompilerIdentity(status, compilerArgs) {
-        let fileState = null;
+    getCompilerIdentity(status, schemaHelperArgs) {
+        let validatorFileState = null;
+        let schemaFileState = null;
         try {
             const stats = fs.statSync(status.path);
-            fileState = { size: stats.size, mtimeMs: stats.mtimeMs };
+            validatorFileState = { size: stats.size, mtimeMs: stats.mtimeMs };
+        } catch (_error) {
+            // Runtime status already contains a clear availability error.
+        }
+        try {
+            const stats = fs.statSync(status.schemaPath);
+            schemaFileState = { size: stats.size, mtimeMs: stats.mtimeMs };
         } catch (_error) {
             // Runtime status already contains a clear availability error.
         }
         return {
-            type: 'yanglint',
+            type: 'netnexus-libyang-schema',
             engine: 'libyang',
             available: status.available,
-            path: status.path,
+            path: status.schemaPath,
+            validatorPath: status.path,
             source: status.source,
-            version: status.version,
-            versionOutput: status.versionOutput,
+            version: status.schemaVersion || status.version,
+            versionOutput: status.schemaVersionOutput || status.versionOutput,
             runtimeRoot: status.runtimeRoot || null,
             moduleSearchPath: status.moduleSearchPath || null,
+            schemaContractVersion: status.schemaContractVersion || null,
             capabilities: status.capabilities || null,
-            args: compilerArgs,
-            fileState
+            args: schemaHelperArgs,
+            validatorFileState,
+            schemaFileState
         };
     }
 
-    calculateHashes(entries, options, compilerStatus, compilerArgs) {
+    calculateHashes(entries, options, compilerStatus, schemaHelperArgs) {
         const contentHash = sha256(
             Buffer.from(
                 entries
@@ -234,14 +394,22 @@ class YangCompiler {
                 'utf8'
             )
         );
+        const configuredSearchPaths = normalizeStringList(
+            options.searchPaths || options.schemaSearchPaths || this.searchPaths
+        ).map(searchPath => path.resolve(searchPath));
+        const deviationFilePaths = externalDeviationPaths(options.deviations).map(deviationPath =>
+            path.resolve(deviationPath)
+        );
         const context = {
             schemaVersion: COMPILE_CACHE_SCHEMA_VERSION,
             contentHash,
             features: normalizeCacheValues(options.features),
             deviations: normalizeCacheValues(options.deviations),
-            searchPaths: normalizeStringList(options.searchPaths || options.schemaSearchPaths || this.searchPaths).map(
-                searchPath => path.resolve(searchPath)
-            ),
+            deviationFiles: deviationFilePaths.map(schemaFileFingerprint),
+            searchPaths: configuredSearchPaths,
+            bundledSchemas: compilerStatus.moduleSearchPath
+                ? schemaSearchPathFingerprint(compilerStatus.moduleSearchPath)
+                : null,
             externalMaxBuffer: normalizePositiveInteger(
                 options.externalMaxBuffer,
                 this.externalMaxBuffer,
@@ -249,11 +417,12 @@ class YangCompiler {
                 64 * 1024 * 1024
             ),
             externalTimeout: normalizePositiveInteger(options.externalTimeout, this.externalTimeout, 100, 10 * 60_000),
-            compiler: this.getCompilerIdentity(compilerStatus, compilerArgs)
+            compiler: this.getCompilerIdentity(compilerStatus, schemaHelperArgs)
         };
         return {
             contentHash,
             contextHash: sha256(Buffer.from(stableStringify(context), 'utf8')),
+            cacheable: configuredSearchPaths.length === 0 && deviationFilePaths.length === 0,
             context
         };
     }
@@ -266,10 +435,12 @@ class YangCompiler {
             if (
                 cache.schemaVersion !== COMPILE_CACHE_SCHEMA_VERSION ||
                 cache.contextHash !== contextHash ||
+                cache.result?.success !== true ||
                 !cache.tree
             ) {
                 return null;
             }
+            validateAuthoritativeSchemaTree(cache.tree);
             return cache;
         } catch (_error) {
             return null;
@@ -307,7 +478,6 @@ class YangCompiler {
             blobPath: this.repository.getBlobPath(entry.hash),
             size: entry.size,
             metadata: parsed.metadata,
-            ast: parsed.ast,
             diagnostics: parsed.diagnostics
         };
     }
@@ -445,103 +615,6 @@ class YangCompiler {
         return { graph: { nodes, edges, missing }, diagnostics };
     }
 
-    buildSchemaTree(modules) {
-        const nodes = {};
-        const childIndex = { [ROOT_NODE_ID]: [] };
-        const roots = [];
-        const addNode = node => {
-            nodes[node.id] = node;
-            if (!childIndex[node.parentId]) childIndex[node.parentId] = [];
-            childIndex[node.parentId].push(node.id);
-            if (!childIndex[node.id]) childIndex[node.id] = [];
-        };
-
-        for (const module of modules.filter(item => item.ast && item.metadata?.name)) {
-            const moduleRootId = `yang-module-${module.hash.slice(0, 24)}`;
-            const moduleNode = {
-                id: moduleRootId,
-                parentId: ROOT_NODE_ID,
-                name: module.metadata.name,
-                keyword: module.metadata.kind,
-                module: module.metadata.name,
-                revision: module.metadata.revision,
-                namespace: module.metadata.namespace,
-                description: module.metadata.description,
-                path: `/${module.metadata.name}`,
-                sourceHash: module.hash,
-                hasChildren: false,
-                childCount: 0
-            };
-            addNode(moduleNode);
-            roots.push(moduleRootId);
-
-            const occurrences = new Map();
-            const visitStatements = (statements, parentId, parentPath, inheritedConfig = null) => {
-                for (const statement of statements || []) {
-                    if (SCHEMA_WRAPPER_KEYWORDS.has(statement.keyword)) {
-                        visitStatements(statement.children, parentId, parentPath, inheritedConfig);
-                        continue;
-                    }
-                    if (!SCHEMA_KEYWORDS.has(statement.keyword)) continue;
-                    const localName = statement.argument || statement.keyword;
-                    const basePath = `${parentPath}/${localName}`;
-                    const occurrenceKey = `${module.hash}:${statement.keyword}:${basePath}`;
-                    const occurrence = (occurrences.get(occurrenceKey) || 0) + 1;
-                    occurrences.set(occurrenceKey, occurrence);
-                    const schemaPath = occurrence === 1 ? basePath : `${basePath}[${occurrence}]`;
-                    const id = `yang-node-${sha256(Buffer.from(`${module.hash}\u0000${statement.keyword}\u0000${schemaPath}`)).slice(0, 32)}`;
-                    const explicitConfig = normalizeBoolean(statementValue(statement, 'config'));
-                    const effectiveConfig = explicitConfig === null ? inheritedConfig : explicitConfig;
-                    const typeStatement = findChild(statement, 'type');
-                    const node = {
-                        id,
-                        parentId,
-                        name: localName,
-                        keyword: statement.keyword,
-                        module: module.metadata.name,
-                        revision: module.metadata.revision,
-                        path: schemaPath,
-                        description: statementValue(statement, 'description'),
-                        reference: statementValue(statement, 'reference'),
-                        status: statementValue(statement, 'status', 'current'),
-                        config: effectiveConfig,
-                        mandatory: normalizeBoolean(statementValue(statement, 'mandatory')),
-                        type: typeStatement?.argument || null,
-                        units: statementValue(statement, 'units'),
-                        default: statementValue(statement, 'default'),
-                        key: statementValue(statement, 'key'),
-                        minElements: statementValue(statement, 'min-elements'),
-                        maxElements: statementValue(statement, 'max-elements'),
-                        presence: statementValue(statement, 'presence'),
-                        ifFeatures: (statement.children || [])
-                            .filter(child => child.keyword === 'if-feature')
-                            .map(child => child.argument),
-                        sourceHash: module.hash,
-                        sourceLine: statement.line,
-                        hasChildren: false,
-                        childCount: 0
-                    };
-                    addNode(node);
-                    visitStatements(statement.children, id, schemaPath, effectiveConfig);
-                }
-            };
-            visitStatements(module.ast.children, moduleRootId, `/${module.metadata.name}`, null);
-        }
-
-        for (const node of Object.values(nodes)) {
-            node.childCount = childIndex[node.id]?.length || 0;
-            node.hasChildren = node.childCount > 0;
-        }
-
-        return {
-            rootId: ROOT_NODE_ID,
-            roots,
-            nodes,
-            childIndex,
-            nodeCount: Object.keys(nodes).length
-        };
-    }
-
     materializeExternalInputs(contextHash, modules) {
         const inputDirectory = path.join(this.cacheDir, contextHash, 'inputs');
         fs.mkdirSync(inputDirectory, { recursive: true });
@@ -599,6 +672,7 @@ class YangCompiler {
     resolveDeviationInputs(deviations, inputs) {
         const requested = Array.isArray(deviations) ? deviations : deviations ? [deviations] : [];
         const resolved = [];
+        const diagnostics = [];
         for (const deviation of requested) {
             const descriptor =
                 typeof deviation === 'string' &&
@@ -612,7 +686,36 @@ class YangCompiler {
                       : deviation || {};
             const explicitPath = descriptor.path || descriptor.filePath;
             if (explicitPath) {
-                resolved.push(path.resolve(explicitPath));
+                const resolvedPath = path.resolve(explicitPath);
+                try {
+                    const stats = fs.statSync(resolvedPath);
+                    if (!stats.isFile()) {
+                        diagnostics.push({
+                            severity: 'error',
+                            code: 'DEVIATION_INVALID_FILE',
+                            message: `Requested deviation is not a regular file: ${resolvedPath}`,
+                            source: resolvedPath,
+                            line: null,
+                            column: null,
+                            authoritative: true,
+                            origin: 'compiler-host'
+                        });
+                        continue;
+                    }
+                    fs.accessSync(resolvedPath, fs.constants.R_OK);
+                    resolved.push(resolvedPath);
+                } catch (error) {
+                    diagnostics.push({
+                        severity: 'error',
+                        code: error.code === 'ENOENT' ? 'DEVIATION_NOT_FOUND' : 'DEVIATION_UNREADABLE',
+                        message: `Cannot use requested deviation ${resolvedPath}: ${error.message}`,
+                        source: resolvedPath,
+                        line: null,
+                        column: null,
+                        authoritative: true,
+                        origin: 'compiler-host'
+                    });
+                }
                 continue;
             }
             const name = descriptor.name || descriptor.module || descriptor.moduleName;
@@ -626,9 +729,22 @@ class YangCompiler {
                     (!revision || metadata.revision === revision)
                 );
             });
-            if (match) resolved.push(match.path);
+            if (match) {
+                resolved.push(match.path);
+            } else {
+                diagnostics.push({
+                    severity: 'error',
+                    code: 'DEVIATION_NOT_FOUND',
+                    message: `Requested deviation module was not found: ${name || hash || '<unspecified>'}${revision ? `@${revision}` : ''}`,
+                    source: name || hash || null,
+                    line: null,
+                    column: null,
+                    authoritative: true,
+                    origin: 'compiler-host'
+                });
+            }
         }
-        return [...new Set(resolved)];
+        return { paths: [...new Set(resolved)], diagnostics };
     }
 
     parseExternalDiagnostics(output, defaultSeverity = 'info') {
@@ -641,10 +757,27 @@ class YangCompiler {
                 diagnostics.push({
                     severity:
                         match[1].toUpperCase() === 'E' ? 'error' : match[1].toUpperCase() === 'W' ? 'warning' : 'info',
-                    code: 'YANGLINT',
+                    code: 'LIBYANG',
                     message: match[2],
                     source: null,
                     line: null,
+                    column: null,
+                    raw: rawLine,
+                    authoritative: true
+                });
+                continue;
+            }
+            match = line.match(/^libyang\[(\d+)\]\s*:\s*(.+)$/i);
+            if (match) {
+                const level = Number(match[1]);
+                const location = match[2].match(/\(path:\s*([^,)]+)(?:,\s*line(?: number)?\s*(\d+))?\)/i);
+                const lineOnly = match[2].match(/\bline(?: number)?\s*(\d+)\b/i);
+                diagnostics.push({
+                    severity: level === 0 ? 'error' : level === 1 ? 'warning' : 'info',
+                    code: 'LIBYANG',
+                    message: match[2],
+                    source: location?.[1]?.trim() || null,
+                    line: location?.[2] ? Number(location[2]) : lineOnly?.[1] ? Number(lineOnly[1]) : null,
                     column: null,
                     raw: rawLine,
                     authoritative: true
@@ -655,7 +788,7 @@ class YangCompiler {
             if (match) {
                 diagnostics.push({
                     severity: match[4].toLowerCase(),
-                    code: 'YANGLINT',
+                    code: 'LIBYANG',
                     message: match[5],
                     source: match[1],
                     line: Number(match[2]),
@@ -677,7 +810,7 @@ class YangCompiler {
                             : severityToken.startsWith('warn')
                               ? 'warning'
                               : 'info',
-                    code: 'YANGLINT',
+                    code: 'LIBYANG',
                     message: match[2],
                     source: location?.[1]?.trim() || null,
                     line: location?.[2] ? Number(location[2]) : lineOnly?.[1] ? Number(lineOnly[1]) : null,
@@ -689,7 +822,7 @@ class YangCompiler {
             }
             diagnostics.push({
                 severity: /error|invalid|failed/i.test(line) ? 'error' : defaultSeverity,
-                code: 'YANGLINT_OUTPUT',
+                code: 'LIBYANG_OUTPUT',
                 message: line,
                 source: null,
                 line: null,
@@ -701,28 +834,60 @@ class YangCompiler {
         return diagnostics;
     }
 
-    async runExternalCompiler(runtime, compilerStatus, compilerArgs, contextHash, modules, options) {
+    async runLibyangSchemaCompiler(runtime, compilerStatus, contextHash, modules, options) {
         const materialized = this.materializeExternalInputs(contextHash, modules);
         const bundledSearchPath =
             compilerStatus.moduleSearchPath ||
             (compilerStatus.runtimeRoot
                 ? path.join(compilerStatus.runtimeRoot, 'share', 'yang', 'modules', 'libyang')
                 : null);
-        const searchPaths = normalizeStringList([
-            materialized.inputDirectory,
-            ...(bundledSearchPath && fs.existsSync(bundledSearchPath) ? [bundledSearchPath] : []),
-            ...normalizeStringList(options.searchPaths || options.schemaSearchPaths || this.searchPaths)
-        ]).map(searchPath => path.resolve(searchPath));
         const featureArguments = this.normalizeFeatureArguments(options.features, modules);
-        const deviationPaths = this.resolveDeviationInputs(options.deviations, materialized.inputs);
+        const deviationResolution = this.resolveDeviationInputs(options.deviations, materialized.inputs);
+        const deviationPaths = deviationResolution.paths;
+        if (deviationResolution.diagnostics.length) {
+            return {
+                invoked: false,
+                succeeded: false,
+                path: compilerStatus.schemaPath,
+                args: [],
+                generatedArgs: [],
+                searchPaths: [],
+                features: featureArguments,
+                deviations: deviationPaths,
+                timeout: null,
+                maxBuffer: null,
+                exitCode: null,
+                signal: null,
+                durationMs: null,
+                timedOut: false,
+                outputTruncated: false,
+                diagnostics: deviationResolution.diagnostics,
+                tree: null
+            };
+        }
+        /* libyang searches its configured directories in reverse insertion order. Keep the
+         * authoritative workspace directory last so it wins over user and bundled fallbacks. */
+        const searchPaths = normalizeStringList([
+            ...(bundledSearchPath && fs.existsSync(bundledSearchPath) ? [bundledSearchPath] : []),
+            ...normalizeStringList(options.searchPaths || options.schemaSearchPaths || this.searchPaths),
+            ...deviationPaths.map(deviationPath => path.dirname(deviationPath)),
+            materialized.inputDirectory
+        ]).map(searchPath => path.resolve(searchPath));
         const schemaPaths = materialized.inputs
             .filter(input => input.module.metadata?.kind === 'module')
             .map(input => input.path);
+        const schemaPathKeys = new Set(schemaPaths.map(normalizedPathKey));
+        const externalDeviationPaths = deviationPaths.filter(
+            deviationPath => !schemaPathKeys.has(normalizedPathKey(deviationPath))
+        );
         const generatedArgs = [];
         for (const searchPath of searchPaths) generatedArgs.push('-p', searchPath);
         for (const featureArgument of featureArguments) generatedArgs.push('-F', featureArgument);
-        const additionalDeviationPaths = deviationPaths.filter(deviationPath => !schemaPaths.includes(deviationPath));
-        const args = [...compilerArgs, ...generatedArgs, ...schemaPaths, ...additionalDeviationPaths];
+        /* A repository module is already parsed as an implemented top-level module, so libyang
+         * applies any deviations it defines automatically and its own schema remains exportable.
+         * -D is reserved for additional files outside the selected repository inputs. */
+        for (const deviationPath of externalDeviationPaths) generatedArgs.push('-D', deviationPath);
+        const args = [...generatedArgs, ...schemaPaths];
         const timeout = normalizePositiveInteger(options.externalTimeout, this.externalTimeout, 100, 10 * 60_000);
         const maxBuffer = normalizePositiveInteger(
             options.externalMaxBuffer,
@@ -732,7 +897,12 @@ class YangCompiler {
         );
         let result;
         try {
-            result = await runtime.execute(args, {
+            if (typeof runtime.executeSchema !== 'function') {
+                const error = new Error('The configured libyang runtime does not provide schema export');
+                error.code = 'LIBYANG_SCHEMA_UNAVAILABLE';
+                throw error;
+            }
+            result = await runtime.executeSchema(args, {
                 cwd: materialized.inputDirectory,
                 timeoutMs: timeout,
                 maxOutputBytes: maxBuffer,
@@ -744,30 +914,45 @@ class YangCompiler {
                 stderr: '',
                 exitCode: null,
                 signal: null,
-                timedOut: error.code === 'YANGLINT_TIMEOUT',
-                outputLimitExceeded: error.code === 'YANGLINT_OUTPUT_LIMIT',
+                timedOut: error.code === 'LIBYANG_SCHEMA_TIMEOUT',
+                outputLimitExceeded: error.code === 'LIBYANG_SCHEMA_OUTPUT_LIMIT',
                 durationMs: null,
                 error
             };
         }
-        const diagnostics = [
-            ...this.parseExternalDiagnostics(result.stdout, 'info'),
-            ...this.parseExternalDiagnostics(result.stderr, 'warning')
-        ];
+        const diagnostics = this.parseExternalDiagnostics(result.stderr, 'warning');
         const exitCode = typeof result.exitCode === 'number' ? result.exitCode : null;
+        let tree = null;
+        if (!result.error && exitCode === 0) {
+            try {
+                tree = validateAuthoritativeSchemaTree(JSON.parse(result.stdout));
+            } catch (error) {
+                diagnostics.push({
+                    severity: 'error',
+                    code: 'LIBYANG_SCHEMA_INVALID_OUTPUT',
+                    message: error.message,
+                    source: compilerStatus.schemaPath,
+                    line: null,
+                    column: null,
+                    authoritative: true
+                });
+            }
+        }
         if ((result.error || exitCode !== 0) && !diagnostics.some(diagnostic => diagnostic.severity === 'error')) {
-            const outputLimit = result.outputLimitExceeded || result.error?.code === 'YANGLINT_OUTPUT_LIMIT';
+            const outputLimit = result.outputLimitExceeded || result.error?.code === 'LIBYANG_SCHEMA_OUTPUT_LIMIT';
             diagnostics.push({
                 severity: 'error',
                 code: outputLimit
-                    ? 'YANGLINT_OUTPUT_LIMIT'
+                    ? 'LIBYANG_SCHEMA_OUTPUT_LIMIT'
                     : result.timedOut
-                      ? 'YANGLINT_TIMEOUT'
+                      ? 'LIBYANG_SCHEMA_TIMEOUT'
                       : result.error
-                        ? 'YANGLINT_EXECUTION_FAILED'
-                        : 'YANGLINT_FAILED',
-                message: result.error?.message || `yanglint exited with code ${exitCode} without an error diagnostic`,
-                source: compilerStatus.path,
+                        ? 'LIBYANG_SCHEMA_EXECUTION_FAILED'
+                        : 'LIBYANG_SCHEMA_FAILED',
+                message:
+                    result.error?.message ||
+                    `libyang schema helper exited with code ${exitCode} without an error diagnostic`,
+                source: compilerStatus.schemaPath,
                 line: null,
                 column: null,
                 authoritative: true
@@ -775,8 +960,8 @@ class YangCompiler {
         }
         return {
             invoked: true,
-            succeeded: !result.error && exitCode === 0,
-            path: compilerStatus.path,
+            succeeded: !result.error && exitCode === 0 && Boolean(tree),
+            path: compilerStatus.schemaPath,
             args,
             generatedArgs,
             searchPaths,
@@ -789,7 +974,8 @@ class YangCompiler {
             durationMs: result.durationMs,
             timedOut: Boolean(result.timedOut),
             outputTruncated: Boolean(result.outputLimitExceeded),
-            diagnostics
+            diagnostics,
+            tree
         };
     }
 
@@ -811,18 +997,22 @@ class YangCompiler {
             snapshotId: options.snapshotId
         });
         const uniqueEntries = [...new Map(entries.map(entry => [entry.hash, entry])).values()];
-        const compilerArgs = Array.isArray(options.compilerArgs) ? options.compilerArgs : this.compilerArgs;
+        const schemaHelperArgs = Array.isArray(options.schemaHelperArgs)
+            ? options.schemaHelperArgs
+            : this.schemaHelperArgs;
         const progress = this.createProgress(options.onProgress, uniqueEntries.length);
         progress('preparing', { message: 'Preparing YANG compilation' });
         const runtime = this.createRuntime({
             compilerPath: options.compilerPath,
             compilerArgs: options.compilerArgs,
+            schemaHelperPath: options.schemaHelperPath,
+            schemaHelperArgs,
             versionTimeout: options.versionTimeout,
             env: options.env,
             runtime: options.runtime
         });
         const compilerStatus = await runtime.getStatus({ force: options.forceRuntimeDiscovery === true });
-        const hashes = this.calculateHashes(uniqueEntries, options, compilerStatus, compilerArgs);
+        const hashes = this.calculateHashes(uniqueEntries, options, compilerStatus, schemaHelperArgs);
         const compileId = hashes.contextHash;
         progress('runtime', {
             percent: 5,
@@ -833,9 +1023,9 @@ class YangCompiler {
             compiler: compilerStatus
         });
 
-        if (!options.force) {
+        if (!options.force && hashes.cacheable) {
             const inMemory = this.results.get(compileId);
-            if (inMemory) {
+            if (inMemory?.result?.success === true) {
                 this.latestCompileId = compileId;
                 const result = { ...inMemory.result, cacheHit: true };
                 progress('completed', {
@@ -873,7 +1063,7 @@ class YangCompiler {
                     ...module.diagnostics.map(diagnostic => ({
                         ...diagnostic,
                         authoritative: false,
-                        origin: 'builtin-preview'
+                        origin: 'repository-index'
                     }))
                 );
             } catch (error) {
@@ -904,34 +1094,40 @@ class YangCompiler {
             ...dependencies.diagnostics.map(diagnostic => ({
                 ...diagnostic,
                 authoritative: false,
-                origin: 'builtin-preview'
+                origin: 'repository-index'
             }))
         );
-
-        progress('schema', { completed: uniqueEntries.length, message: 'Building schema tree index' });
-        const tree = this.buildSchemaTree(modules);
 
         let externalCompiler = {
             invoked: false,
             succeeded: false,
-            path: compilerStatus.path,
+            path: compilerStatus.schemaPath,
             args: [],
             exitCode: null,
             timedOut: false,
             outputTruncated: false,
-            diagnostics: []
+            diagnostics: [],
+            tree: null
         };
         if (compilerStatus.available && modules.some(module => module.metadata?.kind === 'module')) {
-            progress('external', { completed: uniqueEntries.length, message: 'Running external yanglint compiler' });
-            externalCompiler = await this.runExternalCompiler(
+            progress('external', {
+                completed: uniqueEntries.length,
+                message: 'Compiling and exporting the effective schema with libyang'
+            });
+            externalCompiler = await this.runLibyangSchemaCompiler(
                 runtime,
                 compilerStatus,
-                compilerArgs,
                 compileId,
                 modules,
                 options
             );
             diagnostics.push(...externalCompiler.diagnostics);
+            progress('schema', {
+                completed: uniqueEntries.length,
+                message: externalCompiler.tree
+                    ? 'Authoritative libyang effective schema loaded'
+                    : 'Authoritative libyang schema export failed'
+            });
         } else if (!compilerStatus.available) {
             diagnostics.push(compilerUnavailableDiagnostic(compilerStatus));
         } else {
@@ -952,12 +1148,14 @@ class YangCompiler {
         const authoritativeErrorCount = finalDiagnostics.filter(
             diagnostic => diagnostic.severity === 'error' && diagnostic.authoritative !== false
         ).length;
-        const previewErrorCount = finalDiagnostics.filter(
+        const indexErrorCount = finalDiagnostics.filter(
             diagnostic => diagnostic.severity === 'error' && diagnostic.authoritative === false
         ).length;
         const warningCount = finalDiagnostics.filter(diagnostic => diagnostic.severity === 'warning').length;
+        const tree = externalCompiler.tree;
+        const succeeded = externalCompiler.succeeded === true && Boolean(tree) && authoritativeErrorCount === 0;
         const publicResult = {
-            success: externalCompiler.succeeded === true && authoritativeErrorCount === 0,
+            success: succeeded,
             cacheHit: false,
             compileId,
             contentHash: hashes.contentHash,
@@ -966,13 +1164,16 @@ class YangCompiler {
             modules: this.publicModules(modules),
             diagnostics: finalDiagnostics,
             dependencyGraph: dependencies.graph,
-            schemaTree: {
-                authoritative: false,
-                source: 'builtin-preview',
-                rootId: tree.rootId,
-                roots: tree.roots.map(id => nodesPublicView(tree.nodes[id])),
-                nodeCount: tree.nodeCount
-            },
+            schemaTree: tree
+                ? {
+                      authoritative: true,
+                      source: 'libyang-effective',
+                      scope: tree.scope,
+                      rootId: tree.rootId,
+                      roots: tree.roots.map(id => nodesPublicView(tree.nodes[id])),
+                      nodeCount: tree.nodeCount
+                  }
+                : null,
             externalCompiler: {
                 invoked: externalCompiler.invoked,
                 succeeded: externalCompiler.succeeded,
@@ -994,7 +1195,7 @@ class YangCompiler {
             validation: {
                 authoritative: true,
                 engine: 'libyang',
-                succeeded: externalCompiler.succeeded === true && authoritativeErrorCount === 0
+                succeeded
             },
             summary: {
                 requested: uniqueEntries.length,
@@ -1002,17 +1203,21 @@ class YangCompiler {
                 modules: modules.filter(module => module.metadata?.kind === 'module').length,
                 submodules: modules.filter(module => module.metadata?.kind === 'submodule').length,
                 missingDependencies: dependencies.graph.missing.length,
-                schemaNodes: tree.nodeCount,
+                schemaNodes: tree?.nodeCount || 0,
                 errors: errorCount,
                 authoritativeErrors: authoritativeErrorCount,
-                previewErrors: previewErrorCount,
+                indexErrors: indexErrorCount,
                 warnings: warningCount
             }
         };
 
-        progress('caching', { completed: uniqueEntries.length, message: 'Saving YANG compilation cache' });
-        this.saveCache(compileId, publicResult, tree);
-        this.installResult(publicResult, tree);
+        if (succeeded && hashes.cacheable) {
+            progress('caching', { completed: uniqueEntries.length, message: 'Saving YANG compilation cache' });
+            this.saveCache(compileId, publicResult, tree);
+        }
+        /* Failed compilations expose no Schema contract. Keep only an empty query
+         * index so diagnostics remain addressable by compileId. */
+        this.installResult(publicResult, tree || emptySchemaIndex());
         progress('completed', {
             completed: uniqueEntries.length,
             percent: 100,
@@ -1068,7 +1273,7 @@ function nodesPublicView(node) {
 module.exports = {
     YangCompiler,
     ROOT_NODE_ID,
-    SCHEMA_KEYWORDS,
     COMPILE_CACHE_SCHEMA_VERSION,
-    runExecutable
+    LIBYANG_SCHEMA_OUTPUT_VERSION,
+    validateAuthoritativeSchemaTree
 };

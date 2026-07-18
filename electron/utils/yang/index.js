@@ -41,12 +41,18 @@ class YangRegistry {
                 compilerPath: options.compilerPath,
                 compilerSource: options.compilerSource,
                 compilerArgs: options.compilerArgs,
+                schemaHelperPath: options.schemaHelperPath,
+                schemaHelperArgs: options.schemaHelperArgs,
                 searchPaths: options.searchPaths || options.schemaSearchPaths,
                 externalTimeout: options.externalTimeout,
                 externalMaxBuffer: options.externalMaxBuffer,
                 versionTimeout: options.versionTimeout,
                 resourcesPath: options.resourcesPath,
+                appPath: options.appPath,
+                devResourcesPath: options.devResourcesPath,
                 isPackaged: options.isPackaged,
+                platform: options.platform,
+                arch: options.arch,
                 runtime: options.runtime
             });
         if (!this.repository.getWorkspace(this.workspaceId)) {

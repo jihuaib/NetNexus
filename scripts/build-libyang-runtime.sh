@@ -63,16 +63,37 @@ cmake -S "${runtime_build_dir}/source" -B "${runtime_build_dir}/build" \
     -DENABLE_TESTS=OFF \
     -DENABLE_TOOLS=ON \
     -DENABLE_YANGLINT_INTERACTIVE=OFF \
-    -DENABLE_COMMON_TARGETS=OFF
+    -DENABLE_COMMON_TARGETS=OFF \
+    -DCMAKE_DISABLE_FIND_PACKAGE_XXHash=TRUE
 cmake --build "${runtime_build_dir}/build" --config Release --target yanglint --parallel
 
+cmake -S "${project_root}/scripts/libyang-schema-exporter" \
+    -B "${runtime_build_dir}/schema-exporter-build" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DNETNEXUS_LIBYANG_SOURCE="${runtime_build_dir}/source" \
+    -DNETNEXUS_LIBYANG_BUILD="${runtime_build_dir}/build" \
+    -DNETNEXUS_PCRE2_ROOT="${runtime_build_dir}/pcre2-install"
+cmake --build "${runtime_build_dir}/schema-exporter-build" \
+    --config Release --target netnexus-libyang-schema --parallel
+
+expected_runtime_target="${project_root}/resources/libyang/${runtime_platform}-${runtime_arch}"
+if [[ "${runtime_target}" != "${expected_runtime_target}" ]]; then
+    echo "Refusing to replace unexpected libyang runtime target: ${runtime_target}" >&2
+    exit 1
+fi
+rm -rf -- "${runtime_target}"
 mkdir -p "${runtime_target}/bin" "${runtime_target}/share/yang/modules/libyang"
 cp "${runtime_build_dir}/build/yanglint" "${runtime_target}/bin/yanglint"
+cp "${runtime_build_dir}/schema-exporter-build/netnexus-libyang-schema" \
+    "${runtime_target}/bin/netnexus-libyang-schema"
 chmod 0755 "${runtime_target}/bin/yanglint"
+chmod 0755 "${runtime_target}/bin/netnexus-libyang-schema"
 cp "${runtime_build_dir}/source/LICENSE" "${runtime_target}/LICENSE.libyang"
+cp "${runtime_build_dir}/pcre2-source/LICENCE.md" "${runtime_target}/LICENSE.pcre2"
 find "${runtime_build_dir}/source/modules" -maxdepth 1 -type f -name '*.yang' -exec cp {} "${runtime_target}/share/yang/modules/libyang/" \;
 
 node "${project_root}/scripts/write-libyang-runtime-manifest.js" \
-    "${runtime_target}" "${runtime_target}/bin/yanglint"
+    "${runtime_target}" "${runtime_target}/bin/yanglint" \
+    "${runtime_target}/bin/netnexus-libyang-schema"
 node "${project_root}/scripts/verify-libyang-runtime.js" \
     --platform "${runtime_platform}" --arch "${runtime_arch}"

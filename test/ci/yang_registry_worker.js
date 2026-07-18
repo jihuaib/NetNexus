@@ -4,20 +4,13 @@ const os = require('os');
 const path = require('path');
 const WorkerWithPromise = require('../../electron/worker/core/workerWithPromise');
 const { YANG_REQ_TYPES, YANG_EVT_TYPES } = require('../../electron/utils/yang');
+const { getReleaseManifest } = require('../../scripts/libyang-runtime-config');
 
+const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.resolve(__dirname, '..', '..'));
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-yang-worker-'));
 const repositoryRoot = path.join(tempDir, 'repository');
-const helperPath = path.join(tempDir, 'fake-yanglint.js');
 
 async function run() {
-    fs.writeFileSync(
-        helperPath,
-        `const args = process.argv.slice(2);
-if (args.includes('--version')) console.log('yanglint 3.13.6 (libyang 3.13.6)');
-else if (args.includes('--mode=fail')) { console.error('/tmp/worker.yang:4:2: error: worker semantic failure'); process.exitCode = 2; }
-`,
-        'utf8'
-    );
     const workerPath = path.resolve(__dirname, '../../electron/worker/yang/yangCompilerWorker.js');
     const worker = new WorkerWithPromise(workerPath).createLongRunningWorker();
     const progressId = `yang-worker-${Date.now()}`;
@@ -26,16 +19,18 @@ else if (args.includes('--mode=fail')) { console.error('/tmp/worker.yang:4:2: er
     worker.addEventListener(YANG_EVT_TYPES.COMPILE_PROGRESS, listener);
 
     try {
+        const release = getReleaseManifest(projectRoot);
         const configured = await worker.sendRequest(YANG_REQ_TYPES.CONFIGURE, {
             rootDir: repositoryRoot,
-            compilerPath: process.execPath,
-            compilerArgs: [helperPath]
+            resourcesPath: path.join(projectRoot, 'resources'),
+            isPackaged: false
         });
         assert.equal(configured.status, 'success');
         assert.equal(configured.data.rootDir, repositoryRoot);
-        assert.equal(configured.data.compiler.available, true);
+        assert.equal(configured.data.compiler.available, true, configured.data.compiler.error);
         assert.equal(configured.data.compiler.engine, 'libyang');
-        assert.equal(configured.data.compiler.version, '3.13.6');
+        assert.equal(configured.data.compiler.version, release.libyangVersion);
+        assert.equal(configured.data.compiler.capabilities.schemaExport, true);
 
         const compilerStatus = await worker.sendRequest(YANG_REQ_TYPES.GET_COMPILER_STATUS, {});
         assert.equal(compilerStatus.data.available, true);
@@ -59,27 +54,32 @@ else if (args.includes('--mode=fail')) { console.error('/tmp/worker.yang:4:2: er
         });
         assert.equal(imported.data.summary.imported, 1);
 
-        const response = await worker.sendRequest(YANG_REQ_TYPES.COMPILE, { progressId });
+        const response = await worker.sendRequest(YANG_REQ_TYPES.COMPILE, { progressId, force: true });
         assert.equal(response.status, 'success');
-        assert.equal(response.data.success, true);
+        assert.equal(response.data.success, true, JSON.stringify(response.data.diagnostics, null, 2));
         assert.equal(response.data.compiler.engine, 'libyang');
         assert.equal(response.data.externalCompiler.succeeded, true);
-        assert.equal(response.data.schemaTree.authoritative, false);
+        assert.equal(response.data.schemaTree.authoritative, true);
+        assert.equal(response.data.schemaTree.source, 'libyang-effective');
         assert(events.length > 0);
         assert(events.every(event => event.progressId === progressId));
         assert(events.some(event => event.phase === 'preparing'));
-        assert(events.some(event => event.phase === 'parsing'));
+        assert(events.some(event => event.phase === 'external'));
+        assert(events.some(event => event.phase === 'schema'));
         assert.equal(events.at(-1).phase, 'completed');
 
         const roots = await worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, {
             compileId: response.data.compileId
         });
         assert.equal(roots.data.length, 1);
+        assert.equal(roots.data[0].keyword, 'module');
+        assert.equal(roots.data[0].name, 'worker-demo');
         const children = await worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_CHILDREN, {
             compileId: response.data.compileId,
             parentId: roots.data[0].id
         });
         assert.equal(children.data[0].keyword, 'container');
+        assert.equal(children.data[0].name, 'state');
         const source = await worker.sendRequest(YANG_REQ_TYPES.GET_MODULE_SOURCE, { name: 'worker-demo' });
         assert(source.data.source.includes('container state'));
         const diagnostics = await worker.sendRequest(YANG_REQ_TYPES.GET_DIAGNOSTICS, {
@@ -87,18 +87,44 @@ else if (args.includes('--mode=fail')) { console.error('/tmp/worker.yang:4:2: er
         });
         assert.deepEqual(diagnostics.data, []);
 
+        const invalidImport = await worker.sendRequest(YANG_REQ_TYPES.IMPORT_CONTENTS, {
+            workspaceId: 'invalid',
+            contents: [
+                {
+                    expectedName: 'worker-invalid',
+                    content: `module worker-invalid {
+  yang-version 1.1;
+  namespace "urn:worker:invalid";
+  prefix wi;
+  revision 2026-07-18;
+  leaf broken { type does-not-exist; }
+}`
+                }
+            ]
+        });
+        assert.equal(invalidImport.data.summary.imported, 1);
         const failed = await worker.sendRequest(YANG_REQ_TYPES.COMPILE, {
-            compilerArgs: [helperPath, '--mode=fail'],
+            workspaceId: 'invalid',
             force: true
         });
         assert.equal(failed.status, 'success');
         assert.equal(failed.data.success, false);
-        assert(failed.data.diagnostics.some(item => item.code === 'YANGLINT' && item.authoritative));
+        assert(
+            failed.data.diagnostics.some(
+                item => typeof item.code === 'string' && item.code.startsWith('LIBYANG') && item.authoritative
+            ),
+            JSON.stringify(failed.data.diagnostics, null, 2)
+        );
+        const failedRoots = await worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, {
+            compileId: failed.data.compileId,
+            workspaceId: 'invalid'
+        });
+        assert.deepEqual(failedRoots.data, []);
 
         const cleared = await worker.sendRequest(YANG_REQ_TYPES.CLEAR_WORKSPACE, {});
         assert.equal(cleared.data.modules.length, 0);
 
-        console.log('YANG compiler worker API and progress event tests passed');
+        console.log('YANG compiler worker real libyang Schema API and progress event tests passed');
     } finally {
         worker.removeEventListener(YANG_EVT_TYPES.COMPILE_PROGRESS, listener);
         await worker.terminate();

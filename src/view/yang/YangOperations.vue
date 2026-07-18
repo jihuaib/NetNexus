@@ -1,5 +1,12 @@
 <template>
-    <div class="yang-operations-page" :class="{ 'nn-container': !embedded, 'yang-operations-embedded': embedded }">
+    <div
+        class="yang-operations-page"
+        :class="{
+            'nn-container': !embedded,
+            'yang-operations-embedded': embedded,
+            'yang-operations-resizing': requestPaneResizing
+        }"
+    >
         <div v-if="!embedded" class="operation-session-bar">
             <div class="session-summary">
                 <span class="session-indicator" :class="{ 'session-indicator-online': connected }" />
@@ -8,7 +15,7 @@
                     <div class="session-detail">
                         <template v-if="connected">
                             Session {{ session.sessionId || '-' }} ·
-                            {{ session.profileName || session.host || '设备' }} · {{ capabilities.length }} 项能力
+                            {{ session.profileName || session.host || '设备' }}
                         </template>
                         <template v-else>建立连接后才能执行设备操作</template>
                     </div>
@@ -26,33 +33,12 @@
             </nn-space>
         </div>
 
-        <div v-else class="operation-context-bar">
-            <div class="operation-context-main">
-                <span class="session-indicator" :class="{ 'session-indicator-online': connected }" />
-                <div class="operation-context-copy">
-                    <div class="operation-context-title">
-                        {{ contextNode?.name || contextNode?.title || '当前设备' }}
-                        <nn-tag :color="connected ? 'success' : 'default'">
-                            {{ connected ? 'NETCONF 已连接' : 'NETCONF 未连接' }}
-                        </nn-tag>
-                    </div>
-                    <nn-typography-text v-if="contextNode?.path" copyable class="operation-context-path">
-                        {{ contextNode.path }}
-                    </nn-typography-text>
-                    <span v-else class="operation-context-path">设备级操作</span>
-                </div>
-            </div>
-            <nn-space>
-                <nn-button size="small" :disabled="!connected" @click="capabilityDrawerOpen = true">
-                    Capability {{ capabilities.length }}
-                </nn-button>
-                <nn-button v-if="!connected" size="small" type="primary" @click="goToConnections">
-                    前往连接设置
-                </nn-button>
-            </nn-space>
-        </div>
-
-        <div class="operations-layout" :class="{ 'operations-layout-embedded': embedded }">
+        <div
+            ref="operationsLayoutRef"
+            class="operations-layout"
+            :class="{ 'operations-layout-embedded': embedded }"
+            :style="operationsLayoutStyle"
+        >
             <nn-card v-if="!embedded" title="操作" class="operation-nav-card">
                 <div class="operation-nav">
                     <div class="operation-group-title">读取</div>
@@ -63,7 +49,7 @@
                                     type="button"
                                     class="operation-nav-item"
                                     :class="{ 'operation-nav-item-active': activeOperation === operationItem.key }"
-                                    :disabled="!isOperationSupported(operationItem.key)"
+                                    :disabled="executing || !isOperationSupported(operationItem.key)"
                                     @click="activeOperation = operationItem.key"
                                 >
                                     <span>{{ operationItem.label }}</span>
@@ -81,7 +67,7 @@
                                     type="button"
                                     class="operation-nav-item"
                                     :class="{ 'operation-nav-item-active': activeOperation === operationItem.key }"
-                                    :disabled="!isOperationSupported(operationItem.key)"
+                                    :disabled="executing || !isOperationSupported(operationItem.key)"
                                     @click="activeOperation = operationItem.key"
                                 >
                                     <span>{{ operationItem.label }}</span>
@@ -101,7 +87,7 @@
                                     type="button"
                                     class="operation-nav-item"
                                     :class="{ 'operation-nav-item-active': activeOperation === operationItem.key }"
-                                    :disabled="!isOperationSupported(operationItem.key)"
+                                    :disabled="executing || !isOperationSupported(operationItem.key)"
                                     @click="activeOperation = operationItem.key"
                                 >
                                     <span>{{ operationItem.label }}</span>
@@ -116,19 +102,30 @@
             <nn-card class="operation-form-card">
                 <template #title>
                     <span class="operation-form-title">
-                        {{ activeOperationMeta.label }}
+                        {{ embedded ? `RPC 请求 · ${activeOperationMeta.label}` : activeOperationMeta.label }}
                         <nn-tag :color="activeOperationMeta.category === 'read' ? 'blue' : 'warning'">
                             {{ activeOperationMeta.category === 'read' ? '只读' : '需要确认' }}
                         </nn-tag>
                     </span>
                 </template>
-                <template #extra>
-                    <nn-button :disabled="!connected" @click="capabilityDrawerOpen = true">
-                        Capability {{ capabilities.length }}
-                    </nn-button>
-                </template>
+                <div v-if="embedded" class="request-browser-toolbar">
+                    <nn-segmented v-model:value="requestPanelMode" :options="requestPanelOptions" />
+                    <nn-space v-if="requestPanelMode === 'xml'">
+                        <nn-button class="xml-display-toggle" size="small" @click="toggleRequestDisplayMode">
+                            {{ requestDisplayMode === 'formatted' ? '查看原文' : '格式化' }}
+                        </nn-button>
+                        <nn-button size="small" @click="copyRequestXml">复制请求</nn-button>
+                    </nn-space>
+                </div>
 
-                <nn-form :model="form" :label-col="labelCol" class="operation-form">
+                <nn-form
+                    v-if="!embedded || requestPanelMode === 'parameters'"
+                    :model="form"
+                    :label-col="labelCol"
+                    :disabled="executing"
+                    :inert="executing ? '' : undefined"
+                    class="operation-form"
+                >
                     <template v-if="activeOperation === 'get' || activeOperation === 'get-config'">
                         <nn-form-item v-if="activeOperation === 'get-config'" label="源 datastore" required>
                             <nn-select v-model:value="form.source" :options="readDatastoreOptions" />
@@ -303,10 +300,11 @@
                         />
                     </template>
                 </nn-form>
+                <pre v-else class="rpc-request-preview">{{ displayedRequestXml }}</pre>
 
                 <div class="operation-footer">
                     <nn-space>
-                        <nn-button @click="previewOpen = true">
+                        <nn-button v-if="!embedded" @click="previewOpen = true">
                             <template #icon><EyeOutlined /></template>
                             请求预览
                         </nn-button>
@@ -331,27 +329,53 @@
                 </div>
             </nn-card>
 
-            <nn-card title="RPC 结果" class="operation-result-card">
+            <div
+                v-if="embedded"
+                class="operations-row-resizer"
+                role="separator"
+                aria-label="调整 RPC 请求和响应高度"
+                aria-orientation="horizontal"
+                :aria-valuemin="requestPaneMinHeight"
+                :aria-valuemax="requestPaneMaxHeight"
+                :aria-valuenow="requestPaneHeight"
+                tabindex="0"
+                title="拖动调整 RPC 请求和响应高度；双击恢复默认高度"
+                @pointerdown="startRequestPaneResize"
+                @keydown="handleRequestPaneResizeKeydown"
+                @dblclick="resetRequestPaneResize"
+            >
+                <span class="pane-resizer-grip" aria-hidden="true" />
+            </div>
+
+            <nn-card :title="embedded ? 'RPC 响应' : 'RPC 结果'" class="operation-result-card">
                 <template #extra>
                     <nn-space>
                         <nn-tag v-if="result.status" :color="result.status === 'success' ? 'success' : 'error'">
                             {{ result.status === 'success' ? '成功' : '失败' }}
                         </nn-tag>
                         <span v-if="result.duration !== null" class="result-duration">{{ result.duration }} ms</span>
-                        <nn-button size="small" :disabled="!result.reply" @click="clearResult">清空</nn-button>
                     </nn-space>
                 </template>
 
-                <div v-if="result.status" class="result-summary">
-                    <span>{{ result.operation }}</span>
-                    <span>{{ result.time }}</span>
-                    <span v-if="result.messageId">message-id: {{ result.messageId }}</span>
+                <div v-if="result.status" class="result-browser-toolbar">
+                    <div class="result-summary">
+                        <span>{{ result.operation }}</span>
+                        <span>{{ result.time }}</span>
+                        <span v-if="result.messageId">message-id: {{ result.messageId }}</span>
+                    </div>
+                    <nn-space>
+                        <nn-button class="xml-display-toggle" size="small" @click="toggleReplyDisplayMode">
+                            {{ replyDisplayMode === 'formatted' ? '查看原文' : '格式化' }}
+                        </nn-button>
+                        <nn-button size="small" @click="copyReplyXml">复制响应</nn-button>
+                        <nn-button size="small" @click="clearResult">清空</nn-button>
+                    </nn-space>
                 </div>
                 <pre
                     v-if="result.reply"
                     class="rpc-result"
                     :class="{ 'rpc-result-error': result.status === 'error' }"
-                    >{{ result.reply }}</pre
+                    >{{ displayedReplyXml }}</pre
                 >
                 <nn-empty v-else description="执行操作后在这里查看 rpc-reply" />
             </nn-card>
@@ -384,28 +408,19 @@
         </nn-modal>
 
         <nn-modal
+            v-if="!embedded"
             v-model:open="previewOpen"
             :title="`${activeOperationMeta.label} 请求预览`"
             :footer="null"
             width="820px"
         >
-            <pre class="rpc-preview">{{ requestPreview }}</pre>
+            <pre class="rpc-preview">{{ displayedRequestXml }}</pre>
         </nn-modal>
-
-        <nn-drawer v-model:open="capabilityDrawerOpen" title="设备 Capability" width="760px">
-            <nn-input-search v-model:value="capabilityQuery" allow-clear placeholder="筛选 capability URI" />
-            <div class="capability-list">
-                <div v-for="capability in filteredCapabilities" :key="capability" class="capability-row">
-                    <nn-typography-text copyable>{{ capability }}</nn-typography-text>
-                </div>
-                <nn-empty v-if="filteredCapabilities.length === 0" description="暂无 Capability" />
-            </div>
-        </nn-drawer>
     </div>
 </template>
 
 <script setup>
-    import { computed, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+    import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
     import { useRouter } from 'vue-router';
     import {
         NETCONF_CAPABILITY_HINTS,
@@ -419,9 +434,19 @@
     import EventBus from '../../utils/eventBus';
     import { notify } from '../../utils/notify';
     import { EyeOutlined, ReloadOutlined, SendOutlined } from '../../ui/icons';
-    import { clonePlain, invokeBridge, normalizeCapability, normalizeSessionEvent, unwrapArray } from './yangUiUtils';
+    import {
+        clonePlain,
+        formatXmlForDisplay,
+        invokeBridge,
+        normalizeCapability,
+        normalizeSessionEvent,
+        unwrapArray
+    } from './yangUiUtils';
+    import { usePaneResize } from './usePaneResize';
 
     defineOptions({ name: 'YangOperations' });
+
+    const emit = defineEmits(['executing-change']);
 
     const props = defineProps({
         embedded: {
@@ -447,19 +472,43 @@
         contextRawRpc: {
             type: String,
             default: ''
+        },
+        contextRevision: {
+            type: Number,
+            default: 0
         }
     });
 
     const router = useRouter();
     const labelCol = { style: { width: '132px' } };
+    const DEFAULT_RAW_RPC = '<get>\n  <filter type="subtree">\n    <!-- subtree filter -->\n  </filter>\n</get>';
+    const operationsLayoutRef = ref(null);
+    const {
+        paneSize: requestPaneHeight,
+        minSize: requestPaneMinHeight,
+        maxSize: requestPaneMaxHeight,
+        resizing: requestPaneResizing,
+        startResize: startRequestPaneResize,
+        handleResizeKeydown: handleRequestPaneResizeKeydown,
+        resetResize: resetRequestPaneResize,
+        stopResize: stopRequestPaneResize
+    } = usePaneResize({
+        containerRef: operationsLayoutRef,
+        orientation: 'horizontal',
+        defaultRatio: 0.5,
+        minFirst: 260,
+        minSecond: 200,
+        dividerSize: 8
+    });
     const activeOperation = ref('get');
     const sessionLoading = ref(false);
     const executing = ref(false);
     const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, capabilities: [] });
     const confirmationOpen = ref(false);
     const previewOpen = ref(false);
-    const capabilityDrawerOpen = ref(false);
-    const capabilityQuery = ref('');
+    const requestPanelMode = ref('xml');
+    const requestDisplayMode = ref('formatted');
+    const replyDisplayMode = ref('formatted');
     const result = reactive({
         status: '',
         operation: '',
@@ -486,7 +535,7 @@
         validateSource: 'candidate',
         confirmed: false,
         confirmTimeout: 600,
-        rawRpc: '<get>\n  <filter type="subtree">\n    <!-- subtree filter -->\n  </filter>\n</get>'
+        rawRpc: DEFAULT_RAW_RPC
     });
 
     const defaultOperationOptions = [
@@ -515,6 +564,10 @@
         ].includes(operation.key)
     );
     const advancedOperations = NETCONF_OPERATIONS.filter(operation => operation.key === 'raw-rpc');
+    const requestPanelOptions = [
+        { label: '操作参数', value: 'parameters' },
+        { label: 'RPC XML', value: 'xml' }
+    ];
 
     const capabilities = computed(() => {
         const values = session.value.capabilities || session.value.serverCapabilities || [];
@@ -524,16 +577,14 @@
         const status = session.value.status || session.value.state;
         return session.value.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
     });
+    const operationsLayoutStyle = computed(() =>
+        props.embedded && requestPaneHeight.value > 0
+            ? { '--request-pane-height': `${requestPaneHeight.value}px` }
+            : undefined
+    );
     const activeOperationMeta = computed(
         () => NETCONF_OPERATIONS.find(operation => operation.key === activeOperation.value) || NETCONF_OPERATIONS[0]
     );
-    const filteredCapabilities = computed(() => {
-        const query = capabilityQuery.value.trim().toLowerCase();
-        return query
-            ? capabilities.value.filter(capability => capability.toLowerCase().includes(query))
-            : capabilities.value;
-    });
-
     const capabilityIncludes = hint =>
         capabilities.value.some(capability => capability.toLowerCase().includes(hint.toLowerCase()));
     const hasCapability = name => capabilityIncludes(NETCONF_CAPABILITY_HINTS[name] || name);
@@ -582,6 +633,7 @@
     ]);
 
     const operationDisabledReason = operation => {
+        if (executing.value) return '操作执行中';
         if (!connected.value) return '请先建立 NETCONF 会话';
         if (operation === 'edit-config' && editDatastoreOptions.value.length === 0) {
             return '设备未声明 :candidate 或 :writable-running 能力';
@@ -689,6 +741,31 @@
         if (activeOperation.value === 'raw-rpc' && /^<rpc[\s>]/i.test(body)) return body;
         return `<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="preview">\n${body}\n</rpc>`;
     });
+    const displayedRequestXml = computed(() => {
+        const requestXml = result.request || requestPreview.value;
+        return requestDisplayMode.value === 'formatted' ? formatXmlForDisplay(requestXml) : requestXml;
+    });
+    const displayedReplyXml = computed(() =>
+        replyDisplayMode.value === 'formatted' ? formatXmlForDisplay(result.reply) : result.reply
+    );
+
+    const toggleRequestDisplayMode = () => {
+        requestDisplayMode.value = requestDisplayMode.value === 'formatted' ? 'raw' : 'formatted';
+    };
+    const toggleReplyDisplayMode = () => {
+        replyDisplayMode.value = replyDisplayMode.value === 'formatted' ? 'raw' : 'formatted';
+    };
+    const copyXmlText = async (value, label) => {
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+            await navigator.clipboard.writeText(value);
+            notify.success(`${label}已复制`);
+        } catch (_error) {
+            notify.warning('系统剪贴板不可用');
+        }
+    };
+    const copyRequestXml = () => copyXmlText(displayedRequestXml.value, 'RPC 请求');
+    const copyReplyXml = () => copyXmlText(displayedReplyXml.value, 'RPC 响应');
 
     const buildPayload = () => {
         const payload = { operation: activeOperation.value };
@@ -769,35 +846,50 @@
     };
 
     const executeOperation = async () => {
+        if (executing.value) return;
         executing.value = true;
+        emit('executing-change', true);
         const startedAt = performance.now();
         const operation = activeOperation.value;
-        result.status = '';
-        result.reply = '';
+        const operationLabel = activeOperationMeta.value.label;
+        const executionContextRevision = props.contextRevision;
+        const requestXml = requestPreview.value;
+        const request = operation === 'raw-rpc' ? { rpc: requestXml } : buildPayload();
+        const method = operation === 'raw-rpc' ? 'sendRpc' : 'executeOperation';
+        clearResult();
+        result.request = requestXml;
         try {
-            const request = operation === 'raw-rpc' ? { rpc: requestPreview.value } : buildPayload();
-            const method = operation === 'raw-rpc' ? 'sendRpc' : 'executeOperation';
             const { data } = await invokeBridge('netconfApi', method, request);
-            result.status = data?.errors?.length ? 'error' : 'success';
-            result.operation = activeOperationMeta.value.label;
-            result.reply = resultText(data);
-            result.request = data?.rpc || requestPreview.value;
-            result.messageId = data?.messageId || '';
-            result.duration = Math.max(0, Math.round(performance.now() - startedAt));
-            result.time = new Date().toLocaleString();
-            if (result.status === 'success') notify.success(`${activeOperationMeta.value.label} 执行成功`);
-            else notify.error(`${activeOperationMeta.value.label} 返回 rpc-error`);
+            const status = data?.errors?.length ? 'error' : 'success';
+            const contextUnchanged = executionContextRevision === props.contextRevision;
+            if (contextUnchanged) {
+                result.status = status;
+                result.operation = operationLabel;
+                result.reply = resultText(data);
+                result.request = data?.rpc || requestXml;
+                result.messageId = data?.messageId || '';
+                result.duration = Math.max(0, Math.round(performance.now() - startedAt));
+                result.time = new Date().toLocaleString();
+            }
+            const contextSuffix = contextUnchanged ? '' : '（工作区上下文已切换）';
+            if (status === 'success') notify.success(`${operationLabel} 执行成功${contextSuffix}`);
+            else notify.error(`${operationLabel} 返回 rpc-error${contextSuffix}`);
         } catch (error) {
-            result.status = 'error';
-            result.operation = activeOperationMeta.value.label;
-            result.reply = error.message;
-            result.request = requestPreview.value;
-            result.messageId = '';
-            result.duration = Math.max(0, Math.round(performance.now() - startedAt));
-            result.time = new Date().toLocaleString();
-            notify.error(`${activeOperationMeta.value.label} 执行失败：${error.message}`);
+            const contextUnchanged = executionContextRevision === props.contextRevision;
+            if (contextUnchanged) {
+                result.status = 'error';
+                result.operation = operationLabel;
+                result.reply = error.message;
+                result.request = requestXml;
+                result.messageId = '';
+                result.duration = Math.max(0, Math.round(performance.now() - startedAt));
+                result.time = new Date().toLocaleString();
+            }
+            const contextSuffix = contextUnchanged ? '' : '（工作区上下文已切换）';
+            notify.error(`${operationLabel} 执行失败${contextSuffix}：${error.message}`);
         } finally {
             executing.value = false;
+            emit('executing-change', false);
         }
     };
 
@@ -819,6 +911,7 @@
     };
 
     const clearResult = () => {
+        replyDisplayMode.value = 'formatted';
         Object.assign(result, {
             status: '',
             operation: '',
@@ -837,13 +930,23 @@
         form.xpath = '';
         form.subtree = props.contextSubtree || '';
         form.config = props.contextConfig || '';
-        if (props.contextRawRpc) form.rawRpc = props.contextRawRpc;
+        form.rawRpc = props.contextRawRpc || DEFAULT_RAW_RPC;
         confirmationOpen.value = false;
         previewOpen.value = false;
+        requestPanelMode.value = 'xml';
+        requestDisplayMode.value = 'formatted';
         clearResult();
     };
 
     const goToConnections = () => router.push(YANG_ROUTE.CONNECTION);
+
+    watch(
+        form,
+        () => {
+            if (!executing.value && result.request) clearResult();
+        },
+        { deep: true }
+    );
 
     watch(editDatastoreOptions, options => {
         if (!options.some(option => option.value === form.target)) form.target = options[0]?.value || '';
@@ -873,7 +976,8 @@
             props.contextNode?.path,
             props.contextSubtree,
             props.contextConfig,
-            props.contextRawRpc
+            props.contextRawRpc,
+            props.contextRevision
         ],
         applyOperationContext,
         { immediate: true }
@@ -885,6 +989,12 @@
     });
 
     onActivated(loadSession);
+
+    onDeactivated(() => {
+        stopRequestPaneResize();
+        confirmationOpen.value = false;
+        previewOpen.value = false;
+    });
 
     onBeforeUnmount(() => {
         EventBus.off(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.OPERATIONS);
@@ -900,50 +1010,11 @@
     }
 
     .yang-operations-embedded {
+        width: 100%;
+        min-width: 0;
         height: 100%;
-    }
-
-    .operation-context-bar {
-        display: flex;
-        min-width: 0;
-        flex: 0 0 auto;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 8px 10px;
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
-        background: var(--nn-color-bg-muted);
-    }
-
-    .operation-context-main,
-    .operation-context-title {
-        display: flex;
-        min-width: 0;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .operation-context-copy {
-        min-width: 0;
-    }
-
-    .operation-context-title {
-        color: var(--nn-color-text-strong);
-        font-size: 13px;
-        font-weight: 600;
-    }
-
-    .operation-context-path {
-        display: block;
-        max-width: 560px;
+        flex: 1 1 auto;
         overflow: hidden;
-        color: var(--nn-color-text-muted);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 10px;
-        line-height: 18px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     .operation-session-bar {
@@ -1000,12 +1071,44 @@
     .operations-layout-embedded {
         min-height: 0;
         flex: 1;
-        grid-template-columns: minmax(480px, 3fr) minmax(320px, 2fr);
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: var(--request-pane-height, 50%) 8px minmax(200px, 1fr);
+        gap: 0;
+        overflow: hidden;
+    }
+
+    .operations-row-resizer {
+        display: flex;
+        min-height: 8px;
+        align-items: center;
+        justify-content: center;
+        cursor: row-resize;
+        outline: none;
+        touch-action: none;
+        user-select: none;
+    }
+
+    .operations-row-resizer .pane-resizer-grip {
+        width: 34px;
+        height: 2px;
+        border-radius: 999px;
+        background: var(--nn-color-border-light);
+        transition:
+            height 0.15s ease,
+            background-color 0.15s ease;
+    }
+
+    .operations-row-resizer:hover .pane-resizer-grip,
+    .operations-row-resizer:focus-visible .pane-resizer-grip,
+    .yang-operations-resizing .operations-row-resizer .pane-resizer-grip {
+        height: 3px;
+        background: var(--nn-color-primary);
     }
 
     .operation-nav-card,
     .operation-form-card,
     .operation-result-card {
+        min-width: 0;
         min-height: 0;
     }
 
@@ -1119,6 +1222,45 @@
         padding-right: 3px;
     }
 
+    .request-browser-toolbar,
+    .result-browser-toolbar {
+        display: flex;
+        min-width: 0;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding-bottom: 7px;
+        border-bottom: 1px solid var(--nn-color-border-light);
+    }
+
+    .request-browser-toolbar {
+        margin-bottom: 8px;
+    }
+
+    .xml-display-toggle {
+        width: 72px;
+        min-width: 72px;
+        flex: 0 0 72px;
+    }
+
+    .rpc-request-preview {
+        min-height: 0;
+        flex: 1;
+        margin: 0;
+        overflow: auto;
+        padding: 10px;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 4px;
+        background: var(--nn-color-bg-code);
+        color: var(--nn-color-text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.55;
+        tab-size: 2;
+        white-space: pre;
+    }
+
     .xml-editor {
         min-height: 190px;
         resize: vertical;
@@ -1180,12 +1322,16 @@
 
     .result-summary {
         display: flex;
+        min-width: 0;
         flex-wrap: wrap;
         gap: 10px;
-        margin-bottom: 7px;
         color: var(--nn-color-text-muted);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 10px;
+    }
+
+    .result-browser-toolbar {
+        margin-bottom: 8px;
     }
 
     .rpc-result,
@@ -1200,8 +1346,7 @@
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 12px;
         line-height: 1.55;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
+        white-space: pre;
     }
 
     .rpc-result {
@@ -1220,24 +1365,37 @@
         color: var(--nn-color-error);
     }
 
-    .capability-list {
-        max-height: calc(100vh - 145px);
-        margin-top: 10px;
-        overflow-y: auto;
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
+    .yang-operations-embedded .operation-form-card,
+    .yang-operations-embedded .operation-result-card {
+        overflow: hidden;
+        border-radius: 4px;
     }
 
-    .capability-row {
-        padding: 7px 9px;
+    .yang-operations-embedded :deep(.operation-form-card > .nn-card-head),
+    .yang-operations-embedded :deep(.operation-result-card > .nn-card-head) {
+        min-height: 34px;
+        padding: 0 8px;
         border-bottom: 1px solid var(--nn-color-border-light);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 11px;
-        overflow-wrap: anywhere;
+        border-radius: 4px 4px 0 0;
+        background: var(--nn-color-bg-muted);
     }
 
-    .capability-row:last-child {
-        border-bottom: 0;
+    .yang-operations-embedded :deep(.operation-form-card > .nn-card-head .nn-card-head-title),
+    .yang-operations-embedded :deep(.operation-result-card > .nn-card-head .nn-card-head-title) {
+        padding: 7px 0;
+        color: var(--nn-color-text-strong);
+        font-size: 12px;
+    }
+
+    .yang-operations-embedded :deep(.operation-form-card > .nn-card-head .nn-card-extra),
+    .yang-operations-embedded :deep(.operation-result-card > .nn-card-head .nn-card-extra),
+    .yang-operations-embedded .result-duration {
+        color: var(--nn-color-text-muted);
+    }
+
+    .yang-operations-embedded :deep(.operation-form-card > .nn-card-body),
+    .yang-operations-embedded :deep(.operation-result-card > .nn-card-body) {
+        padding: 8px;
     }
 
     @media (max-width: 1180px) {
@@ -1251,7 +1409,7 @@
         }
 
         .operations-layout-embedded {
-            grid-template-columns: minmax(440px, 3fr) minmax(300px, 2fr);
+            grid-template-columns: minmax(0, 1fr);
         }
 
         .operations-layout-embedded .operation-result-card {

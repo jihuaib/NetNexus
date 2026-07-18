@@ -1,42 +1,34 @@
 <template>
-    <div class="nn-container yang-workspace-page" @click="hideContextMenu">
+    <div
+        class="nn-container yang-workspace-page"
+        :class="{ 'workspace-pane-resizing': schemaPaneResizing }"
+        @click="hideContextMenu"
+    >
         <nn-card title="Schema 与设备操作" class="workspace-card">
             <template #extra>
                 <nn-space>
                     <nn-tag :color="connected ? 'success' : 'default'">
                         NETCONF {{ connected ? '已连接' : '未连接' }}
                     </nn-tag>
-                    <nn-tag v-if="compileId && compileSucceeded" color="success">libyang 已编译</nn-tag>
-                    <nn-tag v-else-if="compileId" color="error">libyang 编译失败</nn-tag>
-                    <nn-tag v-else color="default">未编译</nn-tag>
+                    <nn-tag v-if="compileId && compileSucceeded" color="success">Schema 已就绪</nn-tag>
+                    <nn-tag v-else-if="compileId" color="error">Schema 生成失败</nn-tag>
+                    <nn-tag v-else color="default">暂无 Schema</nn-tag>
                     <nn-tag color="blue">模块 {{ workspaceSummary.moduleCount }}</nn-tag>
                     <nn-tag color="cyan">节点 {{ workspaceSummary.nodeCount }}</nn-tag>
-                    <nn-tag :color="diagnosticErrorCount ? 'error' : diagnosticWarningCount ? 'warning' : 'green'">
-                        诊断 {{ diagnostics.length }}
-                    </nn-tag>
                 </nn-space>
             </template>
 
             <div class="workspace-toolbar">
                 <div class="workspace-actions">
-                    <nn-tooltip :title="compilerAvailable ? '' : compilerUnavailableMessage">
-                        <span class="disabled-action-wrap">
-                            <nn-button
-                                type="primary"
-                                :loading="compiling"
-                                :disabled="!compilerAvailable"
-                                @click="compileWorkspace"
-                            >
-                                <template #icon><CodeOutlined /></template>
-                                编译工作区
-                            </nn-button>
-                        </span>
-                    </nn-tooltip>
                     <nn-button :loading="loading" @click="loadWorkspace">
                         <template #icon><ReloadOutlined /></template>
                         刷新
                     </nn-button>
-                    <nn-button danger :disabled="!compileId && workspaceModules.length === 0" @click="clearWorkspace">
+                    <nn-button
+                        danger
+                        :disabled="operationExecuting || (!compileId && workspaceModules.length === 0)"
+                        @click="clearWorkspace"
+                    >
                         <template #icon><DeleteOutlined /></template>
                         清空
                     </nn-button>
@@ -47,15 +39,17 @@
                 </div>
             </div>
 
-            <div class="workspace-layout" :class="{ 'workspace-layout-empty': !compileId }">
+            <div
+                ref="workspaceLayoutRef"
+                class="workspace-layout"
+                :class="{ 'workspace-layout-empty': !compileId }"
+                :style="workspaceLayoutStyle"
+            >
                 <section class="schema-panel">
                     <div class="panel-header">
                         <div class="panel-heading">
                             <span class="panel-title">Schema 索引</span>
-                            <span class="panel-meta">
-                                {{ schemaAuthoritative ? 'libyang effective schema' : '结构预览（非权威）' }} ·
-                                右键当前设备或节点执行操作
-                            </span>
+                            <span class="panel-meta">libyang effective schema · 单击选择 · 右键查看属性或执行操作</span>
                         </div>
                         <nn-input-search
                             v-model:value="treeQuery"
@@ -94,106 +88,34 @@
                     </div>
                 </section>
 
-                <section class="inspector-panel">
-                    <nn-tabs v-model:active-key="inspectorTab" size="small" class="inspector-tabs">
-                        <nn-tab-pane key="detail" tab="节点详情" force-render>
-                            <div class="inspector-scroll">
-                                <nn-descriptions v-if="selectedNode" :column="1" bordered size="small">
-                                    <nn-descriptions-item label="名称">
-                                        {{ selectedNode.name || selectedNode.title || '-' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="Schema 路径">
-                                        <nn-typography-text copyable>{{ selectedNode.path || '-' }}</nn-typography-text>
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="关键字">
-                                        {{ selectedNode.keyword || selectedNode.kind || '-' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="模块">
-                                        {{ selectedNode.module || '-' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="数据类型">
-                                        {{ formatNodeType(selectedNode.type) }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="访问">
-                                        {{ selectedNode.config === false ? 'state / config false' : 'config true' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="Mandatory">
-                                        {{ formatBoolean(selectedNode.mandatory) }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="Status">
-                                        {{ selectedNode.status || '-' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="Default">
-                                        {{ formatValue(selectedNode.default) }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="Units">
-                                        {{ selectedNode.units || '-' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="If Feature">
-                                        {{ formatValue(selectedNode.ifFeatures) }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="描述">
-                                        <span class="detail-description">{{ selectedNode.description || '-' }}</span>
-                                    </nn-descriptions-item>
-                                </nn-descriptions>
-                                <nn-empty v-else description="请选择 Schema 节点" />
-                            </div>
-                        </nn-tab-pane>
+                <div
+                    class="workspace-column-resizer"
+                    role="separator"
+                    aria-label="调整 Schema 树宽度"
+                    aria-orientation="vertical"
+                    :aria-valuemin="schemaPaneMinWidth"
+                    :aria-valuemax="schemaPaneMaxWidth"
+                    :aria-valuenow="schemaPaneWidth"
+                    tabindex="0"
+                    title="拖动调整 Schema 树宽度；双击恢复默认宽度"
+                    @pointerdown="startSchemaPaneResize"
+                    @keydown="handleSchemaPaneResizeKeydown"
+                    @dblclick="resetSchemaPaneResize"
+                >
+                    <span class="pane-resizer-grip" aria-hidden="true" />
+                </div>
 
-                        <nn-tab-pane key="source" tab="YANG 源码" force-render>
-                            <div class="source-toolbar">
-                                <nn-select
-                                    v-model:value="sourceModuleKey"
-                                    :options="moduleOptions"
-                                    allow-clear
-                                    placeholder="选择模块"
-                                    class="source-module-select"
-                                    @change="loadSource"
-                                />
-                                <nn-button :loading="sourceLoading" :disabled="!sourceModuleKey" @click="loadSource">
-                                    刷新源码
-                                </nn-button>
-                            </div>
-                            <nn-spin :spinning="sourceLoading" class="source-spin">
-                                <pre class="source-code">{{ sourceText || '请选择一个模块查看源码' }}</pre>
-                            </nn-spin>
-                        </nn-tab-pane>
-
-                        <nn-tab-pane key="diagnostics" :tab="`诊断 (${diagnostics.length})`" force-render>
-                            <div class="diagnostic-toolbar">
-                                <nn-segmented v-model:value="diagnosticFilter" :options="diagnosticFilterOptions" />
-                                <nn-button size="small" :loading="diagnosticLoading" @click="loadDiagnostics">
-                                    刷新
-                                </nn-button>
-                            </div>
-                            <div class="diagnostic-list">
-                                <button
-                                    v-for="(diagnostic, index) in filteredDiagnostics"
-                                    :key="diagnostic.id || `${diagnostic.file || ''}:${diagnostic.line || 0}:${index}`"
-                                    type="button"
-                                    class="diagnostic-row"
-                                    @click="openDiagnosticSource(diagnostic)"
-                                >
-                                    <nn-tag :color="diagnosticColor(diagnostic.severity)">
-                                        {{ diagnosticLabel(diagnostic.severity) }}
-                                    </nn-tag>
-                                    <span class="diagnostic-content">
-                                        <span class="diagnostic-message">
-                                            {{ diagnostic.message || diagnostic.msg || '未知诊断' }}
-                                        </span>
-                                        <span class="diagnostic-location">
-                                            {{ diagnostic.fileName || diagnostic.file || diagnostic.module || '-' }}
-                                            <template v-if="diagnostic.line">
-                                                :{{ diagnostic.line }}
-                                                <template v-if="diagnostic.column">:{{ diagnostic.column }}</template>
-                                            </template>
-                                        </span>
-                                    </span>
-                                </button>
-                                <nn-empty v-if="filteredDiagnostics.length === 0" description="当前筛选下没有诊断" />
-                            </div>
-                        </nn-tab-pane>
-                    </nn-tabs>
+                <section class="workspace-operation-panel">
+                    <YangOperations
+                        embedded
+                        :operation="operationContext.operation"
+                        :context-revision="operationContextRevision"
+                        :context-node="operationContext.node || deviceOperationRoot"
+                        :context-subtree="operationContext.subtree"
+                        :context-config="operationContext.config"
+                        :context-raw-rpc="operationContext.rawRpc"
+                        @executing-change="handleOperationExecutingChange"
+                    />
                 </section>
             </div>
         </nn-card>
@@ -215,13 +137,13 @@
                 {{ contextMenu.node?.path || '设备级操作' }}
             </div>
             <nn-menu class="schema-context-menu-list" :selectable="false" @click="handleContextMenuClick">
+                <nn-menu-item key="node-properties" :disabled="contextMenu.node?.virtualDevice">
+                    <template #icon><EyeOutlined /></template>
+                    查看节点属性
+                </nn-menu-item>
                 <nn-menu-item key="copy-path" :disabled="!contextMenu.node?.path">
                     <template #icon><CopyOutlined /></template>
                     复制 Schema 路径
-                </nn-menu-item>
-                <nn-menu-item key="view-source" :disabled="!contextMenu.node?.module">
-                    <template #icon><FileSearchOutlined /></template>
-                    查看所属 YANG 源码
                 </nn-menu-item>
                 <nn-menu-divider />
                 <nn-menu-item key="get" :disabled="Boolean(operationDisabledReason('get', contextMenu.node))">
@@ -276,10 +198,6 @@
                     <template #icon><CodeOutlined /></template>
                     {{ isRpcNode(contextMenu.node) ? `执行 ${contextMenu.node.keyword}` : '原始 RPC' }}
                 </nn-menu-item>
-                <nn-menu-item key="capabilities" :disabled="!connected">
-                    <template #icon><EyeOutlined /></template>
-                    查看 Capability
-                </nn-menu-item>
                 <nn-menu-item v-if="!connected" key="connection">
                     <template #icon><ApiOutlined /></template>
                     前往连接设置
@@ -291,32 +209,53 @@
         </div>
 
         <nn-modal
-            v-model:open="operationModalOpen"
-            :title="operationModalTitle"
+            v-model:open="nodePropertyOpen"
+            :title="nodePropertyTitle"
             :footer="null"
-            width="1120px"
-            height="calc(100vh - 64px)"
-            :body-style="{ padding: '8px', overflow: 'hidden' }"
-            wrap-class-name="yang-operation-modal"
+            width="760px"
+            :body-style="{ padding: '12px', overflow: 'hidden' }"
         >
-            <YangOperations
-                v-if="operationModalOpen"
-                embedded
-                :operation="operationContext.operation"
-                :context-node="operationContext.node"
-                :context-subtree="operationContext.subtree"
-                :context-config="operationContext.config"
-                :context-raw-rpc="operationContext.rawRpc"
-            />
-        </nn-modal>
-
-        <nn-modal v-model:open="capabilityModalOpen" title="设备 Capability" :footer="null" width="760px">
-            <nn-input-search v-model:value="capabilityQuery" allow-clear placeholder="筛选 capability URI" />
-            <div class="workspace-capability-list">
-                <div v-for="capability in filteredCapabilities" :key="capability" class="workspace-capability-row">
-                    <nn-typography-text copyable>{{ capability }}</nn-typography-text>
-                </div>
-                <nn-empty v-if="filteredCapabilities.length === 0" description="暂无 Capability" />
+            <div class="node-property-scroll">
+                <nn-spin :spinning="detailLoading">
+                    <nn-descriptions v-if="detailNode" :column="2" bordered size="small">
+                        <nn-descriptions-item label="名称">
+                            {{ detailNode.name || detailNode.title || '-' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="关键字">
+                            {{ detailNode.keyword || detailNode.kind || '-' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="模块">
+                            {{ detailNode.module || '-' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="数据类型">
+                            {{ formatNodeType(detailNode.type) }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="访问">
+                            {{ detailNode.config === false ? 'state / config false' : 'config true' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="Mandatory">
+                            {{ formatBoolean(detailNode.mandatory) }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="Status">
+                            {{ detailNode.status || '-' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="Units">
+                            {{ detailNode.units || '-' }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="Default" :span="2">
+                            {{ formatValue(detailNode.default) }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="If Feature" :span="2">
+                            {{ formatValue(detailNode.ifFeatures) }}
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="Schema 路径" :span="2">
+                            <nn-typography-text copyable>{{ detailNode.path || '-' }}</nn-typography-text>
+                        </nn-descriptions-item>
+                        <nn-descriptions-item label="描述" :span="2">
+                            <span class="detail-description">{{ detailNode.description || '-' }}</span>
+                        </nn-descriptions-item>
+                    </nn-descriptions>
+                </nn-spin>
             </div>
         </nn-modal>
     </div>
@@ -349,16 +288,14 @@
         SendOutlined
     } from '../../ui/icons';
     import YangOperations from './YangOperations.vue';
-    import { useYangCompilerStatus } from './yangCompilerStatus';
     import {
-        fileBaseName,
-        getTaskId,
         invokeBridge,
         isTaskTerminal,
         normalizeCapability,
         normalizeSessionEvent,
         unwrapArray
     } from './yangUiUtils';
+    import { usePaneResize } from './usePaneResize';
 
     defineOptions({ name: 'YangWorkspace' });
 
@@ -368,44 +305,46 @@
     const CONTEXT_MENU_MARGIN = 8;
 
     const loading = ref(false);
-    const compiling = ref(false);
     const treeLoading = ref(false);
-    const sourceLoading = ref(false);
-    const diagnosticLoading = ref(false);
     const compileId = ref('');
     const compileSucceeded = ref(false);
-    const compileTaskId = ref('');
-    const compileProgress = ref(null);
     const workspaceSummary = ref({ moduleCount: 0, nodeCount: 0, cacheHit: false });
     const workspaceModules = ref([]);
-    const diagnostics = ref([]);
     const treeData = ref([]);
     const expandedKeys = ref([]);
     const selectedKeys = ref([]);
-    const selectedNode = ref(null);
+    const detailNode = ref(null);
+    const detailLoading = ref(false);
     const treeQuery = ref('');
-    const inspectorTab = ref('detail');
-    const sourceModuleKey = ref('');
-    const sourceText = ref('');
-    const diagnosticFilter = ref('all');
-    const schemaAuthoritative = ref(false);
     const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] });
     const contextMenuRef = ref(null);
     const contextMenu = reactive({ visible: false, x: 0, y: 0, node: null });
-    const operationModalOpen = ref(false);
     const operationContext = reactive({ operation: 'get', node: null, subtree: '', config: '', rawRpc: '' });
-    const capabilityModalOpen = ref(false);
-    const capabilityQuery = ref('');
+    const operationContextRevision = ref(0);
+    const operationExecuting = ref(false);
+    const nodePropertyOpen = ref(false);
+    const workspaceLayoutRef = ref(null);
+    const {
+        paneSize: schemaPaneWidth,
+        minSize: schemaPaneMinWidth,
+        maxSize: schemaPaneMaxWidth,
+        resizing: schemaPaneResizing,
+        startResize: startSchemaPaneResize,
+        handleResizeKeydown: handleSchemaPaneResizeKeydown,
+        resetResize: resetSchemaPaneResize,
+        stopResize: stopSchemaPaneResize
+    } = usePaneResize({
+        containerRef: workspaceLayoutRef,
+        orientation: 'vertical',
+        defaultRatio: 0.36,
+        minFirst: 320,
+        minSecond: 420,
+        dividerSize: 8,
+        activeWhen: () => window.matchMedia('(min-width: 981px)').matches
+    });
     let contextMenuOpenRequest = 0;
-    const { compilerAvailable, refreshCompilerStatus } = useYangCompilerStatus();
-    const compilerUnavailableMessage = 'YANG 编译暂不可用，请在“设置 → 运行时诊断”中检查';
-
-    const diagnosticFilterOptions = [
-        { label: '全部', value: 'all' },
-        { label: '错误', value: 'error' },
-        { label: '警告', value: 'warning' },
-        { label: '信息', value: 'info' }
-    ];
+    let detailRequestRevision = 0;
+    let clearWorkspaceConfirmHandle = null;
 
     const normalizeModule = (module, index) => {
         if (typeof module === 'string') return { id: '', name: module, revision: '', _key: module };
@@ -415,12 +354,6 @@
         const id = module?.id || module?.moduleId || module?.hash || '';
         return { ...module, id, name, revision, _key: id || `${name}@${revision || 'none'}` };
     };
-
-    const normalizeDiagnostic = diagnostic => ({
-        ...diagnostic,
-        severity: String(diagnostic?.severity || diagnostic?.level || 'error').toLowerCase(),
-        fileName: diagnostic?.fileName || fileBaseName(diagnostic?.file || diagnostic?.filePath || diagnostic?.source)
-    });
 
     const normalizeNode = (node, index = 0) => {
         const id = node?.id || node?.nodeId || node?.key || `${node?.path || node?.name || 'node'}-${index}`;
@@ -446,12 +379,6 @@
         };
     };
 
-    const moduleOptions = computed(() =>
-        workspaceModules.value.map(module => ({
-            label: `${module.name}${module.revision ? `@${module.revision}` : ''}`,
-            value: module._key
-        }))
-    );
     const capabilities = computed(() => {
         const values = session.value.capabilities || session.value.serverCapabilities || [];
         return [...new Set(unwrapArray(values).map(normalizeCapability).filter(Boolean))];
@@ -460,39 +387,20 @@
         const status = session.value.status || session.value.state;
         return session.value.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
     });
-    const filteredCapabilities = computed(() => {
-        const query = capabilityQuery.value.trim().toLowerCase();
-        return query
-            ? capabilities.value.filter(capability => capability.toLowerCase().includes(query))
-            : capabilities.value;
-    });
-    const operationModalTitle = computed(() => {
-        const label = operationContext.operation === 'raw-rpc' ? '原始 RPC' : operationContext.operation;
-        const nodeName = operationContext.node?.name || operationContext.node?.title;
-        return nodeName ? `${label} · ${nodeName}` : label;
+    const workspaceLayoutStyle = computed(() =>
+        schemaPaneWidth.value > 0 ? { '--schema-pane-width': `${schemaPaneWidth.value}px` } : undefined
+    );
+    const nodePropertyTitle = computed(() => {
+        const nodeName = detailNode.value?.name || detailNode.value?.title;
+        return nodeName ? `节点属性 · ${nodeName}` : '节点属性';
     });
     const contextMenuHint = computed(() => {
+        if (operationExecuting.value) return '设备操作执行中，请等待 rpc-reply 后再切换操作';
         if (!connected.value) return '设备未连接；Schema 仍可查看，设备操作需先建立连接';
         const node = contextMenu.node;
         if (node?.config === false) return 'state 节点只允许 get；datastore 操作作用于整个配置存储';
         if (isRpcNode(node)) return `${node.keyword} 将以原始 RPC 草稿打开，请确认实例路径和参数`;
         return '节点操作会自动预填 XML 草稿；delete-config 删除的是整个 datastore';
-    });
-    const diagnosticErrorCount = computed(
-        () => diagnostics.value.filter(item => ['error', 'fatal'].includes(item.severity)).length
-    );
-    const diagnosticWarningCount = computed(
-        () => diagnostics.value.filter(item => ['warning', 'warn'].includes(item.severity)).length
-    );
-    const filteredDiagnostics = computed(() => {
-        if (diagnosticFilter.value === 'all') return diagnostics.value;
-        if (diagnosticFilter.value === 'error') {
-            return diagnostics.value.filter(item => ['error', 'fatal'].includes(item.severity));
-        }
-        if (diagnosticFilter.value === 'warning') {
-            return diagnostics.value.filter(item => ['warning', 'warn'].includes(item.severity));
-        }
-        return diagnostics.value.filter(item => !['error', 'fatal', 'warning', 'warn'].includes(item.severity));
     });
     const deviceOperationRoot = computed(() => ({
         id: 'netconf-device-root',
@@ -517,18 +425,23 @@
             });
         return [deviceOperationRoot.value, ...filterNodes(treeData.value)];
     });
+    const resetOperationContext = () => {
+        Object.assign(operationContext, { operation: 'get', node: null, subtree: '', config: '', rawRpc: '' });
+        operationContextRevision.value += 1;
+    };
     const applyWorkspace = data => {
         const workspace = data?.workspace || data || {};
         compileId.value = workspace.compileId || workspace.id || compileId.value || '';
-        compileSucceeded.value = workspace.success === true || workspace.validation?.succeeded === true;
         const summary = workspace.summary || {};
         const nextModules = unwrapArray(workspace.modules, ['modules']);
         if (nextModules.length) workspaceModules.value = nextModules.map(normalizeModule);
-        const nextDiagnostics = unwrapArray(workspace.diagnostics, ['diagnostics']);
-        diagnostics.value = nextDiagnostics.map(normalizeDiagnostic);
         const schemaTree = workspace.schemaTree || {};
-        schemaAuthoritative.value = schemaTree.authoritative === true;
-        const inlineRoots = unwrapArray(schemaTree.roots || workspace.roots, ['nodes', 'roots']);
+        const authoritativeSchema = schemaTree.authoritative === true && schemaTree.source === 'libyang-effective';
+        compileSucceeded.value =
+            authoritativeSchema && (workspace.success === true || workspace.validation?.succeeded === true);
+        const inlineRoots = authoritativeSchema
+            ? unwrapArray(schemaTree.roots || workspace.roots, ['nodes', 'roots'])
+            : [];
         if (inlineRoots.length) treeData.value = inlineRoots.map(normalizeNode);
         workspaceSummary.value = {
             ...workspaceSummary.value,
@@ -537,14 +450,15 @@
             moduleCount: Number(
                 summary.moduleCount ?? workspace.modules?.length ?? workspaceSummary.value.moduleCount ?? 0
             ),
-            nodeCount: Number(summary.nodeCount ?? schemaTree.nodeCount ?? workspaceSummary.value.nodeCount ?? 0)
+            nodeCount: authoritativeSchema
+                ? Number(summary.nodeCount ?? schemaTree.nodeCount ?? workspaceSummary.value.nodeCount ?? 0)
+                : 0
         };
     };
 
     const loadRoots = async () => {
         if (!compileId.value) {
             treeData.value = [];
-            schemaAuthoritative.value = false;
             return;
         }
         treeLoading.value = true;
@@ -560,18 +474,21 @@
 
     const loadWorkspace = async () => {
         loading.value = true;
+        const previousCompileId = compileId.value;
         try {
             const { data } = await invokeBridge('yangApi', 'getWorkspace');
             compileId.value = '';
             compileSucceeded.value = false;
             workspaceModules.value = [];
-            diagnostics.value = [];
             treeData.value = [];
             selectedKeys.value = [];
-            selectedNode.value = null;
+            detailRequestRevision += 1;
+            detailNode.value = null;
+            detailLoading.value = false;
+            nodePropertyOpen.value = false;
             applyWorkspace(data);
-            if (compileId.value && treeData.value.length === 0) await loadRoots();
-            if (compileId.value && diagnostics.value.length === 0) await loadDiagnostics({ quiet: true });
+            if (previousCompileId && previousCompileId !== compileId.value) resetOperationContext();
+            if (compileSucceeded.value && compileId.value && treeData.value.length === 0) await loadRoots();
             if (workspaceModules.value.length === 0) await loadWorkspaceModules();
         } catch (error) {
             notify.error(`加载 Schema 工作区失败：${error.message}`);
@@ -590,34 +507,7 @@
                 )
                 .map(normalizeModule);
         } catch (_error) {
-            // The workspace can still display its tree when module source enumeration is unavailable.
-        }
-    };
-
-    const compileWorkspace = async () => {
-        if (!compilerAvailable.value) {
-            notify.error(compilerUnavailableMessage);
-            return;
-        }
-        compiling.value = true;
-        compileProgress.value = { phase: 'preparing', completed: 0, total: 0, percent: 0, counts: {} };
-        try {
-            const { data } = await invokeBridge('yangApi', 'compile', {});
-            const taskId = getTaskId(data);
-            if (taskId) {
-                compileTaskId.value = taskId;
-                return;
-            }
-            applyWorkspace(data);
-            if (compileId.value && treeData.value.length === 0) await loadRoots();
-            compiling.value = false;
-            compileProgress.value = null;
-            notify.success(data?.cacheHit ? 'YANG 编译完成（缓存命中）' : 'YANG 编译完成');
-        } catch (error) {
-            await refreshCompilerStatus({ force: true });
-            compiling.value = false;
-            compileProgress.value = null;
-            notify.error(`YANG 编译失败：${error.message}`);
+            // The tree remains usable when module metadata enumeration is unavailable.
         }
     };
 
@@ -648,6 +538,7 @@
     const hasCapability = name => capabilityIncludes(NETCONF_CAPABILITY_HINTS[name] || name);
 
     const operationDisabledReason = (operation, node = null) => {
+        if (operationExecuting.value) return '设备操作执行中，请等待 rpc-reply';
         if (!connected.value) return '请先建立 NETCONF 会话';
         if (operation === 'get-config' && isDataNode(node) && node?.config === false) {
             return 'state 节点不属于配置 datastore';
@@ -787,10 +678,7 @@
         if (!matchedNode?.key) return;
 
         selectedKeys.value = [matchedNode.key];
-        if (!matchedNode.virtualDevice) {
-            selectedNode.value = matchedNode;
-            inspectorTab.value = 'detail';
-        }
+        nodePropertyOpen.value = false;
         contextMenu.node = matchedNode;
         const anchor = {
             clientX: Number.isFinite(event?.clientX) ? event.clientX : CONTEXT_MENU_MARGIN,
@@ -824,17 +712,6 @@
         }
     };
 
-    const showNodeSource = node => {
-        const module = moduleForNode(node);
-        if (!module) {
-            notify.warning('没有找到该节点所属的本地 YANG 模块');
-            return;
-        }
-        sourceModuleKey.value = module._key;
-        inspectorTab.value = 'source';
-        loadSource();
-    };
-
     const openOperation = operation => {
         const node = contextMenu.node;
         const disabledReason = operationDisabledReason(operation, node);
@@ -844,19 +721,22 @@
         }
         Object.assign(operationContext, {
             operation,
-            node,
+            node: node?.virtualDevice ? null : node,
             subtree: ['get', 'get-config'].includes(operation) ? buildNodeXml(node, 'filter') : '',
             config: operation === 'edit-config' ? buildNodeXml(node, 'config') : '',
             rawRpc: operation === 'raw-rpc' ? buildRawRpcDraft(node) : ''
         });
-        operationModalOpen.value = true;
+        operationContextRevision.value += 1;
+    };
+
+    const handleOperationExecutingChange = value => {
+        operationExecuting.value = Boolean(value);
     };
 
     const handleContextMenuClick = ({ key }) => {
         const node = contextMenu.node;
-        if (key === 'copy-path') copyText(node?.path, 'Schema 路径已复制');
-        else if (key === 'view-source') showNodeSource(node);
-        else if (key === 'capabilities') capabilityModalOpen.value = true;
+        if (key === 'node-properties') showNodeProperties(node);
+        else if (key === 'copy-path') copyText(node?.path, 'Schema 路径已复制');
         else if (key === 'connection') router.push(YANG_ROUTE.CONNECTION);
         else openOperation(key);
         hideContextMenu();
@@ -902,102 +782,70 @@
         }
     };
 
-    const handleTreeSelect = async (_keys, info) => {
-        if (!info?.node || info.selected === false) {
-            selectedNode.value = null;
-            return;
-        }
-        const fallbackNode = findNode(treeData.value, info.node.key) || info.node;
-        selectedNode.value = fallbackNode;
-        inspectorTab.value = 'detail';
+    const showNodeProperties = async node => {
+        if (!node || node.virtualDevice) return;
+        const requestRevision = ++detailRequestRevision;
+        detailNode.value = node;
+        detailLoading.value = true;
+        nodePropertyOpen.value = true;
         try {
             const { data } = await invokeBridge('yangApi', 'getSchemaNode', {
                 compileId: compileId.value,
-                nodeId: fallbackNode.id || fallbackNode.key
+                nodeId: node.id || node.key
             });
-            selectedNode.value = { ...fallbackNode, ...(data || {}) };
+            if (requestRevision === detailRequestRevision) detailNode.value = { ...node, ...(data || {}) };
         } catch (_error) {
             // The summary already carried by the tree node is sufficient for basic inspection.
-        }
-    };
-
-    const loadSource = async () => {
-        const module = workspaceModules.value.find(item => item._key === sourceModuleKey.value);
-        if (!module) {
-            sourceText.value = '';
-            return;
-        }
-        sourceLoading.value = true;
-        try {
-            const { data } = await invokeBridge('yangApi', 'getModuleSource', {
-                moduleId: module.id || undefined,
-                name: module.name,
-                revision: module.revision || undefined
-            });
-            sourceText.value = typeof data === 'string' ? data : data?.source || data?.content || '';
-        } catch (error) {
-            sourceText.value = `// 读取源码失败：${error.message}`;
         } finally {
-            sourceLoading.value = false;
+            if (requestRevision === detailRequestRevision) detailLoading.value = false;
         }
     };
 
-    const loadDiagnostics = async ({ quiet = false } = {}) => {
-        diagnosticLoading.value = true;
-        try {
-            const { data } = await invokeBridge('yangApi', 'getDiagnostics', {
-                compileId: compileId.value || undefined
-            });
-            diagnostics.value = unwrapArray(data, ['diagnostics', 'items']).map(normalizeDiagnostic);
-        } catch (error) {
-            if (!quiet) notify.error(`加载诊断失败：${error.message}`);
-        } finally {
-            diagnosticLoading.value = false;
-        }
+    const handleTreeSelect = (_keys, info) => {
+        if (!info?.node) return;
+        const fallbackNode = findNode(treeData.value, info.node.key) || info.node;
+        selectedKeys.value = [fallbackNode.key];
     };
 
-    const openDiagnosticSource = diagnostic => {
-        const module = workspaceModules.value.find(
-            item =>
-                item.id === diagnostic.moduleId ||
-                item.name === diagnostic.module ||
-                item.name === diagnostic.source ||
-                [diagnostic.file, diagnostic.source]
-                    .filter(Boolean)
-                    .some(value => [item.filePath, item.path, item.fileName].includes(value))
-        );
-        if (module) {
-            sourceModuleKey.value = module._key;
-            inspectorTab.value = 'source';
-            loadSource();
-        }
+    const closeClearWorkspaceConfirm = () => {
+        clearWorkspaceConfirmHandle?.destroy?.();
+        clearWorkspaceConfirmHandle = null;
     };
 
     const clearWorkspace = () => {
-        dialog.confirm({
+        if (operationExecuting.value) {
+            notify.warning('设备操作执行中，请等待 rpc-reply 后再清空工作区');
+            return;
+        }
+        closeClearWorkspaceConfirm();
+        clearWorkspaceConfirmHandle = dialog.confirm({
             title: '清空 Schema 工作区',
-            content: '将清除当前编译上下文、Schema 索引和诊断；本地 YANG 源文件仍保留在模型库中。',
+            content: '将清除当前编译上下文、Schema 索引和编译诊断；本地 YANG 源文件仍保留在模型库中。',
             okText: '清空',
             okType: 'danger',
+            onCancel: () => {
+                clearWorkspaceConfirmHandle = null;
+            },
             onOk: async () => {
                 try {
                     await invokeBridge('yangApi', 'clearWorkspace');
                     compileId.value = '';
                     compileSucceeded.value = false;
-                    compileTaskId.value = '';
-                    compileProgress.value = null;
                     workspaceSummary.value = { moduleCount: 0, nodeCount: 0, cacheHit: false };
                     workspaceModules.value = [];
-                    diagnostics.value = [];
                     treeData.value = [];
-                    schemaAuthoritative.value = false;
                     expandedKeys.value = [];
                     selectedKeys.value = [];
-                    selectedNode.value = null;
-                    sourceText.value = '';
+                    detailRequestRevision += 1;
+                    detailNode.value = null;
+                    detailLoading.value = false;
+                    nodePropertyOpen.value = false;
+                    resetOperationContext();
                     notify.success('Schema 工作区已清空');
                 } catch (error) {
                     notify.error(`清空失败：${error.message}`);
+                } finally {
+                    clearWorkspaceConfirmHandle = null;
                 }
             }
         });
@@ -1008,27 +856,8 @@
         const data = payload?.status === 'success' ? payload.data : payload?.data || payload;
         if (!data || typeof data !== 'object') return;
         const action = data.action || data.taskType || data.kind || data.type || '';
-        const taskId = getTaskId(data);
-        if (action && action !== 'compile' && taskId !== compileTaskId.value) return;
-        if (compileTaskId.value && taskId && taskId !== compileTaskId.value) return;
-        compileProgress.value = {
-            ...compileProgress.value,
-            ...data,
-            counts: data.counts || compileProgress.value?.counts || {}
-        };
-        compiling.value = !isTaskTerminal(data.phase || data.status);
-        if (!isTaskTerminal(data.phase || data.status)) return;
-        compileTaskId.value = '';
-        if ((data.phase || data.status) === 'failed') {
-            refreshCompilerStatus({ force: true });
-            notify.error(data.message || data.error?.message || 'YANG 编译失败');
-        }
+        if (action !== 'compile' || !isTaskTerminal(data.phase || data.status)) return;
         loadWorkspace();
-        window.setTimeout(() => {
-            if (compileProgress.value && isTaskTerminal(compileProgress.value.phase || compileProgress.value.status)) {
-                compileProgress.value = null;
-            }
-        }, 4500);
     };
 
     const formatBoolean = value => (value === true ? 'true' : value === false ? 'false' : '-');
@@ -1041,17 +870,6 @@
         if (value === null || value === undefined || value === '') return '-';
         return Array.isArray(value) ? value.join(', ') || '-' : String(value);
     };
-    const diagnosticColor = severity => {
-        if (['error', 'fatal'].includes(severity)) return 'error';
-        if (['warning', 'warn'].includes(severity)) return 'warning';
-        return 'blue';
-    };
-    const diagnosticLabel = severity => {
-        if (['error', 'fatal'].includes(severity)) return '错误';
-        if (['warning', 'warn'].includes(severity)) return '警告';
-        return '信息';
-    };
-
     const handleContextMenuKeydown = event => {
         if (event.key === 'Escape') hideContextMenu();
     };
@@ -1062,9 +880,11 @@
     };
 
     const handleWorkspaceDeactivated = () => {
+        stopSchemaPaneResize();
         hideContextMenu();
-        operationModalOpen.value = false;
-        capabilityModalOpen.value = false;
+        closeClearWorkspaceConfirm();
+        detailRequestRevision += 1;
+        nodePropertyOpen.value = false;
     };
 
     onMounted(() => {
@@ -1073,15 +893,15 @@
         document.addEventListener('keydown', handleContextMenuKeydown);
         window.addEventListener('resize', hideContextMenu);
         window.addEventListener('scroll', handleWorkspaceScroll, true);
-        refreshCompilerStatus();
         Promise.all([loadWorkspace(), loadSession()]);
     });
 
-    onActivated(() => Promise.all([loadWorkspace(), loadSession(), refreshCompilerStatus()]));
+    onActivated(() => Promise.all([loadWorkspace(), loadSession()]));
 
     onDeactivated(handleWorkspaceDeactivated);
 
     onBeforeUnmount(() => {
+        closeClearWorkspaceConfirm();
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE);
         EventBus.off(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`);
         document.removeEventListener('keydown', handleContextMenuKeydown);
@@ -1124,10 +944,6 @@
         gap: 6px;
     }
 
-    .disabled-action-wrap {
-        display: inline-flex;
-    }
-
     .compile-id {
         max-width: 300px;
         overflow: hidden;
@@ -1147,16 +963,15 @@
         display: grid;
         min-height: 0;
         flex: 1;
-        grid-template-columns: minmax(360px, 46%) minmax(400px, 1fr);
-        gap: 8px;
+        grid-template-columns: var(--schema-pane-width, 36%) 8px minmax(420px, 1fr);
+        gap: 0;
     }
 
     .workspace-layout-empty {
         min-height: 360px;
     }
 
-    .schema-panel,
-    .inspector-panel {
+    .schema-panel {
         display: flex;
         min-width: 0;
         min-height: 0;
@@ -1165,6 +980,47 @@
         border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
         background: var(--nn-color-bg-surface);
+    }
+
+    .workspace-operation-panel {
+        display: flex;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .workspace-column-resizer {
+        display: flex;
+        min-width: 8px;
+        align-items: center;
+        justify-content: center;
+        cursor: col-resize;
+        outline: none;
+        touch-action: none;
+        user-select: none;
+    }
+
+    .workspace-column-resizer .pane-resizer-grip {
+        width: 2px;
+        height: 34px;
+        border-radius: 999px;
+        background: var(--nn-color-border-light);
+        transition:
+            width 0.15s ease,
+            background-color 0.15s ease;
+    }
+
+    .workspace-column-resizer:hover .pane-resizer-grip,
+    .workspace-column-resizer:focus-visible .pane-resizer-grip,
+    .workspace-pane-resizing .workspace-column-resizer .pane-resizer-grip {
+        width: 3px;
+        background: var(--nn-color-primary);
+    }
+
+    .workspace-operation-panel :deep(.yang-operations-embedded),
+    .workspace-operation-panel :deep(.operation-form-card),
+    .workspace-operation-panel :deep(.operation-result-card) {
+        min-width: 0;
     }
 
     .panel-header {
@@ -1280,26 +1136,6 @@
         border-top: 1px solid var(--nn-color-border-light);
     }
 
-    .workspace-capability-list {
-        max-height: calc(100vh - 210px);
-        margin-top: 10px;
-        overflow-y: auto;
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
-    }
-
-    .workspace-capability-row {
-        padding: 7px 9px;
-        border-bottom: 1px solid var(--nn-color-border-light);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 11px;
-        overflow-wrap: anywhere;
-    }
-
-    .workspace-capability-row:last-child {
-        border-bottom: 0;
-    }
-
     .schema-node-title {
         display: inline-flex;
         max-width: 100%;
@@ -1347,122 +1183,24 @@
         color: var(--nn-color-primary);
     }
 
-    .inspector-tabs {
-        min-height: 0;
-        flex: 1;
-    }
-
-    .inspector-tabs :deep(.nn-tabs-nav) {
-        margin: 0;
-        padding: 0 8px;
-        background: var(--nn-color-bg-muted);
-    }
-
-    .inspector-tabs :deep(.nn-tabs-content-holder),
-    .inspector-tabs :deep(.nn-tabs-content),
-    .inspector-tabs :deep(.nn-tabs-tabpane) {
-        min-height: 0;
-        flex: 1;
-    }
-
-    .inspector-tabs :deep(.nn-tabs-content) {
-        display: flex;
-        flex-direction: column;
-    }
-
-    .inspector-scroll {
-        height: 100%;
-        overflow: auto;
-        padding: 8px;
-    }
-
     .detail-description {
         display: inline-block;
         white-space: pre-wrap;
     }
 
-    .source-toolbar,
-    .diagnostic-toolbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        padding: 7px 8px;
-        border-bottom: 1px solid var(--nn-color-border-light);
-    }
-
-    .source-module-select {
-        min-width: 240px;
-        flex: 1;
-    }
-
-    .source-spin {
-        display: block;
-        height: calc(100% - 48px);
-    }
-
-    .source-code {
-        height: 100%;
-        min-height: 360px;
-        margin: 0;
-        padding: 10px 12px;
-        overflow: auto;
-        background: var(--nn-color-bg-code);
-        color: var(--nn-color-text);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 12px;
-        line-height: 1.55;
-        white-space: pre;
-    }
-
-    .diagnostic-list {
-        height: calc(100% - 48px);
+    .node-property-scroll {
+        max-height: calc(100vh - 180px);
         overflow-y: auto;
-        padding: 6px;
     }
 
-    .diagnostic-row {
-        display: flex;
-        width: 100%;
-        align-items: flex-start;
-        gap: 8px;
-        padding: 7px;
-        border: 0;
-        border-bottom: 1px solid var(--nn-color-border-light);
-        background: transparent;
-        color: var(--nn-color-text);
-        cursor: pointer;
-        font: inherit;
-        text-align: left;
-    }
-
-    .diagnostic-row:hover {
-        background: var(--nn-color-bg-hover);
-    }
-
-    .diagnostic-content {
-        display: flex;
-        min-width: 0;
-        flex: 1;
-        flex-direction: column;
-    }
-
-    .diagnostic-message {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-    }
-
-    .diagnostic-location {
-        margin-top: 2px;
-        color: var(--nn-color-text-muted);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 10px;
-    }
-
-    @media (max-width: 1000px) {
+    @media (max-width: 980px) {
         .workspace-layout {
             grid-template-columns: 1fr;
-            grid-template-rows: minmax(340px, 1fr) minmax(400px, 1fr);
+            grid-template-rows: minmax(340px, 1fr) minmax(560px, 1.5fr);
+        }
+
+        .workspace-column-resizer {
+            display: none;
         }
     }
 </style>

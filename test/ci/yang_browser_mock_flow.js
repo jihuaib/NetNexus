@@ -2,6 +2,7 @@ const assert = require('assert');
 const vm = require('vm');
 const { featurePageBrowserMockScript } = require('../../scripts/e2e-support/page-browser-mocks');
 const { FeaturePageE2eController } = require('../../scripts/e2e-support/page-controller');
+const { getReleaseManifest } = require('../../scripts/libyang-runtime-config');
 
 async function verifyBrowserBridge() {
     const calls = [];
@@ -53,14 +54,14 @@ async function verifyBrowserBridge() {
     requiredYangMethods.forEach(method => assert.equal(typeof window.yangApi[method], 'function', method));
 
     await window.netconfApi.executeOperation({ operation: 'get' });
-    await window.yangApi.getSchemaChildren({ nodeId: 'schema:interfaces' });
+    await window.yangApi.getSchemaChildren({ nodeId: 'yang-node-test-id' });
     assert.deepStrictEqual(calls[0], {
         method: 'yang.netconf.executeOperation',
         args: [{ operation: 'get' }]
     });
     assert.deepStrictEqual(calls[1], {
         method: 'yang.registry.getSchemaChildren',
-        args: [{ nodeId: 'schema:interfaces' }]
+        args: [{ nodeId: 'yang-node-test-id' }]
     });
 }
 
@@ -117,20 +118,36 @@ async function verifyControllerFlow() {
     assert.equal(response.status, 'success');
     assert.equal(response.data.available, true);
     assert.equal(response.data.engine, 'libyang');
-    assert.match(response.data.version, /e2e/u);
+    assert.equal(response.data.version, getReleaseManifest().libyangVersion);
+    assert.equal(response.data.schemaContractVersion, 1);
+    assert.equal(response.data.source, 'bundled');
 
     response = await controller.call('yang.registry.compile', {});
     assert.equal(response.status, 'success');
     assert.match(response.data.compileId, /^e2e-compile-/u);
     assert(response.data.summary.moduleCount >= 5);
     assert(response.data.schemaTree.roots.length > 0);
+    assert.equal(response.data.schemaTree.authoritative, true);
+    assert.equal(response.data.schemaTree.source, 'libyang-effective');
+    assert.equal(response.data.schemaTree.scope, 'core-effective-schema');
     assert.equal(response.data.compiler.available, true);
 
-    response = await controller.call('yang.registry.getSchemaChildren', { nodeId: 'schema:interfaces' });
+    const interfaceModule = response.data.schemaTree.roots.find(root => root.name === 'ietf-interfaces');
+    assert(interfaceModule);
+    assert.match(interfaceModule.id, /^yang-module-/u);
+    response = await controller.call('yang.registry.getSchemaChildren', { nodeId: interfaceModule.id });
     assert.equal(response.status, 'success');
-    assert.equal(response.data.nodes[0].name, 'interface');
-    response = await controller.call('yang.registry.getSchemaNode', { nodeId: 'schema:interface:name' });
+    const interfaces = response.data.nodes.find(node => node.name === 'interfaces');
+    assert(interfaces);
+    response = await controller.call('yang.registry.getSchemaChildren', { nodeId: interfaces.id });
+    const interfaceList = response.data.nodes.find(node => node.name === 'interface');
+    assert(interfaceList);
+    response = await controller.call('yang.registry.getSchemaChildren', { nodeId: interfaceList.id });
+    const nameLeaf = response.data.nodes.find(node => node.name === 'name');
+    assert(nameLeaf);
+    response = await controller.call('yang.registry.getSchemaNode', { nodeId: nameLeaf.id });
     assert.equal(response.data.type, 'string');
+    assert.equal(response.data.mandatory, false);
     response = await controller.call('yang.registry.getModuleSource', { name: 'ietf-interfaces' });
     assert.match(response.data.source, /container interfaces/u);
 
@@ -147,6 +164,20 @@ async function verifyControllerFlow() {
         .filter(event => event.type === 'yang:taskProgress')
         .map(event => event.data?.data?.action);
     ['discover', 'download', 'import', 'compile'].forEach(action => assert(taskActions.includes(action), action));
+
+    const validInterfaceSource = controller.state.yang.moduleSources['ietf-interfaces'];
+    controller.state.yang.moduleSources['ietf-interfaces'] = validInterfaceSource.replace(
+        'leaf name { type string; }',
+        'leaf name { type netnexus-missing-type; }'
+    );
+    const successfulCompileId = controller.state.yang.workspace.compileId;
+    response = await controller.call('yang.registry.compile', {
+        moduleIds: [{ name: 'ietf-interfaces', revision: '2018-02-20' }]
+    });
+    assert.equal(response.status, 'error');
+    assert.match(response.msg, /libyang effective Schema 编译失败/u);
+    assert.equal(controller.state.yang.workspace.compileId, successfulCompileId);
+    controller.state.yang.moduleSources['ietf-interfaces'] = validInterfaceSource;
 
     response = await controller.call('yang.registry.clearWorkspace');
     assert.equal(response.status, 'success');

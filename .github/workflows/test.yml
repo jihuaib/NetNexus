@@ -77,12 +77,6 @@ jobs:
             - name: Run macOS lint
               run: npm run lint
 
-            - name: Run macOS tests
-              run: npm test
-
-            - name: Run macOS minified CI tests
-              run: npm run test:ci:minified
-
             - name: Install libyang build dependencies
               run: brew install cmake
 
@@ -91,6 +85,12 @@ jobs:
 
             - name: Test bundled libyang runtime
               run: npm run libyang:smoke
+
+            - name: Run macOS tests
+              run: npm test
+
+            - name: Run macOS minified CI tests
+              run: npm run test:ci:minified
 
             - name: Build on macOS
               run: npm run build
@@ -144,17 +144,17 @@ jobs:
             - name: Run Windows lint
               run: npm run lint
 
-            - name: Run Windows tests
-              run: npm test
-
-            - name: Run Windows minified CI tests
-              run: npm run test:ci:minified
-
             - name: Build bundled libyang runtime
               run: npm run libyang:build:windows
 
             - name: Test bundled libyang runtime
               run: npm run libyang:smoke
+
+            - name: Run Windows tests
+              run: npm test
+
+            - name: Run Windows minified CI tests
+              run: npm run test:ci:minified
 
             - name: Build on Windows
               run: npm run build

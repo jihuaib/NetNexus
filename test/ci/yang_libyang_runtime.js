@@ -8,7 +8,10 @@ const {
     discoverLibyangRuntime,
     executeYanglint,
     getLibyangDiscoveryCandidates,
+    getSchemaHelperCandidates,
+    parseSchemaHelperVersion,
     parseYanglintVersion,
+    schemaExecutableNameForPlatform,
     validateExecutable
 } = require('../../electron/utils/yang/libyangRuntime');
 
@@ -16,13 +19,11 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-libyang-runtime-
 
 async function run() {
     try {
-        const helperPath = path.join(tempDir, 'fake-yanglint.js');
+        const subprocessFixturePath = path.join(tempDir, 'subprocess-fixture.js');
         fs.writeFileSync(
-            helperPath,
+            subprocessFixturePath,
             `const command = process.argv[2];
-if (command === '--version') {
-  console.log('yanglint 5.8.6');
-} else if (command === 'echo') {
+if (command === 'echo') {
   console.log(JSON.stringify(process.argv.slice(3)));
 } else if (command === 'sleep') {
   setTimeout(() => {}, 5000);
@@ -39,6 +40,13 @@ if (command === '--version') {
             output: 'yanglint 5.8.6'
         });
         assert.equal(parseYanglintVersion('unrelated tool 5.8.6'), null);
+        assert.deepEqual(parseSchemaHelperVersion('netnexus-libyang-schema 1 (libyang 5.8.6)'), {
+            contractVersion: 1,
+            version: '5.8.6',
+            major: 5,
+            output: 'netnexus-libyang-schema 1 (libyang 5.8.6)'
+        });
+        assert.equal(parseSchemaHelperVersion('yanglint 5.8.6'), null);
 
         const windowsCandidates = getLibyangDiscoveryCandidates({
             platform: 'win32',
@@ -53,6 +61,19 @@ if (command === '--version') {
                 candidate =>
                     candidate.source === 'bundled' &&
                     candidate.path === 'C:\\NetNexus\\resources\\libyang\\win32-x64\\bin\\yanglint.exe'
+            )
+        );
+        assert.equal(schemaExecutableNameForPlatform('win32'), 'netnexus-libyang-schema.exe');
+        assert.equal(schemaExecutableNameForPlatform('darwin'), 'netnexus-libyang-schema');
+        const windowsSchemaCandidates = getSchemaHelperCandidates(windowsCandidates[0], {
+            platform: 'win32',
+            isPackaged: true,
+            env: {}
+        });
+        assert(
+            windowsSchemaCandidates.some(
+                candidate =>
+                    candidate.path === 'C:\\NetNexus\\resources\\libyang\\win32-x64\\bin\\netnexus-libyang-schema.exe'
             )
         );
         assert(
@@ -102,6 +123,11 @@ if (command === '--version') {
             'bin',
             process.platform === 'win32' ? 'yanglint.exe' : 'yanglint'
         );
+        const bundledSchemaExecutable = path.join(
+            runtimeRoot,
+            'bin',
+            process.platform === 'win32' ? 'netnexus-libyang-schema.exe' : 'netnexus-libyang-schema'
+        );
         fs.mkdirSync(path.dirname(bundledExecutable), { recursive: true });
         fs.writeFileSync(
             bundledExecutable,
@@ -114,7 +140,21 @@ else console.log(JSON.stringify(args));
 `,
             'utf8'
         );
-        if (process.platform !== 'win32') fs.chmodSync(bundledExecutable, 0o755);
+        fs.writeFileSync(
+            bundledSchemaExecutable,
+            process.platform === 'win32'
+                ? 'test schema executable'
+                : `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes('--version')) console.log('netnexus-libyang-schema 1 (libyang 5.8.6)');
+else console.log(JSON.stringify(args));
+`,
+            'utf8'
+        );
+        if (process.platform !== 'win32') {
+            fs.chmodSync(bundledExecutable, 0o755);
+            fs.chmodSync(bundledSchemaExecutable, 0o755);
+        }
         const moduleSearchPath = path.join(runtimeRoot, 'share', 'yang', 'modules', 'libyang');
         fs.mkdirSync(moduleSearchPath, { recursive: true });
 
@@ -131,6 +171,15 @@ else console.log(JSON.stringify(args));
                     exitCode: 0,
                     error: null
                 };
+            },
+            executeSchema: async () => {
+                probeCount += 1;
+                return {
+                    stdout: 'netnexus-libyang-schema 1 (libyang 5.8.6)\n',
+                    stderr: '',
+                    exitCode: 0,
+                    error: null
+                };
             }
         };
         const discovered = await discoverLibyangRuntime(discoveryOptions);
@@ -140,21 +189,48 @@ else console.log(JSON.stringify(args));
         assert.equal(discovered.executable, 'yanglint');
         assert.equal(discovered.version, '5.8.6');
         assert.equal(discovered.path, await fs.promises.realpath(bundledExecutable));
+        assert.equal(discovered.schemaPath, await fs.promises.realpath(bundledSchemaExecutable));
+        assert.equal(discovered.schemaVersion, '5.8.6');
+        assert.equal(discovered.schemaContractVersion, 1);
         assert.equal(discovered.source, 'bundled');
         assert.equal(discovered.moduleSearchPath, moduleSearchPath);
         assert.equal(discovered.capabilities.schemaValidation, true);
+        assert.equal(discovered.capabilities.schemaExport, true);
+        assert.equal(discovered.capabilities.coreSchemaExport, true);
+        assert.equal(discovered.capabilities.extensionSchemaExport, false);
         assert.equal(discovered.capabilities.bundledModules, true);
+
+        const incompatibleSchemaContract = await discoverLibyangRuntime({
+            ...discoveryOptions,
+            execute: async () => ({
+                stdout: 'yanglint 5.8.6\n',
+                stderr: '',
+                exitCode: 0,
+                error: null
+            }),
+            executeSchema: async () => ({
+                stdout: 'netnexus-libyang-schema 2 (libyang 5.8.6)\n',
+                stderr: '',
+                exitCode: 0,
+                error: null
+            })
+        });
+        assert.equal(incompatibleSchemaContract.available, false);
+        assert.match(incompatibleSchemaContract.error, /contract 2 does not match required contract 1/u);
 
         const runtime = new LibyangRuntime(discoveryOptions);
         await runtime.getStatus();
         await runtime.getStatus();
-        assert.equal(probeCount, 2, 'the runtime instance should cache its own first probe');
+        assert.equal(probeCount, 4, 'the runtime instance should cache its yanglint and Schema helper probes');
         await runtime.getStatus({ force: true });
-        assert.equal(probeCount, 3);
+        assert.equal(probeCount, 6);
         if (process.platform !== 'win32') {
             const runtimeExecution = await runtime.execute(['schema.yang']);
             assert.equal(runtimeExecution.exitCode, 0, runtimeExecution.stderr);
             assert.deepEqual(JSON.parse(runtimeExecution.stdout), ['-p', moduleSearchPath, 'schema.yang']);
+            const schemaExecution = await runtime.executeSchema(['schema.yang']);
+            assert.equal(schemaExecution.exitCode, 0, schemaExecution.stderr);
+            assert.deepEqual(JSON.parse(schemaExecution.stdout), ['-p', moduleSearchPath, 'schema.yang']);
         }
 
         const extensionsDirectory = path.join(runtimeRoot, 'lib', 'libyang', 'extensions');
@@ -186,10 +262,14 @@ else console.log(JSON.stringify(args));
             assert.match(escapedValidation.error, /outside the bundled runtime/);
         }
 
-        const echo = await executeYanglint(process.execPath, [helperPath, 'echo', '$(touch unsafe)', 'a;echo b'], {
-            timeoutMs: 2_000,
-            maxOutputBytes: 4_096
-        });
+        const echo = await executeYanglint(
+            process.execPath,
+            [subprocessFixturePath, 'echo', '$(touch unsafe)', 'a;echo b'],
+            {
+                timeoutMs: 2_000,
+                maxOutputBytes: 4_096
+            }
+        );
         assert.equal(echo.exitCode, 0, echo.stderr);
         assert.deepEqual(JSON.parse(echo.stdout), ['$(touch unsafe)', 'a;echo b']);
         assert.equal(
@@ -198,7 +278,7 @@ else console.log(JSON.stringify(args));
             'arguments must never be shell-expanded'
         );
 
-        const timeout = await executeYanglint(process.execPath, [helperPath, 'sleep'], {
+        const timeout = await executeYanglint(process.execPath, [subprocessFixturePath, 'sleep'], {
             timeoutMs: 50,
             maxOutputBytes: 4_096
         });
@@ -206,7 +286,7 @@ else console.log(JSON.stringify(args));
         assert.equal(timeout.error.code, 'YANGLINT_TIMEOUT');
 
         const abortController = new AbortController();
-        const abortedPromise = executeYanglint(process.execPath, [helperPath, 'sleep'], {
+        const abortedPromise = executeYanglint(process.execPath, [subprocessFixturePath, 'sleep'], {
             timeoutMs: 2_000,
             maxOutputBytes: 4_096,
             signal: abortController.signal
@@ -216,7 +296,7 @@ else console.log(JSON.stringify(args));
         assert.equal(aborted.aborted, true);
         assert.equal(aborted.error.code, 'YANGLINT_ABORTED');
 
-        const outputLimit = await executeYanglint(process.execPath, [helperPath, 'flood'], {
+        const outputLimit = await executeYanglint(process.execPath, [subprocessFixturePath, 'flood'], {
             timeoutMs: 2_000,
             maxOutputBytes: 256
         });

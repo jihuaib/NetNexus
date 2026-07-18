@@ -1,3 +1,9 @@
+const childProcess = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { validateAuthoritativeSchemaTree } = require('../../electron/utils/yang/yangCompiler');
+const { verifyRuntime } = require('../libyang-runtime-config');
 const { errorResponse, successResponse } = require('./common');
 
 const yangPageApiScript = `
@@ -101,6 +107,39 @@ function clone(value) {
     return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
 
+let verifiedRuntime = null;
+
+function createCompilerStatus() {
+    try {
+        if (!verifiedRuntime) verifiedRuntime = verifyRuntime();
+        return {
+            ...clone(verifiedRuntime),
+            status: 'ready',
+            bundled: verifiedRuntime.source === 'bundled',
+            schemaVersion: verifiedRuntime.version,
+            capabilities: {
+                validation: true,
+                schemaExport: true,
+                coreSchemaExport: true,
+                extensionSchemaExport: false
+            }
+        };
+    } catch (error) {
+        return {
+            available: false,
+            required: true,
+            status: 'unavailable',
+            engine: 'libyang',
+            executable: 'yanglint',
+            schemaExecutable: 'netnexus-libyang-schema',
+            bundled: true,
+            message: error.message,
+            error: error.message,
+            installHint: '请先构建当前平台的内置 libyang 运行时。'
+        };
+    }
+}
+
 function makeModule({
     id,
     name,
@@ -125,113 +164,87 @@ function makeModule({
         source,
         status: isLocal ? 'downloaded' : 'discovered',
         downloadStatus: isLocal ? 'downloaded' : 'remote',
+        fileName: isLocal ? `${name}@${revision}.yang` : '',
         filePath: isLocal ? `/tmp/netnexus-e2e/yang/${name}@${revision}.yang` : '',
         contentHash: isLocal ? `e2e-${id}` : '',
-        compiled: isLocal,
-        compileStatus: isLocal ? 'compiled' : 'pending'
+        compiled: false,
+        compileStatus: 'pending'
     };
 }
 
-function createSchemaNodes() {
-    return {
-        'schema:interfaces': {
-            id: 'schema:interfaces',
-            name: 'interfaces',
-            title: 'interfaces',
-            keyword: 'container',
-            module: 'ietf-interfaces',
-            path: '/ietf-interfaces:interfaces',
-            config: true,
-            description: 'Interface configuration and operational state.',
-            hasChildren: true,
-            childCount: 1,
-            childIds: ['schema:interface']
-        },
-        'schema:interface': {
-            id: 'schema:interface',
-            name: 'interface',
-            title: 'interface',
-            keyword: 'list',
-            key: 'name',
-            module: 'ietf-interfaces',
-            path: '/ietf-interfaces:interfaces/interface',
-            config: true,
-            description: 'A configured interface.',
-            hasChildren: true,
-            childCount: 3,
-            childIds: ['schema:interface:name', 'schema:interface:enabled', 'schema:interface:in-octets']
-        },
-        'schema:interface:name': {
-            id: 'schema:interface:name',
-            name: 'name',
-            title: 'name',
-            keyword: 'leaf',
-            module: 'ietf-interfaces',
-            path: '/ietf-interfaces:interfaces/interface/name',
-            type: 'string',
-            config: true,
-            mandatory: true,
-            description: 'The interface name.',
-            hasChildren: false,
-            childCount: 0,
-            childIds: []
-        },
-        'schema:interface:enabled': {
-            id: 'schema:interface:enabled',
-            name: 'enabled',
-            title: 'enabled',
-            keyword: 'leaf',
-            module: 'ietf-interfaces',
-            path: '/ietf-interfaces:interfaces/interface/enabled',
-            type: 'boolean',
-            default: true,
-            config: true,
-            description: 'Controls whether the interface is enabled.',
-            hasChildren: false,
-            childCount: 0,
-            childIds: []
-        },
-        'schema:interface:in-octets': {
-            id: 'schema:interface:in-octets',
-            name: 'in-octets',
-            title: 'in-octets',
-            keyword: 'leaf',
-            module: 'ietf-interfaces',
-            path: '/ietf-interfaces:interfaces/interface/in-octets',
-            type: 'yang:counter32',
-            config: false,
-            description: 'Number of octets received on the interface.',
-            hasChildren: false,
-            childCount: 0,
-            childIds: []
-        },
-        'schema:system': {
-            id: 'schema:system',
-            name: 'system',
-            title: 'system',
-            keyword: 'container',
-            module: 'ietf-system',
-            path: '/ietf-system:system',
-            config: true,
-            description: 'System configuration.',
-            hasChildren: true,
-            childCount: 1,
-            childIds: ['schema:system:hostname']
-        },
-        'schema:system:hostname': {
-            id: 'schema:system:hostname',
-            name: 'hostname',
-            title: 'hostname',
-            keyword: 'leaf',
-            module: 'ietf-system',
-            path: '/ietf-system:system/hostname',
-            type: 'string',
-            config: true,
-            hasChildren: false,
-            childCount: 0,
-            childIds: []
+function schemaSource(yang, module) {
+    const source = yang.moduleSources[module.name];
+    if (typeof source !== 'string' || !source.trim()) {
+        throw new Error(`E2E 模块 ${module.id || module.name} 没有可供 libyang 编译的真实 YANG 源码`);
+    }
+    return source;
+}
+
+function materializeModuleSources(yang, directory) {
+    const pathsById = new Map();
+    yang.modules
+        .filter(module => module.isLocal)
+        .forEach(module => {
+            const fileName = `${module.name}@${module.revision || 'none'}.yang`;
+            const filePath = path.join(directory, fileName);
+            fs.writeFileSync(filePath, schemaSource(yang, module), 'utf8');
+            pathsById.set(module.id, filePath);
+        });
+    return pathsById;
+}
+
+function executeSchemaHelper(yang, targets) {
+    if (!yang.compiler.available || !yang.compiler.schemaPath) {
+        throw new Error(yang.compiler.message || '内置 libyang Schema helper 不可用');
+    }
+    if (!targets.length) throw new Error('没有可供 libyang 编译的本地 YANG 模块');
+
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-yang-e2e-'));
+    try {
+        const pathsById = materializeModuleSources(yang, directory);
+        const inputPaths = targets.map(module => pathsById.get(module.id));
+        if (inputPaths.some(filePath => !filePath)) {
+            throw new Error('libyang Schema helper 的顶层模块源码没有完成物化');
         }
-    };
+        const runtimeModulePaths = [
+            path.join(yang.compiler.runtimeDirectory || '', 'share', 'yang', 'modules', 'libyang'),
+            path.join(yang.compiler.runtimeDirectory || '', 'share', 'yang', 'modules')
+        ].filter(directoryPath => {
+            try {
+                return fs.statSync(directoryPath).isDirectory();
+            } catch (_error) {
+                return false;
+            }
+        });
+        /* libyang searches directories in reverse insertion order, so the E2E workspace must be last. */
+        const searchArgs = [...runtimeModulePaths, directory].flatMap(directoryPath => ['-p', directoryPath]);
+        const execution = childProcess.spawnSync(yang.compiler.schemaPath, [...searchArgs, ...inputPaths], {
+            cwd: directory,
+            encoding: 'utf8',
+            timeout: 60_000,
+            maxBuffer: 64 * 1024 * 1024,
+            windowsHide: true
+        });
+        if (execution.error || execution.status !== 0) {
+            const detail = [execution.error?.message, execution.stderr, execution.stdout]
+                .map(value => String(value || '').trim())
+                .filter(Boolean)
+                .join('\n');
+            throw new Error(
+                `libyang effective Schema 编译失败${execution.status === null ? '' : `（退出码 ${execution.status}）`}` +
+                    (detail ? `：\n${detail}` : '')
+            );
+        }
+        let output;
+        try {
+            output = JSON.parse(execution.stdout);
+        } catch (error) {
+            throw new Error(`libyang Schema helper 返回了无效 JSON：${error.message}`);
+        }
+        return validateAuthoritativeSchemaTree(output);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 }
 
 function createYangPageState() {
@@ -281,26 +294,19 @@ function createYangPageState() {
             namespace: 'urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring'
         })
     ];
-    return {
+    const yang = {
         profiles: [profile],
         nextProfileId: 2,
         connected: true,
         rpcSequence: 100,
-        compileSequence: 1,
+        compileSequence: 0,
         modules,
-        schemaNodes: createSchemaNodes(),
-        rootNodeIds: ['schema:interfaces'],
+        moduleSources: { ...moduleSources },
+        schemaTree: null,
+        compiledModuleIds: [],
+        compiledAt: '',
         diagnostics: [],
-        compiler: {
-            available: true,
-            required: true,
-            status: 'ready',
-            engine: 'libyang',
-            executable: 'yanglint',
-            version: '3.13.6-e2e',
-            path: '/opt/netnexus/runtime/libyang/bin/yanglint',
-            bundled: true
-        },
+        compiler: createCompilerStatus(),
         session: {
             status: 'connected',
             state: 'connected',
@@ -317,6 +323,16 @@ function createYangPageState() {
         },
         workspace: null
     };
+    if (yang.compiler.available) {
+        compileWorkspace(
+            yang,
+            modules.filter(module => module.isLocal),
+            { cacheHit: true }
+        );
+    } else {
+        yang.workspace = buildWorkspace(yang);
+    }
+    return yang;
 }
 
 function publicProfile(profile) {
@@ -343,35 +359,67 @@ function findModule(yang, identity) {
 }
 
 function schemaNodeSummary(yang, nodeId) {
-    const node = yang.schemaNodes[nodeId];
-    if (!node) return null;
-    const result = clone(node);
-    delete result.childIds;
-    return result;
+    return clone(yang.schemaTree?.nodes?.[nodeId]) || null;
 }
 
 function buildWorkspace(yang, { cacheHit = false } = {}) {
-    const localModules = yang.modules.filter(module => module.isLocal);
-    const roots = yang.rootNodeIds.map(nodeId => schemaNodeSummary(yang, nodeId)).filter(Boolean);
+    const tree = yang.schemaTree;
+    const compiledIds = new Set(yang.compiledModuleIds);
+    const compiledModules = yang.modules.filter(module => compiledIds.has(module.id));
+    const roots = (tree?.roots || []).map(nodeId => schemaNodeSummary(yang, nodeId)).filter(Boolean);
+    const errors = yang.diagnostics.filter(diagnostic => ['error', 'fatal'].includes(diagnostic.severity)).length;
+    const warnings = yang.diagnostics.filter(diagnostic => ['warning', 'warn'].includes(diagnostic.severity)).length;
+    const success = Boolean(tree) && errors === 0;
     return {
-        compileId: `e2e-compile-${yang.compileSequence}`,
+        compileId: tree ? `e2e-compile-${yang.compileSequence}` : '',
+        compiledAt: yang.compiledAt || null,
+        success,
         cacheHit,
         compiler: clone(yang.compiler),
         summary: {
-            moduleCount: localModules.length,
-            nodeCount: Object.keys(yang.schemaNodes).length,
+            moduleCount: compiledModules.length,
+            nodeCount: tree?.nodeCount || 0,
             diagnosticCount: yang.diagnostics.length,
+            errors,
+            warnings,
             cacheHit
         },
-        modules: localModules.map(publicModule),
+        modules: compiledModules.map(publicModule),
         diagnostics: clone(yang.diagnostics),
-        schemaTree: {
-            roots,
-            nodeCount: Object.keys(yang.schemaNodes).length,
-            authoritative: false,
-            source: 'builtin-preview'
-        }
+        schemaTree: tree
+            ? {
+                  rootId: tree.rootId,
+                  roots,
+                  nodeCount: tree.nodeCount,
+                  authoritative: tree.authoritative,
+                  source: tree.source,
+                  scope: tree.scope
+              }
+            : null,
+        externalCompiler: {
+            invoked: Boolean(tree),
+            succeeded: Boolean(tree),
+            path: yang.compiler.schemaPath || null,
+            exitCode: tree ? 0 : null
+        },
+        validation: { authoritative: tree?.authoritative === true, engine: 'libyang', succeeded: success }
     };
+}
+
+function compileWorkspace(yang, targets, { cacheHit = false } = {}) {
+    const tree = executeSchemaHelper(yang, targets);
+    targets.forEach(module => {
+        module.compiled = true;
+        module.compileStatus = 'compiled';
+        module.status = 'compiled';
+    });
+    yang.compileSequence += 1;
+    yang.compiledAt = new Date().toISOString();
+    yang.compiledModuleIds = targets.map(module => module.id);
+    yang.schemaTree = tree;
+    yang.diagnostics = [];
+    yang.workspace = buildWorkspace(yang, { cacheHit });
+    return clone(yang.workspace);
 }
 
 function currentWorkspace(yang) {
@@ -527,6 +575,7 @@ function handleNetconfCall(controller, yang, method, args) {
             module.source = 'download';
             module.status = 'downloaded';
             module.downloadStatus = 'downloaded';
+            module.fileName = `${module.name}@${module.revision}.yang`;
             module.filePath = `/tmp/netnexus-e2e/yang/${module.name}@${module.revision}.yang`;
             module.contentHash = `e2e-${module.id}`;
             module.compileStatus = 'pending';
@@ -628,40 +677,38 @@ function handleRegistryCall(controller, yang, method, args) {
         const request = args[0] || {};
         const identities = Array.isArray(request.moduleIds) ? request.moduleIds : [];
         const targets = identities.length
-            ? yang.modules.filter(module => identities.some(identity => moduleMatchesIdentity(module, identity)))
+            ? yang.modules.filter(
+                  module => module.isLocal && identities.some(identity => moduleMatchesIdentity(module, identity))
+              )
             : yang.modules.filter(module => module.isLocal);
-        targets.forEach(module => {
-            if (!module.isLocal) return;
-            module.compiled = true;
-            module.compileStatus = 'compiled';
-            module.status = 'compiled';
-        });
-        yang.compileSequence += 1;
-        yang.workspace = buildWorkspace(yang);
-        emitTask(controller, 'compile', targets.filter(module => module.isLocal).length, 'YANG 编译与 Schema 索引完成');
-        return successResponse(currentWorkspace(yang));
+        const workspace = compileWorkspace(yang, targets);
+        emitTask(controller, 'compile', targets.length, 'YANG 编译与 Schema 索引完成');
+        return successResponse(workspace);
     }
     if (method === 'yang.registry.clearWorkspace') {
-        yang.workspace = {
-            compileId: '',
-            cacheHit: false,
-            compiler: clone(yang.compiler),
-            summary: { moduleCount: 0, nodeCount: 0, diagnosticCount: 0, cacheHit: false },
-            modules: [],
-            diagnostics: [],
-            schemaTree: { roots: [], nodeCount: 0, authoritative: false, source: 'builtin-preview' }
-        };
+        yang.schemaTree = null;
+        yang.compiledModuleIds = [];
+        yang.compiledAt = '';
+        yang.diagnostics = [];
+        yang.modules.forEach(module => {
+            module.compiled = false;
+            module.compileStatus = 'pending';
+            if (module.isLocal) module.status = 'downloaded';
+        });
+        yang.workspace = buildWorkspace(yang);
         return successResponse(null, 'Schema 工作区已清空');
     }
     if (method === 'yang.registry.getWorkspace') return successResponse(currentWorkspace(yang));
     if (method === 'yang.registry.getSchemaRoots') {
         return successResponse({
-            nodes: yang.rootNodeIds.map(nodeId => schemaNodeSummary(yang, nodeId)).filter(Boolean)
+            nodes: (yang.schemaTree?.roots || []).map(nodeId => schemaNodeSummary(yang, nodeId)).filter(Boolean)
         });
     }
     if (method === 'yang.registry.getSchemaChildren') {
-        const node = yang.schemaNodes[args[0]?.nodeId];
-        const nodes = (node?.childIds || []).map(nodeId => schemaNodeSummary(yang, nodeId)).filter(Boolean);
+        const parentId = args[0]?.parentId || args[0]?.nodeId || yang.schemaTree?.rootId;
+        const nodes = (yang.schemaTree?.childIndex?.[parentId] || [])
+            .map(nodeId => schemaNodeSummary(yang, nodeId))
+            .filter(Boolean);
         return successResponse({ nodes, children: nodes });
     }
     if (method === 'yang.registry.getSchemaNode') {
@@ -671,7 +718,7 @@ function handleRegistryCall(controller, yang, method, args) {
     if (method === 'yang.registry.getModuleSource') {
         const module = findModule(yang, args[0]);
         if (!module) return errorResponse('YANG 模块不存在');
-        return successResponse({ source: moduleSources[module.name] || '', module: publicModule(module) });
+        return successResponse({ source: yang.moduleSources[module.name] || '', module: publicModule(module) });
     }
     if (method === 'yang.registry.getDiagnostics') {
         return successResponse({ diagnostics: clone(yang.diagnostics) });

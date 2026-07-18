@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const YangApp = require('../../electron/app/yangApp');
+const { getReleaseManifest } = require('../../scripts/libyang-runtime-config');
 
 class FakeIpcMain {
     constructor() {
@@ -52,23 +53,14 @@ async function waitForTask(app, taskId) {
 }
 
 async function main() {
+    const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.resolve(__dirname, '..', '..'));
+    const release = getReleaseManifest(projectRoot);
     const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-yang-app-'));
     const sourceDirectory = path.join(temporaryRoot, 'sources');
     fs.mkdirSync(sourceDirectory);
     const typesPath = path.join(sourceDirectory, 'example-types.yang');
     const systemPath = path.join(sourceDirectory, 'example-system.yang');
-    const compilerHelperPath = path.join(temporaryRoot, 'fake-yanglint.js');
-    fs.writeFileSync(
-        compilerHelperPath,
-        `const args = process.argv.slice(2);
-if (args.includes('--version')) console.log('yanglint 5.8.6 (libyang 5.8.6)');
-else if (args.includes('--mode=fail')) {
-  console.error('/tmp/example-system.yang:1:1: error: simulated libyang semantic failure');
-  process.exitCode = 2;
-}
-`,
-        'utf8'
-    );
+    const invalidPath = path.join(sourceDirectory, 'example-invalid.yang');
     fs.writeFileSync(
         typesPath,
         'module example-types { yang-version 1.1; namespace "urn:example:types"; prefix et; revision 2026-01-01; typedef label { type string; } }'
@@ -77,6 +69,10 @@ else if (args.includes('--mode=fail')) {
         systemPath,
         'module example-system { yang-version 1.1; namespace "urn:example:system"; prefix es; import example-types { prefix et; revision-date 2026-01-01; } revision 2026-02-01; container system { leaf hostname { type et:label; } } }'
     );
+    fs.writeFileSync(
+        invalidPath,
+        'module example-invalid { yang-version 1.1; namespace "urn:example:invalid"; prefix ei; revision 2026-07-18; leaf broken { type does-not-exist; } }'
+    );
 
     const ipc = new FakeIpcMain();
     const store = new MemoryStore();
@@ -84,8 +80,8 @@ else if (args.includes('--mode=fail')) {
     const event = createEvent(events);
     const app = new YangApp(ipc, store, {
         rootDir: path.join(temporaryRoot, 'registry'),
-        compilerPath: process.execPath,
-        compilerArgs: [compilerHelperPath]
+        resourcesPath: path.join(projectRoot, 'resources'),
+        isPackaged: false
     });
     try {
         assert(ipc.handlers.has('yang:compile'));
@@ -94,7 +90,8 @@ else if (args.includes('--mode=fail')) {
         assert.equal(compilerStatus.status, 'success');
         assert.equal(compilerStatus.data.available, true);
         assert.equal(compilerStatus.data.engine, 'libyang');
-        assert.equal(compilerStatus.data.version, '5.8.6');
+        assert.equal(compilerStatus.data.version, release.libyangVersion);
+        assert.equal(compilerStatus.data.capabilities.schemaExport, true);
         const importResponse = await app.handleImportFiles(event, [typesPath, systemPath]);
         assert.equal(importResponse.status, 'success');
         const imported = await waitForTask(app, importResponse.data.taskId);
@@ -113,6 +110,8 @@ else if (args.includes('--mode=fail')) {
         const compiled = await waitForTask(app, compileResponse.data.taskId);
         assert.equal(compiled.modules.length, 2, 'selected compilation must include imported dependencies');
         assert.equal(compiled.success, true);
+        assert.equal(compiled.schemaTree.authoritative, true);
+        assert.equal(compiled.schemaTree.source, 'libyang-effective');
 
         const workspaceResponse = await app.handleGetWorkspace(event);
         assert.equal(workspaceResponse.status, 'success');
@@ -141,27 +140,32 @@ else if (args.includes('--mode=fail')) {
         assert.equal(sourceResponse.status, 'success');
         assert.match(sourceResponse.data.source, /module example-system/);
 
-        const failedCompileResponse = await app.handleCompile(event, {
-            compilerArgs: [compilerHelperPath, '--mode=fail'],
-            force: true
-        });
+        const invalidImportResponse = await app.handleImportFiles(event, [invalidPath]);
+        assert.equal(invalidImportResponse.status, 'success');
+        const invalidImport = await waitForTask(app, invalidImportResponse.data.taskId);
+        assert.equal(invalidImport.summary.imported, 1);
+        const failedCompileResponse = await app.handleCompile(event, { force: true });
         const failedTask = app.taskManager.tasks.get(failedCompileResponse.data.taskId);
         await failedTask.promise;
         assert.equal(failedTask.status, 'failed');
-        assert.equal(failedTask.error.code, 'YANGLINT');
+        assert.match(failedTask.error.code, /^LIBYANG/);
         const failedWorkspace = await app.handleGetWorkspace(event);
         assert.equal(failedWorkspace.data.success, false);
         assert(failedWorkspace.data.compileId);
         assert(failedWorkspace.data.diagnostics.some(item => item.authoritative && item.severity === 'error'));
         assert.equal(failedWorkspace.data.modules.filter(module => module.compiled).length, 0);
-        assert.equal(failedWorkspace.data.modules.filter(module => module.compileStatus === 'failed').length, 2);
+        assert.equal(failedWorkspace.data.modules.filter(module => module.compileStatus === 'failed').length, 3);
+        assert.deepEqual(
+            (await app.handleGetSchemaRoots(event, { compileId: failedWorkspace.data.compileId })).data,
+            []
+        );
 
         const clearResponse = await app.handleClearWorkspace(event);
         assert.equal(clearResponse.status, 'success');
         const clearedWorkspace = await app.handleGetWorkspace(event);
         assert.equal(clearedWorkspace.data.compileId, '');
         const retainedModules = await app.handleListModules(event);
-        assert.equal(retainedModules.data.length, 2, 'clearing schema context must retain local source modules');
+        assert.equal(retainedModules.data.length, 3, 'clearing schema context must retain local source modules');
         assert(events.some(item => item.type === 'yang:taskProgress'));
 
         const originalPath = process.env.PATH;
@@ -178,7 +182,7 @@ else if (args.includes('--mode=fail')) {
             assert.equal(unavailableStatus.data.available, false);
             const refusedCompile = await unavailableApp.handleCompile(event);
             assert.equal(refusedCompile.status, 'error');
-            assert.match(refusedCompile.msg, /libyang\/yanglint.*不可用/);
+            assert.match(refusedCompile.msg, /libyang.*不可用/);
         } finally {
             process.env.PATH = originalPath;
             await unavailableApp.close();
@@ -188,7 +192,7 @@ else if (args.includes('--mode=fail')) {
         fs.rmSync(temporaryRoot, { recursive: true, force: true });
     }
 
-    console.log('YANG Electron app import, dependency compilation, schema query, and clear-context tests passed');
+    console.log('YANG Electron app real libyang Schema, dependency compilation, and clear-context tests passed');
 }
 
 main().catch(error => {

@@ -17,7 +17,7 @@ NETCONF / YANG 工作台用于连接支持 NETCONF over SSH 的网络设备，�
 - 使用内容哈希去重并保存 YANG 模型、元数据、工作区和编译缓存。
 - 解析 module/submodule、revision、namespace、feature、deviation、import 和 include。
 - 分析 import/include 依赖闭包，并报告缺失依赖和 revision 不匹配。
-- 后台调用内置 libyang/`yanglint` 完成权威编译、增量缓存、Schema 树懒加载、源码查看和诊断定位。
+- 后台调用内置 `netnexus-libyang-schema`（基于 libyang）完成权威编译与 effective Schema 导出，并提供缓存、Schema 树懒加载、源码查看和诊断定位。
 - 启动时检查 libyang 运行时和版本；运行时缺失、损坏或不兼容时阻止编译，绝不回退到简化解析器并报告成功。
 - 执行读取、配置、锁、校验、提交等结构化 NETCONF RPC，或直接发送原始 RPC XML。
 - 展示 `rpc-reply`、`rpc-error`、message-id、耗时和原始请求。
@@ -27,8 +27,8 @@ NETCONF / YANG 工作台用于连接支持 NETCONF over SSH 的网络设备，�
 | 页面 | 用途 |
 | --- | --- |
 | 连接设置 | 新建、编辑、测试和删除连接 Profile；连接或断开 NETCONF 会话；查看服务端 Capability。 |
-| 模型列表 | 读取设备模型清单、下载模型、导入本地文件或目录、筛选模型、编译所选模型和查看源码。 |
-| Schema 工作区 | 编译并浏览 Schema；右键节点执行 NETCONF 操作，在弹窗中编辑请求、预览 XML 并查看响应。 |
+| 模型列表 | 读取设备模型清单、下载模型、导入本地文件或目录、筛选模型、编译所选模型、查看源码和编译诊断。 |
+| Schema 工作区 | 浏览模型列表生成的 Schema；左键仅选择节点，节点属性通过右键菜单在弹窗中查看，所选 NETCONF 操作直接在右侧 Browser 工作区执行。 |
 
 ## 使用本地 NETCONF Mock 完整联调
 
@@ -63,7 +63,7 @@ Mock 启动后会打印监听地址、SSH Host Key 指纹和 Profile 参数。�
 
 1. 进入“模型列表”，点击“读取设备列表”，确认发现 `netnexus-mock-device` 和 `netnexus-mock-types`。
 2. 选择并下载这两个模型。`netnexus-mock-device` 会通过 `import` 引用 `netnexus-mock-types`，可用于验证 `get-schema` 和依赖处理。
-3. 选择下载后的模型执行“编译所选”，或进入“Schema 工作区”执行“编译工作区”，确认 libyang 编译成功并能浏览 `system`、`interfaces` 和 `state` 节点。
+3. 在模型列表中选择下载后的模型并执行“编译所选”，确认 libyang 编译成功，然后进入 Schema 工作区浏览 `system`、`interfaces` 和 `state` 节点。
 4. 在 Schema 树中右键 `system` 或其他数据节点，执行 `get` 或 `get-config`，确认初始 hostname 为 `netnexus-mock`。
 5. 右键 config 数据节点选择 `edit-config`，目标 datastore 设为 `candidate`，`default-operation` 设为 `merge`，在“config XML”中粘贴下面的内容并执行：
 
@@ -130,21 +130,25 @@ YANG 的 import/include 依赖必须同时存在于本地仓库。建议下载�
 
 没有真实设备时，可以直接使用“导入文件”或“导入目录”。目录导入会递归扫描 `.yang` 文件。仓库按 SHA256 内容哈希保存 Blob，相同内容不会重复写入；同名不同 revision 可以共存。
 
-“编译所选”会自动把本地仓库中能够解析到的 import/include 依赖加入编译集合。“Schema 工作区 → 编译工作区”会编译当前工作区的全部本地模型。编译在 Worker 中运行，不阻塞页面，进度会显示依赖准备、libyang 编译、Schema 索引和缓存阶段。
+模型编译只从“模型列表 → 编译所选”发起，避免无意中编译整个本地仓库。所选模型能够解析到的 import/include 依赖会自动加入编译集合。编译在 Worker 中运行，不阻塞页面，进度会显示依赖准备、libyang 编译、Schema 索引和缓存阶段。
 
-libyang/`yanglint` 是唯一权威编译器：
+“模型列表 → 编译诊断”显示最近一次有效编译上下文的错误、警告和信息。诊断弹窗会使用当前 `compileId` 读取结果；导入、下载或修改模型使上下文失效后，不会继续展示旧诊断。能够匹配到本地模块的诊断可以直接打开对应源码。
+
+libyang 是唯一权威编译引擎：
 
 - YANG 1.0/1.1 的语法和语义是否合法，以 libyang 结果为准。
 - typedef、uses/refine、augment、deviation、feature、XPath must/when 和跨模块约束由 libyang 校验。
-- 只有 `yanglint` 成功退出且没有错误诊断时，模块和工作区才会标记为“已编译”。
+- 只有固定合同版本的 `netnexus-libyang-schema` 成功完成 libyang 编译并返回通过结构校验的 effective Schema 时，模块和工作区才会标记为“已编译”。
 - JavaScript 解析仅用于导入时提取模块元数据、准备 import/include 依赖和界面索引，不构成编译成功，也不作为 libyang 不可用时的回退路径。
-- 编译缓存同时绑定模型内容、feature/deviation 选项、libyang 版本和可执行文件身份，运行时变化后不会复用旧结果。
+- 编译缓存同时绑定模型内容、feature/deviation 选项、libyang 版本、helper 合同和可执行文件身份；使用外部 deviation 文件或搜索目录时禁用结果缓存，避免外部依赖变化后复用旧树。
 
-当前页面中的 Schema 树是对已经通过 libyang 校验的模型生成的懒加载结构预览，用于导航源码和常用节点属性；它不是 libyang 展开后的 authoritative effective-schema 导出。界面会明确标记“结构预览（非权威）”，编译成败与语义诊断仍只采用 libyang 结果。
+Schema 工作区中的树直接来自 libyang 编译后的 effective schema。`uses`、`augment`、`deviation`、feature 选择以及继承后的 `config`、`mandatory`、`type`、`default` 等语义均由 libyang 解析；JavaScript 不再生成或回退到另一棵 Schema 树。运行时缺失、编译失败或导出结果无效时不会显示非权威预览。
 
-正式安装包应携带当前平台对应的 libyang/`yanglint` 运行时。页面顶部会展示实际使用的引擎、版本和路径；如果内置运行时缺失、损坏或与当前系统架构不兼容，编译按钮会停用并给出修复提示。此时应修复或重新安装 NetNexus，而不是继续使用非权威结果。
+当前导出合同的范围是 core effective schema：datastore 数据节点，以及 RPC、action、notification、input 和 output。libyang 仍会编译并校验内置扩展插件，但由 `yang-data`、`structure`、schema-mount 等扩展产生的独立扩展树暂不并入普通 Schema 树；运行时能力中会明确返回 `extensionSchemaExport: false`。
 
-打包运行时按平台和 CPU 架构隔离在应用资源目录的 `libyang/<platform>-<arch>/` 下，包括 `bin/yanglint` 和配套的 libyang 内置模块。当前构建采用静态链接；若平台包采用动态构建，动态库及插件目录约定为 `lib/libyang/{extensions,types}`。Worker 启动编译器时会设置对应的库与插件搜索路径；在“设置 → 运行时诊断”中显示“内置安装包”表示实际命中了这套内置资源。
+正式安装包应携带当前平台对应的 libyang/`yanglint` 运行时和 `netnexus-libyang-schema` effective-schema 导出工具。“设置 → 运行时诊断”会展示实际使用的引擎、版本和路径；任一内置程序缺失、损坏或与当前系统架构不兼容时，模型列表中的编译按钮会停用并给出修复提示。
+
+打包运行时按平台和 CPU 架构隔离在应用资源目录的 `libyang/<platform>-<arch>/` 下，包括 `bin/yanglint`、`bin/netnexus-libyang-schema` 和配套的 libyang 内置模块。两个程序均静态链接同一个固定版本的 libyang；Worker 使用 Schema 导出工具一次完成权威编译和结构化 JSON 导出。
 
 维护者在当前平台构建和验证运行时：
 
@@ -160,22 +164,28 @@ npm run libyang:verify
 
 应用打包前会强制验证平台、架构、执行权限和版本，验证失败则终止打包，避免生成不带权威编译器的安装包。
 
-源码开发或运行时联调可以用 `NETNEXUS_YANGLINT_PATH` 覆盖内置可执行文件：
+源码开发或运行时联调可以同时覆盖内置 `yanglint` 和 Schema helper；两者的 libyang 版本必须完全一致，helper 合同必须为版本 1：
 
 ```bash
-NETNEXUS_YANGLINT_PATH=/absolute/path/to/yanglint npm run dev
+NETNEXUS_YANGLINT_PATH=/absolute/path/to/yanglint \
+NETNEXUS_LIBYANG_SCHEMA_PATH=/absolute/path/to/netnexus-libyang-schema \
+npm run dev
 ```
 
-该环境变量仅用于开发覆盖和故障定位，不是普通用户的安装步骤。启动前可运行同一个可执行文件的版本命令确认其可执行；libyang 的 stdout/stderr 会转换成工作区诊断。
+这些环境变量仅用于开发覆盖和故障定位，不是普通用户的安装步骤。libyang/helper 的 stdout/stderr 会转换成模型列表中的编译诊断。
 
 ### 4. 浏览 Schema 和执行 RPC
 
 编译成功后，Schema 工作区支持：
 
-- 按模块展开已通过 libyang 校验的 Schema 结构预览根节点和子节点。
-- 查看节点路径、keyword、数据类型、config、mandatory、default、units、status 和描述。
-- 查看模块原始 YANG 源码。
-- 按错误、警告和信息筛选诊断，并从诊断定位到模块源码。
+- 按模块展开 libyang effective schema 根节点和子节点。
+- 左键单击节点仅更新当前选择，不自动打开属性弹窗。
+- 通过节点右键菜单的“查看节点属性”，在弹窗中查看路径、keyword、数据类型、config、mandatory、default、units、status 和描述。
+- 右键当前设备或 Schema 节点选择操作，直接在右侧操作区编辑参数、执行 RPC 并查看结果。
+
+原始 YANG 源码统一在“模型列表”的对应模型行中查看，Schema 工作区不再提供重复入口。
+
+设备会话状态和完整 Capability 列表统一在“连接设置”中查看；Schema 工作区不再重复显示设备状态条或 Capability 入口。
 
 Schema 树顶部始终提供“当前设备”入口，即使尚未编译模型也能右键执行全量和 datastore 操作；右键普通 Schema 节点则会预填 subtree/config XML 草稿。`delete-config` 等 datastore 操作仍明确作用于整个配置存储：
 
@@ -192,7 +202,9 @@ Schema 树顶部始终提供“当前设备”入口，即使尚未编译模型�
 | `discard-changes` | 放弃 candidate 中尚未提交的修改。 | `:candidate`。 |
 | 原始 RPC | 发送完整 `<rpc>` XML，用于厂商 RPC、action 或尚未做成表单的操作。 | 由 RPC 本身决定。 |
 
-页面会依据节点的 `config` 属性和服务端 Capability 禁用明显不可用的结构化操作。所有表单、请求预览和 RPC 结果都显示在操作弹窗中；原始 RPC 不做 Capability 推断，执行前需要自行确认命名空间、目标 datastore 和操作风险。旧的 `/yang/yang-operations` 地址会自动跳转到 Schema 工作区。
+页面会依据节点的 `config` 属性和服务端 Capability 禁用明显不可用的结构化操作。Schema 工作区右侧采用 NETCONF Browser 风格布局：上方是 Request 区，可在操作参数与 RPC XML 之间切换；下方是 RPC Reply 响应区，状态、耗时和 message-id 与响应一起显示。请求和响应 XML 默认以格式化后的缩进结构展示，并可切换到“原文”查看设备实际收发内容；格式化只影响显示，不改变实际发送的 XML。
+
+RPC 等待回复期间会锁定操作切换和工作区清空，避免重复下发或丢失结果。高风险操作二次确认仍使用弹窗。原始 RPC 不做 Capability 推断，执行前需要自行确认命名空间、目标 datastore 和操作风险。旧的 `/yang/yang-operations` 地址会自动跳转到 Schema 工作区。
 
 ## 安全设计
 
@@ -252,7 +264,7 @@ YANG 仓库位于 Electron `userData/yang` 下，主要包含：
 
 ## 开发测试
 
-NETCONF framing、XML、RPC client、模型发现、仓库和 libyang 编译集成都有独立 CI 测试。浏览器 E2E 使用可变状态 mock，覆盖连接、发现、下载、权威编译器状态门控、Schema 树和 RPC 基本流程：
+NETCONF framing、XML、RPC client、模型发现、仓库和 libyang 编译集成都有独立 CI 测试。浏览器 E2E 的设备与 RPC 控制面使用可变状态 mock，但 Schema 必须由测试前构建的真实 bundled libyang helper 生成，不存在手写成功树；测试覆盖连接、发现、下载、编译器状态门控、Schema 树和 RPC 基本流程：
 
 ```bash
 ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron test/ci/yang_browser_mock_flow.js

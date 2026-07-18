@@ -20,6 +20,8 @@ class YangApp {
         this.rootDir = path.resolve(options.rootDir || path.join(app.getPath('userData'), 'yang'));
         this.compilerPath = options.compilerPath || process.env.NETNEXUS_YANGLINT_PATH || null;
         this.compilerArgs = Array.isArray(options.compilerArgs) ? options.compilerArgs : [];
+        this.schemaHelperPath = options.schemaHelperPath || process.env.NETNEXUS_LIBYANG_SCHEMA_PATH || null;
+        this.schemaHelperArgs = Array.isArray(options.schemaHelperArgs) ? options.schemaHelperArgs : [];
         this.resourcesPath = options.resourcesPath || process.resourcesPath;
         this.isPackaged = options.isPackaged ?? Boolean(app?.isPackaged);
         this.workerClient = null;
@@ -122,6 +124,8 @@ class YangApp {
                     workspaceId: WORKSPACE_ID,
                     compilerPath: this.compilerPath,
                     compilerArgs: this.compilerArgs,
+                    schemaHelperPath: this.schemaHelperPath,
+                    schemaHelperArgs: this.schemaHelperArgs,
                     resourcesPath: this.resourcesPath,
                     isPackaged: this.isPackaged
                 },
@@ -393,7 +397,11 @@ class YangApp {
                                 features: Array.isArray(options.features) ? options.features : [],
                                 deviations: Array.isArray(options.deviations) ? options.deviations : [],
                                 compilerPath: options.compilerPath,
-                                compilerArgs: Array.isArray(options.compilerArgs) ? options.compilerArgs : undefined
+                                compilerArgs: Array.isArray(options.compilerArgs) ? options.compilerArgs : undefined,
+                                schemaHelperPath: options.schemaHelperPath,
+                                schemaHelperArgs: Array.isArray(options.schemaHelperArgs)
+                                    ? options.schemaHelperArgs
+                                    : undefined
                             }
                         };
                         this.persistCompileState(this.compileResult, workspace);

@@ -4,6 +4,8 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Release = Get-Content (Join-Path $ProjectRoot 'resources/libyang/manifest.json') -Raw | ConvertFrom-Json
 $RuntimeKey = 'win32-x64'
 $RuntimeTarget = Join-Path $ProjectRoot "resources/libyang/$RuntimeKey"
+$SchemaHelperSource = Join-Path $ProjectRoot 'scripts/netnexus-libyang-schema.c'
+$WindowsRuntimeManifestSource = Join-Path $ProjectRoot 'scripts/netnexus-libyang-windows.manifest.in'
 $VcpkgRoot = if ($env:VCPKG_ROOT) {
     $env:VCPKG_ROOT
 } elseif ($env:VCPKG_INSTALLATION_ROOT) {
@@ -17,6 +19,12 @@ $VcpkgManifest = Get-Content (Join-Path $VcpkgManifestRoot 'vcpkg.json') -Raw | 
 $VcpkgBaseline = $VcpkgManifest.'builtin-baseline'
 if (-not (Test-Path $Vcpkg -PathType Leaf)) {
     throw "vcpkg was not found at $Vcpkg. Set VCPKG_ROOT to a bootstrapped vcpkg checkout."
+}
+if (-not (Test-Path $SchemaHelperSource -PathType Leaf)) {
+    throw "The required libyang Schema helper source was not found at $SchemaHelperSource."
+}
+if (-not (Test-Path $WindowsRuntimeManifestSource -PathType Leaf)) {
+    throw "The required Windows UTF-8 runtime manifest was not found at $WindowsRuntimeManifestSource."
 }
 if ($VcpkgBaseline -ne $Release.windowsDependencies.vcpkgBaseline) {
     throw 'The Windows vcpkg baseline does not match the bundled runtime release manifest.'
@@ -67,8 +75,15 @@ function Test-VcpkgBaselineAvailable {
     )
     & git -C $Path cat-file -e "${Baseline}^{commit}" 2>$null
     if ($LASTEXITCODE -ne 0) { return $false }
-    & git -C $Path cat-file -e "${Baseline}:versions/baseline.json" 2>$null
-    return $LASTEXITCODE -eq 0
+    foreach ($RequiredVersionFile in @(
+        'versions/baseline.json',
+        'versions/d-/dirent.json',
+        'versions/p-/pthreads.json'
+    )) {
+        & git -C $Path cat-file -e "${Baseline}:${RequiredVersionFile}" 2>$null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    }
+    return $true
 }
 
 function Ensure-VcpkgBaseline {
@@ -81,12 +96,16 @@ function Ensure-VcpkgBaseline {
     Write-Host "Fetching pinned vcpkg baseline $Baseline..."
     # Keep the existing checkout's full history: vcpkg version records can refer
     # to port tree objects older than the selected baseline.
-    & git -C $Path fetch --no-tags https://github.com/microsoft/vcpkg.git $Baseline
+    # GitHub's preinstalled C:\vcpkg checkout may know the commit but omit tree
+    # objects from its partial/shallow object store. --refetch disables object
+    # negotiation so the pinned commit and version database are downloaded again.
+    & git -C $Path fetch --refetch --no-tags https://github.com/microsoft/vcpkg.git `
+        "+${Baseline}:refs/netnexus/baselines/${Baseline}"
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to fetch pinned vcpkg baseline $Baseline."
     }
     if (-not (Test-VcpkgBaselineAvailable -Path $Path -Baseline $Baseline)) {
-        throw "Pinned vcpkg baseline $Baseline does not contain versions/baseline.json."
+        throw "Pinned vcpkg baseline $Baseline is missing its required version database objects."
     }
 }
 
@@ -132,6 +151,51 @@ function Get-DumpbinPath {
     return $Candidate.FullName
 }
 
+function Get-MtPath {
+    $Command = Get-Command 'mt.exe' -ErrorAction SilentlyContinue
+    if ($Command) { return $Command.Path }
+
+    $WindowsKitsRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+    if (-not (Test-Path $WindowsKitsRoot -PathType Container)) {
+        throw 'mt.exe and the Windows 10 SDK tools directory were not found.'
+    }
+    $Candidate = Get-ChildItem $WindowsKitsRoot -Filter 'mt.exe' -File -Recurse |
+        Where-Object { $_.FullName -match '[\\/]x64[\\/]mt\.exe$' } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if (-not $Candidate) { throw "Unable to locate x64 mt.exe under $WindowsKitsRoot." }
+    return $Candidate.FullName
+}
+
+function Assert-WindowsRuntimeManifest {
+    param([Parameter(Mandatory = $true)][string]$Executable)
+
+    $Mt = Get-MtPath
+    $ManifestProbe = Join-Path $BuildRoot (([IO.Path]::GetFileName($Executable)) + '.embedded.manifest')
+    try {
+        & $Mt -nologo "-inputresource:${Executable};#1" "-out:${ManifestProbe}"
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $ManifestProbe -PathType Leaf)) {
+            throw "Unable to extract the embedded manifest from $Executable."
+        }
+        [xml]$Manifest = Get-Content $ManifestProbe -Raw
+        $Utf8Nodes = $Manifest.SelectNodes(
+            '//*[local-name()="activeCodePage" and namespace-uri()="http://schemas.microsoft.com/SMI/2019/WindowsSettings"]'
+        )
+        $LongPathNodes = $Manifest.SelectNodes(
+            '//*[local-name()="longPathAware" and namespace-uri()="http://schemas.microsoft.com/SMI/2016/WindowsSettings"]'
+        )
+        if ($Utf8Nodes.Count -ne 1 -or $Utf8Nodes[0].InnerText.Trim() -ne 'UTF-8') {
+            throw "$Executable does not embed exactly one UTF-8 activeCodePage declaration."
+        }
+        if ($LongPathNodes.Count -ne 1 -or $LongPathNodes[0].InnerText.Trim() -ne 'true') {
+            throw "$Executable does not embed exactly one longPathAware declaration."
+        }
+    }
+    finally {
+        if (Test-Path $ManifestProbe) { Remove-Item $ManifestProbe -Force }
+    }
+}
+
 function Assert-WindowsSystemDependencies {
     param([Parameter(Mandatory = $true)][string]$Executable)
 
@@ -153,7 +217,7 @@ function Assert-WindowsSystemDependencies {
         -not $Allowed.ContainsKey($_) -and $_ -notmatch '^(API|EXT)-MS-WIN-[A-Z0-9_.-]+\.DLL$'
     })
     if ($Unexpected.Count -gt 0) {
-        throw "Bundled yanglint imports non-approved DLLs: $($Unexpected -join ', '). Static linkage is required."
+        throw "Bundled libyang executable imports non-approved DLLs: $($Unexpected -join ', '). Static linkage is required."
     }
 }
 
@@ -236,6 +300,48 @@ endif()
         (Join-Path $SourceDir 'tools/CMakeLists.txt') `
         $GetoptFindBlock `
         $GetoptTargetBlock
+    Copy-Item $SchemaHelperSource (Join-Path $SourceDir 'tools/netnexus-libyang-schema.c') -Force
+    Copy-Item $WindowsRuntimeManifestSource `
+        (Join-Path $SourceDir 'tools/netnexus-libyang-windows.manifest.in') -Force
+    $ToolSubdirectories = @'
+add_subdirectory(lint)
+add_subdirectory(re)
+'@
+    $ToolSubdirectoriesWithSchemaHelper = @'
+add_subdirectory(lint)
+add_subdirectory(re)
+
+add_executable(netnexus-libyang-schema
+    ${PROJECT_SOURCE_DIR}/tools/netnexus-libyang-schema.c)
+target_link_libraries(netnexus-libyang-schema yang)
+target_include_directories(netnexus-libyang-schema BEFORE PRIVATE ${PROJECT_BINARY_DIR})
+target_compile_definitions(netnexus-libyang-schema PRIVATE STATIC)
+set_target_properties(netnexus-libyang-schema PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED YES
+    C_EXTENSIONS NO)
+if(MSVC)
+    target_compile_options(netnexus-libyang-schema PRIVATE /W4 /utf-8)
+    function(netnexus_embed_windows_manifest target identity)
+        set(NETNEXUS_MANIFEST_IDENTITY "${identity}")
+        set(manifest_output "${CMAKE_CURRENT_BINARY_DIR}/${target}.netnexus.manifest")
+        configure_file(
+            "${PROJECT_SOURCE_DIR}/tools/netnexus-libyang-windows.manifest.in"
+            "${manifest_output}"
+            @ONLY)
+        target_link_options(${target} PRIVATE
+            "/MANIFEST:EMBED,ID=1"
+            "/MANIFESTINPUT:${manifest_output}")
+        set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS "${manifest_output}")
+    endfunction()
+    netnexus_embed_windows_manifest(yanglint "NetNexus.libyang.yanglint")
+    netnexus_embed_windows_manifest(netnexus-libyang-schema "NetNexus.libyang.schema")
+endif()
+'@
+    Replace-PinnedSourceText `
+        (Join-Path $SourceDir 'tools/CMakeLists.txt') `
+        $ToolSubdirectories `
+        $ToolSubdirectoriesWithSchemaHelper
 
     & cmake -S $SourceDir -B $BuildDir -A x64 `
         "-DCMAKE_TOOLCHAIN_FILE=$VcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
@@ -254,20 +360,28 @@ endif()
         '-DENABLE_YANGLINT_INTERACTIVE=OFF' `
         '-DENABLE_COMMON_TARGETS=OFF'
     if ($LASTEXITCODE -ne 0) { throw 'Unable to configure the Windows libyang runtime.' }
-    & cmake --build $BuildDir --config Release --target yanglint --parallel
-    if ($LASTEXITCODE -ne 0) { throw 'Unable to build the Windows yanglint executable.' }
+    & cmake --build $BuildDir --config Release --target yanglint netnexus-libyang-schema --parallel
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to build the Windows libyang runtime executables.' }
 
     $BuiltYanglint = @(Get-ChildItem $BuildDir -Filter 'yanglint.exe' -File -Recurse)
     if ($BuiltYanglint.Count -ne 1) {
         throw "Expected exactly one built yanglint.exe, found $($BuiltYanglint.Count)."
     }
+    $BuiltSchemaHelper = @(Get-ChildItem $BuildDir -Filter 'netnexus-libyang-schema.exe' -File -Recurse)
+    if ($BuiltSchemaHelper.Count -ne 1) {
+        throw "Expected exactly one built netnexus-libyang-schema.exe, found $($BuiltSchemaHelper.Count)."
+    }
     Assert-WindowsSystemDependencies ($BuiltYanglint[0].FullName)
+    Assert-WindowsSystemDependencies ($BuiltSchemaHelper[0].FullName)
+    Assert-WindowsRuntimeManifest ($BuiltYanglint[0].FullName)
+    Assert-WindowsRuntimeManifest ($BuiltSchemaHelper[0].FullName)
 
     $BinDir = Join-Path $RuntimeTarget 'bin'
     $ModuleDir = Join-Path $RuntimeTarget 'share/yang/modules/libyang'
     if (Test-Path $RuntimeTarget) { Remove-Item $RuntimeTarget -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $BinDir, $ModuleDir | Out-Null
     Copy-Item ($BuiltYanglint[0].FullName) (Join-Path $BinDir 'yanglint.exe') -Force
+    Copy-Item ($BuiltSchemaHelper[0].FullName) (Join-Path $BinDir 'netnexus-libyang-schema.exe') -Force
     Copy-Item (Join-Path $SourceDir 'LICENSE') (Join-Path $RuntimeTarget 'LICENSE.libyang') -Force
     Copy-Item (Join-Path $Pcre2SourceDir 'LICENCE.md') (Join-Path $RuntimeTarget 'LICENSE.pcre2') -Force
     Copy-Item (Join-Path $GetoptSourceDir 'LICENSE') (Join-Path $RuntimeTarget 'LICENSE.getopt') -Force
@@ -279,7 +393,9 @@ endif()
         (Join-Path $RuntimeTarget 'LICENSE.dirent') -Force
     Copy-Item (Join-Path $SourceDir 'modules/*.yang') $ModuleDir -Force
     & node (Join-Path $ProjectRoot 'scripts/write-libyang-runtime-manifest.js') `
-        $RuntimeTarget (Join-Path $BinDir 'yanglint.exe')
+        $RuntimeTarget `
+        (Join-Path $BinDir 'yanglint.exe') `
+        (Join-Path $BinDir 'netnexus-libyang-schema.exe')
     & node (Join-Path $ProjectRoot 'scripts/verify-libyang-runtime.js') --platform win32 --arch x64
     if ($LASTEXITCODE -ne 0) { throw 'The generated Windows libyang runtime did not pass verification.' }
 }

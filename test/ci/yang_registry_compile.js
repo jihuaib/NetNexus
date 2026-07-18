@@ -3,10 +3,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { YangRegistry } = require('../../electron/utils/yang');
+const { getReleaseManifest } = require('../../scripts/libyang-runtime-config');
 
+const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.resolve(__dirname, '..', '..'));
+const resourcesPath = path.join(projectRoot, 'resources');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-yang-compile-'));
 const repositoryRoot = path.join(tempDir, 'repository');
-const helperPath = path.join(tempDir, 'fake-yanglint.js');
 
 const commonTypes = `module common-types {
   yang-version 1.1;
@@ -14,6 +16,14 @@ const commonTypes = `module common-types {
   prefix ct;
   revision 2025-01-02;
   typedef label { type string; }
+  feature extended-identity;
+  grouping refined-presence {
+    container refined-container { leaf refined-value { type string; } }
+  }
+  grouping identity-fields {
+    leaf serial { type string; }
+    leaf extended-serial { if-feature extended-identity; type string; }
+  }
 }`;
 
 const demoExtra = `submodule demo-extra {
@@ -27,17 +37,24 @@ const demo = `module demo {
   yang-version 1.1;
   namespace "urn:demo";
   prefix d;
-  revision 2026-07-18;
   import common-types { prefix ct; revision-date 2025-01-02; }
   include demo-extra { revision-date 2026-07-18; }
+  reference "demo-module-reference";
+  revision 2026-07-18;
   feature turbo;
   container system {
+    uses ct:identity-fields;
+    uses ct:refined-presence {
+      refine refined-container { presence "created by an effective refine"; }
+    }
     leaf hostname { type ct:label; mandatory true; }
     leaf-list address { type string; }
+    leaf turbo-mode { if-feature turbo; type boolean; }
     list interface {
       key "name";
       leaf name { type string; }
       choice mode {
+        default routed;
         case routed { leaf address-family { type string; } }
         case switched { leaf vlan { type uint16; } }
       }
@@ -54,124 +71,99 @@ const demo = `module demo {
   }
 }`;
 
-function installFakeYanglint() {
-    fs.writeFileSync(
-        helperPath,
-        `const fs = require('fs');
-const args = process.argv.slice(2);
-const mode = (args.find(arg => arg.startsWith('--mode=')) || '').slice(7);
-if (args.includes('--version')) {
-  console.log('yanglint ' + (process.env.FAKE_YANGLINT_VERSION || '3.13.6') + ' (libyang ' + (process.env.FAKE_LIBYANG_VERSION || '3.13.6') + ')');
-  process.exit(0);
-}
-if (process.env.FAKE_YANGLINT_LOG) fs.writeFileSync(process.env.FAKE_YANGLINT_LOG, JSON.stringify(args));
-if (mode === 'timeout') {
-  setTimeout(() => process.exit(0), 2000);
-} else if (mode === 'output') {
-  process.stdout.write('x'.repeat(20000));
-} else if (mode === 'fail') {
-  console.error('/tmp/demo.yang:12:3: error: simulated libyang semantic failure');
-  process.exit(2);
-} else if (mode === 'silent-fail') {
-  process.exit(7);
-} else if (mode === 'warn') {
-  console.error('libyang warn : simulated libyang warning');
-}
-`,
-        'utf8'
-    );
+const demoAugment = `module demo-augment {
+  yang-version 1.1;
+  namespace "urn:demo:augment";
+  prefix da;
+  import demo { prefix d; revision-date 2026-07-18; }
+  revision 2026-07-18;
+  augment "/d:system" { leaf augmented-state { type string; } }
+}`;
+
+function demoDeviation(mandatory = false) {
+    return `module demo-deviation {
+  yang-version 1.1;
+  namespace "urn:demo:deviation";
+  prefix dd;
+  import demo { prefix d; revision-date 2026-07-18; }
+  revision 2026-07-18;
+  leaf deviation-owner-state { type string; }
+  deviation "/d:system/d:address" { deviate not-supported; }
+  deviation "/d:system/d:hostname" { deviate replace { mandatory ${mandatory}; } }
+}`;
 }
 
 function createRegistry(rootDir = repositoryRoot, options = {}) {
     return new YangRegistry({
         rootDir,
-        compilerPath: process.execPath,
-        compilerArgs: [helperPath],
+        resourcesPath,
+        isPackaged: false,
         ...options
     });
 }
 
-function createBundledRuntime(version) {
-    return {
-        async getStatus() {
-            return {
-                available: true,
-                required: true,
-                engine: 'libyang',
-                executable: 'yanglint',
-                version,
-                path: path.join(tempDir, 'bundled-runtime', 'bin', 'yanglint'),
-                source: 'bundled',
-                runtimeRoot: path.join(tempDir, 'bundled-runtime'),
-                capabilities: { schemaValidation: true, yang11: true }
-            };
-        },
-        async execute() {
-            return {
-                stdout: '',
-                stderr: '',
-                exitCode: 0,
-                signal: null,
-                timedOut: false,
-                outputLimitExceeded: false,
-                durationMs: 1,
-                error: null
-            };
-        }
-    };
-}
-
 async function run() {
     try {
-        installFakeYanglint();
+        const release = getReleaseManifest(projectRoot);
         const registry = createRegistry();
-        const status = await registry.getCompilerStatus();
-        assert.equal(status.available, true);
+        const status = await registry.getCompilerStatus({ force: true });
+        assert.equal(status.available, true, status.error);
         assert.equal(status.required, true);
         assert.equal(status.engine, 'libyang');
-        assert.equal(status.version, '3.13.6');
+        assert.equal(status.version, release.libyangVersion);
+        assert.equal(status.schemaVersion, release.libyangVersion);
+        assert.equal(status.capabilities.schemaExport, true);
 
-        const importResult = registry.importContents([
+        const imported = registry.importContents([
             { content: commonTypes, expectedName: 'common-types', revision: '2025-01-02', source: 'test' },
             { content: demoExtra, expectedName: 'demo-extra', revision: '2026-07-18', source: 'test' },
-            { content: demo, expectedName: 'demo', revision: '2026-07-18', source: 'test' }
+            { content: demo, expectedName: 'demo', revision: '2026-07-18', source: 'test' },
+            { content: demoAugment, expectedName: 'demo-augment', revision: '2026-07-18', source: 'test' }
         ]);
-        assert.equal(importResult.summary.imported, 3);
+        assert.equal(imported.summary.imported, 4);
 
         const progress = [];
-        const compiled = await registry.compile({ onProgress: event => progress.push(event) });
+        const compiled = await registry.compile({
+            onProgress: event => progress.push(event),
+            force: true
+        });
         assert.equal(compiled.success, true, JSON.stringify(compiled.diagnostics, null, 2));
         assert.equal(compiled.cacheHit, false);
         assert.equal(compiled.compiler.engine, 'libyang');
-        assert.equal(compiled.compiler.version, '3.13.6');
+        assert.equal(compiled.compiler.version, release.libyangVersion);
         assert.equal(compiled.validation.authoritative, true);
         assert.equal(compiled.externalCompiler.succeeded, true);
-        assert.equal(compiled.schemaTree.authoritative, false);
-        assert.equal(compiled.schemaTree.source, 'builtin-preview');
-        assert.equal(compiled.summary.modules, 2);
+        assert.equal(compiled.schemaTree.authoritative, true);
+        assert.equal(compiled.schemaTree.source, 'libyang-effective');
+        assert.equal(compiled.schemaTree.scope, 'core-effective-schema');
+        assert.equal(compiled.summary.modules, 3);
         assert.equal(compiled.summary.submodules, 1);
         assert.equal(compiled.summary.missingDependencies, 0);
         assert(!compiled.diagnostics.some(diagnostic => diagnostic.code === 'DEPENDENCY_CYCLE'));
         assert(progress.some(event => event.phase === 'runtime'));
-        assert(progress.some(event => event.phase === 'parsing'));
-        assert(progress.some(event => event.phase === 'dependencies'));
-        assert(progress.some(event => event.phase === 'schema'));
         assert(progress.some(event => event.phase === 'external'));
+        assert(progress.some(event => event.phase === 'schema'));
         assert.equal(progress.at(-1).phase, 'completed');
         assert.equal(progress.at(-1).percent, 100);
 
         const roots = registry.getSchemaRoots({ compileId: compiled.compileId });
         assert.equal(roots.length, 3);
-        assert(roots.some(root => root.hasChildren));
+        assert(roots.every(root => root.keyword === 'module'));
+        assert(roots.some(root => root.name === 'demo' && root.hasChildren));
+        assert.equal(roots.find(root => root.name === 'demo').reference, 'demo-module-reference');
 
-        const allNodes = [];
-        const walk = parentId => {
-            for (const child of registry.getSchemaChildren(parentId, { compileId: compiled.compileId })) {
-                allNodes.push(child);
-                walk(child.id);
-            }
+        const collectNodes = (schemaRoots, compileId, schemaRegistry = registry) => {
+            const collected = [];
+            const walk = parentId => {
+                for (const child of schemaRegistry.getSchemaChildren(parentId, { compileId })) {
+                    collected.push(child);
+                    walk(child.id);
+                }
+            };
+            schemaRoots.forEach(root => walk(root.id));
+            return collected;
         };
-        roots.forEach(root => walk(root.id));
+        const allNodes = collectNodes(roots, compiled.compileId);
         const keywords = new Set(allNodes.map(node => node.keyword));
         for (const keyword of [
             'container',
@@ -186,12 +178,68 @@ async function run() {
             'input',
             'output'
         ]) {
-            assert(keywords.has(keyword), `schema preview must contain ${keyword}`);
+            assert(
+                keywords.has(keyword),
+                `libyang effective schema must contain ${keyword}; got ${[...keywords].sort().join(', ')}`
+            );
         }
         const hostname = allNodes.find(node => node.name === 'hostname');
-        assert.equal(hostname.type, 'ct:label');
+        assert(hostname);
+        assert.equal(hostname.type, 'label');
         assert.equal(hostname.mandatory, true);
+        assert.equal(allNodes.find(node => node.name === 'refined-container').presence, true);
+        assert.equal(allNodes.find(node => node.name === 'mode' && node.keyword === 'choice').default, 'routed');
         assert.equal(registry.getSchemaNode(hostname.id).path, hostname.path);
+        assert(
+            allNodes.some(node => node.name === 'serial'),
+            'libyang must expand grouping/uses into the effective tree'
+        );
+        assert(
+            allNodes.some(node => node.name === 'extended-serial'),
+            'default compilation must enable every feature'
+        );
+        assert(
+            allNodes.some(node => node.name === 'augmented-state' && node.module === 'demo-augment'),
+            'libyang must attach augment nodes to their effective target'
+        );
+        assert(
+            allNodes.some(node => node.name === 'turbo-mode'),
+            'libyang default all-features mode must include the if-feature node'
+        );
+
+        const disabledFeatures = await registry.compile({
+            features: [{ module: 'demo', features: [] }],
+            force: true
+        });
+        assert.equal(disabledFeatures.success, true, JSON.stringify(disabledFeatures.diagnostics, null, 2));
+        const disabledRoots = registry.getSchemaRoots({ compileId: disabledFeatures.compileId });
+        const disabledNodes = collectNodes(disabledRoots, disabledFeatures.compileId);
+        assert.equal(
+            disabledNodes.some(node => node.name === 'turbo-mode'),
+            false,
+            'explicitly disabled if-feature nodes must disappear from the effective tree'
+        );
+        assert.equal(
+            disabledNodes.some(node => node.name === 'extended-serial'),
+            false,
+            'once -F is used, features in unspecified modules must be disabled like yanglint'
+        );
+
+        const multipleSelectedFeatures = await registry.compile({
+            features: ['demo:turbo', 'common-types:extended-identity'],
+            force: true
+        });
+        assert.equal(
+            multipleSelectedFeatures.success,
+            true,
+            JSON.stringify(multipleSelectedFeatures.diagnostics, null, 2)
+        );
+        const multipleSelectedNodes = collectNodes(
+            registry.getSchemaRoots({ compileId: multipleSelectedFeatures.compileId }),
+            multipleSelectedFeatures.compileId
+        );
+        assert(multipleSelectedNodes.some(node => node.name === 'turbo-mode'));
+        assert(multipleSelectedNodes.some(node => node.name === 'extended-serial'));
 
         const cached = await registry.compile();
         assert.equal(cached.compileId, compiled.compileId);
@@ -199,83 +247,124 @@ async function run() {
 
         const restoredRegistry = createRegistry();
         const restored = await restoredRegistry.compile();
-        assert.equal(restored.cacheHit, true, 'a fresh registry must restore the disk cache');
+        assert.equal(restored.cacheHit, true, 'a fresh registry must restore the authoritative Schema cache');
         assert(restoredRegistry.getSchemaRoots().length > 0);
-
-        const differentRuntime = await restoredRegistry.compile({
-            env: { ...process.env, FAKE_YANGLINT_VERSION: '3.14.0', FAKE_LIBYANG_VERSION: '3.14.0' }
-        });
-        assert.equal(differentRuntime.compiler.version, '3.14.0');
-        assert.notEqual(
-            differentRuntime.compileId,
-            compiled.compileId,
-            'runtime version must be part of the cache key'
-        );
-        assert.equal(differentRuntime.cacheHit, false);
-
-        const bundledRepositoryRoot = path.join(tempDir, 'bundled-repository');
-        const bundledRegistry = new YangRegistry({
-            rootDir: bundledRepositoryRoot,
-            runtime: createBundledRuntime('5.8.6')
-        });
-        bundledRegistry.importContents([
-            { content: commonTypes, expectedName: 'common-types' },
-            { content: demoExtra, expectedName: 'demo-extra' },
-            { content: demo, expectedName: 'demo' }
-        ]);
-        const bundledCompile = await bundledRegistry.compile();
-        assert.equal(bundledCompile.success, true);
-        assert.equal(bundledCompile.compiler.source, 'bundled');
-        assert.equal(bundledCompile.compiler.version, '5.8.6');
-        const upgradedBundledRegistry = new YangRegistry({
-            rootDir: bundledRepositoryRoot,
-            runtime: createBundledRuntime('5.9.0')
-        });
-        const upgradedBundledCompile = await upgradedBundledRegistry.compile();
-        assert.notEqual(upgradedBundledCompile.compileId, bundledCompile.compileId);
-        assert.equal(upgradedBundledCompile.cacheHit, false, 'a bundled libyang upgrade must invalidate the cache');
 
         const searchDirectory = path.join(tempDir, 'search');
         const deviationPath = path.join(tempDir, 'demo-deviation.yang');
-        const argumentLog = path.join(tempDir, 'yanglint-args.json');
         fs.mkdirSync(searchDirectory);
-        fs.writeFileSync(
-            deviationPath,
-            'module demo-deviation { namespace "urn:demo:deviation"; prefix dd; revision 2026-07-18; }',
-            'utf8'
-        );
+        fs.writeFileSync(deviationPath, demoDeviation(false), 'utf8');
         const selectedFeatures = await registry.compile({
             force: true,
             features: ['demo:turbo'],
             deviations: [deviationPath],
-            searchPaths: [searchDirectory],
-            env: { ...process.env, FAKE_YANGLINT_LOG: argumentLog }
+            searchPaths: [searchDirectory]
         });
-        assert.equal(selectedFeatures.success, true);
+        assert.equal(selectedFeatures.success, true, JSON.stringify(selectedFeatures.diagnostics, null, 2));
         assert.deepEqual(selectedFeatures.externalCompiler.features, ['demo:turbo']);
         assert(selectedFeatures.externalCompiler.searchPaths.includes(searchDirectory));
         assert.deepEqual(selectedFeatures.externalCompiler.deviations, [deviationPath]);
-        const invokedArgs = JSON.parse(fs.readFileSync(argumentLog, 'utf8'));
-        const searchArguments = invokedArgs
-            .map((argument, index) => (argument === '-p' ? invokedArgs[index + 1] : null))
-            .filter(Boolean);
-        assert(searchArguments.includes(searchDirectory));
-        assert.equal(invokedArgs[invokedArgs.indexOf('-F') + 1], 'demo:turbo');
-        assert(invokedArgs.includes(deviationPath));
+        assert.equal(selectedFeatures.schemaTree.authoritative, true);
+        const selectedRoots = registry.getSchemaRoots({ compileId: selectedFeatures.compileId });
+        const selectedNodes = collectNodes(selectedRoots, selectedFeatures.compileId);
+        assert(
+            selectedNodes.some(node => node.name === 'turbo-mode'),
+            'enabled if-feature node must be present'
+        );
+        assert.equal(
+            selectedNodes.some(node => node.name === 'address'),
+            false,
+            'not-supported deviation must remove the effective node'
+        );
+        assert.equal(
+            selectedNodes.find(node => node.name === 'hostname').mandatory,
+            false,
+            'replace deviation must update the effective node properties'
+        );
+
+        fs.writeFileSync(deviationPath, demoDeviation(true), 'utf8');
+        const changedDeviation = await registry.compile({
+            features: ['demo:turbo'],
+            deviations: [deviationPath],
+            searchPaths: [searchDirectory]
+        });
+        assert.equal(changedDeviation.cacheHit, false, 'external deviation content must participate in the cache key');
+        assert.notEqual(changedDeviation.compileId, selectedFeatures.compileId);
+        const changedDeviationNodes = collectNodes(
+            registry.getSchemaRoots({ compileId: changedDeviation.compileId }),
+            changedDeviation.compileId
+        );
+        assert.equal(changedDeviationNodes.find(node => node.name === 'hostname').mandatory, true);
+
+        const missingDeviation = await registry.compile({
+            force: true,
+            deviations: [{ name: 'missing-deviation' }]
+        });
+        assert.equal(missingDeviation.success, false);
+        assert(missingDeviation.diagnostics.some(diagnostic => diagnostic.code === 'DEVIATION_NOT_FOUND'));
+
+        const unknownFeatureModule = await registry.compile({
+            force: true,
+            features: ['not-loaded:feature']
+        });
+        assert.equal(unknownFeatureModule.success, false);
+        assert(
+            unknownFeatureModule.diagnostics.some(diagnostic => /not-loaded/u.test(diagnostic.message)),
+            JSON.stringify(unknownFeatureModule.diagnostics, null, 2)
+        );
+
+        const deviationRegistry = createRegistry(path.join(tempDir, 'deviation-repository'));
+        deviationRegistry.importContents([
+            { content: commonTypes, expectedName: 'common-types', revision: '2025-01-02', source: 'test' },
+            { content: demoExtra, expectedName: 'demo-extra', revision: '2026-07-18', source: 'test' },
+            { content: demo, expectedName: 'demo', revision: '2026-07-18', source: 'test' },
+            { content: demoAugment, expectedName: 'demo-augment', revision: '2026-07-18', source: 'test' },
+            { content: demoDeviation(false), expectedName: 'demo-deviation', revision: '2026-07-18' }
+        ]);
+        const repositoryDeviation = await deviationRegistry.compile({
+            force: true,
+            deviations: [{ name: 'demo-deviation', revision: '2026-07-18' }]
+        });
+        assert.equal(repositoryDeviation.success, true, JSON.stringify(repositoryDeviation.diagnostics, null, 2));
+        const selectedDeviationPath = repositoryDeviation.externalCompiler.deviations[0];
+        assert.equal(
+            repositoryDeviation.externalCompiler.args.filter(argument => argument === selectedDeviationPath).length,
+            1,
+            'a repository deviation must be passed exactly once as a top-level workspace module'
+        );
+        const repositoryDeviationRoots = deviationRegistry.getSchemaRoots({
+            compileId: repositoryDeviation.compileId
+        });
+        assert(
+            repositoryDeviationRoots.some(root => root.name === 'demo-deviation'),
+            'a selected repository deviation remains a workspace module and must keep its Schema root'
+        );
+        const repositoryDeviationNodes = collectNodes(
+            repositoryDeviationRoots,
+            repositoryDeviation.compileId,
+            deviationRegistry
+        );
+        assert(
+            repositoryDeviationNodes.some(node => node.name === 'deviation-owner-state'),
+            'data owned by a repository deviation module must remain in the effective Schema'
+        );
 
         const missingModule = `module needs-missing {
+  yang-version 1.1;
   namespace "urn:missing";
   prefix nm;
   revision 2026-07-18;
   import absent-types { prefix at; revision-date 2020-01-01; }
 }`;
         const duplicateOne = `module duplicate-demo {
+  yang-version 1.1;
   namespace "urn:duplicate:one";
   prefix dd;
   revision 2026-01-01;
   leaf one { type string; }
 }`;
         const duplicateTwo = `module duplicate-demo {
+  yang-version 1.1;
   namespace "urn:duplicate:two";
   prefix dd;
   revision 2026-01-01;
@@ -287,67 +376,60 @@ async function run() {
                 { content: duplicateOne, expectedName: 'duplicate-demo' },
                 { content: duplicateTwo, expectedName: 'duplicate-demo' }
             ],
-            { workspaceId: 'errors' }
+            { workspaceId: 'dependency-errors' }
         );
-        const failed = await registry.compile({
-            workspaceId: 'errors',
-            compilerArgs: [helperPath, '--mode=fail'],
-            force: true
-        });
-        assert.equal(failed.success, false);
-        assert(failed.diagnostics.some(item => item.code === 'MISSING_DEPENDENCY' && item.authoritative === false));
-        assert(failed.diagnostics.some(item => item.code === 'DUPLICATE_REVISION' && item.authoritative === false));
-        const semanticError = failed.diagnostics.find(item => item.code === 'YANGLINT');
-        assert.equal(semanticError.severity, 'error');
-        assert.equal(semanticError.line, 12);
-        assert.equal(semanticError.column, 3);
-        assert.equal(semanticError.authoritative, true);
+        const dependencyFailure = await registry.compile({ workspaceId: 'dependency-errors', force: true });
+        assert.equal(dependencyFailure.success, false);
+        assert(
+            dependencyFailure.diagnostics.some(
+                item => item.code === 'MISSING_DEPENDENCY' && item.authoritative === false
+            )
+        );
+        assert(
+            dependencyFailure.diagnostics.some(
+                item => item.code === 'DUPLICATE_REVISION' && item.authoritative === false
+            )
+        );
+        assert.equal(registry.getSchemaRoots({ compileId: dependencyFailure.compileId }).length, 0);
 
-        const silentFailure = await registry.compile({
-            compilerArgs: [helperPath, '--mode=silent-fail'],
-            force: true
+        const invalidType = `module invalid-type {
+  yang-version 1.1;
+  namespace "urn:invalid:type";
+  prefix it;
+  revision 2026-07-18;
+  leaf broken { type does-not-exist; }
+}`;
+        registry.importContents([{ content: invalidType, expectedName: 'invalid-type' }], {
+            workspaceId: 'semantic-error'
         });
-        assert.equal(silentFailure.success, false);
-        assert(silentFailure.diagnostics.some(item => item.code === 'YANGLINT_FAILED' && item.authoritative));
+        const semanticFailure = await registry.compile({ workspaceId: 'semantic-error', force: true });
+        assert.equal(semanticFailure.success, false);
+        assert(
+            semanticFailure.diagnostics.some(
+                item =>
+                    item.authoritative &&
+                    item.severity === 'error' &&
+                    typeof item.code === 'string' &&
+                    item.code.startsWith('LIBYANG')
+            ),
+            JSON.stringify(semanticFailure.diagnostics, null, 2)
+        );
+        assert.equal(registry.getSchemaRoots({ compileId: semanticFailure.compileId }).length, 0);
 
         const unavailableRegistry = new YangRegistry({
-            rootDir: repositoryRoot,
+            rootDir: path.join(tempDir, 'unavailable-repository'),
             compilerPath: path.join(tempDir, 'missing-yanglint'),
             resourcesPath: path.join(tempDir, 'empty-resources'),
             isPackaged: true
         });
-        const unavailable = await unavailableRegistry.compile({
-            env: { PATH: '' },
-            force: true
-        });
+        const unavailable = await unavailableRegistry.compile({ env: { PATH: '' }, force: true });
         assert.equal(unavailable.success, false);
         assert.equal(unavailable.compiler.available, false);
         assert.equal(unavailable.externalCompiler.invoked, false);
-        assert(unavailable.diagnostics.some(item => item.code === 'YANGLINT_UNAVAILABLE'));
-        assert(
-            unavailableRegistry.getSchemaRoots({ compileId: unavailable.compileId }).length > 0,
-            'preview remains available'
-        );
+        assert(unavailable.diagnostics.some(item => item.code === 'LIBYANG_RUNTIME_UNAVAILABLE'));
+        assert.equal(unavailableRegistry.getSchemaRoots({ compileId: unavailable.compileId }).length, 0);
 
-        const timedOut = await registry.compile({
-            compilerArgs: [helperPath, '--mode=timeout'],
-            externalTimeout: 100,
-            force: true
-        });
-        assert.equal(timedOut.success, false);
-        assert.equal(timedOut.externalCompiler.timedOut, true);
-        assert(timedOut.diagnostics.some(item => item.code === 'YANGLINT_TIMEOUT'));
-
-        const outputLimited = await registry.compile({
-            compilerArgs: [helperPath, '--mode=output'],
-            externalMaxBuffer: 1024,
-            force: true
-        });
-        assert.equal(outputLimited.success, false);
-        assert.equal(outputLimited.externalCompiler.outputTruncated, true);
-        assert(outputLimited.diagnostics.some(item => item.code === 'YANGLINT_OUTPUT_LIMIT'));
-
-        console.log('Authoritative libyang compiler, preview index, diagnostics, and cache tests passed');
+        console.log('Authoritative libyang compiler, effective Schema, diagnostics, and cache tests passed');
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }

@@ -55,6 +55,10 @@
                             </nn-button>
                         </span>
                     </nn-tooltip>
+                    <nn-button :loading="diagnosticLoading" @click="openDiagnostics">
+                        <template #icon><FileSearchOutlined /></template>
+                        编译诊断 ({{ diagnosticCountHint }})
+                    </nn-button>
                     <nn-button :loading="loading" @click="loadModules">
                         <template #icon><ReloadOutlined /></template>
                         刷新
@@ -163,16 +167,77 @@
             </nn-table>
         </nn-card>
 
-        <nn-drawer v-model:open="sourceDrawerOpen" :title="sourceDrawerTitle" width="720px">
+        <nn-drawer v-model:open="sourceDrawerOpen" :title="sourceDrawerTitle" width="720px" :z-index="1200">
             <nn-spin :spinning="sourceLoading">
                 <pre class="source-preview">{{ sourceText || '暂无源码' }}</pre>
             </nn-spin>
         </nn-drawer>
+
+        <nn-modal
+            v-model:open="diagnosticModalOpen"
+            title="编译诊断"
+            :footer="null"
+            width="900px"
+            :body-style="{ padding: '12px', overflow: 'hidden' }"
+        >
+            <div class="diagnostic-context-bar">
+                <div class="diagnostic-context-main">
+                    <nn-tag :color="compileContextColor">{{ compileContextLabel }}</nn-tag>
+                    <span v-if="compileContext.compiledAt">{{ formatCompileTime(compileContext.compiledAt) }}</span>
+                    <span
+                        v-if="compileContext.compileId"
+                        class="diagnostic-compile-id"
+                        :title="compileContext.compileId"
+                    >
+                        {{ compileContext.compileId }}
+                    </span>
+                </div>
+                <nn-button size="small" :loading="diagnosticLoading" @click="loadDiagnostics">刷新</nn-button>
+            </div>
+
+            <div v-if="compileContext.compileId" class="diagnostic-filter-bar">
+                <nn-segmented v-model:value="diagnosticFilter" :options="diagnosticFilterOptions" />
+                <span>错误 {{ diagnosticErrorCount }} · 警告 {{ diagnosticWarningCount }}</span>
+            </div>
+
+            <div class="diagnostic-list">
+                <nn-spin :spinning="diagnosticLoading">
+                    <nn-empty v-if="!compileContext.compileId" description="请先选择本地模型并执行“编译所选”" />
+                    <template v-else>
+                        <div
+                            v-for="(diagnostic, index) in filteredDiagnostics"
+                            :key="diagnostic.id || `${diagnostic.file || ''}:${diagnostic.line || 0}:${index}`"
+                            class="diagnostic-row"
+                        >
+                            <nn-tag :color="diagnosticColor(diagnostic.severity)">
+                                {{ diagnosticLabel(diagnostic.severity) }}
+                            </nn-tag>
+                            <span class="diagnostic-content">
+                                <span class="diagnostic-message">
+                                    {{ diagnostic.message || diagnostic.msg || '未知诊断' }}
+                                </span>
+                                <span class="diagnostic-location">
+                                    {{ formatDiagnosticLocation(diagnostic) }}
+                                </span>
+                            </span>
+                            <nn-button
+                                v-if="moduleForDiagnostic(diagnostic)"
+                                size="small"
+                                @click="openDiagnosticSource(diagnostic)"
+                            >
+                                查看源码
+                            </nn-button>
+                        </div>
+                        <nn-empty v-if="filteredDiagnostics.length === 0" description="当前筛选下没有编译诊断" />
+                    </template>
+                </nn-spin>
+            </div>
+        </nn-modal>
     </div>
 </template>
 
 <script setup>
-    import { computed, onActivated, onBeforeUnmount, onMounted, ref } from 'vue';
+    import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue';
     import {
         NETCONF_SESSION_STATUS,
         YANG_EVENT,
@@ -191,7 +256,14 @@
         SearchOutlined
     } from '../../ui/icons';
     import { useYangCompilerStatus } from './yangCompilerStatus';
-    import { getTaskId, invokeBridge, isTaskTerminal, normalizeSessionEvent, unwrapArray } from './yangUiUtils';
+    import {
+        fileBaseName,
+        getTaskId,
+        invokeBridge,
+        isTaskTerminal,
+        normalizeSessionEvent,
+        unwrapArray
+    } from './yangUiUtils';
 
     defineOptions({ name: 'YangModules' });
 
@@ -242,7 +314,23 @@
     const sourceLoading = ref(false);
     const sourceText = ref('');
     const sourceModule = ref(null);
+    const diagnosticModalOpen = ref(false);
+    const diagnosticLoading = ref(false);
+    const diagnostics = ref([]);
+    const diagnosticFilter = ref('all');
+    const diagnosticLoadedCompileId = ref('');
+    const compileContext = ref({ compileId: '', success: null, compiledAt: null, summary: {} });
+    let diagnosticRequestRevision = 0;
+    let compileContextRequestRevision = 0;
+    let sourceRequestRevision = 0;
     const { compilerAvailable, refreshCompilerStatus } = useYangCompilerStatus();
+
+    const diagnosticFilterOptions = [
+        { label: '全部', value: 'all' },
+        { label: '错误', value: 'error' },
+        { label: '警告', value: 'warning' },
+        { label: '信息', value: 'info' }
+    ];
 
     const normalizeModule = (module, index = 0) => {
         const metadata = module?.metadata || {};
@@ -284,11 +372,18 @@
             imported: Boolean(module?.imported || module?.source === 'import'),
             isLocal,
             localPath,
+            fileName: module?.fileName || fileBaseName(localPath),
             status,
             compileStatus,
             _key: `${name}@${revision || 'none'}`
         };
     };
+
+    const normalizeDiagnostic = diagnostic => ({
+        ...diagnostic,
+        severity: String(diagnostic?.severity || diagnostic?.level || 'error').toLowerCase(),
+        fileName: diagnostic?.fileName || fileBaseName(diagnostic?.file || diagnostic?.filePath || diagnostic?.source)
+    });
 
     const mergeModules = nextModules => {
         const merged = new Map(modules.value.map(module => [module._key, module]));
@@ -335,6 +430,35 @@
     const failedModuleCount = computed(
         () => modules.value.filter(module => ['failed', 'missing', 'warning'].includes(module.status)).length
     );
+    const diagnosticErrorCount = computed(
+        () => diagnostics.value.filter(item => ['error', 'fatal'].includes(item.severity)).length
+    );
+    const diagnosticWarningCount = computed(
+        () => diagnostics.value.filter(item => ['warning', 'warn'].includes(item.severity)).length
+    );
+    const diagnosticCountHint = computed(() => {
+        if (!compileContext.value.compileId) return 0;
+        if (diagnosticLoadedCompileId.value === compileContext.value.compileId) return diagnostics.value.length;
+        return Number(compileContext.value.summary?.errors || 0) + Number(compileContext.value.summary?.warnings || 0);
+    });
+    const compileContextColor = computed(() => {
+        if (!compileContext.value.compileId) return 'default';
+        return compileContext.value.success === true ? 'success' : 'error';
+    });
+    const compileContextLabel = computed(() => {
+        if (!compileContext.value.compileId) return '尚未编译';
+        return compileContext.value.success === true ? '编译成功' : '编译失败';
+    });
+    const filteredDiagnostics = computed(() => {
+        if (diagnosticFilter.value === 'all') return diagnostics.value;
+        if (diagnosticFilter.value === 'error') {
+            return diagnostics.value.filter(item => ['error', 'fatal'].includes(item.severity));
+        }
+        if (diagnosticFilter.value === 'warning') {
+            return diagnostics.value.filter(item => ['warning', 'warn'].includes(item.severity));
+        }
+        return diagnostics.value.filter(item => !['error', 'fatal', 'warning', 'warn'].includes(item.severity));
+    });
     const downloadDisabledReason = computed(() => {
         if (!connected.value) return '请先建立 NETCONF 连接';
         if (selectedModules.value.length === 0) return '请先选择模块';
@@ -385,6 +509,117 @@
         } finally {
             loading.value = false;
         }
+    };
+
+    const normalizeCompileContext = data => {
+        const workspace = data?.workspace || data || {};
+        return {
+            compileId: workspace.compileId || '',
+            success: workspace.success ?? null,
+            compiledAt: workspace.compiledAt || null,
+            summary: workspace.summary || {}
+        };
+    };
+
+    const applyCompileContext = context => {
+        if (!context.compileId || context.compileId !== compileContext.value.compileId) {
+            diagnostics.value = [];
+            diagnosticLoadedCompileId.value = '';
+            diagnosticFilter.value = 'all';
+        }
+        compileContext.value = context;
+    };
+
+    const fetchCompileContext = async () => {
+        const { data } = await invokeBridge('yangApi', 'getWorkspace');
+        return normalizeCompileContext(data);
+    };
+
+    const loadCompileContext = async ({ quiet = false } = {}) => {
+        const contextRequestRevision = ++compileContextRequestRevision;
+        try {
+            const context = await fetchCompileContext();
+            if (contextRequestRevision !== compileContextRequestRevision) return null;
+            applyCompileContext(context);
+            return context;
+        } catch (error) {
+            if (contextRequestRevision === compileContextRequestRevision && !quiet) {
+                notify.error(`加载编译上下文失败：${error.message}`);
+            }
+            return null;
+        }
+    };
+
+    const loadDiagnostics = async options => {
+        const quiet = options?.quiet === true;
+        const requestRevision = ++diagnosticRequestRevision;
+        const contextRequestRevision = ++compileContextRequestRevision;
+        let requestedCompileId = '';
+        diagnosticLoading.value = true;
+        try {
+            const context = await fetchCompileContext();
+            if (
+                requestRevision !== diagnosticRequestRevision ||
+                contextRequestRevision !== compileContextRequestRevision
+            ) {
+                return;
+            }
+            applyCompileContext(context);
+            if (!context.compileId) return;
+            requestedCompileId = context.compileId;
+            const { data } = await invokeBridge('yangApi', 'getDiagnostics', { compileId: context.compileId });
+            if (
+                requestRevision !== diagnosticRequestRevision ||
+                contextRequestRevision !== compileContextRequestRevision ||
+                compileContext.value.compileId !== context.compileId
+            ) {
+                return;
+            }
+            const confirmedContext = await fetchCompileContext();
+            if (
+                requestRevision !== diagnosticRequestRevision ||
+                contextRequestRevision !== compileContextRequestRevision
+            ) {
+                return;
+            }
+            applyCompileContext(confirmedContext);
+            if (confirmedContext.compileId !== context.compileId) return;
+            diagnostics.value = unwrapArray(data, ['diagnostics', 'items']).map(normalizeDiagnostic);
+            diagnosticLoadedCompileId.value = context.compileId;
+        } catch (error) {
+            const requestIsCurrent =
+                requestRevision === diagnosticRequestRevision &&
+                contextRequestRevision === compileContextRequestRevision;
+            if (requestIsCurrent && requestedCompileId) {
+                diagnostics.value = [];
+                diagnosticLoadedCompileId.value = '';
+                try {
+                    const latestContext = await fetchCompileContext();
+                    if (
+                        requestRevision === diagnosticRequestRevision &&
+                        contextRequestRevision === compileContextRequestRevision
+                    ) {
+                        applyCompileContext(latestContext);
+                    }
+                } catch (_contextError) {
+                    // Keep the last known compile context while ensuring stale diagnostic rows are not displayed.
+                }
+            }
+            if (
+                requestRevision === diagnosticRequestRevision &&
+                contextRequestRevision === compileContextRequestRevision &&
+                !quiet
+            ) {
+                notify.error(`加载编译诊断失败：${error.message}`);
+            }
+        } finally {
+            if (requestRevision === diagnosticRequestRevision) diagnosticLoading.value = false;
+        }
+    };
+
+    const openDiagnostics = () => {
+        diagnosticModalOpen.value = true;
+        loadDiagnostics();
     };
 
     const loadSession = async () => {
@@ -442,7 +677,7 @@
             const asyncTask = handleImmediateTask('download', data, ['modules', 'downloaded']);
             if (!asyncTask) {
                 downloading.value = false;
-                await loadModules();
+                await Promise.all([loadModules(), loadCompileContext({ quiet: true })]);
                 notify.success('YANG 模型下载完成');
             }
         } catch (error) {
@@ -482,7 +717,7 @@
             const asyncTask = handleImmediateTask('import', data, ['modules']);
             if (!asyncTask) {
                 importing.value = false;
-                await loadModules();
+                await Promise.all([loadModules(), loadCompileContext({ quiet: true })]);
                 notify.success('YANG 文件导入完成');
             }
         } catch (error) {
@@ -510,7 +745,7 @@
             const asyncTask = handleImmediateTask('compile', data, ['modules']);
             if (!asyncTask) {
                 compiling.value = false;
-                await loadModules();
+                await Promise.all([loadModules(), loadDiagnostics({ quiet: true })]);
                 notify.success(data?.cacheHit ? '编译完成（缓存命中）' : 'YANG 编译完成');
             }
         } catch (error) {
@@ -525,18 +760,97 @@
     };
 
     const openSource = async module => {
+        const requestRevision = ++sourceRequestRevision;
         sourceModule.value = module;
         sourceDrawerOpen.value = true;
         sourceLoading.value = true;
         sourceText.value = '';
         try {
             const { data } = await invokeBridge('yangApi', 'getModuleSource', moduleIdentity(module));
-            sourceText.value = typeof data === 'string' ? data : data?.source || data?.content || '';
+            if (requestRevision === sourceRequestRevision) {
+                sourceText.value = typeof data === 'string' ? data : data?.source || data?.content || '';
+            }
         } catch (error) {
-            sourceText.value = `// 读取源码失败：${error.message}`;
+            if (requestRevision === sourceRequestRevision) {
+                sourceText.value = `// 读取源码失败：${error.message}`;
+            }
         } finally {
-            sourceLoading.value = false;
+            if (requestRevision === sourceRequestRevision) sourceLoading.value = false;
         }
+    };
+
+    const moduleForDiagnostic = diagnostic => {
+        const localModules = modules.value.filter(module => module.isLocal);
+        const moduleId = diagnostic?.moduleId;
+        if (moduleId) {
+            const idMatch = localModules.find(module =>
+                [module.id, module.moduleId, module.hash].filter(Boolean).includes(moduleId)
+            );
+            if (idMatch) return idMatch;
+        }
+
+        const sourceValues = [diagnostic?.source, diagnostic?.file, diagnostic?.filePath, diagnostic?.fileName]
+            .filter(Boolean)
+            .map(String);
+        const exactPathMatch = localModules.find(module =>
+            [module.filePath, module.path, module.localPath].filter(Boolean).some(value => sourceValues.includes(value))
+        );
+        if (exactPathMatch) return exactPathMatch;
+
+        const sourceFileNames = new Set(sourceValues.map(fileBaseName));
+        const fileMatches = localModules.filter(module => {
+            const canonicalName = `${module.name}${module.revision ? `@${module.revision}` : ''}.yang`;
+            const hashSuffixName = module.hash
+                ? `${module.name}${module.revision ? `@${module.revision}` : ''}-${String(module.hash).slice(0, 12)}.yang`
+                : '';
+            return [
+                module.fileName,
+                fileBaseName(module.filePath),
+                fileBaseName(module.path),
+                fileBaseName(module.localPath),
+                canonicalName,
+                hashSuffixName
+            ]
+                .filter(Boolean)
+                .some(value => sourceFileNames.has(value));
+        });
+        if (fileMatches.length === 1) return fileMatches[0];
+
+        const namedMatches = localModules.filter(module => {
+            const diagnosticModule = diagnostic?.module || diagnostic?.moduleName;
+            const diagnosticRevision = diagnostic?.revision || diagnostic?.revisionDate;
+            return diagnosticModule === module.name && (!diagnosticRevision || diagnosticRevision === module.revision);
+        });
+        return namedMatches.length === 1 ? namedMatches[0] : null;
+    };
+
+    const openDiagnosticSource = diagnostic => {
+        const module = moduleForDiagnostic(diagnostic);
+        if (!module) return;
+        openSource(module);
+    };
+
+    const diagnosticColor = severity => {
+        if (['error', 'fatal'].includes(severity)) return 'error';
+        if (['warning', 'warn'].includes(severity)) return 'warning';
+        return 'blue';
+    };
+
+    const diagnosticLabel = severity => {
+        if (['error', 'fatal'].includes(severity)) return '错误';
+        if (['warning', 'warn'].includes(severity)) return '警告';
+        return '信息';
+    };
+
+    const formatDiagnosticLocation = diagnostic => {
+        const location = diagnostic?.fileName || diagnostic?.file || diagnostic?.module || '-';
+        if (!diagnostic?.line) return location;
+        return `${location}:${diagnostic.line}${diagnostic.column ? `:${diagnostic.column}` : ''}`;
+    };
+
+    const formatCompileTime = value => {
+        const timestamp = Date.parse(value);
+        return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : String(value || '-');
     };
 
     const handleTaskProgress = payload => {
@@ -576,7 +890,8 @@
                 }
             }
         }
-        if (action === 'compile' && (data.phase || data.status) === 'failed') {
+        const taskFailed = (data.phase || data.status) === 'failed';
+        if (action === 'compile' && taskFailed) {
             refreshCompilerStatus({ force: true });
             modules.value.forEach(module => {
                 if (module.compileStatus === 'compiling') {
@@ -588,7 +903,10 @@
         if ((data.phase || data.status) === 'failed') {
             notify.error(data.message || data.error?.message || 'YANG 任务失败');
         }
-        loadModules();
+        Promise.all([
+            loadModules(),
+            action === 'compile' ? loadDiagnostics({ quiet: true }) : loadCompileContext({ quiet: true })
+        ]);
         window.setTimeout(() => {
             if (taskProgress.value && getTaskId(taskProgress.value) === taskId) taskProgress.value = null;
         }, 4000);
@@ -603,10 +921,22 @@
     onMounted(async () => {
         EventBus.on(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.MODULES, handleTaskProgress);
         EventBus.on(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.MODULES}-session`, handleSessionEvent);
-        await Promise.all([loadModules(), loadSession(), refreshCompilerStatus()]);
+        await Promise.all([loadModules(), loadSession(), refreshCompilerStatus(), loadCompileContext({ quiet: true })]);
     });
 
-    onActivated(() => Promise.all([loadModules(), loadSession(), refreshCompilerStatus()]));
+    onActivated(() =>
+        Promise.all([loadModules(), loadSession(), refreshCompilerStatus(), loadCompileContext({ quiet: true })])
+    );
+
+    onDeactivated(() => {
+        diagnosticRequestRevision += 1;
+        compileContextRequestRevision += 1;
+        sourceRequestRevision += 1;
+        diagnosticLoading.value = false;
+        sourceLoading.value = false;
+        diagnosticModalOpen.value = false;
+        sourceDrawerOpen.value = false;
+    });
 
     onBeforeUnmount(() => {
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.MODULES);
@@ -710,6 +1040,82 @@
     .mono-text {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 12px;
+    }
+
+    .diagnostic-context-bar,
+    .diagnostic-filter-bar,
+    .diagnostic-context-main {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .diagnostic-context-bar,
+    .diagnostic-filter-bar {
+        justify-content: space-between;
+    }
+
+    .diagnostic-context-bar {
+        padding-bottom: 9px;
+        color: var(--nn-color-text-muted);
+        font-size: 11px;
+    }
+
+    .diagnostic-filter-bar {
+        padding: 8px 0;
+        border-top: 1px solid var(--nn-color-border-light);
+        color: var(--nn-color-text-muted);
+        font-size: 11px;
+    }
+
+    .diagnostic-compile-id {
+        max-width: 360px;
+        overflow: hidden;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .diagnostic-list {
+        min-height: 240px;
+        max-height: calc(100vh - 260px);
+        overflow-y: auto;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+    }
+
+    .diagnostic-row {
+        display: flex;
+        width: 100%;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 8px;
+        border-bottom: 1px solid var(--nn-color-border-light);
+        color: var(--nn-color-text);
+    }
+
+    .diagnostic-row:last-child {
+        border-bottom: 0;
+    }
+
+    .diagnostic-content {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+    }
+
+    .diagnostic-message {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    .diagnostic-location {
+        margin-top: 2px;
+        color: var(--nn-color-text-muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 10px;
     }
 
     .source-preview {

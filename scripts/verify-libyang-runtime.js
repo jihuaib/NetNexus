@@ -27,7 +27,10 @@ async function beforePack(context = {}, dependencies = {}) {
     const write = dependencies.write || (message => process.stdout.write(message));
     for (const targetArch of targetArchitectures) {
         const status = runtimeVerifier({ projectRoot, platform, arch: targetArch });
-        write(`Verified bundled libyang ${status.version}: ${status.path}\n`);
+        write(
+            `Verified bundled libyang ${status.version} and effective Schema helper contract ` +
+                `${status.schemaContractVersion}: ${status.path}, ${status.schemaPath}\n`
+        );
     }
 }
 
