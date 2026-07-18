@@ -4,6 +4,10 @@ const { featurePageBrowserMockScript } = require('../../scripts/e2e-support/page
 const { FeaturePageE2eController } = require('../../scripts/e2e-support/page-controller');
 const { getReleaseManifest } = require('../../scripts/libyang-runtime-config');
 
+const BASE_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:base:1.0';
+const INTERFACES_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-interfaces';
+const SYSTEM_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-system';
+
 async function verifyBrowserBridge() {
     const calls = [];
     const window = {
@@ -153,8 +157,47 @@ async function verifyControllerFlow() {
 
     response = await controller.call('yang.netconf.executeOperation', { operation: 'get' });
     assert.equal(response.status, 'success');
-    assert.match(response.data.rpc, /<get\/>/u);
+    assert.match(response.data.rpc, /<get><\/get>/u);
     assert.match(response.data.reply, /<interfaces/u);
+
+    response = await controller.call('yang.netconf.executeOperation', {
+        operation: 'get',
+        filter: {
+            type: 'subtree',
+            content:
+                `<interfaces xmlns="${INTERFACES_NAMESPACE}"><interface>` +
+                '<name>eth0</name><in-octets/></interface></interfaces>'
+        }
+    });
+    assert.match(response.data.rpc, /<filter type="subtree">/u);
+    assert.match(response.data.reply, /<name>eth0<\/name><in-octets>102400<\/in-octets>/u);
+    assert.doesNotMatch(response.data.reply, /<(?:enabled|system)(?:\s|>)/u);
+
+    response = await controller.call('yang.netconf.executeOperation', {
+        operation: 'get-config',
+        source: 'running',
+        filter: {
+            type: 'subtree',
+            content:
+                `<interfaces xmlns="${INTERFACES_NAMESPACE}"><interface>` +
+                '<name>missing0</name><enabled/></interface></interfaces>'
+        }
+    });
+    assert.match(response.data.rpc, /<get-config><source><running\/><\/source>/u);
+    assert.match(response.data.reply, /<data><\/data>/u);
+    assert.doesNotMatch(response.data.reply, /<(?:interfaces|in-octets)(?:\s|>)/u);
+
+    const prefixedRawGet =
+        `<nc:rpc xmlns:nc="${BASE_NAMESPACE}" message-id="42"><nc:get>` +
+        '<nc:filter type="subtree">' +
+        `<sys:system xmlns:sys="${SYSTEM_NAMESPACE}"><sys:hostname/></sys:system>` +
+        '</nc:filter></nc:get></nc:rpc>';
+    response = await controller.call('yang.netconf.sendRpc', { rpc: prefixedRawGet });
+    assert.equal(response.data.messageId, '42');
+    assert.match(response.data.reply, /<system xmlns="urn:ietf:params:xml:ns:yang:ietf-system">/u);
+    assert.match(response.data.reply, /<hostname>netnexus-e2e<\/hostname>/u);
+    assert.doesNotMatch(response.data.reply, /<interfaces(?:\s|>)/u);
+
     response = await controller.call('yang.netconf.sendRpc', { rpc: '<rpc message-id="42"><commit/></rpc>' });
     assert.equal(response.status, 'success');
     assert.match(response.data.reply, /<ok\/>/u);

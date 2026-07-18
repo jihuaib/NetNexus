@@ -56,6 +56,12 @@ function decodeChunkedWrite(buffer) {
     return messages[0];
 }
 
+function extractMessageId(xml) {
+    const match = /message-id="([^"]+)"/.exec(xml);
+    assert(match, 'RPC envelope must contain a message-id');
+    return match[1];
+}
+
 async function runClientTests() {
     const transport = new FakeTransport();
     const client = new NetconfClient({ transport, rpcTimeout: 100, helloTimeout: 100 });
@@ -94,7 +100,11 @@ async function runClientTests() {
     );
     const [firstReply, secondReply] = await Promise.all([firstPromise, secondPromise]);
     assert.equal(firstReply.ok, true);
+    assert.equal(firstReply.requestXml, firstXml);
+    assert.equal(extractMessageId(firstReply.requestXml), firstReply.messageId);
     assert.equal(secondReply.messageId, secondId);
+    assert.equal(secondReply.requestXml, secondXml);
+    assert.equal(extractMessageId(secondReply.requestXml), secondReply.messageId);
     assert.equal(client.pending.size, 0);
 
     const errorPromise = client.rpc('<edit-config><target><running/></target><config/></edit-config>');
@@ -107,12 +117,20 @@ async function runClientTests() {
     );
     await assert.rejects(
         errorPromise,
-        error => error instanceof NetconfRpcError && error.errors[0].tag === 'operation-not-supported'
+        error =>
+            error instanceof NetconfRpcError &&
+            error.errors[0].tag === 'operation-not-supported' &&
+            error.requestXml === errorRpc &&
+            extractMessageId(error.requestXml) === error.messageId
     );
 
     await assert.rejects(
         client.rpc('<get/>', { timeout: 15 }),
-        error => error instanceof NetconfTimeoutError && error.code === 'NETCONF_RPC_TIMEOUT'
+        error =>
+            error instanceof NetconfTimeoutError &&
+            error.code === 'NETCONF_RPC_TIMEOUT' &&
+            error.requestXml.includes('<get/>') &&
+            extractMessageId(error.requestXml) === error.messageId
     );
     assert.equal(client.pending.size, 0);
 
@@ -124,7 +142,11 @@ async function runClientTests() {
     client.disconnect('test disconnect');
     await assert.rejects(
         pendingAtDisconnect,
-        error => error instanceof NetconfConnectionError && error.code === 'NETCONF_DISCONNECTED'
+        error =>
+            error instanceof NetconfConnectionError &&
+            error.code === 'NETCONF_DISCONNECTED' &&
+            error.requestXml.includes('<get/>') &&
+            extractMessageId(error.requestXml) === error.messageId
     );
     assert.equal(transport.ended, true);
     assert.equal(client.pending.size, 0);
@@ -149,7 +171,10 @@ async function runVersion10Test() {
     const outgoing = new DelimiterFramer().push(transport.writes[1])[0];
     assert(outgoing.includes('message-id="custom-7"'));
     transport.receive(encodeDelimiter('<rpc-reply message-id="custom-7"><ok/></rpc-reply>'));
-    assert.equal((await rpcPromise).ok, true);
+    const reply = await rpcPromise;
+    assert.equal(reply.ok, true);
+    assert.equal(reply.requestXml, outgoing);
+    assert.equal(extractMessageId(reply.requestXml), reply.messageId);
     client.disconnect();
 }
 

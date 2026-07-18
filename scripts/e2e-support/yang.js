@@ -3,6 +3,16 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { validateAuthoritativeSchemaTree } = require('../../electron/utils/yang/yangCompiler');
+const {
+    buildGet,
+    buildGetConfig,
+    childValues,
+    filterSubtreeXml,
+    findRoot,
+    getAttribute,
+    parseXml,
+    rpcReplyDataToConfig
+} = require('../../electron/utils/netconf');
 const { verifyRuntime } = require('../libyang-runtime-config');
 const { errorResponse, successResponse } = require('./common');
 
@@ -49,6 +59,16 @@ const capabilities = Object.freeze([
     'urn:ietf:params:netconf:capability:xpath:1.0',
     'urn:ietf:params:netconf:capability:yang-library:1.1?revision=2019-01-04',
     'urn:ietf:params:netconf:capability:notification:1.0'
+]);
+
+const PAGE_INTERFACES_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-interfaces';
+const PAGE_SYSTEM_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-system';
+const PAGE_KEY_DEFINITIONS = Object.freeze([
+    Object.freeze({
+        namespace: PAGE_INTERFACES_NAMESPACE,
+        element: 'interface',
+        keys: Object.freeze([Object.freeze({ namespace: PAGE_INTERFACES_NAMESPACE, name: 'name' })])
+    })
 ]);
 
 const moduleSources = Object.freeze({
@@ -599,6 +619,39 @@ function rpcEnvelope(messageId, body) {
     return `<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="${messageId}">${body}</rpc>`;
 }
 
+function pageDatastoreXml(includeOperational) {
+    const operationalState = includeOperational ? '<in-octets>102400</in-octets>' : '';
+    return (
+        `<system xmlns="${PAGE_SYSTEM_NAMESPACE}"><hostname>netnexus-e2e</hostname></system>` +
+        `<interfaces xmlns="${PAGE_INTERFACES_NAMESPACE}">` +
+        `<interface><name>eth0</name><enabled>true</enabled>${operationalState}</interface>` +
+        '</interfaces>'
+    );
+}
+
+function filterPageDatastore(rpc, includeOperational) {
+    return filterSubtreeXml(pageDatastoreXml(includeOperational), rpc, {
+        keyDefinitions: PAGE_KEY_DEFINITIONS,
+        passthroughUnsupported: true
+    });
+}
+
+function readOperationFromRpc(rpc) {
+    const root = findRoot(parseXml(rpc));
+    if (!root) return null;
+    if (root.name === 'get' || root.name === 'get-config') {
+        return { name: root.name, messageId: null, operationXml: rpc };
+    }
+    if (root.name !== 'rpc') return null;
+    const name =
+        childValues(root.value, 'get-config').length > 0
+            ? 'get-config'
+            : childValues(root.value, 'get').length > 0
+              ? 'get'
+              : null;
+    return name ? { name, messageId: getAttribute(root.value, 'message-id'), operationXml: rpc } : null;
+}
+
 function executeNetconfOperation(yang, request) {
     if (!yang.connected) return errorResponse('请先建立 NETCONF 会话');
     const operation = String(request.operation || 'get');
@@ -606,26 +659,33 @@ function executeNetconfOperation(yang, request) {
     let operationXml = `<${operation}/>`;
     let replyBody = '<ok/>';
     if (operation === 'get' || operation === 'get-config') {
-        operationXml = `<${operation}/>`;
-        replyBody =
-            '<data><interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"><interface>' +
-            '<name>eth0</name><enabled>true</enabled><in-octets>102400</in-octets>' +
-            '</interface></interfaces></data>';
+        const readOptions = { ...request };
+        delete readOptions.messageId;
+        delete readOptions.wrap;
+        operationXml = operation === 'get' ? buildGet(readOptions) : buildGetConfig(readOptions);
     }
     const rpc = rpcEnvelope(messageId, operationXml);
+    if (operation === 'get' || operation === 'get-config') {
+        replyBody = `<data>${filterPageDatastore(rpc, operation === 'get')}</data>`;
+    }
     const reply = `<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="${messageId}">${replyBody}</rpc-reply>`;
-    return successResponse({ operation, messageId, rpc, reply, errors: [] });
+    const response = { operation, messageId, rpc, requestXml: rpc, reply, errors: [] };
+    if (operation === 'get-config') Object.assign(response, rpcReplyDataToConfig(reply));
+    return successResponse(response);
 }
 
 function sendRawRpc(yang, request) {
     if (!yang.connected) return errorResponse('请先建立 NETCONF 会话');
-    const messageId = String(++yang.rpcSequence);
-    const rpc = String(request.rpc || '').trim() || rpcEnvelope(messageId, '<get/>');
-    const dataReply = /<(?:[\w-]+:)?get(?:[\s>])/u.test(rpc)
-        ? '<data><system xmlns="urn:ietf:params:xml:ns:yang:ietf-system"><hostname>netnexus-e2e</hostname></system></data>'
+    const generatedMessageId = String(++yang.rpcSequence);
+    const source = String(request.rpc || '').trim() || '<get/>';
+    const readOperation = readOperationFromRpc(source);
+    const messageId = String(readOperation?.messageId || generatedMessageId);
+    const rpc = findRoot(parseXml(source))?.name === 'rpc' ? source : rpcEnvelope(messageId, source);
+    const replyBody = readOperation
+        ? `<data>${filterPageDatastore(rpc, readOperation.name === 'get')}</data>`
         : '<ok/>';
-    const reply = `<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="${messageId}">${dataReply}</rpc-reply>`;
-    return successResponse({ messageId, rpc, reply, errors: [] });
+    const reply = `<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="${messageId}">${replyBody}</rpc-reply>`;
+    return successResponse({ messageId, rpc, requestXml: rpc, reply, errors: [] });
 }
 
 function handleRegistryCall(controller, yang, method, args) {

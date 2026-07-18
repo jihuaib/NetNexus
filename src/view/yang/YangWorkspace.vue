@@ -10,8 +10,13 @@
                     <nn-tag :color="connected ? 'success' : 'default'">
                         NETCONF {{ connected ? '已连接' : '未连接' }}
                     </nn-tag>
-                    <nn-tag v-if="compileId && compileSucceeded" color="success">Schema 已就绪</nn-tag>
-                    <nn-tag v-else-if="compileId" color="error">Schema 生成失败</nn-tag>
+                    <nn-tag v-if="schemaStatus === 'ready'" color="success">Schema 已就绪</nn-tag>
+                    <nn-tag v-else-if="schemaStatus === 'compile-failed'" color="error">Schema 生成失败</nn-tag>
+                    <nn-tag v-else-if="schemaStatus === 'restore-failed'" color="error" :title="schemaStatusMessage">
+                        Schema 恢复失败
+                    </nn-tag>
+                    <nn-tag v-else-if="schemaStatus === 'restoring'" color="processing">Schema 恢复中</nn-tag>
+                    <nn-tag v-else-if="compileId" color="default">Schema 状态未知</nn-tag>
                     <nn-tag v-else color="default">暂无 Schema</nn-tag>
                     <nn-tag color="blue">模块 {{ workspaceSummary.moduleCount }}</nn-tag>
                     <nn-tag color="cyan">节点 {{ workspaceSummary.nodeCount }}</nn-tag>
@@ -20,9 +25,13 @@
 
             <div class="workspace-toolbar">
                 <div class="workspace-actions">
-                    <nn-button :loading="loading" @click="loadWorkspace">
+                    <nn-button :loading="loading" @click="loadWorkspace()">
                         <template #icon><ReloadOutlined /></template>
                         刷新
+                    </nn-button>
+                    <nn-button class="execution-history-trigger" @click="executionHistoryOpen = true">
+                        <template #icon><ClockCircleOutlined /></template>
+                        执行记录
                     </nn-button>
                     <nn-button
                         danger
@@ -49,7 +58,6 @@
                     <div class="panel-header">
                         <div class="panel-heading">
                             <span class="panel-title">Schema 索引</span>
-                            <span class="panel-meta">libyang effective schema · 单击选择 · 右键查看属性或执行操作</span>
                         </div>
                         <nn-input-search
                             v-model:value="treeQuery"
@@ -72,7 +80,18 @@
                             >
                                 <template #title="node">
                                     <span class="schema-node-title">
-                                        <LoadingOutlined v-if="node.loading" spin class="node-loading" />
+                                        <span
+                                            class="schema-node-icon"
+                                            :class="`schema-node-icon-${schemaNodeIconKind(node)}`"
+                                            :data-node-icon="schemaNodeIconKind(node)"
+                                            aria-hidden="true"
+                                        >
+                                            <component
+                                                :is="schemaNodeIconComponent(node)"
+                                                :spin="node.loading"
+                                                :stroke-width="1.8"
+                                            />
+                                        </span>
                                         <span class="schema-node-name">{{ node.title }}</span>
                                         <span class="schema-node-keyword">{{ node.keyword || node.kind }}</span>
                                         <span v-if="node.config === false" class="schema-node-access schema-node-state">
@@ -109,11 +128,14 @@
                     <YangOperations
                         embedded
                         :operation="operationContext.operation"
+                        :compile-id="compileId"
+                        :schema-tree="treeData"
                         :context-revision="operationContextRevision"
                         :context-node="operationContext.node || deviceOperationRoot"
                         :context-subtree="operationContext.subtree"
                         :context-config="operationContext.config"
                         :context-raw-rpc="operationContext.rawRpc"
+                        :context-params="operationContext.params"
                         @executing-change="handleOperationExecutingChange"
                     />
                 </section>
@@ -136,73 +158,13 @@
             <div class="schema-context-menu-path" :title="contextMenu.node?.path">
                 {{ contextMenu.node?.path || '设备级操作' }}
             </div>
-            <nn-menu class="schema-context-menu-list" :selectable="false" @click="handleContextMenuClick">
-                <nn-menu-item key="node-properties" :disabled="contextMenu.node?.virtualDevice">
-                    <template #icon><EyeOutlined /></template>
-                    查看节点属性
-                </nn-menu-item>
-                <nn-menu-item key="copy-path" :disabled="!contextMenu.node?.path">
-                    <template #icon><CopyOutlined /></template>
-                    复制 Schema 路径
-                </nn-menu-item>
-                <nn-menu-divider />
-                <nn-menu-item key="get" :disabled="Boolean(operationDisabledReason('get', contextMenu.node))">
-                    <template #icon><ApiOutlined /></template>
-                    {{ isDataNode(contextMenu.node) ? '读取当前节点（get）' : '读取全部数据（get）' }}
-                </nn-menu-item>
-                <nn-menu-item
-                    key="get-config"
-                    :disabled="Boolean(operationDisabledReason('get-config', contextMenu.node))"
-                >
-                    <template #icon><FileSearchOutlined /></template>
-                    {{ isConfigDataNode(contextMenu.node) ? '读取节点配置（get-config）' : '读取配置（get-config）' }}
-                </nn-menu-item>
-                <nn-menu-item
-                    key="edit-config"
-                    :disabled="Boolean(operationDisabledReason('edit-config', contextMenu.node))"
-                >
-                    <template #icon><EditOutlined /></template>
-                    编辑当前节点（edit-config）
-                </nn-menu-item>
-                <nn-menu-divider />
-                <nn-menu-item key="copy-config" :disabled="Boolean(operationDisabledReason('copy-config'))">
-                    <template #icon><CopyOutlined /></template>
-                    复制配置存储（copy-config）
-                </nn-menu-item>
-                <nn-menu-item key="delete-config" :disabled="Boolean(operationDisabledReason('delete-config'))">
-                    <template #icon><DeleteOutlined /></template>
-                    删除整个配置存储（delete-config）
-                </nn-menu-item>
-                <nn-menu-item key="lock" :disabled="Boolean(operationDisabledReason('lock'))">
-                    <template #icon><SafetyOutlined /></template>
-                    锁定配置存储（lock）
-                </nn-menu-item>
-                <nn-menu-item key="unlock" :disabled="Boolean(operationDisabledReason('unlock'))">
-                    <template #icon><SafetyOutlined /></template>
-                    解锁配置存储（unlock）
-                </nn-menu-item>
-                <nn-menu-item key="validate" :disabled="Boolean(operationDisabledReason('validate'))">
-                    <template #icon><CodeOutlined /></template>
-                    校验配置（validate）
-                </nn-menu-item>
-                <nn-menu-item key="commit" :disabled="Boolean(operationDisabledReason('commit'))">
-                    <template #icon><SendOutlined /></template>
-                    提交 candidate（commit）
-                </nn-menu-item>
-                <nn-menu-item key="discard-changes" :disabled="Boolean(operationDisabledReason('discard-changes'))">
-                    <template #icon><DeleteOutlined /></template>
-                    放弃 candidate 修改
-                </nn-menu-item>
-                <nn-menu-divider />
-                <nn-menu-item key="raw-rpc" :disabled="Boolean(operationDisabledReason('raw-rpc'))">
-                    <template #icon><CodeOutlined /></template>
-                    {{ isRpcNode(contextMenu.node) ? `执行 ${contextMenu.node.keyword}` : '原始 RPC' }}
-                </nn-menu-item>
-                <nn-menu-item v-if="!connected" key="connection">
-                    <template #icon><ApiOutlined /></template>
-                    前往连接设置
-                </nn-menu-item>
-            </nn-menu>
+            <nn-menu
+                class="schema-context-menu-list"
+                submenu-mode="popup"
+                :items="schemaContextMenuItems"
+                :selectable="false"
+                @click="handleContextMenuClick"
+            />
             <div class="schema-context-menu-hint">
                 {{ contextMenuHint }}
             </div>
@@ -258,11 +220,13 @@
                 </nn-spin>
             </div>
         </nn-modal>
+
+        <YangExecutionHistoryDrawer v-model:open="executionHistoryOpen" />
     </div>
 </template>
 
 <script setup>
-    import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from 'vue';
+    import { computed, h, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from 'vue';
     import { useRouter } from 'vue-router';
     import {
         NETCONF_CAPABILITY_HINTS,
@@ -276,17 +240,27 @@
     import { notify } from '../../utils/notify';
     import {
         ApiOutlined,
+        BellOutlined,
+        ClockCircleOutlined,
+        CloudServerOutlined,
+        ClusterOutlined,
         CodeOutlined,
         CopyOutlined,
         DeleteOutlined,
         EditOutlined,
         EyeOutlined,
         FileSearchOutlined,
+        FileTextOutlined,
+        FolderOpenOutlined,
+        FolderOutlined,
+        KeyOutlined,
         LoadingOutlined,
         ReloadOutlined,
         SafetyOutlined,
-        SendOutlined
+        SendOutlined,
+        UnorderedListOutlined
     } from '../../ui/icons';
+    import YangExecutionHistoryDrawer from './YangExecutionHistoryDrawer.vue';
     import YangOperations from './YangOperations.vue';
     import {
         invokeBridge,
@@ -302,12 +276,29 @@
     const router = useRouter();
     const DATA_NODE_KEYWORDS = new Set(['container', 'list', 'leaf', 'leaf-list', 'anydata', 'anyxml']);
     const RPC_NODE_KEYWORDS = new Set(['rpc', 'action']);
+    const LEAF_NODE_KEYWORDS = new Set(['leaf', 'leaf-list', 'anydata', 'anyxml']);
     const CONTEXT_MENU_MARGIN = 8;
+    const SCHEMA_NODE_ICONS = Object.freeze({
+        device: CloudServerOutlined,
+        module: CodeOutlined,
+        container: FolderOutlined,
+        list: UnorderedListOutlined,
+        key: KeyOutlined,
+        leaf: FileTextOutlined,
+        state: EyeOutlined,
+        operation: ApiOutlined,
+        notification: BellOutlined,
+        branch: ClusterOutlined,
+        io: SendOutlined,
+        loading: LoadingOutlined,
+        fallback: FileSearchOutlined
+    });
 
     const loading = ref(false);
     const treeLoading = ref(false);
     const compileId = ref('');
-    const compileSucceeded = ref(false);
+    const schemaStatus = ref('none');
+    const schemaStatusMessage = ref('');
     const workspaceSummary = ref({ moduleCount: 0, nodeCount: 0, cacheHit: false });
     const workspaceModules = ref([]);
     const treeData = ref([]);
@@ -319,10 +310,18 @@
     const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] });
     const contextMenuRef = ref(null);
     const contextMenu = reactive({ visible: false, x: 0, y: 0, node: null });
-    const operationContext = reactive({ operation: 'get', node: null, subtree: '', config: '', rawRpc: '' });
+    const operationContext = reactive({
+        operation: 'get',
+        node: null,
+        subtree: '',
+        config: '',
+        rawRpc: '',
+        params: {}
+    });
     const operationContextRevision = ref(0);
     const operationExecuting = ref(false);
     const nodePropertyOpen = ref(false);
+    const executionHistoryOpen = ref(false);
     const workspaceLayoutRef = ref(null);
     const {
         paneSize: schemaPaneWidth,
@@ -336,7 +335,7 @@
     } = usePaneResize({
         containerRef: workspaceLayoutRef,
         orientation: 'vertical',
-        defaultRatio: 0.36,
+        defaultRatio: 0,
         minFirst: 320,
         minSecond: 420,
         dividerSize: 8,
@@ -344,6 +343,10 @@
     });
     let contextMenuOpenRequest = 0;
     let detailRequestRevision = 0;
+    let workspaceRequestRevision = 0;
+    let schemaRootsPromise = null;
+    let schemaRootsPromiseCompileId = '';
+    let schemaRestoreFailedCompileId = '';
     let clearWorkspaceConfirmHandle = null;
 
     const normalizeModule = (module, index) => {
@@ -355,28 +358,82 @@
         return { ...module, id, name, revision, _key: id || `${name}@${revision || 'none'}` };
     };
 
-    const normalizeNode = (node, index = 0) => {
+    const schemaNodeKeyword = node =>
+        String(node?.keyword || node?.kind || '')
+            .trim()
+            .toLowerCase();
+    const schemaLocalName = value => {
+        const name = String(value || '').trim();
+        return name.includes(':') ? name.slice(name.lastIndexOf(':') + 1) : name;
+    };
+    const normalizeSchemaKeys = value => {
+        const values = Array.isArray(value) ? value : String(value || '').split(/\s+/u);
+        return [...new Set(values.map(schemaLocalName).filter(name => /^[A-Za-z_][\w.-]*$/u.test(name)))];
+    };
+    const schemaChildContext = node => ({
+        parentKeyword: schemaNodeKeyword(node),
+        listKeys: schemaNodeKeyword(node) === 'list' ? normalizeSchemaKeys(node?.schemaKey) : []
+    });
+
+    const normalizeNode = (node, index = 0, parentContext = {}) => {
         const id = node?.id || node?.nodeId || node?.key || `${node?.path || node?.name || 'node'}-${index}`;
         const hasChildren = Boolean(node?.hasChildren || Number(node?.childCount || 0) > 0 || node?.children?.length);
         const keyword = node?.keyword || node?.kind || '';
-        const schemaKey =
-            node?.schemaKey ||
-            node?.listKey ||
-            node?.listKeys ||
-            (keyword === 'list' && node?.id ? node?.key || '' : '');
+        const normalizedKeyword = String(keyword).trim().toLowerCase();
+        const name = node?.name || node?.title || '';
+        const schemaKey = node?.schemaKey ?? node?.listKey ?? node?.listKeys ?? [];
+        const parentListKeys = Array.isArray(parentContext.listKeys) ? parentContext.listKeys : [];
+        const isListKey = Boolean(
+            node?.isListKey === true ||
+                node?.isKey === true ||
+                node?.keyLeaf === true ||
+                (normalizedKeyword === 'leaf' &&
+                    parentContext.parentKeyword === 'list' &&
+                    parentListKeys.includes(schemaLocalName(name)))
+        );
+        const childContext = {
+            parentKeyword: normalizedKeyword,
+            listKeys: normalizedKeyword === 'list' ? normalizeSchemaKeys(schemaKey) : []
+        };
         return {
             ...node,
             id,
             key: id,
             title: node?.title || node?.name || node?.keyword || id,
-            name: node?.name || node?.title || '',
+            name,
             keyword,
             schemaKey,
+            isListKey,
             isLeaf: !hasChildren,
-            children: Array.isArray(node?.children) ? node.children.map(normalizeNode) : [],
+            children: Array.isArray(node?.children)
+                ? node.children.map((child, childIndex) => normalizeNode(child, childIndex, childContext))
+                : [],
             childrenLoaded: Array.isArray(node?.children) && node.children.length > 0,
             loading: false
         };
+    };
+
+    const schemaNodeIconKind = node => {
+        if (node?.loading) return 'loading';
+        if (node?.virtualDevice) return 'device';
+        if (node?.isListKey) return 'key';
+        const keyword = schemaNodeKeyword(node);
+        if (['module', 'submodule'].includes(keyword)) return 'module';
+        if (keyword === 'container') return 'container';
+        if (keyword === 'list') return 'list';
+        if (node?.config === false && LEAF_NODE_KEYWORDS.has(keyword)) return 'state';
+        if (LEAF_NODE_KEYWORDS.has(keyword)) return 'leaf';
+        if (RPC_NODE_KEYWORDS.has(keyword)) return 'operation';
+        if (keyword === 'notification') return 'notification';
+        if (['choice', 'case'].includes(keyword)) return 'branch';
+        if (['input', 'output'].includes(keyword)) return 'io';
+        return 'fallback';
+    };
+
+    const schemaNodeIconComponent = node => {
+        const kind = schemaNodeIconKind(node);
+        if (kind === 'container' && expandedKeys.value.includes(node?.key)) return FolderOpenOutlined;
+        return SCHEMA_NODE_ICONS[kind] || SCHEMA_NODE_ICONS.fallback;
     };
 
     const capabilities = computed(() => {
@@ -400,7 +457,7 @@
         const node = contextMenu.node;
         if (node?.config === false) return 'state 节点只允许 get；datastore 操作作用于整个配置存储';
         if (isRpcNode(node)) return `${node.keyword} 将以原始 RPC 草稿打开，请确认实例路径和参数`;
-        return '节点操作会自动预填 XML 草稿；delete-config 删除的是整个 datastore';
+        return '节点操作会自动预填 XML；Candidate 工作区和配置存储菜单始终作用于整个 datastore';
     });
     const deviceOperationRoot = computed(() => ({
         id: 'netconf-device-root',
@@ -426,23 +483,52 @@
         return [deviceOperationRoot.value, ...filterNodes(treeData.value)];
     });
     const resetOperationContext = () => {
-        Object.assign(operationContext, { operation: 'get', node: null, subtree: '', config: '', rawRpc: '' });
+        Object.assign(operationContext, {
+            operation: 'get',
+            node: null,
+            subtree: '',
+            config: '',
+            rawRpc: '',
+            params: {}
+        });
         operationContextRevision.value += 1;
     };
-    const applyWorkspace = data => {
+    const applyWorkspace = (data, { preserveTree = false } = {}) => {
         const workspace = data?.workspace || data || {};
-        compileId.value = workspace.compileId || workspace.id || compileId.value || '';
+        const nextCompileId = workspace.compileId || workspace.id || '';
+        if (nextCompileId !== compileId.value) {
+            schemaRestoreFailedCompileId = '';
+            schemaStatusMessage.value = '';
+        }
+        compileId.value = nextCompileId;
         const summary = workspace.summary || {};
         const nextModules = unwrapArray(workspace.modules, ['modules']);
-        if (nextModules.length) workspaceModules.value = nextModules.map(normalizeModule);
+        workspaceModules.value = nextModules.map(normalizeModule);
         const schemaTree = workspace.schemaTree || {};
         const authoritativeSchema = schemaTree.authoritative === true && schemaTree.source === 'libyang-effective';
-        compileSucceeded.value =
-            authoritativeSchema && (workspace.success === true || workspace.validation?.succeeded === true);
+        const workspaceSucceeded = workspace.success === true || workspace.validation?.succeeded === true;
+        const workspaceFailed = workspace.success === false;
+        if (!compileId.value) {
+            schemaStatus.value = 'none';
+            schemaStatusMessage.value = '';
+        } else if (workspaceFailed) {
+            schemaStatus.value = 'compile-failed';
+            schemaStatusMessage.value = '';
+        } else if (authoritativeSchema && workspaceSucceeded) {
+            schemaStatus.value = 'ready';
+            schemaStatusMessage.value = '';
+            schemaRestoreFailedCompileId = '';
+        } else if (preserveTree && treeData.value.length && workspaceSucceeded) {
+            schemaStatus.value = 'ready';
+        } else if (workspaceSucceeded) {
+            schemaStatus.value = schemaRestoreFailedCompileId === compileId.value ? 'restore-failed' : 'restoring';
+        } else {
+            schemaStatus.value = 'unknown';
+        }
         const inlineRoots = authoritativeSchema
             ? unwrapArray(schemaTree.roots || workspace.roots, ['nodes', 'roots'])
             : [];
-        if (inlineRoots.length) treeData.value = inlineRoots.map(normalizeNode);
+        if (!preserveTree) treeData.value = inlineRoots.map((node, index) => normalizeNode(node, index));
         workspaceSummary.value = {
             ...workspaceSummary.value,
             ...summary,
@@ -450,50 +536,110 @@
             moduleCount: Number(
                 summary.moduleCount ?? workspace.modules?.length ?? workspaceSummary.value.moduleCount ?? 0
             ),
-            nodeCount: authoritativeSchema
-                ? Number(summary.nodeCount ?? schemaTree.nodeCount ?? workspaceSummary.value.nodeCount ?? 0)
-                : 0
+            nodeCount:
+                authoritativeSchema || preserveTree || workspaceSucceeded
+                    ? Number(summary.nodeCount ?? schemaTree.nodeCount ?? workspaceSummary.value.nodeCount ?? 0)
+                    : 0
         };
     };
 
-    const loadRoots = async () => {
+    const loadRoots = async ({ force = false } = {}) => {
         if (!compileId.value) {
             treeData.value = [];
-            return;
+            schemaStatus.value = 'none';
+            schemaStatusMessage.value = '';
+            return false;
         }
+        const requestedCompileId = compileId.value;
+        if (!force && schemaRestoreFailedCompileId === requestedCompileId) return false;
+        if (schemaRootsPromise && schemaRootsPromiseCompileId === requestedCompileId) return schemaRootsPromise;
+
+        schemaStatus.value = 'restoring';
+        schemaStatusMessage.value = '';
         treeLoading.value = true;
-        try {
-            const { data } = await invokeBridge('yangApi', 'getSchemaRoots', { compileId: compileId.value });
-            treeData.value = unwrapArray(data, ['nodes', 'roots']).map(normalizeNode);
-        } catch (error) {
-            notify.error(`加载 Schema 树失败：${error.message}`);
-        } finally {
-            treeLoading.value = false;
-        }
+        schemaRootsPromiseCompileId = requestedCompileId;
+        const request = (async () => {
+            try {
+                const { data } = await invokeBridge('yangApi', 'getSchemaRoots', {
+                    compileId: requestedCompileId
+                });
+                if (compileId.value !== requestedCompileId) return false;
+                treeData.value = unwrapArray(data, ['nodes', 'roots']).map((node, index) => normalizeNode(node, index));
+                schemaStatus.value = 'ready';
+                schemaStatusMessage.value = '';
+                schemaRestoreFailedCompileId = '';
+                return true;
+            } catch (error) {
+                if (compileId.value !== requestedCompileId) return false;
+                schemaStatus.value = 'restore-failed';
+                schemaStatusMessage.value = error.message;
+                schemaRestoreFailedCompileId = requestedCompileId;
+                notify.error(`恢复 Schema 树失败：${error.message}`);
+                return false;
+            } finally {
+                if (schemaRootsPromiseCompileId === requestedCompileId) {
+                    treeLoading.value = false;
+                    schemaRootsPromise = null;
+                    schemaRootsPromiseCompileId = '';
+                }
+            }
+        })();
+        schemaRootsPromise = request;
+        return request;
     };
 
-    const loadWorkspace = async () => {
+    const workspaceHasSuccessfulCompilation = workspace =>
+        Boolean(
+            (workspace?.compileId || workspace?.id) &&
+                (workspace?.success === true || workspace?.validation?.succeeded === true)
+        );
+
+    const loadWorkspace = async ({ preserveTree = false, retrySchemaRestore = true } = {}) => {
+        const requestRevision = ++workspaceRequestRevision;
         loading.value = true;
         const previousCompileId = compileId.value;
         try {
             const { data } = await invokeBridge('yangApi', 'getWorkspace');
-            compileId.value = '';
-            compileSucceeded.value = false;
-            workspaceModules.value = [];
-            treeData.value = [];
-            selectedKeys.value = [];
-            detailRequestRevision += 1;
-            detailNode.value = null;
-            detailLoading.value = false;
-            nodePropertyOpen.value = false;
-            applyWorkspace(data);
-            if (previousCompileId && previousCompileId !== compileId.value) resetOperationContext();
-            if (compileSucceeded.value && compileId.value && treeData.value.length === 0) await loadRoots();
+            if (requestRevision !== workspaceRequestRevision) return;
+            const workspace = data?.workspace || data || {};
+            const nextCompileId = workspace.compileId || workspace.id || '';
+            const preserveExistingTree = Boolean(
+                preserveTree &&
+                    previousCompileId &&
+                    previousCompileId === nextCompileId &&
+                    workspace.success !== false &&
+                    treeData.value.length
+            );
+
+            if (!preserveExistingTree) {
+                workspaceModules.value = [];
+                treeData.value = [];
+                expandedKeys.value = [];
+                selectedKeys.value = [];
+                detailRequestRevision += 1;
+                detailNode.value = null;
+                detailLoading.value = false;
+                nodePropertyOpen.value = false;
+            }
+
+            applyWorkspace(data, { preserveTree: preserveExistingTree });
+            if (!preserveExistingTree && previousCompileId && previousCompileId !== compileId.value) {
+                resetOperationContext();
+            }
+            if (
+                workspaceHasSuccessfulCompilation(workspace) &&
+                treeData.value.length === 0 &&
+                schemaStatus.value !== 'ready'
+            ) {
+                await loadRoots({ force: retrySchemaRestore });
+            }
             if (workspaceModules.value.length === 0) await loadWorkspaceModules();
         } catch (error) {
-            notify.error(`加载 Schema 工作区失败：${error.message}`);
+            if (requestRevision === workspaceRequestRevision) {
+                notify.error(`加载 Schema 工作区失败：${error.message}`);
+            }
         } finally {
-            loading.value = false;
+            if (requestRevision === workspaceRequestRevision) loading.value = false;
         }
     };
 
@@ -537,7 +683,7 @@
         capabilities.value.some(capability => capability.toLowerCase().includes(hint.toLowerCase()));
     const hasCapability = name => capabilityIncludes(NETCONF_CAPABILITY_HINTS[name] || name);
 
-    const operationDisabledReason = (operation, node = null) => {
+    const operationDisabledReason = (operation, node = null, params = {}) => {
         if (operationExecuting.value) return '设备操作执行中，请等待 rpc-reply';
         if (!connected.value) return '请先建立 NETCONF 会话';
         if (operation === 'get-config' && isDataNode(node) && node?.config === false) {
@@ -556,11 +702,362 @@
             return '标准 delete-config 需要设备声明 :startup 能力';
         }
         if (operation === 'validate' && !hasCapability('validate')) return '设备未声明 :validate 能力';
-        if (['commit', 'discard-changes'].includes(operation) && !hasCapability('candidate')) {
+        if (['commit', 'cancel-commit', 'discard-changes'].includes(operation) && !hasCapability('candidate')) {
             return '设备未声明 :candidate 能力';
+        }
+        if (operation === 'cancel-commit' && !hasCapability('confirmedCommit')) {
+            return '设备未声明 :confirmed-commit 能力';
+        }
+        if (operation === 'commit' && params.confirmed && !hasCapability('confirmedCommit')) {
+            return '设备未声明 :confirmed-commit 能力';
+        }
+
+        const source = params.source || params.copySource || params.validateSource;
+        const target = params.target || params.copyTarget || params.deleteTarget || params.lockTarget;
+        const datastoreCapabilityReason = datastore => {
+            if (datastore === 'candidate' && !hasCapability('candidate')) return '设备未声明 :candidate 能力';
+            if (datastore === 'startup' && !hasCapability('startup')) return '设备未声明 :startup 能力';
+            return '';
+        };
+        const sourceReason = datastoreCapabilityReason(source);
+        if (sourceReason) return sourceReason;
+        const targetReason = datastoreCapabilityReason(target);
+        if (targetReason) return targetReason;
+        if (operation === 'edit-config' && target === 'running' && !hasCapability('writableRunning')) {
+            return '设备未声明 :writable-running 能力';
+        }
+        if (operation === 'copy-config' && target === 'running' && !hasCapability('writableRunning')) {
+            return '设备未声明 :writable-running 能力';
         }
         return '';
     };
+
+    const menuIcon = component => () => h(component, { strokeWidth: 1.8 });
+    const operationMenuItem = ({ key, label, operation, icon, scope = 'node', params = {} }) => {
+        const node = scope === 'node' ? contextMenu.node : null;
+        const disabledReason = operationDisabledReason(operation, node, params);
+        return {
+            key,
+            label,
+            icon: menuIcon(icon),
+            disabled: Boolean(disabledReason),
+            title: disabledReason || label,
+            action: { type: 'operation', operation, scope, params }
+        };
+    };
+    const allMenuActionsDisabled = items =>
+        items
+            .filter(item => item?.type !== 'divider')
+            .every(item => item.disabled || (item.children?.length && allMenuActionsDisabled(item.children)));
+
+    const schemaContextMenuItems = computed(() => {
+        const node = contextMenu.node;
+        if (!node) return [];
+
+        const getConfigChildren = [
+            operationMenuItem({
+                key: 'get-config:running',
+                label: 'Running',
+                operation: 'get-config',
+                icon: FileSearchOutlined,
+                params: { source: 'running' }
+            })
+        ];
+        if (hasCapability('candidate')) {
+            getConfigChildren.push(
+                operationMenuItem({
+                    key: 'get-config:candidate',
+                    label: 'Candidate',
+                    operation: 'get-config',
+                    icon: FileSearchOutlined,
+                    params: { source: 'candidate' }
+                })
+            );
+        }
+        if (hasCapability('startup')) {
+            getConfigChildren.push(
+                operationMenuItem({
+                    key: 'get-config:startup',
+                    label: 'Startup',
+                    operation: 'get-config',
+                    icon: FileSearchOutlined,
+                    params: { source: 'startup' }
+                })
+            );
+        }
+
+        const editConfigChildren = [];
+        if (hasCapability('candidate')) {
+            editConfigChildren.push(
+                operationMenuItem({
+                    key: 'edit-config:candidate',
+                    label: 'Candidate',
+                    operation: 'edit-config',
+                    icon: EditOutlined,
+                    params: { target: 'candidate' }
+                })
+            );
+        }
+        if (hasCapability('writableRunning')) {
+            editConfigChildren.push(
+                operationMenuItem({
+                    key: 'edit-config:running',
+                    label: 'Running',
+                    operation: 'edit-config',
+                    icon: EditOutlined,
+                    params: { target: 'running' }
+                })
+            );
+        }
+
+        const candidateChildren = [];
+        if (hasCapability('validate')) {
+            candidateChildren.push(
+                operationMenuItem({
+                    key: 'candidate:validate',
+                    label: '校验 Candidate（validate）',
+                    operation: 'validate',
+                    icon: CodeOutlined,
+                    scope: 'datastore',
+                    params: { validateSource: 'candidate' }
+                })
+            );
+        }
+        candidateChildren.push(
+            operationMenuItem({
+                key: 'candidate:commit',
+                label: '提交整个 Candidate → Running',
+                operation: 'commit',
+                icon: SendOutlined,
+                scope: 'datastore',
+                params: { confirmed: false }
+            })
+        );
+        if (hasCapability('confirmedCommit')) {
+            candidateChildren.push(
+                operationMenuItem({
+                    key: 'candidate:confirmed-commit',
+                    label: 'Confirmed Commit → Running…',
+                    operation: 'commit',
+                    icon: SendOutlined,
+                    scope: 'datastore',
+                    params: { confirmed: true }
+                }),
+                operationMenuItem({
+                    key: 'candidate:cancel-commit',
+                    label: '取消 Confirmed Commit',
+                    operation: 'cancel-commit',
+                    icon: DeleteOutlined,
+                    scope: 'datastore'
+                })
+            );
+        }
+        candidateChildren.push(
+            operationMenuItem({
+                key: 'candidate:discard',
+                label: '放弃全部未提交修改',
+                operation: 'discard-changes',
+                icon: DeleteOutlined,
+                scope: 'datastore'
+            }),
+            { type: 'divider', key: 'candidate-divider-lock' },
+            operationMenuItem({
+                key: 'candidate:lock',
+                label: '锁定 Candidate',
+                operation: 'lock',
+                icon: SafetyOutlined,
+                scope: 'datastore',
+                params: { lockTarget: 'candidate' }
+            }),
+            operationMenuItem({
+                key: 'candidate:unlock',
+                label: '解锁 Candidate',
+                operation: 'unlock',
+                icon: SafetyOutlined,
+                scope: 'datastore',
+                params: { lockTarget: 'candidate' }
+            })
+        );
+
+        const validateChildren = [
+            operationMenuItem({
+                key: 'datastore:validate:running',
+                label: 'Running',
+                operation: 'validate',
+                icon: CodeOutlined,
+                scope: 'datastore',
+                params: { validateSource: 'running' }
+            })
+        ];
+        if (hasCapability('startup')) {
+            validateChildren.push(
+                operationMenuItem({
+                    key: 'datastore:validate:startup',
+                    label: 'Startup',
+                    operation: 'validate',
+                    icon: CodeOutlined,
+                    scope: 'datastore',
+                    params: { validateSource: 'startup' }
+                })
+            );
+        }
+        const lockChildren = ['running', ...(hasCapability('startup') ? ['startup'] : [])].map(datastore =>
+            operationMenuItem({
+                key: `datastore:lock:${datastore}`,
+                label: datastore === 'running' ? 'Running' : 'Startup',
+                operation: 'lock',
+                icon: SafetyOutlined,
+                scope: 'datastore',
+                params: { lockTarget: datastore }
+            })
+        );
+        const unlockChildren = ['running', ...(hasCapability('startup') ? ['startup'] : [])].map(datastore =>
+            operationMenuItem({
+                key: `datastore:unlock:${datastore}`,
+                label: datastore === 'running' ? 'Running' : 'Startup',
+                operation: 'unlock',
+                icon: SafetyOutlined,
+                scope: 'datastore',
+                params: { lockTarget: datastore }
+            })
+        );
+        const datastoreChildren = [
+            operationMenuItem({
+                key: 'datastore:copy-config',
+                label: '复制配置存储（copy-config）…',
+                operation: 'copy-config',
+                icon: CopyOutlined,
+                scope: 'datastore'
+            })
+        ];
+        if (hasCapability('validate')) {
+            datastoreChildren.push({
+                key: 'datastore:validate',
+                label: '校验配置（validate）',
+                icon: menuIcon(CodeOutlined),
+                disabled: allMenuActionsDisabled(validateChildren),
+                children: validateChildren
+            });
+        }
+        datastoreChildren.push(
+            {
+                key: 'datastore:lock',
+                label: '锁定配置存储（lock）',
+                icon: menuIcon(SafetyOutlined),
+                disabled: allMenuActionsDisabled(lockChildren),
+                children: lockChildren
+            },
+            {
+                key: 'datastore:unlock',
+                label: '解锁配置存储（unlock）',
+                icon: menuIcon(SafetyOutlined),
+                disabled: allMenuActionsDisabled(unlockChildren),
+                children: unlockChildren
+            }
+        );
+        if (hasCapability('startup')) {
+            const startupChildren = [
+                operationMenuItem({
+                    key: 'startup:save-running',
+                    label: '保存 Running → Startup',
+                    operation: 'copy-config',
+                    icon: CopyOutlined,
+                    scope: 'datastore',
+                    params: { copySource: 'running', copyTarget: 'startup' }
+                }),
+                operationMenuItem({
+                    key: 'startup:delete',
+                    label: '删除整个 Startup…',
+                    operation: 'delete-config',
+                    icon: DeleteOutlined,
+                    scope: 'datastore',
+                    params: { deleteTarget: 'startup' }
+                })
+            ];
+            datastoreChildren.push({
+                key: 'datastore:startup',
+                label: 'Startup',
+                icon: menuIcon(FileSearchOutlined),
+                disabled: allMenuActionsDisabled(startupChildren),
+                children: startupChildren
+            });
+        }
+
+        const items = [
+            {
+                key: 'node-properties',
+                label: '查看节点属性',
+                icon: menuIcon(EyeOutlined),
+                disabled: Boolean(node.virtualDevice),
+                action: { type: 'properties' }
+            },
+            {
+                key: 'copy-path',
+                label: '复制 Schema 路径',
+                icon: menuIcon(CopyOutlined),
+                disabled: !node.path,
+                action: { type: 'copy-path' }
+            },
+            { type: 'divider', key: 'node-divider-read' },
+            operationMenuItem({
+                key: 'get',
+                label: isDataNode(node) ? '读取当前节点（get）' : '读取全部数据（get）',
+                operation: 'get',
+                icon: ApiOutlined
+            }),
+            {
+                key: 'get-config',
+                label: isConfigDataNode(node) ? '读取节点配置（get-config）' : '读取配置（get-config）',
+                icon: menuIcon(FileSearchOutlined),
+                disabled: allMenuActionsDisabled(getConfigChildren),
+                children: getConfigChildren
+            }
+        ];
+        if (editConfigChildren.length) {
+            items.push({
+                key: 'edit-config',
+                label: '编辑当前节点（edit-config）',
+                icon: menuIcon(EditOutlined),
+                disabled: allMenuActionsDisabled(editConfigChildren),
+                children: editConfigChildren
+            });
+        }
+        items.push({ type: 'divider', key: 'node-divider-datastore' });
+        if (hasCapability('candidate')) {
+            items.push({
+                key: 'candidate-workspace',
+                label: 'Candidate 工作区',
+                icon: menuIcon(EditOutlined),
+                disabled: allMenuActionsDisabled(candidateChildren),
+                children: candidateChildren
+            });
+        }
+        items.push(
+            {
+                key: 'datastore-workspace',
+                label: '配置存储',
+                icon: menuIcon(SafetyOutlined),
+                disabled: allMenuActionsDisabled(datastoreChildren),
+                children: datastoreChildren
+            },
+            { type: 'divider', key: 'node-divider-advanced' },
+            operationMenuItem({
+                key: 'raw-rpc',
+                label: isRpcNode(node) ? `执行 ${node.keyword}` : '原始 RPC',
+                operation: 'raw-rpc',
+                icon: CodeOutlined
+            })
+        );
+        if (!connected.value) {
+            items.push({
+                key: 'connection',
+                label: '前往连接设置',
+                icon: menuIcon(ApiOutlined),
+                action: { type: 'connection' }
+            });
+        }
+        return items;
+    });
 
     const moduleForNode = node =>
         workspaceModules.value.find(module => module.name === node?.module || module.id === node?.moduleId);
@@ -712,9 +1209,10 @@
         }
     };
 
-    const openOperation = operation => {
-        const node = contextMenu.node;
-        const disabledReason = operationDisabledReason(operation, node);
+    const openOperation = (operation, { scope = 'node', params = {} } = {}) => {
+        const contextNode = contextMenu.node;
+        const node = scope === 'node' ? contextNode : null;
+        const disabledReason = operationDisabledReason(operation, node, params);
         if (disabledReason) {
             notify.warning(disabledReason);
             return;
@@ -722,9 +1220,10 @@
         Object.assign(operationContext, {
             operation,
             node: node?.virtualDevice ? null : node,
-            subtree: ['get', 'get-config'].includes(operation) ? buildNodeXml(node, 'filter') : '',
+            subtree: ['get', 'get-config', 'edit-config'].includes(operation) ? buildNodeXml(node, 'filter') : '',
             config: operation === 'edit-config' ? buildNodeXml(node, 'config') : '',
-            rawRpc: operation === 'raw-rpc' ? buildRawRpcDraft(node) : ''
+            rawRpc: operation === 'raw-rpc' ? buildRawRpcDraft(node) : '',
+            params: { ...params }
         });
         operationContextRevision.value += 1;
     };
@@ -733,12 +1232,13 @@
         operationExecuting.value = Boolean(value);
     };
 
-    const handleContextMenuClick = ({ key }) => {
+    const handleContextMenuClick = ({ item }) => {
         const node = contextMenu.node;
-        if (key === 'node-properties') showNodeProperties(node);
-        else if (key === 'copy-path') copyText(node?.path, 'Schema 路径已复制');
-        else if (key === 'connection') router.push(YANG_ROUTE.CONNECTION);
-        else openOperation(key);
+        const action = item?.action;
+        if (action?.type === 'properties') showNodeProperties(node);
+        else if (action?.type === 'copy-path') copyText(node?.path, 'Schema 路径已复制');
+        else if (action?.type === 'connection') router.push(YANG_ROUTE.CONNECTION);
+        else if (action?.type === 'operation') openOperation(action.operation, action);
         hideContextMenu();
     };
 
@@ -771,7 +1271,10 @@
                 parentId: node.id,
                 nodeId: node.id
             });
-            node.children = unwrapArray(data, ['nodes', 'children']).map(normalizeNode);
+            const parentContext = schemaChildContext(node);
+            node.children = unwrapArray(data, ['nodes', 'children']).map((child, index) =>
+                normalizeNode(child, index, parentContext)
+            );
             node.childrenLoaded = true;
             node.isLeaf = node.children.length === 0;
         } catch (error) {
@@ -830,7 +1333,9 @@
                 try {
                     await invokeBridge('yangApi', 'clearWorkspace');
                     compileId.value = '';
-                    compileSucceeded.value = false;
+                    schemaStatus.value = 'none';
+                    schemaStatusMessage.value = '';
+                    schemaRestoreFailedCompileId = '';
                     workspaceSummary.value = { moduleCount: 0, nodeCount: 0, cacheHit: false };
                     workspaceModules.value = [];
                     treeData.value = [];
@@ -885,6 +1390,7 @@
         closeClearWorkspaceConfirm();
         detailRequestRevision += 1;
         nodePropertyOpen.value = false;
+        executionHistoryOpen.value = false;
     };
 
     onMounted(() => {
@@ -896,7 +1402,7 @@
         Promise.all([loadWorkspace(), loadSession()]);
     });
 
-    onActivated(() => Promise.all([loadWorkspace(), loadSession()]));
+    onActivated(() => Promise.all([loadWorkspace({ preserveTree: true, retrySchemaRestore: false }), loadSession()]));
 
     onDeactivated(handleWorkspaceDeactivated);
 
@@ -944,6 +1450,11 @@
         gap: 6px;
     }
 
+    .execution-history-trigger {
+        width: 100px;
+        flex: 0 0 100px;
+    }
+
     .compile-id {
         max-width: 300px;
         overflow: hidden;
@@ -963,7 +1474,7 @@
         display: grid;
         min-height: 0;
         flex: 1;
-        grid-template-columns: var(--schema-pane-width, 36%) 8px minmax(420px, 1fr);
+        grid-template-columns: var(--schema-pane-width, 320px) 8px minmax(420px, 1fr);
         gap: 0;
     }
 
@@ -1144,6 +1655,46 @@
         font-size: 12px;
     }
 
+    .schema-node-icon {
+        display: inline-flex;
+        width: 14px;
+        height: 14px;
+        flex: 0 0 14px;
+        align-items: center;
+        justify-content: center;
+        color: var(--nn-color-text-muted);
+        font-size: 14px;
+        line-height: 1;
+    }
+
+    .schema-node-icon-device,
+    .schema-node-icon-container,
+    .schema-node-icon-operation,
+    .schema-node-icon-loading {
+        color: var(--nn-color-primary);
+    }
+
+    .schema-node-icon-module,
+    .schema-node-icon-list,
+    .schema-node-icon-branch {
+        color: var(--nn-color-text-info);
+    }
+
+    .schema-node-icon-leaf {
+        color: var(--nn-color-text-success);
+    }
+
+    .schema-node-icon-key,
+    .schema-node-icon-notification {
+        color: var(--nn-color-text-warning);
+    }
+
+    .schema-node-icon-state,
+    .schema-node-icon-io,
+    .schema-node-icon-fallback {
+        color: var(--nn-color-text-muted);
+    }
+
     .schema-node-name {
         overflow: hidden;
         color: var(--nn-color-text-strong);
@@ -1176,11 +1727,6 @@
     .schema-node-state {
         background: var(--nn-color-bg-warning-subtle);
         color: var(--nn-color-warning);
-    }
-
-    .node-loading {
-        flex: 0 0 auto;
-        color: var(--nn-color-primary);
     }
 
     .detail-description {

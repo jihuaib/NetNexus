@@ -32,6 +32,70 @@ function assertCommandSucceeds(command, args, description) {
     );
 }
 
+function extractPowerShellFunction(source, name) {
+    const declaration = `function ${name} {`;
+    const functionStart = source.indexOf(declaration);
+    assert(functionStart >= 0, `PowerShell function ${name} must exist`);
+
+    const bodyStart = source.indexOf('{', functionStart);
+    let depth = 0;
+    for (let index = bodyStart; index < source.length; index += 1) {
+        if (source[index] === '{') depth += 1;
+        if (source[index] !== '}') continue;
+        depth -= 1;
+        if (depth === 0) return source.slice(functionStart, index + 1);
+    }
+
+    assert.fail(`PowerShell function ${name} is missing its closing brace`);
+}
+
+function assertVcpkgBaselinePreflightContract(powershellSource) {
+    const probeSource = extractPowerShellFunction(powershellSource, 'Test-VcpkgBaselineAvailable');
+    const exitCodeProbePattern =
+        /& git -C \$Path cat-file -e [^\r\n]+ 2>\$null\s+if \(\$LASTEXITCODE -ne 0\) \{ return \$false \}/g;
+    assert.equal(
+        Array.from(probeSource.matchAll(exitCodeProbePattern)).length,
+        2,
+        'missing vcpkg commit and version-database objects must make the baseline probe return false'
+    );
+    const tryIndex = probeSource.indexOf('try {');
+    const firstCatFileIndex = probeSource.indexOf('& git -C $Path cat-file -e');
+    const lastCatFileIndex = probeSource.lastIndexOf('& git -C $Path cat-file -e');
+    const catchIndex = probeSource.lastIndexOf('catch {');
+    const catchReturnsFalse = /catch\s*\{\s*return \$false\s*\}/.test(probeSource.slice(catchIndex));
+    assert(
+        tryIndex >= 0 &&
+            tryIndex < firstCatFileIndex &&
+            firstCatFileIndex < lastCatFileIndex &&
+            lastCatFileIndex < catchIndex &&
+            catchReturnsFalse,
+        'Windows PowerShell NativeCommandError from a missing git object must be caught and converted to false'
+    );
+    assert.doesNotMatch(probeSource, /\bthrow\b/, 'a missing vcpkg object must not terminate before the fetch');
+
+    const ensureSource = extractPowerShellFunction(powershellSource, 'Ensure-VcpkgBaseline');
+    const initialProbe = 'if (Test-VcpkgBaselineAvailable -Path $Path -Baseline $Baseline) { return }';
+    const fetchCommand = '& git -C $Path fetch --refetch --no-tags';
+    const postFetchProbe = 'if (-not (Test-VcpkgBaselineAvailable -Path $Path -Baseline $Baseline)) {';
+    const initialProbeIndex = ensureSource.indexOf(initialProbe);
+    const fetchIndex = ensureSource.indexOf(fetchCommand);
+    const postFetchProbeIndex = ensureSource.indexOf(postFetchProbe);
+    assert(
+        initialProbeIndex >= 0 && initialProbeIndex < fetchIndex && fetchIndex < postFetchProbeIndex,
+        'an unavailable vcpkg baseline must be fetched before the post-fetch availability check'
+    );
+    assert.doesNotMatch(
+        ensureSource.slice(0, fetchIndex),
+        /\bthrow\b/,
+        'the vcpkg baseline preflight must not throw before attempting its recovery fetch'
+    );
+    assert.match(
+        ensureSource.slice(postFetchProbeIndex),
+        /throw "Pinned vcpkg baseline \$Baseline is missing its required version database objects\."/,
+        'the vcpkg baseline preflight may report missing objects only after the recovery fetch is checked'
+    );
+}
+
 function verifyScriptSyntax() {
     const javascriptScripts = [
         'scripts/libyang-runtime-config.js',
@@ -91,6 +155,7 @@ function verifyScriptSyntax() {
         assert.match(powershellSource, /finally\s*\{/);
     }
     const powershellSource = fs.readFileSync(powershellScript, 'utf8');
+    assertVcpkgBaselinePreflightContract(powershellSource);
     assert.match(powershellSource, /CMAKE_FIND_LIBRARY_SUFFIXES \.lib/);
     assert.match(powershellSource, /pcre2-8-static/);
     assert.match(powershellSource, /Assert-GitCommit/);

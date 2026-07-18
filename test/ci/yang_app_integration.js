@@ -67,7 +67,7 @@ async function main() {
     );
     fs.writeFileSync(
         systemPath,
-        'module example-system { yang-version 1.1; namespace "urn:example:system"; prefix es; import example-types { prefix et; revision-date 2026-01-01; } revision 2026-02-01; container system { leaf hostname { type et:label; } } }'
+        'module example-system { yang-version 1.1; namespace "urn:example:system"; prefix es; import example-types { prefix et; revision-date 2026-01-01; } revision 2026-02-01; feature domain-name; container system { leaf hostname { type et:label; } leaf domain { if-feature domain-name; type string; } } }'
     );
     fs.writeFileSync(
         invalidPath,
@@ -78,11 +78,12 @@ async function main() {
     const store = new MemoryStore();
     const events = [];
     const event = createEvent(events);
-    const app = new YangApp(ipc, store, {
+    const appOptions = {
         rootDir: path.join(temporaryRoot, 'registry'),
         resourcesPath: path.join(projectRoot, 'resources'),
         isPackaged: false
-    });
+    };
+    let app = new YangApp(ipc, store, appOptions);
     try {
         assert(ipc.handlers.has('yang:compile'));
         assert(ipc.handlers.has('yang:getCompilerStatus'));
@@ -104,7 +105,8 @@ async function main() {
         assert(system?.id);
 
         const compileResponse = await app.handleCompile(event, {
-            moduleIds: [{ id: system.id, name: system.name, revision: system.revision }]
+            moduleIds: [{ id: system.id, name: system.name, revision: system.revision }],
+            features: ['example-system:domain-name']
         });
         assert.equal(compileResponse.status, 'success');
         const compiled = await waitForTask(app, compileResponse.data.taskId);
@@ -135,10 +137,33 @@ async function main() {
             nodeId: containerResponse.data[0].id
         });
         assert.equal(childrenResponse.data[0].name, 'hostname');
+        assert(childrenResponse.data.some(node => node.name === 'domain'));
 
         const sourceResponse = await app.handleGetModuleSource(event, { moduleId: system.id });
         assert.equal(sourceResponse.status, 'success');
         assert.match(sourceResponse.data.source, /module example-system/);
+
+        await app.close();
+        app = new YangApp(new FakeIpcMain(), store, appOptions);
+        const restartedWorkspace = await app.handleGetWorkspace(event);
+        assert.equal(restartedWorkspace.status, 'success');
+        assert.equal(restartedWorkspace.data.compileId, compiled.compileId);
+        assert.equal(restartedWorkspace.data.success, true);
+        assert.equal(restartedWorkspace.data.schemaTree.authoritative, true);
+        assert.equal(restartedWorkspace.data.schemaTree.source, 'libyang-effective');
+        assert.equal(restartedWorkspace.data.modules.filter(module => module.compiled).length, 2);
+        assert.deepEqual(store.get('yang-workspace-state').restoreOptions.features, ['example-system:domain-name']);
+        const restartedRoots = await app.handleGetSchemaRoots(event, { compileId: compiled.compileId });
+        assert.equal(restartedRoots.status, 'success');
+        assert(restartedRoots.data.some(node => node.name === 'example-system'));
+
+        await app.close();
+        app = new YangApp(new FakeIpcMain(), store, appOptions);
+        const secondRestartWorkspace = await app.handleGetWorkspace(event);
+        assert.equal(secondRestartWorkspace.status, 'success');
+        assert.equal(secondRestartWorkspace.data.compileId, compiled.compileId);
+        assert.equal(secondRestartWorkspace.data.schemaTree.authoritative, true);
+        assert.deepEqual(store.get('yang-workspace-state').restoreOptions.features, ['example-system:domain-name']);
 
         const invalidImportResponse = await app.handleImportFiles(event, [invalidPath]);
         assert.equal(invalidImportResponse.status, 'success');

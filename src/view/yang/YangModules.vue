@@ -95,7 +95,7 @@
                 :columns="columns"
                 :data-source="filteredModules"
                 :loading="loading"
-                :pagination="pagination"
+                :pagination="false"
                 :scroll="{ x: 1160, y: 'calc(100vh - 310px)' }"
                 row-key="_key"
                 size="small"
@@ -278,12 +278,6 @@
         { title: '编译状态', key: 'compileStatus', width: 105 },
         { title: '操作', key: 'action', width: 125, fixed: 'right' }
     ];
-    const pagination = {
-        pageSize: 20,
-        showSizeChanger: true,
-        pageSizeOptions: ['20', '50', '100'],
-        showTotal: total => `共 ${total} 个模块`
-    };
     const sourceOptions = [
         { label: '全部来源', value: 'all' },
         { label: '设备发现', value: 'remote' },

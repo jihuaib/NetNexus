@@ -19,7 +19,8 @@ const {
     buildDiscardChanges,
     buildKillSession,
     buildCreateSubscription,
-    assertSafeXml
+    assertSafeXml,
+    rpcReplyDataToConfig
 } = require('../../utils/netconf');
 const { parseYang } = require('../../utils/yang');
 const { NETCONF_REQ_TYPES, YANG_EVT_TYPES, NETCONF_LIMITS } = require('../../const/yangConst');
@@ -34,6 +35,7 @@ function errorData(error) {
         message: error?.message || String(error),
         errors: error?.errors || [],
         messageId: error?.messageId || null,
+        requestXml: error?.requestXml || null,
         replyXml: error?.replyXml || null
     };
 }
@@ -457,8 +459,9 @@ class NetconfWorkerService {
             messageId: options.messageId,
             rejectOnRpcError: false
         });
-        return {
+        const result = {
             rpc,
+            requestXml: reply.requestXml || rpc,
             reply: reply.xml,
             xml: reply.xml,
             messageId: reply.messageId,
@@ -467,6 +470,15 @@ class NetconfWorkerService {
             errors: reply.errors,
             duration: Date.now() - startedAt
         };
+        if (options.operation === 'get-config' && (!Array.isArray(reply.errors) || reply.errors.length === 0)) {
+            Object.assign(
+                result,
+                rpcReplyDataToConfig(reply.xml, {
+                    maxXmlSize: NETCONF_LIMITS.MAX_RAW_RPC_BYTES
+                })
+            );
+        }
+        return result;
     }
 }
 

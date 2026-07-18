@@ -22,7 +22,9 @@ const {
     childText,
     getAttribute,
     localName,
-    extractElementContent
+    extractElementContent,
+    filterSubtreeXml,
+    hasSubtreeFilter
 } = require('../electron/utils/netconf');
 
 const MOCK_NAMESPACE = 'urn:netnexus:params:xml:ns:yang:mock-device';
@@ -163,6 +165,14 @@ const MOCK_MODULES = Object.freeze({
         conformanceType: 'import'
     })
 });
+
+const MOCK_KEY_DEFINITIONS = Object.freeze([
+    Object.freeze({
+        namespace: MOCK_NAMESPACE,
+        element: 'interface',
+        keys: Object.freeze([Object.freeze({ namespace: MOCK_NAMESPACE, name: 'name' })])
+    })
+]);
 
 const SERVER_CAPABILITIES = Object.freeze([
     'urn:ietf:params:netconf:base:1.0',
@@ -373,15 +383,6 @@ function renderInterfaces(interfaces, includeOperational) {
         })
         .join('');
     return '<interfaces xmlns="' + MOCK_NAMESPACE + '">' + body + '</interfaces>';
-}
-
-function requestedView(xml) {
-    const value = String(xml || '').toLowerCase();
-    if (!value.includes('<filter')) return { system: true, interfaces: true };
-    const wantsSystem = value.includes('system');
-    const wantsInterfaces = value.includes('interface');
-    if (!wantsSystem && !wantsInterfaces) return { system: true, interfaces: true };
-    return { system: wantsSystem, interfaces: wantsInterfaces };
 }
 
 function parseBoolean(value, fieldName) {
@@ -620,16 +621,14 @@ class MockNetconfSession {
     }
 
     handleGet(xml, messageId) {
-        if (/<(?:[A-Za-z_][\w.-]*:)?yang-library\b/iu.test(xml)) {
-            return rpcReply(messageId, '<data>' + this.server.yangLibraryXml() + '</data>');
+        let candidates = this.server.renderDatastore('running', '', true);
+        if (hasSubtreeFilter(xml)) {
+            candidates += this.server.yangLibraryXml();
+            candidates += this.server.modulesStateXml();
+            candidates += this.server.monitoringSchemasXml();
         }
-        if (/<(?:[A-Za-z_][\w.-]*:)?modules-state\b/iu.test(xml)) {
-            return rpcReply(messageId, '<data>' + this.server.modulesStateXml() + '</data>');
-        }
-        if (/<(?:[A-Za-z_][\w.-]*:)?netconf-state\b/iu.test(xml) && /<(?:[A-Za-z_][\w.-]*:)?schemas\b/iu.test(xml)) {
-            return rpcReply(messageId, '<data>' + this.server.monitoringSchemasXml() + '</data>');
-        }
-        return rpcReply(messageId, '<data>' + this.server.renderDatastore('running', xml, true) + '</data>');
+        const data = filterSubtreeXml(candidates, xml, { keyDefinitions: MOCK_KEY_DEFINITIONS });
+        return rpcReply(messageId, '<data>' + data + '</data>');
     }
 
     handleGetConfig(xml, messageId) {
@@ -1033,10 +1032,7 @@ class MockNetconfServer extends EventEmitter {
 
     renderDatastore(name, filterXml = '', includeOperational = false) {
         const config = this.requireDatastore(name);
-        const view = requestedView(filterXml);
-        let xml = '';
-        if (view.system) xml += renderSystem(config.system);
-        if (view.interfaces) xml += renderInterfaces(config.interfaces, includeOperational);
+        let xml = renderSystem(config.system) + renderInterfaces(config.interfaces, includeOperational);
         if (includeOperational) {
             const uptime = this.startedAt
                 ? Math.max(0, Math.floor((Date.now() - Date.parse(this.startedAt)) / 1000))
@@ -1054,7 +1050,7 @@ class MockNetconfServer extends EventEmitter {
                 escapeXml(this.state.lastOperation) +
                 '</last-operation></state>';
         }
-        return xml;
+        return filterSubtreeXml(xml, filterXml, { keyDefinitions: MOCK_KEY_DEFINITIONS });
     }
 
     yangLibraryXml() {

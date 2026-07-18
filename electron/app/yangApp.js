@@ -30,6 +30,7 @@ class YangApp {
         this.eventDispatcher = new EventDispatcher();
         this.lastCompile = this.readStoredState();
         this.compileResult = null;
+        this.compilationRestorePromises = new Map();
         this.logLevel = null;
         this.taskManager = new TaskManager({
             onProgress: progress => this.emitTaskProgress(progress)
@@ -434,6 +435,83 @@ class YangApp {
         );
     }
 
+    async restoreStoredCompilation(event, workspace, requestedCompileId, options = {}) {
+        const stored = this.lastCompile;
+        if (!stored?.compileId || !workspace?.contentHash || stored.workspaceContentHash !== workspace.contentHash) {
+            throw new Error('当前工作区尚未编译');
+        }
+        const expected = requestedCompileId || stored.compileId;
+        if (requestedCompileId && requestedCompileId !== stored.compileId) {
+            throw new Error('指定的YANG编译上下文已失效');
+        }
+        if (!options.forceWorkerRestore && this.compileResult?.compileId === expected) {
+            return this.compileResult;
+        }
+
+        const restoreKey = `${workspace.contentHash}\u0000${expected}`;
+        const pending = this.compilationRestorePromises.get(restoreKey);
+        if (pending) return pending;
+
+        const restoreOptions =
+            stored.restoreOptions && typeof stored.restoreOptions === 'object' && !Array.isArray(stored.restoreOptions)
+                ? { ...stored.restoreOptions }
+                : {};
+        const hashes =
+            Array.isArray(stored.moduleHashes) && stored.moduleHashes.length ? stored.moduleHashes : undefined;
+        const restorePromise = (async () => {
+            const restored = await this.send(
+                event,
+                WORKER_REQ_TYPES.COMPILE,
+                {
+                    ...restoreOptions,
+                    force: false,
+                    hashes
+                },
+                { timeoutMs: 10 * 60 * 1000 }
+            );
+            if (restored.compileId !== expected) {
+                throw new Error('YANG工作区内容或编译选项已经变化，请重新编译');
+            }
+            if (
+                stored.success === true &&
+                (restored.success !== true ||
+                    restored.schemaTree?.authoritative !== true ||
+                    restored.schemaTree?.source !== 'libyang-effective')
+            ) {
+                const diagnostic = restored.diagnostics?.find(
+                    item => item.severity === 'error' && item.authoritative !== false
+                );
+                throw new Error(diagnostic?.message || '无法恢复已保存的libyang权威Schema缓存');
+            }
+
+            const latestWorkspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE);
+            if (
+                this.lastCompile !== stored ||
+                latestWorkspace?.contentHash !== workspace.contentHash ||
+                stored.workspaceContentHash !== latestWorkspace.contentHash
+            ) {
+                throw new Error('YANG工作区在恢复编译上下文时已发生变化');
+            }
+
+            const compileResult = {
+                ...restored,
+                moduleHashes: restored.modules?.map(module => module.hash).filter(Boolean) || stored.moduleHashes || [],
+                restoreOptions
+            };
+            this.compileResult = compileResult;
+            this.persistCompileState(compileResult, latestWorkspace);
+            return compileResult;
+        })();
+        this.compilationRestorePromises.set(restoreKey, restorePromise);
+        try {
+            return await restorePromise;
+        } finally {
+            if (this.compilationRestorePromises.get(restoreKey) === restorePromise) {
+                this.compilationRestorePromises.delete(restoreKey);
+            }
+        }
+    }
+
     async decorateWorkspace(event, workspace) {
         const current = this.isStoredCompilationCurrent(workspace) ? this.lastCompile : null;
         const result = this.compileResult?.compileId === current?.compileId ? this.compileResult : null;
@@ -468,7 +546,18 @@ class YangApp {
     async handleGetWorkspace(event) {
         try {
             const workspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE);
-            if (!this.isStoredCompilationCurrent(workspace) && this.lastCompile) this.invalidateCompilation();
+            if (!this.isStoredCompilationCurrent(workspace) && this.lastCompile) {
+                this.invalidateCompilation();
+            } else if (
+                this.lastCompile?.success === true &&
+                this.compileResult?.compileId !== this.lastCompile.compileId
+            ) {
+                try {
+                    await this.restoreStoredCompilation(event, workspace, this.lastCompile.compileId);
+                } catch (error) {
+                    logger.warn('恢复YANG编译缓存失败:', error.message);
+                }
+            }
             return successResponse(await this.decorateWorkspace(event, workspace));
         } catch (error) {
             return errorResponse('获取YANG工作区失败: ' + error.message);
@@ -496,22 +585,7 @@ class YangApp {
         try {
             await this.send(event, WORKER_REQ_TYPES.GET_DIAGNOSTICS, { compileId: expected });
         } catch (_error) {
-            const restored = await this.send(
-                event,
-                WORKER_REQ_TYPES.COMPILE,
-                {
-                    ...this.lastCompile.restoreOptions,
-                    force: false,
-                    hashes: this.lastCompile.moduleHashes || undefined
-                },
-                { timeoutMs: 10 * 60 * 1000 }
-            );
-            this.compileResult = {
-                ...restored,
-                moduleHashes: restored.modules?.map(module => module.hash).filter(Boolean) || []
-            };
-            this.persistCompileState(this.compileResult, workspace);
-            if (restored.compileId !== expected) throw new Error('YANG工作区内容或编译选项已经变化，请重新编译');
+            await this.restoreStoredCompilation(event, workspace, expected, { forceWorkerRestore: true });
         }
         return expected;
     }
@@ -583,6 +657,7 @@ class YangApp {
         this.workerClient = null;
         this.configurePromise = null;
         this.progressReporters.clear();
+        this.compilationRestorePromises.clear();
         this.eventDispatcher.cleanup();
         if (worker) {
             try {

@@ -56,6 +56,15 @@ class NetconfTimeoutError extends Error {
     }
 }
 
+function withRpcContext(error, requestXml, messageId) {
+    const source = error instanceof Error ? error : new Error(String(error));
+    const contextualError = Object.create(Object.getPrototypeOf(source));
+    Object.defineProperties(contextualError, Object.getOwnPropertyDescriptors(source));
+    contextualError.requestXml = requestXml || contextualError.requestXml || null;
+    contextualError.messageId = messageId || contextualError.messageId || null;
+    return contextualError;
+}
+
 function isTransport(value) {
     return Boolean(value && typeof value.on === 'function' && typeof value.write === 'function');
 }
@@ -396,11 +405,15 @@ class NetconfClient extends EventEmitter {
                 pending.reject(
                     new NetconfRpcError(message.errors, {
                         messageId: message.messageId,
-                        replyXml: message.xml
+                        replyXml: message.xml,
+                        requestXml: pending.requestXml
                     })
                 );
             } else {
-                pending.resolve(message);
+                pending.resolve({
+                    ...message,
+                    requestXml: pending.requestXml
+                });
             }
             return;
         }
@@ -461,12 +474,13 @@ class NetconfClient extends EventEmitter {
                     return;
                 }
                 this.pending.delete(messageId);
-                reject(new NetconfTimeoutError(messageId, timeout));
+                reject(withRpcContext(new NetconfTimeoutError(messageId, timeout), envelope.xml, messageId));
             }, timeout);
             this.pending.set(messageId, {
                 resolve,
                 reject,
                 timer,
+                requestXml: envelope.xml,
                 rejectOnRpcError: options.rejectOnRpcError !== false
             });
             try {
@@ -478,7 +492,7 @@ class NetconfClient extends EventEmitter {
             } catch (error) {
                 clearTimeout(timer);
                 this.pending.delete(messageId);
-                reject(error);
+                reject(withRpcContext(error, envelope.xml, messageId));
             }
         });
     }
@@ -604,9 +618,9 @@ class NetconfClient extends EventEmitter {
     }
 
     _rejectPending(error) {
-        for (const pending of this.pending.values()) {
+        for (const [messageId, pending] of this.pending.entries()) {
             clearTimeout(pending.timer);
-            pending.reject(error);
+            pending.reject(withRpcContext(error, pending.requestXml, messageId));
         }
         this.pending.clear();
     }

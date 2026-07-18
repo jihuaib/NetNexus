@@ -1,8 +1,22 @@
 'use strict';
 
-const { XMLParser, XMLValidator } = require('fast-xml-parser');
+const { XMLBuilder, XMLParser, XMLValidator } = require('fast-xml-parser');
 
 const DEFAULT_MAX_XML_SIZE = 64 * 1024 * 1024;
+const DEFAULT_MAX_CONFIG_XML_SIZE = 8 * 1024 * 1024;
+const NETCONF_BASE_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:base:1.0';
+const ORDERED_XML_OPTIONS = Object.freeze({
+    preserveOrder: true,
+    ignoreAttributes: false,
+    attributeNamePrefix: '@_',
+    trimValues: false,
+    parseTagValue: false,
+    parseAttributeValue: false,
+    removeNSPrefix: false,
+    processEntities: true,
+    commentPropName: '#comment',
+    cdataPropName: '#cdata'
+});
 
 class NetconfXmlError extends Error {
     constructor(message, code = 'NETCONF_INVALID_XML', cause = null) {
@@ -26,6 +40,7 @@ class NetconfRpcError extends Error {
         this.errors = normalizedErrors;
         this.messageId = options.messageId || null;
         this.replyXml = options.replyXml || null;
+        this.requestXml = options.requestXml || null;
     }
 }
 
@@ -261,6 +276,159 @@ function parseNetconfMessage(xml, options = {}) {
     };
 }
 
+function orderedElement(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const name = Object.keys(item).find(
+        key => key !== ':@' && key !== '#text' && key !== '#comment' && key !== '#cdata' && !key.startsWith('?')
+    );
+    if (!name) return null;
+    return {
+        name,
+        children: Array.isArray(item[name]) ? item[name] : [],
+        attributes: item[':@'] && typeof item[':@'] === 'object' ? item[':@'] : {}
+    };
+}
+
+function namespaceMapFor(parentNamespaces, attributes) {
+    const namespaces = new Map(parentNamespaces || []);
+    for (const [name, value] of Object.entries(attributes || {})) {
+        if (name === '@_xmlns') namespaces.set('', String(value));
+        else if (name.startsWith('@_xmlns:')) namespaces.set(name.slice('@_xmlns:'.length), String(value));
+    }
+    return namespaces;
+}
+
+function resolveElementName(name, namespaces) {
+    const separator = String(name).indexOf(':');
+    const prefix = separator < 0 ? '' : String(name).slice(0, separator);
+    return {
+        localName: separator < 0 ? String(name) : String(name).slice(separator + 1),
+        namespace: namespaces.get(prefix) || ''
+    };
+}
+
+function hasNonWhitespaceText(items) {
+    return (items || []).some(item => {
+        const text = item?.['#text'] ?? item?.['#cdata'];
+        return text !== undefined && String(text).trim() !== '';
+    });
+}
+
+function assertNoEditOperationAttributes(items, parentNamespaces) {
+    for (const item of items || []) {
+        const element = orderedElement(item);
+        if (!element) continue;
+        const namespaces = namespaceMapFor(parentNamespaces, element.attributes);
+        for (const name of Object.keys(element.attributes)) {
+            if (!name.startsWith('@_') || name === '@_xmlns' || name.startsWith('@_xmlns:')) continue;
+            const attributeName = name.slice(2);
+            const separator = attributeName.indexOf(':');
+            const prefix = separator < 0 ? '' : attributeName.slice(0, separator);
+            const attributeLocalName = separator < 0 ? attributeName : attributeName.slice(separator + 1);
+            if (
+                attributeLocalName === 'operation' &&
+                (prefix === '' || namespaces.get(prefix) === NETCONF_BASE_NAMESPACE)
+            ) {
+                throw new NetconfXmlError(
+                    'get-config data contains an edit operation attribute',
+                    'NETCONF_CONFIG_UNSAFE_OPERATION'
+                );
+            }
+        }
+        assertNoEditOperationAttributes(element.children, namespaces);
+    }
+}
+
+function preserveDataDefaultNamespace(items, dataNamespaces) {
+    const inheritedDefaultNamespace = dataNamespaces.get('') || '';
+    if (!inheritedDefaultNamespace || inheritedDefaultNamespace === NETCONF_BASE_NAMESPACE) return;
+    for (const item of items || []) {
+        const element = orderedElement(item);
+        if (!element || Object.prototype.hasOwnProperty.call(element.attributes, '@_xmlns')) continue;
+        item[':@'] = { ...element.attributes, '@_xmlns': inheritedDefaultNamespace };
+    }
+}
+
+function rpcReplyDataToConfig(xml, options = {}) {
+    const value = assertSafeXml(xml, {
+        maxXmlSize: Number(options.maxXmlSize) || DEFAULT_MAX_CONFIG_XML_SIZE
+    });
+    const validation = XMLValidator.validate(value, {
+        allowBooleanAttributes: false,
+        unpairedTags: []
+    });
+    if (validation !== true) {
+        const message = validation && validation.err ? validation.err.msg : 'unknown XML validation error';
+        throw new NetconfXmlError(`Invalid NETCONF rpc-reply XML: ${message}`);
+    }
+
+    const document = new XMLParser(ORDERED_XML_OPTIONS).parse(value);
+    const rootItems = document.filter(item => orderedElement(item));
+    if (rootItems.length !== 1 || hasNonWhitespaceText(document)) {
+        throw new NetconfXmlError('NETCONF rpc-reply must contain exactly one document element');
+    }
+
+    const root = orderedElement(rootItems[0]);
+    const rootNamespaces = namespaceMapFor(null, root.attributes);
+    const rootName = resolveElementName(root.name, rootNamespaces);
+    if (rootName.localName !== 'rpc-reply' || rootName.namespace !== NETCONF_BASE_NAMESPACE) {
+        throw new NetconfXmlError('Expected a NETCONF rpc-reply in the base namespace');
+    }
+
+    const directElements = root.children.map(item => {
+        const element = orderedElement(item);
+        if (!element) return null;
+        const namespaces = namespaceMapFor(rootNamespaces, element.attributes);
+        return { element, namespaces, resolvedName: resolveElementName(element.name, namespaces) };
+    });
+    if (hasNonWhitespaceText(root.children)) {
+        throw new NetconfXmlError('NETCONF rpc-reply contains unexpected text content');
+    }
+    if (
+        directElements.some(
+            entry =>
+                entry?.resolvedName.localName === 'rpc-error' && entry.resolvedName.namespace === NETCONF_BASE_NAMESPACE
+        )
+    ) {
+        throw new NetconfXmlError('NETCONF rpc-reply contains rpc-error', 'NETCONF_RPC_ERROR');
+    }
+
+    const dataElements = directElements.filter(
+        entry => entry?.resolvedName.localName === 'data' && entry.resolvedName.namespace === NETCONF_BASE_NAMESPACE
+    );
+    if (dataElements.length !== 1) {
+        throw new NetconfXmlError('NETCONF rpc-reply must contain exactly one data element');
+    }
+
+    const data = dataElements[0];
+    if (hasNonWhitespaceText(data.element.children)) {
+        throw new NetconfXmlError('NETCONF data contains unexpected direct text content');
+    }
+    preserveDataDefaultNamespace(data.element.children, data.namespaces);
+    assertNoEditOperationAttributes(data.element.children, data.namespaces);
+
+    const configAttributes = { '@_xmlns': NETCONF_BASE_NAMESPACE };
+    for (const [prefix, namespace] of data.namespaces.entries()) {
+        if (prefix && prefix !== 'xml') configAttributes[`@_xmlns:${prefix}`] = namespace;
+    }
+    const configDocument = [
+        {
+            config: data.element.children,
+            ':@': configAttributes
+        }
+    ];
+    const configXml = new XMLBuilder(ORDERED_XML_OPTIONS).build(configDocument).trim();
+    const sourceMessageId = Object.entries(root.attributes).find(
+        ([name]) => name.startsWith('@_') && localName(name.slice(2)) === 'message-id'
+    )?.[1];
+
+    return {
+        configXml,
+        empty: !data.element.children.some(item => orderedElement(item)),
+        sourceMessageId: sourceMessageId === undefined ? null : String(sourceMessageId)
+    };
+}
+
 function decodeXmlText(value) {
     return String(value)
         .replace(/&lt;/g, '<')
@@ -314,6 +482,7 @@ module.exports = {
     findRoot,
     getAttribute,
     normalizeRpcError,
+    rpcReplyDataToConfig,
     decodeXmlText,
     extractElementContentDetails,
     extractElementContent

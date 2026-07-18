@@ -5,6 +5,7 @@ const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), ma
 export function usePaneResize({
     containerRef,
     orientation,
+    reverse = false,
     defaultRatio = 0.5,
     minFirst = 0,
     minSecond = 0,
@@ -65,7 +66,14 @@ export function usePaneResize({
     const updateFromPointer = event => {
         const rect = containerRef.value?.getBoundingClientRect?.();
         if (!rect) return;
-        const pointerPosition = orientation === 'horizontal' ? event.clientY - rect.top : event.clientX - rect.left;
+        const pointerPosition =
+            orientation === 'horizontal'
+                ? reverse
+                    ? rect.bottom - event.clientY
+                    : event.clientY - rect.top
+                : reverse
+                  ? rect.right - event.clientX
+                  : event.clientX - rect.left;
         paneSize.value = Math.round(clamp(pointerPosition - dividerSize / 2, minSize.value, maxSize.value));
     };
 
@@ -111,10 +119,14 @@ export function usePaneResize({
 
         if (event.key === 'Home') nextSize = minSize.value;
         else if (event.key === 'End') nextSize = maxSize.value;
-        else if (orientation === 'horizontal' && event.key === 'ArrowUp') nextSize = paneSize.value - step;
-        else if (orientation === 'horizontal' && event.key === 'ArrowDown') nextSize = paneSize.value + step;
-        else if (orientation !== 'horizontal' && event.key === 'ArrowLeft') nextSize = paneSize.value - step;
-        else if (orientation !== 'horizontal' && event.key === 'ArrowRight') nextSize = paneSize.value + step;
+        else if (orientation === 'horizontal' && event.key === 'ArrowUp')
+            nextSize = paneSize.value + (reverse ? step : -step);
+        else if (orientation === 'horizontal' && event.key === 'ArrowDown')
+            nextSize = paneSize.value + (reverse ? -step : step);
+        else if (orientation !== 'horizontal' && event.key === 'ArrowLeft')
+            nextSize = paneSize.value + (reverse ? step : -step);
+        else if (orientation !== 'horizontal' && event.key === 'ArrowRight')
+            nextSize = paneSize.value + (reverse ? -step : step);
 
         if (nextSize === null) return;
         event.preventDefault();
@@ -148,6 +160,7 @@ export function usePaneResize({
         startResize,
         handleResizeKeydown,
         resetResize,
-        stopResize
+        stopResize,
+        updateBounds
     };
 }

@@ -15,6 +15,7 @@ const {
     buildGetSchema,
     buildCommit,
     parseNetconfMessage,
+    rpcReplyDataToConfig,
     NetconfXmlError
 } = require('../../electron/utils/netconf');
 
@@ -116,6 +117,47 @@ assert.throws(
     () =>
         parseNetconfMessage('<!DOCTYPE rpc-reply [<!ENTITY x SYSTEM "file:///etc/passwd">]><rpc-reply>&x;</rpc-reply>'),
     error => error instanceof NetconfXmlError && error.code === 'NETCONF_UNSAFE_XML'
+);
+
+const prefixedConfig = rpcReplyDataToConfig(`
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0"
+              xmlns:if="urn:ietf:params:xml:ns:yang:ietf-interfaces" message-id="17">
+  <nc:data>
+    <if:interfaces><if:interface><if:name>eth0</if:name><if:enabled>true</if:enabled></if:interface></if:interfaces>
+  </nc:data>
+</nc:rpc-reply>`);
+assert.equal(prefixedConfig.empty, false);
+assert.equal(prefixedConfig.sourceMessageId, '17');
+assert(prefixedConfig.configXml.startsWith('<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"'));
+assert(prefixedConfig.configXml.includes('xmlns:if="urn:ietf:params:xml:ns:yang:ietf-interfaces"'));
+assert(prefixedConfig.configXml.includes('<if:name>eth0</if:name>'));
+assert(!prefixedConfig.configXml.includes('<nc:data'));
+assert(buildEditConfig({ target: 'candidate', config: prefixedConfig.configXml }).includes(prefixedConfig.configXml));
+
+const inheritedDefaultNamespace = rpcReplyDataToConfig(
+    '<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0"><nc:data xmlns="urn:example:system"><system><hostname>router-2</hostname></system></nc:data></nc:rpc-reply>'
+);
+assert(inheritedDefaultNamespace.configXml.includes('<system xmlns="urn:example:system">'));
+assert(inheritedDefaultNamespace.configXml.includes('<hostname>router-2</hostname>'));
+
+const emptyConfig = rpcReplyDataToConfig(
+    '<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="18"><data/></rpc-reply>'
+);
+assert.equal(emptyConfig.empty, true);
+
+assert.throws(
+    () =>
+        rpcReplyDataToConfig(
+            '<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0"><data><system xmlns="urn:example" nc:operation="delete"/></data></rpc-reply>'
+        ),
+    error => error instanceof NetconfXmlError && error.code === 'NETCONF_CONFIG_UNSAFE_OPERATION'
+);
+assert.throws(
+    () =>
+        rpcReplyDataToConfig(
+            '<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><rpc-error><error-tag>operation-failed</error-tag></rpc-error></rpc-reply>'
+        ),
+    error => error instanceof NetconfXmlError && error.code === 'NETCONF_RPC_ERROR'
 );
 
 async function run() {

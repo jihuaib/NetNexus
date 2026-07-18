@@ -73,17 +73,25 @@ function Test-VcpkgBaselineAvailable {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Baseline
     )
-    & git -C $Path cat-file -e "${Baseline}^{commit}" 2>$null
-    if ($LASTEXITCODE -ne 0) { return $false }
-    foreach ($RequiredVersionFile in @(
-        'versions/baseline.json',
-        'versions/d-/dirent.json',
-        'versions/p-/pthreads.json'
-    )) {
-        & git -C $Path cat-file -e "${Baseline}:${RequiredVersionFile}" 2>$null
+    # Windows PowerShell 5.1 promotes redirected native stderr to a
+    # terminating NativeCommandError when ErrorActionPreference is Stop.
+    # A missing object is the expected cache-miss signal for the fetch below.
+    try {
+        & git -C $Path cat-file -e "${Baseline}^{commit}" 2>$null
         if ($LASTEXITCODE -ne 0) { return $false }
+        foreach ($RequiredVersionFile in @(
+            'versions/baseline.json',
+            'versions/d-/dirent.json',
+            'versions/p-/pthreads.json'
+        )) {
+            & git -C $Path cat-file -e "${Baseline}:${RequiredVersionFile}" 2>$null
+            if ($LASTEXITCODE -ne 0) { return $false }
+        }
+        return $true
     }
-    return $true
+    catch {
+        return $false
+    }
 }
 
 function Ensure-VcpkgBaseline {

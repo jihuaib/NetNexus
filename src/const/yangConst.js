@@ -16,8 +16,10 @@
  * - selectPrivateKey() -> data: string | { filePath, path? } (opens a native file picker)
  * - discoverModules() -> data: Module[] | { modules: Module[], snapshotId?, jobId? }
  * - downloadModules({ modules: [{ name, revision? }], includeDependencies: true })
- * - executeOperation({ operation, ...operationFields }) -> data: { rpc?, reply?, messageId? } | string
- * - sendRpc({ rpc }) -> data: { rpc?, reply?, messageId? } | string
+ * - executeOperation({ operation, ...operationFields })
+ *   -> data: { rpc?, requestXml?, reply?, messageId? } | string
+ * - sendRpc({ rpc }) -> data: { rpc?, requestXml?, reply?, messageId? } | string
+ *   (`rpc` is the operation fragment; `requestXml` is the complete envelope written to the transport.)
  *
  * window.yangApi
  * - listModules(query?) -> data: Module[] | { modules: Module[] }
@@ -148,6 +150,7 @@ export const NETCONF_OPERATIONS = Object.freeze([
     { key: 'unlock', label: 'unlock', category: 'write' },
     { key: 'validate', label: 'validate', category: 'read', capability: 'validate' },
     { key: 'commit', label: 'commit', category: 'write', capability: 'candidate' },
+    { key: 'cancel-commit', label: 'cancel-commit', category: 'danger', capability: 'confirmedCommit' },
     { key: 'discard-changes', label: 'discard-changes', category: 'danger', capability: 'candidate' },
     { key: 'raw-rpc', label: '原始 RPC', category: 'danger' }
 ]);

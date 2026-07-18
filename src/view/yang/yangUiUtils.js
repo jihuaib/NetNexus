@@ -2,7 +2,10 @@ export const clonePlain = value => JSON.parse(JSON.stringify(value));
 
 export const responseData = response => {
     if (response?.status !== 'success') {
-        throw new Error(response?.msg || '操作失败');
+        const error = new Error(response?.msg || '操作失败');
+        error.code = response?.data?.code || response?.code || '';
+        error.details = response?.data?.details || response?.data || null;
+        throw error;
     }
     return response.data;
 };

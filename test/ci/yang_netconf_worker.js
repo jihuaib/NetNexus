@@ -43,8 +43,20 @@ class FakeClient extends EventEmitter {
     async rpc(rpc, options) {
         this.lastRpc = rpc;
         this.lastRpcOptions = options;
+        if (rpc.includes('<get-config>')) {
+            return {
+                type: 'rpc-reply',
+                requestXml: `<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="8">${rpc}</rpc>`,
+                xml: '<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="8"><data><system xmlns="urn:example:system"><hostname>router-1</hostname></system></data></rpc-reply>',
+                messageId: '8',
+                ok: false,
+                data: { system: { hostname: 'router-1' } },
+                errors: []
+            };
+        }
         return {
             type: 'rpc-reply',
+            requestXml: `<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="9">${rpc}</rpc>`,
             xml: '<rpc-reply message-id="9"><ok/></rpc-reply>',
             messageId: '9',
             ok: true,
@@ -125,6 +137,18 @@ async function main() {
     assert.match(downloaded.content, /^module example-system/);
     assert.equal(downloaded.source, 'netconf://router-1/example-system@2026-01-01');
 
+    const currentConfig = await service.executeOperation(profile.id, {
+        operation: 'get-config',
+        source: 'candidate',
+        filter: { type: 'subtree', content: '<system xmlns="urn:example:system"/>' }
+    });
+    assert.equal(currentConfig.empty, false);
+    assert.equal(currentConfig.sourceMessageId, '8');
+    assert.match(currentConfig.requestXml, /^<rpc\b[^>]*message-id="8"/);
+    assert.match(currentConfig.requestXml, /<get-config>/);
+    assert.match(currentConfig.configXml, /<system xmlns="urn:example:system">/);
+    assert.match(currentConfig.configXml, /<hostname>router-1<\/hostname>/);
+
     const operation = await service.executeOperation(profile.id, {
         operation: 'edit-config',
         target: 'candidate',
@@ -134,6 +158,10 @@ async function main() {
     assert.equal(operation.ok, true);
     assert.match(operation.rpc, /<edit-config>/);
     assert.match(operation.rpc, /<candidate\/>/);
+    assert.doesNotMatch(operation.rpc, /^<rpc\b/);
+    assert.match(operation.requestXml, /^<rpc\b[^>]*message-id="9"/);
+    assert.match(operation.requestXml, /<edit-config>/);
+    assert.equal(/message-id="([^"]+)"/.exec(operation.requestXml)[1], operation.messageId);
     assert.equal(clients[0].lastRpcOptions.rejectOnRpcError, false);
 
     await assert.rejects(

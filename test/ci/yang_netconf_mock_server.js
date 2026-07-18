@@ -12,6 +12,7 @@ const { MOCK_DEVICE_YANG, MOCK_TYPES_YANG, MockNetconfServer, parseArgs } = requ
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const SOURCE_PROJECT_ROOT = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || PROJECT_ROOT);
 const RPC_OPTIONS = Object.freeze({ timeout: 5_000 });
+const MOCK_DEVICE_NAMESPACE = 'urn:netnexus:params:xml:ns:yang:mock-device';
 
 function waitFor(predicate, message, timeoutMs = 3_000) {
     const startedAt = Date.now();
@@ -220,6 +221,78 @@ async function run() {
 
         const initialRunning = await primary.getConfig({ source: 'running' }, RPC_OPTIONS);
         assert.match(initialRunning.xml, /<hostname>netnexus-mock<\/hostname>/u);
+
+        const sessionCountOnly = await primary.get(
+            {
+                filter: {
+                    type: 'subtree',
+                    content: `<state xmlns="${MOCK_DEVICE_NAMESPACE}"><session-count/></state>`
+                }
+            },
+            RPC_OPTIONS
+        );
+        assert.match(
+            sessionCountOnly.xml,
+            new RegExp(`<state xmlns="${MOCK_DEVICE_NAMESPACE}"><session-count>\\d+</session-count></state>`, 'u')
+        );
+        assert.doesNotMatch(sessionCountOnly.xml, /<(?:uptime|datastore-revision|last-operation)>/u);
+        assert.doesNotMatch(sessionCountOnly.xml, /<(?:system|interfaces)(?:\s|>)/u);
+
+        const hostnameOnly = await primary.getConfig(
+            {
+                source: 'running',
+                filter: {
+                    type: 'subtree',
+                    content: `<system xmlns="${MOCK_DEVICE_NAMESPACE}"><hostname/></system>`
+                }
+            },
+            RPC_OPTIONS
+        );
+        assert.match(
+            hostnameOnly.xml,
+            new RegExp(`<system xmlns="${MOCK_DEVICE_NAMESPACE}"><hostname>netnexus-mock</hostname></system>`, 'u')
+        );
+        assert.doesNotMatch(hostnameOnly.xml, /<(?:location|contact)>/u);
+        assert.doesNotMatch(hostnameOnly.xml, /<(?:interfaces|state)(?:\s|>)/u);
+
+        const selectedInterfaceLeaf = await primary.getConfig(
+            {
+                source: 'running',
+                filter: {
+                    type: 'subtree',
+                    content:
+                        `<interfaces xmlns="${MOCK_DEVICE_NAMESPACE}"><interface>` +
+                        '<name>loopback0</name><enabled/></interface></interfaces>'
+                }
+            },
+            RPC_OPTIONS
+        );
+        assert.match(
+            selectedInterfaceLeaf.xml,
+            new RegExp(
+                `<interfaces xmlns="${MOCK_DEVICE_NAMESPACE}"><interface>` +
+                    '<name>loopback0</name><enabled>true</enabled></interface></interfaces>',
+                'u'
+            )
+        );
+        assert.equal((selectedInterfaceLeaf.xml.match(/<interface>/gu) || []).length, 1);
+        assert.doesNotMatch(selectedInterfaceLeaf.xml, /<name>eth0<\/name>/u);
+        assert.doesNotMatch(selectedInterfaceLeaf.xml, /<(?:description|mtu|oper-status|packets)>/u);
+
+        const unmatchedInterface = await primary.getConfig(
+            {
+                source: 'running',
+                filter: {
+                    type: 'subtree',
+                    content:
+                        `<interfaces xmlns="${MOCK_DEVICE_NAMESPACE}"><interface>` +
+                        '<name>missing0</name><enabled/></interface></interfaces>'
+                }
+            },
+            RPC_OPTIONS
+        );
+        assert.match(unmatchedInterface.xml, /<data(?:\s[^>]*)?(?:\/>|>\s*<\/data>)/u);
+        assert.doesNotMatch(unmatchedInterface.xml, /<(?:system|interfaces|state)(?:\s|>)/u);
 
         const candidateConfig =
             '<system xmlns="urn:netnexus:params:xml:ns:yang:mock-device">' +
