@@ -1222,14 +1222,9 @@ class BmpSession {
     getRibTypesByFlags(sessionFlags) {
         const postPolicy = (sessionFlags & BmpConst.BMP_SESSION_FLAGS.POST_POLICY) !== 0;
         const adjRibOut = (sessionFlags & BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT) !== 0;
-        const asPath = (sessionFlags & BmpConst.BMP_SESSION_FLAGS.AS_PATH) !== 0;
 
         if (adjRibOut) {
             return [postPolicy ? BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT : BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT];
-        }
-
-        if (asPath) {
-            return [BmpConst.BMP_BGP_RIB_TYPE.AS_PATH];
         }
 
         return [postPolicy ? BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN : BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN];

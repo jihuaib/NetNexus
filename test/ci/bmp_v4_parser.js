@@ -601,6 +601,22 @@ function addBgpSessionRoute(session, afi, safi, prefix, mask, ribType = BmpConst
 }
 
 const { session, events } = makeSession();
+[
+    { flags: 0, ribType: BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN },
+    { flags: BmpConst.BMP_SESSION_FLAGS.POST_POLICY, ribType: BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN },
+    { flags: BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT, ribType: BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_OUT },
+    {
+        flags: BmpConst.BMP_SESSION_FLAGS.POST_POLICY | BmpConst.BMP_SESSION_FLAGS.ADJ_RIB_OUT,
+        ribType: BmpConst.BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT
+    }
+].forEach(({ flags, ribType }) => {
+    assert.deepEqual(session.getRibTypesByFlags(flags), [ribType]);
+    assert.deepEqual(
+        session.getRibTypesByFlags(flags | BmpConst.BMP_SESSION_FLAGS.AS_PATH),
+        [ribType],
+        'the AS_PATH encoding flag must not change the RIB stage selected by the policy and direction flags'
+    );
+});
 session.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
 );

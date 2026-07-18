@@ -8,7 +8,12 @@
         @focusin="handleFocusIn"
         @focusout="handleFocusOut"
     >
-        <span ref="triggerRef" class="nn-tooltip-trigger" :aria-describedby="visible ? tooltipId : undefined">
+        <span
+            ref="triggerRef"
+            class="nn-tooltip-trigger"
+            :aria-describedby="visible ? tooltipId : undefined"
+            @click="handleTriggerClick"
+        >
             <slot />
         </span>
         <Teleport to="body">
@@ -56,6 +61,8 @@
     const hovered = ref(false);
     const focused = ref(false);
     const controlledDismissed = ref(false);
+    const interactionDismissed = ref(false);
+    const overlayFocusReturnPending = ref(false);
     const resolvedPlacement = ref(props.placement);
     const popupPosition = ref({ top: 0, left: 0, arrowX: 0, arrowY: 0 });
     const tooltipId = `nn-tooltip-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -76,7 +83,7 @@
             return props.open && !controlledDismissed.value;
         }
 
-        return hovered.value || focused.value;
+        return !interactionDismissed.value && (hovered.value || focused.value);
     });
 
     const tooltipClass = computed(() => ({
@@ -175,29 +182,52 @@
         resolvedPlacement.value = placement;
     };
 
-    const resetControlledDismissal = () => {
+    const isDismissed = () => (isControlled.value ? controlledDismissed.value : interactionDismissed.value);
+
+    const resetDismissal = () => {
+        interactionDismissed.value = false;
+        overlayFocusReturnPending.value = false;
+
         if (isControlled.value && props.open) {
             controlledDismissed.value = false;
         }
     };
 
+    const isModalFocusTarget = target => Boolean(target?.closest?.('[aria-modal="true"]'));
+
     const handleMouseEnter = () => {
         hovered.value = true;
-        resetControlledDismissal();
+        resetDismissal();
     };
 
     const handleMouseLeave = () => {
         hovered.value = false;
     };
 
-    const handleFocusIn = () => {
+    const handleFocusIn = event => {
         focused.value = true;
-        resetControlledDismissal();
+
+        // Modal overlays restore focus to their trigger when they close. Keep a tooltip
+        // dismissed for that programmatic return; a real re-entry resets it below.
+        if (isDismissed() && (overlayFocusReturnPending.value || isModalFocusTarget(event.relatedTarget))) {
+            overlayFocusReturnPending.value = false;
+            return;
+        }
+
+        resetDismissal();
     };
 
     const handleFocusOut = event => {
         if (!event.currentTarget.contains(event.relatedTarget)) {
             focused.value = false;
+
+            if (!isDismissed()) return;
+
+            if (isModalFocusTarget(event.relatedTarget)) {
+                overlayFocusReturnPending.value = true;
+            } else if (!overlayFocusReturnPending.value) {
+                resetDismissal();
+            }
         }
     };
 
@@ -207,7 +237,15 @@
 
         if (isControlled.value && props.open) {
             controlledDismissed.value = true;
+        } else {
+            interactionDismissed.value = true;
         }
+
+        overlayFocusReturnPending.value = false;
+    };
+
+    const handleTriggerClick = () => {
+        dismissTooltip();
     };
 
     const handleDocumentPointerDown = event => {
@@ -227,6 +265,7 @@
         () => props.open,
         () => {
             controlledDismissed.value = false;
+            overlayFocusReturnPending.value = false;
         }
     );
 

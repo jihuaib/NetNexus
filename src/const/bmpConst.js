@@ -26,9 +26,9 @@ export const BMP_PEER_TYPE = {
 // 直接使用这个值处理
 export const BMP_SESSION_FLAGS = {
     IPV6: 0x80, // V 位: 使用 IPv6 地址
-    POST_POLICY: 0x40, // P 位: Adj-RIB-In 是策略后导出的（post-policy）
-    AS_PATH: 0x20, // L 位: 表示 AS_PATH
-    ADJ_RIB_OUT: 0x10, // O 位: Adj-RIB-Out
+    POST_POLICY: 0x40, // L 位: Post-policy；未设置表示 Pre-policy
+    AS_PATH: 0x20, // A 位: legacy 2-byte AS_PATH 编码；不是 RIB stage
+    ADJ_RIB_OUT: 0x10, // O 位: Adj-RIB-Out；未设置表示 Adj-RIB-In
     FILTERED: 0x08, // F 位: Local-RIB filtered
     EXTENDED_FLAGS: 0x01 // X 位: Extended Flags TLV carries effective flags
 };
@@ -102,17 +102,17 @@ export const BMP_SESSION_STATE_NAME = {
 export const BMP_BGP_RIB_TYPE = {
     PRE_ADJ_RIB_IN: 1,
     ADJ_RIB_IN: 2,
-    AS_PATH: 3,
+    AS_PATH: 3, // 历史兼容值；BMP A flag 是 AS_PATH 编码标志，不是 RIB stage
     ADJ_RIB_OUT: 4,
     POST_ADJ_RIB_OUT: 5
 };
 
 export const BMP_BGP_RIB_TYPE_NAME = {
-    [BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN]: 'Pre Adj RIB In',
-    [BMP_BGP_RIB_TYPE.ADJ_RIB_IN]: 'Adj RIB In',
-    [BMP_BGP_RIB_TYPE.AS_PATH]: 'AS Path',
-    [BMP_BGP_RIB_TYPE.ADJ_RIB_OUT]: 'Adj RIB Out',
-    [BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT]: 'Post Adj RIB Out'
+    [BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN]: 'Pre-policy Adj-RIB-In',
+    [BMP_BGP_RIB_TYPE.ADJ_RIB_IN]: 'Post-policy Adj-RIB-In',
+    [BMP_BGP_RIB_TYPE.AS_PATH]: 'Legacy 2-byte AS_PATH (compat)',
+    [BMP_BGP_RIB_TYPE.ADJ_RIB_OUT]: 'Pre-policy Adj-RIB-Out',
+    [BMP_BGP_RIB_TYPE.POST_ADJ_RIB_OUT]: 'Post-policy Adj-RIB-Out'
 };
 
 export const BMP_TLV_TYPE = {

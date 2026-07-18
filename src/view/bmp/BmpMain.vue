@@ -10,6 +10,7 @@
                 <nn-tab-pane key="bgp-loc-rib-statis-report" tab="BGP Loc-RIB统计" />
                 <nn-tab-pane key="route-assurance" tab="路由矩阵" />
                 <nn-tab-pane key="route-lens" tab="路由追踪" />
+                <nn-tab-pane key="route-history" tab="路由轨迹" />
             </nn-tabs>
         </div>
 
@@ -44,7 +45,8 @@
         'bgp-session-statis-report',
         'bgp-loc-rib-statis-report',
         'route-assurance',
-        'route-lens'
+        'route-lens',
+        'route-history'
     ]);
 
     const handleTabChange = key => {

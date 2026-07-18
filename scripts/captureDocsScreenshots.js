@@ -9,6 +9,10 @@ const BgpConst = require('../electron/const/bgpConst');
 const BASE_URL = process.env.NETNEXUS_DOCS_URL || 'http://127.0.0.1:3000';
 const OUTPUT_ROOT = path.join(__dirname, '..');
 const NODE_PATH = process.env.NETNEXUS_NODE || process.env.npm_node_execpath || 'node';
+const SCREENSHOT_SCOPE = String(process.env.NETNEXUS_DOCS_SCREENSHOT_SCOPE || '')
+    .trim()
+    .toLowerCase();
+const SCREENSHOT_MATCH = String(process.env.NETNEXUS_DOCS_SCREENSHOT_MATCH || '').trim();
 const BGP_DOCS_PORT = Number(process.env.NETNEXUS_DOCS_BGP_PORT || 11790);
 const BMP_DOCS_PORT = Number(process.env.NETNEXUS_DOCS_BMP_PORT || 1790);
 const BMP_DOCS_ROUTES = Number(process.env.NETNEXUS_DOCS_BMP_ROUTES || 25);
@@ -30,6 +34,11 @@ const TCP_TOOL_DOCS_PAYLOAD = 'NetNexus TCP demo payload';
 const UDP_TOOL_DOCS_PAYLOAD = 'NetNexus UDP demo payload';
 const BMP_DRAFT_20 = 20;
 const BMP_PATH_MARKING_TLV_DRAFT_20 = 8;
+const BMP_ROUTE_LENS_QUERY = '203.0.120.1';
+const BMP_ROUTE_HISTORY_IPV4_QUERY = '198.18.250.0/24';
+const BMP_ROUTE_HISTORY_EVPN_QUERY = 'evpn:mac-ip:';
+const BMP_ROUTE_HISTORY_BGP_LS_QUERY = 'bgp-ls:';
+const BMP_ROUTE_HISTORY_FLOW_SPEC_QUERY = 'dst=198.18.253.0/24';
 const DEFAULT_WINDOW_WIDTH = 1920;
 const DEFAULT_WINDOW_HEIGHT = 1200;
 
@@ -103,6 +112,12 @@ const screenshots = [
         prepare: 'open-bmp-session-route-detail',
         cleanup: 'close-overlay'
     },
+    {
+        route: '/bmp/bgp-session',
+        outputPath: 'docs/images/bmp/bmp-session-route-event-timeline.png',
+        prepare: 'open-bmp-session-route-event-timeline',
+        cleanup: 'close-overlay'
+    },
     ['/bmp/bgp-loc-rib', 'docs/images/bmp/bmp-monitor-bgp-route.png'],
     {
         route: '/bmp/bgp-loc-rib',
@@ -114,6 +129,12 @@ const screenshots = [
         route: '/bmp/bgp-loc-rib',
         outputPath: 'docs/images/bmp/bmp-loc-rib-route-detail.png',
         prepare: 'open-bmp-loc-rib-route-detail',
+        cleanup: 'close-overlay'
+    },
+    {
+        route: '/bmp/bgp-loc-rib',
+        outputPath: 'docs/images/bmp/bmp-loc-rib-route-event-timeline.png',
+        prepare: 'open-bmp-loc-rib-route-event-timeline',
         cleanup: 'close-overlay'
     },
     ['/bmp/bgp-session-statis-report', 'docs/images/bmp/bmp-session-statis-report.png'],
@@ -128,6 +149,63 @@ const screenshots = [
         route: '/bmp/bgp-loc-rib-statis-report',
         outputPath: 'docs/images/bmp/bmp-loc-rib-statis-detail.png',
         prepare: 'open-text-detail-0',
+        cleanup: 'close-overlay'
+    },
+    {
+        route: '/bmp/route-assurance',
+        outputPath: 'docs/images/bmp/bmp-route-assurance.png',
+        prepare: 'prepare-bmp-route-assurance'
+    },
+    {
+        route: '/bmp/route-lens',
+        outputPath: 'docs/images/bmp/bmp-route-lens.png',
+        prepare: 'prepare-bmp-route-lens'
+    },
+    {
+        route: '/bmp/route-lens',
+        outputPath: 'docs/images/bmp/bmp-route-lens-route-detail.png',
+        prepare: 'open-bmp-route-lens-route-detail',
+        cleanup: 'close-overlay'
+    },
+    {
+        route: '/bmp/route-lens',
+        outputPath: 'docs/images/bmp/bmp-route-lens-route-event-timeline.png',
+        prepare: 'open-bmp-route-lens-route-event-timeline',
+        cleanup: 'close-overlay'
+    },
+    {
+        route: '/bmp/route-lens',
+        outputPath: 'docs/images/bmp/bmp-route-lens-policy-diff-detail.png',
+        prepare: 'open-bmp-route-lens-policy-diff-detail',
+        cleanup: 'close-overlay'
+    },
+    {
+        route: '/bmp/route-history',
+        outputPath: 'docs/images/bmp/bmp-route-history.png',
+        prepare: 'prepare-bmp-route-history-ipv4'
+    },
+    {
+        route: '/bmp/route-history',
+        outputPath: 'docs/images/bmp/bmp-route-history-event-timeline.png',
+        prepare: 'open-bmp-route-history-ipv4-event-timeline',
+        cleanup: 'close-overlay'
+    },
+    {
+        route: '/bmp/route-history',
+        outputPath: 'docs/images/bmp/bmp-route-history-evpn-event-timeline.png',
+        prepare: 'open-bmp-route-history-evpn-event-timeline',
+        cleanup: 'close-overlay'
+    },
+    {
+        route: '/bmp/route-history',
+        outputPath: 'docs/images/bmp/bmp-route-history-bgp-ls-event-timeline.png',
+        prepare: 'open-bmp-route-history-bgp-ls-event-timeline',
+        cleanup: 'close-overlay'
+    },
+    {
+        route: '/bmp/route-history',
+        outputPath: 'docs/images/bmp/bmp-route-history-flowspec-event-timeline.png',
+        prepare: 'open-bmp-route-history-flowspec-event-timeline',
         cleanup: 'close-overlay'
     },
     ['/rpki/rpki-config', 'docs/images/rpki/rpki-config-and-client.png'],
@@ -276,6 +354,12 @@ function normalizeScreenshotEntry(entry) {
     return entry;
 }
 
+function matchesScreenshotScope(entry) {
+    const { outputPath } = normalizeScreenshotEntry(entry);
+    if (SCREENSHOT_SCOPE && !outputPath.startsWith(`docs/images/${SCREENSHOT_SCOPE}/`)) return false;
+    return !SCREENSHOT_MATCH || outputPath.includes(SCREENSHOT_MATCH);
+}
+
 async function runScreenshotHandler(map, handlerName, win, label) {
     if (!handlerName) {
         return;
@@ -313,7 +397,7 @@ async function navigateAndCapture(win, route, outputPath, prepare, cleanup) {
 
 async function capturePage(win, label, outputPath) {
     await win.webContents.executeJavaScript('document.fonts && document.fonts.ready');
-    await win.webContents.executeJavaScript(`
+    const hasOpenOverlay = await win.webContents.executeJavaScript(`
         (() => {
             let style = document.getElementById('docs-screenshot-hide-overlays');
             if (!style) {
@@ -321,14 +405,54 @@ async function capturePage(win, label, outputPath) {
                 style.id = 'docs-screenshot-hide-overlays';
                 document.head.appendChild(style);
             }
-            style.textContent = '.nn-toast-host, .update-notification { display: none !important; }';
-        })();
-        document.querySelectorAll(
-            '.nn-toast, .update-notification, [class*="update-notification"]'
-        ).forEach(element => {
-            element.remove();
-        });
+            style.textContent =
+                '.nn-toast-host, .update-notification, .floating-progress-notification { display: none !important; } ' +
+                '.nn-drawer-content-wrapper { transition: none !important; } ' +
+                '.nn-drawer-motion-enter-from, .nn-drawer-motion-leave-to { opacity: 1 !important; } ' +
+                '.nn-drawer-motion-enter-from .nn-drawer-content-wrapper, ' +
+                '.nn-drawer-motion-leave-to .nn-drawer-content-wrapper { transform: none !important; }';
+            const isVisible = element => {
+                const rect = element?.getBoundingClientRect();
+                const computed = element ? window.getComputedStyle(element) : null;
+                return Boolean(
+                    element &&
+                    rect &&
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    computed?.display !== 'none' &&
+                    computed?.visibility !== 'hidden'
+                );
+            };
+            document.querySelectorAll('.nn-drawer').forEach(drawer => {
+                if (!isVisible(drawer)) return;
+                drawer.classList.remove('nn-drawer-motion-enter-from', 'nn-drawer-motion-leave-to');
+                drawer.style.opacity = '1';
+                const wrapper = drawer.querySelector('.nn-drawer-content-wrapper');
+                if (wrapper) {
+                    wrapper.style.transition = 'none';
+                    wrapper.style.transform = 'none';
+                }
+            });
+            document.querySelectorAll(
+                '.nn-toast, .update-notification, [class*="update-notification"], .floating-progress-notification'
+            ).forEach(element => {
+                element.remove();
+            });
+            return Array.from(document.querySelectorAll('.nn-drawer-content, .nn-modal')).some(isVisible);
+        })()
     `);
+    await win.webContents.executeJavaScript(`
+        new Promise(resolve => {
+            requestAnimationFrame(() => requestAnimationFrame(resolve));
+        })
+    `);
+    win.webContents.invalidate();
+    await wait(150);
+    if (hasOpenOverlay) {
+        await win.capturePage();
+        await wait(100);
+        win.webContents.invalidate();
+    }
     const image = await win.capturePage();
     const absoluteOutputPath = path.join(OUTPUT_ROOT, outputPath);
     await fs.mkdir(path.dirname(absoluteOutputPath), { recursive: true });
@@ -357,23 +481,51 @@ async function waitForOpenOverlay(win, label, expectedText = '') {
             const text = overlay?.textContent?.trim() || '';
             const spinning = Boolean(overlay?.querySelector('.nn-spin-overlay, .nn-spin, .nn-table-loading-mask'));
             const hasEmptyDetail = text.includes('暂无详情');
+            const wrapper = overlay?.closest('.nn-drawer-content-wrapper');
+            const panel = wrapper || overlay;
+            const panelRect = panel?.getBoundingClientRect();
+            const transitionRoot = wrapper?.closest('.nn-drawer');
+            const drawerIsTransitioning = Boolean(
+                transitionRoot?.classList.contains('nn-drawer-motion-enter-from') ||
+                transitionRoot?.classList.contains('nn-drawer-motion-leave-to')
+            );
+            const panelIsInViewport = Boolean(
+                panelRect &&
+                panelRect.left >= -2 &&
+                panelRect.top >= -2 &&
+                panelRect.right <= window.innerWidth + 2 &&
+                panelRect.bottom <= window.innerHeight + 2
+            );
             return {
                 ready:
                     Boolean(overlay) &&
                     !spinning &&
                     text.length > 10 &&
                     !hasEmptyDetail &&
+                    panelIsInViewport &&
+                    !drawerIsTransitioning &&
                     (!expectedText || text.includes(expectedText)),
                 text: text.slice(0, 80),
                 overlays: overlays.length,
                 matchingOverlays: matchingOverlays.length,
-                spinning
+                spinning,
+                panelIsInViewport,
+                drawerIsTransitioning,
+                panelRect: panelRect
+                    ? {
+                          left: Math.round(panelRect.left),
+                          top: Math.round(panelRect.top),
+                          right: Math.round(panelRect.right),
+                          bottom: Math.round(panelRect.bottom)
+                      }
+                    : null
             };
         })()
     `,
         label,
         10000
     );
+    await wait(100);
 }
 
 async function openDetailButtonByText(win, buttonIndex, label) {
@@ -417,6 +569,374 @@ async function openDetailButtonBySelector(win, selector, label) {
         throw new Error(`detail selector not found for ${label}: ${selector}`);
     }
     await waitForOpenOverlay(win, label);
+}
+
+async function selectOptionByText(win, selector, optionText, label) {
+    const current = await win.webContents.executeJavaScript(`
+        (() => {
+            const select = document.querySelector(${JSON.stringify(selector)});
+            if (!select) return { ready: false, reason: 'select not found' };
+            const selectedText = select.querySelector('.nn-select-single-value')?.textContent?.trim() || '';
+            const optionText = ${JSON.stringify(optionText)};
+            if (selectedText === optionText || selectedText.startsWith(optionText + ' (')) {
+                return { ready: true, alreadySelected: true, selectedText };
+            }
+            if (select.getAttribute('aria-disabled') === 'true') {
+                return { ready: false, reason: 'select disabled', selectedText };
+            }
+            select.click();
+            return { ready: true, alreadySelected: false, selectedText };
+        })()
+    `);
+    if (!current?.ready) {
+        throw new Error(`select unavailable for ${label}: ${JSON.stringify(current)}`);
+    }
+    if (current.alreadySelected) return;
+
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const isVisible = element => {
+                const rect = element?.getBoundingClientRect();
+                const style = element ? window.getComputedStyle(element) : null;
+                return Boolean(
+                    element &&
+                    rect &&
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    style?.display !== 'none' &&
+                    style?.visibility !== 'hidden'
+                );
+            };
+            const options = Array.from(document.querySelectorAll('[role="option"]')).filter(isVisible);
+            const optionText = ${JSON.stringify(optionText)};
+            const option = options.find(item => {
+                const text = item.textContent.trim();
+                return text === optionText || text.startsWith(optionText + ' (');
+            });
+            return {
+                ready: Boolean(option),
+                options: options.map(item => item.textContent.trim()).slice(0, 20)
+            };
+        })()
+    `,
+        `${label} option`,
+        10000
+    );
+
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const isVisible = element => {
+                const rect = element?.getBoundingClientRect();
+                const style = element ? window.getComputedStyle(element) : null;
+                return Boolean(
+                    element &&
+                    rect &&
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    style?.display !== 'none' &&
+                    style?.visibility !== 'hidden'
+                );
+            };
+            const optionText = ${JSON.stringify(optionText)};
+            const option = Array.from(document.querySelectorAll('[role="option"]'))
+                .filter(isVisible)
+                .find(item => {
+                    const text = item.textContent.trim();
+                    return text === optionText || text.startsWith(optionText + ' (');
+                });
+            if (!option) return { clicked: false };
+            option.click();
+            return { clicked: true, text: option.textContent.trim() };
+        })()
+    `);
+    if (!result?.clicked) {
+        throw new Error(`option not found for ${label}: ${optionText}`);
+    }
+    await wait(300);
+}
+
+async function clickDrawerTab(win, tabText, label) {
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const isVisible = element => {
+                const rect = element?.getBoundingClientRect();
+                const style = element ? window.getComputedStyle(element) : null;
+                return Boolean(
+                    element &&
+                    rect &&
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    style?.display !== 'none' &&
+                    style?.visibility !== 'hidden'
+                );
+            };
+            const drawer = Array.from(document.querySelectorAll('.nn-drawer-content')).filter(isVisible).at(-1);
+            const tab = Array.from(drawer?.querySelectorAll('.nn-tabs-tab') || [])
+                .find(item => item.textContent.trim() === ${JSON.stringify(tabText)});
+            if (!tab) return { clicked: false, drawerText: drawer?.textContent?.slice(0, 120) || '' };
+            tab.click();
+            return { clicked: true, text: tab.textContent.trim() };
+        })()
+    `);
+    if (!result?.clicked) {
+        throw new Error(`drawer tab not found for ${label}: ${JSON.stringify(result)}`);
+    }
+    await wait(200);
+}
+
+async function waitForRouteEventTimeline(win, label, expectedEventTypes = []) {
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const isVisible = element => {
+                const rect = element?.getBoundingClientRect();
+                const style = element ? window.getComputedStyle(element) : null;
+                return Boolean(
+                    element &&
+                    rect &&
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    style?.display !== 'none' &&
+                    style?.visibility !== 'hidden'
+                );
+            };
+            const timelines = Array.from(document.querySelectorAll('[data-testid="bmp-route-event-timeline"]'))
+                .filter(isVisible);
+            const timeline = timelines.at(-1);
+            const items = Array.from(timeline?.querySelectorAll('[data-testid="bmp-route-event-item"]') || []);
+            const eventTypes = items.map(item => item.dataset.eventType).filter(Boolean);
+            const expected = ${JSON.stringify(expectedEventTypes)};
+            const spinning = Boolean(timeline?.querySelector('.nn-spin-spinning, .nn-spin-overlay'));
+            return {
+                ready:
+                    Boolean(timeline) &&
+                    !spinning &&
+                    items.length > 0 &&
+                    expected.every(eventType => eventTypes.includes(eventType)),
+                items: items.length,
+                eventTypes,
+                text: timeline?.textContent?.slice(0, 160) || ''
+            };
+        })()
+    `,
+        label,
+        15000
+    );
+}
+
+async function openRouteDetailEventTimeline(win, selector, label) {
+    await openDetailButtonBySelector(win, selector, label);
+    await clickDrawerTab(win, '事件轨迹', label);
+    await waitForRouteEventTimeline(win, label, ['announce']);
+}
+
+async function prepareBmpRouteLens(win, label) {
+    const inputReady = await win.webContents.executeJavaScript(
+        setDomInputScript('[data-testid="route-lens-query"]', BMP_ROUTE_LENS_QUERY)
+    );
+    if (!inputReady) throw new Error(`Route Lens input unavailable for ${label}`);
+    const clicked = await win.webContents.executeJavaScript(`
+        (() => {
+            const button = document.querySelector('[data-testid="route-lens-search"]');
+            if (!button || button.disabled) return false;
+            button.click();
+            return true;
+        })()
+    `);
+    if (!clicked) throw new Error(`Route Lens search unavailable for ${label}`);
+
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const stageKeys = ['preIn', 'postIn', 'locRib', 'preOut', 'postOut'];
+            const stages = Object.fromEntries(stageKeys.map(key => {
+                const stage = document.querySelector('[data-testid="route-lens-stage-' + key + '"]');
+                const cards = Array.from(stage?.querySelectorAll('[data-testid="route-lens-route-card"]') || []);
+                return [key, cards.filter(card => card.textContent.includes('203.0.120.0/24')).length];
+            }));
+            return {
+                ready: stageKeys.every(key => stages[key] === 1),
+                stages,
+                loading: Boolean(document.querySelector('.route-lens-page .nn-spin-spinning'))
+            };
+        })()
+    `,
+        label,
+        15000
+    );
+}
+
+async function openBmpRouteLensRouteDetail(win, label) {
+    await prepareBmpRouteLens(win, label);
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const stage = document.querySelector('[data-testid="route-lens-stage-preIn"]');
+            const card = Array.from(stage?.querySelectorAll('[data-testid="route-lens-route-card"]') || [])
+                .find(item => item.textContent.includes('203.0.120.0/24'));
+            if (!card) return { clicked: false };
+            card.scrollIntoView({ block: 'center', inline: 'nearest' });
+            card.click();
+            return { clicked: true };
+        })()
+    `);
+    if (!result?.clicked) throw new Error(`Route Lens route card unavailable for ${label}`);
+    await waitForOpenOverlay(win, label, '203.0.120.0/24 · Pre Adj-RIB-In');
+}
+
+async function openBmpRouteLensRouteEventTimeline(win, label) {
+    await openBmpRouteLensRouteDetail(win, label);
+    await clickDrawerTab(win, '事件轨迹', label);
+    await waitForRouteEventTimeline(win, label, ['announce']);
+}
+
+async function openBmpRouteLensPolicyDiffDetail(win, label) {
+    await prepareBmpRouteLens(win, label);
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const panel = Array.from(document.querySelectorAll('.analysis-panel'))
+                .find(item => item.textContent.includes('Inbound 属性差异'));
+            const card = panel?.querySelector('.diff-card');
+            if (!card) return { clicked: false, panelText: panel?.textContent?.slice(0, 120) || '' };
+            card.scrollIntoView({ block: 'center', inline: 'nearest' });
+            card.click();
+            return { clicked: true };
+        })()
+    `);
+    if (!result?.clicked) {
+        throw new Error(`Route Lens policy diff unavailable for ${label}: ${JSON.stringify(result)}`);
+    }
+    await waitForOpenOverlay(win, label, 'Inbound 属性差异');
+}
+
+async function prepareBmpRouteAssurance(win, label) {
+    const toggleState = await win.webContents.executeJavaScript(`
+        (() => {
+            const toggle = document.querySelector('[data-testid="route-assurance-toggle"]');
+            if (!toggle || toggle.disabled) return { ready: false };
+            const checked = toggle.getAttribute('aria-checked') === 'true';
+            if (!checked) toggle.click();
+            return { ready: true, checked };
+        })()
+    `);
+    if (!toggleState?.ready) throw new Error(`Route Assurance toggle unavailable for ${label}`);
+
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const toggle = document.querySelector('[data-testid="route-assurance-toggle"]');
+            const vrf = document.querySelector('[data-testid="route-assurance-vrf"]');
+            return {
+                ready: toggle?.getAttribute('aria-checked') === 'true' && vrf?.getAttribute('aria-disabled') !== 'true',
+                checked: toggle?.getAttribute('aria-checked'),
+                vrfDisabled: vrf?.getAttribute('aria-disabled')
+            };
+        })()
+    `,
+        `${label} analysis enabled`,
+        15000
+    );
+
+    await selectOptionByText(win, '[data-testid="route-assurance-vrf"]', 'route-lens-lab', label);
+    const clicked = await win.webContents.executeJavaScript(`
+        (() => {
+            const button = document.querySelector('[data-testid="route-assurance-search"]');
+            if (!button || button.disabled) return false;
+            button.click();
+            return true;
+        })()
+    `);
+    if (!clicked) throw new Error(`Route Assurance search unavailable for ${label}`);
+
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const expected = { preIn: '6', postIn: '5', locRib: '4', preOut: '3', postOut: '2' };
+            const counts = Object.fromEntries(Object.keys(expected).map(key => [
+                key,
+                document.querySelector('[data-testid="route-assurance-stage-' + key + '"] strong')?.textContent?.trim()
+            ]));
+            const rows = Array.from(document.querySelectorAll('[data-testid="route-assurance-issue-row"]'));
+            return {
+                ready: Object.keys(expected).every(key => counts[key] === expected[key]) && rows.length === 5,
+                counts,
+                rows: rows.length,
+                loading: Boolean(document.querySelector('.route-assurance-page .nn-table-loading-mask'))
+            };
+        })()
+    `,
+        label,
+        20000
+    );
+}
+
+async function prepareBmpRouteHistory(win, label, query, expectedIdentity) {
+    await selectOptionByText(win, '[data-testid="route-history-scope-kind"]', 'BGP Peer RIB', `${label} scope`);
+    await selectOptionByText(
+        win,
+        '[data-testid="route-history-rib-type"]',
+        'Post-policy Adj-RIB-In',
+        `${label} RIB stage`
+    );
+
+    const inputReady = await win.webContents.executeJavaScript(
+        setDomInputScript('[data-testid="route-history-prefix"]', query)
+    );
+    if (!inputReady) throw new Error(`Route History input unavailable for ${label}`);
+    const clicked = await win.webContents.executeJavaScript(`
+        (() => {
+            const button = document.querySelector('[data-testid="route-history-search"]');
+            if (!button || button.disabled) return false;
+            button.click();
+            return true;
+        })()
+    `);
+    if (!clicked) throw new Error(`Route History search unavailable for ${label}`);
+
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const rows = Array.from(document.querySelectorAll('[data-testid="route-history-row"]'));
+            const matchingRows = rows.filter(row => row.textContent.includes(${JSON.stringify(expectedIdentity)}));
+            return {
+                ready:
+                    matchingRows.length === 1 &&
+                    matchingRows[0].textContent.includes('最近保留事件：撤销') &&
+                    !document.querySelector('.route-history-page .nn-table-loading-mask'),
+                rows: rows.length,
+                matchingRows: matchingRows.length,
+                text: matchingRows[0]?.textContent?.slice(0, 220) || ''
+            };
+        })()
+    `,
+        label,
+        15000
+    );
+}
+
+async function openBmpRouteHistoryEventTimeline(win, label, query, expectedIdentity) {
+    await prepareBmpRouteHistory(win, label, query, expectedIdentity);
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const row = Array.from(document.querySelectorAll('[data-testid="route-history-row"]'))
+                .find(item => item.textContent.includes(${JSON.stringify(expectedIdentity)}));
+            const button = row?.querySelector('[data-testid="route-history-open"]');
+            if (!button) return { clicked: false, rowText: row?.textContent?.slice(0, 160) || '' };
+            button.click();
+            return { clicked: true };
+        })()
+    `);
+    if (!result?.clicked) {
+        throw new Error(`Route History timeline unavailable for ${label}: ${JSON.stringify(result)}`);
+    }
+    await waitForOpenOverlay(win, label, '事件轨迹');
+    await waitForRouteEventTimeline(win, label, ['withdraw', 'replace', 'announce']);
 }
 
 async function closeOpenOverlay(win) {
@@ -642,6 +1162,32 @@ screenshotPreparers.set('open-bmp-session-route-detail', (win, label) =>
 );
 screenshotPreparers.set('open-bmp-loc-rib-route-detail', (win, label) =>
     openDetailButtonBySelector(win, '[data-testid="bmp-loc-rib-route-table"] .nn-table-tbody button', label)
+);
+screenshotPreparers.set('open-bmp-session-route-event-timeline', (win, label) =>
+    openRouteDetailEventTimeline(win, '[data-testid="bmp-session-route-table"] .nn-table-tbody button', label)
+);
+screenshotPreparers.set('open-bmp-loc-rib-route-event-timeline', (win, label) =>
+    openRouteDetailEventTimeline(win, '[data-testid="bmp-loc-rib-route-table"] .nn-table-tbody button', label)
+);
+screenshotPreparers.set('prepare-bmp-route-assurance', prepareBmpRouteAssurance);
+screenshotPreparers.set('prepare-bmp-route-lens', prepareBmpRouteLens);
+screenshotPreparers.set('open-bmp-route-lens-route-detail', openBmpRouteLensRouteDetail);
+screenshotPreparers.set('open-bmp-route-lens-route-event-timeline', openBmpRouteLensRouteEventTimeline);
+screenshotPreparers.set('open-bmp-route-lens-policy-diff-detail', openBmpRouteLensPolicyDiffDetail);
+screenshotPreparers.set('prepare-bmp-route-history-ipv4', (win, label) =>
+    prepareBmpRouteHistory(win, label, BMP_ROUTE_HISTORY_IPV4_QUERY, '198.18.250.0/24')
+);
+screenshotPreparers.set('open-bmp-route-history-ipv4-event-timeline', (win, label) =>
+    openBmpRouteHistoryEventTimeline(win, label, BMP_ROUTE_HISTORY_IPV4_QUERY, '198.18.250.0/24')
+);
+screenshotPreparers.set('open-bmp-route-history-evpn-event-timeline', (win, label) =>
+    openBmpRouteHistoryEventTimeline(win, label, BMP_ROUTE_HISTORY_EVPN_QUERY, 'evpn:mac-ip:')
+);
+screenshotPreparers.set('open-bmp-route-history-bgp-ls-event-timeline', (win, label) =>
+    openBmpRouteHistoryEventTimeline(win, label, BMP_ROUTE_HISTORY_BGP_LS_QUERY, 'bgp-ls:Link:')
+);
+screenshotPreparers.set('open-bmp-route-history-flowspec-event-timeline', (win, label) =>
+    openBmpRouteHistoryEventTimeline(win, label, BMP_ROUTE_HISTORY_FLOW_SPEC_QUERY, 'dst=198.18.253.0/24')
 );
 screenshotPreparers.set('open-tcp-ao-result', openTcpAoResult);
 screenshotPreparers.set('open-snmp-mib-context-menu', openSnmpMibContextMenu);
@@ -881,7 +1427,7 @@ async function startBmpForDocs(win) {
     console.log(`started BMP server for docs screenshots on 127.0.0.1:${BMP_DOCS_PORT}`);
 }
 
-function startMockBmpClient() {
+function startMockBmpClient(scenario = 'full') {
     const mockScriptPath = path.join(__dirname, 'mockBmpClient.js');
     const args = [
         mockScriptPath,
@@ -892,7 +1438,10 @@ function startMockBmpClient() {
         '--routes',
         `${BMP_DOCS_ROUTES}`,
         '--interval',
-        '1'
+        '1',
+        '--scenario',
+        scenario,
+        '--no-dump-packets'
     ];
     const child = spawn(NODE_PATH, args, {
         cwd: OUTPUT_ROOT,
@@ -902,7 +1451,7 @@ function startMockBmpClient() {
     let output = '';
     const ready = new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
-            reject(new Error('mock BMP client did not finish sending data in time'));
+            reject(new Error(`mock BMP client (${scenario}) did not finish sending data in time`));
         }, 15000);
 
         const handleOutput = data => {
@@ -928,7 +1477,7 @@ function startMockBmpClient() {
         child.once('exit', code => {
             clearTimeout(timeout);
             if (!output.includes('mock data sent; keeping BMP TCP connection open')) {
-                reject(new Error(`mock BMP client exited before data was ready, code ${code}`));
+                reject(new Error(`mock BMP client (${scenario}) exited before data was ready, code ${code}`));
             }
         });
     });
@@ -1048,6 +1597,43 @@ async function waitForBmpMockData(win) {
     }
 
     throw new Error(`BMP mock data was not ready: ${JSON.stringify(lastState)}`);
+}
+
+async function waitForBmpRouteHistoryData(win) {
+    await waitForRendererCondition(
+        win,
+        `
+        (async () => {
+            const response = await window.bmpApi.getPersistedRouteEvents({
+                groupByRoute: true,
+                prefixExact: '198.18.250.0',
+                prefixLength: 24,
+                afi: 1,
+                scopeKind: 'peer',
+                ribType: '2',
+                pageSize: 10,
+                includeTotal: true
+            });
+            const list = response?.status === 'success' && Array.isArray(response?.data?.list)
+                ? response.data.list
+                : [];
+            const history = list.find(item => item?.route?.ip === '198.18.250.0');
+            return {
+                ready:
+                    Boolean(history) &&
+                    Number(history.eventCount) >= 3 &&
+                    history.latestEvent?.eventType === 'withdraw',
+                status: response?.status,
+                total: response?.data?.total,
+                eventCount: history?.eventCount,
+                latestEventType: history?.latestEvent?.eventType,
+                message: response?.msg
+            };
+        })()
+    `,
+        'BMP route-history fixture',
+        20000
+    );
 }
 
 async function setupSettingsDemo(win) {
@@ -2069,6 +2655,15 @@ async function setupDocsDemoData(win, runtimeDir, longRunningProcesses) {
     longRunningProcesses.push(mock.child);
     await mock.ready;
     await waitForBmpMockData(win);
+    let routeHistoryFixturePromise = null;
+    pagePreparers.set('/bmp/route-history', async pageWin => {
+        if (!routeHistoryFixturePromise) {
+            const routeHistoryMock = startMockBmpClient('route-history');
+            longRunningProcesses.push(routeHistoryMock.child);
+            routeHistoryFixturePromise = routeHistoryMock.ready.then(() => waitForBmpRouteHistoryData(pageWin));
+        }
+        await routeHistoryFixturePromise;
+    });
     await setupRpkiDemo(win);
     await setupFtpDemo(win, runtimeDir);
     await setupDhcpDemo(win);
@@ -2141,11 +2736,23 @@ async function run() {
     try {
         await setupDocsDemoData(win, runtimeDir, longRunningProcesses);
 
-        for (const screenshot of screenshots) {
+        const selectedScreenshots = screenshots.filter(matchesScreenshotScope);
+        if (
+            (SCREENSHOT_SCOPE || SCREENSHOT_MATCH) &&
+            selectedScreenshots.length === 0 &&
+            SCREENSHOT_SCOPE !== 'setting'
+        ) {
+            throw new Error(
+                `no documentation screenshots matched scope=${SCREENSHOT_SCOPE || '*'} match=${SCREENSHOT_MATCH || '*'}`
+            );
+        }
+        for (const screenshot of selectedScreenshots) {
             const { route, outputPath, prepare, cleanup } = normalizeScreenshotEntry(screenshot);
             await navigateAndCapture(win, route, outputPath, prepare, cleanup);
         }
-        await captureSettingsScreenshots(win);
+        if ((!SCREENSHOT_SCOPE && !SCREENSHOT_MATCH) || SCREENSHOT_SCOPE === 'setting') {
+            await captureSettingsScreenshots(win);
+        }
     } finally {
         for (const child of [...longRunningProcesses].reverse()) {
             await stopChildProcess(child);

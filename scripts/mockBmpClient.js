@@ -11,8 +11,27 @@ const DEFAULT_OPTIONS = {
     routes: 25,
     interval: 30,
     once: false,
-    dumpPackets: true
+    dumpPackets: true,
+    scenario: 'full'
 };
+
+const ROUTE_HISTORY_SCENARIO = Object.freeze({
+    sysName: 'netnexus-history-fixture',
+    lifecyclePrefix: '198.18.250.0',
+    activePrefix: '198.18.251.0',
+    withdrawNoopPrefix: '198.18.252.0',
+    prefixLength: 24,
+    evpnVni: 10410,
+    evpnSequence: 41,
+    evpnIdentity: 'evpn:mac-ip:65000:41:tag=141:mac=aa:bb:cc:dd:ee:29:ip=192.0.2.51',
+    bgpLsLocalAddress: '10.250.0.1',
+    bgpLsRemoteAddress: '10.250.0.2',
+    bgpLsIdentity: 'bgp-ls:Link:10.250.0.1->10.250.0.2',
+    flowSpecPrefix: '198.18.253.0',
+    flowSpecPrefixLength: 24,
+    flowSpecIdentity: 'dst=198.18.253.0/24; proto = 6; dst-port = 443'
+});
+const SUPPORTED_SCENARIOS = new Set(['full', 'route-history']);
 
 function u16(value) {
     return Buffer.from([(value >> 8) & 0xff, value & 0xff]);
@@ -195,6 +214,11 @@ function ipv4Update(
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, body);
 }
 
+function ipv4Withdraw(prefixes) {
+    const withdrawn = Buffer.concat(prefixes.map(prefix => ipv4Nlri(prefix)));
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(withdrawn.length), withdrawn, u16(0)]));
+}
+
 function endOfRibUpdate(afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
     if (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 && safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
         return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(0)]));
@@ -206,6 +230,43 @@ function endOfRibUpdate(afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi = BgpConst.BG
         BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL
     );
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(mpUnreach.length), mpUnreach]));
+}
+
+function multiprotocolUpdate(
+    afi,
+    safi,
+    nlri,
+    { nextHop = Buffer.alloc(0), localPref = null, communities = [], additionalAttrs = [] } = {}
+) {
+    const nextHopBytes = Buffer.isBuffer(nextHop) ? nextHop : ipBytes(nextHop);
+    const mpReachValue = Buffer.concat([
+        u16(afi),
+        Buffer.from([safi, nextHopBytes.length]),
+        nextHopBytes,
+        Buffer.from([0]),
+        nlri
+    ]);
+    const attrs = [
+        pathAttr(BgpConst.BGP_PATH_ATTR.ORIGIN, Buffer.from([BgpConst.BGP_ORIGIN_TYPE.IGP])),
+        pathAttr(BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI, mpReachValue, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL),
+        ...additionalAttrs
+    ];
+    if (localPref !== null && localPref !== undefined) {
+        attrs.push(
+            pathAttr(BgpConst.BGP_PATH_ATTR.LOCAL_PREF, u32(localPref), BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE)
+        );
+    }
+    if (communities.length > 0) {
+        attrs.push(standardCommunitiesAttr(communities));
+    }
+    const attrBuffer = Buffer.concat(attrs);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrBuffer.length), attrBuffer]));
+}
+
+function multiprotocolWithdraw(afi, safi, nlri) {
+    const value = Buffer.concat([u16(afi), Buffer.from([safi]), nlri]);
+    const attr = pathAttr(BgpConst.BGP_PATH_ATTR.MP_UNREACH_NLRI, value, BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL);
+    return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attr.length), attr]));
 }
 
 function labeledUnicastNlri(prefix, label = 300, pathId = null) {
@@ -298,17 +359,21 @@ function bgpLsNodeDescriptor(type, asn, routerId) {
     return bgpLsTlv(type, Buffer.concat([bgpLsTlv(512, u32(asn)), bgpLsTlv(515, ip(routerId))]));
 }
 
-function bgpLsLinkUpdate() {
+function bgpLsLinkNlri({ identifier = 20001, localAddress = '10.10.0.1', remoteAddress = '10.10.0.2' } = {}) {
     const nlriBody = Buffer.concat([
         Buffer.from([3]),
         u32(0),
-        u32(20001),
+        u32(identifier),
         bgpLsNodeDescriptor(256, 65009, '10.100.0.1'),
         bgpLsNodeDescriptor(257, 65109, '10.200.0.1'),
-        bgpLsTlv(259, ip('10.10.0.1')),
-        bgpLsTlv(260, ip('10.10.0.2'))
+        bgpLsTlv(259, ip(localAddress)),
+        bgpLsTlv(260, ip(remoteAddress))
     ]);
-    const nlri = Buffer.concat([u16(2), u16(nlriBody.length), nlriBody]);
+    return Buffer.concat([u16(2), u16(nlriBody.length), nlriBody]);
+}
+
+function bgpLsLinkUpdate() {
+    const nlri = bgpLsLinkNlri();
     const mpReachValue = Buffer.concat([
         u16(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS),
         Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS, 0, 0]),
@@ -329,12 +394,7 @@ function evpnNlri(routeType, body) {
     return Buffer.concat([Buffer.from([routeType, body.length]), body]);
 }
 
-function evpnVxlanUpdate(vni = 10000, sequence = 1, options = {}) {
-    if (typeof sequence === 'object' && sequence !== null) {
-        options = sequence;
-        sequence = 1;
-    }
-    const { pathId = null } = options;
+function evpnVxlanNlri(vni = 10000, sequence = 1, { pathId = null } = {}) {
     const rd65000 = Buffer.from([0, 0, 0xfd, 0xe8, 0, 0, 0, sequence]);
     const esi = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, sequence & 0xff]);
     const mac = Buffer.from([0xaa, 0xbb, 0xcc, 0xdd, 0xee, sequence & 0xff]);
@@ -349,7 +409,15 @@ function evpnVxlanUpdate(vni = 10000, sequence = 1, options = {}) {
             evpnRaw24(vni)
         ])
     );
-    const nlri = pathId === null || pathId === undefined ? evpnRoute : Buffer.concat([u32(pathId), evpnRoute]);
+    return pathId === null || pathId === undefined ? evpnRoute : Buffer.concat([u32(pathId), evpnRoute]);
+}
+
+function evpnVxlanUpdate(vni = 10000, sequence = 1, options = {}) {
+    if (typeof sequence === 'object' && sequence !== null) {
+        options = sequence;
+        sequence = 1;
+    }
+    const nlri = evpnVxlanNlri(vni, sequence, options);
     const mpReachValue = Buffer.concat([
         u16(BgpConst.BGP_AFI_TYPE.AFI_L2VPN),
         Buffer.from([BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, 4]),
@@ -367,6 +435,26 @@ function evpnVxlanUpdate(vni = 10000, sequence = 1, options = {}) {
         )
     ]);
     return bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(attrs.length), attrs]));
+}
+
+function ipv4FlowSpecNlri(prefix = ROUTE_HISTORY_SCENARIO.flowSpecPrefix, prefixLength = 24) {
+    const prefixBytes = ip(prefix).subarray(0, Math.ceil(prefixLength / 8));
+    const components = Buffer.concat([
+        Buffer.from([1, prefixLength]),
+        prefixBytes,
+        Buffer.from([3, 0x81, 6]),
+        Buffer.from([5, 0x91]),
+        u16(443)
+    ]);
+    return Buffer.concat([Buffer.from([components.length]), components]);
+}
+
+function vxlanEncapsulationAttr() {
+    return pathAttr(
+        BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES,
+        Buffer.concat([Buffer.from([0x03, 0x0c, 0, 0, 0, 0]), u16(8)]),
+        BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE
+    );
 }
 
 function bmpMessage(type, payload, version = BmpConst.BMP_VERSION.V4) {
@@ -517,12 +605,12 @@ function statsRecords(records) {
     ]);
 }
 
-function initiationMessage() {
+function initiationMessage({ sysName = 'demo-bmp-router', sysDesc = 'NetNexus local BMP demo data' } = {}) {
     return bmpMessage(
         BmpConst.BMP_MSG_TYPE.INITIATION,
         Buffer.concat([
-            tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME, Buffer.from('demo-bmp-router')),
-            tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC, Buffer.from('NetNexus local BMP demo data'))
+            tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_NAME, Buffer.from(sysName)),
+            tlv(BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC, Buffer.from(sysDesc))
         ])
     );
 }
@@ -625,6 +713,8 @@ function parseArgs(argv) {
             options.routes = Number(argv[++index] || options.routes);
         } else if (arg === '--interval') {
             options.interval = Number(argv[++index] || options.interval);
+        } else if (arg === '--scenario') {
+            options.scenario = argv[++index] || options.scenario;
         } else if (arg === '--once') {
             options.once = true;
         } else if (arg === '--dump-packets') {
@@ -645,6 +735,9 @@ function parseArgs(argv) {
     if (!Number.isInteger(options.interval) || options.interval < 0) {
         throw new Error(`Invalid --interval: ${options.interval}`);
     }
+    if (!SUPPORTED_SCENARIOS.has(options.scenario)) {
+        throw new Error(`Invalid --scenario: ${options.scenario}; expected full or route-history`);
+    }
 
     return options;
 }
@@ -657,6 +750,7 @@ Options:
   --port <port>      BMP server port, default ${DEFAULT_OPTIONS.port}
   --routes <count>   IPv4 route count, default ${DEFAULT_OPTIONS.routes}
   --interval <ms>    Delay between message batches, default ${DEFAULT_OPTIONS.interval}
+  --scenario <name>  Scenario: full or route-history, default ${DEFAULT_OPTIONS.scenario}
   --once             Send data once and close the TCP connection
   --dump-packets     Print each sent BMP packet as copyable hex bytes, default on
   --no-dump-packets  Do not print packet hex bytes
@@ -664,7 +758,232 @@ Options:
 `);
 }
 
+function buildRouteHistoryScenario() {
+    const peer = {
+        flags: BmpConst.BMP_SESSION_FLAGS.POST_POLICY,
+        peerAddress: '192.0.2.250',
+        peerAs: 64512,
+        routerId: '192.0.2.250',
+        localAddress: '192.0.2.254'
+    };
+    const addressFamilies = [
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        },
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN
+        },
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_BGP_LS,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS
+        },
+        {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC
+        }
+    ];
+    const evpnRoute = evpnVxlanNlri(ROUTE_HISTORY_SCENARIO.evpnVni, ROUTE_HISTORY_SCENARIO.evpnSequence);
+    const bgpLsRoute = bgpLsLinkNlri({
+        identifier: 25001,
+        localAddress: ROUTE_HISTORY_SCENARIO.bgpLsLocalAddress,
+        remoteAddress: ROUTE_HISTORY_SCENARIO.bgpLsRemoteAddress
+    });
+    const flowSpecRoute = ipv4FlowSpecNlri(
+        ROUTE_HISTORY_SCENARIO.flowSpecPrefix,
+        ROUTE_HISTORY_SCENARIO.flowSpecPrefixLength
+    );
+
+    return [
+        {
+            name: 'route-history-initiation',
+            data: initiationMessage({
+                sysName: ROUTE_HISTORY_SCENARIO.sysName,
+                sysDesc: 'NetNexus route-history UI fixture'
+            })
+        },
+        {
+            name: 'route-history-peer-up-post-policy-adj-rib-in',
+            data: bmpMessage(
+                BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+                peerUpPayload({
+                    ...peer,
+                    recvAddressFamilies: addressFamilies,
+                    sendAddressFamilies: addressFamilies
+                })
+            )
+        },
+        {
+            name: 'route-history-lifecycle-announce',
+            data: routeMonitoringMessage(
+                peer,
+                ipv4Update([ROUTE_HISTORY_SCENARIO.lifecyclePrefix], {
+                    nextHop: '192.0.2.241',
+                    asns: [64512, 64520],
+                    localPref: 100,
+                    communities: ['64512:100']
+                })
+            )
+        },
+        {
+            name: 'route-history-lifecycle-replace',
+            data: routeMonitoringMessage(
+                peer,
+                ipv4Update([ROUTE_HISTORY_SCENARIO.lifecyclePrefix], {
+                    nextHop: '192.0.2.242',
+                    asns: [64512, 64530],
+                    localPref: 250,
+                    communities: ['64512:250']
+                })
+            )
+        },
+        {
+            name: 'route-history-lifecycle-withdraw',
+            data: routeMonitoringMessage(peer, ipv4Withdraw([ROUTE_HISTORY_SCENARIO.lifecyclePrefix]))
+        },
+        {
+            name: 'route-history-active-announce',
+            data: routeMonitoringMessage(
+                peer,
+                ipv4Update([ROUTE_HISTORY_SCENARIO.activePrefix], {
+                    nextHop: '192.0.2.243',
+                    asns: [64512, 64540],
+                    localPref: 180,
+                    communities: ['64512:180']
+                })
+            )
+        },
+        {
+            name: 'route-history-withdraw-noop',
+            data: routeMonitoringMessage(peer, ipv4Withdraw([ROUTE_HISTORY_SCENARIO.withdrawNoopPrefix]))
+        },
+        {
+            name: 'route-history-evpn-announce',
+            data: routeMonitoringMessage(
+                peer,
+                multiprotocolUpdate(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, evpnRoute, {
+                    nextHop: '10.0.0.41',
+                    localPref: 110,
+                    communities: ['64512:410'],
+                    additionalAttrs: [vxlanEncapsulationAttr()]
+                })
+            )
+        },
+        {
+            name: 'route-history-evpn-replace',
+            data: routeMonitoringMessage(
+                peer,
+                multiprotocolUpdate(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, evpnRoute, {
+                    nextHop: '10.0.0.42',
+                    localPref: 210,
+                    communities: ['64512:420'],
+                    additionalAttrs: [vxlanEncapsulationAttr()]
+                })
+            )
+        },
+        {
+            name: 'route-history-evpn-withdraw',
+            data: routeMonitoringMessage(
+                peer,
+                multiprotocolWithdraw(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, evpnRoute)
+            )
+        },
+        {
+            name: 'route-history-bgp-ls-announce',
+            data: routeMonitoringMessage(
+                peer,
+                multiprotocolUpdate(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS, bgpLsRoute, {
+                    localPref: 120,
+                    communities: ['64512:501']
+                })
+            )
+        },
+        {
+            name: 'route-history-bgp-ls-replace',
+            data: routeMonitoringMessage(
+                peer,
+                multiprotocolUpdate(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS, bgpLsRoute, {
+                    localPref: 220,
+                    communities: ['64512:502']
+                })
+            )
+        },
+        {
+            name: 'route-history-bgp-ls-withdraw',
+            data: routeMonitoringMessage(
+                peer,
+                multiprotocolWithdraw(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS, bgpLsRoute)
+            )
+        },
+        {
+            name: 'route-history-flowspec-announce',
+            data: routeMonitoringMessage(
+                peer,
+                multiprotocolUpdate(
+                    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC,
+                    flowSpecRoute,
+                    { localPref: 130, communities: ['64512:601'] }
+                )
+            )
+        },
+        {
+            name: 'route-history-flowspec-replace',
+            data: routeMonitoringMessage(
+                peer,
+                multiprotocolUpdate(
+                    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC,
+                    flowSpecRoute,
+                    { localPref: 230, communities: ['64512:602'] }
+                )
+            )
+        },
+        {
+            name: 'route-history-flowspec-withdraw',
+            data: routeMonitoringMessage(
+                peer,
+                multiprotocolWithdraw(
+                    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC,
+                    flowSpecRoute
+                )
+            )
+        },
+        {
+            name: 'route-history-ipv4-eor',
+            data: routeMonitoringMessage(peer, endOfRibUpdate())
+        },
+        {
+            name: 'route-history-evpn-eor',
+            data: routeMonitoringMessage(
+                peer,
+                endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN)
+            )
+        },
+        {
+            name: 'route-history-bgp-ls-eor',
+            data: routeMonitoringMessage(
+                peer,
+                endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS)
+            )
+        },
+        {
+            name: 'route-history-flowspec-eor',
+            data: routeMonitoringMessage(
+                peer,
+                endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC)
+            )
+        }
+    ];
+}
+
 function buildScenario(options) {
+    if ((options.scenario || DEFAULT_OPTIONS.scenario) === 'route-history') {
+        return buildRouteHistoryScenario();
+    }
+
     const ipv4Peer = {
         peerAddress: '192.0.2.2',
         peerAs: 65000,
@@ -1907,6 +2226,16 @@ async function run() {
     }
 
     const messages = buildScenario(options);
+    if (options.scenario === 'route-history') {
+        console.log(
+            `route-history fixture: sysName=${ROUTE_HISTORY_SCENARIO.sysName}, ` +
+                `lifecycle=${ROUTE_HISTORY_SCENARIO.lifecyclePrefix}/${ROUTE_HISTORY_SCENARIO.prefixLength}, ` +
+                `active=${ROUTE_HISTORY_SCENARIO.activePrefix}/${ROUTE_HISTORY_SCENARIO.prefixLength}, ` +
+                `withdraw-noop=${ROUTE_HISTORY_SCENARIO.withdrawNoopPrefix}/${ROUTE_HISTORY_SCENARIO.prefixLength}\n` +
+                `non-IP lifecycle queries: EVPN=${ROUTE_HISTORY_SCENARIO.evpnIdentity}, ` +
+                `BGP-LS=${ROUTE_HISTORY_SCENARIO.bgpLsIdentity}, FlowSpec=${ROUTE_HISTORY_SCENARIO.flowSpecIdentity}`
+        );
+    }
     const socket = net.createConnection({ host: options.host, port: options.port });
     socket.setNoDelay(true);
 
@@ -1976,5 +2305,6 @@ if (require.main === module) {
 
 module.exports = {
     buildScenario,
-    parseArgs
+    parseArgs,
+    ROUTE_HISTORY_SCENARIO
 };

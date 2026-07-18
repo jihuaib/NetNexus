@@ -85,7 +85,10 @@ const bmpBrowserMockScript = `
                 instance
             }),
         getBgpStatisticsReports: client => window.__bmpE2eCall('getBgpStatisticsReports', client),
-        getBgpInstanceStatisticsReports: client => window.__bmpE2eCall('getBgpInstanceStatisticsReports', client)
+        getBgpInstanceStatisticsReports: client => window.__bmpE2eCall('getBgpInstanceStatisticsReports', client),
+        getPersistenceStatus: () => window.__bmpE2eCall('getPersistenceStatus'),
+        getPersistedRouteEvents: query =>
+            window.__bmpE2eCall('getPersistedRouteEvents', structuredClone(query || {}))
     };
 })();
 `;
@@ -1107,6 +1110,22 @@ const BmpE2eController = (() => {
                         routeKey: data.routeKey,
                         route: this.summarizeRoute(data.route)
                     };
+                case 'getPersistedRouteEvents':
+                    return {
+                        groupByRoute: data.groupByRoute === true,
+                        prefixExact: data.prefixExact,
+                        prefix: data.prefix,
+                        prefixLength: data.prefixLength,
+                        scopeKind: data.scopeKind,
+                        ribType: data.ribType,
+                        scopeId: data.scopeId,
+                        routeId: data.routeId,
+                        routeKey: data.routeKey,
+                        toEventId: data.toEventId,
+                        pageSize: data.pageSize,
+                        cursor: data.cursor || null,
+                        includeTotal: data.includeTotal
+                    };
                 case 'getRouteLens':
                     return {
                         query: data.query,
@@ -1293,6 +1312,10 @@ const BmpE2eController = (() => {
                     return this.invokeWorkerAsync('getBgpInstanceRoutes', args[0]);
                 case 'getBgpInstanceRouteDetail':
                     return this.invokeWorkerAsync('getBgpInstanceRouteDetail', args[0]);
+                case 'getPersistenceStatus':
+                    return this.invokeWorkerAsync('getPersistenceStatus', null);
+                case 'getPersistedRouteEvents':
+                    return this.invokeWorkerAsync('getPersistedRouteEvents', args[0] || {});
                 case 'getRouteLens':
                     return this.invokeWorkerAsync('getRouteLens', {
                         query: args[0],

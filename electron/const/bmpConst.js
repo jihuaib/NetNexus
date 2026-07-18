@@ -27,9 +27,9 @@ const BMP_PEER_TYPE = {
 
 const BMP_SESSION_FLAGS = {
     IPV6: 0x80, // V 位: 使用 IPv6 地址
-    POST_POLICY: 0x40, // P 位: Adj-RIB-In 是策略后导出的（post-policy）
-    AS_PATH: 0x20, // L 位: 表示 AS_PATH
-    ADJ_RIB_OUT: 0x10, // O 位: Adj-RIB-Out
+    POST_POLICY: 0x40, // L 位: Post-policy；未设置表示 Pre-policy
+    AS_PATH: 0x20, // A 位: legacy 2-byte AS_PATH 编码；不是 RIB stage
+    ADJ_RIB_OUT: 0x10, // O 位: Adj-RIB-Out；未设置表示 Adj-RIB-In
     FILTERED: 0x08, // F 位: Local-RIB filtered
     EXTENDED_FLAGS: 0x01 // X 位: Extended Flags TLV carries effective flags
 };
@@ -220,7 +220,7 @@ const BMP_REQ_TYPES = {
 const BMP_BGP_RIB_TYPE = {
     PRE_ADJ_RIB_IN: 1,
     ADJ_RIB_IN: 2,
-    AS_PATH: 3,
+    AS_PATH: 3, // Legacy compatibility only; BMP A is an AS_PATH encoding flag, not a RIB stage.
     ADJ_RIB_OUT: 4,
     POST_ADJ_RIB_OUT: 5
 };

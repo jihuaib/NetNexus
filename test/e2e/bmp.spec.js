@@ -391,6 +391,26 @@ test.describe('BMP pages', () => {
                 });
             }
 
+            await sessionRouteTable
+                .locator('tbody tr')
+                .filter({ hasText: '10.10.0.0' })
+                .getByTestId('bmp-session-route-detail')
+                .click();
+            const routeDetailDrawer = page.getByRole('dialog', { name: /路由detail: 10\.10\.0\.0/ });
+            await expect(routeDetailDrawer).toContainText('persistentRouteId', { timeout: 10000 });
+            await routeDetailDrawer.getByRole('tab', { name: '事件轨迹', exact: true }).click();
+
+            const eventTimeline = routeDetailDrawer.getByTestId('bmp-route-event-timeline');
+            await expect(eventTimeline.getByTestId('bmp-route-event-item').first()).toBeVisible({ timeout: 10000 });
+            const eventQuery = [...controller.timeline]
+                .reverse()
+                .find(item => item.message === 'worker query: getPersistedRouteEvents')?.data?.request;
+            expect(eventQuery?.scopeId).toBeTruthy();
+            expect(eventQuery?.routeId).toBeTruthy();
+            expect(eventQuery?.routeKey).toBeUndefined();
+            await routeDetailDrawer.getByRole('button', { name: '关闭' }).click();
+            await expect(routeDetailDrawer).not.toBeVisible();
+
             const pagination = sessionRouteTable.getByRole('navigation', { name: '表格分页' });
             const secondPageButton = pagination.getByRole('button', { name: '2', exact: true });
             await expect(secondPageButton).toBeVisible();
@@ -614,6 +634,31 @@ test.describe('BMP pages', () => {
                 await expect(page.getByTestId(testId)).toHaveCount(1);
             }
 
+            const connectorAlignment = await flow
+                .locator('.stage-connector')
+                .first()
+                .evaluate(connector => {
+                    const connectorRect = connector.getBoundingClientRect();
+                    const stageHeaderRect = connector.previousElementSibling
+                        .querySelector('.stage-header')
+                        .getBoundingClientRect();
+                    const lineStyle = window.getComputedStyle(connector, '::before');
+                    const arrowStyle = window.getComputedStyle(connector, '::after');
+                    return {
+                        connectorCenter: connectorRect.top + connectorRect.height / 2,
+                        headerCenter: stageHeaderRect.top + stageHeaderRect.height / 2,
+                        lineCenter: connectorRect.top + Number.parseFloat(lineStyle.top),
+                        arrowCenter:
+                            connectorRect.top +
+                            Number.parseFloat(arrowStyle.top) +
+                            Number.parseFloat(arrowStyle.height) / 2
+                    };
+                });
+            expect(Math.abs(connectorAlignment.connectorCenter - connectorAlignment.headerCenter)).toBeLessThanOrEqual(
+                1
+            );
+            expect(Math.abs(connectorAlignment.lineCenter - connectorAlignment.arrowCenter)).toBeLessThanOrEqual(1);
+
             const preInStage = page.getByTestId('route-lens-stage-preIn');
             const postInStage = page.getByTestId('route-lens-stage-postIn');
             await expect(preInStage).toContainText('203.0.126.0/24');
@@ -703,6 +748,41 @@ test.describe('BMP pages', () => {
             await expect(reportedLocRibCard).toContainText('Best');
             await expect(reportedLocRibCard).toContainText('Primary');
             await expect(reportedLocRibCard).toContainText('设备上报');
+
+            const preInLifecycleCard = preInStage
+                .getByTestId('route-lens-route-card')
+                .filter({ hasText: lifecyclePrefix });
+            await preInLifecycleCard.click();
+            const lifecycleDrawer = page.getByRole('dialog', {
+                name: `${lifecyclePrefix} · Pre Adj-RIB-In`
+            });
+            await lifecycleDrawer.getByRole('tab', { name: '事件轨迹', exact: true }).click();
+            const lifecycleTimeline = lifecycleDrawer.getByTestId('bmp-route-event-timeline');
+            await expect(lifecycleTimeline).toBeVisible();
+            await expect(
+                lifecycleTimeline.getByTestId('bmp-route-event-item').filter({ hasText: '宣告' }).first()
+            ).toBeVisible({ timeout: 10000 });
+            await expect
+                .poll(() => {
+                    const request = controller.timeline
+                        .filter(item => item.message === 'worker query: getPersistedRouteEvents')
+                        .at(-1)?.data?.request;
+                    return {
+                        hasScopeId: Boolean(request?.scopeId),
+                        hasRouteId: Boolean(request?.routeId),
+                        routeKey: request?.routeKey,
+                        pageSize: request?.pageSize,
+                        includeTotal: request?.includeTotal
+                    };
+                })
+                .toEqual({
+                    hasScopeId: true,
+                    hasRouteId: true,
+                    routeKey: undefined,
+                    pageSize: 50,
+                    includeTotal: true
+                });
+            await lifecycleDrawer.getByRole('button', { name: '关闭' }).click();
 
             const inboundDiff = routeLensPage
                 .locator('.analysis-panel')
@@ -871,6 +951,208 @@ test.describe('BMP pages', () => {
                     expect(route.routeState).toBe('active');
                 });
             }
+
+            await locRibRouteTable
+                .locator('tbody tr')
+                .filter({ hasText: '10.30.0.0' })
+                .getByTestId('bmp-loc-rib-route-detail')
+                .click();
+            const routeDetailDrawer = page.getByRole('dialog', { name: /路由detail: 10\.30\.0\.0/ });
+            await expect(routeDetailDrawer).toContainText('persistentRouteId', { timeout: 10000 });
+            await page.evaluate(() => {
+                window.__bmpOriginalGetPersistedRouteEvents = window.bmpApi.getPersistedRouteEvents;
+                window.__bmpCapturedRouteEventQueries = [];
+                window.bmpApi.getPersistedRouteEvents = async query => {
+                    window.__bmpCapturedRouteEventQueries.push(structuredClone(query));
+                    return {
+                        status: 'success',
+                        data: {
+                            list: [
+                                {
+                                    eventId: 208,
+                                    connectionId: 'connection-loc-rib-history',
+                                    eventType: 'announce',
+                                    observedAtMs: 1710000120000,
+                                    sourceTimestampMs: null,
+                                    ribEpoch: 3,
+                                    attrId: 'attr-loc-rib-current',
+                                    reason: null,
+                                    route: {
+                                        ip: '10.30.0.0',
+                                        mask: 24,
+                                        pathId: 0,
+                                        rd: '0:0',
+                                        nextHop: '0.0.0.0',
+                                        asPath: '65000',
+                                        localPref: 100,
+                                        med: 0,
+                                        origin: 'IGP'
+                                    }
+                                },
+                                {
+                                    eventId: 207,
+                                    connectionId: 'connection-loc-rib-history',
+                                    eventType: 'withdraw',
+                                    observedAtMs: 1710000110000,
+                                    sourceTimestampMs: null,
+                                    ribEpoch: 2,
+                                    attrId: null,
+                                    reason: 'test-withdraw',
+                                    route: { ip: '10.30.0.0', mask: 24, pathId: 0, rd: '0:0' }
+                                },
+                                {
+                                    eventId: 206,
+                                    connectionId: 'connection-loc-rib-history',
+                                    eventType: 'announce',
+                                    observedAtMs: 1710000100000,
+                                    sourceTimestampMs: null,
+                                    ribEpoch: 2,
+                                    attrId: 'attr-before-wire-withdraw',
+                                    reason: null,
+                                    route: {
+                                        ip: '10.30.0.0',
+                                        mask: 24,
+                                        pathId: 0,
+                                        rd: '0:0',
+                                        nextHop: '0.0.0.1',
+                                        asPath: '65000 65100',
+                                        localPref: 200,
+                                        med: 10,
+                                        origin: 'IGP'
+                                    }
+                                },
+                                {
+                                    eventId: 205,
+                                    connectionId: 'connection-loc-rib-history',
+                                    eventType: 'purge',
+                                    observedAtMs: 1710000090000,
+                                    sourceTimestampMs: null,
+                                    ribEpoch: 2,
+                                    attrId: 'attr-before-purge',
+                                    reason: 'test-purge',
+                                    route: {
+                                        ip: '10.30.0.0',
+                                        mask: 24,
+                                        pathId: 0,
+                                        rd: '0:0',
+                                        nextHop: '0.0.0.1',
+                                        asPath: '65000 65100',
+                                        localPref: 200,
+                                        med: 10,
+                                        origin: 'IGP'
+                                    }
+                                },
+                                {
+                                    eventId: 204,
+                                    connectionId: 'connection-loc-rib-history',
+                                    eventType: 'replace',
+                                    observedAtMs: 1710000080000,
+                                    sourceTimestampMs: null,
+                                    ribEpoch: 2,
+                                    attrId: 'attr-after-replace',
+                                    reason: null,
+                                    route: {
+                                        ip: '10.30.0.0',
+                                        mask: 24,
+                                        pathId: 0,
+                                        rd: '0:0',
+                                        nextHop: '0.0.0.1',
+                                        asPath: '65000 65100',
+                                        localPref: 200,
+                                        med: 10,
+                                        origin: 'IGP'
+                                    }
+                                },
+                                {
+                                    eventId: 203,
+                                    connectionId: 'connection-stale-writer',
+                                    eventType: 'upsert-noop',
+                                    observedAtMs: 1710000070000,
+                                    sourceTimestampMs: null,
+                                    ribEpoch: 1,
+                                    attrId: 'attr-unapplied',
+                                    reason: 'stale-connection',
+                                    route: {
+                                        ip: '10.30.0.0',
+                                        mask: 24,
+                                        pathId: 0,
+                                        rd: '0:0',
+                                        nextHop: '203.0.113.9',
+                                        asPath: '64512',
+                                        localPref: 999,
+                                        med: 999,
+                                        origin: 'INCOMPLETE'
+                                    }
+                                },
+                                {
+                                    eventId: 202,
+                                    connectionId: 'connection-stale-writer',
+                                    eventType: 'withdraw-noop',
+                                    observedAtMs: 1710000060000,
+                                    sourceTimestampMs: null,
+                                    ribEpoch: 1,
+                                    attrId: null,
+                                    reason: 'stale-connection',
+                                    route: { ip: '10.30.0.0', mask: 24, pathId: 0, rd: '0:0' }
+                                },
+                                {
+                                    eventId: 201,
+                                    connectionId: 'connection-loc-rib-history',
+                                    eventType: 'announce',
+                                    observedAtMs: 1710000000000,
+                                    sourceTimestampMs: null,
+                                    ribEpoch: 2,
+                                    attrId: 'attr-loc-rib-history',
+                                    reason: null,
+                                    route: {
+                                        ip: '10.30.0.0',
+                                        mask: 24,
+                                        pathId: 0,
+                                        rd: '0:0',
+                                        nextHop: '0.0.0.0',
+                                        asPath: '65000',
+                                        localPref: 100,
+                                        med: 0,
+                                        origin: 'IGP'
+                                    }
+                                }
+                            ],
+                            total: 8,
+                            page: 1,
+                            pageSize: 50,
+                            nextCursor: null
+                        }
+                    };
+                };
+            });
+            await routeDetailDrawer.getByRole('tab', { name: '事件轨迹', exact: true }).click();
+
+            const eventTimeline = routeDetailDrawer.getByTestId('bmp-route-event-timeline');
+            const withdrawEvent = eventTimeline.locator('[data-event-type="withdraw"]');
+            await expect(withdrawEvent).toContainText('test-withdraw');
+            await expect(withdrawEvent).toContainText('本事件只保存 NLRI');
+            const purgeEvent = eventTimeline.locator('[data-event-type="purge"]');
+            await expect(purgeEvent).toContainText('清理前属性快照');
+            await expect(purgeEvent).toContainText('0.0.0.1');
+            const replaceEvent = eventTimeline.locator('[data-event-type="replace"]');
+            await expect(replaceEvent).toContainText('关键属性变化');
+            await expect(replaceEvent).toContainText('0.0.0.0');
+            await expect(replaceEvent).toContainText('0.0.0.1');
+            const noopEvent = eventTimeline.locator('[data-event-type="upsert-noop"]');
+            await expect(noopEvent).toContainText('未应用的上报快照');
+            await expect(noopEvent).not.toContainText('关键属性变化');
+            await expect(eventTimeline.locator('[data-event-type="announce"]').first()).toContainText('0.0.0.0');
+            const eventQuery = await page.evaluate(() => window.__bmpCapturedRouteEventQueries.at(-1));
+            expect(eventQuery.scopeId).toBeTruthy();
+            expect(eventQuery.routeId).toBeTruthy();
+            expect(eventQuery.routeKey).toBeUndefined();
+
+            await routeDetailDrawer.getByRole('button', { name: '关闭' }).click();
+            await page.evaluate(() => {
+                window.bmpApi.getPersistedRouteEvents = window.__bmpOriginalGetPersistedRouteEvents;
+                delete window.__bmpOriginalGetPersistedRouteEvents;
+                delete window.__bmpCapturedRouteEventQueries;
+            });
 
             const pagination = locRibRouteTable.getByRole('navigation', { name: '表格分页' });
             const secondPageButton = pagination.getByRole('button', { name: '2', exact: true });

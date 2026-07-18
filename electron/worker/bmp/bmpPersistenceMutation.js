@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const ipaddr = require('ipaddr.js');
 const {
     canonicalStringify,
     createSourceKey,
@@ -77,6 +78,20 @@ function stringify(value) {
         }
         return item;
     });
+}
+
+function normalizePersistedPrefix(value, length) {
+    if (value === null || value === undefined || value === '') return null;
+    const text = String(value).trim();
+    if (!ipaddr.isValid(text)) return text;
+
+    const address = ipaddr.parse(text);
+    const prefixLength = length === null || length === undefined || length === '' ? null : Number(length);
+    const maximum = address.kind() === 'ipv4' ? 32 : 128;
+    if (Number.isInteger(prefixLength) && prefixLength >= 0 && prefixLength <= maximum) {
+        return address.constructor.networkAddressFromCIDR(`${address.toString()}/${prefixLength}`).toString();
+    }
+    return address.toString();
 }
 
 function makeConnectionId() {
@@ -214,6 +229,8 @@ function buildRoute(owner, route, afi, safi) {
     const canonicalAttr = attr ? canonicalizeBmpRouteAttr(attr) : null;
     const attrJson = canonicalAttr ? stringify(canonicalAttr) : null;
     const attrId = attrJson ? crypto.createHash('sha256').update(attrJson).digest('hex') : null;
+    const rawPrefix = route.ip || route.prefix || routeInfo.ip || routeInfo.prefix || null;
+    const prefixLength = route.mask ?? route.length ?? routeInfo.mask ?? routeInfo.length ?? null;
     return {
         id: key.keyHex,
         keyJson: stringify({
@@ -228,8 +245,8 @@ function buildRoute(owner, route, afi, safi) {
         safi: Number(safi),
         pathId: Number(route.pathId || 0),
         rd: route.rd || null,
-        prefix: route.ip || route.prefix || routeInfo.ip || routeInfo.prefix || null,
-        prefixLength: route.mask ?? route.length ?? routeInfo.mask ?? routeInfo.length ?? null,
+        prefix: normalizePersistedPrefix(rawPrefix, prefixLength),
+        prefixLength,
         nlriKind: key.canonicalIdentity.nlri.kind,
         nlriJson: stringify(route.nlriDetail || routeInfo.nlriDetail || route),
         attrId,
@@ -268,7 +285,7 @@ function buildWithdrawRoute(owner, withdrawn, afi, safi, existingRoute = null) {
         safi: route.safi,
         pathId: route.pathId,
         rd: route.rd,
-        prefix: route.ip,
+        prefix: normalizePersistedPrefix(route.ip, route.mask),
         prefixLength: route.mask,
         nlriKind: key.canonicalIdentity.nlri.kind,
         nlriJson: stringify(withdrawn),

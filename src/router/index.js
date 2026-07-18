@@ -23,6 +23,7 @@ const BmpMain = () => import('../view/bmp/BmpMain.vue');
 const BmpConfig = () => import('../view/bmp/BmpConfig.vue');
 const BgpRouteAssurance = () => import('../view/bmp/BgpRouteAssurance.vue');
 const BgpRouteLens = () => import('../view/bmp/BgpRouteLens.vue');
+const BgpRouteHistory = () => import('../view/bmp/BgpRouteHistory.vue');
 const BgpSession = () => import('../view/bmp/BgpSession.vue');
 const BgpLocRib = () => import('../view/bmp/BgpLocRib.vue');
 const BgpSessionStatisReport = () => import('../view/bmp/BgpSessionStatisReport.vue');
@@ -200,6 +201,12 @@ const routes = [
                         path: 'route-lens',
                         name: 'BgpRouteLens',
                         component: BgpRouteLens,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'route-history',
+                        name: 'BgpRouteHistory',
+                        component: BgpRouteHistory,
                         meta: { keepAlive: true }
                     },
                     {

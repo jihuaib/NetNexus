@@ -199,8 +199,6 @@
 
                                     <div v-if="index < stageDefinitions.length - 1" class="stage-connector">
                                         <span>推测关联</span>
-                                        <i />
-                                        <b aria-hidden="true">›</b>
                                     </div>
                                 </template>
                             </div>
@@ -325,52 +323,81 @@
             </nn-spin>
         </nn-card>
 
-        <nn-drawer v-model:open="drawerOpen" :title="drawerTitle" width="560px" placement="right">
+        <nn-drawer
+            v-model:open="drawerOpen"
+            :title="drawerTitle"
+            :width="selectedType === 'route' ? '760px' : '560px'"
+            placement="right"
+        >
             <template v-if="selectedType === 'route' && selectedRecord">
-                <nn-alert
-                    class="drawer-evidence-alert"
-                    :type="hasPathMarking(selectedRecord) ? 'success' : 'warning'"
-                    show-icon
-                    :message="hasPathMarking(selectedRecord) ? 'Path Marking：设备上报' : 'Path Marking：观测缺失'"
-                    :description="
-                        hasPathMarking(selectedRecord)
-                            ? '状态与原因来自设备携带的 Path Marking TLV。'
-                            : '当前没有设备上报的 Path Marking，阶段关联及未选中原因只能作为推测。'
-                    "
-                />
-                <nn-descriptions :column="1" bordered size="small">
-                    <nn-descriptions-item label="阶段">{{ selectedStageTitle }}</nn-descriptions-item>
-                    <nn-descriptions-item label="Prefix / NLRI">
-                        {{ formatPrefix(selectedRecord) }}
-                    </nn-descriptions-item>
-                    <nn-descriptions-item label="地址族">
-                        {{ getAddressFamilyLabel(selectedRecord) }}
-                    </nn-descriptions-item>
-                    <nn-descriptions-item label="Client">{{ getClientLabel(selectedRecord) }}</nn-descriptions-item>
-                    <nn-descriptions-item label="Peer / 实例">{{ getPeerLabel(selectedRecord) }}</nn-descriptions-item>
-                    <nn-descriptions-item label="VRF / RD">{{ getVrfRdLabel(selectedRecord) }}</nn-descriptions-item>
-                    <nn-descriptions-item label="Next Hop">
-                        {{ formatValue(getRoute(selectedRecord).nextHop) }}
-                    </nn-descriptions-item>
-                    <nn-descriptions-item label="AS Path">
-                        {{ formatValue(getRoute(selectedRecord).asPath) }}
-                    </nn-descriptions-item>
-                    <nn-descriptions-item label="Local Preference">
-                        {{ formatValue(getRoute(selectedRecord).localPref) }}
-                    </nn-descriptions-item>
-                    <nn-descriptions-item label="MED">
-                        {{ formatValue(getRoute(selectedRecord).med) }}
-                    </nn-descriptions-item>
-                    <nn-descriptions-item label="Communities">
-                        {{ formatValue(getRoute(selectedRecord).communities) }}
-                    </nn-descriptions-item>
-                    <nn-descriptions-item label="Path Status">
-                        {{ getPathMarkingNames(selectedRecord).join(', ') || '-' }}
-                    </nn-descriptions-item>
-                    <nn-descriptions-item label="Reason">
-                        {{ getPathMarkingReason(selectedRecord) || '-' }}
-                    </nn-descriptions-item>
-                </nn-descriptions>
+                <nn-tabs v-model:active-key="drawerTabKey" size="small">
+                    <nn-tab-pane key="detail" tab="路由详情">
+                        <nn-alert
+                            class="drawer-evidence-alert"
+                            :type="hasPathMarking(selectedRecord) ? 'success' : 'warning'"
+                            show-icon
+                            :message="
+                                hasPathMarking(selectedRecord) ? 'Path Marking：设备上报' : 'Path Marking：观测缺失'
+                            "
+                            :description="
+                                hasPathMarking(selectedRecord)
+                                    ? '状态与原因来自设备携带的 Path Marking TLV。'
+                                    : '当前没有设备上报的 Path Marking，阶段关联及未选中原因只能作为推测。'
+                            "
+                        />
+                        <nn-descriptions :column="1" bordered size="small">
+                            <nn-descriptions-item label="阶段">{{ selectedStageTitle }}</nn-descriptions-item>
+                            <nn-descriptions-item label="Prefix / NLRI">
+                                {{ formatPrefix(selectedRecord) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="地址族">
+                                {{ getAddressFamilyLabel(selectedRecord) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="Client">
+                                {{ getClientLabel(selectedRecord) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="Peer / 实例">
+                                {{ getPeerLabel(selectedRecord) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="VRF / RD">
+                                {{ getVrfRdLabel(selectedRecord) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="Next Hop">
+                                {{ formatValue(getRoute(selectedRecord).nextHop) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="AS Path">
+                                {{ formatValue(getRoute(selectedRecord).asPath) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="Local Preference">
+                                {{ formatValue(getRoute(selectedRecord).localPref) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="MED">
+                                {{ formatValue(getRoute(selectedRecord).med) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="Communities">
+                                {{ formatValue(getRoute(selectedRecord).communities) }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="Path Status">
+                                {{ getPathMarkingNames(selectedRecord).join(', ') || '-' }}
+                            </nn-descriptions-item>
+                            <nn-descriptions-item label="Reason">
+                                {{ getPathMarkingReason(selectedRecord) || '-' }}
+                            </nn-descriptions-item>
+                        </nn-descriptions>
+                        <div class="raw-detail">
+                            <div class="raw-detail-title">原始查询结果</div>
+                            <pre>{{ JSON.stringify(selectedRecord, null, 2) }}</pre>
+                        </div>
+                    </nn-tab-pane>
+                    <nn-tab-pane key="history" tab="事件轨迹">
+                        <BmpRouteEventTimeline
+                            :active="drawerOpen && drawerTabKey === 'history'"
+                            :scope-id="selectedRouteEventTarget.scopeId"
+                            :route-key="selectedRouteEventTarget.routeKey"
+                            :route-id="selectedRouteEventTarget.routeId"
+                        />
+                    </nn-tab-pane>
+                </nn-tabs>
             </template>
             <template v-else-if="selectedRecord">
                 <nn-alert
@@ -381,7 +408,7 @@
                     description="属性值来自 BMP 观测；前后路径的配对可能是推测关联，不等同于设备策略执行日志。"
                 />
             </template>
-            <div v-if="selectedRecord" class="raw-detail">
+            <div v-if="selectedRecord && selectedType !== 'route'" class="raw-detail">
                 <div class="raw-detail-title">原始查询结果</div>
                 <pre>{{ JSON.stringify(selectedRecord, null, 2) }}</pre>
             </div>
@@ -398,6 +425,7 @@
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
     import EventBus from '../../utils/eventBus';
     import { notify } from '../../utils/notify';
+    import BmpRouteEventTimeline from '../../components/BmpRouteEventTimeline.vue';
 
     defineOptions({ name: 'BgpRouteLens' });
 
@@ -458,6 +486,7 @@
     const selectedRecord = ref(null);
     const selectedType = ref('');
     const selectedStageTitle = ref('');
+    const drawerTabKey = ref('detail');
     const eventPageId = BMP_EVENT_PAGE_ID.PAGE_ID_BMP_ROUTE_LENS || 'bmp-route-lens';
     const liveEvents = [
         'bmp:routeUpdate',
@@ -509,6 +538,18 @@
     });
 
     const getRoute = entry => entry?.route || entry || {};
+    const selectedRouteEventTarget = computed(() => {
+        if (selectedType.value !== 'route' || !selectedRecord.value) {
+            return { scopeId: '', routeKey: '', routeId: '' };
+        }
+        const route = getRoute(selectedRecord.value);
+        const owner = selectedRecord.value.session || selectedRecord.value.instance || {};
+        return {
+            scopeId: route.persistentScopeId || owner.persistentScopeId || '',
+            routeKey: route.routeKey || '',
+            routeId: route.persistentRouteId || ''
+        };
+    });
     const hasPathMarking = entry => {
         const route = getRoute(entry);
         return (
@@ -973,6 +1014,7 @@
         selectedRecord.value = entry;
         selectedType.value = 'route';
         selectedStageTitle.value = stage.title;
+        drawerTabKey.value = 'detail';
         drawerTitle.value = `${formatPrefix(entry)} · ${stage.title}`;
         drawerOpen.value = true;
     };
@@ -1217,6 +1259,8 @@
     }
 
     .route-flow {
+        --route-stage-header-height: 54px;
+
         display: flex;
         width: max-content;
         min-width: 100%;
@@ -1237,7 +1281,7 @@
         grid-template-columns: 24px minmax(0, 1fr) auto;
         align-items: center;
         gap: 8px;
-        min-height: 54px;
+        min-height: var(--route-stage-header-height);
         padding: 8px 9px;
         border-bottom: 1px solid var(--nn-color-border-light);
         background: var(--nn-color-bg-muted);
@@ -1488,31 +1532,43 @@
     .stage-connector {
         position: relative;
         width: 48px;
+        height: var(--route-stage-header-height);
         min-width: 48px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        align-self: flex-start;
+        margin-top: 1px;
+        color: var(--nn-color-text-warning);
+    }
+
+    .stage-connector::before {
+        position: absolute;
+        top: 50%;
+        right: 5px;
+        left: 0;
+        border-top: 1px dashed var(--nn-color-warning);
+        content: '';
+        transform: translateY(-50%);
+    }
+
+    .stage-connector::after {
+        position: absolute;
+        top: calc(50% - 4px);
+        right: 1px;
+        width: 7px;
+        height: 7px;
+        border-top: 1px solid var(--nn-color-warning);
+        border-right: 1px solid var(--nn-color-warning);
+        content: '';
+        transform: rotate(45deg);
     }
 
     .stage-connector span {
         position: absolute;
-        top: 17px;
-        color: var(--nn-color-text-warning);
+        top: 4px;
+        left: 50%;
         font-size: 9px;
+        line-height: 1;
+        transform: translateX(-50%);
         white-space: nowrap;
-    }
-
-    .stage-connector i {
-        width: 100%;
-        border-top: 1px dashed var(--nn-color-warning);
-    }
-
-    .stage-connector b {
-        position: absolute;
-        right: 0;
-        color: var(--nn-color-warning);
-        font-size: 20px;
-        font-weight: 400;
     }
 
     .analysis-grid {

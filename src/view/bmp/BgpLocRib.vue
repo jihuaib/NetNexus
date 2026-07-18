@@ -148,6 +148,7 @@
                                                                     <nn-button
                                                                         type="text"
                                                                         size="small"
+                                                                        data-testid="bmp-loc-rib-route-detail"
                                                                         @click="viewRouteDetailJson(record)"
                                                                     >
                                                                         <template #icon><ProfileOutlined /></template>
@@ -183,12 +184,29 @@
             v-model:open="detailsDrawerVisible"
             :title="detailsDrawerTitle"
             placement="right"
-            width="500px"
+            :width="routeEventTarget ? '760px' : '500px'"
             @close="closeDetailsDrawer"
         >
-            <template v-if="currentDetails">
-                <pre>{{ JSON.stringify(currentDetails, null, 2) }}</pre>
-            </template>
+            <nn-tabs v-if="routeEventTarget" v-model:active-key="detailsTabKey" size="small">
+                <nn-tab-pane key="detail" tab="路由详情">
+                    <nn-spin :spinning="routeDetailLoading">
+                        <div v-if="routeDetailLoading && !currentDetails" class="route-detail-loading" />
+                        <nn-empty v-else-if="!currentDetails" description="暂无路由详情" />
+                        <pre v-else class="route-detail-json">{{ JSON.stringify(currentDetails, null, 2) }}</pre>
+                    </nn-spin>
+                </nn-tab-pane>
+                <nn-tab-pane key="history" tab="事件轨迹">
+                    <BmpRouteEventTimeline
+                        :active="detailsDrawerVisible && detailsTabKey === 'history'"
+                        :scope-id="routeEventTarget.scopeId"
+                        :route-key="routeEventTarget.routeKey"
+                        :route-id="routeEventTarget.routeId"
+                    />
+                </nn-tab-pane>
+            </nn-tabs>
+            <pre v-else-if="currentDetails" class="route-detail-json">{{
+                JSON.stringify(currentDetails, null, 2)
+            }}</pre>
         </nn-drawer>
     </div>
 </template>
@@ -198,6 +216,7 @@
     import { notify } from '../../utils/notify';
     import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import { ProfileOutlined } from '../../ui/icons';
+    import BmpRouteEventTimeline from '../../components/BmpRouteEventTimeline.vue';
     import {
         BMP_SESSION_TYPE_NAME,
         BMP_SESSION_STATE_NAME,
@@ -428,11 +447,19 @@
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
     const currentDetails = ref(null);
+    const detailsTabKey = ref('detail');
+    const routeEventTarget = ref(null);
+    const routeDetailLoading = ref(false);
+    let routeDetailRequestId = 0;
 
     // Close details drawer
     const closeDetailsDrawer = () => {
+        routeDetailRequestId += 1;
         detailsDrawerVisible.value = false;
         currentDetails.value = null;
+        detailsTabKey.value = 'detail';
+        routeEventTarget.value = null;
+        routeDetailLoading.value = false;
     };
 
     const markClientOffline = client => {
@@ -864,45 +891,70 @@
     };
 
     const viewInstanceDetails = record => {
+        routeDetailRequestId += 1;
+        routeDetailLoading.value = false;
+        detailsTabKey.value = 'detail';
+        routeEventTarget.value = null;
         currentDetails.value = record;
         detailsDrawerTitle.value = `Instance 详情: ${record.instanceRd}`;
         detailsDrawerVisible.value = true;
     };
 
     const viewRouteDetailJson = async record => {
+        const requestId = ++routeDetailRequestId;
+        const routeKey = getRouteKey(record);
+        const instance = getActiveInstanceApiInfo();
+
         detailsDrawerTitle.value = `路由detail: ${record.ip || ''}`;
         detailsDrawerVisible.value = true;
+        detailsTabKey.value = 'detail';
         currentDetails.value = null;
+        routeDetailLoading.value = true;
+        routeEventTarget.value = {
+            scopeId: record.persistentScopeId || instance?.persistentScopeId || '',
+            routeKey,
+            routeId: record.persistentRouteId || ''
+        };
 
         if (!activeClientKey.value || !activeInstanceKey.value) {
             currentDetails.value = record;
+            routeDetailLoading.value = false;
             return;
         }
 
         const client = getActiveClientApiInfo();
         if (!client) {
             currentDetails.value = record;
+            routeDetailLoading.value = false;
             return;
         }
-        const instance = getActiveInstanceApiInfo();
         if (!instance) {
             currentDetails.value = record;
+            routeDetailLoading.value = false;
             return;
         }
-        const routeKey = getRouteKey(record);
 
         try {
             const res = await window.bmpApi.getBgpInstanceRouteDetail(client, instance, routeKey);
+            if (requestId !== routeDetailRequestId) return;
             if (res.status === 'success' && res.data) {
                 currentDetails.value = res.data;
+                routeEventTarget.value = {
+                    scopeId: res.data.persistentScopeId || routeEventTarget.value.scopeId,
+                    routeKey: res.data.routeKey || routeEventTarget.value.routeKey,
+                    routeId: res.data.persistentRouteId || routeEventTarget.value.routeId
+                };
             } else {
                 currentDetails.value = record;
                 notify.error('查询路由detail失败');
             }
         } catch (error) {
+            if (requestId !== routeDetailRequestId) return;
             console.error(error);
             currentDetails.value = record;
             notify.error('查询路由detail失败');
+        } finally {
+            if (requestId === routeDetailRequestId) routeDetailLoading.value = false;
         }
     };
 
@@ -1003,6 +1055,16 @@
 </script>
 
 <style scoped>
+    .route-detail-loading {
+        min-height: 160px;
+    }
+
+    .route-detail-json {
+        margin: 0;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+    }
+
     .bmp-full-page {
         height: 100%;
         min-height: 0;

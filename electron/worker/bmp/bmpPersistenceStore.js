@@ -4,6 +4,7 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const ipaddr = require('ipaddr.js');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
+const { ipv6BufferToString } = require('../../utils/ipUtils');
 const { getSessionStatisticsReportIdentityParts } = require('../../utils/bmpStatistics');
 const { installBmpSqlTrace } = require('./bmpSqlTrace');
 const {
@@ -2989,6 +2990,10 @@ class BmpPersistenceStore {
             this.open();
         }
 
+        if (query.groupByRoute === true) {
+            return this.queryRouteHistories(query);
+        }
+
         const page = positiveInteger(query.page, 1);
         const pageSize = positiveInteger(query.pageSize, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
         const cursor = decodeCursor(query.cursor, 'events');
@@ -3045,6 +3050,10 @@ class BmpPersistenceStore {
         if (finiteNumber(query.toMs) !== null) {
             where.push('e.observed_at_ms <= @toMs');
             params.toMs = Number(query.toMs);
+        }
+        if (finiteNumber(query.toEventId) !== null) {
+            where.push('e.event_id <= @toEventId');
+            params.toEventId = Number(query.toEventId);
         }
         const countWhereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
         const countParams = { ...params };
@@ -3135,6 +3144,257 @@ class BmpPersistenceStore {
             nextCursor:
                 hasMore && lastRow
                     ? encodeCursor('events', {
+                          observedAtMs: lastRow.observed_at_ms,
+                          eventId: lastRow.event_id
+                      })
+                    : null
+        };
+    }
+
+    queryRouteHistories(query = {}) {
+        if (!this.db) {
+            this.open();
+        }
+
+        const hasValue = value =>
+            typeof value === 'string' ? value.trim() !== '' : value !== undefined && value !== null && value !== '';
+        if (hasValue(query.eventType)) {
+            throw new Error(
+                'BMP route history grouping does not support eventType because latestEvent must remain unfiltered'
+            );
+        }
+        if (hasValue(query.page) && Number(query.page) !== 1) {
+            throw new Error('BMP route history grouping uses cursor pagination; page must be 1 when provided');
+        }
+        if (
+            ![
+                query.prefixExact,
+                query.prefix,
+                query.routeId,
+                query.legacyRouteKey || query.routeKey,
+                query.scopeId
+            ].some(hasValue)
+        ) {
+            throw new Error('BMP route history grouping requires prefixExact, prefix, routeId, routeKey, or scopeId');
+        }
+
+        const pageSize = positiveInteger(query.pageSize, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+        const cursor = decodeCursor(query.cursor, 'route-histories');
+        const includeTotal = query.includeTotal !== false;
+        const where = ['e.route_pk IS NOT NULL', 'e.scope_id IS NOT NULL'];
+        const params = {};
+        const addFilter = (sql, name, value) => {
+            if (value !== undefined && value !== null && value !== '') {
+                where.push(sql);
+                params[name] = value;
+            }
+        };
+
+        addFilter('e.source_id = @sourceId', 'sourceId', query.sourceId);
+        addFilter('e.scope_id = @scopeId', 'scopeId', query.scopeId);
+        addFilter('identity.route_id = @routeId', 'routeId', query.routeId);
+        addFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
+        addFilter('COALESCE(identity.afi, s.afi) = @afi', 'afi', finiteNumber(query.afi));
+        addFilter('COALESCE(identity.safi, s.safi) = @safi', 'safi', finiteNumber(query.safi));
+        addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
+        addFilter(
+            'identity.legacy_route_key = @legacyRouteKey',
+            'legacyRouteKey',
+            query.legacyRouteKey || query.routeKey
+        );
+
+        const rawPrefixExact = String(query.prefixExact ?? '').trim();
+        if (rawPrefixExact) {
+            let normalizedPrefix = rawPrefixExact;
+            let prefixLength = finiteNumber(query.prefixLength);
+            let parsedAddress = null;
+            try {
+                const cidrText = rawPrefixExact.includes('/')
+                    ? rawPrefixExact
+                    : prefixLength === null
+                      ? null
+                      : `${rawPrefixExact}/${prefixLength}`;
+                if (cidrText) {
+                    const [address, length] = ipaddr.parseCIDR(cidrText);
+                    parsedAddress = address.constructor.networkAddressFromCIDR(`${address.toString()}/${length}`);
+                    normalizedPrefix = parsedAddress.toString();
+                    prefixLength = length;
+                } else if (isStrictIpAddress(rawPrefixExact)) {
+                    parsedAddress = ipaddr.parse(rawPrefixExact);
+                    normalizedPrefix = parsedAddress.toString();
+                } else {
+                    throw new Error('not an IP address');
+                }
+            } catch (_error) {
+                throw new Error('BMP route history prefixExact must be a valid IP address or CIDR');
+            }
+            const prefixCandidates = new Set([normalizedPrefix]);
+            const rawAddress = rawPrefixExact.includes('/')
+                ? rawPrefixExact.slice(0, rawPrefixExact.lastIndexOf('/')).trim()
+                : rawPrefixExact;
+            prefixCandidates.add(rawAddress.toLowerCase());
+            if (parsedAddress?.kind() === 'ipv6') {
+                prefixCandidates.add(ipv6BufferToString(Buffer.from(parsedAddress.toByteArray()), 128));
+            }
+            const prefixPlaceholders = Array.from(prefixCandidates).map((prefix, index) => {
+                const name = `prefixExact${index}`;
+                params[name] = prefix;
+                return `@${name}`;
+            });
+            where.push(`identity.prefix IN (${prefixPlaceholders.join(', ')})`);
+            addFilter('identity.prefix_length = @prefixLength', 'prefixLength', prefixLength);
+        } else if (String(query.prefix ?? '').trim()) {
+            params.prefixStart = String(query.prefix).trim();
+            params.prefixEnd = `${params.prefixStart}\uffff`;
+            where.push('identity.prefix >= @prefixStart AND identity.prefix < @prefixEnd');
+        }
+
+        if (finiteNumber(query.fromMs) !== null) {
+            where.push('e.observed_at_ms >= @fromMs');
+            params.fromMs = Number(query.fromMs);
+        }
+        if (finiteNumber(query.toMs) !== null) {
+            where.push('e.observed_at_ms <= @toMs');
+            params.toMs = Number(query.toMs);
+        }
+
+        let cursorAsOfEventId = null;
+        let cursorObservedAtMs = null;
+        let cursorEventId = null;
+        if (cursor) {
+            cursorAsOfEventId = finiteNumber(cursor.asOfEventId);
+            cursorObservedAtMs = finiteNumber(cursor.observedAtMs);
+            cursorEventId = finiteNumber(cursor.eventId);
+            if (cursorAsOfEventId === null || cursorObservedAtMs === null || cursorEventId === null) {
+                throw new Error('Invalid BMP persistence route-histories cursor fields');
+            }
+        }
+
+        const readSnapshot = this.db.transaction(() => {
+            const asOfEventId =
+                cursorAsOfEventId ??
+                Number(
+                    this.db.prepare('SELECT COALESCE(MAX(event_id), 0) AS event_id FROM bmp_route_events').get()
+                        .event_id
+                );
+            const snapshotWhere = [...where, 'e.event_id <= @asOfEventId'];
+            const snapshotParams = { ...params, asOfEventId };
+            const whereSql = `WHERE ${snapshotWhere.join(' AND ')}`;
+            const historyFromSql = `
+                FROM bmp_route_events e
+                JOIN bmp_rib_scopes s ON s.scope_id = e.scope_id
+                JOIN bmp_route_identities identity ON identity.route_pk = e.route_pk
+                ${whereSql}`;
+            const total = includeTotal
+                ? Number(
+                      this.db
+                          .prepare(
+                              `SELECT COUNT(*) AS total
+                                 FROM (
+                                       SELECT e.scope_id, e.route_pk
+                                         ${historyFromSql}
+                                        GROUP BY e.scope_id, e.route_pk
+                                      ) histories`
+                          )
+                          .get(snapshotParams).total
+                  )
+                : null;
+            const pageCursorWhere =
+                cursorObservedAtMs === null
+                    ? ''
+                    : 'AND (latest.observed_at_ms, latest.event_id) < (@cursorObservedAtMs, @cursorEventId)';
+            const rows = this.db
+                .prepare(
+                    `WITH ranked AS (
+                         SELECT e.event_id, e.scope_id, e.route_pk, e.observed_at_ms,
+                                COUNT(*) OVER (PARTITION BY e.scope_id, e.route_pk) AS event_count,
+                                MIN(e.observed_at_ms) OVER (PARTITION BY e.scope_id, e.route_pk) AS first_observed_at_ms,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY e.scope_id, e.route_pk
+                                    ORDER BY e.observed_at_ms DESC, e.event_id DESC
+                                ) AS route_rank
+                           ${historyFromSql}
+                     ), paged AS (
+                         SELECT latest.event_id, latest.scope_id, latest.route_pk,
+                                latest.observed_at_ms, latest.event_count, latest.first_observed_at_ms
+                           FROM ranked latest
+                          WHERE latest.route_rank = 1
+                           ${pageCursorWhere}
+                          ORDER BY latest.observed_at_ms DESC, latest.event_id DESC
+                          LIMIT @limit
+                     )
+                     SELECT e.*, paged.event_count, paged.first_observed_at_ms,
+                            identity.route_id, identity.legacy_route_key,
+                            identity.afi, identity.safi, identity.path_id, identity.rd,
+                            identity.prefix, identity.prefix_length, identity.nlri_json,
+                            payload.route_json, event_attr.attr_json,
+                            src.remote_ip, src.sys_name,
+                            s.scope_kind, s.scope_identity_json, s.rib_type,
+                            s.peer_ip, s.peer_as, s.peer_rd, s.vrf_name
+                       FROM paged
+                       JOIN bmp_route_events e ON e.event_id = paged.event_id
+                       JOIN bmp_rib_scopes s ON s.scope_id = paged.scope_id
+                       JOIN bmp_route_identities identity ON identity.route_pk = paged.route_pk
+                       JOIN bmp_sources src ON src.source_id = e.source_id
+                       LEFT JOIN bmp_route_payloads payload ON payload.payload_id = e.payload_id
+                       LEFT JOIN bmp_route_attributes event_attr ON event_attr.attr_id = e.attr_id
+                      ORDER BY paged.observed_at_ms DESC, paged.event_id DESC`
+                )
+                .all({
+                    ...snapshotParams,
+                    cursorObservedAtMs,
+                    cursorEventId,
+                    limit: pageSize + 1
+                });
+            return { asOfEventId, total, rows };
+        });
+
+        const snapshot = readSnapshot();
+        const hasMore = snapshot.rows.length > pageSize;
+        const pageRows = hasMore ? snapshot.rows.slice(0, pageSize) : snapshot.rows;
+        const lastRow = pageRows[pageRows.length - 1];
+        return {
+            kind: 'route-histories',
+            list: pageRows.map(row => ({
+                scopeId: row.scope_id,
+                routeId: row.route_id,
+                sourceId: row.source_id,
+                eventCount: Number(row.event_count || 0),
+                firstObservedAt: new Date(row.first_observed_at_ms).toISOString(),
+                firstObservedAtMs: row.first_observed_at_ms,
+                latestEvent: {
+                    eventId: row.event_id,
+                    connectionId: row.connection_id,
+                    sequence: row.source_sequence,
+                    eventType: row.event_type,
+                    observedAt: new Date(row.observed_at_ms).toISOString(),
+                    observedAtMs: row.observed_at_ms,
+                    sourceTimestampMs: row.source_timestamp_ms,
+                    ribEpoch: row.rib_epoch,
+                    attrId: row.attr_id,
+                    reason: row.reason
+                },
+                route: buildStoredRouteProjection(row),
+                source: { remoteIp: row.remote_ip, sysName: row.sys_name },
+                scope: {
+                    kind: row.scope_kind,
+                    afi: Number(row.afi),
+                    safi: Number(row.safi),
+                    ribType: row.rib_type,
+                    peerIp: row.peer_ip,
+                    peerAs: row.peer_as,
+                    peerRd: row.peer_rd,
+                    vrfName: row.vrf_name,
+                    rdRaw: parseJson(row.scope_identity_json, {})?.peer?.rd || null
+                }
+            })),
+            total: snapshot.total,
+            pageSize,
+            asOfEventId: snapshot.asOfEventId,
+            nextCursor:
+                hasMore && lastRow
+                    ? encodeCursor('route-histories', {
+                          asOfEventId: snapshot.asOfEventId,
                           observedAtMs: lastRow.observed_at_ms,
                           eventId: lastRow.event_id
                       })
