@@ -24,7 +24,13 @@ class NetconfApp {
         this.credentialStore = options.credentialStore || new SecureCredentialStore();
         this.transientSecrets = new Map();
         this.inventories = new Map();
+        this.deletingProfiles = new Set();
+        this.profileGenerations = new Map();
+        this.profileDeletionPromises = new Map();
+        this.closing = false;
+        this.closePromise = null;
         this.activeProfileId = null;
+        this.yangApp?.setActiveProfileId?.(null);
         this.logLevel = null;
         this.taskManager = new TaskManager({
             onProgress: progress => {
@@ -58,6 +64,33 @@ class NetconfApp {
         if (event?.sender && !event.sender.isDestroyed?.()) this.eventDispatcher.setWebContents(event.sender);
     }
 
+    profileGeneration(profileId) {
+        return this.profileGenerations.get(String(profileId || '')) || 0;
+    }
+
+    assertProfileAvailable(profileId, expectedGeneration = undefined) {
+        const id = String(profileId || '');
+        if (this.closing) {
+            const error = new Error('NETCONF 服务正在关闭');
+            error.code = 'NETCONF_APP_CLOSING';
+            throw error;
+        }
+        if (this.deletingProfiles.has(id) || (expectedGeneration !== undefined && this.profileGeneration(id) !== expectedGeneration)) {
+            const error = new Error('连接 Profile 正在删除或已被删除');
+            error.code = 'NETCONF_PROFILE_DELETING';
+            throw error;
+        }
+        return this.profileGeneration(id);
+    }
+
+    beginProfileDeletion(profileId) {
+        const id = String(profileId || '');
+        this.deletingProfiles.add(id);
+        const generation = this.profileGeneration(id) + 1;
+        this.profileGenerations.set(id, generation);
+        return generation;
+    }
+
     getStoredProfiles() {
         const profiles = this.store.get(PROFILE_STORE_KEY, []);
         return Array.isArray(profiles) ? profiles : [];
@@ -73,6 +106,7 @@ class NetconfApp {
 
     normalizeProfile(input = {}, existing = null) {
         const id = String(input.id || existing?.id || randomUUID());
+        this.yangApp?.profileWorkspaceId?.(id);
         const name = String(input.name || existing?.name || input.host || '')
             .trim()
             .slice(0, 80);
@@ -150,6 +184,11 @@ class NetconfApp {
     }
 
     ensureWorker(event) {
+        if (this.closing) {
+            const error = new Error('NETCONF 服务正在关闭');
+            error.code = 'NETCONF_APP_CLOSING';
+            throw error;
+        }
         this.setWebContents(event);
         if (this.workerClient) return this.workerClient;
         this.workerClient = new RequestWorkerClient(resolveWorkerPath('yang/netconfWorker.js'), {
@@ -157,14 +196,21 @@ class NetconfApp {
         });
         this.workerClient.on('event', (eventName, data) => {
             const state = data && typeof data === 'object' ? data : null;
-            if (eventName !== YANG_EVT_TYPES.NOTIFICATION && state?.profileId) {
+            if (
+                eventName !== YANG_EVT_TYPES.NOTIFICATION &&
+                state?.profileId &&
+                !this.closing &&
+                !this.deletingProfiles.has(state.profileId)
+            ) {
                 if (['connected', 'connecting', 'reconnecting'].includes(state.status)) {
                     this.activeProfileId = state.profileId;
+                    this.yangApp?.setActiveProfileId?.(state.profileId);
                 } else if (
                     this.activeProfileId === state.profileId &&
                     ['disconnected', 'error'].includes(state.status)
                 ) {
                     this.activeProfileId = null;
+                    this.yangApp?.setActiveProfileId?.(null);
                 }
             }
             if (!this.eventDispatcher.canEmit()) return;
@@ -177,6 +223,7 @@ class NetconfApp {
         this.workerClient.on('exit', () => {
             this.workerClient = null;
             this.activeProfileId = null;
+            this.yangApp?.setActiveProfileId?.(null);
         });
         return this.workerClient;
     }
@@ -194,10 +241,13 @@ class NetconfApp {
 
     async handleSaveProfile(_event, input = {}) {
         try {
+            if (this.closing) this.assertProfileAvailable(input.id);
+            const requestedGeneration = input.id ? this.assertProfileAvailable(input.id) : undefined;
             const profiles = this.getStoredProfiles();
             const index = input.id ? profiles.findIndex(profile => profile.id === input.id) : -1;
             const existing = index >= 0 ? profiles[index] : null;
             const normalized = this.normalizeProfile(input, existing);
+            this.assertProfileAvailable(normalized.id, requestedGeneration);
             this.captureTransientSecrets(normalized);
             const protectedProfile = this.credentialStore.protectProfile(normalized, existing || {});
             if (index >= 0) profiles.splice(index, 1, protectedProfile);
@@ -211,16 +261,35 @@ class NetconfApp {
     }
 
     async handleDeleteProfile(event, profileId) {
-        try {
-            const id = String(profileId || '');
-            if (!id) return errorResponse('缺少连接ID');
-            if (this.activeProfileId === id) await this.disconnectProfile(event, id);
+        const id = String(profileId || '');
+        if (!id) return errorResponse('缺少连接ID');
+        if (this.closing) return errorResponse('NETCONF 服务正在关闭');
+        if (this.deletingProfiles.has(id)) return errorResponse('连接 Profile 正在删除');
+        this.beginProfileDeletion(id);
+        const deletionPromise = (async () => {
+            const pending = [];
+            for (const task of this.taskManager.tasks.values()) {
+                if (task.status === 'running' && task.metadata?.profileId === id) {
+                    this.taskManager.cancel(task.taskId);
+                    if (task.promise) pending.push(task.promise);
+                }
+            }
+            await Promise.allSettled(pending);
+            if (this.workerClient) await this.disconnectProfile(event, id);
+            await this.yangApp?.deleteProfileWorkspace?.(id, event);
             this.saveStoredProfiles(this.getStoredProfiles().filter(profile => profile.id !== id));
             this.transientSecrets.delete(id);
             this.inventories.delete(id);
             return successResponse(null, '连接配置已删除');
+        })();
+        this.profileDeletionPromises.set(id, deletionPromise);
+        try {
+            return await deletionPromise;
         } catch (error) {
             return errorResponse('删除连接失败: ' + error.message);
+        } finally {
+            if (this.profileDeletionPromises.get(id) === deletionPromise) this.profileDeletionPromises.delete(id);
+            this.deletingProfiles.delete(id);
         }
     }
 
@@ -242,11 +311,15 @@ class NetconfApp {
     async handleTestConnection(event, profile) {
         const startedAt = Date.now();
         try {
+            const requestedId = profile && typeof profile === 'object' ? profile.id : profile || this.activeProfileId;
+            const requestedGeneration = requestedId ? this.assertProfileAvailable(requestedId) : undefined;
             const runtime = this.resolveRuntimeProfile(profile);
+            const generation = this.assertProfileAvailable(runtime.id, requestedGeneration);
             if (runtime.privateKeyPath && !fs.existsSync(runtime.privateKeyPath)) throw new Error('私钥文件不存在');
             const result = await this.ensureWorker(event).sendRequest(NETCONF_REQ_TYPES.TEST_CONNECTION, runtime, {
                 timeoutMs: runtime.connectTimeout + runtime.rpcTimeout + 5000
             });
+            this.assertProfileAvailable(runtime.id, generation);
             return successResponse({ ...result.data, latency: Date.now() - startedAt }, 'NETCONF连接测试成功');
         } catch (error) {
             logger.error('NETCONF连接测试失败:', error.message);
@@ -256,11 +329,31 @@ class NetconfApp {
 
     async handleConnect(event, profileOrId) {
         try {
+            const requestedId =
+                profileOrId && typeof profileOrId === 'object'
+                    ? profileOrId.id
+                    : profileOrId || this.activeProfileId;
+            const requestedGeneration = requestedId ? this.assertProfileAvailable(requestedId) : undefined;
             const runtime = this.resolveRuntimeProfile(profileOrId);
-            const result = await this.ensureWorker(event).sendRequest(NETCONF_REQ_TYPES.CONNECT, runtime, {
+            const generation = this.assertProfileAvailable(runtime.id, requestedGeneration);
+            const client = this.ensureWorker(event);
+            const result = await client.sendRequest(NETCONF_REQ_TYPES.CONNECT, runtime, {
                 timeoutMs: runtime.connectTimeout + runtime.rpcTimeout + 5000
             });
+            try {
+                this.assertProfileAvailable(runtime.id, generation);
+            } catch (error) {
+                await client
+                    .sendRequest(NETCONF_REQ_TYPES.DISCONNECT, { profileId: runtime.id }, { timeoutMs: 10000 })
+                    .catch(() => {});
+                if (this.activeProfileId === runtime.id) {
+                    this.activeProfileId = null;
+                    this.yangApp?.setActiveProfileId?.(null);
+                }
+                throw error;
+            }
             this.activeProfileId = runtime.id;
+            this.yangApp?.setActiveProfileId?.(runtime.id);
             this.rememberObservedFingerprint(runtime.id, result.data?.hostKeyFingerprint);
             return successResponse(result.data, 'NETCONF连接成功');
         } catch (error) {
@@ -280,12 +373,14 @@ class NetconfApp {
 
     async disconnectProfile(event, profileId) {
         if (!this.workerClient) return { profileId, status: 'disconnected' };
-        const result = await this.ensureWorker(event).sendRequest(
+        this.setWebContents(event);
+        const result = await this.workerClient.sendRequest(
             NETCONF_REQ_TYPES.DISCONNECT,
             { profileId },
             { timeoutMs: 10000 }
         );
         if (this.activeProfileId === profileId) this.activeProfileId = null;
+        if (!this.activeProfileId) this.yangApp?.setActiveProfileId?.(null);
         return result.data;
     }
 
@@ -325,13 +420,15 @@ class NetconfApp {
         return String(profileId);
     }
 
-    async discoverModules(event, profileId) {
+    async discoverModules(event, profileId, expectedGeneration = undefined) {
         const id = this.resolveProfileId(profileId);
+        const generation = this.assertProfileAvailable(id, expectedGeneration);
         const result = await this.ensureWorker(event).sendRequest(
             NETCONF_REQ_TYPES.DISCOVER_MODULES,
             { profileId: id },
             { timeoutMs: 120000 }
         );
+        this.assertProfileAvailable(id, generation);
         const inventory = result.data || { modules: [] };
         this.inventories.set(id, inventory);
         return inventory;
@@ -389,36 +486,75 @@ class NetconfApp {
         return `${name}@${revision}`;
     }
 
-    findInventoryDependency(inventory, name, revision = '') {
-        const candidates = (inventory?.modules || []).filter(module => (module.name || module.identifier) === name);
+    inventoryDependencyCandidates(inventory, name, kind = '') {
+        const candidates = [];
+        for (const module of inventory?.modules || []) {
+            const moduleName = module.name || module.identifier;
+            const moduleKind = module.kind || (module.submodule || module.isSubmodule ? 'submodule' : 'module');
+            if (moduleName === name && (!kind || moduleKind === kind)) candidates.push(module);
+            for (const submodule of module.submodules || []) {
+                const descriptor = {
+                    ...submodule,
+                    kind: 'submodule',
+                    submodule: true,
+                    parentModule: moduleName
+                };
+                if ((descriptor.name || descriptor.identifier) === name && (!kind || kind === 'submodule')) {
+                    candidates.push(descriptor);
+                }
+            }
+        }
+        return candidates;
+    }
+
+    findInventoryDependency(inventory, name, revision = '', kind = '') {
+        const candidates = this.inventoryDependencyCandidates(inventory, name, kind);
         if (revision) {
             const exact = candidates.find(module => (module.revision || module.version || '') === revision);
-            if (exact) return exact;
+            return exact;
         }
         return candidates.sort((left, right) =>
             (right.revision || right.version || '').localeCompare(left.revision || left.version || '')
         )[0];
     }
 
+    dependencyDescriptor(item, fallbackKind = 'module') {
+        const descriptor = typeof item === 'string' ? { name: item } : item || {};
+        const name = descriptor.name || descriptor.identifier || '';
+        if (!name) return null;
+        const kind = descriptor.kind || fallbackKind;
+        const revision = descriptor.revision || descriptor.version || descriptor.revisionDate || '';
+        return {
+            name,
+            revision,
+            format: descriptor.format || 'yang',
+            kind,
+            submodule: kind === 'submodule'
+        };
+    }
+
+    resolveDependency(inventory, item, fallbackKind = 'module') {
+        const descriptor = this.dependencyDescriptor(item, fallbackKind);
+        if (!descriptor) return null;
+        return (
+            this.findInventoryDependency(inventory, descriptor.name, descriptor.revision, descriptor.kind) || descriptor
+        );
+    }
+
     inventoryDeclaredDependencies(inventory, module) {
         const dependencies = [];
-        const add = item => {
-            const descriptor = typeof item === 'string' ? { name: item } : item || {};
-            const target = this.findInventoryDependency(
-                inventory,
-                descriptor.name || descriptor.identifier,
-                descriptor.revision || descriptor.version || descriptor.revisionDate
-            );
+        const add = (item, kind) => {
+            const target = this.resolveDependency(inventory, item, kind);
             if (target) dependencies.push(target);
         };
-        (module.submodules || []).forEach(add);
-        (module.deviations || []).forEach(add);
+        (module.submodules || []).forEach(item => add(item, 'submodule'));
+        (module.deviations || []).forEach(item => add(item, 'module'));
         return dependencies;
     }
 
     parsedDependencies(inventory, downloaded) {
         return (downloaded.dependencies || [])
-            .map(item => this.findInventoryDependency(inventory, item.name, item.revisionDate))
+            .map(item => this.resolveDependency(inventory, item, item.kind === 'submodule' ? 'submodule' : 'module'))
             .filter(Boolean);
     }
 
@@ -426,13 +562,15 @@ class NetconfApp {
         try {
             this.setWebContents(event);
             const profileId = this.resolveProfileId(request);
+            const profileGeneration = this.assertProfileAvailable(profileId);
             const task = this.taskManager.start(
                 'download',
                 async ({ signal, report }) => {
+                    this.assertProfileAvailable(profileId, profileGeneration);
                     let inventory = this.inventories.get(profileId);
                     if (!inventory) {
                         report({ phase: 'discovering', percent: 5, message: '正在读取设备YANG列表' });
-                        inventory = await this.discoverModules(event, profileId);
+                        inventory = await this.discoverModules(event, profileId, profileGeneration);
                     }
                     const selected = this.selectInventoryModules(inventory, request.modules);
                     if (selected.length === 0) throw new Error('没有匹配的YANG模型可下载');
@@ -477,6 +615,10 @@ class NetconfApp {
                             });
                         }
                     }
+                    if (signal.aborted) {
+                        throw new Error('YANG 下载已取消');
+                    }
+                    this.assertProfileAvailable(profileId, profileGeneration);
                     if (downloaded.length === 0) {
                         const detail = failed[0]?.error || '设备未返回模型内容';
                         throw new Error(`YANG下载失败: ${detail}`);
@@ -484,11 +626,11 @@ class NetconfApp {
                     report({ phase: 'importing', percent: 85, message: '正在写入本地YANG仓库' });
                     const imported = this.yangApp
                         ? await this.yangApp.importDownloadedContents(downloaded, {
-                              snapshotId: request.snapshotId,
                               profileId,
                               inventory
-                          })
+                          }, event)
                         : { downloaded };
+                    this.assertProfileAvailable(profileId, profileGeneration);
                     return { profileId, downloaded: downloaded.length, failed, imported };
                 },
                 { profileId }
@@ -502,11 +644,13 @@ class NetconfApp {
     async handleExecuteOperation(event, request = {}) {
         try {
             const profileId = this.resolveProfileId(request);
+            const generation = this.assertProfileAvailable(profileId);
             const result = await this.ensureWorker(event).sendRequest(
                 NETCONF_REQ_TYPES.EXECUTE_OPERATION,
                 { ...request, profileId },
                 { timeoutMs: Number(request.timeout) || 120000 }
             );
+            this.assertProfileAvailable(profileId, generation);
             return successResponse(result.data, 'NETCONF操作完成');
         } catch (error) {
             return errorResponse('NETCONF操作失败: ' + error.message, { code: error.code, details: error.data });
@@ -516,11 +660,13 @@ class NetconfApp {
     async handleSendRpc(event, request = {}) {
         try {
             const profileId = this.resolveProfileId(request);
+            const generation = this.assertProfileAvailable(profileId);
             const result = await this.ensureWorker(event).sendRequest(
                 NETCONF_REQ_TYPES.SEND_RPC,
                 { ...request, profileId },
                 { timeoutMs: Number(request.timeout) || 120000 }
             );
+            this.assertProfileAvailable(profileId, generation);
             return successResponse(result.data, 'NETCONF RPC完成');
         } catch (error) {
             return errorResponse('NETCONF RPC失败: ' + error.message, { code: error.code, details: error.data });
@@ -550,22 +696,41 @@ class NetconfApp {
     }
 
     async closeAll() {
-        for (const task of this.taskManager.list()) {
-            if (task.status === 'running') this.taskManager.cancel(task.taskId);
-        }
-        if (!this.workerClient) {
-            this.eventDispatcher.cleanup();
-            return;
-        }
-        try {
-            await this.workerClient.sendRequest(NETCONF_REQ_TYPES.DISCONNECT_ALL, null, { timeoutMs: 10000 });
-        } catch (error) {
-            logger.warn('关闭NETCONF会话失败:', error.message);
-        } finally {
-            await this.workerClient.terminate();
-            this.workerClient = null;
+        if (this.closePromise) return this.closePromise;
+        const closePromise = (async () => {
+            this.closing = true;
+            const pendingTasks = [];
+            for (const task of this.taskManager.tasks.values()) {
+                if (task.status !== 'running') continue;
+                this.taskManager.cancel(task.taskId);
+                if (task.promise) pendingTasks.push(task.promise);
+            }
+            await Promise.allSettled(pendingTasks);
+            await Promise.allSettled([...this.profileDeletionPromises.values()]);
+
+            const worker = this.workerClient;
+            if (worker) {
+                try {
+                    await worker.sendRequest(NETCONF_REQ_TYPES.DISCONNECT_ALL, null, { timeoutMs: 10000 });
+                } catch (error) {
+                    logger.warn('关闭NETCONF会话失败:', error.message);
+                } finally {
+                    await worker.terminate();
+                    if (this.workerClient === worker) this.workerClient = null;
+                }
+            }
             this.activeProfileId = null;
+            this.yangApp?.setActiveProfileId?.(null);
+            this.deletingProfiles.clear();
+            this.profileDeletionPromises.clear();
             this.eventDispatcher.cleanup();
+        })();
+        this.closePromise = closePromise;
+        try {
+            await closePromise;
+        } finally {
+            this.closing = false;
+            if (this.closePromise === closePromise) this.closePromise = null;
         }
     }
 }

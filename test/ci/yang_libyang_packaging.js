@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const {
+    computeBuildInputHash,
     getReleaseManifest,
     getRuntimeDirectory,
     getRuntimeExecutable,
@@ -14,6 +15,11 @@ const {
     parseYanglintVersion,
     verifyRuntime
 } = require('../../scripts/libyang-runtime-config');
+const {
+    ensureLibyangRuntime,
+    isTruthyEnv,
+    resolveBuildCommand
+} = require('../../scripts/ensure-libyang-runtime');
 const beforePack = require('../../scripts/verify-libyang-runtime');
 
 const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.resolve(__dirname, '..', '..'));
@@ -98,6 +104,7 @@ function assertVcpkgBaselinePreflightContract(powershellSource) {
 
 function verifyScriptSyntax() {
     const javascriptScripts = [
+        'scripts/ensure-libyang-runtime.js',
         'scripts/libyang-runtime-config.js',
         'scripts/verify-libyang-runtime.js',
         'scripts/write-libyang-runtime-manifest.js',
@@ -327,11 +334,193 @@ function testPinnedReleaseAndPackageContract() {
         'electron-builder must copy the bundled libyang runtime into the application resources'
     );
     assert.equal(packageJson.scripts['libyang:verify'], 'node scripts/verify-libyang-runtime.js');
+    assert.equal(packageJson.scripts['libyang:ensure'], 'node scripts/ensure-libyang-runtime.js');
+    assert.equal(packageJson.scripts['libyang:build'], 'node scripts/ensure-libyang-runtime.js --force');
+    assert.match(
+        packageJson.scripts.postinstall,
+        /(?:^|&&\s*)node scripts\/ensure-libyang-runtime\.js\s*$/,
+        'npm install/npm ci must ensure the bundled libyang runtime automatically after existing install work'
+    );
     assert.equal(packageJson.scripts['libyang:build:unix'], 'bash scripts/build-libyang-runtime.sh');
     assert.match(packageJson.scripts['libyang:build:windows'], /build-libyang-runtime\.ps1/);
     for (const licenseFile of ['LICENSE.libyang', 'LICENSE.pcre2', 'NOTICE.pthreads']) {
         assert(fs.statSync(path.join(projectRoot, 'resources', 'libyang', licenseFile)).isFile());
     }
+}
+
+async function testInstallRuntimeEnsureContract() {
+    const fixtureProjectRoot = path.join(tempDir, 'fixture-project');
+    for (const value of ['1', 'true', 'TRUE', 'yes', 'on']) assert.equal(isTruthyEnv(value), true);
+    for (const value of [undefined, null, '', '0', 'false', 'no', 'off']) assert.equal(isTruthyEnv(value), false);
+
+    const unixBuild = resolveBuildCommand({
+        projectRoot: fixtureProjectRoot,
+        platform: 'darwin',
+        arch: 'arm64'
+    });
+    assert.equal(unixBuild.command, 'bash');
+    assert.equal(path.basename(unixBuild.args.at(-1)), 'build-libyang-runtime.sh');
+
+    const windowsBuild = resolveBuildCommand({
+        projectRoot: 'C:\\fixture\\project',
+        platform: 'win32',
+        arch: 'x64'
+    });
+    assert.match(windowsBuild.command, /^powershell(?:\.exe)?$/i);
+    assert.deepEqual(windowsBuild.args.slice(0, 4), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File']);
+    assert.equal(path.win32.basename(windowsBuild.args.at(-1)), 'build-libyang-runtime.ps1');
+    assert.throws(
+        () => resolveBuildCommand({ projectRoot: fixtureProjectRoot, platform: 'win32', arch: 'arm64' }),
+        /Windows support x64 only/
+    );
+    assert.throws(
+        () => resolveBuildCommand({ projectRoot: fixtureProjectRoot, platform: 'freebsd', arch: 'x64' }),
+        /not supported on platform freebsd/
+    );
+
+    const verifyOptions = [];
+    await ensureLibyangRuntime(
+        {
+            projectRoot: fixtureProjectRoot,
+            platform: 'darwin',
+            arch: 'arm64',
+            env: {}
+        },
+        {
+            verifyRuntime(options) {
+                verifyOptions.push(options);
+                return { available: true, version: '5.8.6' };
+            },
+            spawnSync() {
+                assert.fail('a valid bundled runtime must not be rebuilt');
+            },
+            write() {}
+        }
+    );
+    assert.deepEqual(verifyOptions, [
+        { projectRoot: fixtureProjectRoot, platform: 'darwin', arch: 'arm64' }
+    ]);
+
+    let verifyAttempt = 0;
+    const buildCalls = [];
+    await ensureLibyangRuntime(
+        {
+            projectRoot: fixtureProjectRoot,
+            platform: 'darwin',
+            arch: 'arm64',
+            env: {}
+        },
+        {
+            verifyRuntime(options) {
+                verifyAttempt += 1;
+                assert.equal(options.projectRoot, fixtureProjectRoot);
+                assert.equal(options.platform, 'darwin');
+                assert.equal(options.arch, 'arm64');
+                if (verifyAttempt === 1) throw new Error('runtime missing');
+                return { available: true, version: '5.8.6' };
+            },
+            spawnSync(command, args, options) {
+                buildCalls.push({ command, args, options });
+                return { status: 0, stdout: '', stderr: '' };
+            },
+            write() {}
+        }
+    );
+    assert.equal(verifyAttempt, 2, 'a rebuilt runtime must be verified before npm install succeeds');
+    assert.equal(buildCalls.length, 1);
+    assert.equal(buildCalls[0].command, 'bash');
+    assert.equal(path.basename(buildCalls[0].args.at(-1)), 'build-libyang-runtime.sh');
+    assert.equal(buildCalls[0].options.cwd, fixtureProjectRoot);
+
+    let skippedWork = false;
+    await ensureLibyangRuntime(
+        {
+            projectRoot: fixtureProjectRoot,
+            platform: 'linux',
+            arch: 'x64',
+            env: { NETNEXUS_SKIP_LIBYANG_BUILD: '1' }
+        },
+        {
+            verifyRuntime() {
+                skippedWork = true;
+            },
+            spawnSync() {
+                skippedWork = true;
+            },
+            write() {}
+        }
+    );
+    assert.equal(skippedWork, false, 'the explicit skip flag must bypass verification and compilation');
+
+    let forcedVerifyCount = 0;
+    let forcedBuildCount = 0;
+    await ensureLibyangRuntime(
+        {
+            projectRoot: fixtureProjectRoot,
+            platform: 'darwin',
+            arch: 'arm64',
+            env: {},
+            force: true
+        },
+        {
+            verifyRuntime() {
+                forcedVerifyCount += 1;
+                return { available: true, version: '5.8.6' };
+            },
+            spawnSync() {
+                forcedBuildCount += 1;
+                return { status: 0, stdout: '', stderr: '' };
+            },
+            write() {}
+        }
+    );
+    assert.equal(forcedBuildCount, 1);
+    assert.equal(forcedVerifyCount, 1, 'force mode must build first and then verify once');
+
+    assert.throws(
+        () =>
+            ensureLibyangRuntime(
+                {
+                    projectRoot: fixtureProjectRoot,
+                    platform: 'darwin',
+                    arch: 'arm64',
+                    env: {},
+                    force: true
+                },
+                {
+                    verifyRuntime() {
+                        assert.fail('a failed build must not be verified');
+                    },
+                    spawnSync() {
+                        return { status: 9, signal: null };
+                    },
+                    write() {}
+                }
+            ),
+        /build failed with exit code 9/
+    );
+    assert.throws(
+        () =>
+            ensureLibyangRuntime(
+                {
+                    projectRoot: fixtureProjectRoot,
+                    platform: 'darwin',
+                    arch: 'arm64',
+                    env: {},
+                    force: true
+                },
+                {
+                    verifyRuntime() {
+                        assert.fail('a build that could not start must not be verified');
+                    },
+                    spawnSync() {
+                        return { error: new Error('spawn unavailable'), status: null };
+                    },
+                    write() {}
+                }
+            ),
+        /Unable to start the bundled libyang build: spawn unavailable/
+    );
 }
 
 function testRuntimePathMapping() {
@@ -378,8 +567,8 @@ function testRuntimePathMapping() {
 
 function testRuntimeVerifierWithoutNativeRuntime() {
     const runtimeDirectory = path.join(tempDir, 'fake-runtime');
-    const verifierPlatform = process.platform === 'win32' ? 'win32' : 'darwin';
-    const verifierArch = process.platform === 'win32' ? 'x64' : 'arm64';
+    const verifierPlatform = normalizePlatform(process.platform);
+    const verifierArch = normalizeArch(process.arch);
     const executable = path.join(runtimeDirectory, 'bin', verifierPlatform === 'win32' ? 'yanglint.exe' : 'yanglint');
     const schemaExecutable = path.join(
         runtimeDirectory,
@@ -399,11 +588,17 @@ function testRuntimeVerifierWithoutNativeRuntime() {
         ['scripts/write-libyang-runtime-manifest.js', runtimeDirectory, executable, schemaExecutable],
         'runtime manifest generation'
     );
-    const generatedManifest = JSON.parse(fs.readFileSync(path.join(runtimeDirectory, 'runtime.json'), 'utf8'));
+    const runtimeManifestPath = path.join(runtimeDirectory, 'runtime.json');
+    const generatedManifest = JSON.parse(fs.readFileSync(runtimeManifestPath, 'utf8'));
     assert.equal(generatedManifest.schemaVersion, 2);
     assert.equal(generatedManifest.executable, 'yanglint');
     assert.equal(generatedManifest.schemaExecutable, 'netnexus-libyang-schema');
     assert.equal(generatedManifest.schemaContractVersion, 1);
+    assert.match(generatedManifest.buildInputHash, /^[a-f0-9]{64}$/);
+    assert.equal(
+        generatedManifest.buildInputHash,
+        computeBuildInputHash({ projectRoot, platform: verifierPlatform, arch: verifierArch })
+    );
     assert.match(generatedManifest.sha256, /^[a-f0-9]{64}$/);
     assert.match(generatedManifest.schemaSha256, /^[a-f0-9]{64}$/);
     assert.notEqual(generatedManifest.sha256, generatedManifest.schemaSha256);
@@ -435,6 +630,25 @@ function testRuntimeVerifierWithoutNativeRuntime() {
     assert.equal(status.source, 'bundled');
     assert.equal(status.schemaPath, schemaExecutable);
     assert.equal(status.schemaContractVersion, 1);
+
+    fs.writeFileSync(
+        runtimeManifestPath,
+        `${JSON.stringify({ ...generatedManifest, buildInputHash: '0'.repeat(64) }, null, 4)}\n`,
+        'utf8'
+    );
+    assert.throws(
+        () =>
+            verifyRuntime({
+                projectRoot,
+                platform: verifierPlatform,
+                arch: verifierArch,
+                runtimeDirectory,
+                executable,
+                schemaExecutable
+            }),
+        /build inputs changed.*rebuild is required/
+    );
+    fs.writeFileSync(runtimeManifestPath, `${JSON.stringify(generatedManifest, null, 4)}\n`, 'utf8');
 
     assert.throws(
         () =>
@@ -499,8 +713,8 @@ function testRuntimeVerifierWithoutNativeRuntime() {
             () =>
                 verifyRuntime({
                     projectRoot,
-                    platform: 'darwin',
-                    arch: 'arm64',
+                    platform: verifierPlatform,
+                    arch: verifierArch,
                     runtimeDirectory,
                     executable: symlink,
                     schemaExecutable
@@ -513,8 +727,8 @@ function testRuntimeVerifierWithoutNativeRuntime() {
             () =>
                 verifyRuntime({
                     projectRoot,
-                    platform: 'darwin',
-                    arch: 'arm64',
+                    platform: verifierPlatform,
+                    arch: verifierArch,
                     runtimeDirectory,
                     executable,
                     schemaExecutable
@@ -576,51 +790,59 @@ async function testBeforePackHook() {
     );
 }
 
-function assertRuntimeBuiltBeforeTests(workflowFile, jobName, nextJobName, buildCommand) {
+function getWorkflowJobSource(workflowFile, jobName, nextJobName) {
     const workflowSource = fs.readFileSync(path.join(projectRoot, workflowFile), 'utf8');
     const jobStart = workflowSource.indexOf(`    ${jobName}:`);
     const jobEnd = nextJobName ? workflowSource.indexOf(`    ${nextJobName}:`, jobStart + 1) : workflowSource.length;
     assert(jobStart >= 0 && jobEnd > jobStart, `${workflowFile} must contain the ${jobName} job`);
-    const jobSource = workflowSource.slice(jobStart, jobEnd);
-    const buildIndex = jobSource.indexOf(`run: ${buildCommand}`);
+    return workflowSource.slice(jobStart, jobEnd);
+}
+
+function assertRuntimeEnsuredBeforeTests(workflowFile, jobName, nextJobName, { macos = false } = {}) {
+    const jobSource = getWorkflowJobSource(workflowFile, jobName, nextJobName);
+    const installIndex = jobSource.indexOf('run: npm ci');
     const smokeIndex = jobSource.indexOf('run: npm run libyang:smoke');
     const testIndex = jobSource.indexOf('run: npm test');
     const minifiedIndex = jobSource.indexOf('run: npm run test:ci:minified');
     assert(
-        buildIndex >= 0 && buildIndex < smokeIndex && smokeIndex < testIndex && testIndex < minifiedIndex,
-        `${workflowFile} ${jobName} must build and smoke-test bundled libyang before running YANG CI tests`
+        installIndex >= 0 && installIndex < smokeIndex && smokeIndex < testIndex && testIndex < minifiedIndex,
+        `${workflowFile} ${jobName} must install/ensure and smoke-test bundled libyang before YANG CI tests`
+    );
+    assert.doesNotMatch(
+        jobSource,
+        /run: npm run libyang:build:(?:unix|windows)/,
+        `${workflowFile} ${jobName} must rely on postinstall instead of compiling libyang twice`
+    );
+    if (!macos) return;
+    const buildDependenciesIndex = jobSource.indexOf('run: brew install cmake');
+    assert(
+        buildDependenciesIndex >= 0 && buildDependenciesIndex < installIndex,
+        `${workflowFile} ${jobName} must install CMake before npm ci invokes the libyang postinstall build`
     );
 }
 
-function testCiRuntimeBuildOrdering() {
-    assertRuntimeBuiltBeforeTests(
-        '.github/workflows/test.yml',
-        'e2e-macos',
-        'e2e-windows',
-        'npm run libyang:build:unix'
-    );
-    assertRuntimeBuiltBeforeTests('.github/workflows/test.yml', 'e2e-windows', null, 'npm run libyang:build:windows');
-    assertRuntimeBuiltBeforeTests(
-        '.github/workflows/release.yml',
-        'build-windows',
-        'build-macos',
-        'npm run libyang:build:windows'
-    );
-    assertRuntimeBuiltBeforeTests(
-        '.github/workflows/release.yml',
-        'build-macos',
-        'publish',
-        'npm run libyang:build:unix'
+function testCiRuntimeInstallOrdering() {
+    assertRuntimeEnsuredBeforeTests('.github/workflows/test.yml', 'e2e-macos', 'e2e-windows', { macos: true });
+    assertRuntimeEnsuredBeforeTests('.github/workflows/test.yml', 'e2e-windows', null);
+    assertRuntimeEnsuredBeforeTests('.github/workflows/release.yml', 'build-windows', 'build-macos');
+    assertRuntimeEnsuredBeforeTests('.github/workflows/release.yml', 'build-macos', 'publish', { macos: true });
+
+    const frrJobSource = getWorkflowJobSource('.github/workflows/test.yml', 'frr-bmp-e2e', 'e2e-macos');
+    assert.match(
+        frrJobSource,
+        /NETNEXUS_SKIP_LIBYANG_BUILD:\s*['"]1['"]/,
+        'the FRR-only job must explicitly skip the unrelated libyang postinstall build'
     );
 }
 
 async function run() {
     try {
         testPinnedReleaseAndPackageContract();
+        await testInstallRuntimeEnsureContract();
         testRuntimePathMapping();
         testRuntimeVerifierWithoutNativeRuntime();
         await testBeforePackHook();
-        testCiRuntimeBuildOrdering();
+        testCiRuntimeInstallOrdering();
         verifyScriptSyntax();
         console.log('libyang packaging contract and clean-CI verification tests passed');
     } finally {

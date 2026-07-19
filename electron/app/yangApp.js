@@ -1,4 +1,5 @@
 const path = require('path');
+const { createHash } = require('crypto');
 const { app, BrowserWindow, dialog } = require('electron');
 const logger = require('../log/logger');
 const EventDispatcher = require('../utils/eventDispatcher');
@@ -9,9 +10,36 @@ const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
 const { YANG_REQ_TYPES: WORKER_REQ_TYPES, YANG_EVT_TYPES: WORKER_EVT_TYPES } = require('../utils/yang');
 const { YANG_EVT_TYPES } = require('../const/yangConst');
 
-const WORKSPACE_ID = 'default';
-const STATE_STORE_KEY = 'yang-workspace-state';
+const CONFIGURATION_WORKSPACE_ID = 'default';
+const STATE_STORE_KEY = 'yang-profile-workspace-states';
+const STATE_SCHEMA_VERSION = 1;
 const DEFAULT_REQUEST_TIMEOUT = 120000;
+const MAX_PROFILE_ID_BYTES = 1024;
+const PROFILE_WORKSPACE_ID_RE = /^profile-[a-f0-9]{64}$/u;
+const LIFECYCLE_ERROR_CODES = new Set([
+    'WORKER_CANCELLED',
+    'WORKER_EXIT',
+    'WORKER_TERMINATED',
+    'YANG_APP_CLOSED',
+    'YANG_APP_CLOSING'
+]);
+
+function profileWorkspaceId(profileId) {
+    const value = String(profileId ?? '');
+    const containsControlCharacter = [...value].some(character => {
+        const codePoint = character.codePointAt(0);
+        return codePoint <= 0x1f || codePoint === 0x7f;
+    });
+    if (
+        !value ||
+        /^\s+$/u.test(value) ||
+        containsControlCharacter ||
+        Buffer.byteLength(value) > MAX_PROFILE_ID_BYTES
+    ) {
+        throw new Error('缺少有效的 NETCONF Profile ID');
+    }
+    return `profile-${createHash('sha256').update(value, 'utf8').digest('hex')}`;
+}
 
 class YangApp {
     constructor(ipcMain, store, options = {}) {
@@ -28,9 +56,16 @@ class YangApp {
         this.configurePromise = null;
         this.progressReporters = new Map();
         this.eventDispatcher = new EventDispatcher();
+        this.activeProfileId = null;
         this.lastCompile = this.readStoredState();
-        this.compileResult = null;
+        this.compileResult = new Map();
         this.compilationRestorePromises = new Map();
+        this.deletingWorkspaces = new Set();
+        this.closing = false;
+        this.closed = false;
+        this.closePromise = null;
+        this.lifecycleGeneration = 0;
+        this.retiredWebContents = new WeakSet();
         this.logLevel = null;
         this.taskManager = new TaskManager({
             onProgress: progress => this.emitTaskProgress(progress)
@@ -64,19 +99,42 @@ class YangApp {
 
     emitTaskProgress(progress) {
         if (!this.eventDispatcher.canEmit()) return;
-        this.eventDispatcher.emit(YANG_EVT_TYPES.TASK_PROGRESS, successResponse(progress, 'YANG任务进度'));
+        const profileId = progress?.metadata?.profileId || null;
+        const workspaceId = progress?.metadata?.workspaceId || null;
+        this.eventDispatcher.emit(
+            YANG_EVT_TYPES.TASK_PROGRESS,
+            successResponse({ ...progress, profileId, workspaceId }, 'YANG任务进度')
+        );
     }
 
     readStoredState() {
         try {
-            return this.store?.get(STATE_STORE_KEY, null) || null;
+            const stored = this.store?.get(STATE_STORE_KEY, null);
+            if (stored?.schemaVersion !== STATE_SCHEMA_VERSION || !stored.workspaces) return new Map();
+            return new Map(
+                Object.entries(stored.workspaces).filter(
+                    ([workspaceId, state]) =>
+                        PROFILE_WORKSPACE_ID_RE.test(workspaceId) &&
+                        state &&
+                        typeof state === 'object' &&
+                        !Array.isArray(state)
+                )
+            );
         } catch (_error) {
-            return null;
+            return new Map();
         }
     }
 
-    persistCompileState(result, workspace) {
-        this.lastCompile = result
+    writeStoredState() {
+        if (!this.store) return;
+        this.store.set(STATE_STORE_KEY, {
+            schemaVersion: STATE_SCHEMA_VERSION,
+            workspaces: Object.fromEntries(this.lastCompile)
+        });
+    }
+
+    persistCompileState(workspaceId, result, workspace) {
+        const state = result
             ? {
                   compileId: result.compileId,
                   contentHash: result.contentHash,
@@ -89,17 +147,74 @@ class YangApp {
                   workspaceContentHash: workspace?.contentHash || null
               }
             : null;
-        if (!this.store) return;
-        if (this.lastCompile) this.store.set(STATE_STORE_KEY, this.lastCompile);
-        else this.store.delete(STATE_STORE_KEY);
+        if (state) this.lastCompile.set(workspaceId, state);
+        else this.lastCompile.delete(workspaceId);
+        this.writeStoredState();
     }
 
-    invalidateCompilation() {
-        this.compileResult = null;
-        this.persistCompileState(null, null);
+    invalidateCompilation(workspaceId) {
+        if (!workspaceId) {
+            this.compileResult.clear();
+            this.lastCompile.clear();
+            this.compilationRestorePromises.clear();
+            this.store?.delete(STATE_STORE_KEY);
+            return;
+        }
+        this.compileResult.delete(workspaceId);
+        this.persistCompileState(workspaceId, null, null);
+    }
+
+    setActiveProfileId(profileId) {
+        this.activeProfileId = profileId ? String(profileId) : null;
+    }
+
+    profileWorkspaceId(profileId) {
+        return profileWorkspaceId(profileId);
+    }
+
+    resolveProfileContext(request = {}) {
+        const payload = request && typeof request === 'object' && !Array.isArray(request) ? request : {};
+        const profileId = String(payload.profileId ?? this.activeProfileId ?? '');
+        return { profileId, workspaceId: profileWorkspaceId(profileId) };
+    }
+
+    assertWorkspaceAvailable(workspaceId) {
+        if (this.deletingWorkspaces.has(workspaceId)) throw new Error('该 Profile 工作区正在删除');
+    }
+
+    lifecycleError(code, message) {
+        const error = new Error(message);
+        error.code = code;
+        return error;
+    }
+
+    assertLifecycleAvailable(event) {
+        if (this.closing) throw this.lifecycleError('YANG_APP_CLOSING', 'YANG 服务正在关闭');
+        if (!this.closed) return;
+        const sender = event?.sender;
+        if (
+            sender &&
+            typeof sender === 'object' &&
+            !sender.isDestroyed?.() &&
+            !this.retiredWebContents.has(sender)
+        ) {
+            this.closed = false;
+            return;
+        }
+        throw this.lifecycleError('YANG_APP_CLOSED', 'YANG 服务已关闭');
+    }
+
+    isLifecycleInterruption(error, generation) {
+        return (
+            generation !== this.lifecycleGeneration ||
+            this.closing ||
+            this.closed ||
+            LIFECYCLE_ERROR_CODES.has(error?.code)
+        );
     }
 
     ensureWorker(event) {
+        this.assertLifecycleAvailable(event);
         this.setWebContents(event);
         if (this.workerClient) return this.workerClient;
         const client = new RequestWorkerClient(resolveWorkerPath('yang/yangCompilerWorker.js'), {
@@ -123,7 +238,7 @@ class YangApp {
                 WORKER_REQ_TYPES.CONFIGURE,
                 {
                     rootDir: this.rootDir,
-                    workspaceId: WORKSPACE_ID,
+                    workspaceId: CONFIGURATION_WORKSPACE_ID,
                     compilerPath: this.compilerPath,
                     compilerArgs: this.compilerArgs,
                     schemaHelperPath: this.schemaHelperPath,
@@ -145,11 +260,10 @@ class YangApp {
     async send(event, operation, data = {}, options = {}) {
         const client = this.ensureWorker(event);
         await this.configurePromise;
-        const response = await client.sendRequest(
-            operation,
-            { workspaceId: WORKSPACE_ID, ...data },
-            { timeoutMs: options.timeoutMs || DEFAULT_REQUEST_TIMEOUT, signal: options.signal }
-        );
+        const response = await client.sendRequest(operation, data, {
+            timeoutMs: options.timeoutMs || DEFAULT_REQUEST_TIMEOUT,
+            signal: options.signal
+        });
         return response.data;
     }
 
@@ -209,8 +323,8 @@ class YangApp {
             submodule: (metadata.kind || entry?.kind) === 'submodule',
             isSubmodule: (metadata.kind || entry?.kind) === 'submodule',
             isLocal: true,
-            localPath: entry?.blobPath || entry?.filePath || '',
-            filePath: entry?.blobPath || entry?.filePath || '',
+            localPath: entry?.filePath || '',
+            filePath: entry?.filePath || '',
             status: hasErrors ? 'failed' : 'downloaded',
             compileStatus: compiledHashes.has(hash)
                 ? 'compiled'
@@ -222,18 +336,18 @@ class YangApp {
         };
     }
 
-    compiledHashes() {
-        if (this.compileResult) {
-            return new Set(this.compileResult.success ? this.compileResult.moduleHashes || [] : []);
-        }
-        return new Set(this.lastCompile?.success ? this.lastCompile.moduleHashes || [] : []);
+    compiledHashes(workspaceId) {
+        const result = this.compileResult.get(workspaceId);
+        if (result) return new Set(result.success ? result.moduleHashes || [] : []);
+        const stored = this.lastCompile.get(workspaceId);
+        return new Set(stored?.success ? stored.moduleHashes || [] : []);
     }
 
-    failedCompileHashes() {
-        if (this.compileResult) {
-            return new Set(this.compileResult.success ? [] : this.compileResult.moduleHashes || []);
-        }
-        return new Set(this.lastCompile?.success === false ? this.lastCompile.moduleHashes || [] : []);
+    failedCompileHashes(workspaceId) {
+        const result = this.compileResult.get(workspaceId);
+        if (result) return new Set(result.success ? [] : result.moduleHashes || []);
+        const stored = this.lastCompile.get(workspaceId);
+        return new Set(stored?.success === false ? stored.moduleHashes || [] : []);
     }
 
     async listRawModules(event, query = {}) {
@@ -242,17 +356,24 @@ class YangApp {
 
     async handleListModules(event, query = {}) {
         try {
-            const modules = await this.listRawModules(event, query);
-            const compiled = this.compiledHashes();
-            const failed = this.failedCompileHashes();
+            const context = this.resolveProfileContext(query);
+            const payload = query && typeof query === 'object' && !Array.isArray(query) ? query : {};
+            const workspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE, {
+                workspaceId: context.workspaceId
+            });
+            this.reconcileCompilationFreshness(context.workspaceId, workspace);
+            const modules = await this.listRawModules(event, { ...payload, workspaceId: context.workspaceId });
+            const compiled = this.compiledHashes(context.workspaceId);
+            const failed = this.failedCompileHashes(context.workspaceId);
             return successResponse(modules.map(module => this.normalizeModule(module, compiled, failed)));
         } catch (error) {
             return errorResponse('获取YANG模型失败: ' + error.message);
         }
     }
 
-    startImportTask(event, type, operation, data) {
+    startImportTask(event, type, operation, data, context) {
         this.setWebContents(event);
+        this.assertWorkspaceAvailable(context.workspaceId);
         return this.taskManager.start(
             'import',
             async ({ taskId, signal, report }) => {
@@ -262,25 +383,34 @@ class YangApp {
                     const result = await this.send(
                         event,
                         operation,
-                        { ...data, progressId: taskId },
+                        {
+                            ...data,
+                            workspaceId: context.workspaceId,
+                            workspaceMetadata: { profileId: context.profileId },
+                            progressId: taskId
+                        },
                         { timeoutMs: 10 * 60 * 1000, signal }
                     );
-                    this.invalidateCompilation();
+                    this.invalidateCompilation(context.workspaceId);
                     return result;
                 } finally {
                     this.progressReporters.delete(taskId);
                 }
             },
-            { source: type }
+            { source: type, ...context }
         );
     }
 
-    async handleImportFiles(event, filePaths) {
+    async handleImportFiles(event, input) {
         try {
-            const paths = Array.isArray(filePaths) && filePaths.length ? filePaths : await this.selectFiles(event);
+            const options = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+            const context = this.resolveProfileContext(options);
+            const requestedPaths = Array.isArray(input) ? input : options.filePaths || options.paths;
+            const paths =
+                Array.isArray(requestedPaths) && requestedPaths.length ? requestedPaths : await this.selectFiles(event);
             if (!paths.length) return successResponse({ cancelled: true, filePaths: [] }, '已取消导入');
             return successResponse(
-                this.startImportTask(event, 'files', WORKER_REQ_TYPES.IMPORT_FILES, { filePaths: paths }),
+                this.startImportTask(event, 'files', WORKER_REQ_TYPES.IMPORT_FILES, { filePaths: paths }, context),
                 'YANG导入任务已开始'
             );
         } catch (error) {
@@ -288,16 +418,25 @@ class YangApp {
         }
     }
 
-    async handleImportDirectory(event, directoryPath) {
+    async handleImportDirectory(event, input) {
         try {
+            const options = input && typeof input === 'object' ? input : {};
+            const context = this.resolveProfileContext(options);
+            const requestedPath = typeof input === 'string' ? input : options.directoryPath || options.path;
             const selected =
-                typeof directoryPath === 'string' && directoryPath ? directoryPath : await this.selectDirectory(event);
+                typeof requestedPath === 'string' && requestedPath ? requestedPath : await this.selectDirectory(event);
             if (!selected) return successResponse({ cancelled: true }, '已取消导入');
             return successResponse(
-                this.startImportTask(event, 'directory', WORKER_REQ_TYPES.IMPORT_DIRECTORY, {
-                    directoryPath: selected,
-                    recursive: true
-                }),
+                this.startImportTask(
+                    event,
+                    'directory',
+                    WORKER_REQ_TYPES.IMPORT_DIRECTORY,
+                    {
+                        directoryPath: selected,
+                        recursive: true
+                    },
+                    context
+                ),
                 'YANG目录导入任务已开始'
             );
         } catch (error) {
@@ -305,16 +444,18 @@ class YangApp {
         }
     }
 
-    async importDownloadedContents(contents, options = {}) {
-        const result = await this.send(null, WORKER_REQ_TYPES.IMPORT_CONTENTS, {
+    async importDownloadedContents(contents, options = {}, event = null) {
+        const context = this.resolveProfileContext(options);
+        this.assertWorkspaceAvailable(context.workspaceId);
+        const result = await this.send(event, WORKER_REQ_TYPES.IMPORT_CONTENTS, {
             contents,
-            snapshotId: options.snapshotId,
-            snapshotMetadata: {
-                profileId: options.profileId || null,
+            workspaceId: context.workspaceId,
+            workspaceMetadata: {
+                profileId: context.profileId,
                 discoveredAt: options.inventory?.discoveredAt || new Date().toISOString()
             }
         });
-        this.invalidateCompilation();
+        this.invalidateCompilation(context.workspaceId);
         return result;
     }
 
@@ -364,6 +505,8 @@ class YangApp {
     async handleCompile(event, options = {}) {
         try {
             this.setWebContents(event);
+            const context = this.resolveProfileContext(options);
+            this.assertWorkspaceAvailable(context.workspaceId);
             const compiler = await this.send(event, WORKER_REQ_TYPES.GET_COMPILER_STATUS, {
                 forceRuntimeDiscovery: options.forceRuntimeDiscovery === true
             });
@@ -371,7 +514,7 @@ class YangApp {
                 const details = [compiler.error, compiler.installHint].filter(Boolean).join(' ');
                 return errorResponse(`libyang/yanglint 权威编译器不可用${details ? `: ${details}` : ''}`);
             }
-            const modules = await this.listRawModules(event);
+            const modules = await this.listRawModules(event, { workspaceId: context.workspaceId });
             if (!modules.length) return errorResponse('请先下载或导入YANG模型');
             const hashes = this.resolveCompileHashes(options.hashes || options.moduleIds || options.modules, modules);
             const task = this.taskManager.start(
@@ -386,18 +529,27 @@ class YangApp {
                             WORKER_REQ_TYPES.COMPILE,
                             {
                                 ...options,
+                                workspaceId: context.workspaceId,
                                 hashes: hashes || undefined,
                                 progressId: taskId
                             },
                             { timeoutMs: 10 * 60 * 1000, signal }
                         );
-                        const workspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE);
-                        this.compileResult = {
+                        const workspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE, {
+                            workspaceId: context.workspaceId
+                        });
+                        const compileResult = {
                             ...result,
                             moduleHashes: result.modules?.map(module => module.hash).filter(Boolean) || [],
                             restoreOptions: {
                                 features: Array.isArray(options.features) ? options.features : [],
                                 deviations: Array.isArray(options.deviations) ? options.deviations : [],
+                                searchPaths: Array.isArray(options.searchPaths) ? options.searchPaths : undefined,
+                                schemaSearchPaths: Array.isArray(options.schemaSearchPaths)
+                                    ? options.schemaSearchPaths
+                                    : undefined,
+                                externalTimeout: options.externalTimeout,
+                                externalMaxBuffer: options.externalMaxBuffer,
                                 compilerPath: options.compilerPath,
                                 compilerArgs: Array.isArray(options.compilerArgs) ? options.compilerArgs : undefined,
                                 schemaHelperPath: options.schemaHelperPath,
@@ -406,7 +558,8 @@ class YangApp {
                                     : undefined
                             }
                         };
-                        this.persistCompileState(this.compileResult, workspace);
+                        this.compileResult.set(context.workspaceId, compileResult);
+                        this.persistCompileState(context.workspaceId, compileResult, workspace);
                         if (!result.success) {
                             const diagnostic = result.diagnostics?.find(
                                 item => item.severity === 'error' && item.authoritative !== false
@@ -420,7 +573,7 @@ class YangApp {
                         this.progressReporters.delete(taskId);
                     }
                 },
-                { moduleCount: hashes?.length || modules.length }
+                { ...context, moduleCount: hashes?.length || modules.length }
             );
             return successResponse(task, 'YANG编译任务已开始');
         } catch (error) {
@@ -428,16 +581,28 @@ class YangApp {
         }
     }
 
-    isStoredCompilationCurrent(workspace) {
+    isStoredCompilationCurrent(workspaceId, workspace) {
+        const stored = this.lastCompile.get(workspaceId);
         return Boolean(
-            this.lastCompile?.compileId &&
-                workspace?.contentHash &&
-                this.lastCompile.workspaceContentHash === workspace.contentHash
+            stored?.compileId && workspace?.contentHash && stored.workspaceContentHash === workspace.contentHash
         );
     }
 
-    async restoreStoredCompilation(event, workspace, requestedCompileId, options = {}) {
-        const stored = this.lastCompile;
+    reconcileCompilationFreshness(workspaceId, workspace) {
+        const stored = this.lastCompile.get(workspaceId);
+        if (stored && !this.isStoredCompilationCurrent(workspaceId, workspace)) {
+            this.invalidateCompilation(workspaceId);
+            return false;
+        }
+        const result = this.compileResult.get(workspaceId);
+        if (result && (!stored || result.compileId !== stored.compileId)) {
+            this.compileResult.delete(workspaceId);
+        }
+        return Boolean(stored);
+    }
+
+    async restoreStoredCompilation(event, context, workspace, requestedCompileId, options = {}) {
+        const stored = this.lastCompile.get(context.workspaceId);
         if (!stored?.compileId || !workspace?.contentHash || stored.workspaceContentHash !== workspace.contentHash) {
             throw new Error('当前工作区尚未编译');
         }
@@ -445,11 +610,12 @@ class YangApp {
         if (requestedCompileId && requestedCompileId !== stored.compileId) {
             throw new Error('指定的YANG编译上下文已失效');
         }
-        if (!options.forceWorkerRestore && this.compileResult?.compileId === expected) {
-            return this.compileResult;
+        const currentResult = this.compileResult.get(context.workspaceId);
+        if (!options.forceWorkerRestore && currentResult?.compileId === expected) {
+            return currentResult;
         }
 
-        const restoreKey = `${workspace.contentHash}\u0000${expected}`;
+        const restoreKey = `${context.workspaceId}\u0000${workspace.contentHash}\u0000${expected}`;
         const pending = this.compilationRestorePromises.get(restoreKey);
         if (pending) return pending;
 
@@ -465,6 +631,7 @@ class YangApp {
                 WORKER_REQ_TYPES.COMPILE,
                 {
                     ...restoreOptions,
+                    workspaceId: context.workspaceId,
                     force: false,
                     hashes
                 },
@@ -485,9 +652,11 @@ class YangApp {
                 throw new Error(diagnostic?.message || '无法恢复已保存的libyang权威Schema缓存');
             }
 
-            const latestWorkspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE);
+            const latestWorkspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE, {
+                workspaceId: context.workspaceId
+            });
             if (
-                this.lastCompile !== stored ||
+                this.lastCompile.get(context.workspaceId) !== stored ||
                 latestWorkspace?.contentHash !== workspace.contentHash ||
                 stored.workspaceContentHash !== latestWorkspace.contentHash
             ) {
@@ -499,8 +668,8 @@ class YangApp {
                 moduleHashes: restored.modules?.map(module => module.hash).filter(Boolean) || stored.moduleHashes || [],
                 restoreOptions
             };
-            this.compileResult = compileResult;
-            this.persistCompileState(compileResult, latestWorkspace);
+            this.compileResult.set(context.workspaceId, compileResult);
+            this.persistCompileState(context.workspaceId, compileResult, latestWorkspace);
             return compileResult;
         })();
         this.compilationRestorePromises.set(restoreKey, restorePromise);
@@ -513,17 +682,21 @@ class YangApp {
         }
     }
 
-    async decorateWorkspace(event, workspace) {
-        const current = this.isStoredCompilationCurrent(workspace) ? this.lastCompile : null;
-        const result = this.compileResult?.compileId === current?.compileId ? this.compileResult : null;
+    async decorateWorkspace(event, context, workspace) {
+        const current = this.isStoredCompilationCurrent(context.workspaceId, workspace)
+            ? this.lastCompile.get(context.workspaceId)
+            : null;
+        const workspaceResult = this.compileResult.get(context.workspaceId);
+        const result = workspaceResult?.compileId === current?.compileId ? workspaceResult : null;
         const compiled = new Set(current?.success ? current.moduleHashes || [] : []);
         const failed = new Set(current?.success === false ? current.moduleHashes || [] : []);
-        const rawModules = await this.listRawModules(event);
+        const rawModules = await this.listRawModules(event, { workspaceId: context.workspaceId });
         const modules = rawModules.map(module => this.normalizeModule(module, compiled, failed));
         const compiler = await this.send(event, WORKER_REQ_TYPES.GET_COMPILER_STATUS);
         return {
-            workspaceId: workspace?.id || WORKSPACE_ID,
-            name: workspace?.name || WORKSPACE_ID,
+            profileId: context.profileId,
+            workspaceId: workspace?.id || context.workspaceId,
+            name: workspace?.name || context.workspaceId,
             createdAt: workspace?.createdAt || null,
             updatedAt: workspace?.updatedAt || null,
             contentHash: workspace?.contentHash || null,
@@ -544,22 +717,30 @@ class YangApp {
         };
     }
 
-    async handleGetWorkspace(event) {
+    async handleGetWorkspace(event, query = {}) {
+        const lifecycleGeneration = this.lifecycleGeneration;
         try {
-            const workspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE);
-            if (!this.isStoredCompilationCurrent(workspace) && this.lastCompile) {
-                this.invalidateCompilation();
-            } else if (
-                this.lastCompile?.success === true &&
-                this.compileResult?.compileId !== this.lastCompile.compileId
-            ) {
+            const context = this.resolveProfileContext(query);
+            const workspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE, {
+                workspaceId: context.workspaceId
+            });
+            const stored = this.lastCompile.get(context.workspaceId);
+            const storedIsCurrent = this.reconcileCompilationFreshness(context.workspaceId, workspace);
+            const result = this.compileResult.get(context.workspaceId);
+            let restoreError = '';
+            if (storedIsCurrent && stored?.success === true && result?.compileId !== stored.compileId) {
                 try {
-                    await this.restoreStoredCompilation(event, workspace, this.lastCompile.compileId);
+                    await this.restoreStoredCompilation(event, context, workspace, stored.compileId);
                 } catch (error) {
-                    logger.warn('恢复YANG编译缓存失败:', error.message);
+                    if (this.isLifecycleInterruption(error, lifecycleGeneration)) throw error;
+                    logger.warn(`恢复YANG编译缓存失败 (${context.workspaceId}):`, error.message);
+                    restoreError = error.message;
+                    this.invalidateCompilation(context.workspaceId);
                 }
             }
-            return successResponse(await this.decorateWorkspace(event, workspace));
+            const decorated = await this.decorateWorkspace(event, context, workspace);
+            if (restoreError) decorated.restoreError = restoreError;
+            return successResponse(decorated);
         } catch (error) {
             return errorResponse('获取YANG工作区失败: ' + error.message);
         }
@@ -576,25 +757,34 @@ class YangApp {
         }
     }
 
-    async ensureCompilationLoaded(event, requestedCompileId) {
-        const workspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE);
-        if (!this.isStoredCompilationCurrent(workspace)) throw new Error('当前工作区尚未编译');
-        const expected = requestedCompileId || this.lastCompile.compileId;
-        if (requestedCompileId && requestedCompileId !== this.lastCompile.compileId) {
+    async ensureCompilationLoaded(event, request = {}) {
+        const context = this.resolveProfileContext(request);
+        const workspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE, {
+            workspaceId: context.workspaceId
+        });
+        const stored = this.lastCompile.get(context.workspaceId);
+        if (!this.isStoredCompilationCurrent(context.workspaceId, workspace)) throw new Error('当前工作区尚未编译');
+        const requestedCompileId = request?.compileId;
+        const expected = requestedCompileId || stored.compileId;
+        if (requestedCompileId && requestedCompileId !== stored.compileId) {
             throw new Error('指定的YANG编译上下文已失效');
         }
         try {
-            await this.send(event, WORKER_REQ_TYPES.GET_DIAGNOSTICS, { compileId: expected });
+            await this.send(event, WORKER_REQ_TYPES.GET_DIAGNOSTICS, {
+                workspaceId: context.workspaceId,
+                compileId: expected
+            });
         } catch (_error) {
-            await this.restoreStoredCompilation(event, workspace, expected, { forceWorkerRestore: true });
+            await this.restoreStoredCompilation(event, context, workspace, expected, { forceWorkerRestore: true });
         }
-        return expected;
+        return { ...context, compileId: expected };
     }
 
-    async handleClearWorkspace(event) {
+    async handleClearWorkspace(event, request = {}) {
         try {
             this.setWebContents(event);
-            this.invalidateCompilation();
+            const context = this.resolveProfileContext(request);
+            this.invalidateCompilation(context.workspaceId);
             return successResponse(null, 'YANG编译工作区已清空');
         } catch (error) {
             return errorResponse('清空YANG工作区失败: ' + error.message);
@@ -626,11 +816,11 @@ class YangApp {
     async handleValidateRpc(event, request = {}) {
         try {
             const payload = request && typeof request === 'object' && !Array.isArray(request) ? request : {};
-            const compileId = await this.ensureCompilationLoaded(event, payload.compileId);
+            const context = await this.ensureCompilationLoaded(event, payload);
             const result = await this.send(
                 event,
                 WORKER_REQ_TYPES.VALIDATE_RPC,
-                { compileId, rpc: String(payload.rpc ?? '') },
+                { ...context, rpc: String(payload.rpc ?? '') },
                 { timeoutMs: 60_000 }
             );
             return successResponse(result, result.valid ? 'RPC YANG校验通过' : 'RPC YANG校验未通过');
@@ -643,8 +833,9 @@ class YangApp {
 
     async handleCompiledQuery(event, request, operation, errorPrefix) {
         try {
-            const compileId = await this.ensureCompilationLoaded(event, request?.compileId);
-            return successResponse(await this.send(event, operation, { ...request, compileId }));
+            const payload = request && typeof request === 'object' && !Array.isArray(request) ? request : {};
+            const context = await this.ensureCompilationLoaded(event, payload);
+            return successResponse(await this.send(event, operation, { ...payload, ...context }));
         } catch (error) {
             return errorResponse(`${errorPrefix}: ${error.message}`);
         }
@@ -652,11 +843,58 @@ class YangApp {
 
     async handleGetModuleSource(event, request = {}) {
         try {
-            const data = { ...request };
-            if (request.moduleId && !request.hash) data.hash = request.moduleId;
-            return successResponse(await this.send(event, WORKER_REQ_TYPES.GET_MODULE_SOURCE, data));
+            const payload = request && typeof request === 'object' && !Array.isArray(request) ? request : {};
+            const context = this.resolveProfileContext(payload);
+            const modules = await this.listRawModules(event, { workspaceId: context.workspaceId });
+            const hash = payload.hash || payload.moduleId;
+            const module = modules.find(entry => {
+                if (hash) return entry.hash === hash;
+                const metadata = entry.metadata || {};
+                return (
+                    metadata.name === payload.name &&
+                    (!payload.revision || metadata.revision === payload.revision) &&
+                    (!payload.kind || metadata.kind === payload.kind)
+                );
+            });
+            if (!module) throw new Error('当前 Profile 工作区中不存在该 YANG 模型');
+            return successResponse(
+                await this.send(event, WORKER_REQ_TYPES.GET_MODULE_SOURCE, {
+                    workspaceId: context.workspaceId,
+                    hash: module.hash
+                })
+            );
         } catch (error) {
             return errorResponse('获取YANG源码失败: ' + error.message);
+        }
+    }
+
+    async deleteProfileWorkspace(profileId, event = null) {
+        const context = this.resolveProfileContext({ profileId });
+        if (this.deletingWorkspaces.has(context.workspaceId)) throw new Error('该 Profile 工作区正在删除');
+        this.deletingWorkspaces.add(context.workspaceId);
+        try {
+            const pending = [];
+            for (const task of this.taskManager.tasks.values()) {
+                if (
+                    task.status === 'running' &&
+                    (task.metadata?.profileId === context.profileId ||
+                        task.metadata?.workspaceId === context.workspaceId)
+                ) {
+                    this.taskManager.cancel(task.taskId);
+                    if (task.promise) pending.push(task.promise);
+                }
+            }
+            await Promise.allSettled(pending);
+            const deleted = await this.send(event, WORKER_REQ_TYPES.DELETE_WORKSPACE, {
+                workspaceId: context.workspaceId
+            });
+            this.invalidateCompilation(context.workspaceId);
+            for (const key of this.compilationRestorePromises.keys()) {
+                if (key.startsWith(`${context.workspaceId}\u0000`)) this.compilationRestorePromises.delete(key);
+            }
+            return Boolean(deleted);
+        } finally {
+            this.deletingWorkspaces.delete(context.workspaceId);
         }
     }
 
@@ -669,23 +907,49 @@ class YangApp {
     }
 
     async close() {
-        for (const task of this.taskManager.list()) {
-            if (task.status === 'running') this.taskManager.cancel(task.taskId);
-        }
-        const worker = this.workerClient;
-        this.workerClient = null;
-        this.configurePromise = null;
-        this.progressReporters.clear();
-        this.compilationRestorePromises.clear();
-        this.eventDispatcher.cleanup();
-        if (worker) {
-            try {
-                await worker.terminate();
-            } catch (error) {
-                logger.warn('关闭YANG编译Worker失败:', error.message);
+        if (this.closePromise) return this.closePromise;
+        const closePromise = (async () => {
+            this.closing = true;
+            this.closed = false;
+            this.lifecycleGeneration += 1;
+            const sender = this.eventDispatcher.webContents;
+            if (sender && typeof sender === 'object') this.retiredWebContents.add(sender);
+
+            const pendingTasks = [];
+            for (const task of this.taskManager.tasks.values()) {
+                if (task.status !== 'running') continue;
+                this.taskManager.cancel(task.taskId);
+                if (task.promise) pendingTasks.push(task.promise);
             }
+            await Promise.allSettled(pendingTasks);
+
+            const worker = this.workerClient;
+            this.workerClient = null;
+            this.configurePromise = null;
+            this.progressReporters.clear();
+            this.eventDispatcher.cleanup();
+            if (worker) {
+                try {
+                    await worker.terminate();
+                } catch (error) {
+                    logger.warn('关闭YANG编译Worker失败:', error.message);
+                }
+            }
+            this.compilationRestorePromises.clear();
+            this.deletingWorkspaces.clear();
+            this.activeProfileId = null;
+            this.closed = true;
+        })();
+        this.closePromise = closePromise;
+        try {
+            await closePromise;
+        } finally {
+            this.closing = false;
+            if (this.closePromise === closePromise) this.closePromise = null;
         }
     }
 }
 
 module.exports = YangApp;
+module.exports.profileWorkspaceId = profileWorkspaceId;
+module.exports.STATE_STORE_KEY = STATE_STORE_KEY;

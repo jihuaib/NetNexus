@@ -9,6 +9,14 @@ const { getReleaseManifest, verifyRuntime } = require('./libyang-runtime-config'
 
 const projectRoot = path.resolve(__dirname, '..');
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-libyang-smoke-'));
+const profileContext = Object.freeze({
+    profileId: 'libyang-runtime-smoke',
+    workspaceId: 'profile-libyang-runtime-smoke'
+});
+const invalidProfileContext = Object.freeze({
+    profileId: 'libyang-runtime-smoke-invalid',
+    workspaceId: 'profile-libyang-runtime-smoke-invalid'
+});
 const common = `module netnexus-smoke-types {
   yang-version 1.1;
   namespace "urn:netnexus:smoke:types";
@@ -53,7 +61,9 @@ async function run() {
     const registry = new YangRegistry({
         rootDir: path.join(tempRoot, 'repository'),
         resourcesPath: path.join(projectRoot, 'resources'),
-        isPackaged: false
+        isPackaged: false,
+        workspaceId: profileContext.workspaceId,
+        workspaceName: profileContext.profileId
     });
     const status = await registry.getCompilerStatus({ forceRuntimeDiscovery: true });
     assert.equal(status.available, true, status.error);
@@ -221,23 +231,40 @@ async function run() {
     assert.notEqual(depthLimitResult.status, 0, 'over-deep effective Schema export must fail closed');
     assert.match(depthLimitResult.stderr, /maxDepth limit of 256/u);
 
-    registry.importContents([
-        { content: common, expectedName: 'netnexus-smoke-types' },
-        { content: child, expectedName: 'netnexus-smoke-child' },
-        { content: main, expectedName: 'netnexus-smoke' }
-    ]);
-    const valid = await registry.compile({ features: ['netnexus-smoke:advanced'], force: true });
+    const imported = registry.importContents(
+        [
+            { content: common, expectedName: 'netnexus-smoke-types' },
+            { content: child, expectedName: 'netnexus-smoke-child' },
+            { content: main, expectedName: 'netnexus-smoke' }
+        ],
+        {
+            workspaceId: profileContext.workspaceId,
+            workspaceMetadata: { profileId: profileContext.profileId }
+        }
+    );
+    assert.equal(imported.workspace.metadata.profileId, profileContext.profileId);
+    const valid = await registry.compile({
+        workspaceId: profileContext.workspaceId,
+        features: ['netnexus-smoke:advanced'],
+        force: true
+    });
     assert.equal(valid.success, true, JSON.stringify(valid.diagnostics, null, 2));
     assert.equal(valid.validation.engine, 'libyang');
     assert.equal(valid.externalCompiler.exitCode, 0);
     assert.equal(valid.schemaTree.authoritative, true);
     assert.equal(valid.schemaTree.source, 'libyang-effective');
     assert.equal(valid.schemaTree.scope, 'core-effective-schema');
-    const roots = registry.getSchemaRoots({ compileId: valid.compileId });
+    const roots = registry.getSchemaRoots({
+        workspaceId: profileContext.workspaceId,
+        compileId: valid.compileId
+    });
     assert(roots.some(node => node.keyword === 'module' && node.name === 'netnexus-smoke'));
     const nodes = [];
     const visit = parentId => {
-        for (const node of registry.getSchemaChildren(parentId, { compileId: valid.compileId })) {
+        for (const node of registry.getSchemaChildren(parentId, {
+            workspaceId: profileContext.workspaceId,
+            compileId: valid.compileId
+        })) {
             nodes.push(node);
             visit(node.id);
         }
@@ -251,14 +278,24 @@ async function run() {
     assert.equal(hostname.mandatory, true);
 
     registry.importContents([{ content: invalid, expectedName: 'netnexus-smoke-invalid' }], {
-        workspaceId: 'invalid'
+        workspaceId: invalidProfileContext.workspaceId,
+        workspaceMetadata: { profileId: invalidProfileContext.profileId }
     });
-    const failed = await registry.compile({ workspaceId: 'invalid', force: true });
+    const failed = await registry.compile({
+        workspaceId: invalidProfileContext.workspaceId,
+        force: true
+    });
     assert.equal(failed.success, false);
     assert.equal(failed.externalCompiler.succeeded, false);
     assert.equal(failed.schemaTree, null);
     assert(failed.diagnostics.some(diagnostic => diagnostic.authoritative && diagnostic.severity === 'error'));
-    assert.deepEqual(registry.getSchemaRoots({ compileId: failed.compileId }), []);
+    assert.deepEqual(
+        registry.getSchemaRoots({
+            workspaceId: invalidProfileContext.workspaceId,
+            compileId: failed.compileId
+        }),
+        []
+    );
     process.stdout.write(
         `Bundled libyang ${status.version} authoritative compiler and effective Schema smoke test passed\n`
     );

@@ -12,33 +12,33 @@
  * - testConnection(profile) -> data: { latency?, serverVersion?, capabilities? }
  * - connect(profileId | profile) -> data: SessionState
  * - disconnect(profileId?) -> data: SessionState
- * - getSessionState() -> data: SessionState
+ * - getSessionState(profileId?) -> data: SessionState
  * - selectPrivateKey() -> data: string | { filePath, path? } (opens a native file picker)
- * - discoverModules() -> data: Module[] | { modules: Module[], snapshotId?, jobId? }
- * - downloadModules({ modules: [{ name, revision? }], includeDependencies: true })
+ * - discoverModules(profileId) -> data: Module[] | { modules: Module[], jobId? }
+ * - downloadModules({ profileId, modules: [{ name, revision? }], includeDependencies: true })
  * - executeOperation({ operation, ...operationFields })
  *   -> data: { rpc?, requestXml?, reply?, messageId? } | string
  * - sendRpc({ rpc }) -> data: { rpc?, requestXml?, reply?, messageId? } | string
  *   (`rpc` is the operation fragment; `requestXml` is the complete envelope written to the transport.)
  *
  * window.yangApi
- * - listModules(query?) -> data: Module[] | { modules: Module[] }
+ * - listModules({ profileId, query? }) -> data: Module[] | { modules: Module[] }
  * - selectFiles() -> data: string[] | { filePaths: string[], canceled? }
  * - selectDirectory() -> data: string | { directoryPath, path?, canceled? }
- * - importFiles(filePaths: string[]) -> data: { imported?, failed?, workspace?, taskId? }
- * - importDirectory(directoryPath: string) -> data: { imported?, failed?, workspace?, taskId? }
+ * - importFiles({ profileId, filePaths: string[] }) -> data: { imported?, failed?, workspace?, taskId? }
+ * - importDirectory({ profileId, directoryPath: string }) -> data: { imported?, failed?, workspace?, taskId? }
  * - getCompilerStatus() -> data: {
  *     available, required, engine, executable, version?, path?, source?, error?, installHint?, capabilities?
  *   }
- * - compile({ moduleIds? }) -> data: CompileResult | { taskId }
- * - clearWorkspace()
- * - getWorkspace() -> data: { compileId?, summary?, modules?, diagnostics?, schemaTree? }
- * - getSchemaRoots({ compileId? }) -> data: SchemaNode[] | { nodes: SchemaNode[] }
- * - getSchemaChildren({ compileId?, parentId, nodeId? }) -> data: SchemaNode[] | { nodes: SchemaNode[] }
- * - getSchemaNode({ compileId?, nodeId }) -> data: SchemaNode
- * - validateRpc({ compileId, rpc }) -> data: { valid, diagnostics, engine, performed, validationType? }
- * - getModuleSource({ moduleId?, name?, revision? }) -> data: string | { source, module? }
- * - getDiagnostics({ compileId? }) -> data: Diagnostic[] | { diagnostics: Diagnostic[] }
+ * - compile({ profileId, moduleIds? }) -> data: CompileResult | { taskId }
+ * - clearWorkspace({ profileId })
+ * - getWorkspace({ profileId }) -> data: { compileId?, summary?, modules?, diagnostics?, schemaTree? }
+ * - getSchemaRoots({ profileId, compileId? }) -> data: SchemaNode[] | { nodes: SchemaNode[] }
+ * - getSchemaChildren({ profileId, compileId?, parentId, nodeId? }) -> data: SchemaNode[] | { nodes: SchemaNode[] }
+ * - getSchemaNode({ profileId, compileId?, nodeId }) -> data: SchemaNode
+ * - validateRpc({ profileId, compileId, rpc }) -> data: { valid, diagnostics, engine, performed, validationType? }
+ * - getModuleSource({ profileId, moduleId?, name?, revision? }) -> data: string | { source, module? }
+ * - getDiagnostics({ profileId, compileId? }) -> data: Diagnostic[] | { diagnostics: Diagnostic[] }
  */
 
 export const YANG_EVENT = Object.freeze({

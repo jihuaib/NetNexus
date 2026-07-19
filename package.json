@@ -46,8 +46,10 @@
     "scripts": {
         "install-deps:arch": "electron-builder install-app-deps",
         "build": "vite build",
+        "libyang:build": "node scripts/ensure-libyang-runtime.js --force",
         "libyang:build:unix": "bash scripts/build-libyang-runtime.sh",
         "libyang:build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-libyang-runtime.ps1",
+        "libyang:ensure": "node scripts/ensure-libyang-runtime.js",
         "libyang:smoke": "node scripts/smoke-libyang-runtime.js",
         "libyang:verify": "node scripts/verify-libyang-runtime.js",
         "start": "vite",
@@ -94,7 +96,7 @@
         "docs:pdf": "electron scripts/generateDocsPdf.js",
         "lint": "eslint --ext .js,.vue src electron",
         "lint:fix": "eslint --fix --fix-type=problem,suggestion --ext .js,.vue src electron",
-        "postinstall": "electron-rebuild && npm run install-deps:arch && node scripts/patch-electron-builder.js",
+        "postinstall": "electron-rebuild && npm run install-deps:arch && node scripts/patch-electron-builder.js && node scripts/ensure-libyang-runtime.js",
         "make-icns": "node scripts/make-icns.js"
     },
     "build": {

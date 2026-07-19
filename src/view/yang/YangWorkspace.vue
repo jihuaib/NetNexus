@@ -24,6 +24,16 @@
             </template>
 
             <div class="workspace-toolbar">
+                <div class="workspace-context">
+                    <YangProfileField
+                        :value="selectedProfileId"
+                        :options="profileOptions"
+                        :loading="profilesLoading"
+                        test-id="yang-workspace-profile-select"
+                        @update:value="selectProfile"
+                    />
+                    <span v-if="workspaceSummary.cacheHit" class="cache-hint">缓存命中</span>
+                </div>
                 <div class="workspace-actions">
                     <nn-button :loading="loading" @click="loadWorkspace()">
                         <template #icon><ReloadOutlined /></template>
@@ -41,10 +51,6 @@
                         <template #icon><DeleteOutlined /></template>
                         清空
                     </nn-button>
-                </div>
-                <div class="workspace-context">
-                    <span v-if="compileId" class="compile-id" :title="compileId">Compile ID: {{ compileId }}</span>
-                    <span v-if="workspaceSummary.cacheHit" class="cache-hint">缓存命中</span>
                 </div>
             </div>
 
@@ -127,6 +133,7 @@
                 <section class="workspace-operation-panel">
                     <YangOperations
                         embedded
+                        :profile-id="selectedProfileId"
                         :operation="operationContext.operation"
                         :compile-id="compileId"
                         :schema-tree="treeData"
@@ -226,7 +233,18 @@
 </template>
 
 <script setup>
-    import { computed, h, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from 'vue';
+    import {
+        computed,
+        h,
+        nextTick,
+        onActivated,
+        onBeforeUnmount,
+        onDeactivated,
+        onMounted,
+        reactive,
+        ref,
+        watch
+    } from 'vue';
     import { useRouter } from 'vue-router';
     import {
         NETCONF_CAPABILITY_HINTS,
@@ -262,6 +280,7 @@
     } from '../../ui/icons';
     import YangExecutionHistoryDrawer from './YangExecutionHistoryDrawer.vue';
     import YangOperations from './YangOperations.vue';
+    import YangProfileField from './YangProfileField.vue';
     import {
         invokeBridge,
         isTaskTerminal,
@@ -270,6 +289,7 @@
         unwrapArray
     } from './yangUiUtils';
     import { usePaneResize } from './usePaneResize';
+    import { useYangProfileContext } from './useYangProfileContext';
 
     defineOptions({ name: 'YangWorkspace' });
 
@@ -344,10 +364,20 @@
     let contextMenuOpenRequest = 0;
     let detailRequestRevision = 0;
     let workspaceRequestRevision = 0;
+    let profileRequestRevision = 0;
+    let profileContextReady = false;
     let schemaRootsPromise = null;
-    let schemaRootsPromiseCompileId = '';
+    let schemaRootsPromiseKey = '';
     let schemaRestoreFailedCompileId = '';
     let clearWorkspaceConfirmHandle = null;
+    const {
+        profilesLoading,
+        selectedProfileId,
+        profileOptions,
+        refreshProfiles,
+        selectProfile,
+        taskMatchesProfile
+    } = useYangProfileContext();
 
     const normalizeModule = (module, index) => {
         if (typeof module === 'string') return { id: '', name: module, revision: '', _key: module };
@@ -495,7 +525,7 @@
     };
     const applyWorkspace = (data, { preserveTree = false } = {}) => {
         const workspace = data?.workspace || data || {};
-        const nextCompileId = workspace.compileId || workspace.id || '';
+        const nextCompileId = workspace.compileId || '';
         if (nextCompileId !== compileId.value) {
             schemaRestoreFailedCompileId = '';
             schemaStatusMessage.value = '';
@@ -551,58 +581,86 @@
             return false;
         }
         const requestedCompileId = compileId.value;
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
+        const requestKey = `${requestRevision}\u0000${profileId}\u0000${requestedCompileId}`;
         if (!force && schemaRestoreFailedCompileId === requestedCompileId) return false;
-        if (schemaRootsPromise && schemaRootsPromiseCompileId === requestedCompileId) return schemaRootsPromise;
+        if (schemaRootsPromise && schemaRootsPromiseKey === requestKey) return schemaRootsPromise;
 
         schemaStatus.value = 'restoring';
         schemaStatusMessage.value = '';
         treeLoading.value = true;
-        schemaRootsPromiseCompileId = requestedCompileId;
         const request = (async () => {
             try {
                 const { data } = await invokeBridge('yangApi', 'getSchemaRoots', {
+                    profileId,
                     compileId: requestedCompileId
                 });
-                if (compileId.value !== requestedCompileId) return false;
+                if (
+                    compileId.value !== requestedCompileId ||
+                    profileId !== selectedProfileId.value ||
+                    requestRevision !== profileRequestRevision
+                ) {
+                    return false;
+                }
                 treeData.value = unwrapArray(data, ['nodes', 'roots']).map((node, index) => normalizeNode(node, index));
                 schemaStatus.value = 'ready';
                 schemaStatusMessage.value = '';
                 schemaRestoreFailedCompileId = '';
                 return true;
             } catch (error) {
-                if (compileId.value !== requestedCompileId) return false;
+                if (
+                    compileId.value !== requestedCompileId ||
+                    profileId !== selectedProfileId.value ||
+                    requestRevision !== profileRequestRevision
+                ) {
+                    return false;
+                }
                 schemaStatus.value = 'restore-failed';
                 schemaStatusMessage.value = error.message;
                 schemaRestoreFailedCompileId = requestedCompileId;
                 notify.error(`恢复 Schema 树失败：${error.message}`);
                 return false;
             } finally {
-                if (schemaRootsPromiseCompileId === requestedCompileId) {
+                if (schemaRootsPromise === request) {
                     treeLoading.value = false;
                     schemaRootsPromise = null;
-                    schemaRootsPromiseCompileId = '';
+                    schemaRootsPromiseKey = '';
                 }
             }
         })();
         schemaRootsPromise = request;
+        schemaRootsPromiseKey = requestKey;
         return request;
     };
 
     const workspaceHasSuccessfulCompilation = workspace =>
         Boolean(
-            (workspace?.compileId || workspace?.id) &&
+            workspace?.compileId &&
                 (workspace?.success === true || workspace?.validation?.succeeded === true)
         );
 
     const loadWorkspace = async ({ preserveTree = false, retrySchemaRestore = true } = {}) => {
         const requestRevision = ++workspaceRequestRevision;
+        const profileId = selectedProfileId.value;
+        const profileRevision = profileRequestRevision;
+        if (!profileId) {
+            loading.value = false;
+            return;
+        }
         loading.value = true;
         const previousCompileId = compileId.value;
         try {
-            const { data } = await invokeBridge('yangApi', 'getWorkspace');
-            if (requestRevision !== workspaceRequestRevision) return;
+            const { data } = await invokeBridge('yangApi', 'getWorkspace', { profileId });
+            if (
+                requestRevision !== workspaceRequestRevision ||
+                profileRevision !== profileRequestRevision ||
+                profileId !== selectedProfileId.value
+            ) {
+                return;
+            }
             const workspace = data?.workspace || data || {};
-            const nextCompileId = workspace.compileId || workspace.id || '';
+            const nextCompileId = workspace.compileId || '';
             const preserveExistingTree = Boolean(
                 preserveTree &&
                     previousCompileId &&
@@ -644,8 +702,12 @@
     };
 
     const loadWorkspaceModules = async () => {
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
+        if (!profileId) return;
         try {
-            const { data } = await invokeBridge('yangApi', 'listModules');
+            const { data } = await invokeBridge('yangApi', 'listModules', { profileId });
+            if (requestRevision !== profileRequestRevision || profileId !== selectedProfileId.value) return;
             workspaceModules.value = unwrapArray(data, ['modules', 'items'])
                 .filter(
                     module =>
@@ -1243,34 +1305,54 @@
     };
 
     const loadSession = async () => {
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
+        if (!profileId) {
+            session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
+            return;
+        }
         try {
-            const { data } = await invokeBridge('netconfApi', 'getSessionState');
+            const { data } = await invokeBridge('netconfApi', 'getSessionState', profileId);
+            if (requestRevision !== profileRequestRevision || profileId !== selectedProfileId.value) return;
             session.value = { ...session.value, ...(data || {}) };
         } catch (error) {
-            session.value = {
-                status: NETCONF_SESSION_STATUS.DISCONNECTED,
-                connected: false,
-                capabilities: []
-            };
-            console.warn('Unable to load NETCONF session state:', error.message);
+            if (requestRevision === profileRequestRevision && profileId === selectedProfileId.value) {
+                session.value = {
+                    status: NETCONF_SESSION_STATUS.DISCONNECTED,
+                    connected: false,
+                    capabilities: []
+                };
+                console.warn('Unable to load NETCONF session state:', error.message);
+            }
         }
     };
 
     const handleSessionEvent = payload => {
-        session.value = normalizeSessionEvent(payload, session.value);
+        const next = normalizeSessionEvent(payload, session.value);
+        if (next?.profileId && next.profileId !== selectedProfileId.value) return;
+        session.value = next;
     };
 
     const handleTreeExpand = async (_keys, info) => {
         const node = findNode(treeData.value, info?.node?.key);
         if (!info?.expanded || !node || node.isLeaf || node.childrenLoaded || node.loading) return;
+        const profileId = selectedProfileId.value;
+        const requestedCompileId = compileId.value;
+        const requestRevision = profileRequestRevision;
+        const requestIsCurrent = () =>
+            requestRevision === profileRequestRevision &&
+            profileId === selectedProfileId.value &&
+            requestedCompileId === compileId.value;
         node.loading = true;
         treeData.value = [...treeData.value];
         try {
             const { data } = await invokeBridge('yangApi', 'getSchemaChildren', {
-                compileId: compileId.value,
+                profileId,
+                compileId: requestedCompileId,
                 parentId: node.id,
                 nodeId: node.id
             });
+            if (!requestIsCurrent()) return;
             const parentContext = schemaChildContext(node);
             node.children = unwrapArray(data, ['nodes', 'children']).map((child, index) =>
                 normalizeNode(child, index, parentContext)
@@ -1278,29 +1360,38 @@
             node.childrenLoaded = true;
             node.isLeaf = node.children.length === 0;
         } catch (error) {
-            notify.error(`加载子节点失败：${error.message}`);
+            if (requestIsCurrent()) notify.error(`加载子节点失败：${error.message}`);
         } finally {
             node.loading = false;
-            treeData.value = [...treeData.value];
+            if (requestIsCurrent()) treeData.value = [...treeData.value];
         }
     };
 
     const showNodeProperties = async node => {
         if (!node || node.virtualDevice) return;
         const requestRevision = ++detailRequestRevision;
+        const profileId = selectedProfileId.value;
+        const requestedCompileId = compileId.value;
+        const profileRevision = profileRequestRevision;
+        const requestIsCurrent = () =>
+            requestRevision === detailRequestRevision &&
+            profileRevision === profileRequestRevision &&
+            profileId === selectedProfileId.value &&
+            requestedCompileId === compileId.value;
         detailNode.value = node;
         detailLoading.value = true;
         nodePropertyOpen.value = true;
         try {
             const { data } = await invokeBridge('yangApi', 'getSchemaNode', {
-                compileId: compileId.value,
+                profileId,
+                compileId: requestedCompileId,
                 nodeId: node.id || node.key
             });
-            if (requestRevision === detailRequestRevision) detailNode.value = { ...node, ...(data || {}) };
+            if (requestIsCurrent()) detailNode.value = { ...node, ...(data || {}) };
         } catch (_error) {
             // The summary already carried by the tree node is sufficient for basic inspection.
         } finally {
-            if (requestRevision === detailRequestRevision) detailLoading.value = false;
+            if (requestIsCurrent()) detailLoading.value = false;
         }
     };
 
@@ -1321,17 +1412,24 @@
             return;
         }
         closeClearWorkspaceConfirm();
-        clearWorkspaceConfirmHandle = dialog.confirm({
+        let confirmHandle = null;
+        confirmHandle = dialog.confirm({
             title: '清空 Schema 工作区',
             content: '将清除当前编译上下文、Schema 索引和编译诊断；本地 YANG 源文件仍保留在模型库中。',
             okText: '清空',
             okType: 'danger',
             onCancel: () => {
-                clearWorkspaceConfirmHandle = null;
+                if (clearWorkspaceConfirmHandle === confirmHandle) clearWorkspaceConfirmHandle = null;
             },
             onOk: async () => {
+                const profileId = selectedProfileId.value;
+                const requestRevision = profileRequestRevision;
                 try {
-                    await invokeBridge('yangApi', 'clearWorkspace');
+                    await invokeBridge('yangApi', 'clearWorkspace', { profileId });
+                    if (requestRevision !== profileRequestRevision || profileId !== selectedProfileId.value) {
+                        if (profileId === selectedProfileId.value) void loadWorkspace();
+                        return;
+                    }
                     compileId.value = '';
                     schemaStatus.value = 'none';
                     schemaStatusMessage.value = '';
@@ -1348,22 +1446,62 @@
                     resetOperationContext();
                     notify.success('Schema 工作区已清空');
                 } catch (error) {
-                    notify.error(`清空失败：${error.message}`);
+                    if (requestRevision === profileRequestRevision && profileId === selectedProfileId.value) {
+                        notify.error(`清空失败：${error.message}`);
+                    }
                 } finally {
-                    clearWorkspaceConfirmHandle = null;
+                    if (clearWorkspaceConfirmHandle === confirmHandle) clearWorkspaceConfirmHandle = null;
                 }
             }
         });
+        clearWorkspaceConfirmHandle = confirmHandle;
     };
 
     const handleCompileProgress = payload => {
         if (payload?.status === 'error') return;
         const data = payload?.status === 'success' ? payload.data : payload?.data || payload;
         if (!data || typeof data !== 'object') return;
+        if (!taskMatchesProfile(data, selectedProfileId.value)) return;
         const action = data.action || data.taskType || data.kind || data.type || '';
         if (action !== 'compile' || !isTaskTerminal(data.phase || data.status)) return;
         loadWorkspace();
     };
+
+    const resetProfileWorkspace = () => {
+        profileRequestRevision += 1;
+        workspaceRequestRevision += 1;
+        detailRequestRevision += 1;
+        contextMenuOpenRequest += 1;
+        schemaRootsPromise = null;
+        schemaRootsPromiseKey = '';
+        schemaRestoreFailedCompileId = '';
+        compileId.value = '';
+        schemaStatus.value = 'none';
+        schemaStatusMessage.value = '';
+        workspaceSummary.value = { moduleCount: 0, nodeCount: 0, cacheHit: false };
+        workspaceModules.value = [];
+        treeData.value = [];
+        expandedKeys.value = [];
+        selectedKeys.value = [];
+        detailNode.value = null;
+        detailLoading.value = false;
+        nodePropertyOpen.value = false;
+        executionHistoryOpen.value = false;
+        treeLoading.value = false;
+        loading.value = false;
+        session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
+        hideContextMenu();
+        closeClearWorkspaceConfirm();
+        resetOperationContext();
+    };
+
+    const reloadCurrentProfile = options => Promise.all([loadWorkspace(options), loadSession()]);
+
+    watch(selectedProfileId, (profileId, previousProfileId) => {
+        if (profileId === previousProfileId) return;
+        resetProfileWorkspace();
+        if (profileContextReady) reloadCurrentProfile();
+    });
 
     const formatBoolean = value => (value === true ? 'true' : value === false ? 'false' : '-');
     const formatNodeType = value => {
@@ -1393,16 +1531,22 @@
         executionHistoryOpen.value = false;
     };
 
-    onMounted(() => {
+    onMounted(async () => {
         EventBus.on(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE, handleCompileProgress);
         EventBus.on(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`, handleSessionEvent);
         document.addEventListener('keydown', handleContextMenuKeydown);
         window.addEventListener('resize', hideContextMenu);
         window.addEventListener('scroll', handleWorkspaceScroll, true);
-        Promise.all([loadWorkspace(), loadSession()]);
+        await refreshProfiles();
+        profileContextReady = true;
+        await reloadCurrentProfile();
     });
 
-    onActivated(() => Promise.all([loadWorkspace({ preserveTree: true, retrySchemaRestore: false }), loadSession()]));
+    onActivated(async () => {
+        await refreshProfiles();
+        profileContextReady = true;
+        await reloadCurrentProfile({ preserveTree: true, retrySchemaRestore: false });
+    });
 
     onDeactivated(handleWorkspaceDeactivated);
 
@@ -1450,19 +1594,20 @@
         gap: 6px;
     }
 
+    .workspace-context {
+        min-width: 0;
+        flex: 1;
+    }
+
+    .workspace-actions {
+        flex: none;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
     .execution-history-trigger {
         width: 100px;
         flex: 0 0 100px;
-    }
-
-    .compile-id {
-        max-width: 300px;
-        overflow: hidden;
-        color: var(--nn-color-text-muted);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 11px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     .cache-hint {
@@ -1747,6 +1892,22 @@
 
         .workspace-column-resizer {
             display: none;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .workspace-toolbar {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .workspace-context,
+        .workspace-actions {
+            width: 100%;
+        }
+
+        .workspace-actions {
+            justify-content: flex-start;
         }
     }
 </style>

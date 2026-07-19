@@ -1,4 +1,5 @@
 const childProcess = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -35,6 +36,45 @@ function getReleaseManifest(projectRoot = PROJECT_ROOT) {
         throw new Error(`Invalid libyang release manifest: ${manifestPath}`);
     }
     return manifest;
+}
+
+function getBuildInputPaths(platform = process.platform) {
+    const normalizedPlatform = normalizePlatform(platform);
+    const common = [
+        'resources/libyang/manifest.json',
+        'scripts/libyang-runtime-config.js',
+        'scripts/netnexus-libyang-schema.c',
+        'scripts/write-libyang-runtime-manifest.js'
+    ];
+    if (normalizedPlatform === 'darwin' || normalizedPlatform === 'linux') {
+        return [...common, 'scripts/build-libyang-runtime.sh', 'scripts/libyang-schema-exporter/CMakeLists.txt'];
+    }
+    if (normalizedPlatform === 'win32') {
+        return [
+            ...common,
+            'resources/libyang/NOTICE.pthreads',
+            'scripts/build-libyang-runtime.ps1',
+            'scripts/libyang-vcpkg/vcpkg.json',
+            'scripts/netnexus-libyang-windows.manifest.in'
+        ];
+    }
+    throw new Error(`Bundled libyang builds are not supported on platform ${normalizedPlatform}`);
+}
+
+function computeBuildInputHash(options = {}) {
+    const projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
+    const platform = normalizePlatform(options.platform);
+    const arch = normalizeArch(options.arch);
+    const digest = crypto.createHash('sha256');
+    digest.update(`netnexus-libyang-build-input-v1\0${platform}\0${arch}\0`);
+    for (const relativePath of getBuildInputPaths(platform)) {
+        const filePath = path.join(projectRoot, relativePath);
+        digest.update(relativePath.replaceAll(path.sep, '/'));
+        digest.update('\0');
+        digest.update(fs.readFileSync(filePath));
+        digest.update('\0');
+    }
+    return digest.digest('hex');
 }
 
 function getRuntimeDirectory(options = {}) {
@@ -93,6 +133,43 @@ function executeVersionProbe(executable, args, options) {
     });
 }
 
+function readRuntimeManifest(runtimeDirectory) {
+    const manifestPath = path.join(runtimeDirectory, 'runtime.json');
+    let runtime;
+    try {
+        runtime = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch (error) {
+        throw new Error(`Bundled libyang runtime metadata is missing or invalid: ${manifestPath}: ${error.message}`);
+    }
+    return { manifestPath, runtime };
+}
+
+function verifyRuntimeBuildContract(options) {
+    const { manifestPath, runtime } = readRuntimeManifest(options.runtimeDirectory);
+    if (runtime.schemaVersion !== 2) {
+        throw new Error(`Bundled libyang runtime metadata has an unsupported schema version: ${manifestPath}`);
+    }
+    if (runtime.version !== options.expectedVersion) {
+        throw new Error(
+            `Bundled libyang runtime metadata version ${runtime.version || 'unknown'} does not match required ` +
+                `libyang ${options.expectedVersion}`
+        );
+    }
+    if (normalizePlatform(runtime.platform) !== options.platform || normalizeArch(runtime.arch) !== options.arch) {
+        throw new Error(
+            `Bundled libyang runtime metadata targets ${runtime.platform || 'unknown'}-${runtime.arch || 'unknown'}, ` +
+                `expected ${options.platform}-${options.arch}`
+        );
+    }
+    const expectedBuildInputHash = computeBuildInputHash(options);
+    if (runtime.buildInputHash !== expectedBuildInputHash) {
+        throw new Error(
+            `Bundled libyang runtime build inputs changed for ${options.platform}-${options.arch}; rebuild is required`
+        );
+    }
+    return runtime;
+}
+
 function verifyRuntime(options = {}) {
     const projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
     const platform = normalizePlatform(options.platform);
@@ -113,6 +190,13 @@ function verifyRuntime(options = {}) {
         }
         throw error;
     }
+    verifyRuntimeBuildContract({
+        projectRoot,
+        platform,
+        arch,
+        runtimeDirectory,
+        expectedVersion
+    });
     const execution = executeVersionProbe(executable, ['--version'], options);
     if (execution.error || execution.status !== 0) {
         const detail = execution.error?.message || execution.stderr || `exit code ${execution.status}`;
@@ -171,6 +255,8 @@ module.exports = {
     normalizePlatform,
     normalizeArch,
     getReleaseManifest,
+    getBuildInputPaths,
+    computeBuildInputHash,
     getRuntimeDirectory,
     getRuntimeExecutable,
     getRuntimeSchemaExecutable,

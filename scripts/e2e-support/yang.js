@@ -29,9 +29,9 @@ const yangPageApiScript = `
         testConnection: profile => call('yang.netconf.testConnection', profile),
         connect: profile => call('yang.netconf.connect', profile),
         disconnect: profileId => call('yang.netconf.disconnect', profileId),
-        getSessionState: () => call('yang.netconf.getSessionState'),
+        getSessionState: profileId => call('yang.netconf.getSessionState', profileId),
         selectPrivateKey: () => call('yang.netconf.selectPrivateKey'),
-        discoverModules: () => call('yang.netconf.discoverModules'),
+        discoverModules: profileId => call('yang.netconf.discoverModules', profileId),
         downloadModules: request => call('yang.netconf.downloadModules', request),
         executeOperation: request => call('yang.netconf.executeOperation', request),
         sendRpc: request => call('yang.netconf.sendRpc', request)
@@ -40,12 +40,12 @@ const yangPageApiScript = `
         listModules: query => call('yang.registry.listModules', query),
         selectFiles: () => call('yang.registry.selectFiles'),
         selectDirectory: () => call('yang.registry.selectDirectory'),
-        importFiles: filePaths => call('yang.registry.importFiles', filePaths),
-        importDirectory: directoryPath => call('yang.registry.importDirectory', directoryPath),
-        getCompilerStatus: () => call('yang.registry.getCompilerStatus'),
+        importFiles: request => call('yang.registry.importFiles', request),
+        importDirectory: request => call('yang.registry.importDirectory', request),
+        getCompilerStatus: request => call('yang.registry.getCompilerStatus', request),
         compile: request => call('yang.registry.compile', request),
-        clearWorkspace: () => call('yang.registry.clearWorkspace'),
-        getWorkspace: () => call('yang.registry.getWorkspace'),
+        clearWorkspace: request => call('yang.registry.clearWorkspace', request),
+        getWorkspace: request => call('yang.registry.getWorkspace', request),
         getSchemaRoots: request => call('yang.registry.getSchemaRoots', request),
         getSchemaChildren: request => call('yang.registry.getSchemaChildren', request),
         getSchemaNode: request => call('yang.registry.getSchemaNode', request),
@@ -104,6 +104,7 @@ const moduleSources = Object.freeze({
   yang-version 1.1;
   namespace "urn:ietf:params:xml:ns:yang:ietf-system";
   prefix sys;
+  import ietf-netconf-monitoring { prefix ncm; revision-date 2010-10-04; }
   revision 2014-08-06;
   container system { leaf hostname { type string; } }
 }`,
@@ -175,7 +176,8 @@ function makeModule({
     isLocal = false,
     source = 'netconf',
     imports = [],
-    features = []
+    features = [],
+    deviceAdvertised = false
 }) {
     return {
         id,
@@ -187,6 +189,7 @@ function makeModule({
         features,
         deviations: [],
         imports,
+        deviceAdvertised,
         isLocal,
         source,
         status: isLocal ? 'downloaded' : 'discovered',
@@ -355,6 +358,78 @@ function validateRpcInstance(yang, request = {}) {
     }
 }
 
+const PROFILE_WORKSPACE_FIELDS = Object.freeze([
+    'modules',
+    'schemaTree',
+    'compiledModuleIds',
+    'compiledAt',
+    'diagnostics',
+    'workspace',
+    'compileSequence'
+]);
+
+function requestProfileId(yang, request, { stringIsProfileId = false } = {}) {
+    const value =
+        stringIsProfileId && typeof request === 'string' ? request : request?.profileId || request?.workspaceId;
+    const normalized = String(value || yang.activeWorkspaceProfileId || yang.profiles[0]?.id || '');
+    if (normalized.startsWith('profile-')) return normalized.slice('profile-'.length);
+    if (normalized.startsWith('profile:')) return normalized.slice('profile:'.length);
+    return normalized;
+}
+
+function saveActiveProfileWorkspace(yang) {
+    const profileId = yang.activeWorkspaceProfileId;
+    if (!profileId) return;
+    const workspace = yang.profileWorkspaces[profileId] || {};
+    PROFILE_WORKSPACE_FIELDS.forEach(field => {
+        workspace[field] = yang[field];
+    });
+    yang.profileWorkspaces[profileId] = workspace;
+}
+
+function activateProfileWorkspace(yang, request) {
+    const profileId = requestProfileId(yang, request);
+    if (!profileId || profileId === yang.activeWorkspaceProfileId) return profileId;
+    saveActiveProfileWorkspace(yang);
+    if (!yang.profileWorkspaces[profileId]) {
+        yang.profileWorkspaces[profileId] = {
+            modules: [],
+            schemaTree: null,
+            compiledModuleIds: [],
+            compiledAt: '',
+            diagnostics: [],
+            workspace: null,
+            compileSequence: 0
+        };
+    }
+    yang.activeWorkspaceProfileId = profileId;
+    PROFILE_WORKSPACE_FIELDS.forEach(field => {
+        yang[field] = yang.profileWorkspaces[profileId][field];
+    });
+    return profileId;
+}
+
+function sessionForProfile(yang, profileId) {
+    const id = String(profileId || '');
+    return (
+        yang.sessions[id] || {
+            profileId: id || null,
+            status: 'disconnected',
+            state: 'disconnected',
+            connected: false,
+            capabilities: []
+        }
+    );
+}
+
+function activateProfileSession(yang, request) {
+    const profileId = requestProfileId(yang, request, { stringIsProfileId: true });
+    const session = sessionForProfile(yang, profileId);
+    yang.session = session;
+    yang.connected = session.connected === true;
+    return { profileId, session };
+}
+
 function createYangPageState() {
     const profile = {
         id: 'e2e-netconf-profile',
@@ -371,6 +446,13 @@ function createYangPageState() {
         keepaliveInterval: 30000,
         autoReconnect: false
     };
+    const offlineProfile = {
+        ...profile,
+        id: 'e2e-netconf-profile-2',
+        name: 'NETCONF E2E 备用设备',
+        host: '192.0.2.20',
+        hasSavedCredentials: true
+    };
     const modules = [
         makeModule({
             id: 'ietf-yang-types@2013-07-15',
@@ -378,7 +460,8 @@ function createYangPageState() {
             revision: '2013-07-15',
             namespace: 'urn:ietf:params:xml:ns:yang:ietf-yang-types',
             isLocal: true,
-            source: 'download'
+            source: 'download',
+            deviceAdvertised: true
         }),
         makeModule({
             id: 'ietf-interfaces@2018-02-20',
@@ -387,24 +470,32 @@ function createYangPageState() {
             namespace: 'urn:ietf:params:xml:ns:yang:ietf-interfaces',
             isLocal: true,
             source: 'download',
-            imports: [{ name: 'ietf-yang-types', revision: '2013-07-15' }]
+            imports: [{ name: 'ietf-yang-types', revision: '2013-07-15' }],
+            deviceAdvertised: true
         }),
         makeModule({
             id: 'ietf-system@2014-08-06',
             name: 'ietf-system',
             revision: '2014-08-06',
-            namespace: 'urn:ietf:params:xml:ns:yang:ietf-system'
+            namespace: 'urn:ietf:params:xml:ns:yang:ietf-system',
+            imports: [{ name: 'ietf-netconf-monitoring', revision: '2010-10-04' }],
+            deviceAdvertised: true
         }),
         makeModule({
             id: 'ietf-netconf-monitoring@2010-10-04',
             name: 'ietf-netconf-monitoring',
             revision: '2010-10-04',
-            namespace: 'urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring'
+            namespace: 'urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring',
+            deviceAdvertised: true
         })
     ];
     const yang = {
-        profiles: [profile],
-        nextProfileId: 2,
+        profiles: [profile, offlineProfile],
+        nextProfileId: 3,
+        activeProfileId: profile.id,
+        activeWorkspaceProfileId: profile.id,
+        profileWorkspaces: {},
+        sessions: {},
         connected: true,
         rpcSequence: 100,
         compileSequence: 0,
@@ -440,6 +531,26 @@ function createYangPageState() {
     } else {
         yang.workspace = buildWorkspace(yang);
     }
+    yang.sessions[profile.id] = yang.session;
+    saveActiveProfileWorkspace(yang);
+    yang.profileWorkspaces[offlineProfile.id] = {
+        modules: [
+            makeModule({
+                id: 'vendor-system@2026-02-02',
+                name: 'vendor-system',
+                revision: '2026-02-02',
+                namespace: 'urn:netnexus:e2e:vendor-system',
+                isLocal: true,
+                source: 'import'
+            })
+        ],
+        schemaTree: null,
+        compiledModuleIds: [],
+        compiledAt: '',
+        diagnostics: [],
+        workspace: null,
+        compileSequence: 0
+    };
     return yang;
 }
 
@@ -479,6 +590,8 @@ function buildWorkspace(yang, { cacheHit = false } = {}) {
     const warnings = yang.diagnostics.filter(diagnostic => ['warning', 'warn'].includes(diagnostic.severity)).length;
     const success = Boolean(tree) && errors === 0;
     return {
+        profileId: yang.activeWorkspaceProfileId,
+        workspaceId: `profile-${yang.activeWorkspaceProfileId}`,
         compileId: tree ? `e2e-compile-${yang.compileSequence}` : '',
         compiledAt: yang.compiledAt || null,
         success,
@@ -539,8 +652,10 @@ function emitSession(controller, yang) {
     controller.emitEvent('netconf:sessionEvent', successResponse(clone(yang.session), 'NETCONF 会话状态更新'));
 }
 
-function emitTask(controller, action, count, message) {
+function emitTask(controller, yang, action, count, message) {
     const taskId = `e2e-${action}-${Date.now()}`;
+    const profileId = yang.activeWorkspaceProfileId;
+    const workspaceId = `profile-${profileId}`;
     controller.emitEvent(
         'yang:taskProgress',
         successResponse({
@@ -552,6 +667,9 @@ function emitTask(controller, action, count, message) {
             total: count,
             percent: 100,
             counts: { [action === 'compile' ? 'compiled' : `${action}ed`]: count, failed: 0 },
+            profileId,
+            workspaceId,
+            metadata: { profileId, workspaceId },
             message
         })
     );
@@ -595,6 +713,7 @@ function connectSession(controller, yang, target) {
             ? yang.profiles.find(item => item.id === target)
             : normalizeProfile(yang, target || {});
     if (!profile) return errorResponse('连接 Profile 不存在');
+    activateProfileWorkspace(yang, { profileId: profile.id });
     yang.connected = true;
     yang.session = {
         status: 'connected',
@@ -611,12 +730,19 @@ function connectSession(controller, yang, target) {
         hostKeyFingerprint: profile.hostKeyFingerprint || 'SHA256:NetNexusE2EHostKey',
         capabilities: [...capabilities]
     };
+    yang.sessions[profile.id] = yang.session;
+    yang.activeProfileId = profile.id;
     emitSession(controller, yang);
     return successResponse(clone(yang.session), 'NETCONF 连接成功');
 }
 
 function handleNetconfCall(controller, yang, method, args) {
-    if (method === 'yang.netconf.listProfiles') return successResponse(yang.profiles.map(publicProfile));
+    if (method === 'yang.netconf.listProfiles') {
+        return successResponse({
+            profiles: yang.profiles.map(publicProfile),
+            activeProfileId: yang.activeProfileId
+        });
+    }
     if (method === 'yang.netconf.saveProfile') {
         const profile = normalizeProfile(yang, args[0] || {});
         const index = yang.profiles.findIndex(item => item.id === profile.id);
@@ -627,9 +753,18 @@ function handleNetconfCall(controller, yang, method, args) {
     if (method === 'yang.netconf.deleteProfile') {
         const profileId = args[0];
         yang.profiles = yang.profiles.filter(profile => profile.id !== profileId);
-        if (yang.session.profileId === profileId) {
+        delete yang.profileWorkspaces[profileId];
+        delete yang.sessions[profileId];
+        if (yang.activeProfileId === profileId) {
+            yang.activeProfileId = null;
             yang.connected = false;
-            yang.session = { status: 'disconnected', state: 'disconnected', connected: false, capabilities: [] };
+            yang.session = {
+                profileId,
+                status: 'disconnected',
+                state: 'disconnected',
+                connected: false,
+                capabilities: []
+            };
             emitSession(controller, yang);
         }
         return successResponse(null, '连接 Profile 已删除');
@@ -646,60 +781,99 @@ function handleNetconfCall(controller, yang, method, args) {
     }
     if (method === 'yang.netconf.connect') return connectSession(controller, yang, args[0]);
     if (method === 'yang.netconf.disconnect') {
+        const profileId = requestProfileId(yang, args[0], { stringIsProfileId: true });
+        activateProfileWorkspace(yang, { profileId });
         yang.connected = false;
         yang.session = {
             status: 'disconnected',
             state: 'disconnected',
             connected: false,
-            profileId: args[0] || yang.session.profileId || '',
+            profileId,
             capabilities: []
         };
+        yang.sessions[profileId] = yang.session;
+        if (yang.activeProfileId === profileId) yang.activeProfileId = null;
         emitSession(controller, yang);
         return successResponse(clone(yang.session), 'NETCONF 连接已断开');
     }
-    if (method === 'yang.netconf.getSessionState') return successResponse(clone(yang.session));
+    if (method === 'yang.netconf.getSessionState') {
+        const profileId = requestProfileId(yang, args[0], { stringIsProfileId: true });
+        return successResponse(clone(sessionForProfile(yang, profileId)));
+    }
     if (method === 'yang.netconf.selectPrivateKey') {
         return successResponse({ filePath: '/tmp/netnexus-e2e/id_ed25519' });
     }
     if (method === 'yang.netconf.discoverModules') {
-        if (!yang.connected) return errorResponse('请先建立 NETCONF 会话');
-        const discovered = yang.modules.filter(module => !module.isLocal).map(publicModule);
-        emitTask(controller, 'discover', discovered.length, `已从 YANG Library 读取 ${discovered.length} 个模块`);
+        const { profileId, session } = activateProfileSession(yang, args[0]);
+        activateProfileWorkspace(yang, { profileId });
+        if (!session.connected) return errorResponse('请先建立 NETCONF 会话');
+        const discovered = yang.modules.filter(module => module.deviceAdvertised).map(publicModule);
+        emitTask(controller, yang, 'discover', discovered.length, `已从 YANG Library 读取 ${discovered.length} 个模块`);
         return successResponse({
-            snapshotId: 'e2e-yang-library-snapshot',
             modules: discovered,
             source: 'ietf-yang-library'
         });
     }
     if (method === 'yang.netconf.downloadModules') {
-        if (!yang.connected) return errorResponse('请先建立 NETCONF 会话');
         const request = args[0] || {};
+        const { profileId, session } = activateProfileSession(yang, request);
+        activateProfileWorkspace(yang, { profileId });
+        if (!session.connected) return errorResponse('请先建立 NETCONF 会话');
         const identities = Array.isArray(request.modules) ? request.modules : [];
+        const includeDependencies = request.includeDependencies !== false;
         const downloaded = [];
-        identities.forEach(identity => {
+        const queued = new Set();
+        const queue = [];
+        const enqueue = identity => {
             const module = findModule(yang, identity);
             if (!module) return;
-            module.isLocal = true;
-            module.source = 'download';
-            module.status = 'downloaded';
-            module.downloadStatus = 'downloaded';
-            module.fileName = `${module.name}@${module.revision}.yang`;
-            module.filePath = `/tmp/netnexus-e2e/yang/${module.name}@${module.revision}.yang`;
-            module.contentHash = `e2e-${module.id}`;
-            module.compileStatus = 'pending';
-            module.compiled = false;
-            downloaded.push(publicModule(module));
-        });
+            const key = `${module.name}@${module.revision || ''}`;
+            if (queued.has(key)) return;
+            queued.add(key);
+            queue.push(module);
+        };
+        identities.forEach(enqueue);
+        for (let index = 0; index < queue.length; index += 1) {
+            const module = queue[index];
+            if (!module.isLocal) {
+                module.isLocal = true;
+                module.source = 'download';
+                module.status = 'downloaded';
+                module.downloadStatus = 'downloaded';
+                module.fileName = `${module.name}@${module.revision}.yang`;
+                module.filePath = `/tmp/netnexus-e2e/yang/${module.name}@${module.revision}.yang`;
+                module.contentHash = `e2e-${module.id}`;
+                module.compileStatus = 'pending';
+                module.compiled = false;
+                downloaded.push(publicModule(module));
+            }
+            if (includeDependencies) {
+                [
+                    ...(module.imports || []),
+                    ...(module.includes || []),
+                    ...(module.submodules || []),
+                    ...(module.deviations || []),
+                    ...(module.dependencies || [])
+                ].forEach(enqueue);
+            }
+        }
         yang.workspace = null;
-        emitTask(controller, 'download', downloaded.length, `已通过 get-schema 下载 ${downloaded.length} 个模块`);
+        emitTask(controller, yang, 'download', downloaded.length, `已通过 get-schema 下载 ${downloaded.length} 个模块`);
         return successResponse({
             modules: downloaded,
             downloaded,
-            includeDependencies: Boolean(request.includeDependencies)
+            failed: [],
+            includeDependencies
         });
     }
-    if (method === 'yang.netconf.executeOperation') return executeNetconfOperation(yang, args[0] || {});
-    if (method === 'yang.netconf.sendRpc') return sendRawRpc(yang, args[0] || {});
+    if (method === 'yang.netconf.executeOperation') {
+        activateProfileSession(yang, args[0]);
+        return executeNetconfOperation(yang, args[0] || {});
+    }
+    if (method === 'yang.netconf.sendRpc') {
+        activateProfileSession(yang, args[0]);
+        return sendRawRpc(yang, args[0] || {});
+    }
     return null;
 }
 
@@ -777,6 +951,24 @@ function sendRawRpc(yang, request) {
 }
 
 function handleRegistryCall(controller, yang, method, args) {
+    if (
+        [
+            'yang.registry.listModules',
+            'yang.registry.importFiles',
+            'yang.registry.importDirectory',
+            'yang.registry.compile',
+            'yang.registry.clearWorkspace',
+            'yang.registry.getWorkspace',
+            'yang.registry.getSchemaRoots',
+            'yang.registry.getSchemaChildren',
+            'yang.registry.getSchemaNode',
+            'yang.registry.validateRpc',
+            'yang.registry.getModuleSource',
+            'yang.registry.getDiagnostics'
+        ].includes(method)
+    ) {
+        activateProfileWorkspace(yang, args[0]);
+    }
     if (method === 'yang.registry.listModules') {
         const query = typeof args[0] === 'string' ? args[0] : args[0]?.query || args[0]?.search || '';
         const normalizedQuery = String(query).trim().toLowerCase();
@@ -804,7 +996,7 @@ function handleRegistryCall(controller, yang, method, args) {
         );
         imported.imported = true;
         yang.workspace = null;
-        emitTask(controller, 'import', 1, 'YANG 文件导入完成');
+        emitTask(controller, yang, 'import', 1, 'YANG 文件导入完成');
         return successResponse({ imported: [publicModule(imported)], modules: [publicModule(imported)], failed: [] });
     }
     if (method === 'yang.registry.importDirectory') {
@@ -814,7 +1006,7 @@ function handleRegistryCall(controller, yang, method, args) {
         );
         imported.imported = true;
         yang.workspace = null;
-        emitTask(controller, 'import', 1, 'YANG 目录扫描与导入完成');
+        emitTask(controller, yang, 'import', 1, 'YANG 目录扫描与导入完成');
         return successResponse({ imported: [publicModule(imported)], modules: [publicModule(imported)], failed: [] });
     }
     if (method === 'yang.registry.getCompilerStatus') return successResponse(clone(yang.compiler));
@@ -830,7 +1022,7 @@ function handleRegistryCall(controller, yang, method, args) {
               )
             : yang.modules.filter(module => module.isLocal);
         const workspace = compileWorkspace(yang, targets);
-        emitTask(controller, 'compile', targets.length, 'YANG 编译与 Schema 索引完成');
+        emitTask(controller, yang, 'compile', targets.length, 'YANG 编译与 Schema 索引完成');
         return successResponse(workspace);
     }
     if (method === 'yang.registry.clearWorkspace') {

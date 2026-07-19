@@ -15,6 +15,7 @@ jobs:
         env:
             NODE_VERSION: '16.20.2'
             FRR_BMP_ROUTES_PER_FAMILY: '1024'
+            NETNEXUS_SKIP_LIBYANG_BUILD: '1'
 
         steps:
             - name: Checkout
@@ -71,17 +72,14 @@ jobs:
               with:
                   python-version: '3.11'
 
+            - name: Install libyang build dependencies
+              run: brew install cmake
+
             - name: Install dependencies
               run: npm ci
 
             - name: Run macOS lint
               run: npm run lint
-
-            - name: Install libyang build dependencies
-              run: brew install cmake
-
-            - name: Build bundled libyang runtime
-              run: npm run libyang:build:unix
 
             - name: Test bundled libyang runtime
               run: npm run libyang:smoke
@@ -143,9 +141,6 @@ jobs:
 
             - name: Run Windows lint
               run: npm run lint
-
-            - name: Build bundled libyang runtime
-              run: npm run libyang:build:windows
 
             - name: Test bundled libyang runtime
               run: npm run libyang:smoke

@@ -120,12 +120,18 @@
                                         复制
                                     </nn-button>
                                 </header>
-                                <pre
+                                <XmlCodeEditor
+                                    :key="`${selectedRecord.id}-request`"
+                                    :value="selectedRequestXml"
+                                    :rows="8"
+                                    readonly
+                                    line-numbers
+                                    :bordered="false"
+                                    class="execution-history-xml-editor"
                                     data-testid="netconf-history-request"
-                                    data-xml-viewer
                                     tabindex="0"
                                     aria-label="RPC 请求 XML"
-                                ><XmlHighlight :value="selectedRequestXml" /></pre>
+                                />
                             </section>
 
                             <section class="execution-history-xml-section">
@@ -149,9 +155,15 @@
                                         复制
                                     </nn-button>
                                 </header>
-                                <pre
+                                <XmlCodeEditor
+                                    :key="`${selectedRecord.id}-reply`"
+                                    :value="selectedReplyXml"
+                                    :rows="8"
+                                    readonly
+                                    line-numbers
+                                    :bordered="false"
+                                    class="execution-history-xml-editor"
                                     data-testid="netconf-history-reply"
-                                    data-xml-viewer
                                     tabindex="0"
                                     aria-label="RPC 响应 XML"
                                     :class="{
@@ -159,7 +171,7 @@
                                             selectedRecord.status
                                         )
                                     }"
-                                ><XmlHighlight :value="selectedReplyXml" /></pre>
+                                />
                             </section>
                         </div>
                     </template>
@@ -173,7 +185,7 @@
     import { computed, nextTick, ref, watch } from 'vue';
     import { CopyOutlined, DeleteOutlined } from '../../ui/icons';
     import { notify } from '../../utils/notify';
-    import XmlHighlight from './XmlHighlight.vue';
+    import XmlCodeEditor from './XmlCodeEditor.vue';
     import { formatXmlForDisplay } from './yangUiUtils';
     import { useNetconfExecutionHistory } from './useNetconfExecutionHistory';
 
@@ -481,31 +493,26 @@
         white-space: nowrap;
     }
 
-    .execution-history-xml-section > pre {
+    .execution-history-xml-editor {
         min-width: 0;
         min-height: 0;
         flex: 1;
-        margin: 0;
-        overflow: auto;
-        padding: 10px;
-        border: 0;
         border-radius: 0;
-        background: transparent;
-        color: var(--nn-color-text);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 11px;
-        line-height: 1.55;
-        white-space: pre;
-        word-break: normal;
     }
 
-    .execution-history-xml-section > pre:focus-visible {
-        outline: 2px solid var(--nn-color-primary);
-        outline-offset: -2px;
+    .execution-history-xml-editor :deep(.xml-code-editor-highlight),
+    .execution-history-xml-editor :deep(.xml-code-editor-input) {
+        height: 100%;
     }
 
-    .execution-history-xml-error {
-        box-shadow: inset 3px 0 0 var(--nn-color-error);
+    .execution-history-xml-editor :deep(.xml-code-editor-input) {
+        resize: none;
+    }
+
+    .execution-history-xml-editor :deep(.xml-code-editor-input:focus) {
+        border-color: var(--nn-color-primary);
+        box-shadow: none;
     }
 
     @media (max-width: 720px) {

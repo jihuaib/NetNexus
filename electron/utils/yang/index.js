@@ -11,6 +11,7 @@ const YANG_REQ_TYPES = Object.freeze({
     IMPORT_CONTENTS: 'yang:import-contents',
     COMPILE: 'yang:compile',
     CLEAR_WORKSPACE: 'yang:clear-workspace',
+    DELETE_WORKSPACE: 'yang:delete-workspace',
     GET_WORKSPACE: 'yang:get-workspace',
     GET_SCHEMA_ROOTS: 'yang:get-schema-roots',
     GET_SCHEMA_CHILDREN: 'yang:get-schema-children',
@@ -33,6 +34,8 @@ const YANG_EVT_TYPES = Object.freeze({
 class YangRegistry {
     constructor(options = {}) {
         this.workspaceId = options.workspaceId || 'default';
+        this.latestCompileIds = new Map();
+        this.compileScopeContentHashes = new Map();
         this.repository = options.repository || new YangRepository(options);
         this.compiler =
             options.compiler ||
@@ -68,6 +71,49 @@ class YangRegistry {
         };
     }
 
+    compileScopeKey(options = {}) {
+        if (options.snapshotId) return `snapshot:${options.snapshotId}`;
+        const workspaceId = options.workspaceId === undefined ? this.workspaceId : options.workspaceId;
+        return `workspace:${workspaceId}`;
+    }
+
+    resolveCompileId(options = {}) {
+        const explicit = typeof options === 'string' ? options : options?.compileId;
+        if (typeof options === 'string' && explicit) return explicit;
+        const normalized = typeof options === 'object' && options ? options : {};
+        const scopeKey = this.compileScopeKey(normalized);
+        let compileId = this.latestCompileIds.get(scopeKey);
+        if (compileId) {
+            const expectedContentHash = this.compileScopeContentHashes.get(scopeKey);
+            const currentContentHash = normalized.snapshotId
+                ? this.repository.getSnapshot(normalized.snapshotId)?.contentHash
+                : this.repository.getWorkspace(
+                      normalized.workspaceId === undefined ? this.workspaceId : normalized.workspaceId
+                  )?.contentHash;
+            if (!expectedContentHash || expectedContentHash !== currentContentHash) {
+                this.latestCompileIds.delete(scopeKey);
+                this.compileScopeContentHashes.delete(scopeKey);
+                compileId = null;
+            }
+        }
+        if (explicit && compileId !== explicit) {
+            throw new Error(`YANG compilation ${explicit} is not loaded for ${scopeKey}`);
+        }
+        if (explicit) return explicit;
+        if (!compileId) throw new Error(`No YANG compilation is loaded for ${scopeKey}`);
+        return compileId;
+    }
+
+    clearScopeCompilation(options = {}) {
+        const scopeKey = this.compileScopeKey(options);
+        const removedCompileId = this.latestCompileIds.get(scopeKey);
+        this.latestCompileIds.delete(scopeKey);
+        this.compileScopeContentHashes.delete(scopeKey);
+        if (removedCompileId && this.compiler.latestCompileId === removedCompileId) {
+            this.compiler.latestCompileId = this.latestCompileIds.get(this.compileScopeKey()) || null;
+        }
+    }
+
     importFiles(filePaths = [], options = {}) {
         const paths = Array.isArray(filePaths) ? filePaths : [filePaths];
         return this.repository.importPaths(paths, {
@@ -100,10 +146,16 @@ class YangRegistry {
         if (id && typeof id === 'object') {
             id = id.workspaceId || this.workspaceId;
         }
-        if (id === this.workspaceId) {
-            this.compiler.latestCompileId = null;
-        }
+        this.clearScopeCompilation({ workspaceId: id });
         return this.repository.clearWorkspace(id);
+    }
+
+    deleteWorkspace(id = this.workspaceId) {
+        if (id && typeof id === 'object') {
+            id = id.workspaceId || this.workspaceId;
+        }
+        this.clearScopeCompilation({ workspaceId: id });
+        return this.repository.deleteWorkspace(id);
     }
 
     async compile(options = {}) {
@@ -115,7 +167,7 @@ class YangRegistry {
                 hashes:
                     imported.workspace?.modules.map(module => module.hash) ||
                     imported.imported.map(entry => entry.hash),
-                workspaceId: undefined
+                workspaceId: compileOptions.workspaceId
             };
         } else if (options.contents?.length) {
             const imported = this.repository.importContents(options.contents, compileOptions);
@@ -124,10 +176,17 @@ class YangRegistry {
                 hashes:
                     imported.workspace?.modules.map(module => module.hash) ||
                     imported.imported.map(entry => entry.hash),
-                workspaceId: undefined
+                workspaceId: compileOptions.workspaceId
             };
         }
-        return this.compiler.compile(compileOptions);
+        const result = await this.compiler.compile(compileOptions);
+        const scopeKey = this.compileScopeKey(compileOptions);
+        const scopeContentHash = compileOptions.snapshotId
+            ? this.repository.getSnapshot(compileOptions.snapshotId)?.contentHash
+            : this.repository.getWorkspace(compileOptions.workspaceId)?.contentHash;
+        this.latestCompileIds.set(scopeKey, result.compileId);
+        this.compileScopeContentHashes.set(scopeKey, scopeContentHash || null);
+        return result;
     }
 
     async getCompilerStatus(options = {}) {
@@ -135,8 +194,7 @@ class YangRegistry {
     }
 
     getSchemaRoots(options = {}) {
-        const compileId = typeof options === 'string' ? options : options.compileId;
-        return this.compiler.getSchemaRoots(compileId);
+        return this.compiler.getSchemaRoots(this.resolveCompileId(options));
     }
 
     getSchemaChildren(parentId, options = {}) {
@@ -144,7 +202,7 @@ class YangRegistry {
             options = parentId;
             parentId = options.parentId;
         }
-        return this.compiler.getSchemaChildren(parentId || ROOT_NODE_ID, options.compileId);
+        return this.compiler.getSchemaChildren(parentId || ROOT_NODE_ID, this.resolveCompileId(options));
     }
 
     getSchemaNode(nodeId, options = {}) {
@@ -152,25 +210,32 @@ class YangRegistry {
             options = nodeId;
             nodeId = options.nodeId;
         }
-        return this.compiler.getSchemaNode(nodeId, options.compileId);
+        return this.compiler.getSchemaNode(nodeId, this.resolveCompileId(options));
     }
 
     async validateRpc(options = {}) {
-        return this.compiler.validateRpc(options);
+        return this.compiler.validateRpc({ ...options, compileId: this.resolveCompileId(options) });
     }
 
-    getModuleSource(identifier) {
-        return this.repository.getSource(identifier);
+    getModuleSource(identifier, options = {}) {
+        return this.repository.getSource(identifier, this.normalizeWorkspaceOptions(options));
     }
 
     getDiagnostics(options = {}) {
-        const compileId = typeof options === 'string' ? options : options.compileId;
-        return this.compiler.getDiagnostics(compileId);
+        return this.compiler.getDiagnostics(this.resolveCompileId(options));
     }
 
     createSnapshot(options = {}) {
-        const modules =
-            options.modules || this.repository.getWorkspace(options.workspaceId || this.workspaceId)?.modules || [];
+        const workspaceId = options.workspaceId || this.workspaceId;
+        const requestedModules = Array.isArray(options.modules) ? options.modules : null;
+        const modules = requestedModules
+            ? requestedModules.every(module => module && typeof module === 'object' && module.filePath)
+                ? requestedModules
+                : this.repository.resolveEntries({
+                      workspaceId,
+                      hashes: requestedModules.map(module => (typeof module === 'string' ? module : module?.hash))
+                  })
+            : this.repository.resolveEntries({ workspaceId });
         return this.repository.createSnapshot({ ...options, modules });
     }
 
@@ -183,7 +248,9 @@ class YangRegistry {
     }
 
     deleteSnapshot(id) {
-        return this.repository.deleteManifest('snapshot', typeof id === 'object' ? id.id : id);
+        const snapshotId = typeof id === 'object' ? id.id : id;
+        this.clearScopeCompilation({ snapshotId });
+        return this.repository.deleteManifest('snapshot', snapshotId);
     }
 }
 

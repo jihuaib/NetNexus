@@ -22,6 +22,7 @@ class YangCompilerWorker {
         this.messageHandler.registerHandler(YANG_REQ_TYPES.IMPORT_CONTENTS, this.importContents.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.COMPILE, this.compile.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.CLEAR_WORKSPACE, this.clearWorkspace.bind(this));
+        this.messageHandler.registerHandler(YANG_REQ_TYPES.DELETE_WORKSPACE, this.deleteWorkspace.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.GET_WORKSPACE, this.getWorkspace.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, this.getSchemaRoots.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.GET_SCHEMA_CHILDREN, this.getSchemaChildren.bind(this));
@@ -182,6 +183,12 @@ class YangCompilerWorker {
         );
     }
 
+    deleteWorkspace(messageId, data = {}) {
+        this.respond(messageId, 'Unable to delete YANG workspace', () =>
+            this.requireRegistry(data).deleteWorkspace(data.workspaceId || 'default')
+        );
+    }
+
     getWorkspace(messageId, data = {}) {
         this.respond(messageId, 'Unable to get YANG workspace', () =>
             this.requireRegistry(data).getWorkspace(data.workspaceId || 'default')
@@ -221,7 +228,7 @@ class YangCompilerWorker {
                     revision: data.revision,
                     kind: data.kind
                 };
-            return this.requireRegistry(data).getModuleSource(identifier);
+            return this.requireRegistry(data).getModuleSource(identifier, data);
         });
     }
 

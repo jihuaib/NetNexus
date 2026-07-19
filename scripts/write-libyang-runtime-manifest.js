@@ -1,7 +1,13 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { PROJECT_ROOT, getReleaseManifest, normalizePlatform, normalizeArch } = require('./libyang-runtime-config');
+const {
+    PROJECT_ROOT,
+    computeBuildInputHash,
+    getReleaseManifest,
+    normalizePlatform,
+    normalizeArch
+} = require('./libyang-runtime-config');
 
 const runtimeDirectory = path.resolve(process.argv[2] || '');
 const executable = path.resolve(process.argv[3] || '');
@@ -18,6 +24,8 @@ if (
     );
 }
 const release = getReleaseManifest(PROJECT_ROOT);
+const platform = normalizePlatform(process.platform);
+const arch = normalizeArch(process.arch);
 const digest = crypto.createHash('sha256').update(fs.readFileSync(executable)).digest('hex');
 const schemaDigest = crypto.createHash('sha256').update(fs.readFileSync(schemaExecutable)).digest('hex');
 const runtime = {
@@ -37,8 +45,9 @@ const runtime = {
     license: release.license,
     buildMode: release.buildMode,
     interactive: release.interactive,
-    platform: normalizePlatform(process.platform),
-    arch: normalizeArch(process.arch),
+    platform,
+    arch,
+    buildInputHash: computeBuildInputHash({ projectRoot: PROJECT_ROOT, platform, arch }),
     sha256: digest,
     schemaSha256: schemaDigest,
     builtAt: new Date().toISOString()

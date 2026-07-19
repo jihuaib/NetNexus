@@ -3,10 +3,10 @@ const fs = require('fs');
 const path = require('path');
 const { parseYang } = require('./yangParser');
 
-const CATALOG_SCHEMA_VERSION = 1;
-const MANIFEST_SCHEMA_VERSION = 1;
+const MANIFEST_SCHEMA_VERSION = 2;
 const DEFAULT_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const MODULES_DIRECTORY_NAME = 'modules';
 
 function sha256(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
@@ -91,70 +91,66 @@ class YangRepository {
         this.rootDir = path.resolve(options.rootDir || path.join(options.userDataPath, 'yang'));
         this.maxSourceBytes = Number(options.maxSourceBytes) || DEFAULT_MAX_SOURCE_BYTES;
         this.paths = {
-            blobs: path.join(this.rootDir, 'blobs'),
             snapshots: path.join(this.rootDir, 'snapshots'),
             workspaces: path.join(this.rootDir, 'workspaces'),
-            compiled: path.join(this.rootDir, 'compiled'),
-            catalog: path.join(this.rootDir, 'catalog.json')
+            compiled: path.join(this.rootDir, 'compiled')
         };
-        Object.values(this.paths)
-            .filter(directoryPath => directoryPath !== this.paths.catalog)
-            .forEach(ensureDirectory);
-        this.catalog = this.loadCatalog();
+        Object.values(this.paths).forEach(ensureDirectory);
     }
 
-    loadCatalog() {
-        if (!fs.existsSync(this.paths.catalog)) {
-            return {
-                schemaVersion: CATALOG_SCHEMA_VERSION,
-                updatedAt: null,
-                blobs: {}
-            };
-        }
-        try {
-            const catalog = JSON.parse(fs.readFileSync(this.paths.catalog, 'utf8'));
-            if (
-                catalog.schemaVersion !== CATALOG_SCHEMA_VERSION ||
-                !catalog.blobs ||
-                typeof catalog.blobs !== 'object'
-            ) {
-                throw new Error('unsupported catalog schema');
-            }
-            return catalog;
-        } catch (error) {
-            throw new Error(`Unable to read YANG catalog ${this.paths.catalog}: ${error.message}`);
-        }
+    scopeType(type) {
+        return type === 'snapshot' ? 'snapshot' : 'workspace';
     }
 
-    saveCatalog() {
-        this.catalog.updatedAt = new Date().toISOString();
-        atomicWriteJson(this.paths.catalog, this.catalog);
+    scopeDirectory(type, id) {
+        const normalizedType = this.scopeType(type);
+        const safeId = normalizeManifestId(id, normalizedType);
+        const directory = normalizedType === 'snapshot' ? this.paths.snapshots : this.paths.workspaces;
+        return path.join(directory, safeId);
     }
 
-    getBlobPath(hash) {
+    manifestPath(type, id) {
+        return path.join(this.scopeDirectory(type, id), 'manifest.json');
+    }
+
+    modulePath(type, id, hash) {
         if (!/^[a-f0-9]{64}$/.test(hash)) {
-            throw new Error(`Invalid YANG blob hash: ${hash}`);
+            throw new Error(`Invalid YANG module hash: ${hash}`);
         }
-        return path.join(this.paths.blobs, hash.slice(0, 2), `${hash}.yang`);
+        return path.join(this.scopeDirectory(type, id), MODULES_DIRECTORY_NAME, `${hash}.yang`);
     }
 
-    storeBlob(buffer, hash) {
-        const blobPath = this.getBlobPath(hash);
-        if (fs.existsSync(blobPath)) {
-            const existing = fs.readFileSync(blobPath);
+    readEntryBuffer(entry) {
+        if (Buffer.isBuffer(entry?._sourceBuffer)) return entry._sourceBuffer;
+        const sourcePath = entry?.filePath;
+        if (!sourcePath) {
+            throw new Error(`YANG module ${entry?.hash || '<unknown>'} has no readable source file`);
+        }
+        return fs.readFileSync(sourcePath);
+    }
+
+    storeModule(type, id, entry) {
+        const buffer = this.readEntryBuffer(entry);
+        const hash = entry.hash;
+        if (sha256(buffer) !== hash) {
+            throw new Error(`YANG module integrity check failed for ${hash}`);
+        }
+        const modulePath = this.modulePath(type, id, hash);
+        if (fs.existsSync(modulePath)) {
+            const existing = fs.readFileSync(modulePath);
             if (sha256(existing) !== hash) {
-                throw new Error(`YANG blob integrity check failed for ${hash}`);
+                throw new Error(`YANG module integrity check failed for ${hash}`);
             }
-            return blobPath;
+            return modulePath;
         }
         try {
-            atomicWriteFile(blobPath, buffer);
+            atomicWriteFile(modulePath, buffer);
         } catch (error) {
-            if (!fs.existsSync(blobPath)) {
+            if (!fs.existsSync(modulePath)) {
                 throw error;
             }
         }
-        return blobPath;
+        return modulePath;
     }
 
     validateSource(buffer, sourceName) {
@@ -201,25 +197,21 @@ class YangRepository {
             });
         }
 
-        const blobPath = this.storeBlob(buffer, hash);
         const now = new Date().toISOString();
         const origin = options.source || options.sourcePath || options.origin || sourceName;
-        const existing = this.catalog.blobs[hash];
-        const origins = [...new Set([...(existing?.origins || []), origin].filter(Boolean))];
         const entry = {
             hash,
-            blobPath,
             size: buffer.length,
-            fileName: options.fileName || existing?.fileName || this.suggestFileName(parsed.metadata, hash),
-            importedAt: existing?.importedAt || now,
+            fileName: options.fileName || this.suggestFileName(parsed.metadata, hash),
+            importedAt: now,
             updatedAt: now,
-            origins,
+            origins: [origin].filter(Boolean),
             metadata: parsed.metadata,
-            diagnostics
+            diagnostics,
+            deduplicated: false
         };
-        this.catalog.blobs[hash] = entry;
-        this.saveCatalog();
-        return { ...entry, deduplicated: Boolean(existing) };
+        Object.defineProperty(entry, '_sourceBuffer', { value: buffer, enumerable: false });
+        return entry;
     }
 
     importContents(contents = [], options = {}) {
@@ -340,29 +332,61 @@ class YangRepository {
     finishImport(imported, failed, options) {
         let workspace = null;
         let snapshot = null;
+        let workspaceId = null;
+        let snapshotId = null;
+        const deduplicated = new Set();
+        if (options.snapshotId && this.getSnapshot(options.snapshotId)) {
+            throw new Error(`Snapshot ${options.snapshotId} already exists and is immutable`);
+        }
         if (options.workspaceId !== false) {
-            workspace = this.addToWorkspace(options.workspaceId || 'default', imported, {
+            workspaceId = options.workspaceId || 'default';
+            const existingHashes = new Set(this.getWorkspace(workspaceId)?.modules?.map(module => module.hash) || []);
+            const seenHashes = new Set(existingHashes);
+            imported.forEach((entry, index) => {
+                if (seenHashes.has(entry.hash)) deduplicated.add(index);
+                seenHashes.add(entry.hash);
+            });
+            workspace = this.addToWorkspace(workspaceId, imported, {
                 name: options.workspaceName,
                 metadata: options.workspaceMetadata
             });
         }
         if (options.snapshotId) {
+            snapshotId = options.snapshotId;
             snapshot = this.createSnapshot({
-                id: options.snapshotId,
+                id: snapshotId,
                 name: options.snapshotName,
                 modules: imported,
                 metadata: options.snapshotMetadata
             });
         }
+        if (!workspaceId) {
+            const seenHashes = new Set();
+            imported.forEach((entry, index) => {
+                if (seenHashes.has(entry.hash)) deduplicated.add(index);
+                seenHashes.add(entry.hash);
+            });
+        }
+        const persistedEntries = workspaceId
+            ? this.resolveEntries({ workspaceId, hashes: imported.map(entry => entry.hash) })
+            : snapshotId
+              ? this.resolveEntries({ snapshotId, hashes: imported.map(entry => entry.hash) })
+              : [];
+        const persistedByHash = new Map(persistedEntries.map(entry => [entry.hash, entry]));
+        const publicImported = imported.map((entry, index) => ({
+            ...entry,
+            ...(persistedByHash.get(entry.hash) || {}),
+            deduplicated: deduplicated.has(index)
+        }));
         return {
-            imported,
+            imported: publicImported,
             failed,
             workspace,
             snapshot,
             summary: {
                 discovered: imported.length + failed.length,
                 imported: imported.length,
-                deduplicated: imported.filter(entry => entry.deduplicated).length,
+                deduplicated: deduplicated.size,
                 failed: failed.length,
                 invalid: imported.filter(entry => entry.diagnostics.some(diagnostic => diagnostic.severity === 'error'))
                     .length
@@ -377,17 +401,9 @@ class YangRepository {
         return `${metadata.name}${metadata.revision ? `@${metadata.revision}` : ''}.yang`;
     }
 
-    manifestPath(type, id) {
-        const normalizedType = type === 'snapshot' ? 'snapshot' : 'workspace';
-        const safeId = normalizeManifestId(id, normalizedType);
-        const directory = normalizedType === 'snapshot' ? this.paths.snapshots : this.paths.workspaces;
-        return path.join(directory, safeId, 'manifest.json');
-    }
-
-    moduleReference(entryOrHash) {
-        const entry = typeof entryOrHash === 'string' ? this.catalog.blobs[entryOrHash] : entryOrHash;
-        if (!entry || !entry.hash || !this.catalog.blobs[entry.hash]) {
-            throw new Error(`Unknown YANG blob ${typeof entryOrHash === 'string' ? entryOrHash : entryOrHash?.hash}`);
+    moduleReference(entry) {
+        if (!entry?.hash || !/^[a-f0-9]{64}$/.test(entry.hash)) {
+            throw new Error(`Invalid YANG module reference ${entry?.hash || '<unknown>'}`);
         }
         const metadata = entry.metadata || {};
         return {
@@ -396,8 +412,98 @@ class YangRepository {
             revision: metadata.revision || null,
             kind: metadata.kind || null,
             fileName: entry.fileName,
-            size: entry.size
+            size: entry.size,
+            importedAt: entry.importedAt || null,
+            updatedAt: entry.updatedAt || null,
+            origins: [...new Set((entry.origins || []).filter(Boolean))],
+            metadata,
+            diagnostics: Array.isArray(entry.diagnostics) ? entry.diagnostics : [],
+            relativePath: `${MODULES_DIRECTORY_NAME}/${entry.hash}.yang`
         };
+    }
+
+    mergeModuleEntries(entries = []) {
+        const merged = new Map();
+        for (const entry of entries) {
+            if (!entry?.hash) continue;
+            const existing = merged.get(entry.hash);
+            if (!existing) {
+                merged.set(entry.hash, entry);
+                continue;
+            }
+            const source = Buffer.isBuffer(entry._sourceBuffer) ? entry : existing;
+            const combined = {
+                ...existing,
+                ...entry,
+                fileName: existing.fileName || entry.fileName,
+                importedAt: existing.importedAt || entry.importedAt || null,
+                updatedAt: entry.updatedAt || existing.updatedAt || null,
+                origins: [...new Set([...(existing.origins || []), ...(entry.origins || [])].filter(Boolean))],
+                metadata: entry.metadata || existing.metadata || {},
+                diagnostics: Array.isArray(entry.diagnostics) ? entry.diagnostics : existing.diagnostics || []
+            };
+            const sourceBuffer = source._sourceBuffer;
+            if (Buffer.isBuffer(sourceBuffer)) {
+                Object.defineProperty(combined, '_sourceBuffer', { value: sourceBuffer, enumerable: false });
+            }
+            merged.set(entry.hash, combined);
+        }
+        return [...merged.values()];
+    }
+
+    expandManifestModules(type, id, manifest) {
+        return (manifest?.modules || []).map(reference => ({
+            ...reference,
+            filePath: this.modulePath(type, id, reference.hash)
+        }));
+    }
+
+    pruneModuleDirectory(type, id, hashes) {
+        const moduleDirectory = path.join(this.scopeDirectory(type, id), MODULES_DIRECTORY_NAME);
+        if (!fs.existsSync(moduleDirectory)) return;
+        const expected = new Set([...hashes].map(hash => `${hash}.yang`));
+        for (const entry of fs.readdirSync(moduleDirectory, { withFileTypes: true })) {
+            if (entry.isFile() && expected.has(entry.name)) continue;
+            fs.rmSync(path.join(moduleDirectory, entry.name), { recursive: true, force: true });
+        }
+    }
+
+    writeManifest(type, id, options = {}) {
+        const normalizedType = this.scopeType(type);
+        const manifestPath = this.manifestPath(normalizedType, id);
+        const existing = this.readManifest(normalizedType, id);
+        const manifestExists = fs.existsSync(manifestPath);
+        if (manifestExists && existing && options.overwrite !== true) {
+            const label = normalizedType === 'snapshot' ? 'Snapshot' : 'Workspace';
+            throw new Error(`${label} ${id} already exists${normalizedType === 'snapshot' ? ' and is immutable' : ''}`);
+        }
+        if (manifestExists && !existing) {
+            fs.rmSync(this.scopeDirectory(normalizedType, id), { recursive: true, force: true });
+        }
+
+        const modules = this.mergeModuleEntries(options.modules || []);
+        const references = modules.map(entry => {
+            this.storeModule(normalizedType, id, entry);
+            return this.moduleReference(entry);
+        });
+        const now = new Date().toISOString();
+        const manifest = {
+            schemaVersion: MANIFEST_SCHEMA_VERSION,
+            type: normalizedType,
+            id,
+            name: options.name || existing?.name || id,
+            createdAt: existing?.createdAt || now,
+            updatedAt: now,
+            contentHash: this.computeManifestContentHash(references),
+            metadata: options.metadata || existing?.metadata || {},
+            modules: references
+        };
+        if (normalizedType === 'workspace') {
+            manifest.baseSnapshotId = options.baseSnapshotId || existing?.baseSnapshotId || null;
+        }
+        atomicWriteJson(manifestPath, manifest);
+        this.pruneModuleDirectory(normalizedType, id, new Set(references.map(reference => reference.hash)));
+        return manifest;
     }
 
     computeManifestContentHash(modules) {
@@ -414,69 +520,24 @@ class YangRepository {
 
     createSnapshot(options = {}) {
         const id = normalizeManifestId(options.id, 'snapshot');
-        const manifestPath = this.manifestPath('snapshot', id);
-        if (fs.existsSync(manifestPath)) {
-            throw new Error(`Snapshot ${id} already exists and is immutable`);
-        }
-        const modules = [
-            ...new Map(
-                (options.modules || []).map(item => {
-                    const reference = this.moduleReference(item.hash || item);
-                    return [reference.hash, reference];
-                })
-            ).values()
-        ];
-        const now = new Date().toISOString();
-        const manifest = {
-            schemaVersion: MANIFEST_SCHEMA_VERSION,
-            type: 'snapshot',
-            id,
+        return this.writeManifest('snapshot', id, {
             name: options.name || id,
-            createdAt: now,
-            updatedAt: now,
-            contentHash: this.computeManifestContentHash(modules),
-            metadata: options.metadata || {},
-            modules
-        };
-        atomicWriteJson(manifestPath, manifest);
-        return manifest;
+            metadata: options.metadata,
+            modules: options.modules || []
+        });
     }
 
     createWorkspace(options = {}) {
         const id = normalizeManifestId(options.id, 'workspace');
-        const manifestPath = this.manifestPath('workspace', id);
-        if (fs.existsSync(manifestPath) && options.overwrite !== true) {
-            throw new Error(`Workspace ${id} already exists`);
-        }
-        const modules = [
-            ...new Map(
-                (options.modules || []).map(item => {
-                    const reference = this.moduleReference(item.hash || item);
-                    return [reference.hash, reference];
-                })
-            ).values()
-        ];
-        const existing = fs.existsSync(manifestPath) ? this.readManifest('workspace', id) : null;
-        const now = new Date().toISOString();
-        const manifest = {
-            schemaVersion: MANIFEST_SCHEMA_VERSION,
-            type: 'workspace',
-            id,
-            name: options.name || existing?.name || id,
-            createdAt: existing?.createdAt || now,
-            updatedAt: now,
-            baseSnapshotId: options.baseSnapshotId || existing?.baseSnapshotId || null,
-            contentHash: this.computeManifestContentHash(modules),
-            metadata: options.metadata || existing?.metadata || {},
-            modules
-        };
-        atomicWriteJson(manifestPath, manifest);
-        return manifest;
+        return this.writeManifest('workspace', id, {
+            ...options,
+            id
+        });
     }
 
     addToWorkspace(id = 'default', entries = [], options = {}) {
         const existing = this.getWorkspace(id);
-        const modules = [...(existing?.modules || []), ...entries];
+        const modules = [...this.expandManifestModules('workspace', id, existing), ...entries];
         return this.createWorkspace({
             id,
             name: options.name || existing?.name || id,
@@ -500,14 +561,13 @@ class YangRepository {
     }
 
     readManifest(type, id) {
-        const manifestPath = this.manifestPath(type, id);
+        const normalizedType = this.scopeType(type);
+        const manifestPath = this.manifestPath(normalizedType, id);
         if (!fs.existsSync(manifestPath)) {
             return null;
         }
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-        if (manifest.schemaVersion !== MANIFEST_SCHEMA_VERSION || manifest.type !== type) {
-            throw new Error(`Unsupported ${type} manifest ${id}`);
-        }
+        if (manifest.schemaVersion !== MANIFEST_SCHEMA_VERSION || manifest.type !== normalizedType) return null;
         return manifest;
     }
 
@@ -530,30 +590,29 @@ class YangRepository {
     }
 
     deleteManifest(type, id) {
-        const manifestPath = this.manifestPath(type, id);
-        if (!fs.existsSync(manifestPath)) {
+        const directory = this.scopeDirectory(type, id);
+        if (!fs.existsSync(directory)) {
             return false;
         }
-        fs.rmSync(path.dirname(manifestPath), { recursive: true, force: false });
+        fs.rmSync(directory, { recursive: true, force: false });
         return true;
     }
 
+    deleteWorkspace(id = 'default') {
+        return this.deleteManifest('workspace', id);
+    }
+
     resolveEntries(options = {}) {
-        let hashes = options.hashes;
-        if (!hashes && options.workspaceId) {
-            hashes = (this.getWorkspace(options.workspaceId)?.modules || []).map(module => module.hash);
-        }
-        if (!hashes && options.snapshotId) {
-            hashes = (this.getSnapshot(options.snapshotId)?.modules || []).map(module => module.hash);
-        }
-        if (!hashes) {
-            hashes = Object.keys(this.catalog.blobs);
-        }
-        return [...new Set(hashes)].map(hash => {
-            const entry = this.catalog.blobs[hash];
-            if (!entry) {
-                throw new Error(`Unknown YANG blob ${hash}`);
-            }
+        const useSnapshot = Boolean(options.snapshotId);
+        const type = useSnapshot ? 'snapshot' : 'workspace';
+        const id = useSnapshot ? options.snapshotId : options.workspaceId || 'default';
+        const manifest = useSnapshot ? this.getSnapshot(id) : this.getWorkspace(id);
+        const entries = this.expandManifestModules(type, id, manifest);
+        if (options.hashes === undefined) return entries;
+        const byHash = new Map(entries.map(entry => [entry.hash, entry]));
+        return [...new Set(options.hashes)].map(hash => {
+            const entry = byHash.get(hash);
+            if (!entry) throw new Error(`Unknown YANG module ${hash} in ${type} ${id}`);
             return entry;
         });
     }
@@ -579,23 +638,30 @@ class YangRepository {
             });
     }
 
-    getSource(identifier) {
-        let entry;
-        if (typeof identifier === 'string' && /^[a-f0-9]{64}$/.test(identifier)) {
-            entry = this.catalog.blobs[identifier];
-        } else {
-            const request = typeof identifier === 'string' ? { name: identifier } : identifier || {};
-            const candidates = this.listModules({ name: request.name, revision: request.revision, kind: request.kind });
-            entry = candidates[0];
+    getSource(identifier, options = {}) {
+        const request = typeof identifier === 'string' ? { name: identifier } : identifier || {};
+        const scope = {
+            workspaceId: request.workspaceId ?? options.workspaceId,
+            snapshotId: request.snapshotId ?? options.snapshotId
+        };
+        let candidates = this.listModules(scope);
+        const hash =
+            typeof identifier === 'string' && /^[a-f0-9]{64}$/.test(identifier) ? identifier : request.hash;
+        if (hash) candidates = candidates.filter(entry => entry.hash === hash);
+        else {
+            if (request.name) candidates = candidates.filter(entry => entry.metadata?.name === request.name);
+            if (request.revision) candidates = candidates.filter(entry => entry.metadata?.revision === request.revision);
+            if (request.kind) candidates = candidates.filter(entry => entry.metadata?.kind === request.kind);
         }
+        const entry = candidates[0];
         if (!entry) {
             throw new Error(
                 `YANG module not found: ${typeof identifier === 'string' ? identifier : stableStringify(identifier)}`
             );
         }
-        const buffer = fs.readFileSync(this.getBlobPath(entry.hash));
+        const buffer = fs.readFileSync(entry.filePath);
         if (sha256(buffer) !== entry.hash) {
-            throw new Error(`YANG blob integrity check failed for ${entry.hash}`);
+            throw new Error(`YANG module integrity check failed for ${entry.hash}`);
         }
         const source = buffer.toString('utf8');
         return {
@@ -613,6 +679,5 @@ module.exports = {
     stableStringify,
     atomicWriteFile,
     atomicWriteJson,
-    CATALOG_SCHEMA_VERSION,
     MANIFEST_SCHEMA_VERSION
 };

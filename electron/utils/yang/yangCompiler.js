@@ -473,10 +473,12 @@ class YangCompiler {
     }
 
     loadModule(entry) {
-        const buffer = fs.readFileSync(this.repository.getBlobPath(entry.hash));
+        const sourcePath = entry.filePath;
+        if (!sourcePath) throw new Error(`YANG module ${entry.hash} has no workspace-local source file`);
+        const buffer = fs.readFileSync(sourcePath);
         const actualHash = sha256(buffer);
         if (actualHash !== entry.hash) {
-            throw new Error(`YANG blob integrity check failed for ${entry.hash}`);
+            throw new Error(`YANG module integrity check failed for ${entry.hash}`);
         }
         const source = buffer.toString('utf8');
         const parsed = parseYang(source, { sourceName: entry.fileName || entry.hash });
@@ -484,7 +486,7 @@ class YangCompiler {
             id: `${parsed.metadata?.kind || 'invalid'}:${parsed.metadata?.name || entry.hash}@${parsed.metadata?.revision || 'none'}#${entry.hash.slice(0, 12)}`,
             hash: entry.hash,
             fileName: entry.fileName,
-            blobPath: this.repository.getBlobPath(entry.hash),
+            filePath: sourcePath,
             size: entry.size,
             metadata: parsed.metadata,
             diagnostics: parsed.diagnostics
@@ -641,7 +643,7 @@ class YangCompiler {
             usedNames.add(fileName);
             const targetPath = path.join(inputDirectory, fileName);
             if (!fs.existsSync(targetPath)) {
-                fs.copyFileSync(module.blobPath, targetPath, fs.constants.COPYFILE_EXCL);
+                fs.copyFileSync(module.filePath, targetPath, fs.constants.COPYFILE_EXCL);
             }
             return { module, path: targetPath };
         });

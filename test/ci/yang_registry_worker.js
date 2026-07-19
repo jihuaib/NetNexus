@@ -36,19 +36,20 @@ async function run() {
         assert.equal(compilerStatus.data.available, true);
         assert.equal(compilerStatus.data.required, true);
 
+        const workerDemo = `module worker-demo {
+  yang-version 1.1;
+  namespace "urn:worker-demo";
+  prefix wd;
+  revision 2026-07-18;
+  container state { leaf ready { type boolean; } }
+}`;
         const imported = await worker.sendRequest(YANG_REQ_TYPES.IMPORT_CONTENTS, {
             contents: [
                 {
                     expectedName: 'worker-demo',
                     revision: '2026-07-18',
                     source: 'netconf://worker-test/get-schema',
-                    content: `module worker-demo {
-  yang-version 1.1;
-  namespace "urn:worker-demo";
-  prefix wd;
-  revision 2026-07-18;
-  container state { leaf ready { type boolean; } }
-}`
+                    content: workerDemo
                 }
             ]
         });
@@ -68,6 +69,20 @@ async function run() {
         assert(events.some(event => event.phase === 'schema'));
         assert.equal(events.at(-1).phase, 'completed');
 
+        const replicaImport = await worker.sendRequest(YANG_REQ_TYPES.IMPORT_CONTENTS, {
+            workspaceId: 'replica',
+            contents: [{ expectedName: 'worker-demo', revision: '2026-07-18', content: workerDemo }]
+        });
+        assert.notEqual(replicaImport.data.imported[0].filePath, imported.data.imported[0].filePath);
+        assert(fs.existsSync(replicaImport.data.imported[0].filePath));
+        const replicaCompile = await worker.sendRequest(YANG_REQ_TYPES.COMPILE, { workspaceId: 'replica' });
+        assert.equal(replicaCompile.data.compileId, response.data.compileId);
+        assert.equal(replicaCompile.data.cacheHit, true);
+        const scopedReplicaRoots = await worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, {
+            workspaceId: 'replica'
+        });
+        assert(scopedReplicaRoots.data.some(node => node.name === 'worker-demo'));
+
         const roots = await worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, {
             compileId: response.data.compileId
         });
@@ -82,6 +97,11 @@ async function run() {
         assert.equal(children.data[0].name, 'state');
         const source = await worker.sendRequest(YANG_REQ_TYPES.GET_MODULE_SOURCE, { name: 'worker-demo' });
         assert(source.data.source.includes('container state'));
+        const replicaSource = await worker.sendRequest(YANG_REQ_TYPES.GET_MODULE_SOURCE, {
+            workspaceId: 'replica',
+            hash: replicaImport.data.imported[0].hash
+        });
+        assert(replicaSource.data.source.includes('container state'));
         const diagnostics = await worker.sendRequest(YANG_REQ_TYPES.GET_DIAGNOSTICS, {
             compileId: response.data.compileId
         });
@@ -123,6 +143,36 @@ async function run() {
 
         const cleared = await worker.sendRequest(YANG_REQ_TYPES.CLEAR_WORKSPACE, {});
         assert.equal(cleared.data.modules.length, 0);
+        await assert.rejects(
+            worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, { workspaceId: 'default' }),
+            /No YANG compilation is loaded for workspace:default/u
+        );
+        await assert.rejects(
+            worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, {
+                workspaceId: 'default',
+                compileId: response.data.compileId
+            }),
+            /is not loaded for workspace:default/u
+        );
+        assert.equal(
+            (await worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, { workspaceId: 'replica' })).data.length,
+            1
+        );
+        const retainedReplica = await worker.sendRequest(YANG_REQ_TYPES.LIST_MODULES, { workspaceId: 'replica' });
+        assert.equal(retainedReplica.data.length, 1);
+        assert(fs.existsSync(retainedReplica.data[0].filePath));
+        const deleted = await worker.sendRequest(YANG_REQ_TYPES.DELETE_WORKSPACE, {});
+        assert.equal(deleted.data, true);
+        assert.equal((await worker.sendRequest(YANG_REQ_TYPES.DELETE_WORKSPACE, {})).data, false);
+        assert.equal((await worker.sendRequest(YANG_REQ_TYPES.LIST_MODULES, { workspaceId: 'replica' })).data.length, 1);
+        assert.equal(
+            (await worker.sendRequest(YANG_REQ_TYPES.DELETE_WORKSPACE, { workspaceId: 'replica' })).data,
+            true
+        );
+        await assert.rejects(
+            worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, { workspaceId: 'replica' }),
+            /No YANG compilation is loaded for workspace:replica/u
+        );
 
         console.log('YANG compiler worker real libyang Schema API and progress event tests passed');
     } finally {

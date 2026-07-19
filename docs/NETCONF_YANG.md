@@ -150,17 +150,28 @@ Schema 工作区中的树直接来自 libyang 编译后的 effective schema。`u
 
 打包运行时按平台和 CPU 架构隔离在应用资源目录的 `libyang/<platform>-<arch>/` 下，包括 `bin/yanglint`、`bin/netnexus-libyang-schema` 和配套的 libyang 内置模块。两个程序均静态链接同一个固定版本的 libyang；Worker 使用 Schema 导出工具一次完成权威编译和结构化 JSON 导出。
 
-维护者在当前平台构建和验证运行时：
+正常执行 `npm install` 或 `npm ci` 时，安装生命周期会自动确保当前平台和 CPU 架构对应的 bundled libyang 运行时可用。已有运行时通过完整性、版本和构建输入指纹校验时会直接复用，不会重复编译；运行时缺失或构建输入已变化时会自动重新编译，并在完成后再次验证。
+
+自动构建需要网络访问以取得锁定版本的上游源码，并要求本机具备以下工具：
+
+- macOS / Linux：Git、CMake 和可用的 C 编译工具链。
+- Windows：仅支持 x64 构建，需要 Git、CMake、Visual Studio C++ Build Tools、Windows SDK，以及已完成 bootstrap 的 vcpkg；vcpkg 不在默认位置时通过 `VCPKG_ROOT` 指定。
+
+维护者需要无条件重新构建当前平台运行时时，可以执行：
 
 ```bash
-# macOS / Linux
-npm run libyang:build:unix
-npm run libyang:verify
-
-# Windows PowerShell
-npm run libyang:build:windows
+npm run libyang:build
 npm run libyang:verify
 ```
+
+平台专用命令仍可用于调试构建脚本：
+
+```bash
+npm run libyang:build:unix
+npm run libyang:build:windows
+```
+
+只有明确不需要任何 YANG 功能的任务才可以设置 `NETNEXUS_SKIP_LIBYANG_BUILD=1` 跳过安装阶段构建。这个开关不会关闭运行时验证；缺少或使用了无效运行时后，应用打包和 YANG 编译仍会失败。`npm install --ignore-scripts` 与 `npm ci --ignore-scripts` 同样会绕过自动构建，不适用于打包或 YANG 测试。
 
 应用打包前会强制验证平台、架构、执行权限和版本，验证失败则终止打包，避免生成不带权威编译器的安装包。
 

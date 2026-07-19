@@ -13,39 +13,56 @@
             </template>
 
             <div class="module-toolbar">
-                <div class="module-actions">
+                <div class="module-profile-row" data-testid="yang-modules-profile-row">
+                    <YangProfileField
+                        :value="selectedProfileId"
+                        :options="profileOptions"
+                        :loading="profilesLoading"
+                        test-id="yang-modules-profile-select"
+                        @update:value="selectProfile"
+                    />
+                    <nn-button class="module-refresh-action" :loading="loading" @click="loadModules">
+                        <template #icon><ReloadOutlined /></template>
+                        刷新
+                    </nn-button>
+                </div>
+
+                <div class="module-actions" data-testid="yang-modules-actions">
                     <nn-tooltip :title="connected ? '' : '请先在连接设置中建立 NETCONF 会话'">
-                        <span class="disabled-action-wrap">
-                            <nn-button :loading="discovering" :disabled="!connected" @click="discoverModules">
-                                <template #icon><SearchOutlined /></template>
-                                读取设备列表
-                            </nn-button>
-                        </span>
-                    </nn-tooltip>
-                    <nn-tooltip :title="downloadDisabledReason">
-                        <span class="disabled-action-wrap">
+                        <span class="disabled-action-wrap module-action-device-wrap">
                             <nn-button
-                                type="primary"
-                                :loading="downloading"
-                                :disabled="Boolean(downloadDisabledReason)"
-                                @click="downloadSelected"
+                                class="module-action-button module-action-device"
+                                :loading="discovering"
+                                :disabled="!connected"
+                                @click="openDeviceModules"
                             >
-                                <template #icon><CloudDownloadOutlined /></template>
-                                下载所选 ({{ selectedKeys.length }})
+                                <template #icon><SearchOutlined /></template>
+                                获取设备列表
                             </nn-button>
                         </span>
                     </nn-tooltip>
-                    <nn-button :loading="importing" @click="importFiles">
+                    <nn-button
+                        class="module-action-button"
+                        :loading="importing"
+                        :disabled="!selectedProfileId"
+                        @click="importFiles"
+                    >
                         <template #icon><FileSearchOutlined /></template>
                         导入文件
                     </nn-button>
-                    <nn-button :loading="importing" @click="importDirectory">
+                    <nn-button
+                        class="module-action-button"
+                        :loading="importing"
+                        :disabled="!selectedProfileId"
+                        @click="importDirectory"
+                    >
                         <template #icon><FolderOpenOutlined /></template>
                         导入目录
                     </nn-button>
                     <nn-tooltip :title="compileDisabledReason">
-                        <span class="disabled-action-wrap">
+                        <span class="disabled-action-wrap module-action-standard-wrap">
                             <nn-button
+                                class="module-action-button"
                                 :loading="compiling"
                                 :disabled="Boolean(compileDisabledReason)"
                                 @click="compileSelected"
@@ -55,40 +72,46 @@
                             </nn-button>
                         </span>
                     </nn-tooltip>
-                    <nn-button :loading="diagnosticLoading" @click="openDiagnostics">
+                    <nn-button
+                        class="module-action-button module-action-diagnostics"
+                        :loading="diagnosticLoading"
+                        @click="openDiagnostics"
+                    >
                         <template #icon><FileSearchOutlined /></template>
                         编译诊断 ({{ diagnosticCountHint }})
                     </nn-button>
-                    <nn-button :loading="loading" @click="loadModules">
-                        <template #icon><ReloadOutlined /></template>
-                        刷新
-                    </nn-button>
-                </div>
-
-                <div class="module-filters">
-                    <nn-input-search
-                        v-model:value="query"
-                        allow-clear
-                        placeholder="模块名 / namespace / revision"
-                        class="module-search"
-                    />
-                    <nn-select v-model:value="sourceFilter" :options="sourceOptions" class="compact-select" />
-                    <nn-select v-model:value="statusFilter" :options="statusOptions" class="compact-select" />
                 </div>
             </div>
 
             <div class="selection-row">
                 <nn-checkbox
                     :checked="allVisibleSelected"
+                    :indeterminate="someVisibleSelected"
                     :disabled="filteredModules.length === 0"
                     @change="toggleAllVisible"
                 >
                     选择当前筛选结果
                 </nn-checkbox>
-                <span class="selection-meta">
-                    显示 {{ filteredModules.length }}，已选 {{ selectedKeys.length }}；下载会自动补齐 import/include
-                    依赖
-                </span>
+                <div class="selection-filters" data-testid="yang-modules-selection-filters">
+                    <div class="selection-search">
+                        <nn-input-search
+                            v-model:value="query"
+                            allow-clear
+                            aria-label="搜索模型"
+                            placeholder="模块名 / namespace / revision"
+                            class="module-search"
+                        />
+                    </div>
+                    <div class="selection-status">
+                        <nn-select
+                            v-model:value="statusFilter"
+                            :options="statusOptions"
+                            aria-label="模型状态"
+                            class="compact-select"
+                            data-testid="yang-modules-status-select"
+                        />
+                    </div>
+                </div>
             </div>
 
             <nn-table
@@ -96,7 +119,7 @@
                 :data-source="filteredModules"
                 :loading="loading"
                 :pagination="false"
-                :scroll="{ x: 1160, y: 'calc(100vh - 310px)' }"
+                :scroll="{ x: 990, y: 'calc(100vh - 350px)' }"
                 row-key="_key"
                 size="small"
                 class="module-table"
@@ -129,11 +152,6 @@
                             <span>{{ record.features.length }}</span>
                         </nn-tooltip>
                     </template>
-                    <template v-else-if="column.key === 'source'">
-                        <nn-tag :color="record.isLocal ? 'cyan' : 'blue'">
-                            {{ record.isLocal ? (record.imported ? '本地导入' : '本地仓库') : 'NETCONF' }}
-                        </nn-tag>
-                    </template>
                     <template v-else-if="column.key === 'status'">
                         <nn-tooltip :title="record.message || record.error || ''">
                             <nn-tag :color="getStatusMeta(record.status).color">
@@ -150,22 +168,152 @@
                         </nn-tooltip>
                     </template>
                     <template v-else-if="column.key === 'action'">
-                        <nn-space>
-                            <nn-button size="small" :disabled="!record.isLocal" @click="openSource(record)">
-                                源码
-                            </nn-button>
-                            <nn-button
-                                size="small"
-                                :disabled="record.isLocal || !connected"
-                                @click="downloadOne(record)"
-                            >
-                                下载
-                            </nn-button>
-                        </nn-space>
+                        <nn-button size="small" :disabled="!record.isLocal" @click="openSource(record)">
+                            源码
+                        </nn-button>
                     </template>
                 </template>
             </nn-table>
         </nn-card>
+
+        <nn-modal
+            v-model:open="deviceModuleModalOpen"
+            title="设备 YANG 模型"
+            width="960px"
+            :closable="!downloading"
+            :keyboard="!downloading"
+            :mask-closable="false"
+            class="device-module-modal"
+            data-testid="device-yang-module-modal"
+            @cancel="closeDeviceModules"
+        >
+            <div class="device-module-dialog">
+                <div class="device-module-toolbar">
+                    <nn-input-search
+                        v-model:value="deviceModuleQuery"
+                        allow-clear
+                        placeholder="模块名 / namespace / revision"
+                        class="device-module-search"
+                    />
+                    <nn-space>
+                        <nn-tag color="blue">设备 {{ deviceModules.length }}</nn-tag>
+                        <nn-tag color="cyan">本地已有 {{ deviceLocalCount }}</nn-tag>
+                        <nn-button :loading="discovering" :disabled="downloading" @click="loadDeviceModules">
+                            <template #icon><ReloadOutlined /></template>
+                            重新获取
+                        </nn-button>
+                    </nn-space>
+                </div>
+
+                <nn-alert
+                    type="info"
+                    show-icon
+                    message="依赖会自动下载"
+                    description="这里只选择需要的根模型；下载时会读取源码并递归补齐 import、include、submodule 和 deviation 依赖。"
+                />
+
+                <nn-alert
+                    v-if="deviceModuleError"
+                    type="error"
+                    show-icon
+                    :message="deviceModuleError"
+                    class="device-module-message"
+                />
+
+                <nn-alert
+                    v-if="deviceDownloadFailures.length"
+                    type="warning"
+                    show-icon
+                    message="部分模型或依赖下载失败"
+                    :description="deviceDownloadFailureText"
+                    class="device-module-message"
+                />
+
+                <div class="device-module-selection-row">
+                    <nn-checkbox
+                        :checked="allVisibleDeviceModulesSelected"
+                        :disabled="deviceSelectableVisibleModules.length === 0 || downloading"
+                        @change="toggleAllVisibleDeviceModules"
+                    >
+                        选择当前结果中未下载的模型
+                    </nn-checkbox>
+                    <span>
+                        显示 {{ filteredDeviceModules.length }}，选择 {{ selectedDeviceModules.length }} 个根模型
+                    </span>
+                </div>
+
+                <nn-table
+                    :columns="deviceModuleColumns"
+                    :data-source="filteredDeviceModules"
+                    :loading="discovering"
+                    :pagination="false"
+                    :scroll="{ x: 860, y: 'min(48vh, 430px)' }"
+                    row-key="_key"
+                    size="small"
+                    class="device-module-table"
+                >
+                    <template #bodyCell="{ column, record }">
+                        <template v-if="column.key === 'selection'">
+                            <nn-checkbox
+                                :checked="deviceSelectedKeys.includes(record._key)"
+                                :disabled="!canDownloadDeviceModule(record) || downloading"
+                                :aria-label="`选择设备模型 ${record.name}`"
+                                @change="event => toggleDeviceModule(record, event.target.checked)"
+                            />
+                        </template>
+                        <template v-else-if="column.key === 'name'">
+                            <div class="module-name-cell">
+                                <span class="module-name">{{ deviceModuleFileName(record) }}</span>
+                                <nn-tag v-if="record.importOnly" color="default">import-only</nn-tag>
+                            </div>
+                        </template>
+                        <template v-else-if="column.key === 'revision'">
+                            <span class="mono-text">{{ record.revision || '-' }}</span>
+                        </template>
+                        <template v-else-if="column.key === 'namespace'">
+                            <nn-tooltip :title="record.namespace || '-'">
+                                <span class="ellipsis-text">{{ record.namespace || '-' }}</span>
+                            </nn-tooltip>
+                        </template>
+                        <template v-else-if="column.key === 'features'">
+                            <nn-tooltip :title="record.features.join(', ') || '无'">
+                                <span>{{ record.features.length }}</span>
+                            </nn-tooltip>
+                        </template>
+                        <template v-else-if="column.key === 'state'">
+                            <nn-tag v-if="isDeviceModuleLocal(record)" color="cyan">本地已有</nn-tag>
+                            <nn-tag v-else-if="!isYangDeviceModule(record)" color="warning">不支持 {{ record.format }}</nn-tag>
+                            <nn-tag v-else color="blue">待下载</nn-tag>
+                        </template>
+                    </template>
+                </nn-table>
+
+                <div v-if="downloading" class="device-download-progress" role="status">
+                    <span>{{ deviceDownloadProgressText }}</span>
+                    <span v-if="Number.isFinite(Number(taskProgress?.percent))">
+                        {{ Math.round(Number(taskProgress.percent)) }}%
+                    </span>
+                </div>
+            </div>
+
+            <template #footer>
+                <div class="device-module-footer">
+                    <span>下载结果可能多于所选数量，新增部分为自动解析出的依赖模型。</span>
+                    <nn-space>
+                        <nn-button :disabled="downloading" @click="closeDeviceModules">取消</nn-button>
+                        <nn-button
+                            type="primary"
+                            :loading="downloading"
+                            :disabled="selectedDeviceModules.length === 0 || discovering"
+                            @click="downloadDeviceModules"
+                        >
+                            <template #icon><CloudDownloadOutlined /></template>
+                            下载所选 ({{ selectedDeviceModules.length }})
+                        </nn-button>
+                    </nn-space>
+                </div>
+            </template>
+        </nn-modal>
 
         <nn-drawer v-model:open="sourceDrawerOpen" :title="sourceDrawerTitle" width="720px" :z-index="1200">
             <nn-spin :spinning="sourceLoading">
@@ -237,7 +385,7 @@
 </template>
 
 <script setup>
-    import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue';
+    import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
     import {
         NETCONF_SESSION_STATUS,
         YANG_EVENT,
@@ -255,7 +403,9 @@
         ReloadOutlined,
         SearchOutlined
     } from '../../ui/icons';
+    import YangProfileField from './YangProfileField.vue';
     import { useYangCompilerStatus } from './yangCompilerStatus';
+    import { useYangProfileContext } from './useYangProfileContext';
     import {
         fileBaseName,
         getTaskId,
@@ -273,20 +423,21 @@
         { title: 'Revision', dataIndex: 'revision', key: 'revision', width: 112 },
         { title: 'Namespace', dataIndex: 'namespace', key: 'namespace', width: 250 },
         { title: 'Feature', key: 'features', width: 70, align: 'center' },
-        { title: '来源', key: 'source', width: 100 },
         { title: '文件状态', key: 'status', width: 105 },
         { title: '编译状态', key: 'compileStatus', width: 105 },
-        { title: '操作', key: 'action', width: 125, fixed: 'right' }
+        { title: '操作', key: 'action', width: 72, fixed: 'right' }
     ];
-    const sourceOptions = [
-        { label: '全部来源', value: 'all' },
-        { label: '设备发现', value: 'remote' },
-        { label: '本地仓库', value: 'local' }
+    const deviceModuleColumns = [
+        { title: '选择', key: 'selection', width: 54, align: 'center' },
+        { title: '模型文件', key: 'name', width: 260 },
+        { title: 'Revision', key: 'revision', width: 112 },
+        { title: 'Namespace', key: 'namespace', width: 260 },
+        { title: 'Feature', key: 'features', width: 70, align: 'center' },
+        { title: '状态', key: 'state', width: 104 }
     ];
     const statusOptions = [
         { label: '全部状态', value: 'all' },
-        { label: '未下载', value: 'remote' },
-        { label: '已下载/导入', value: 'local' },
+        { label: '未编译', value: 'pending' },
         { label: '已编译', value: 'compiled' },
         { label: '异常', value: 'problem' }
     ];
@@ -294,8 +445,14 @@
     const modules = ref([]);
     const selectedKeys = ref([]);
     const query = ref('');
-    const sourceFilter = ref('all');
     const statusFilter = ref('all');
+    const deviceModuleModalOpen = ref(false);
+    const deviceModules = ref([]);
+    const deviceSelectedKeys = ref([]);
+    const deviceModuleQuery = ref('');
+    const deviceModuleError = ref('');
+    const deviceDownloadFailures = ref([]);
+    const deviceDownloadTerminalHandled = ref(false);
     const loading = ref(false);
     const discovering = ref(false);
     const downloading = ref(false);
@@ -317,7 +474,19 @@
     let diagnosticRequestRevision = 0;
     let compileContextRequestRevision = 0;
     let sourceRequestRevision = 0;
+    let profileRequestRevision = 0;
+    let profileContextReady = false;
     const { compilerAvailable, refreshCompilerStatus } = useYangCompilerStatus();
+    const {
+        profilesLoading,
+        selectedProfileId,
+        profileOptions,
+        refreshProfiles,
+        selectProfile,
+        taskMatchesProfile
+    } = useYangProfileContext();
+    const profileRequestMatches = (profileId, requestRevision) =>
+        requestRevision === profileRequestRevision && profileId === selectedProfileId.value;
 
     const diagnosticFilterOptions = [
         { label: '全部', value: 'all' },
@@ -390,6 +559,15 @@
         selectedKeys.value = selectedKeys.value.filter(key => validKeys.has(key));
     };
 
+    const replaceLocalModules = nextModules => {
+        modules.value = nextModules
+            .map(normalizeModule)
+            .filter(module => module.isLocal)
+            .sort((left, right) => left.name.localeCompare(right.name));
+        const validKeys = new Set(modules.value.map(module => module._key));
+        selectedKeys.value = selectedKeys.value.filter(key => validKeys.has(key));
+    };
+
     const filteredModules = computed(() => {
         const search = query.value.trim().toLowerCase();
         return modules.value.filter(module => {
@@ -400,23 +578,74 @@
                         .toLowerCase()
                         .includes(search)
                 );
-            const matchesSource =
-                sourceFilter.value === 'all' || (sourceFilter.value === 'local' ? module.isLocal : !module.isLocal);
             let matchesStatus = true;
-            if (statusFilter.value === 'remote') matchesStatus = !module.isLocal;
-            else if (statusFilter.value === 'local') matchesStatus = module.isLocal;
+            if (statusFilter.value === 'pending') matchesStatus = module.compileStatus === 'pending';
             else if (statusFilter.value === 'compiled') matchesStatus = module.compileStatus === 'compiled';
             else if (statusFilter.value === 'problem') {
                 matchesStatus =
                     ['failed', 'missing', 'warning'].includes(module.status) || module.compileStatus === 'failed';
             }
-            return matchesSearch && matchesSource && matchesStatus;
+            return matchesSearch && matchesStatus;
         });
+    });
+    const isYangDeviceModule = module => String(module?.format || 'yang').toLowerCase() === 'yang';
+    const isDeviceModuleLocal = module =>
+        modules.value.some(
+            localModule =>
+                localModule.isLocal &&
+                localModule.name === module.name &&
+                (!module.revision || localModule.revision === module.revision)
+        );
+    const canDownloadDeviceModule = module => isYangDeviceModule(module) && !isDeviceModuleLocal(module);
+    const filteredDeviceModules = computed(() => {
+        const search = deviceModuleQuery.value.trim().toLowerCase();
+        if (!search) return deviceModules.value;
+        return deviceModules.value.filter(module =>
+            [module.name, module.revision, module.namespace].some(value =>
+                String(value || '')
+                    .toLowerCase()
+                    .includes(search)
+            )
+        );
+    });
+    const deviceSelectableVisibleModules = computed(() =>
+        filteredDeviceModules.value.filter(canDownloadDeviceModule)
+    );
+    const selectedDeviceModules = computed(() =>
+        deviceModules.value.filter(
+            module => deviceSelectedKeys.value.includes(module._key) && canDownloadDeviceModule(module)
+        )
+    );
+    const allVisibleDeviceModulesSelected = computed(
+        () =>
+            deviceSelectableVisibleModules.value.length > 0 &&
+            deviceSelectableVisibleModules.value.every(module => deviceSelectedKeys.value.includes(module._key))
+    );
+    const deviceLocalCount = computed(() => deviceModules.value.filter(isDeviceModuleLocal).length);
+    const deviceDownloadFailureText = computed(() =>
+        deviceDownloadFailures.value
+            .map(item => `${item.name || item.identifier || '未知模型'}：${item.error || item.message || '下载失败'}`)
+            .join('；')
+    );
+    const deviceDownloadProgressText = computed(() => {
+        const progress = taskProgress.value;
+        if (!progress || progress.action !== 'download') return '正在准备下载';
+        if (progress.phase === 'discovering') return '正在刷新设备 YANG 列表';
+        if (progress.phase === 'importing') return '正在写入本地 YANG 仓库';
+        const count = Number(progress.total || 0)
+            ? `${Number(progress.completed || 0)}/${Number(progress.total)}`
+            : '';
+        return [progress.module || progress.message || '正在下载模型及其依赖', count].filter(Boolean).join(' · ');
     });
     const allVisibleSelected = computed(
         () =>
             filteredModules.value.length > 0 &&
             filteredModules.value.every(module => selectedKeys.value.includes(module._key))
+    );
+    const someVisibleSelected = computed(
+        () =>
+            !allVisibleSelected.value &&
+            filteredModules.value.some(module => selectedKeys.value.includes(module._key))
     );
     const selectedModules = computed(() => modules.value.filter(module => selectedKeys.value.includes(module._key)));
     const selectedLocalModules = computed(() => selectedModules.value.filter(module => module.isLocal && module.id));
@@ -453,13 +682,8 @@
         }
         return diagnostics.value.filter(item => !['error', 'fatal', 'warning', 'warn'].includes(item.severity));
     });
-    const downloadDisabledReason = computed(() => {
-        if (!connected.value) return '请先建立 NETCONF 连接';
-        if (selectedModules.value.length === 0) return '请先选择模块';
-        if (!selectedModules.value.some(module => !module.isLocal)) return '所选模块均已在本地仓库';
-        return '';
-    });
     const compileDisabledReason = computed(() => {
+        if (!selectedProfileId.value) return '请先选择连接 Profile';
         if (!compilerAvailable.value) return 'YANG 编译暂不可用，请在“设置 → 运行时诊断”中检查';
         if (selectedLocalModules.value.length === 0) return '请先选择已下载或已导入的本地模块';
         return '';
@@ -492,16 +716,44 @@
         else selectedKeys.value = selectedKeys.value.filter(key => !keys.includes(key));
     };
 
+    const toggleDeviceModule = (module, checked) => {
+        if (!canDownloadDeviceModule(module)) return;
+        if (checked && !deviceSelectedKeys.value.includes(module._key)) {
+            deviceSelectedKeys.value.push(module._key);
+        }
+        if (!checked) deviceSelectedKeys.value = deviceSelectedKeys.value.filter(key => key !== module._key);
+    };
+
+    const toggleAllVisibleDeviceModules = event => {
+        const keys = deviceSelectableVisibleModules.value.map(module => module._key);
+        if (event.target.checked) deviceSelectedKeys.value = [...new Set([...deviceSelectedKeys.value, ...keys])];
+        else deviceSelectedKeys.value = deviceSelectedKeys.value.filter(key => !keys.includes(key));
+    };
+
+    const deviceModuleFileName = module =>
+        `${module.name}${module.revision ? `@${module.revision}` : ''}.${String(module.format || 'yang').toLowerCase()}`;
+
     const loadModules = async () => {
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
+        if (!profileId) {
+            modules.value = [];
+            loading.value = false;
+            return;
+        }
         loading.value = true;
         try {
-            const { data } = await invokeBridge('yangApi', 'listModules');
-            const localModules = unwrapArray(data, ['modules', 'items', 'records']);
-            mergeModules(localModules);
+            const { data } = await invokeBridge('yangApi', 'listModules', { profileId });
+            if (requestRevision !== profileRequestRevision || profileId !== selectedProfileId.value) return;
+            replaceLocalModules(unwrapArray(data, ['modules', 'items', 'records']));
         } catch (error) {
-            notify.error(`加载 YANG 模型失败：${error.message}`);
+            if (requestRevision === profileRequestRevision && profileId === selectedProfileId.value) {
+                notify.error(`加载 YANG 模型失败：${error.message}`);
+            }
         } finally {
-            loading.value = false;
+            if (requestRevision === profileRequestRevision && profileId === selectedProfileId.value) {
+                loading.value = false;
+            }
         }
     };
 
@@ -524,16 +776,25 @@
         compileContext.value = context;
     };
 
-    const fetchCompileContext = async () => {
-        const { data } = await invokeBridge('yangApi', 'getWorkspace');
+    const fetchCompileContext = async (profileId = selectedProfileId.value) => {
+        if (!profileId) return normalizeCompileContext(null);
+        const { data } = await invokeBridge('yangApi', 'getWorkspace', { profileId });
         return normalizeCompileContext(data);
     };
 
     const loadCompileContext = async ({ quiet = false } = {}) => {
         const contextRequestRevision = ++compileContextRequestRevision;
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
         try {
-            const context = await fetchCompileContext();
-            if (contextRequestRevision !== compileContextRequestRevision) return null;
+            const context = await fetchCompileContext(profileId);
+            if (
+                contextRequestRevision !== compileContextRequestRevision ||
+                requestRevision !== profileRequestRevision ||
+                profileId !== selectedProfileId.value
+            ) {
+                return null;
+            }
             applyCompileContext(context);
             return context;
         } catch (error) {
@@ -548,20 +809,27 @@
         const quiet = options?.quiet === true;
         const requestRevision = ++diagnosticRequestRevision;
         const contextRequestRevision = ++compileContextRequestRevision;
+        const profileRevision = profileRequestRevision;
+        const profileId = selectedProfileId.value;
         let requestedCompileId = '';
         diagnosticLoading.value = true;
         try {
-            const context = await fetchCompileContext();
+            const context = await fetchCompileContext(profileId);
             if (
                 requestRevision !== diagnosticRequestRevision ||
-                contextRequestRevision !== compileContextRequestRevision
+                contextRequestRevision !== compileContextRequestRevision ||
+                profileRevision !== profileRequestRevision ||
+                profileId !== selectedProfileId.value
             ) {
                 return;
             }
             applyCompileContext(context);
             if (!context.compileId) return;
             requestedCompileId = context.compileId;
-            const { data } = await invokeBridge('yangApi', 'getDiagnostics', { compileId: context.compileId });
+            const { data } = await invokeBridge('yangApi', 'getDiagnostics', {
+                profileId,
+                compileId: context.compileId
+            });
             if (
                 requestRevision !== diagnosticRequestRevision ||
                 contextRequestRevision !== compileContextRequestRevision ||
@@ -569,7 +837,7 @@
             ) {
                 return;
             }
-            const confirmedContext = await fetchCompileContext();
+            const confirmedContext = await fetchCompileContext(profileId);
             if (
                 requestRevision !== diagnosticRequestRevision ||
                 contextRequestRevision !== compileContextRequestRevision
@@ -588,7 +856,7 @@
                 diagnostics.value = [];
                 diagnosticLoadedCompileId.value = '';
                 try {
-                    const latestContext = await fetchCompileContext();
+                    const latestContext = await fetchCompileContext(profileId);
                     if (
                         requestRevision === diagnosticRequestRevision &&
                         contextRequestRevision === compileContextRequestRevision
@@ -617,12 +885,21 @@
     };
 
     const loadSession = async () => {
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
+        if (!profileId) {
+            connected.value = false;
+            return;
+        }
         try {
-            const { data } = await invokeBridge('netconfApi', 'getSessionState');
+            const { data } = await invokeBridge('netconfApi', 'getSessionState', profileId);
+            if (requestRevision !== profileRequestRevision || profileId !== selectedProfileId.value) return;
             const status = data?.status || data?.state;
             connected.value = data?.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
         } catch (_error) {
-            connected.value = false;
+            if (requestRevision === profileRequestRevision && profileId === selectedProfileId.value) {
+                connected.value = false;
+            }
         }
     };
 
@@ -637,18 +914,44 @@
         return false;
     };
 
-    const discoverModules = async () => {
+    const openDeviceModules = () => {
+        if (!connected.value || !selectedProfileId.value) return;
+        deviceModuleModalOpen.value = true;
+        deviceModuleQuery.value = '';
+        deviceSelectedKeys.value = [];
+        deviceDownloadFailures.value = [];
+        deviceModuleError.value = '';
+        loadDeviceModules();
+    };
+
+    const closeDeviceModules = () => {
+        if (downloading.value) return;
+        deviceModuleModalOpen.value = false;
+    };
+
+    const loadDeviceModules = async () => {
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
+        if (!profileId) return;
         discovering.value = true;
+        deviceModuleError.value = '';
+        deviceDownloadFailures.value = [];
+        deviceSelectedKeys.value = [];
         try {
-            const { data } = await invokeBridge('netconfApi', 'discoverModules');
-            const asyncTask = handleImmediateTask('discover', data, ['modules', 'items']);
-            if (!asyncTask) {
-                notify.success(`已读取 ${unwrapArray(data, ['modules', 'items']).length} 个设备模型`);
+            const { data } = await invokeBridge('netconfApi', 'discoverModules', profileId);
+            if (!profileRequestMatches(profileId, requestRevision)) return;
+            deviceModules.value = unwrapArray(data, ['modules', 'items'])
+                .map(normalizeModule)
+                .sort((left, right) => left.name.localeCompare(right.name));
+        } catch (error) {
+            if (profileRequestMatches(profileId, requestRevision)) {
+                deviceModules.value = [];
+                deviceModuleError.value = `获取设备 YANG 列表失败：${error.message}`;
+            }
+        } finally {
+            if (profileRequestMatches(profileId, requestRevision)) {
                 discovering.value = false;
             }
-        } catch (error) {
-            discovering.value = false;
-            notify.error(`读取设备 YANG 列表失败：${error.message}`);
         }
     };
 
@@ -658,34 +961,47 @@
         revision: module.revision || undefined
     });
 
-    const runDownload = async targets => {
+    const finishDeviceDownload = async (data, profileId, requestRevision) => {
+        deviceDownloadFailures.value = Array.isArray(data?.failed) ? data.failed : [];
+        downloading.value = false;
+        await Promise.all([loadModules(), loadCompileContext({ quiet: true })]);
+        if (!profileRequestMatches(profileId, requestRevision)) return;
+        if (deviceDownloadFailures.value.length) {
+            notify.warning(`已下载可用模型，但有 ${deviceDownloadFailures.value.length} 个模型或依赖失败`);
+            return;
+        }
+        deviceModuleModalOpen.value = false;
+        notify.success('YANG 模型及其依赖下载完成');
+    };
+
+    const downloadDeviceModules = async () => {
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
+        const targets = [...selectedDeviceModules.value];
+        if (!profileId || targets.length === 0) return;
         downloading.value = true;
-        targets.forEach(module => {
-            module.status = 'downloading';
-        });
+        deviceDownloadTerminalHandled.value = false;
+        deviceModuleError.value = '';
+        deviceDownloadFailures.value = [];
         try {
             const { data } = await invokeBridge('netconfApi', 'downloadModules', {
+                profileId,
                 modules: targets.map(moduleIdentity),
                 includeDependencies: true
             });
-            const asyncTask = handleImmediateTask('download', data, ['modules', 'downloaded']);
-            if (!asyncTask) {
-                downloading.value = false;
-                await Promise.all([loadModules(), loadCompileContext({ quiet: true })]);
-                notify.success('YANG 模型下载完成');
+            if (!profileRequestMatches(profileId, requestRevision)) return;
+            const taskId = getTaskId(data);
+            if (taskId) activeTasks.value.download = taskId;
+            else if (!deviceDownloadTerminalHandled.value) {
+                await finishDeviceDownload(data, profileId, requestRevision);
             }
         } catch (error) {
-            targets.forEach(module => {
-                module.status = module.isLocal ? 'downloaded' : 'failed';
-                module.message = error.message;
-            });
+            if (!profileRequestMatches(profileId, requestRevision)) return;
             downloading.value = false;
-            notify.error(`下载失败：${error.message}`);
+            deviceModuleError.value = `下载失败：${error.message}`;
+            notify.error(deviceModuleError.value);
         }
     };
-
-    const downloadSelected = () => runDownload(selectedModules.value.filter(module => !module.isLocal));
-    const downloadOne = module => runDownload([module]);
 
     const selectImportTarget = async method => {
         const selector = method === 'importFiles' ? 'selectFiles' : 'selectDirectory';
@@ -700,23 +1016,35 @@
     };
 
     const runImport = async method => {
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
+        if (!profileId) return;
         importing.value = true;
         try {
             const target = await selectImportTarget(method);
+            if (!profileRequestMatches(profileId, requestRevision)) return;
             if (!target) {
                 importing.value = false;
                 return;
             }
-            const { data } = await invokeBridge('yangApi', method, target);
+            const request =
+                method === 'importFiles'
+                    ? { profileId, filePaths: target }
+                    : { profileId, directoryPath: target };
+            const { data } = await invokeBridge('yangApi', method, request);
+            if (!profileRequestMatches(profileId, requestRevision)) return;
             const asyncTask = handleImmediateTask('import', data, ['modules']);
             if (!asyncTask) {
                 importing.value = false;
                 await Promise.all([loadModules(), loadCompileContext({ quiet: true })]);
+                if (!profileRequestMatches(profileId, requestRevision)) return;
                 notify.success('YANG 文件导入完成');
             }
         } catch (error) {
-            importing.value = false;
-            notify.error(`导入失败：${error.message}`);
+            if (profileRequestMatches(profileId, requestRevision)) {
+                importing.value = false;
+                notify.error(`导入失败：${error.message}`);
+            }
         }
     };
 
@@ -728,23 +1056,31 @@
             notify.error(compileDisabledReason.value);
             return;
         }
+        const profileId = selectedProfileId.value;
+        const requestRevision = profileRequestRevision;
+        const targets = [...selectedLocalModules.value];
         compiling.value = true;
-        selectedLocalModules.value.forEach(module => {
+        targets.forEach(module => {
             module.compileStatus = 'compiling';
         });
         try {
             const { data } = await invokeBridge('yangApi', 'compile', {
-                moduleIds: selectedLocalModules.value.map(moduleIdentity)
+                profileId,
+                moduleIds: targets.map(moduleIdentity)
             });
+            if (!profileRequestMatches(profileId, requestRevision)) return;
             const asyncTask = handleImmediateTask('compile', data, ['modules']);
             if (!asyncTask) {
                 compiling.value = false;
                 await Promise.all([loadModules(), loadDiagnostics({ quiet: true })]);
+                if (!profileRequestMatches(profileId, requestRevision)) return;
                 notify.success(data?.cacheHit ? '编译完成（缓存命中）' : 'YANG 编译完成');
             }
         } catch (error) {
+            if (!profileRequestMatches(profileId, requestRevision)) return;
             await refreshCompilerStatus({ force: true });
-            selectedLocalModules.value.forEach(module => {
+            if (!profileRequestMatches(profileId, requestRevision)) return;
+            targets.forEach(module => {
                 module.compileStatus = 'failed';
                 module.compileMessage = error.message;
             });
@@ -760,7 +1096,10 @@
         sourceLoading.value = true;
         sourceText.value = '';
         try {
-            const { data } = await invokeBridge('yangApi', 'getModuleSource', moduleIdentity(module));
+            const { data } = await invokeBridge('yangApi', 'getModuleSource', {
+                profileId: selectedProfileId.value,
+                ...moduleIdentity(module)
+            });
             if (requestRevision === sourceRequestRevision) {
                 sourceText.value = typeof data === 'string' ? data : data?.source || data?.content || '';
             }
@@ -851,6 +1190,7 @@
         if (payload?.status === 'error') return;
         const data = payload?.status === 'success' ? payload.data : payload?.data || payload;
         if (!data || typeof data !== 'object') return;
+        if (!taskMatchesProfile(data, selectedProfileId.value)) return;
         const taskId = getTaskId(data);
         const actionFromPayload = data.action || data.taskType || data.kind || data.type || '';
         const action =
@@ -862,29 +1202,21 @@
 
         activeTasks.value[action] = '';
         if (action === 'discover') discovering.value = false;
-        if (action === 'download') downloading.value = false;
         if (action === 'import') importing.value = false;
         if (action === 'compile') compiling.value = false;
+        const taskFailed = (data.phase || data.status) === 'failed';
         if (action === 'download') {
-            const taskFailed = (data.phase || data.status) === 'failed';
-            modules.value.forEach(module => {
-                if (module.status !== 'downloading') return;
-                module.status = taskFailed ? 'failed' : module.isLocal ? 'downloaded' : 'remote';
-                if (taskFailed) module.message = data.message || data.error?.message || '下载任务失败';
-            });
-            for (const failure of data.result?.failed || []) {
-                const module = modules.value.find(
-                    item =>
-                        item.name === (failure.name || failure.identifier) &&
-                        (!failure.revision || item.revision === failure.revision)
-                );
-                if (module) {
-                    module.status = 'failed';
-                    module.message = failure.error || failure.message || '下载失败';
-                }
+            deviceDownloadTerminalHandled.value = true;
+            if (taskFailed || (data.phase || data.status) === 'cancelled') {
+                downloading.value = false;
+                deviceModuleError.value =
+                    data.message || data.error?.message || (taskFailed ? '模型或依赖下载失败' : '模型下载已取消');
+                if (taskFailed) notify.error(deviceModuleError.value);
+                Promise.all([loadModules(), loadCompileContext({ quiet: true })]);
+            } else {
+                finishDeviceDownload(data.result || {}, selectedProfileId.value, profileRequestRevision);
             }
         }
-        const taskFailed = (data.phase || data.status) === 'failed';
         if (action === 'compile' && taskFailed) {
             refreshCompilerStatus({ force: true });
             modules.value.forEach(module => {
@@ -894,13 +1226,15 @@
                 }
             });
         }
-        if ((data.phase || data.status) === 'failed') {
+        if (action !== 'download' && (data.phase || data.status) === 'failed') {
             notify.error(data.message || data.error?.message || 'YANG 任务失败');
         }
-        Promise.all([
-            loadModules(),
-            action === 'compile' ? loadDiagnostics({ quiet: true }) : loadCompileContext({ quiet: true })
-        ]);
+        if (action !== 'download') {
+            Promise.all([
+                loadModules(),
+                action === 'compile' ? loadDiagnostics({ quiet: true }) : loadCompileContext({ quiet: true })
+            ]);
+        }
         window.setTimeout(() => {
             if (taskProgress.value && getTaskId(taskProgress.value) === taskId) taskProgress.value = null;
         }, 4000);
@@ -908,19 +1242,66 @@
 
     const handleSessionEvent = payload => {
         const data = normalizeSessionEvent(payload);
+        if (data?.profileId && data.profileId !== selectedProfileId.value) return;
         const status = data?.status || data?.state;
         connected.value = data?.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
     };
 
+    const resetProfileState = () => {
+        profileRequestRevision += 1;
+        diagnosticRequestRevision += 1;
+        compileContextRequestRevision += 1;
+        sourceRequestRevision += 1;
+        modules.value = [];
+        selectedKeys.value = [];
+        deviceModules.value = [];
+        deviceSelectedKeys.value = [];
+        deviceModuleQuery.value = '';
+        deviceModuleError.value = '';
+        deviceDownloadFailures.value = [];
+        deviceDownloadTerminalHandled.value = false;
+        diagnostics.value = [];
+        diagnosticLoadedCompileId.value = '';
+        compileContext.value = { compileId: '', success: null, compiledAt: null, summary: {} };
+        connected.value = false;
+        activeTasks.value = { discover: '', download: '', import: '', compile: '' };
+        taskProgress.value = null;
+        loading.value = false;
+        discovering.value = false;
+        downloading.value = false;
+        importing.value = false;
+        compiling.value = false;
+        diagnosticLoading.value = false;
+        sourceLoading.value = false;
+        deviceModuleModalOpen.value = false;
+        diagnosticModalOpen.value = false;
+        sourceDrawerOpen.value = false;
+        sourceModule.value = null;
+        sourceText.value = '';
+    };
+
+    const reloadCurrentProfile = () =>
+        Promise.all([loadModules(), loadSession(), loadCompileContext({ quiet: true })]);
+
+    watch(selectedProfileId, (profileId, previousProfileId) => {
+        if (profileId === previousProfileId) return;
+        resetProfileState();
+        if (profileContextReady) reloadCurrentProfile();
+    });
+
     onMounted(async () => {
         EventBus.on(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.MODULES, handleTaskProgress);
         EventBus.on(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.MODULES}-session`, handleSessionEvent);
-        await Promise.all([loadModules(), loadSession(), refreshCompilerStatus(), loadCompileContext({ quiet: true })]);
+        await refreshProfiles();
+        profileContextReady = true;
+        await Promise.all([reloadCurrentProfile(), refreshCompilerStatus()]);
     });
 
-    onActivated(() =>
-        Promise.all([loadModules(), loadSession(), refreshCompilerStatus(), loadCompileContext({ quiet: true })])
-    );
+    onActivated(async () => {
+        await refreshProfiles();
+        profileContextReady = true;
+        await Promise.all([reloadCurrentProfile(), refreshCompilerStatus()]);
+    });
 
     onDeactivated(() => {
         diagnosticRequestRevision += 1;
@@ -928,6 +1309,7 @@
         sourceRequestRevision += 1;
         diagnosticLoading.value = false;
         sourceLoading.value = false;
+        deviceModuleModalOpen.value = false;
         diagnosticModalOpen.value = false;
         sourceDrawerOpen.value = false;
     });
@@ -959,42 +1341,69 @@
 
     .module-toolbar {
         display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 10px;
+        flex-direction: column;
+        gap: 8px;
         margin-bottom: 8px;
     }
 
-    .module-actions,
-    .module-filters {
+    .module-profile-row,
+    .module-actions {
         display: flex;
-        flex-wrap: wrap;
         align-items: center;
         gap: 6px;
     }
 
-    .module-filters {
-        justify-content: flex-end;
+    .module-profile-row {
+        min-width: 0;
+        min-height: 32px;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 8px 12px;
     }
 
-    .module-search {
-        width: 270px;
+    .module-refresh-action {
+        width: 88px;
+        flex: 0 0 88px;
     }
 
-    .compact-select {
-        width: 126px;
+    .module-actions {
+        min-height: 32px;
+        flex-wrap: wrap;
+    }
+
+    .module-action-button {
+        width: 112px;
+        flex: 0 0 112px;
+    }
+
+    .module-action-device,
+    .module-action-device-wrap {
+        width: 136px;
+        flex-basis: 136px;
+    }
+
+    .module-action-diagnostics {
+        width: 150px;
+        flex-basis: 150px;
+    }
+
+    .module-action-standard-wrap {
+        width: 112px;
+        flex-basis: 112px;
     }
 
     .disabled-action-wrap {
         display: inline-flex;
+        flex: none;
     }
 
     .selection-row {
         display: flex;
+        container: module-selection / inline-size;
         align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        min-height: 32px;
+        justify-content: flex-start;
+        gap: 8px;
+        min-height: 42px;
         padding: 4px 8px;
         border: 1px solid var(--nn-color-border-light);
         border-bottom: 0;
@@ -1002,9 +1411,29 @@
         background: var(--nn-color-bg-muted);
     }
 
-    .selection-meta {
-        color: var(--nn-color-text-muted);
-        font-size: 11px;
+    .selection-filters {
+        display: flex;
+        width: min(498px, 100%);
+        min-width: 0;
+        flex: 0 1 498px;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .selection-search {
+        width: 340px;
+        min-width: 220px;
+        flex: 0 1 340px;
+    }
+
+    .selection-status {
+        width: 150px;
+        flex: 0 0 150px;
+    }
+
+    .selection-search :deep(.module-search),
+    .selection-status :deep(.compact-select) {
+        width: 100%;
     }
 
     .module-table {
@@ -1034,6 +1463,71 @@
     .mono-text {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 12px;
+    }
+
+    .device-module-dialog {
+        display: flex;
+        min-height: min(560px, calc(100vh - 190px));
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .device-module-toolbar,
+    .device-module-selection-row,
+    .device-module-footer,
+    .device-download-progress {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    .device-module-toolbar {
+        flex-wrap: wrap;
+    }
+
+    .device-module-search {
+        width: min(420px, 100%);
+    }
+
+    .device-module-message {
+        flex: none;
+    }
+
+    .device-module-selection-row {
+        min-height: 34px;
+        padding: 5px 8px;
+        border: 1px solid var(--nn-color-border-light);
+        border-bottom: 0;
+        border-radius: 6px 6px 0 0;
+        background: var(--nn-color-bg-muted);
+        color: var(--nn-color-text-muted);
+        font-size: 11px;
+    }
+
+    .device-module-table {
+        min-height: 0;
+        flex: 1;
+        margin-top: -10px;
+    }
+
+    .device-download-progress {
+        padding: 8px 10px;
+        border: 1px solid var(--nn-color-border-info);
+        border-radius: 6px;
+        background: var(--nn-color-bg-info-subtle);
+        color: var(--nn-color-text-info);
+        font-size: 12px;
+    }
+
+    .device-module-footer {
+        width: 100%;
+    }
+
+    .device-module-footer > span {
+        color: var(--nn-color-text-muted);
+        font-size: 11px;
+        text-align: left;
     }
 
     .diagnostic-context-bar,
@@ -1127,14 +1621,36 @@
         white-space: pre;
     }
 
-    @media (max-width: 1100px) {
-        .module-toolbar {
+    @container module-selection (max-width: 600px) {
+        .selection-filters {
+            width: 100%;
+            flex-basis: 100%;
+        }
+
+        .selection-search {
+            flex: 1 1 auto;
+        }
+    }
+
+    @container module-selection (max-width: 390px) {
+        .selection-filters {
+            align-items: stretch;
             flex-direction: column;
         }
 
-        .module-filters {
+        .selection-search,
+        .selection-status {
             width: 100%;
-            justify-content: flex-start;
+            min-width: 0;
+            flex-basis: auto;
+        }
+    }
+
+    @media (max-width: 1100px) {
+        .device-module-selection-row,
+        .device-module-footer {
+            align-items: flex-start;
+            flex-direction: column;
         }
     }
 </style>

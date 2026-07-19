@@ -245,6 +245,58 @@ async function run() {
         assert.equal(cached.compileId, compiled.compileId);
         assert.equal(cached.cacheHit, true);
 
+        const replicaImport = registry.importContents(
+            [
+                { content: commonTypes, expectedName: 'common-types', revision: '2025-01-02', source: 'replica' },
+                { content: demoExtra, expectedName: 'demo-extra', revision: '2026-07-18', source: 'replica' },
+                { content: demo, expectedName: 'demo', revision: '2026-07-18', source: 'replica' },
+                { content: demoAugment, expectedName: 'demo-augment', revision: '2026-07-18', source: 'replica' }
+            ],
+            { workspaceId: 'replica' }
+        );
+        const defaultEntries = registry.listModules();
+        const replicaEntries = registry.listModules({ workspaceId: 'replica' });
+        assert.equal(replicaEntries.length, defaultEntries.length);
+        for (const replicaEntry of replicaEntries) {
+            const defaultEntry = defaultEntries.find(entry => entry.hash === replicaEntry.hash);
+            assert(defaultEntry);
+            assert.notEqual(replicaEntry.filePath, defaultEntry.filePath);
+            assert(fs.existsSync(replicaEntry.filePath));
+        }
+        assert(replicaImport.imported.every(entry => entry.deduplicated === false));
+        const replicaCompiled = await registry.compile({ workspaceId: 'replica' });
+        assert.equal(replicaCompiled.compileId, compiled.compileId);
+        assert.equal(replicaCompiled.cacheHit, true, 'compiled cache must remain shared across isolated workspaces');
+        registry.importContents(
+            [
+                {
+                    content:
+                        'module replica-extra { yang-version 1.1; namespace "urn:replica:extra"; prefix re; revision 2026-07-19; }',
+                    expectedName: 'replica-extra'
+                }
+            ],
+            { workspaceId: 'replica' }
+        );
+        assert.throws(
+            () =>
+                registry.getSchemaRoots({
+                    workspaceId: 'replica',
+                    compileId: replicaCompiled.compileId
+                }),
+            /is not loaded for workspace:replica/u,
+            'changing workspace sources must invalidate its implicit compiled context'
+        );
+        registry.clearWorkspace('replica');
+        assert.equal(registry.listModules({ workspaceId: 'replica' }).length, 0);
+        assert.throws(
+            () => registry.getSchemaRoots({ workspaceId: 'replica' }),
+            /No YANG compilation is loaded for workspace:replica/u
+        );
+        assert.equal(registry.listModules().length, 4);
+        assert.equal((await registry.compile()).compileId, compiled.compileId);
+        assert.equal(registry.deleteWorkspace('replica'), true);
+        assert.equal(registry.listModules().length, 4);
+
         const restoredRegistry = createRegistry();
         const restored = await restoredRegistry.compile();
         assert.equal(restored.cacheHit, true, 'a fresh registry must restore the authoritative Schema cache');
@@ -390,7 +442,10 @@ async function run() {
                 item => item.code === 'DUPLICATE_REVISION' && item.authoritative === false
             )
         );
-        assert.equal(registry.getSchemaRoots({ compileId: dependencyFailure.compileId }).length, 0);
+        assert.equal(
+            registry.getSchemaRoots({ workspaceId: 'dependency-errors', compileId: dependencyFailure.compileId }).length,
+            0
+        );
 
         const invalidType = `module invalid-type {
   yang-version 1.1;
@@ -414,7 +469,10 @@ async function run() {
             ),
             JSON.stringify(semanticFailure.diagnostics, null, 2)
         );
-        assert.equal(registry.getSchemaRoots({ compileId: semanticFailure.compileId }).length, 0);
+        assert.equal(
+            registry.getSchemaRoots({ workspaceId: 'semantic-error', compileId: semanticFailure.compileId }).length,
+            0
+        );
 
         const unavailableRegistry = new YangRegistry({
             rootDir: path.join(tempDir, 'unavailable-repository'),

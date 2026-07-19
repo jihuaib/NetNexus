@@ -81,8 +81,10 @@ try {
 
     const lexicalEntry = imported.imported.find(entry => entry.metadata?.name === 'lexical-demo');
     assert(lexicalEntry);
-    assert(fs.existsSync(lexicalEntry.blobPath));
-    assert.match(lexicalEntry.blobPath, /blobs[/\\][a-f0-9]{2}[/\\][a-f0-9]{64}\.yang$/);
+    assert(fs.existsSync(lexicalEntry.filePath));
+    assert.match(lexicalEntry.filePath, /workspaces[/\\]default[/\\]modules[/\\][a-f0-9]{64}\.yang$/);
+    assert.equal(fs.existsSync(path.join(repositoryRoot, 'blobs')), false);
+    assert.equal(fs.existsSync(path.join(repositoryRoot, 'catalog.json')), false);
 
     const downloaded = registry.importContents([
         {
@@ -95,7 +97,26 @@ try {
     assert.equal(downloaded.imported[0].hash, lexicalEntry.hash);
     assert.equal(downloaded.imported[0].deduplicated, true);
     assert(downloaded.imported[0].origins.includes('netconf://router-1/get-schema'));
-    assert.equal(downloaded.workspace.modules.length, 2, 'workspace references must deduplicate identical blobs');
+    assert.equal(downloaded.workspace.modules.length, 2, 'workspace references must deduplicate identical modules');
+
+    const isolated = registry.importContents(
+        [
+            {
+                content: lexicalSource,
+                expectedName: 'lexical-demo',
+                revision: '2026-07-18',
+                source: 'netconf://router-2/get-schema'
+            }
+        ],
+        { workspaceId: 'router-two', workspaceMetadata: { profileId: 'router-two' } }
+    );
+    const isolatedEntry = isolated.imported[0];
+    assert.equal(isolatedEntry.hash, lexicalEntry.hash);
+    assert.equal(isolatedEntry.deduplicated, false, 'deduplication must be scoped to one workspace');
+    assert.notEqual(isolatedEntry.filePath, lexicalEntry.filePath);
+    assert.match(isolatedEntry.filePath, /workspaces[/\\]router-two[/\\]modules[/\\][a-f0-9]{64}\.yang$/);
+    assert(fs.existsSync(isolatedEntry.filePath));
+    assert.equal(fs.readFileSync(isolatedEntry.filePath, 'utf8'), fs.readFileSync(lexicalEntry.filePath, 'utf8'));
 
     const mismatched = registry.importContents(
         [{ content: lexicalSource, expectedName: 'wrong-name', revision: '1999-01-01', source: 'netconf://bad' }],
@@ -108,7 +129,33 @@ try {
     assert.equal(snapshot.type, 'snapshot');
     assert.equal(snapshot.modules.length, 2);
     assert(fs.existsSync(path.join(repositoryRoot, 'snapshots', snapshot.id, 'manifest.json')));
+    const snapshotEntry = registry.repository
+        .resolveEntries({ snapshotId: snapshot.id, hashes: [lexicalEntry.hash] })
+        .at(0);
+    assert(fs.existsSync(snapshotEntry.filePath));
+    assert.match(snapshotEntry.filePath, /snapshots[/\\]router-1-20260718[/\\]modules[/\\][a-f0-9]{64}\.yang$/);
+    assert.notEqual(snapshotEntry.filePath, lexicalEntry.filePath, 'snapshots must own their module files');
     assert.throws(() => registry.createSnapshot({ id: snapshot.id }), /immutable/, 'snapshots must not be overwritten');
+    const isolatedBeforeSnapshotConflict = registry.getWorkspace('router-two');
+    assert.throws(
+        () =>
+            registry.importContents(
+                [
+                    {
+                        content:
+                            'module snapshot-conflict { namespace "urn:snapshot:conflict"; prefix sc; revision 2026-07-19; }',
+                        expectedName: 'snapshot-conflict'
+                    }
+                ],
+                { workspaceId: 'router-two', snapshotId: snapshot.id }
+            ),
+        /immutable/u
+    );
+    assert.deepEqual(
+        registry.getWorkspace('router-two'),
+        isolatedBeforeSnapshotConflict,
+        'a snapshot ID conflict must not partially modify the Profile workspace'
+    );
 
     const source = registry.getModuleSource({ name: 'lexical-demo', revision: '2026-07-18' });
     assert.equal(source.hash, lexicalEntry.hash);
@@ -118,10 +165,18 @@ try {
     assert.equal(cleared.modules.length, 0);
     assert.equal(registry.listModules().length, 0);
     assert.equal(
-        registry.repository.listModules().length,
-        2,
-        'clearing a workspace must retain content-addressed blobs'
+        registry.listModules({ workspaceId: 'router-two' }).length,
+        1,
+        'clearing one workspace must retain another workspace and its files'
     );
+    assert(fs.existsSync(isolatedEntry.filePath));
+    assert.equal(registry.repository.resolveEntries({ snapshotId: snapshot.id }).length, 2);
+
+    assert.equal(registry.deleteWorkspace(), true);
+    assert.equal(registry.getWorkspace(), null);
+    assert.equal(registry.listModules({ workspaceId: 'router-two' }).length, 1);
+    assert(fs.existsSync(isolatedEntry.filePath), 'deleting one workspace must not remove another workspace module');
+    assert.equal(registry.deleteWorkspace(), false);
 
     const temporaryFiles = [];
     const visit = directory => {

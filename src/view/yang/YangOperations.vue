@@ -853,6 +853,10 @@
     const emit = defineEmits(['executing-change']);
 
     const props = defineProps({
+        profileId: {
+            type: String,
+            default: ''
+        },
         embedded: {
             type: Boolean,
             default: false
@@ -959,6 +963,7 @@
     });
     let parameterContextMenuOpenRequest = 0;
     let parameterActionOpenRequest = 0;
+    let parameterSchemaRequestRevision = 0;
     let parameterContextMenuTrigger = null;
     const parameterSchemaChildrenCache = new Map();
     const parameterDiscoveredSchemaNodes = ref([]);
@@ -1869,10 +1874,15 @@
         if (!node) return [];
         if (Array.isArray(node.children) && (node.children.length || node.childrenLoaded)) return node.children;
         if (!props.compileId || !node.id || node.isLeaf) return [];
-        const cacheKey = `${props.compileId}:${node.id}`;
+        const profileId = props.profileId;
+        const requestedCompileId = props.compileId;
+        const requestedContextRevision = props.contextRevision;
+        const requestRevision = parameterSchemaRequestRevision;
+        const cacheKey = `${profileId}\u0000${requestedCompileId}\u0000${node.id}`;
         if (!parameterSchemaChildrenCache.has(cacheKey)) {
             const childRequest = invokeBridge('yangApi', 'getSchemaChildren', {
-                compileId: props.compileId,
+                profileId,
+                compileId: requestedCompileId,
                 parentId: node.id,
                 nodeId: node.id
             })
@@ -1886,6 +1896,14 @@
             parameterSchemaChildrenCache.set(cacheKey, childRequest);
         }
         const children = await parameterSchemaChildrenCache.get(cacheKey);
+        if (
+            requestRevision !== parameterSchemaRequestRevision ||
+            profileId !== props.profileId ||
+            requestedCompileId !== props.compileId ||
+            requestedContextRevision !== props.contextRevision
+        ) {
+            return [];
+        }
         const knownKeys = new Set(
             parameterDiscoveredSchemaNodes.value.map(candidate => candidate.id || candidate.path).filter(Boolean)
         );
@@ -2389,6 +2407,7 @@
         requestValidating.value = true;
         try {
             const { data } = await invokeBridge('yangApi', 'validateRpc', {
+                profileId: props.profileId,
                 compileId: props.compileId,
                 rpc: source
             });
@@ -2600,7 +2619,8 @@
         const operationLabel = manualRequest ? `${operation}（手工 RPC）` : activeOperationMeta.value.label;
         const executionContextRevision = props.contextRevision;
         const requestXml = manualRequest ? currentRequestXml.value : requestPreview.value;
-        const request = manualRequest || operation === 'raw-rpc' ? { rpc: requestXml } : buildPayload();
+        const operationRequest = manualRequest || operation === 'raw-rpc' ? { rpc: requestXml } : buildPayload();
+        const request = { ...operationRequest, profileId: props.profileId };
         const method = manualRequest || operation === 'raw-rpc' ? 'sendRpc' : 'executeOperation';
         const historyId = beginOperationHistory({
             operation,
@@ -2675,19 +2695,29 @@
 
     const loadSession = async () => {
         sessionLoading.value = true;
+        const requestedProfileId = props.profileId;
+        if (!requestedProfileId) {
+            session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
+            sessionLoading.value = false;
+            return;
+        }
         try {
-            const { data } = await invokeBridge('netconfApi', 'getSessionState');
+            const { data } = await invokeBridge('netconfApi', 'getSessionState', requestedProfileId);
+            if (requestedProfileId !== props.profileId) return;
             session.value = { ...session.value, ...(data || {}) };
         } catch (error) {
+            if (requestedProfileId !== props.profileId) return;
             session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
             console.warn('Unable to load NETCONF session state:', error.message);
         } finally {
-            sessionLoading.value = false;
+            if (requestedProfileId === props.profileId) sessionLoading.value = false;
         }
     };
 
     const handleSessionEvent = payload => {
-        session.value = normalizeSessionEvent(payload, session.value);
+        const next = normalizeSessionEvent(payload, session.value);
+        if (next?.profileId && next.profileId !== props.profileId) return;
+        session.value = next;
     };
 
     const clearResult = () => {
@@ -2737,6 +2767,7 @@
 
         try {
             const { data } = await invokeBridge('netconfApi', 'executeOperation', {
+                profileId: props.profileId,
                 operation: 'get-config',
                 source,
                 filter: { type: 'subtree', content: props.contextSubtree }
@@ -2810,6 +2841,7 @@
 
     const applyOperationContext = () => {
         if (!props.embedded) return;
+        parameterSchemaRequestRevision += 1;
         applyingOperationContext = true;
         restoreGeneratedRequest({ silent: true });
         cancelEditConfigReadback();
@@ -2930,9 +2962,23 @@
     watch(
         () => props.compileId,
         () => {
+            parameterSchemaRequestRevision += 1;
             clearRequestValidation();
             parameterSchemaChildrenCache.clear();
             parameterDiscoveredSchemaNodes.value = [];
+        }
+    );
+    watch(
+        () => props.profileId,
+        () => {
+            parameterSchemaRequestRevision += 1;
+            cancelEditConfigReadback();
+            clearRequestValidation();
+            clearResult();
+            parameterSchemaChildrenCache.clear();
+            parameterDiscoveredSchemaNodes.value = [];
+            session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
+            void loadSession();
         }
     );
     watch([executing, editConfigLoading], ([isExecuting, isReading]) => {
@@ -2943,6 +2989,7 @@
     watch(
         () => [
             props.embedded,
+            props.profileId,
             props.operation,
             props.contextNode?.id,
             props.contextNode?.path,

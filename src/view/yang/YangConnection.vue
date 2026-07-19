@@ -304,7 +304,7 @@
 </template>
 
 <script setup>
-    import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref } from 'vue';
+    import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue';
     import {
         DEFAULT_NETCONF_PROFILE,
         NETCONF_AUTH_OPTIONS,
@@ -325,6 +325,7 @@
         normalizeSessionEvent,
         unwrapArray
     } from './yangUiUtils';
+    import { useYangProfileContext } from './useYangProfileContext';
 
     defineOptions({ name: 'YangConnection' });
 
@@ -339,6 +340,13 @@
     ];
     const profiles = ref([]);
     const selectedProfileId = ref('');
+    const {
+        selectedProfileId: sharedProfileId,
+        refreshProfiles: refreshSharedProfiles,
+        selectProfile: selectSharedProfile,
+        upsertProfile: upsertSharedProfile,
+        removeProfile: removeSharedProfile
+    } = useYangProfileContext();
     const draft = ref(clonePlain(DEFAULT_NETCONF_PROFILE));
     const savedFingerprint = ref('');
     const profileLoading = ref(false);
@@ -352,6 +360,26 @@
     const capabilityQuery = ref('');
     const testResultOpen = ref(false);
     const testResult = ref({ success: false, message: '' });
+    let profileContextRevision = 0;
+    let profileListRequestRevision = 0;
+    let saveRequestRevision = 0;
+    let testRequestRevision = 0;
+    let privateKeyRequestRevision = 0;
+    let connectRequestRevision = 0;
+    let disconnectRequestRevision = 0;
+
+    const profileContextMatches = (profileId, revision) =>
+        revision === profileContextRevision && String(selectedProfileId.value || '') === String(profileId || '');
+
+    const invalidateProfileContext = () => {
+        profileContextRevision += 1;
+        saving.value = false;
+        testing.value = false;
+        connecting.value = false;
+        disconnecting.value = false;
+        privateKeySelecting.value = false;
+        testResultOpen.value = false;
+    };
 
     const normalizeProfile = profile => ({
         ...clonePlain(DEFAULT_NETCONF_PROFILE),
@@ -425,43 +453,75 @@
     };
 
     const loadProfiles = async ({ preserveSelection = true } = {}) => {
+        const requestRevision = ++profileListRequestRevision;
         profileLoading.value = true;
         try {
-            const { data } = await invokeBridge('netconfApi', 'listProfiles');
-            profiles.value = unwrapArray(data, ['profiles', 'items']).map(normalizeProfile);
+            const loadedProfiles = await refreshSharedProfiles();
+            if (requestRevision !== profileListRequestRevision) return;
+            const localDrafts = profiles.value.filter(profile => String(profile.id).startsWith('draft-'));
+            profiles.value = [
+                ...loadedProfiles.map(normalizeProfile),
+                ...localDrafts.filter(draftProfile =>
+                    loadedProfiles.every(profile => profile.id !== draftProfile.id)
+                )
+            ];
             const existing = preserveSelection
                 ? profiles.value.find(profile => profile.id === selectedProfileId.value)
                 : null;
-            const nextProfile = existing || profiles.value[0];
+            const shared = profiles.value.find(profile => profile.id === sharedProfileId.value);
+            const nextProfile = (existing && String(existing.id).startsWith('draft-') ? existing : null) ||
+                shared ||
+                existing ||
+                profiles.value[0];
             if (nextProfile) {
+                const preserveCurrentDraft = existing === nextProfile && isDirty.value;
+                if (!preserveCurrentDraft) invalidateProfileContext();
                 selectedProfileId.value = nextProfile.id;
-                applyDraft(nextProfile);
+                if (!String(nextProfile.id).startsWith('draft-')) selectSharedProfile(nextProfile.id);
+                if (!preserveCurrentDraft) applyDraft(nextProfile);
             } else {
+                invalidateProfileContext();
                 selectedProfileId.value = '';
                 applyDraft(DEFAULT_NETCONF_PROFILE);
             }
         } catch (error) {
-            notify.error(`加载连接 Profile 失败：${error.message}`);
+            if (requestRevision === profileListRequestRevision) {
+                notify.error(`加载连接 Profile 失败：${error.message}`);
+            }
         } finally {
-            profileLoading.value = false;
+            if (requestRevision === profileListRequestRevision) profileLoading.value = false;
         }
     };
 
     const loadSessionState = async () => {
+        const profileId = String(selectedProfileId.value || '');
+        const requestRevision = profileContextRevision;
+        if (!profileId || profileId.startsWith('draft-')) {
+            session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
+            return;
+        }
         try {
-            const { data } = await invokeBridge('netconfApi', 'getSessionState');
+            const { data } = await invokeBridge('netconfApi', 'getSessionState', profileId);
+            if (!profileContextMatches(profileId, requestRevision)) return;
             session.value = { ...session.value, ...(data || {}) };
         } catch (error) {
-            console.warn('Unable to load NETCONF session state:', error.message);
+            if (profileContextMatches(profileId, requestRevision)) {
+                console.warn('Unable to load NETCONF session state:', error.message);
+            }
         }
     };
 
     const selectProfile = profile => {
+        invalidateProfileContext();
         selectedProfileId.value = profile.id;
+        if (!String(profile.id).startsWith('draft-')) selectSharedProfile(profile.id);
         applyDraft(profile);
+        session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
+        void loadSessionState();
     };
 
     const addProfile = () => {
+        invalidateProfileContext();
         const profile = normalizeProfile({
             id: `draft-${Date.now()}`,
             name: `新连接 ${profiles.value.length + 1}`
@@ -502,31 +562,41 @@
 
     const persistProfile = async ({ silent = false } = {}) => {
         if (!validateDraft()) return null;
+        const actionRevision = ++saveRequestRevision;
+        const requestContextRevision = profileContextRevision;
+        const oldId = String(selectedProfileId.value || '');
+        const draftSnapshot = normalizeProfile(clonePlain(draft.value));
         saving.value = true;
         try {
-            const payload = normalizeProfile(draft.value);
+            const payload = normalizeProfile(clonePlain(draftSnapshot));
             if (String(payload.id).startsWith('draft-')) delete payload.id;
             const { data } = await invokeBridge('netconfApi', 'saveProfile', clonePlain(payload));
-            const returned = data?.profile || data || { ...payload, id: draft.value.id };
+            const returned = data?.profile || data || { ...payload, id: oldId };
             const saved = normalizeProfile({
-                ...draft.value,
+                ...draftSnapshot,
                 ...returned,
-                password: returned.password || draft.value.password,
-                passphrase: returned.passphrase || draft.value.passphrase
+                password: returned.password || draftSnapshot.password,
+                passphrase: returned.passphrase || draftSnapshot.passphrase
             });
-            const oldId = selectedProfileId.value;
             const existingIndex = profiles.value.findIndex(profile => profile.id === oldId);
             if (existingIndex >= 0) profiles.value.splice(existingIndex, 1, saved);
             else profiles.value.push(saved);
-            selectedProfileId.value = saved.id;
-            applyDraft(saved);
+            const contextCurrent = profileContextMatches(oldId, requestContextRevision);
+            if (contextCurrent) {
+                profileContextRevision += 1;
+                selectedProfileId.value = saved.id;
+                upsertSharedProfile(saved);
+                applyDraft(saved);
+            } else {
+                upsertSharedProfile(saved, { select: false });
+            }
             if (!silent) notify.success('连接 Profile 已保存');
-            return saved;
+            return contextCurrent ? saved : null;
         } catch (error) {
-            notify.error(`保存失败：${error.message}`);
+            if (profileContextMatches(oldId, requestContextRevision)) notify.error(`保存失败：${error.message}`);
             return null;
         } finally {
-            saving.value = false;
+            if (actionRevision === saveRequestRevision) saving.value = false;
         }
     };
 
@@ -546,9 +616,20 @@
                         await invokeBridge('netconfApi', 'deleteProfile', profile.id);
                     }
                     profiles.value = profiles.value.filter(item => item.id !== profile.id);
-                    const next = profiles.value[0];
-                    selectedProfileId.value = next?.id || '';
-                    applyDraft(next || DEFAULT_NETCONF_PROFILE);
+                    const nextId = removeSharedProfile(profile.id);
+                    if (selectedProfileId.value === profile.id) {
+                        const next = profiles.value.find(item => item.id === nextId) || profiles.value[0];
+                        invalidateProfileContext();
+                        selectedProfileId.value = next?.id || '';
+                        if (next?.id && !String(next.id).startsWith('draft-')) selectSharedProfile(next.id);
+                        applyDraft(next || DEFAULT_NETCONF_PROFILE);
+                        session.value = {
+                            status: NETCONF_SESSION_STATUS.DISCONNECTED,
+                            connected: false,
+                            capabilities: []
+                        };
+                        if (next?.id && !String(next.id).startsWith('draft-')) void loadSessionState();
+                    }
                     notify.success('连接 Profile 已删除');
                 } catch (error) {
                     notify.error(`删除失败：${error.message}`);
@@ -559,10 +640,15 @@
 
     const testConnection = async () => {
         if (!validateDraft()) return;
+        const actionRevision = ++testRequestRevision;
+        const profileId = String(selectedProfileId.value || '');
+        const requestContextRevision = profileContextRevision;
+        const requestProfile = clonePlain(draft.value);
         testing.value = true;
         try {
             const startedAt = Date.now();
-            const { data } = await invokeBridge('netconfApi', 'testConnection', clonePlain(draft.value));
+            const { data } = await invokeBridge('netconfApi', 'testConnection', requestProfile);
+            if (!profileContextMatches(profileId, requestContextRevision)) return;
             testResult.value = {
                 success: true,
                 latency: data?.latency ?? Date.now() - startedAt,
@@ -570,35 +656,55 @@
             };
             testResultOpen.value = true;
         } catch (error) {
+            if (!profileContextMatches(profileId, requestContextRevision)) return;
             testResult.value = { success: false, message: error.message };
             testResultOpen.value = true;
         } finally {
-            testing.value = false;
+            if (actionRevision === testRequestRevision) testing.value = false;
         }
     };
 
     const selectPrivateKey = async () => {
+        const actionRevision = ++privateKeyRequestRevision;
+        const profileId = String(selectedProfileId.value || '');
+        const requestContextRevision = profileContextRevision;
         privateKeySelecting.value = true;
         try {
             const { data } = await invokeBridge('netconfApi', 'selectPrivateKey');
+            if (!profileContextMatches(profileId, requestContextRevision)) return;
             const filePath = typeof data === 'string' ? data : data?.filePath || data?.path || '';
             if (filePath) draft.value.privateKeyPath = filePath;
         } catch (error) {
-            notify.error(`选择私钥失败：${error.message}`);
+            if (profileContextMatches(profileId, requestContextRevision)) {
+                notify.error(`选择私钥失败：${error.message}`);
+            }
         } finally {
-            privateKeySelecting.value = false;
+            if (actionRevision === privateKeyRequestRevision) privateKeySelecting.value = false;
         }
     };
 
     const connectProfile = async () => {
         if (!validateDraft()) return;
+        const actionRevision = ++connectRequestRevision;
+        const initialProfileId = String(selectedProfileId.value || '');
+        const initialContextRevision = profileContextRevision;
+        let targetProfileId = initialProfileId;
+        let targetContextRevision = initialContextRevision;
         connecting.value = true;
         session.value = { ...session.value, status: NETCONF_SESSION_STATUS.CONNECTING, message: '正在连接设备' };
         try {
             const saved = isDirty.value ? await persistProfile({ silent: true }) : selectedProfile.value || draft.value;
-            if (!saved) throw new Error('Profile 保存失败，连接已取消');
+            if (!saved) {
+                if (!profileContextMatches(initialProfileId, initialContextRevision)) return;
+                throw new Error('Profile 保存失败，连接已取消');
+            }
+            targetProfileId = String(saved.id || '');
+            targetContextRevision = profileContextRevision;
+            if (!profileContextMatches(targetProfileId, targetContextRevision)) return;
+            selectSharedProfile(saved.id);
             const target = saved.id || clonePlain(saved);
             const { data } = await invokeBridge('netconfApi', 'connect', target);
+            if (!profileContextMatches(targetProfileId, targetContextRevision)) return;
             session.value = {
                 ...session.value,
                 ...(data || {}),
@@ -608,6 +714,7 @@
             };
             notify.success(`已连接 ${saved.name || saved.host}`);
         } catch (error) {
+            if (!profileContextMatches(targetProfileId, targetContextRevision)) return;
             session.value = {
                 ...session.value,
                 status: NETCONF_SESSION_STATUS.ERROR,
@@ -616,14 +723,18 @@
             };
             notify.error(`连接失败：${error.message}`);
         } finally {
-            connecting.value = false;
+            if (actionRevision === connectRequestRevision) connecting.value = false;
         }
     };
 
     const disconnectProfile = async () => {
+        const actionRevision = ++disconnectRequestRevision;
+        const profileId = String(activeProfileId.value || selectedProfileId.value || '');
+        const requestContextRevision = profileContextRevision;
         disconnecting.value = true;
         try {
-            const { data } = await invokeBridge('netconfApi', 'disconnect', activeProfileId.value || undefined);
+            const { data } = await invokeBridge('netconfApi', 'disconnect', profileId || undefined);
+            if (!profileContextMatches(profileId, requestContextRevision)) return;
             session.value = {
                 ...(data || {}),
                 status: NETCONF_SESSION_STATUS.DISCONNECTED,
@@ -632,9 +743,11 @@
             };
             notify.success('NETCONF 连接已断开');
         } catch (error) {
-            notify.error(`断开连接失败：${error.message}`);
+            if (profileContextMatches(profileId, requestContextRevision)) {
+                notify.error(`断开连接失败：${error.message}`);
+            }
         } finally {
-            disconnecting.value = false;
+            if (actionRevision === disconnectRequestRevision) disconnecting.value = false;
         }
     };
 
@@ -644,6 +757,7 @@
             return;
         }
         const data = normalizeSessionEvent(payload, session.value);
+        if (data?.profileId && data.profileId !== selectedProfileId.value) return;
         session.value = data;
         connecting.value = ['connecting', 'reconnecting'].includes(data.status || data.state);
         disconnecting.value = (data.status || data.state) === 'disconnecting';
@@ -651,14 +765,35 @@
 
     const clearValidationErrors = () => {};
 
-    defineExpose({ clearValidationErrors, refresh: () => Promise.all([loadProfiles(), loadSessionState()]) });
+    defineExpose({
+        clearValidationErrors,
+        refresh: async () => {
+            await loadProfiles();
+            await loadSessionState();
+        }
+    });
+
+    watch(sharedProfileId, profileId => {
+        if (!profileId || profileId === selectedProfileId.value) return;
+        const profile = profiles.value.find(item => item.id === profileId);
+        if (!profile) return;
+        invalidateProfileContext();
+        selectedProfileId.value = profile.id;
+        applyDraft(profile);
+        session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
+        void loadSessionState();
+    });
 
     onMounted(async () => {
         EventBus.on(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.CONNECTION, handleSessionEvent);
-        await Promise.all([loadProfiles(), loadSessionState()]);
+        await loadProfiles();
+        await loadSessionState();
     });
 
-    onActivated(loadSessionState);
+    onActivated(async () => {
+        await loadProfiles();
+        await loadSessionState();
+    });
 
     onBeforeUnmount(() => {
         EventBus.off(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.CONNECTION);

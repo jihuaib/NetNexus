@@ -87,6 +87,7 @@
             autocorrect="off"
             @input="handleInput"
             @scroll="syncHighlightScroll"
+            @select="syncHighlightAfterSelection"
             @focus="emit('focus', $event)"
             @blur="emit('blur', $event)"
             @keydown="handleKeydown"
@@ -199,6 +200,11 @@
         if (diagnosticsRef.value) diagnosticsRef.value.scrollTop = textarea.scrollTop;
     };
 
+    const syncHighlightAfterSelection = event => {
+        const textarea = event?.target;
+        requestAnimationFrame(() => syncHighlightScroll({ target: textarea }));
+    };
+
     const handleInput = event => {
         emit('update:value', event.target.value);
         emit('input', event);
@@ -257,8 +263,8 @@
         tab-size: 2;
     }
 
-    .xml-code-editor-highlight,
-    .xml-code-editor-input {
+    .xml-code-editor > .xml-code-editor-highlight,
+    .xml-code-editor > .xml-code-editor-input {
         box-sizing: border-box;
         width: 100%;
         min-width: 0;
@@ -274,9 +280,10 @@
         line-height: var(--xml-code-line-height);
         tab-size: inherit;
         white-space: pre;
+        word-break: normal;
     }
 
-    .xml-code-editor-highlight {
+    .xml-code-editor > .xml-code-editor-highlight {
         position: absolute;
         z-index: 0;
         inset: 0;
@@ -285,7 +292,7 @@
         pointer-events: none;
     }
 
-    .xml-code-editor-highlight::after {
+    .xml-code-editor > .xml-code-editor-highlight::after {
         content: ' ';
     }
 
@@ -414,9 +421,12 @@
         background: transparent;
         caret-color: var(--nn-color-text);
         color: transparent;
+        cursor: text;
         outline: none;
         resize: vertical;
+        user-select: text;
         -webkit-text-fill-color: transparent;
+        -webkit-user-select: text;
     }
 
     .xml-code-editor-input:hover:not(:disabled):not(:read-only) {
@@ -435,8 +445,9 @@
     }
 
     .xml-code-editor-input::selection {
-        background: color-mix(in srgb, var(--nn-color-primary) 28%, transparent);
+        background-color: rgba(22, 119, 255, 0.62);
         color: transparent;
+        text-shadow: none;
         -webkit-text-fill-color: transparent;
     }
 
@@ -454,7 +465,7 @@
     }
 
     .xml-code-editor-readonly .xml-code-editor-input {
-        cursor: default;
+        cursor: text;
         resize: none;
     }
 

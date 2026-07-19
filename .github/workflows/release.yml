@@ -48,9 +48,6 @@ jobs:
             - name: Run Windows lint
               run: npm run lint
 
-            - name: Build bundled libyang runtime
-              run: npm run libyang:build:windows
-
             - name: Test bundled libyang runtime
               run: npm run libyang:smoke
 
@@ -105,17 +102,14 @@ jobs:
               with:
                   python-version: '3.11'
 
+            - name: Install libyang build dependencies
+              run: brew install cmake
+
             - name: Install dependencies
               run: npm ci
 
             - name: Run macOS lint
               run: npm run lint
-
-            - name: Install libyang build dependencies
-              run: brew install cmake
-
-            - name: Build bundled libyang runtime
-              run: npm run libyang:build:unix
 
             - name: Test bundled libyang runtime
               run: npm run libyang:smoke
