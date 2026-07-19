@@ -5,37 +5,8 @@
                 <nn-space>
                     <nn-tag :color="sessionStatusMeta.color">NETCONF {{ sessionStatusMeta.text }}</nn-tag>
                     <nn-tag color="blue">Profile {{ profiles.length }}</nn-tag>
-                    <nn-tag v-if="isConnected" color="cyan">Capability {{ capabilities.length }}</nn-tag>
                 </nn-space>
             </template>
-
-            <div class="connection-status-bar">
-                <div class="connection-status-main">
-                    <span class="status-dot" :class="'status-dot-' + sessionStatus" />
-                    <div class="connection-status-content">
-                        <div class="connection-status-title">NETCONF 会话</div>
-                        <div class="connection-status-description">
-                            {{ sessionDescription }}
-                        </div>
-                    </div>
-                </div>
-                <nn-space wrap class="connection-status-actions">
-                    <nn-button :disabled="!isConnected" @click="capabilityModalOpen = true">
-                        设备 Capability {{ capabilities.length }}
-                    </nn-button>
-                    <nn-button
-                        v-if="!isConnected"
-                        type="primary"
-                        :loading="connecting"
-                        :disabled="!selectedProfileId"
-                        @click="connectProfile"
-                    >
-                        <template #icon><ApiOutlined /></template>
-                        连接
-                    </nn-button>
-                    <nn-button v-else danger :loading="disconnecting" @click="disconnectProfile">断开连接</nn-button>
-                </nn-space>
-            </div>
 
             <div class="connection-layout">
                 <section class="connection-panel profile-card">
@@ -104,6 +75,16 @@
                             >
                                 <template #icon><SaveOutlined /></template>
                                 保存
+                            </nn-button>
+                            <nn-button
+                                v-if="!isConnected"
+                                type="primary"
+                                :loading="connecting"
+                                :disabled="!selectedProfileId"
+                                @click="connectProfile"
+                            >
+                                <template #icon><ApiOutlined /></template>
+                                连接
                             </nn-button>
                             <nn-button danger :disabled="!selectedProfileId" @click="deleteProfile">
                                 <template #icon><DeleteOutlined /></template>
@@ -242,46 +223,64 @@
                 <div class="connection-panel-header session-panel-header">
                     <div class="connection-panel-heading">
                         <span class="connection-panel-title">当前会话</span>
-                        <span class="connection-panel-meta">NETCONF 会话与服务端能力摘要</span>
                     </div>
                 </div>
                 <div class="session-panel-body">
-                    <nn-descriptions :column="3" bordered size="small">
-                        <nn-descriptions-item label="Profile">
-                            {{ session.profileName || selectedProfile?.name || '-' }}
-                        </nn-descriptions-item>
-                        <nn-descriptions-item label="远端">
-                            {{ session.host || selectedProfile?.host || '-' }}:{{
-                                session.port || selectedProfile?.port || 830
-                            }}
-                        </nn-descriptions-item>
-                        <nn-descriptions-item label="NETCONF Base">
-                            {{ session.baseVersion || session.version || '-' }}
-                        </nn-descriptions-item>
-                        <nn-descriptions-item label="Session ID">{{ session.sessionId || '-' }}</nn-descriptions-item>
-                        <nn-descriptions-item label="连接时间">
-                            {{ formatDateTime(session.connectedAt) }}
-                        </nn-descriptions-item>
-                        <nn-descriptions-item label="能力数量">{{ capabilities.length }}</nn-descriptions-item>
-                    </nn-descriptions>
+                    <nn-table
+                        :columns="sessionColumns"
+                        :data-source="currentSessionRows"
+                        :pagination="false"
+                        :scroll="{ x: 1070 }"
+                        row-key="key"
+                        size="small"
+                        bordered
+                        class="session-table"
+                    >
+                        <template #bodyCell="{ column }">
+                            <template v-if="column.key === 'action'">
+                                <nn-space :size="4" class="session-actions">
+                                    <nn-button type="link" size="small" @click="capabilityDrawerOpen = true">
+                                        设备 Capability {{ capabilities.length }}
+                                    </nn-button>
+                                    <nn-button
+                                        type="link"
+                                        danger
+                                        size="small"
+                                        :loading="disconnecting"
+                                        @click="disconnectProfile"
+                                    >
+                                        断开连接
+                                    </nn-button>
+                                </nn-space>
+                            </template>
+                        </template>
+                    </nn-table>
                 </div>
             </section>
         </nn-card>
 
-        <nn-modal v-model:open="capabilityModalOpen" title="设备 Capability" :footer="null" width="880px">
-            <nn-input-search
-                v-model:value="capabilityQuery"
-                allow-clear
-                placeholder="筛选 capability URI"
-                class="capability-search"
-            />
-            <div class="capability-list">
-                <div v-for="capability in filteredCapabilities" :key="capability" class="capability-row">
-                    <nn-typography-text copyable>{{ capability }}</nn-typography-text>
+        <nn-drawer
+            v-model:open="capabilityDrawerOpen"
+            title="设备 Capability"
+            placement="right"
+            width="min(720px, calc(100vw - 24px))"
+            :body-style="{ padding: '12px', overflow: 'hidden' }"
+        >
+            <div class="capability-drawer-content">
+                <nn-input-search
+                    v-model:value="capabilityQuery"
+                    allow-clear
+                    placeholder="筛选 capability URI"
+                    class="capability-search"
+                />
+                <div class="capability-list">
+                    <div v-for="capability in filteredCapabilities" :key="capability" class="capability-row">
+                        <nn-typography-text copyable>{{ capability }}</nn-typography-text>
+                    </div>
+                    <nn-empty v-if="filteredCapabilities.length === 0" description="暂无 Capability" />
                 </div>
-                <nn-empty v-if="filteredCapabilities.length === 0" description="暂无 Capability" />
             </div>
-        </nn-modal>
+        </nn-drawer>
 
         <nn-modal v-model:open="testResultOpen" title="连接测试结果" :footer="null" width="680px">
             <nn-alert
@@ -329,6 +328,14 @@
     defineOptions({ name: 'YangConnection' });
 
     const labelCol = { style: { width: '108px' } };
+    const sessionColumns = [
+        { title: 'Profile', dataIndex: 'profileName', key: 'profileName', width: 160, ellipsis: true },
+        { title: '远端', dataIndex: 'remote', key: 'remote', width: 220, ellipsis: true },
+        { title: 'NETCONF Base', dataIndex: 'baseVersion', key: 'baseVersion', width: 140 },
+        { title: 'Session ID', dataIndex: 'sessionId', key: 'sessionId', width: 150, ellipsis: true },
+        { title: '连接时间', dataIndex: 'connectedAt', key: 'connectedAt', width: 180 },
+        { title: '操作', key: 'action', width: 220, fixed: 'right', align: 'center' }
+    ];
     const profiles = ref([]);
     const selectedProfileId = ref('');
     const draft = ref(clonePlain(DEFAULT_NETCONF_PROFILE));
@@ -340,7 +347,7 @@
     const disconnecting = ref(false);
     const privateKeySelecting = ref(false);
     const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, capabilities: [] });
-    const capabilityModalOpen = ref(false);
+    const capabilityDrawerOpen = ref(false);
     const capabilityQuery = ref('');
     const testResultOpen = ref(false);
     const testResult = ref({ success: false, message: '' });
@@ -375,6 +382,22 @@
     );
     const isConnected = computed(() => sessionStatus.value === NETCONF_SESSION_STATUS.CONNECTED);
     const activeProfileId = computed(() => session.value?.profileId || session.value?.connectionId || '');
+    const currentSessionRows = computed(() => {
+        if (!isConnected.value) return [];
+        const profile = selectedProfile.value;
+        const host = session.value.host || profile?.host || '-';
+        const port = session.value.port || profile?.port || 830;
+        return [
+            {
+                key: session.value.sessionId || activeProfileId.value || 'current-session',
+                profileName: session.value.profileName || profile?.name || '-',
+                remote: `${host}:${port}`,
+                baseVersion: session.value.baseVersion || session.value.version || '-',
+                sessionId: session.value.sessionId || '-',
+                connectedAt: formatDateTime(session.value.connectedAt)
+            }
+        ];
+    });
     const capabilities = computed(() => {
         const values = session.value?.capabilities || session.value?.serverCapabilities || [];
         return [...new Set(unwrapArray(values).map(normalizeCapability).filter(Boolean))];
@@ -382,21 +405,6 @@
     const filteredCapabilities = computed(() => {
         const query = capabilityQuery.value.trim().toLowerCase();
         return query ? capabilities.value.filter(item => item.toLowerCase().includes(query)) : capabilities.value;
-    });
-    const sessionDescription = computed(() => {
-        if (sessionStatus.value === NETCONF_SESSION_STATUS.CONNECTED) {
-            const name = session.value.profileName || selectedProfile.value?.name || '设备';
-            return `${name} · Session ${session.value.sessionId || '-'} · ${capabilities.value.length} 项能力`;
-        }
-        if ([NETCONF_SESSION_STATUS.CONNECTING, NETCONF_SESSION_STATUS.RECONNECTING].includes(sessionStatus.value)) {
-            return session.value.message || '正在建立 SSH NETCONF subsystem 并交换 hello';
-        }
-        return (
-            session.value.message ||
-            session.value.lastError?.message ||
-            session.value.protocolError?.message ||
-            '选择一个 Profile 后测试或建立连接'
-        );
     });
 
     const applyDraft = profile => {
@@ -666,81 +674,6 @@
         overflow-y: auto;
     }
 
-    .connection-status-bar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 10px 14px;
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
-        background: var(--nn-color-bg-muted);
-    }
-
-    .connection-status-main {
-        display: flex;
-        min-width: 0;
-        align-items: center;
-        gap: 12px;
-    }
-
-    .connection-status-content {
-        min-width: 0;
-    }
-
-    .connection-status-actions {
-        flex: 0 0 auto;
-        justify-content: flex-end;
-    }
-
-    .status-dot {
-        width: 12px;
-        height: 12px;
-        flex: 0 0 auto;
-        border-radius: 50%;
-        background: var(--nn-color-text-muted);
-        box-shadow: 0 0 0 4px var(--nn-color-bg-muted);
-    }
-
-    .status-dot-connected {
-        background: var(--nn-color-success);
-        box-shadow: 0 0 0 4px var(--nn-color-bg-success-subtle);
-    }
-
-    .status-dot-connecting,
-    .status-dot-reconnecting,
-    .status-dot-disconnecting {
-        background: var(--nn-color-info);
-        box-shadow: 0 0 0 4px var(--nn-color-bg-info-subtle);
-        animation: yang-status-pulse 1.4s ease-in-out infinite;
-    }
-
-    .status-dot-error {
-        background: var(--nn-color-error);
-        box-shadow: 0 0 0 4px var(--nn-color-bg-danger-subtle);
-    }
-
-    @keyframes yang-status-pulse {
-        50% {
-            opacity: 0.45;
-        }
-    }
-
-    .connection-status-title {
-        color: var(--nn-color-text-strong);
-        font-size: 13px;
-        font-weight: 600;
-    }
-
-    .connection-status-description {
-        overflow: hidden;
-        margin-top: 2px;
-        color: var(--nn-color-text-muted);
-        font-size: 12px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
     .connection-layout {
         display: grid;
         min-width: 0;
@@ -937,14 +870,32 @@
 
     .session-panel-body {
         padding: 8px;
+        overflow: hidden;
+    }
+
+    .session-table :deep(.nn-table-row) {
+        cursor: default;
+    }
+
+    .session-actions {
+        white-space: nowrap;
+    }
+
+    .capability-drawer-content {
+        display: flex;
+        height: 100%;
+        min-height: 0;
+        flex-direction: column;
     }
 
     .capability-search {
+        flex: 0 0 auto;
         margin-bottom: 10px;
     }
 
     .capability-list {
-        max-height: 55vh;
+        min-height: 0;
+        flex: 1;
         overflow-y: auto;
         border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
@@ -981,17 +932,6 @@
     }
 
     @media (max-width: 720px) {
-        .connection-status-bar {
-            align-items: stretch;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .connection-status-actions {
-            width: 100%;
-            justify-content: flex-start;
-        }
-
         .profile-editor-header {
             align-items: flex-start;
             flex-direction: column;

@@ -168,52 +168,17 @@
 
                     <XmlCodeEditor
                         v-if="embedded"
-                        ref="requestEditorRef"
                         :value="currentRequestXml"
                         :status="requestValidation.status"
+                        :diagnostics="requestValidation.diagnostics"
                         :disabled="executing || editConfigLoading"
                         :rows="8"
+                        line-numbers
                         class="rpc-request-preview rpc-request-editor"
                         aria-label="RPC 请求 XML"
                         :aria-invalid="requestValidation.status === 'error' ? 'true' : 'false'"
                         @update:value="handleRequestEditorInput"
                     />
-                    <div
-                        v-if="embedded"
-                        class="request-validation-bar"
-                        :class="`request-validation-${requestValidation.status || 'idle'}`"
-                        :data-validation-status="requestValidation.status || 'idle'"
-                        aria-live="polite"
-                    >
-                        <button
-                            type="button"
-                            class="request-validation-summary"
-                            :disabled="requestValidation.diagnostics.length === 0"
-                            :title="requestValidationSummary"
-                            @click="focusRequestDiagnostic(activeRequestDiagnosticIndex)"
-                        >
-                            <span class="request-validation-indicator" aria-hidden="true" />
-                            <span>{{ requestValidationSummary }}</span>
-                        </button>
-                        <div class="request-validation-navigation">
-                            <button
-                                type="button"
-                                :disabled="requestValidation.diagnostics.length <= 1"
-                                aria-label="上一个 RPC 问题"
-                                @click="focusPreviousRequestDiagnostic"
-                            >
-                                上一处
-                            </button>
-                            <button
-                                type="button"
-                                :disabled="requestValidation.diagnostics.length <= 1"
-                                aria-label="下一个 RPC 问题"
-                                @click="focusNextRequestDiagnostic"
-                            >
-                                下一处
-                            </button>
-                        </div>
-                    </div>
                     <nn-form
                         v-else
                         :model="form"
@@ -489,12 +454,17 @@
                             <nn-button size="small" @click="clearResult">清空</nn-button>
                         </nn-space>
                     </div>
-                    <pre
+                    <XmlCodeEditor
                         v-if="result.reply"
+                        :value="displayedReplyXml"
+                        :rows="8"
+                        readonly
+                        line-numbers
+                        :bordered="false"
                         class="rpc-result"
                         :class="{ 'rpc-result-error': result.status === 'error' }"
-                        data-xml-viewer
-                    ><XmlHighlight :value="displayedReplyXml" /></pre>
+                        aria-label="RPC 响应 XML"
+                    />
                     <nn-empty v-else description="执行操作后在这里查看 rpc-reply" />
                 </nn-card>
             </div>
@@ -1009,10 +979,8 @@
         activeWhen: () => props.embedded && !requestOptionsCollapsed.value
     });
     const replyDisplayMode = ref('formatted');
-    const requestEditorRef = ref(null);
     const requestDraft = ref('');
     const requestOverrideActive = ref(false);
-    const activeRequestDiagnosticIndex = ref(0);
     const requestValidation = reactive({
         status: '',
         diagnostics: [],
@@ -2325,7 +2293,6 @@
     );
 
     const clearRequestValidation = () => {
-        activeRequestDiagnosticIndex.value = 0;
         Object.assign(requestValidation, { status: '', diagnostics: [], operation: '' });
     };
     const handleRequestEditorInput = value => {
@@ -2343,17 +2310,15 @@
         if (result.request) clearResult();
         if (!silent && wasOverridden) notify.info('已恢复为参数树自动生成的 RPC');
     };
-    const applyRequestValidation = (validation, { focusInvalid = true, notifyResult = false } = {}) => {
+    const applyRequestValidation = (validation, { notifyResult = false } = {}) => {
         const diagnostics = Array.isArray(validation?.diagnostics) ? validation.diagnostics : [];
         Object.assign(requestValidation, {
             status: diagnostics.length ? 'error' : 'success',
             diagnostics,
             operation: validation?.operation || ''
         });
-        activeRequestDiagnosticIndex.value = 0;
-        if (diagnostics.length && focusInvalid) void nextTick(() => focusRequestDiagnostic(0));
         if (notifyResult) {
-            if (diagnostics.length) notify.warning(`RPC 验证失败：${diagnostics[0].message}`);
+            if (diagnostics.length) notify.warning(`RPC 验证完成：发现 ${diagnostics.length} 处问题`);
             else notify.success(`RPC 验证通过${validation?.operation ? `：${validation.operation}` : ''}`);
         }
         return validation;
@@ -2363,7 +2328,6 @@
             options && typeof options === 'object' && !('currentTarget' in options) ? options : {};
         const validation = validateNetconfRpc(currentRequestXml.value);
         return applyRequestValidation(validation, {
-            focusInvalid: validationOptions.focusInvalid !== false,
             notifyResult: validationOptions.notifyResult !== false
         });
     };
@@ -2371,7 +2335,7 @@
         const source = currentRequestXml.value;
         const validation = validateNetconfRpc(source);
         if (!validation.valid) {
-            applyRequestValidation(validation, { focusInvalid: true, notifyResult: true });
+            applyRequestValidation(validation, { notifyResult: true });
             return;
         }
         const formatted = formatXmlForDisplay(source);
@@ -2386,43 +2350,6 @@
         clearRequestValidation();
         notify.success('RPC 已格式化');
     };
-    const focusRequestDiagnostic = index => {
-        const diagnostics = requestValidation.diagnostics;
-        if (!diagnostics.length) return;
-        const normalizedIndex = Math.max(0, Math.min(Number(index) || 0, diagnostics.length - 1));
-        activeRequestDiagnosticIndex.value = normalizedIndex;
-        const diagnostic = diagnostics[normalizedIndex];
-        const start = Math.max(0, Number(diagnostic.index) || 0);
-        const length = Math.max(1, Number(diagnostic.length) || 1);
-        void nextTick(() => requestEditorRef.value?.setSelectionRange(start, start + length));
-    };
-    const focusPreviousRequestDiagnostic = () => {
-        const count = requestValidation.diagnostics.length;
-        if (count <= 1) return;
-        focusRequestDiagnostic((activeRequestDiagnosticIndex.value - 1 + count) % count);
-    };
-    const focusNextRequestDiagnostic = () => {
-        const count = requestValidation.diagnostics.length;
-        if (count <= 1) return;
-        focusRequestDiagnostic((activeRequestDiagnosticIndex.value + 1) % count);
-    };
-    const requestValidationSummary = computed(() => {
-        if (requestValidation.status === 'success') {
-            return `RPC 合法${requestValidation.operation ? ` · 操作 ${requestValidation.operation}` : ''} · 可以发送`;
-        }
-        if (requestValidation.diagnostics.length) {
-            const diagnostic =
-                requestValidation.diagnostics[activeRequestDiagnosticIndex.value] || requestValidation.diagnostics[0];
-            const location =
-                diagnostic.line && diagnostic.column ? `第 ${diagnostic.line} 行，第 ${diagnostic.column} 列 · ` : '';
-            return `${location}${diagnostic.message}（${activeRequestDiagnosticIndex.value + 1}/${
-                requestValidation.diagnostics.length
-            }）`;
-        }
-        return requestOverrideActive.value
-            ? '手工编辑模式：执行前会自动验证并二次确认'
-            : '可直接编辑完整 RPC；修改后将切换为手工发送';
-    });
     const toggleReplyDisplayMode = () => {
         replyDisplayMode.value = replyDisplayMode.value === 'formatted' ? 'raw' : 'formatted';
     };
@@ -2554,7 +2481,7 @@
         const manualRequest = requestOverrideActive.value;
         const manualValidation = manualRequest ? validateNetconfRpc(currentRequestXml.value) : null;
         if (manualRequest && !manualValidation.valid) {
-            applyRequestValidation(manualValidation, { focusInvalid: true });
+            applyRequestValidation(manualValidation);
             notify.warning(`RPC 验证失败：${manualValidation.diagnostics[0]?.message || '请输入合法报文'}`);
             return;
         }
@@ -3633,6 +3560,9 @@
     }
 
     .rpc-request-preview {
+        --xml-code-line-height: 1.55em;
+        --xml-code-padding-block: 10px;
+        --xml-code-padding-inline: 10px;
         min-height: 0;
         flex: 1;
         margin: 0;
@@ -3652,107 +3582,10 @@
     .rpc-request-editor :deep(.xml-code-editor-input) {
         height: 100%;
         min-height: 0;
-        padding: 10px;
-        line-height: 1.55;
     }
 
     .rpc-request-editor :deep(.xml-code-editor-input) {
         resize: none;
-    }
-
-    .request-validation-bar {
-        display: flex;
-        min-width: 0;
-        min-height: 30px;
-        flex: 0 0 30px;
-        align-items: center;
-        justify-content: space-between;
-        gap: 6px;
-        margin-top: 6px;
-        padding: 3px 5px 3px 8px;
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 4px;
-        background: var(--nn-color-bg-muted);
-        color: var(--nn-color-text-muted);
-        font-size: 10px;
-    }
-
-    .request-validation-summary {
-        display: flex;
-        min-width: 0;
-        flex: 1 1 auto;
-        align-items: center;
-        gap: 6px;
-        overflow: hidden;
-        padding: 0;
-        border: 0;
-        background: transparent;
-        color: inherit;
-        cursor: pointer;
-        font: inherit;
-        text-align: left;
-    }
-
-    .request-validation-summary:disabled {
-        cursor: default;
-        opacity: 1;
-    }
-
-    .request-validation-summary > span:last-child {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .request-validation-indicator {
-        width: 6px;
-        height: 6px;
-        flex: 0 0 6px;
-        border-radius: 50%;
-        background: var(--nn-color-text-muted);
-    }
-
-    .request-validation-error {
-        border-color: var(--nn-color-border-danger);
-        background: var(--nn-color-bg-danger-subtle);
-        color: var(--nn-color-error);
-    }
-
-    .request-validation-error .request-validation-indicator {
-        background: var(--nn-color-error);
-    }
-
-    .request-validation-success {
-        border-color: color-mix(in srgb, var(--nn-color-success) 42%, var(--nn-color-border-light));
-        background: color-mix(in srgb, var(--nn-color-success) 8%, var(--nn-color-bg-surface));
-        color: var(--nn-color-success);
-    }
-
-    .request-validation-success .request-validation-indicator {
-        background: var(--nn-color-success);
-    }
-
-    .request-validation-navigation {
-        display: flex;
-        flex: 0 0 auto;
-        gap: 2px;
-    }
-
-    .request-validation-navigation button {
-        min-width: 42px;
-        height: 22px;
-        padding: 0 5px;
-        border: 1px solid currentColor;
-        border-radius: 3px;
-        background: transparent;
-        color: inherit;
-        cursor: pointer;
-        font: inherit;
-    }
-
-    .request-validation-navigation button:disabled {
-        cursor: default;
-        opacity: 0.38;
     }
 
     .xml-editor {
@@ -3832,7 +3665,6 @@
         margin-bottom: 8px;
     }
 
-    .rpc-result,
     .rpc-preview {
         min-height: 0;
         margin: 0;
@@ -3848,8 +3680,26 @@
     }
 
     .rpc-result {
+        --xml-code-line-height: 1.55em;
+        --xml-code-padding-block: 10px;
+        --xml-code-padding-inline: 10px;
+        min-height: 0;
         flex: 1;
-        padding: 10px;
+        overflow: hidden;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+        background: var(--nn-color-bg-code);
+        font-size: 12px;
+    }
+
+    .rpc-result :deep(.xml-code-editor-highlight),
+    .rpc-result :deep(.xml-code-editor-input) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .rpc-result :deep(.xml-code-editor-input) {
+        resize: none;
     }
 
     .rpc-preview {
@@ -3860,7 +3710,6 @@
 
     .rpc-result-error {
         border-color: var(--nn-color-border-danger);
-        color: var(--nn-color-error);
     }
 
     .yang-operations-embedded .operation-form-card,

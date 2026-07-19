@@ -101,7 +101,6 @@ async function connectionGeometry(page) {
         return {
             card: rect(':scope > .connection-card'),
             body: rect(':scope > .connection-card > .nn-card-body'),
-            status: rect('.connection-status-bar'),
             layout: rect('.connection-layout'),
             profile: rect('.profile-card'),
             editor: rect('.profile-editor-card'),
@@ -150,9 +149,7 @@ test.describe('NETCONF/YANG workbench', () => {
         const connectionPageBox = await connectionPage.boundingBox();
         expect(Math.abs(connection.card.y - connectionPageBox.y)).toBeLessThanOrEqual(1);
         expect(Math.abs(connection.card.height - connectionPageBox.height)).toBeLessThanOrEqual(1);
-        expect(Math.abs(connection.status.x - connection.layout.x)).toBeLessThanOrEqual(1);
-        expect(Math.abs(connection.status.width - connection.layout.width)).toBeLessThanOrEqual(1);
-        expect(connection.status.y + connection.status.height).toBeLessThanOrEqual(connection.layout.y - 7);
+        expect(connection.layout.y - connection.body.y).toBeLessThanOrEqual(16);
         expect(Math.abs(connection.profile.y - connection.editor.y)).toBeLessThanOrEqual(1);
         expect(Math.abs(connection.profile.height - connection.editor.height)).toBeLessThanOrEqual(1);
         expect(connection.profile.width).toBeGreaterThanOrEqual(220);
@@ -194,8 +191,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await page.goto('/#/yang/yang-connection');
 
         const connection = await connectionGeometry(page);
-        expect(Math.abs(connection.status.x - connection.layout.x)).toBeLessThanOrEqual(1);
-        expect(Math.abs(connection.status.width - connection.layout.width)).toBeLessThanOrEqual(1);
+        expect(connection.layout.y - connection.body.y).toBeLessThanOrEqual(16);
         expect(Math.abs(connection.profile.x - connection.editor.x)).toBeLessThanOrEqual(1);
         expect(Math.abs(connection.profile.width - connection.editor.width)).toBeLessThanOrEqual(1);
         expect(connection.editor.y).toBeGreaterThanOrEqual(connection.profile.y + connection.profile.height + 7);
@@ -333,14 +329,43 @@ test.describe('NETCONF/YANG workbench', () => {
 
     test('keeps the device Capability entry in connection settings only', async ({ page }) => {
         await page.goto('/#/yang/yang-connection');
-        const capabilityButton = page.getByRole('button', { name: /设备 Capability \d+/u });
+        const connectionPage = page.locator('.yang-connection-page:visible');
+        const sessionTable = connectionPage.locator('.session-table');
+        await expect(sessionTable).toBeVisible();
+        await expect(sessionTable.getByRole('row')).toHaveCount(2);
+        await expect(sessionTable.locator('thead th')).toHaveText([
+            'Profile',
+            '远端',
+            'NETCONF Base',
+            'Session ID',
+            '连接时间',
+            '操作'
+        ]);
+        const capabilityButton = sessionTable.getByRole('button', { name: /设备 Capability \d+/u });
         await expect(capabilityButton).toBeVisible();
+        await expect(sessionTable.getByRole('button', { name: '断开连接', exact: true })).toBeVisible();
+        await expect(connectionPage.locator('.connection-status-bar')).toHaveCount(0);
+        await expect(connectionPage.locator('.connection-status-description')).toHaveCount(0);
+        await expect(connectionPage.getByText(/^Capability \d+$/u)).toHaveCount(0);
+        await expect(connectionPage.getByText('能力数量', { exact: true })).toHaveCount(0);
         await capabilityButton.click();
 
         const capabilityDialog = page.getByRole('dialog', { name: '设备 Capability' });
         await expect(capabilityDialog).toBeVisible();
+        await expect(capabilityDialog).toHaveClass(/nn-drawer-content/u);
+        await expect(capabilityDialog.locator('.capability-list')).toHaveCSS('overflow-y', 'auto');
         await expect(capabilityDialog).toContainText('urn:ietf:params:netconf:capability:candidate:1.0');
         await capabilityDialog.getByRole('button', { name: '关闭' }).click();
+
+        await sessionTable.getByRole('button', { name: '断开连接', exact: true }).click();
+        await expect(sessionTable).toBeHidden();
+        const editorConnectButton = connectionPage
+            .locator('.profile-editor-card')
+            .getByRole('button', { name: '连接', exact: true });
+        await expect(editorConnectButton).toBeVisible();
+        await editorConnectButton.click();
+        await expect(sessionTable).toBeVisible();
+        await expect(editorConnectButton).toHaveCount(0);
 
         await page.goto('/#/yang/yang-workspace');
         const workspacePage = page.locator('.yang-workspace-page:visible');
@@ -713,7 +738,8 @@ test.describe('NETCONF/YANG workbench', () => {
         const requestCard = operationPanel.locator('.operation-form-card');
         const requestEditor = requestCard.locator('.rpc-request-preview');
         const requestInput = requestEditor.locator('textarea[aria-label="RPC 请求 XML"]');
-        const validationBar = requestCard.locator('.request-validation-bar');
+        const requestLineNumbers = requestEditor.locator('[data-xml-line-number]');
+        const requestDiagnostics = requestEditor.locator('[data-xml-diagnostic]');
         const validateButton = requestCard.getByRole('button', { name: '验证', exact: true });
         const regenerateButton = requestCard.getByRole('button', { name: '参数生成', exact: true });
         const toolbarButtons = requestCard.locator('.request-browser-actions button');
@@ -722,6 +748,10 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(requestInput).toBeEditable();
         const generatedRpc = await requestInput.inputValue();
         expect(generatedRpc).toMatch(/^<rpc\b[\s\S]*<get\b[\s\S]*<\/rpc>$/u);
+        await expect(requestEditor.locator('[data-xml-line-number-gutter]')).toBeVisible();
+        expect(
+            await requestLineNumbers.evaluateAll(elements => elements.map(element => element.dataset.lineNumber))
+        ).toEqual(generatedRpc.split('\n').map((_line, index) => String(index + 1)));
         await expect(regenerateButton).toBeDisabled();
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         const initialCardBox = await requestCard.boundingBox();
@@ -737,15 +767,24 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(requestCard.getByText('手工编辑', { exact: true })).toBeVisible();
         await expect(regenerateButton).toBeEnabled();
         await validateButton.click();
-        await expect(validationBar).toHaveAttribute('data-validation-status', 'error');
-        await expect(validationBar).toContainText('第 3 行，第 1 列');
-        await expect(validationBar).toContainText('XML 格式不合法');
-        const malformedSelection = await requestInput.evaluate(element => ({
-            start: element.selectionStart,
-            end: element.selectionEnd
-        }));
-        expect(malformedSelection.start).toBe(malformedRpc.indexOf('</rpc>'));
-        expect(malformedSelection.end).toBeGreaterThan(malformedSelection.start);
+        const malformedDiagnostic = requestEditor.locator('[data-xml-diagnostic][data-line="3"]');
+        const malformedLineNumber = requestEditor.locator('[data-xml-line-number="3"]');
+        await expect(malformedDiagnostic).toBeVisible();
+        await expect(malformedDiagnostic).toContainText('XML 格式不合法');
+        await expect(malformedLineNumber).toBeVisible();
+        await expect(malformedLineNumber).toHaveClass(/xml-code-line-number-error/u);
+        const [diagnosticBox, lineNumberBox] = await Promise.all([
+            malformedDiagnostic.boundingBox(),
+            malformedLineNumber.boundingBox()
+        ]);
+        expect(
+            Math.abs(diagnosticBox.y + diagnosticBox.height / 2 - (lineNumberBox.y + lineNumberBox.height / 2))
+        ).toBeLessThanOrEqual(2);
+        await expect(requestCard.locator('.request-validation-bar')).toHaveCount(0);
+        await expect(requestCard.getByRole('button', { name: /上一个 RPC 问题|下一个 RPC 问题/u })).toHaveCount(0);
+        const malformedCardBox = await requestCard.boundingBox();
+        expect(Math.abs(malformedCardBox.width - initialCardBox.width)).toBeLessThanOrEqual(1);
+        expect(Math.abs(malformedCardBox.height - initialCardBox.height)).toBeLessThanOrEqual(1);
         await operationPanel.getByRole('button', { name: '发送手工 RPC', exact: true }).click();
         await expect(page.getByRole('dialog', { name: '确认发送手工 RPC' })).toHaveCount(0);
         expect(rawRequests).toHaveLength(0);
@@ -754,25 +793,21 @@ test.describe('NETCONF/YANG workbench', () => {
             '<!DOCTYPE rpc><rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="manual-unsafe"><get/></rpc>';
         await requestInput.fill(unsafeRpc);
         await validateButton.click();
-        await expect(validationBar).toContainText('DOCTYPE 或 ENTITY');
-        const unsafeSelection = await requestInput.evaluate(element => ({
-            start: element.selectionStart,
-            end: element.selectionEnd
-        }));
-        expect(unsafeSelection.start).toBe(0);
-        expect(unsafeSelection.end).toBeGreaterThan(unsafeSelection.start);
+        await expect(requestEditor.locator('[data-xml-diagnostic][data-line="1"]')).toContainText('DOCTYPE 或 ENTITY');
 
         const multipleInvalidRpc =
-            '<rpc xmlns="urn:example:wrong" message-id=""><get><!-- NETNEXUS_REQUIRED --></get></rpc>';
+            '<rpc xmlns="urn:example:wrong" message-id="">\n' +
+            '  <get>\n' +
+            '    <!-- NETNEXUS_REQUIRED -->\n' +
+            '  </get>\n' +
+            '</rpc>';
         await requestInput.fill(multipleInvalidRpc);
         await validateButton.click();
-        await expect(validationBar).toContainText('（1/3）');
-        const firstInvalidSelectionStart = await requestInput.evaluate(element => element.selectionStart);
-        const nextProblemButton = validationBar.getByRole('button', { name: '下一个 RPC 问题', exact: true });
-        await expect(nextProblemButton).toBeEnabled();
-        await nextProblemButton.click();
-        await expect(validationBar).toContainText('（2/3）');
-        expect(await requestInput.evaluate(element => element.selectionStart)).not.toBe(firstInvalidSelectionStart);
+        await expect(requestDiagnostics).toHaveCount(2);
+        const rootDiagnostic = requestEditor.locator('[data-xml-diagnostic][data-line="1"]');
+        await expect(rootDiagnostic).toContainText('NETCONF base 命名空间');
+        await expect(rootDiagnostic).toContainText('message-id');
+        await expect(requestEditor.locator('[data-xml-diagnostic][data-line="3"]')).toContainText('NETNEXUS_REQUIRED');
 
         await regenerateButton.click();
         await expect(requestInput).toHaveValue(generatedRpc);
@@ -791,8 +826,8 @@ test.describe('NETCONF/YANG workbench', () => {
             '</rpc>';
         await requestInput.fill(validRpc);
         await validateButton.click();
-        await expect(validationBar).toHaveAttribute('data-validation-status', 'success');
-        await expect(validationBar).toContainText('RPC 合法 · 操作 get · 可以发送');
+        await expect(requestDiagnostics).toHaveCount(0);
+        await expect(requestEditor.locator('[data-xml-diagnostics-layer]')).toHaveAttribute('role', 'status');
         expect(
             await toolbarButtons.evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().width))
         ).toEqual(initialButtonWidths);
@@ -1171,6 +1206,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(replyViewer).toContainText('<rpc-reply');
         await expect(replyViewer).toContainText('<interface>');
         await expect(replyViewer).toHaveAttribute('data-xml-viewer', '');
+        await expect(replyViewer.locator('[data-xml-line-number-gutter]')).toBeVisible();
         const replyTagToken = replyViewer.locator('[data-xml-token="tag"]').first();
         const replyAttributeToken = replyViewer.locator('[data-xml-token="attribute"]').first();
         const replyValueToken = replyViewer.locator('[data-xml-token="value"]').first();
@@ -1188,18 +1224,27 @@ test.describe('NETCONF/YANG workbench', () => {
             )
         );
         expect(new Set(replySyntaxColors).size).toBe(4);
-        const formattedReplyXml = await replyViewer.textContent();
+        const replyCodeContent = replyViewer.locator('[data-xml-code-content]');
+        const replyLineNumbers = replyViewer.locator('[data-xml-line-number]');
+        const formattedReplyXml = await replyCodeContent.textContent();
         expect(formattedReplyXml).toMatch(/<rpc-reply[^>]*>\n\s{2}<data>\n\s{4}<interfaces[^>]*>/u);
         expect(formattedReplyXml).toMatch(/\n\s{6}<interface>\n\s{8}<name>eth0<\/name>/u);
-        const sentRequestXml = await requestPreview.textContent();
+        expect(
+            await replyLineNumbers.evaluateAll(elements => elements.map(element => element.dataset.lineNumber))
+        ).toEqual(formattedReplyXml.split('\n').map((_line, index) => String(index + 1)));
+        const sentRequestXml = await requestPreview.locator('textarea[aria-label="RPC 请求 XML"]').inputValue();
         expect(sentRequestXml).toMatch(/message-id="\d+"/u);
         expect(sentRequestXml).not.toContain('message-id="preview"');
 
         const responseDisplayToggle = responseCard.getByRole('button', { name: '查看原文', exact: true });
         const formattedResponseToggleWidth = (await responseDisplayToggle.boundingBox()).width;
         await responseDisplayToggle.click();
-        const rawReplyXml = await operationPanel.locator('.rpc-result').textContent();
+        await expect(replyLineNumbers).toHaveCount(1);
+        const rawReplyXml = await replyCodeContent.textContent();
         expect(rawReplyXml).not.toContain('\n');
+        expect(
+            await replyLineNumbers.evaluateAll(elements => elements.map(element => element.dataset.lineNumber))
+        ).toEqual(['1']);
         const responseFormatToggle = responseCard.getByRole('button', { name: '格式化', exact: true });
         const rawResponseToggleWidth = (await responseFormatToggle.boundingBox()).width;
         expect(rawResponseToggleWidth).toBe(formattedResponseToggleWidth);

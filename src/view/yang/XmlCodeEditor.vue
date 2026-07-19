@@ -7,19 +7,68 @@
                 'xml-code-editor-disabled': disabled,
                 'xml-code-editor-readonly': readonly,
                 'xml-code-editor-borderless': !bordered,
+                'xml-code-editor-line-numbers': lineNumbers,
                 'xml-code-editor-status-error': status === 'error',
                 'xml-code-editor-status-warning': status === 'warning'
             }
         ]"
-        :style="$attrs.style"
+        :style="[$attrs.style, editorStyle]"
         data-xml-editor
+        :data-xml-viewer="readonly ? '' : undefined"
     >
         <pre
             ref="highlightRef"
             class="xml-code-editor-highlight"
             data-xml-highlight-layer
+            data-xml-code-content
             aria-hidden="true"
         ><XmlHighlight :value="displayValue" /></pre>
+        <div
+            v-if="lineNumbers"
+            ref="gutterRef"
+            class="xml-code-editor-gutter"
+            data-xml-line-number-gutter
+            aria-hidden="true"
+        >
+            <div class="xml-code-editor-gutter-content">
+                <span
+                    v-for="row in diagnosticRows"
+                    :key="row.line"
+                    class="xml-code-line-number"
+                    :class="{ 'xml-code-line-number-error': row.message }"
+                    :data-line-number="row.line"
+                    :data-xml-line-number="row.line"
+                />
+            </div>
+        </div>
+        <div
+            v-if="lineNumbers"
+            ref="diagnosticsRef"
+            class="xml-code-editor-diagnostics-layer"
+            data-xml-diagnostics-layer
+            role="status"
+            aria-live="polite"
+        >
+            <div class="xml-code-editor-diagnostics-content">
+                <div
+                    v-for="row in diagnosticRows"
+                    :key="row.line"
+                    class="xml-code-editor-diagnostic-row"
+                    :class="{ 'xml-code-editor-diagnostic-row-error': row.message }"
+                >
+                    <span
+                        v-if="row.message"
+                        class="xml-code-editor-diagnostic"
+                        data-xml-diagnostic
+                        :data-line="row.line"
+                        :data-column="row.column"
+                        :title="row.message"
+                    >
+                        {{ row.message }}
+                    </span>
+                </div>
+            </div>
+        </div>
         <textarea
             ref="textareaRef"
             v-bind="inputAttributes"
@@ -87,6 +136,14 @@
         bordered: {
             type: Boolean,
             default: true
+        },
+        lineNumbers: {
+            type: Boolean,
+            default: false
+        },
+        diagnostics: {
+            type: Array,
+            default: () => []
         }
     });
 
@@ -94,7 +151,40 @@
     const attrs = useAttrs();
     const textareaRef = ref(null);
     const highlightRef = ref(null);
+    const gutterRef = ref(null);
+    const diagnosticsRef = ref(null);
     const displayValue = computed(() => (props.value === null || props.value === undefined ? '' : String(props.value)));
+    const lineCount = computed(() => Math.max(1, displayValue.value.split('\n').length));
+    const editorStyle = computed(() => {
+        if (!props.lineNumbers) return undefined;
+        const gutterCharacters = Math.max(3, String(lineCount.value).length) + 3;
+        return { '--xml-code-gutter-width': `${gutterCharacters}ch` };
+    });
+    const lineAtIndex = rawIndex => {
+        const index = Math.max(0, Math.min(Number(rawIndex) || 0, displayValue.value.length));
+        return displayValue.value.slice(0, index).split('\n').length;
+    };
+    const diagnosticRows = computed(() => {
+        const rows = Array.from({ length: lineCount.value }, (_value, index) => ({
+            line: index + 1,
+            column: null,
+            messages: []
+        }));
+        props.diagnostics.forEach(diagnostic => {
+            const rawLine = Number(diagnostic?.line) || lineAtIndex(diagnostic?.index);
+            const line = Math.max(1, Math.min(rawLine, rows.length));
+            const row = rows[line - 1];
+            const message = String(diagnostic?.message || '').trim();
+            if (message && !row.messages.includes(message)) row.messages.push(message);
+            const column = Math.max(1, Number(diagnostic?.column) || 1);
+            row.column = row.column === null ? column : Math.min(row.column, column);
+        });
+        return rows.map(row => ({
+            line: row.line,
+            column: row.column || 1,
+            message: row.messages.join('；')
+        }));
+    });
     const inputAttributes = computed(() =>
         Object.fromEntries(Object.entries(attrs).filter(([key]) => !['class', 'style'].includes(key)))
     );
@@ -105,6 +195,8 @@
         if (!textarea || !highlight) return;
         highlight.scrollTop = textarea.scrollTop;
         highlight.scrollLeft = textarea.scrollLeft;
+        if (gutterRef.value) gutterRef.value.scrollTop = textarea.scrollTop;
+        if (diagnosticsRef.value) diagnosticsRef.value.scrollTop = textarea.scrollTop;
     };
 
     const handleInput = event => {
@@ -123,35 +215,24 @@
         () => props.value,
         () => nextTick(syncHighlightScroll)
     );
+    watch(
+        () => props.diagnostics,
+        () => nextTick(syncHighlightScroll),
+        { deep: true }
+    );
 
     onMounted(syncHighlightScroll);
 
     const focus = options => textareaRef.value?.focus(options);
     const blur = () => textareaRef.value?.blur();
     const select = () => textareaRef.value?.select();
-    const setSelectionRange = (start, end = start, direction = 'none') => {
-        const textarea = textareaRef.value;
-        if (!textarea) return;
-        const valueLength = textarea.value.length;
-        const selectionStart = Math.max(0, Math.min(Number(start) || 0, valueLength));
-        const selectionEnd = Math.max(selectionStart, Math.min(Number(end) || selectionStart, valueLength));
-        textarea.focus({ preventScroll: true });
-        textarea.setSelectionRange(selectionStart, selectionEnd, direction);
-
-        const lineNumber = textarea.value.slice(0, selectionStart).split('\n').length;
-        const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 18;
-        const targetScrollTop = Math.max(0, (lineNumber - 3) * lineHeight);
-        textarea.scrollTop = targetScrollTop;
-        syncHighlightScroll({ target: textarea });
-    };
 
     defineExpose({
         textarea: textareaRef,
         highlight: highlightRef,
         focus,
         blur,
-        select,
-        setSelectionRange
+        select
     });
 </script>
 
@@ -168,7 +249,11 @@
         color: var(--nn-color-text);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 12px;
-        line-height: 1.5;
+        --xml-code-line-height: 1.5em;
+        --xml-code-padding-block: 4px;
+        --xml-code-padding-inline: 11px;
+        --xml-code-gutter-width: 42px;
+        line-height: var(--xml-code-line-height);
         tab-size: 2;
     }
 
@@ -179,14 +264,14 @@
         min-width: 0;
         min-height: inherit;
         margin: 0;
-        padding: 4px 11px;
+        padding: var(--xml-code-padding-block) var(--xml-code-padding-inline);
         border: 1px solid transparent;
         border-radius: inherit;
         font-family: inherit;
         font-size: inherit;
         font-weight: inherit;
         letter-spacing: inherit;
-        line-height: inherit;
+        line-height: var(--xml-code-line-height);
         tab-size: inherit;
         white-space: pre;
     }
@@ -202,6 +287,122 @@
 
     .xml-code-editor-highlight::after {
         content: ' ';
+    }
+
+    .xml-code-editor-line-numbers .xml-code-editor-highlight,
+    .xml-code-editor-line-numbers .xml-code-editor-input {
+        padding-left: calc(var(--xml-code-gutter-width) + var(--xml-code-padding-inline));
+    }
+
+    .xml-code-editor-gutter,
+    .xml-code-editor-diagnostics-layer {
+        position: absolute;
+        overflow: hidden;
+        pointer-events: none;
+    }
+
+    .xml-code-editor-gutter {
+        z-index: 3;
+        top: 1px;
+        bottom: 1px;
+        left: 1px;
+        width: var(--xml-code-gutter-width);
+        border-right: 1px solid var(--nn-color-border-light);
+        background: color-mix(in srgb, var(--nn-color-bg-muted) 88%, var(--nn-color-bg-code));
+        color: var(--nn-color-text-muted);
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        user-select: none;
+    }
+
+    .xml-code-editor-gutter-content,
+    .xml-code-editor-diagnostics-content {
+        box-sizing: border-box;
+        min-height: 100%;
+        padding-top: var(--xml-code-padding-block);
+        padding-bottom: var(--xml-code-padding-block);
+    }
+
+    .xml-code-line-number {
+        position: relative;
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        height: var(--xml-code-line-height);
+        padding-right: 8px;
+        line-height: var(--xml-code-line-height);
+    }
+
+    .xml-code-line-number::before {
+        content: attr(data-line-number);
+    }
+
+    .xml-code-line-number-error {
+        background: color-mix(in srgb, var(--nn-color-error) 10%, transparent);
+        color: var(--nn-color-error);
+        font-weight: 600;
+    }
+
+    .xml-code-line-number-error::after {
+        position: absolute;
+        top: 50%;
+        right: 2px;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--nn-color-error);
+        content: '';
+        transform: translateY(-50%);
+    }
+
+    .xml-code-editor-diagnostics-layer {
+        z-index: 2;
+        inset: 1px;
+    }
+
+    .xml-code-editor-diagnostic-row {
+        display: flex;
+        box-sizing: border-box;
+        width: 100%;
+        height: var(--xml-code-line-height);
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: calc(var(--xml-code-padding-inline) + 12px);
+        padding-left: calc(var(--xml-code-gutter-width) + var(--xml-code-padding-inline));
+        line-height: var(--xml-code-line-height);
+    }
+
+    .xml-code-editor-diagnostic-row-error {
+        background: linear-gradient(
+            90deg,
+            transparent 0,
+            color-mix(in srgb, var(--nn-color-error) 7%, transparent) 18%,
+            color-mix(in srgb, var(--nn-color-error) 11%, transparent) 100%
+        );
+        box-shadow: inset 0 -1px color-mix(in srgb, var(--nn-color-error) 32%, transparent);
+    }
+
+    .xml-code-editor-diagnostic {
+        max-width: 58%;
+        overflow: hidden;
+        padding: 0 5px;
+        border: 1px solid color-mix(in srgb, var(--nn-color-error) 45%, transparent);
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--nn-color-bg-surface) 92%, var(--nn-color-error));
+        color: var(--nn-color-error);
+        font-family: var(--nn-font-family);
+        font-size: 10px;
+        font-weight: 500;
+        line-height: calc(var(--xml-code-line-height) - 4px);
+        pointer-events: auto;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        cursor: help;
+    }
+
+    .xml-code-editor-diagnostic::before {
+        content: '错误：';
+        font-weight: 600;
     }
 
     .xml-code-editor-input {
@@ -237,10 +438,6 @@
         background: color-mix(in srgb, var(--nn-color-primary) 28%, transparent);
         color: transparent;
         -webkit-text-fill-color: transparent;
-    }
-
-    .xml-code-editor-status-error .xml-code-editor-input::selection {
-        background: color-mix(in srgb, var(--nn-color-error) 34%, transparent);
     }
 
     .xml-code-editor-disabled {

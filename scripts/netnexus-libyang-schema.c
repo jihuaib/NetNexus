@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <locale.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1238,6 +1239,13 @@ main(int argc, char **argv)
     uint16_t context_options;
     size_t index;
     int argument, exit_code = EXIT_FAILURE;
+
+#ifdef _WIN32
+    if (!setlocale(LC_CTYPE, ".UTF8")) {
+        fputs("Unable to enable the UTF-8 C runtime locale.\n", stderr);
+        return EXIT_FAILURE;
+    }
+#endif
 
     for (argument = 1; argument < argc; ++argument) {
         if (!strcmp(argv[argument], "--version")) {

@@ -168,6 +168,16 @@ function verifyScriptSyntax() {
         /#  else\r?\n#    define LIBYANG_API_DEF\r?\n#    define LIBYANG_API_DECL\r?\n#  endif/,
         'static MSVC builds must use undecorated libyang declarations and definitions'
     );
+    assert.match(
+        powershellSource,
+        /Replace-PinnedSourceText\s+`\r?\n\s+\(Join-Path \$SourceDir 'tools\/lint\/main_ni_only\.c'\)\s+`\r?\n\s+\$YanglintMainBlock\s+`\r?\n\s+\$YanglintUtf8MainBlock/,
+        'the Windows build must apply the drift-checked yanglint UTF-8 locale patch'
+    );
+    assert.match(
+        powershellSource,
+        /setlocale\(LC_CTYPE, "\.UTF8"\)[\s\S]*return main_ni\(argc, argv\);/,
+        'Windows yanglint must enable the UTF-8 C runtime locale before invoking libyang'
+    );
     assert.match(powershellSource, /Assert-GitCommit/);
     assert.match(powershellSource, /netnexus_getopt/);
     assert.match(powershellSource, /Assert-WindowsSystemDependencies/);
@@ -236,6 +246,19 @@ function verifyScriptSyntax() {
     const schemaExporterSource = fs.readFileSync(
         path.join(projectRoot, 'scripts', 'netnexus-libyang-schema.c'),
         'utf8'
+    );
+    assert.match(schemaExporterSource, /#include <locale\.h>/, 'schema helper must include the C locale API');
+    const schemaMainIndex = schemaExporterSource.indexOf('main(int argc, char **argv)');
+    const schemaLocaleIndex = schemaExporterSource.indexOf(
+        'setlocale(LC_CTYPE, ".UTF8")',
+        schemaMainIndex
+    );
+    const schemaArgumentLoopIndex = schemaExporterSource.indexOf('for (argument = 1;', schemaMainIndex);
+    assert(
+        schemaMainIndex >= 0 &&
+            schemaLocaleIndex > schemaMainIndex &&
+            schemaLocaleIndex < schemaArgumentLoopIndex,
+        'schema helper must enable the UTF-8 C runtime locale before processing arguments'
     );
     for (const limitName of ['MAX_EXPORT_NODES', 'MAX_EXPORT_DEPTH', 'MAX_JSON_ALLOCATION_BYTES', 'MAX_JSON_BYTES']) {
         assert.match(schemaExporterSource, new RegExp(`(?:#define|${limitName}).*${limitName}|#define ${limitName}`));

@@ -322,6 +322,43 @@ try {
         $LibyangMsvcApiBlock `
         $LibyangMsvcStaticApiBlock
 
+    $YanglintMainBlock = @'
+int main_ni(int argc, char *argv[]);
+
+int done; /* for cmd.c */
+
+int
+main(int argc, char *argv[])
+{
+    return main_ni(argc, argv);
+}
+'@
+    $YanglintUtf8MainBlock = @'
+#include <locale.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+int main_ni(int argc, char *argv[]);
+
+int done; /* for cmd.c */
+
+int
+main(int argc, char *argv[])
+{
+#ifdef _WIN32
+    if (!setlocale(LC_CTYPE, ".UTF8")) {
+        fputs("Unable to enable the UTF-8 C runtime locale.\n", stderr);
+        return EXIT_FAILURE;
+    }
+#endif
+    return main_ni(argc, argv);
+}
+'@
+    Replace-PinnedSourceText `
+        (Join-Path $SourceDir 'tools/lint/main_ni_only.c') `
+        $YanglintMainBlock `
+        $YanglintUtf8MainBlock
+
     $GetoptFindBlock = @'
 if(WIN32)
     find_library(GETOPT_LIBRARY NAMES getopt REQUIRED)
