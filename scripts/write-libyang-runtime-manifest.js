@@ -22,12 +22,13 @@ if (
     !fs.statSync(schemaExecutable).isFile()
 ) {
     throw new Error(
-        'Usage: node write-libyang-runtime-manifest.js <runtime-directory> <yanglint-executable> <schema-executable>'
+        'Usage: node write-libyang-runtime-manifest.js <runtime-directory> <yanglint-executable> ' +
+            '<schema-executable> [platform] [arch]'
     );
 }
 const release = getReleaseManifest(PROJECT_ROOT);
-const platform = normalizePlatform(process.platform);
-const arch = normalizeArch(process.arch);
+const platform = normalizePlatform(process.argv[5] || process.platform);
+const arch = normalizeArch(process.argv[6] || process.arch);
 const digest = crypto.createHash('sha256').update(fs.readFileSync(executable)).digest('hex');
 const schemaDigest = crypto.createHash('sha256').update(fs.readFileSync(schemaExecutable)).digest('hex');
 const ianaModules = verifyPinnedIanaModules({ projectRoot: PROJECT_ROOT, runtimeDirectory });

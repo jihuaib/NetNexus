@@ -80,18 +80,8 @@ jobs:
                   retention-days: 7
 
     build-macos:
-        name: Build macOS ${{ matrix.arch }}
-        strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    - arch: arm64
-                      runner: macos-15
-                      dist_script: dist:mac:arm64
-                    - arch: x64
-                      runner: macos-15-intel
-                      dist_script: dist:mac
-        runs-on: ${{ matrix.runner }}
+        name: Build macOS arm64 and x64
+        runs-on: macos-15
         steps:
             - name: Checkout
               uses: actions/checkout@v4
@@ -102,10 +92,13 @@ jobs:
               uses: actions/setup-node@v4
               with:
                   node-version: ${{ env.NODE_VERSION }}
+                  architecture: arm64
                   cache: npm
 
-            - name: Verify Node.js version
-              run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+            - name: Verify arm64 runner and Node.js
+              run: |
+                  test "$(uname -m)" = "arm64"
+                  node -e "if (process.version !== 'v' + process.env.NODE_VERSION || process.arch !== 'arm64') { throw new Error('Expected arm64 Node.js v' + process.env.NODE_VERSION + ', got ' + process.arch + ' ' + process.version); }"
 
             - name: Setup Python for native modules
               uses: actions/setup-python@v5
@@ -133,18 +126,60 @@ jobs:
             - name: Build on macOS
               run: npm run build
 
-            - name: Build macOS packages
-              run: npm run ${{ matrix.dist_script }} -- --publish never
+            - name: Build macOS arm64 packages
+              run: npm run dist:mac:arm64 -- --publish never
 
-            - name: Verify packaged BMP SQLite
+            - name: Verify packaged arm64 BMP SQLite
               run: npm run test:packaged:sqlite
               env:
-                  PACKAGED_SQLITE_EXPECTED_ARCH: ${{ matrix.arch }}
+                  PACKAGED_SQLITE_EXPECTED_ARCH: arm64
+
+            - name: Ensure Rosetta 2 is available
+              run: |
+                  if ! /usr/bin/arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+                      sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+                  fi
+                  /usr/bin/arch -x86_64 /usr/bin/true
+                  /usr/bin/pgrep oahd >/dev/null
+
+            - name: Build bundled x64 libyang runtime
+              run: |
+                  npm run libyang:ensure -- --platform darwin --arch x64
+                  node scripts/verify-libyang-runtime.js --platform darwin --arch x64 >/dev/null
+                  /usr/bin/lipo resources/libyang/darwin-x64/bin/yanglint -verify_arch x86_64
+                  /usr/bin/lipo resources/libyang/darwin-x64/bin/netnexus-libyang-schema -verify_arch x86_64
+
+            - name: Setup x64 Node.js under Rosetta
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  architecture: x64
+                  cache: npm
+
+            - name: Verify x64 Node.js
+              run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION || process.arch !== 'x64') { throw new Error('Expected x64 Node.js v' + process.env.NODE_VERSION + ', got ' + process.arch + ' ' + process.version); }"
+
+            - name: Install x64 dependencies
+              run: npm ci
+              env:
+                  npm_config_arch: x64
+
+            - name: Verify bundled x64 libyang runtime
+              run: npm run libyang:smoke
+
+            - name: Build macOS x64 packages
+              run: npm run dist:mac -- --publish never
+
+            - name: Verify packaged x64 BMP SQLite
+              run: npm run test:packaged:sqlite
+              env:
+                  PACKAGED_SQLITE_EXPECTED_ARCH: x64
+                  E2E_APP_EXECUTABLE: release/mac/NetNexus.app/Contents/MacOS/NetNexus
 
             - name: Upload macOS artifacts
               uses: actions/upload-artifact@v4
               with:
-                  name: macos-${{ matrix.arch }}
+                  name: macos
                   path: |
                       release/*.dmg
                       release/*.zip

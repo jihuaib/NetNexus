@@ -25,7 +25,12 @@ const {
     verifyPinnedIanaModules,
     verifyRuntime
 } = require('../../scripts/libyang-runtime-config');
-const { ensureLibyangRuntime, isTruthyEnv, resolveBuildCommand } = require('../../scripts/ensure-libyang-runtime');
+const {
+    ensureLibyangRuntime,
+    isTruthyEnv,
+    optionValue,
+    resolveBuildCommand
+} = require('../../scripts/ensure-libyang-runtime');
 const beforePack = require('../../scripts/verify-libyang-runtime');
 
 const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.resolve(__dirname, '..', '..'));
@@ -204,6 +209,15 @@ function verifyScriptSyntax() {
     assert.match(unixBuildSource, /assert_git_commit/);
     assert.match(unixBuildSource, /expected_runtime_target=/);
     assert.match(unixBuildSource, /verify-libyang-iana-modules\.js/);
+    assert.match(unixBuildSource, /x64\) cmake_target_arch="x86_64"/);
+    assert.match(unixBuildSource, /macos_deployment_target="11\.0"/);
+    assert.equal(
+        Array.from(unixBuildSource.matchAll(/cmake_configure -S/g)).length,
+        3,
+        'PCRE2, libyang and the Schema helper must all receive the selected macOS architecture'
+    );
+    assert.match(unixBuildSource, /lipo "\$\{runtime_executable\}" -verify_arch "\$\{cmake_target_arch\}"/);
+    assert.match(unixBuildSource, /"\$\{runtime_platform\}" "\$\{runtime_arch\}"/);
     assert.match(unixBuildSource, /find "\$\{iana_module_source\}"[^\r\n]+-name '\*\.yang'[^\r\n]+-exec cp/);
     assert.match(
         unixBuildSource,
@@ -513,6 +527,8 @@ async function testInstallRuntimeEnsureContract() {
     const fixtureProjectRoot = path.join(tempDir, 'fixture-project');
     for (const value of ['1', 'true', 'TRUE', 'yes', 'on']) assert.equal(isTruthyEnv(value), true);
     for (const value of [undefined, null, '', '0', 'false', 'no', 'off']) assert.equal(isTruthyEnv(value), false);
+    assert.equal(optionValue('--arch', ['--platform', 'darwin', '--arch', 'x64']), 'x64');
+    assert.throws(() => optionValue('--arch', ['--arch']), /--arch requires a value/);
 
     const unixBuild = resolveBuildCommand({
         projectRoot: fixtureProjectRoot,
@@ -520,7 +536,8 @@ async function testInstallRuntimeEnsureContract() {
         arch: 'arm64'
     });
     assert.equal(unixBuild.command, 'bash');
-    assert.equal(path.basename(unixBuild.args.at(-1)), 'build-libyang-runtime.sh');
+    assert.equal(path.basename(unixBuild.args[0]), 'build-libyang-runtime.sh');
+    assert.deepEqual(unixBuild.args.slice(1), ['--platform', 'darwin', '--arch', 'arm64']);
 
     const windowsBuild = resolveBuildCommand({
         projectRoot: 'C:\\fixture\\project',
@@ -588,7 +605,8 @@ async function testInstallRuntimeEnsureContract() {
     assert.equal(verifyAttempt, 2, 'a rebuilt runtime must be verified before npm install succeeds');
     assert.equal(buildCalls.length, 1);
     assert.equal(buildCalls[0].command, 'bash');
-    assert.equal(path.basename(buildCalls[0].args.at(-1)), 'build-libyang-runtime.sh');
+    assert.equal(path.basename(buildCalls[0].args[0]), 'build-libyang-runtime.sh');
+    assert.deepEqual(buildCalls[0].args.slice(1), ['--platform', 'darwin', '--arch', 'arm64']);
     assert.equal(buildCalls[0].options.cwd, fixtureProjectRoot);
 
     let skippedWork = false;
@@ -760,7 +778,14 @@ function testRuntimeVerifierWithoutNativeRuntime() {
 
     assertCommandSucceeds(
         process.execPath,
-        ['scripts/write-libyang-runtime-manifest.js', runtimeDirectory, executable, schemaExecutable],
+        [
+            'scripts/write-libyang-runtime-manifest.js',
+            runtimeDirectory,
+            executable,
+            schemaExecutable,
+            verifierPlatform,
+            verifierArch
+        ],
         'runtime manifest generation'
     );
     const runtimeManifestPath = path.join(runtimeDirectory, 'runtime.json');
@@ -1092,20 +1117,37 @@ function testCiRuntimeInstallOrdering() {
     );
 
     const macReleaseJobSource = getWorkflowJobSource('.github/workflows/release.yml', 'build-macos', 'publish');
-    assert.match(
-        macReleaseJobSource,
-        /- arch:\s*arm64\s+runner:\s*macos-15\s+dist_script:\s*dist:mac:arm64/s,
-        'the release matrix must build arm64 artifacts on an Apple Silicon runner'
+    assert.match(macReleaseJobSource, /name:\s*Build macOS arm64 and x64/);
+    assert.match(macReleaseJobSource, /runs-on:\s*macos-15/);
+    assert.doesNotMatch(macReleaseJobSource, /macos-15-intel|matrix\./);
+    assert.match(macReleaseJobSource, /architecture:\s*arm64/);
+    assert.match(macReleaseJobSource, /architecture:\s*x64/);
+    assert.match(macReleaseJobSource, /npm_config_arch:\s*x64/);
+    assert.match(macReleaseJobSource, /npm run libyang:ensure -- --platform darwin --arch x64/);
+    assert.match(macReleaseJobSource, /E2E_APP_EXECUTABLE:\s*release\/mac\/NetNexus\.app\/Contents\/MacOS\/NetNexus/);
+    assert.match(macReleaseJobSource, /name:\s*macos(?:\s|$)/);
+
+    const armPackageIndex = macReleaseJobSource.indexOf('run: npm run dist:mac:arm64 -- --publish never');
+    const armSmokeIndex = macReleaseJobSource.indexOf('PACKAGED_SQLITE_EXPECTED_ARCH: arm64');
+    const rosettaIndex = macReleaseJobSource.indexOf('- name: Ensure Rosetta 2 is available');
+    const x64RuntimeBuildIndex = macReleaseJobSource.indexOf('- name: Build bundled x64 libyang runtime');
+    const x64InstallIndex = macReleaseJobSource.indexOf('- name: Install x64 dependencies');
+    const x64RuntimeVerifyIndex = macReleaseJobSource.indexOf('- name: Verify bundled x64 libyang runtime');
+    const x64PackageIndex = macReleaseJobSource.indexOf('run: npm run dist:mac -- --publish never');
+    const x64SmokeIndex = macReleaseJobSource.indexOf('PACKAGED_SQLITE_EXPECTED_ARCH: x64');
+    const uploadIndex = macReleaseJobSource.indexOf('- name: Upload macOS artifacts');
+    assert(
+        armPackageIndex >= 0 &&
+            armPackageIndex < armSmokeIndex &&
+            armSmokeIndex < rosettaIndex &&
+            rosettaIndex < x64RuntimeBuildIndex &&
+            x64RuntimeBuildIndex < x64InstallIndex &&
+            x64InstallIndex < x64RuntimeVerifyIndex &&
+            x64RuntimeVerifyIndex < x64PackageIndex &&
+            x64PackageIndex < x64SmokeIndex &&
+            x64SmokeIndex < uploadIndex,
+        'the single Apple Silicon release job must pass arm64 before rebuilding, packaging and verifying x64'
     );
-    assert.match(
-        macReleaseJobSource,
-        /- arch:\s*x64\s+runner:\s*macos-15-intel\s+dist_script:\s*dist:mac(?:\s|$)/s,
-        'the release matrix must build x64 artifacts and its libyang runtime on an Intel runner'
-    );
-    assert.match(macReleaseJobSource, /runs-on:\s*\$\{\{ matrix\.runner \}\}/);
-    assert.match(macReleaseJobSource, /run:\s*npm run \$\{\{ matrix\.dist_script \}\} -- --publish never/);
-    assert.match(macReleaseJobSource, /PACKAGED_SQLITE_EXPECTED_ARCH:\s*\$\{\{ matrix\.arch \}\}/);
-    assert.match(macReleaseJobSource, /name:\s*macos-\$\{\{ matrix\.arch \}\}/);
 }
 
 async function run() {

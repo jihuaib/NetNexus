@@ -608,7 +608,9 @@ endif()
     & node (Join-Path $ProjectRoot 'scripts/write-libyang-runtime-manifest.js') `
         $RuntimeTarget `
         (Join-Path $BinDir 'yanglint.exe') `
-        (Join-Path $BinDir 'netnexus-libyang-schema.exe')
+        (Join-Path $BinDir 'netnexus-libyang-schema.exe') `
+        win32 `
+        x64
     & node (Join-Path $ProjectRoot 'scripts/verify-libyang-runtime.js') --platform win32 --arch x64
     if ($LASTEXITCODE -ne 0) { throw 'The generated Windows libyang runtime did not pass verification.' }
 }

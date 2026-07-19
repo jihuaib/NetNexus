@@ -10,6 +10,16 @@ function isTruthyEnv(value) {
     );
 }
 
+function optionValue(name, args = process.argv.slice(2)) {
+    const index = args.indexOf(name);
+    if (index < 0) return undefined;
+    const value = args[index + 1];
+    if (!value || value.startsWith('--')) {
+        throw new Error(`${name} requires a value`);
+    }
+    return value;
+}
+
 function resolveBuildCommand(options = {}) {
     const projectRoot = options.projectRoot || PROJECT_ROOT;
     const platform = normalizePlatform(options.platform);
@@ -34,7 +44,13 @@ function resolveBuildCommand(options = {}) {
     if (platform === 'darwin' || platform === 'linux') {
         return {
             command: 'bash',
-            args: [path.join(projectRoot, 'scripts', 'build-libyang-runtime.sh')]
+            args: [
+                path.join(projectRoot, 'scripts', 'build-libyang-runtime.sh'),
+                '--platform',
+                platform,
+                '--arch',
+                arch
+            ]
         };
     }
 
@@ -91,7 +107,12 @@ function ensureLibyangRuntime(options = {}, dependencies = {}) {
 
 if (require.main === module) {
     try {
-        ensureLibyangRuntime({ force: process.argv.includes('--force') });
+        const args = process.argv.slice(2);
+        ensureLibyangRuntime({
+            force: args.includes('--force'),
+            platform: optionValue('--platform', args),
+            arch: optionValue('--arch', args)
+        });
     } catch (error) {
         process.stderr.write(`${error.stack || error.message || error}\n`);
         process.exitCode = 1;
@@ -101,5 +122,6 @@ if (require.main === module) {
 module.exports = {
     ensureLibyangRuntime,
     isTruthyEnv,
+    optionValue,
     resolveBuildCommand
 };
