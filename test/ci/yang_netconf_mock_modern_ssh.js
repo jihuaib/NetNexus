@@ -508,29 +508,36 @@ async function run() {
         assert.match(changeUpdate.xml, /<operation>replace<\/operation>/u);
         assert.match(changeUpdate.xml, /<target>\/netnexus-mock-device:system\/hostname<\/target>/u);
         assert.match(changeUpdate.xml, /<hostname(?:\s[^>]*)?>yang-push-change<\/hostname>/u);
-        validateNotificationWithBundledYanglint(changeUpdate.xml);
 
         const churnStart = notifications.length;
-        await subscriber.editConfig(
-            {
-                target: 'running',
-                config: `<system xmlns="${MOCK_NAMESPACE}"><hostname>yang-push-transient</hostname></system>`
-            },
-            RPC_OPTIONS
-        );
-        await subscriber.editConfig(
-            {
-                target: 'running',
-                config: `<system xmlns="${MOCK_NAMESPACE}"><hostname>yang-push-change</hostname></system>`
-            },
-            RPC_OPTIONS
-        );
+        // Queue both edits before yielding so slow Windows CI cannot consume the
+        // dampening window between the two NETCONF round trips.
+        await Promise.all([
+            subscriber.editConfig(
+                {
+                    target: 'running',
+                    config: `<system xmlns="${MOCK_NAMESPACE}"><hostname>yang-push-transient</hostname></system>`
+                },
+                RPC_OPTIONS
+            ),
+            subscriber.editConfig(
+                {
+                    target: 'running',
+                    config: `<system xmlns="${MOCK_NAMESPACE}"><hostname>yang-push-change</hostname></system>`
+                },
+                RPC_OPTIONS
+            )
+        ]);
         const churnUpdate = await waitFor(
             () =>
                 notifications
                     .slice(churnStart)
                     .find(
-                        item => item.xml.includes('<push-change-update') && item.xml.includes(`<id>${onChangeId}</id>`)
+                        item =>
+                            item.xml.includes('<push-change-update') &&
+                            item.xml.includes(`<id>${onChangeId}</id>`) &&
+                            item.xml.includes('yang-push-transient') &&
+                            item.xml.includes('yang-push-change')
                     ),
             'on-change churn was lost during dampening'
         );
@@ -619,6 +626,7 @@ async function run() {
         );
         assert.match(afterResyncChange.xml, /<patch-id>0<\/patch-id>/u);
         assert.match(afterResyncChange.xml, /after-resync/u);
+        validateNotificationWithBundledYanglint(changeUpdate.xml);
         await assert.rejects(
             subscriber.rpc(
                 `<modify-subscription xmlns="${SN_NAMESPACE}" xmlns:yp="${YANG_PUSH_NAMESPACE}" ` +
@@ -647,24 +655,26 @@ async function run() {
             'interface on-change synchronization was not delivered'
         );
         const interfaceChurnStart = notifications.length;
-        await subscriber.editConfig(
-            {
-                target: 'running',
-                config:
-                    `<interfaces xmlns="${MOCK_NAMESPACE}"><interface><name>push-test</name>` +
-                    '<description>transient interface</description></interface></interfaces>'
-            },
-            RPC_OPTIONS
-        );
-        await subscriber.editConfig(
-            {
-                target: 'running',
-                config:
-                    `<interfaces xmlns="${MOCK_NAMESPACE}" xmlns:nc="${NETCONF_BASE_NAMESPACE}">` +
-                    '<interface nc:operation="delete"><name>push-test</name></interface></interfaces>'
-            },
-            RPC_OPTIONS
-        );
+        await Promise.all([
+            subscriber.editConfig(
+                {
+                    target: 'running',
+                    config:
+                        `<interfaces xmlns="${MOCK_NAMESPACE}"><interface><name>push-test</name>` +
+                        '<description>transient interface</description></interface></interfaces>'
+                },
+                RPC_OPTIONS
+            ),
+            subscriber.editConfig(
+                {
+                    target: 'running',
+                    config:
+                        `<interfaces xmlns="${MOCK_NAMESPACE}" xmlns:nc="${NETCONF_BASE_NAMESPACE}">` +
+                        '<interface nc:operation="delete"><name>push-test</name></interface></interfaces>'
+                },
+                RPC_OPTIONS
+            )
+        ]);
         const interfaceChurn = await waitFor(
             () =>
                 notifications
@@ -672,7 +682,9 @@ async function run() {
                     .find(
                         item =>
                             item.xml.includes('<push-change-update') &&
-                            item.xml.includes(`<id>${interfaceChangeId}</id>`)
+                            item.xml.includes(`<id>${interfaceChangeId}</id>`) &&
+                            item.xml.includes('<operation>create</operation>') &&
+                            item.xml.includes('<operation>delete</operation>')
                     ),
             'interface create/delete churn was not delivered'
         );
