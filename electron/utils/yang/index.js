@@ -15,6 +15,7 @@ const YANG_REQ_TYPES = Object.freeze({
     GET_SCHEMA_ROOTS: 'yang:get-schema-roots',
     GET_SCHEMA_CHILDREN: 'yang:get-schema-children',
     GET_SCHEMA_NODE: 'yang:get-schema-node',
+    VALIDATE_RPC: 'yang:validate-rpc',
     GET_MODULE_SOURCE: 'yang:get-module-source',
     GET_DIAGNOSTICS: 'yang:get-diagnostics',
     CREATE_SNAPSHOT: 'yang:create-snapshot',
@@ -152,6 +153,10 @@ class YangRegistry {
             nodeId = options.nodeId;
         }
         return this.compiler.getSchemaNode(nodeId, options.compileId);
+    }
+
+    async validateRpc(options = {}) {
+        return this.compiler.validateRpc(options);
     }
 
     getModuleSource(identifier) {

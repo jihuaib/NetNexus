@@ -134,7 +134,9 @@
                             <nn-button
                                 class="request-regenerate-action"
                                 size="small"
-                                :disabled="!requestOverrideActive || executing || editConfigLoading"
+                                :disabled="
+                                    !requestOverrideActive || executing || editConfigLoading || requestValidating
+                                "
                                 @click="restoreGeneratedRequest"
                             >
                                 参数生成
@@ -142,7 +144,7 @@
                             <nn-button
                                 class="request-toolbar-action"
                                 size="small"
-                                :disabled="executing || editConfigLoading"
+                                :disabled="executing || editConfigLoading || requestValidating"
                                 @click="formatRequestXml"
                             >
                                 格式化
@@ -150,7 +152,8 @@
                             <nn-button
                                 class="request-toolbar-action"
                                 size="small"
-                                :disabled="executing || editConfigLoading"
+                                :disabled="executing || editConfigLoading || requestValidating"
+                                :loading="requestValidating"
                                 @click="validateRequestEditor"
                             >
                                 验证
@@ -386,7 +389,7 @@
                                     <nn-button
                                         type="primary"
                                         :danger="requestOverrideActive || activeOperationMeta.category === 'danger'"
-                                        :loading="executing"
+                                        :loading="executing || requestValidating"
                                         :disabled="Boolean(executeDisabledReason)"
                                         @click="requestExecute"
                                     >
@@ -770,7 +773,8 @@
                 <nn-button
                     type="primary"
                     :danger="requestOverrideActive || activeOperationMeta.category === 'danger'"
-                    :loading="executing"
+                    :loading="executing || requestValidating"
+                    :disabled="requestValidating"
                     @click="confirmAndExecute"
                 >
                     确认执行
@@ -981,11 +985,15 @@
     const replyDisplayMode = ref('formatted');
     const requestDraft = ref('');
     const requestOverrideActive = ref(false);
+    const requestValidating = ref(false);
     const requestValidation = reactive({
         status: '',
         diagnostics: [],
-        operation: ''
+        operation: '',
+        engine: '',
+        performed: false
     });
+    let requestValidationRevision = 0;
     const editConfigLoading = ref(false);
     const editConfigReadbackStatus = ref('idle');
     const editConfigReadbackSource = ref('');
@@ -2190,7 +2198,9 @@
         }
         return '';
     };
-    const executeDisabledReason = computed(() => (executing.value ? '操作执行中' : validateOperation()));
+    const executeDisabledReason = computed(() =>
+        executing.value ? '操作执行中' : requestValidating.value ? '正在执行 YANG 数据校验' : validateOperation()
+    );
 
     const escapeXmlAttribute = value =>
         String(value || '')
@@ -2293,7 +2303,15 @@
     );
 
     const clearRequestValidation = () => {
-        Object.assign(requestValidation, { status: '', diagnostics: [], operation: '' });
+        requestValidationRevision += 1;
+        requestValidating.value = false;
+        Object.assign(requestValidation, {
+            status: '',
+            diagnostics: [],
+            operation: '',
+            engine: '',
+            performed: false
+        });
     };
     const handleRequestEditorInput = value => {
         requestDraft.value = String(value ?? '');
@@ -2313,23 +2331,102 @@
     const applyRequestValidation = (validation, { notifyResult = false } = {}) => {
         const diagnostics = Array.isArray(validation?.diagnostics) ? validation.diagnostics : [];
         Object.assign(requestValidation, {
-            status: diagnostics.length ? 'error' : 'success',
+            status: diagnostics.length
+                ? 'error'
+                : validation?.validationError || validation?.schemaUnavailable
+                  ? 'warning'
+                  : 'success',
             diagnostics,
-            operation: validation?.operation || ''
+            operation: validation?.operation || '',
+            engine: validation?.engine || '',
+            performed: validation?.performed === true
         });
         if (notifyResult) {
             if (diagnostics.length) notify.warning(`RPC 验证完成：发现 ${diagnostics.length} 处问题`);
-            else notify.success(`RPC 验证通过${validation?.operation ? `：${validation.operation}` : ''}`);
+            else if (validation?.validationError) notify.error(validation.validationError);
+            else if (validation?.schemaUnavailable) notify.warning('RPC 结构合法，但当前没有已编译的 YANG Schema');
+            else {
+                const engine = validation?.engine === 'libyang' ? '（libyang）' : '';
+                notify.success(`RPC 验证通过${engine}${validation?.operation ? `：${validation.operation}` : ''}`);
+            }
         }
         return validation;
     };
-    const validateRequestEditor = options => {
+    const mergeRequestDiagnostics = diagnostics => {
+        const seen = new Set();
+        return diagnostics.filter(diagnostic => {
+            const key = `${diagnostic?.line || ''}\u0000${diagnostic?.column || ''}\u0000${diagnostic?.message || ''}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    };
+    const validateRequestEditor = async options => {
         const validationOptions =
             options && typeof options === 'object' && !('currentTarget' in options) ? options : {};
-        const validation = validateNetconfRpc(currentRequestXml.value);
-        return applyRequestValidation(validation, {
-            notifyResult: validationOptions.notifyResult !== false
-        });
+        const notifyResult = validationOptions.notifyResult !== false;
+        const source = currentRequestXml.value;
+        const structuralValidation = validateNetconfRpc(source);
+        if (!structuralValidation.valid) {
+            requestValidationRevision += 1;
+            requestValidating.value = false;
+            return applyRequestValidation(structuralValidation, { notifyResult });
+        }
+        if (!props.compileId) {
+            return applyRequestValidation(
+                {
+                    ...structuralValidation,
+                    engine: 'xml',
+                    authoritative: false,
+                    performed: false,
+                    schemaUnavailable: true
+                },
+                { notifyResult }
+            );
+        }
+
+        const revision = ++requestValidationRevision;
+        requestValidating.value = true;
+        try {
+            const { data } = await invokeBridge('yangApi', 'validateRpc', {
+                compileId: props.compileId,
+                rpc: source
+            });
+            if (revision !== requestValidationRevision || source !== currentRequestXml.value) {
+                return { valid: false, stale: true, diagnostics: [], operation: structuralValidation.operation };
+            }
+            const diagnostics = mergeRequestDiagnostics([
+                ...structuralValidation.diagnostics,
+                ...(Array.isArray(data?.diagnostics) ? data.diagnostics : [])
+            ]);
+            return applyRequestValidation(
+                {
+                    ...data,
+                    valid: structuralValidation.valid && data?.valid !== false && diagnostics.length === 0,
+                    diagnostics,
+                    operation: structuralValidation.operation || data?.operation || '',
+                    engine: data?.engine || 'libyang',
+                    authoritative: data?.authoritative !== false
+                },
+                { notifyResult }
+            );
+        } catch (error) {
+            if (revision !== requestValidationRevision || source !== currentRequestXml.value) {
+                return { valid: false, stale: true, diagnostics: [], operation: structuralValidation.operation };
+            }
+            return applyRequestValidation(
+                {
+                    ...structuralValidation,
+                    valid: false,
+                    engine: 'libyang',
+                    performed: false,
+                    validationError: `无法执行 YANG 数据校验：${error.message}`
+                },
+                { notifyResult }
+            );
+        } finally {
+            if (revision === requestValidationRevision) requestValidating.value = false;
+        }
     };
     const formatRequestXml = () => {
         const source = currentRequestXml.value;
@@ -2423,34 +2520,45 @@
         return `即将执行 ${activeOperationMeta.value.label}。`;
     });
 
-    const requestExecute = () => {
+    const requestExecute = async () => {
         const error = validateOperation();
         if (error) {
             notify.warning(error);
             return;
         }
-        const validation = validateRequestEditor({ notifyResult: false });
+        const validation = await validateRequestEditor({ notifyResult: false });
         if (!validation.valid) {
-            notify.warning(`RPC 验证失败：${validation.diagnostics[0]?.message || '请输入合法报文'}`);
+            if (!validation.stale) {
+                notify.warning(
+                    validation.validationError ||
+                        `RPC 验证失败：${validation.diagnostics[0]?.message || '请输入合法报文'}`
+                );
+            }
             return;
         }
         if (!requestOverrideActive.value && activeOperationMeta.value.category === 'read') {
-            executeOperation();
+            void executeOperation();
             return;
         }
         confirmationOpen.value = true;
     };
 
-    const confirmAndExecute = () => {
+    const confirmAndExecute = async () => {
         const error = validateOperation();
-        const validation = error ? null : validateRequestEditor({ notifyResult: false });
+        const validation = error ? null : await validateRequestEditor({ notifyResult: false });
         if (error || !validation?.valid) {
             confirmationOpen.value = false;
-            notify.warning(error || `RPC 验证失败：${validation?.diagnostics?.[0]?.message || '请输入合法报文'}`);
+            if (!validation?.stale) {
+                notify.warning(
+                    error ||
+                        validation?.validationError ||
+                        `RPC 验证失败：${validation?.diagnostics?.[0]?.message || '请输入合法报文'}`
+                );
+            }
             return;
         }
         confirmationOpen.value = false;
-        executeOperation();
+        void executeOperation();
     };
 
     const resultText = data => {
@@ -2822,6 +2930,7 @@
     watch(
         () => props.compileId,
         () => {
+            clearRequestValidation();
             parameterSchemaChildrenCache.clear();
             parameterDiscoveredSchemaNodes.value = [];
         }

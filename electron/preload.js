@@ -295,6 +295,7 @@ contextBridge.exposeInMainWorld('yangApi', {
     getSchemaRoots: query => ipcRenderer.invoke('yang:getSchemaRoots', query),
     getSchemaChildren: request => ipcRenderer.invoke('yang:getSchemaChildren', request),
     getSchemaNode: request => ipcRenderer.invoke('yang:getSchemaNode', request),
+    validateRpc: request => ipcRenderer.invoke('yang:validateRpc', request),
     getModuleSource: request => ipcRenderer.invoke('yang:getModuleSource', request),
     getDiagnostics: query => ipcRenderer.invoke('yang:getDiagnostics', query)
 });

@@ -104,6 +104,7 @@ async function connectionGeometry(page) {
             layout: rect('.connection-layout'),
             profile: rect('.profile-card'),
             editor: rect('.profile-editor-card'),
+            form: rect('.profile-form'),
             session: rect('.session-card')
         };
     });
@@ -151,16 +152,21 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(Math.abs(connection.card.height - connectionPageBox.height)).toBeLessThanOrEqual(1);
         expect(connection.layout.y - connection.body.y).toBeLessThanOrEqual(16);
         expect(Math.abs(connection.profile.y - connection.editor.y)).toBeLessThanOrEqual(1);
-        expect(Math.abs(connection.profile.height - connection.editor.height)).toBeLessThanOrEqual(1);
         expect(connection.profile.width).toBeGreaterThanOrEqual(220);
         expect(connection.editor.width).toBeGreaterThan(connection.profile.width);
-        expect(connection.editor.height).toBeGreaterThan(430);
         expect(connection.profile.x + connection.profile.width).toBeLessThanOrEqual(connection.editor.x - 7);
-        expect(connection.session.y).toBeGreaterThanOrEqual(connection.layout.y + connection.layout.height + 7);
-        expect(Math.abs(connection.session.x - connection.layout.x)).toBeLessThanOrEqual(1);
-        expect(Math.abs(connection.session.width - connection.layout.width)).toBeLessThanOrEqual(1);
+        expect(connection.session.y).toBeGreaterThanOrEqual(connection.editor.y + connection.editor.height + 7);
+        expect(connection.session.y - (connection.editor.y + connection.editor.height)).toBeLessThanOrEqual(9);
+        expect(Math.abs(connection.session.x - connection.editor.x)).toBeLessThanOrEqual(1);
+        expect(Math.abs(connection.session.width - connection.editor.width)).toBeLessThanOrEqual(1);
         expect(
-            connection.body.y + connection.body.height - (connection.session.y + connection.session.height)
+            connection.profile.height - (connection.editor.height + connection.session.height + 8)
+        ).toBeLessThanOrEqual(1);
+        expect(
+            connection.editor.height + connection.session.height + 8 - connection.profile.height
+        ).toBeLessThanOrEqual(1);
+        expect(
+            connection.body.y + connection.body.height - (connection.layout.y + connection.layout.height)
         ).toBeLessThanOrEqual(16);
 
         const profileRows = connectionPage.locator('.profile-form .nn-row');
@@ -196,6 +202,10 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(Math.abs(connection.profile.width - connection.editor.width)).toBeLessThanOrEqual(1);
         expect(connection.editor.y).toBeGreaterThanOrEqual(connection.profile.y + connection.profile.height + 7);
         expect(connection.session.y).toBeGreaterThanOrEqual(connection.editor.y + connection.editor.height + 7);
+        expect(connection.session.y - (connection.editor.y + connection.editor.height)).toBeLessThanOrEqual(9);
+        expect(
+            connection.body.y + connection.body.height - (connection.layout.y + connection.layout.height)
+        ).toBeLessThanOrEqual(16);
         await expect
             .poll(() =>
                 page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
@@ -341,12 +351,12 @@ test.describe('NETCONF/YANG workbench', () => {
             '连接时间',
             '操作'
         ]);
-        const capabilityButton = sessionTable.getByRole('button', { name: /设备 Capability \d+/u });
+        const capabilityButton = sessionTable.getByRole('button', { name: /Capability \d+/u });
         await expect(capabilityButton).toBeVisible();
         await expect(sessionTable.getByRole('button', { name: '断开连接', exact: true })).toBeVisible();
         await expect(connectionPage.locator('.connection-status-bar')).toHaveCount(0);
         await expect(connectionPage.locator('.connection-status-description')).toHaveCount(0);
-        await expect(connectionPage.getByText(/^Capability \d+$/u)).toHaveCount(0);
+        await expect(connectionPage.getByRole('button', { name: /Capability \d+/u })).toHaveCount(1);
         await expect(connectionPage.getByText('能力数量', { exact: true })).toHaveCount(0);
         await capabilityButton.click();
 
@@ -357,14 +367,21 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(capabilityDialog).toContainText('urn:ietf:params:netconf:capability:candidate:1.0');
         await capabilityDialog.getByRole('button', { name: '关闭' }).click();
 
+        const connectedGeometry = await connectionGeometry(page);
         await sessionTable.getByRole('button', { name: '断开连接', exact: true }).click();
-        await expect(sessionTable).toBeHidden();
+        await expect(sessionTable).toBeVisible();
+        await expect(sessionTable.getByText('未连接', { exact: true })).toBeVisible();
+        await expect(capabilityButton).toHaveCount(0);
+        await expect(sessionTable.getByRole('button', { name: '断开连接', exact: true })).toHaveCount(0);
         const editorConnectButton = connectionPage
             .locator('.profile-editor-card')
             .getByRole('button', { name: '连接', exact: true });
         await expect(editorConnectButton).toBeVisible();
+        expectSameGeometry(connectedGeometry, await connectionGeometry(page));
+
         await editorConnectButton.click();
-        await expect(sessionTable).toBeVisible();
+        await expect(capabilityButton).toBeVisible();
+        await expect(sessionTable.getByRole('button', { name: '断开连接', exact: true })).toBeVisible();
         await expect(editorConnectButton).toHaveCount(0);
 
         await page.goto('/#/yang/yang-workspace');
@@ -808,6 +825,37 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(rootDiagnostic).toContainText('NETCONF base 命名空间');
         await expect(rootDiagnostic).toContainText('message-id');
         await expect(requestEditor.locator('[data-xml-diagnostic][data-line="3"]')).toContainText('NETNEXUS_REQUIRED');
+
+        const invalidBooleanRpc =
+            '<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="manual-yang-invalid">\n' +
+            '  <edit-config>\n' +
+            '    <target><running/></target>\n' +
+            '    <config>\n' +
+            '      <interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces">\n' +
+            '        <interface>\n' +
+            '          <name>eth0</name>\n' +
+            '          <enabled>not-a-bool</enabled>\n' +
+            '        </interface>\n' +
+            '      </interfaces>\n' +
+            '    </config>\n' +
+            '  </edit-config>\n' +
+            '</rpc>';
+        await requestInput.fill(invalidBooleanRpc);
+        await validateButton.click();
+        const booleanDiagnostic = requestEditor.locator('[data-xml-diagnostic][data-line="8"]');
+        await expect(booleanDiagnostic).toBeVisible();
+        await expect(booleanDiagnostic).toContainText(/boolean|true|false/u);
+        await expect(requestEditor.locator('[data-xml-line-number="8"]')).toHaveClass(/xml-code-line-number-error/u);
+        await expect(requestInput).toHaveAttribute('aria-invalid', 'true');
+        await operationPanel.getByRole('button', { name: '发送手工 RPC', exact: true }).click();
+        await expect(page.getByRole('dialog', { name: '确认发送手工 RPC' })).toHaveCount(0);
+        expect(rawRequests).toHaveLength(0);
+
+        const validBooleanRpc = invalidBooleanRpc.replace('not-a-bool', 'false');
+        await requestInput.fill(validBooleanRpc);
+        await validateButton.click();
+        await expect(requestDiagnostics).toHaveCount(0);
+        await expect(requestInput).toHaveAttribute('aria-invalid', 'false');
 
         await regenerateButton.click();
         await expect(requestInput).toHaveValue(generatedRpc);

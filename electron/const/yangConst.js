@@ -21,6 +21,7 @@ const YANG_REQ_TYPES = Object.freeze({
     GET_SCHEMA_ROOTS: 'getSchemaRoots',
     GET_SCHEMA_CHILDREN: 'getSchemaChildren',
     GET_SCHEMA_NODE: 'getSchemaNode',
+    VALIDATE_RPC: 'validateRpc',
     GET_MODULE_SOURCE: 'getModuleSource',
     GET_DIAGNOSTICS: 'getDiagnostics'
 });

@@ -217,46 +217,47 @@
                         </nn-form>
                     </div>
                 </section>
-            </div>
 
-            <section v-if="isConnected" class="connection-panel session-card">
-                <div class="connection-panel-header session-panel-header">
-                    <div class="connection-panel-heading">
-                        <span class="connection-panel-title">当前会话</span>
+                <section class="connection-panel session-card">
+                    <div class="connection-panel-header session-panel-header">
+                        <div class="connection-panel-heading">
+                            <span class="connection-panel-title">当前会话</span>
+                        </div>
                     </div>
-                </div>
-                <div class="session-panel-body">
-                    <nn-table
-                        :columns="sessionColumns"
-                        :data-source="currentSessionRows"
-                        :pagination="false"
-                        :scroll="{ x: 1070 }"
-                        row-key="key"
-                        size="small"
-                        bordered
-                        class="session-table"
-                    >
-                        <template #bodyCell="{ column }">
-                            <template v-if="column.key === 'action'">
-                                <nn-space :size="4" class="session-actions">
-                                    <nn-button type="link" size="small" @click="capabilityDrawerOpen = true">
-                                        设备 Capability {{ capabilities.length }}
-                                    </nn-button>
-                                    <nn-button
-                                        type="link"
-                                        danger
-                                        size="small"
-                                        :loading="disconnecting"
-                                        @click="disconnectProfile"
-                                    >
-                                        断开连接
-                                    </nn-button>
-                                </nn-space>
+                    <div class="session-panel-body">
+                        <nn-table
+                            :columns="sessionColumns"
+                            :data-source="currentSessionRows"
+                            :pagination="false"
+                            :scroll="{ x: 830 }"
+                            row-key="key"
+                            size="small"
+                            bordered
+                            class="session-table"
+                        >
+                            <template #bodyCell="{ column }">
+                                <template v-if="column.key === 'action'">
+                                    <nn-space v-if="isConnected" :size="4" class="session-actions">
+                                        <nn-button type="link" size="small" @click="capabilityDrawerOpen = true">
+                                            Capability {{ capabilities.length }}
+                                        </nn-button>
+                                        <nn-button
+                                            type="link"
+                                            danger
+                                            size="small"
+                                            :loading="disconnecting"
+                                            @click="disconnectProfile"
+                                        >
+                                            断开连接
+                                        </nn-button>
+                                    </nn-space>
+                                    <span v-else class="session-offline">未连接</span>
+                                </template>
                             </template>
-                        </template>
-                    </nn-table>
-                </div>
-            </section>
+                        </nn-table>
+                    </div>
+                </section>
+            </div>
         </nn-card>
 
         <nn-drawer
@@ -329,12 +330,12 @@
 
     const labelCol = { style: { width: '108px' } };
     const sessionColumns = [
-        { title: 'Profile', dataIndex: 'profileName', key: 'profileName', width: 160, ellipsis: true },
-        { title: '远端', dataIndex: 'remote', key: 'remote', width: 220, ellipsis: true },
-        { title: 'NETCONF Base', dataIndex: 'baseVersion', key: 'baseVersion', width: 140 },
-        { title: 'Session ID', dataIndex: 'sessionId', key: 'sessionId', width: 150, ellipsis: true },
-        { title: '连接时间', dataIndex: 'connectedAt', key: 'connectedAt', width: 180 },
-        { title: '操作', key: 'action', width: 220, fixed: 'right', align: 'center' }
+        { title: 'Profile', dataIndex: 'profileName', key: 'profileName', width: 120, ellipsis: true },
+        { title: '远端', dataIndex: 'remote', key: 'remote', width: 150, ellipsis: true },
+        { title: 'NETCONF Base', dataIndex: 'baseVersion', key: 'baseVersion', width: 120 },
+        { title: 'Session ID', dataIndex: 'sessionId', key: 'sessionId', width: 110, ellipsis: true },
+        { title: '连接时间', dataIndex: 'connectedAt', key: 'connectedAt', width: 150 },
+        { title: '操作', key: 'action', width: 180, fixed: 'right', align: 'center' }
     ];
     const profiles = ref([]);
     const selectedProfileId = ref('');
@@ -383,10 +384,21 @@
     const isConnected = computed(() => sessionStatus.value === NETCONF_SESSION_STATUS.CONNECTED);
     const activeProfileId = computed(() => session.value?.profileId || session.value?.connectionId || '');
     const currentSessionRows = computed(() => {
-        if (!isConnected.value) return [];
         const profile = selectedProfile.value;
         const host = session.value.host || profile?.host || '-';
         const port = session.value.port || profile?.port || 830;
+        if (!isConnected.value) {
+            return [
+                {
+                    key: 'disconnected-session',
+                    profileName: profile?.name || '-',
+                    remote: host === '-' ? '-' : `${host}:${port}`,
+                    baseVersion: '-',
+                    sessionId: '-',
+                    connectedAt: '-'
+                }
+            ];
+        }
         return [
             {
                 key: session.value.sessionId || activeProfileId.value || 'current-session',
@@ -680,6 +692,10 @@
         min-height: 0;
         flex: 1;
         grid-template-columns: minmax(220px, 26%) minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) auto;
+        grid-template-areas:
+            'profile editor'
+            'profile session';
         gap: 8px;
         align-items: stretch;
     }
@@ -740,8 +756,13 @@
         overflow: auto;
     }
 
-    .profile-card,
+    .profile-card {
+        grid-area: profile;
+        min-height: 0;
+    }
+
     .profile-editor-card {
+        grid-area: editor;
         min-height: 0;
     }
 
@@ -861,6 +882,7 @@
     }
 
     .session-card {
+        grid-area: session;
         flex: 0 0 auto;
     }
 
@@ -879,6 +901,13 @@
 
     .session-actions {
         white-space: nowrap;
+    }
+
+    .session-offline {
+        display: inline-flex;
+        height: 24px;
+        align-items: center;
+        color: var(--nn-color-text-muted);
     }
 
     .capability-drawer-content {
@@ -920,6 +949,11 @@
     @media (max-width: 980px) {
         .connection-layout {
             grid-template-columns: 1fr;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+            grid-template-areas:
+                'profile'
+                'editor'
+                'session';
         }
 
         .profile-card {

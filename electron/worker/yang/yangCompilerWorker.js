@@ -26,6 +26,7 @@ class YangCompilerWorker {
         this.messageHandler.registerHandler(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, this.getSchemaRoots.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.GET_SCHEMA_CHILDREN, this.getSchemaChildren.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.GET_SCHEMA_NODE, this.getSchemaNode.bind(this));
+        this.messageHandler.registerHandler(YANG_REQ_TYPES.VALIDATE_RPC, this.validateRpc.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.GET_MODULE_SOURCE, this.getModuleSource.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.GET_DIAGNOSTICS, this.getDiagnostics.bind(this));
         this.messageHandler.registerHandler(YANG_REQ_TYPES.CREATE_SNAPSHOT, this.createSnapshot.bind(this));
@@ -201,6 +202,15 @@ class YangCompilerWorker {
         this.respond(messageId, 'Unable to get schema node', () =>
             this.requireRegistry(data).getSchemaNode(data.nodeId, data)
         );
+    }
+
+    async validateRpc(messageId, data = {}) {
+        try {
+            const result = await this.requireRegistry(data).validateRpc(data);
+            this.messageHandler.sendSuccessResponse(messageId, result, 'YANG RPC instance validation completed');
+        } catch (error) {
+            this.sendError(messageId, 'Unable to validate RPC against YANG', error);
+        }
     }
 
     getModuleSource(messageId, data = {}) {

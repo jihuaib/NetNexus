@@ -6,7 +6,8 @@ const path = require('node:path');
 const Module = require('node:module');
 const { transformSync } = require('esbuild');
 
-const sourcePath = path.join(__dirname, '..', '..', 'src', 'view', 'yang', 'netconfRpcValidation.js');
+const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.join(__dirname, '..', '..'));
+const sourcePath = path.join(projectRoot, 'src', 'view', 'yang', 'netconfRpcValidation.js');
 const transformed = transformSync(fs.readFileSync(sourcePath, 'utf8'), {
     format: 'cjs',
     loader: 'js',

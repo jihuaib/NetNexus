@@ -1,8 +1,16 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { parseYang } = require('./yangParser');
 const { sha256, stableStringify, atomicWriteJson } = require('./yangRepository');
 const { LibyangRuntime } = require('./libyangRuntime');
+const {
+    buildRpcValidationPayload,
+    isSecondaryYanglintDiagnostic,
+    lineAt,
+    normalizeLibyangRpcDiagnostic,
+    resolveRpcValidationTarget
+} = require('./yangRpcInstanceValidation');
 
 const COMPILE_CACHE_SCHEMA_VERSION = 3;
 const LIBYANG_SCHEMA_OUTPUT_VERSION = 1;
@@ -10,6 +18,7 @@ const DEFAULT_COMPILER_EXECUTABLE = 'yanglint';
 const DEFAULT_EXTERNAL_TIMEOUT = 60_000;
 const DEFAULT_EXTERNAL_MAX_BUFFER = 64 * 1024 * 1024;
 const DEFAULT_VERSION_TIMEOUT = 5_000;
+const MAX_RPC_VALIDATION_BYTES = 8 * 1024 * 1024;
 const ROOT_NODE_ID = 'yang-schema-root';
 
 function diagnosticKey(diagnostic) {
@@ -1255,6 +1264,148 @@ class YangCompiler {
         const compilation = this.resolveCompilation(compileId);
         const node = compilation.tree.nodes[nodeId];
         return node ? nodesPublicView(node) : null;
+    }
+
+    dataValidationSchemaPaths(externalCompiler = {}) {
+        const args = Array.isArray(externalCompiler.args) ? externalCompiler.args : [];
+        const generatedArgs = Array.isArray(externalCompiler.generatedArgs) ? externalCompiler.generatedArgs : [];
+        let schemaPaths = generatedArgs.length <= args.length ? args.slice(generatedArgs.length) : [];
+        if (!schemaPaths.length) {
+            const optionWithValue = new Set(['-p', '--path', '-F', '--features', '-D']);
+            schemaPaths = [];
+            for (let index = 0; index < args.length; index += 1) {
+                if (optionWithValue.has(args[index])) {
+                    index += 1;
+                    continue;
+                }
+                if (!args[index].startsWith('-')) schemaPaths.push(args[index]);
+            }
+        }
+        const seen = new Set(schemaPaths.map(normalizedPathKey));
+        for (const deviationPath of externalCompiler.deviations || []) {
+            const key = normalizedPathKey(deviationPath);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            schemaPaths.push(deviationPath);
+        }
+        return schemaPaths.map(filePath => path.resolve(filePath));
+    }
+
+    async validateRpc(options = {}) {
+        const rpc = String(options.rpc ?? '');
+        if (Buffer.byteLength(rpc, 'utf8') > MAX_RPC_VALIDATION_BYTES) {
+            const error = new Error(`RPC exceeds the ${MAX_RPC_VALIDATION_BYTES} byte validation limit`);
+            error.code = 'RPC_VALIDATION_SIZE_LIMIT';
+            throw error;
+        }
+        const compilation = this.resolveCompilation(options.compileId);
+        if (compilation.result?.success !== true) {
+            const error = new Error('The active YANG compilation did not complete successfully');
+            error.code = 'YANG_COMPILATION_UNAVAILABLE';
+            throw error;
+        }
+        const target = resolveRpcValidationTarget(rpc);
+        if (target.skipped) {
+            return {
+                valid: true,
+                diagnostics: [],
+                operation: target.operation,
+                engine: 'libyang',
+                authoritative: true,
+                performed: false,
+                validationType: null,
+                skippedReason: target.reason
+            };
+        }
+
+        const externalCompiler = compilation.result.externalCompiler || {};
+        const schemaPaths = this.dataValidationSchemaPaths(externalCompiler);
+        const missingSchema = schemaPaths.find(schemaPath => !fs.existsSync(schemaPath));
+        if (!schemaPaths.length || missingSchema) {
+            const error = new Error(
+                missingSchema
+                    ? `Compiled YANG input is no longer available: ${missingSchema}`
+                    : 'The active YANG compilation has no reusable schema inputs'
+            );
+            error.code = 'YANG_VALIDATION_CONTEXT_UNAVAILABLE';
+            throw error;
+        }
+
+        const runtime = this.createRuntime(options);
+        const compilerStatus = await runtime.getStatus();
+        if (!compilerStatus.available || compilerStatus.capabilities?.dataValidation !== true) {
+            const error = new Error(compilerStatus.error || 'The bundled libyang runtime cannot validate data');
+            error.code = 'LIBYANG_DATA_VALIDATION_UNAVAILABLE';
+            throw error;
+        }
+
+        const searchPaths = normalizeStringList(externalCompiler.searchPaths).map(searchPath =>
+            path.resolve(searchPath)
+        );
+        const features = normalizeStringList(externalCompiler.features);
+        const args = [];
+        for (const searchPath of searchPaths) args.push('-p', searchPath);
+        for (const feature of features) args.push('-F', feature);
+
+        const temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'netnexus-rpc-validation-'));
+        const inputPath = path.join(temporaryDirectory, 'rpc-payload.xml');
+        const payload = buildRpcValidationPayload(rpc, target.nodes);
+        try {
+            await fs.promises.writeFile(inputPath, payload, { encoding: 'utf8', mode: 0o600 });
+            const execution = await runtime.execute(
+                [...args, '-I', 'xml', '-t', target.validationType, ...schemaPaths, inputPath],
+                {
+                    cwd: path.dirname(schemaPaths[0]),
+                    timeoutMs: normalizePositiveInteger(
+                        options.timeoutMs,
+                        Math.min(this.externalTimeout, 30_000),
+                        100,
+                        60_000
+                    ),
+                    maxOutputBytes: normalizePositiveInteger(
+                        options.maxOutputBytes,
+                        Math.min(this.externalMaxBuffer, 2 * 1024 * 1024),
+                        1024,
+                        8 * 1024 * 1024
+                    ),
+                    env: options.env || process.env
+                }
+            );
+            if (execution.error) throw execution.error;
+
+            const parsed = this.parseExternalDiagnostics(execution.stderr, 'warning');
+            let failures = parsed.filter(
+                diagnostic => diagnostic.severity === 'error' && !isSecondaryYanglintDiagnostic(diagnostic)
+            );
+            if (execution.exitCode !== 0 && failures.length === 0) {
+                failures = [
+                    {
+                        severity: 'error',
+                        code: 'LIBYANG_DATA_VALIDATION_FAILED',
+                        message:
+                            String(execution.stderr || execution.stdout || '').trim() ||
+                            `yanglint exited with code ${execution.exitCode}`,
+                        line: lineAt(rpc, target.nodes[0]?.start || 0)
+                    }
+                ];
+            }
+            const fallbackLine = lineAt(rpc, target.nodes[0]?.start || 0);
+            const diagnostics = deduplicateDiagnostics(
+                failures.map(diagnostic => normalizeLibyangRpcDiagnostic(rpc, diagnostic, fallbackLine))
+            );
+            return {
+                valid: execution.exitCode === 0 && diagnostics.length === 0,
+                diagnostics,
+                operation: target.operation,
+                engine: 'libyang',
+                authoritative: true,
+                performed: true,
+                validationType: target.validationType,
+                skippedReason: ''
+            };
+        } finally {
+            await fs.promises.rm(temporaryDirectory, { recursive: true, force: true }).catch(() => {});
+        }
     }
 
     getDiagnostics(compileId) {

@@ -67,7 +67,7 @@ async function main() {
     );
     fs.writeFileSync(
         systemPath,
-        'module example-system { yang-version 1.1; namespace "urn:example:system"; prefix es; import example-types { prefix et; revision-date 2026-01-01; } revision 2026-02-01; feature domain-name; container system { leaf hostname { type et:label; } leaf domain { if-feature domain-name; type string; } } }'
+        'module example-system { yang-version 1.1; namespace "urn:example:system"; prefix es; import example-types { prefix et; revision-date 2026-01-01; } revision 2026-02-01; feature domain-name; container system { leaf hostname { type et:label; } leaf enabled { type boolean; } leaf domain { if-feature domain-name; type string; } } }'
     );
     fs.writeFileSync(
         invalidPath,
@@ -87,6 +87,7 @@ async function main() {
     try {
         assert(ipc.handlers.has('yang:compile'));
         assert(ipc.handlers.has('yang:getCompilerStatus'));
+        assert(ipc.handlers.has('yang:validateRpc'));
         const compilerStatus = await app.handleGetCompilerStatus(event, { force: true });
         assert.equal(compilerStatus.status, 'success');
         assert.equal(compilerStatus.data.available, true);
@@ -114,6 +115,30 @@ async function main() {
         assert.equal(compiled.success, true);
         assert.equal(compiled.schemaTree.authoritative, true);
         assert.equal(compiled.schemaTree.source, 'libyang-effective');
+
+        const validationResponse = await ipc.handlers.get('yang:validateRpc')(event, {
+            compileId: compiled.compileId,
+            compilerPath: path.join(temporaryRoot, 'renderer-must-not-select-an-executable'),
+            rpc: `<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="validate-rpc-wiring">
+  <edit-config>
+    <target><running/></target>
+    <config>
+      <system xmlns="urn:example:system">
+        <enabled>not-a-boolean</enabled>
+      </system>
+    </config>
+  </edit-config>
+</rpc>`
+        });
+        assert.equal(validationResponse.status, 'success');
+        assert.equal(validationResponse.data.valid, false);
+        assert.equal(validationResponse.data.performed, true);
+        assert.equal(validationResponse.data.authoritative, true);
+        assert.equal(validationResponse.data.engine, 'libyang');
+        assert.equal(validationResponse.data.operation, 'edit-config');
+        assert.equal(validationResponse.data.validationType, 'edit');
+        assert.equal(validationResponse.data.diagnostics.length, 1);
+        assert.match(validationResponse.data.diagnostics[0].message, /boolean|true|false/i);
 
         const workspaceResponse = await app.handleGetWorkspace(event);
         assert.equal(workspaceResponse.status, 'success');

@@ -52,6 +52,7 @@ class YangApp {
         handle('yang:getSchemaRoots', this.handleGetSchemaRoots);
         handle('yang:getSchemaChildren', this.handleGetSchemaChildren);
         handle('yang:getSchemaNode', this.handleGetSchemaNode);
+        handle('yang:validateRpc', this.handleValidateRpc);
         handle('yang:getModuleSource', this.handleGetModuleSource);
         handle('yang:getDiagnostics', this.handleGetDiagnostics);
     }
@@ -620,6 +621,24 @@ class YangApp {
 
     async handleGetDiagnostics(event, query = {}) {
         return this.handleCompiledQuery(event, query, WORKER_REQ_TYPES.GET_DIAGNOSTICS, '获取YANG诊断失败');
+    }
+
+    async handleValidateRpc(event, request = {}) {
+        try {
+            const payload = request && typeof request === 'object' && !Array.isArray(request) ? request : {};
+            const compileId = await this.ensureCompilationLoaded(event, payload.compileId);
+            const result = await this.send(
+                event,
+                WORKER_REQ_TYPES.VALIDATE_RPC,
+                { compileId, rpc: String(payload.rpc ?? '') },
+                { timeoutMs: 60_000 }
+            );
+            return successResponse(result, result.valid ? 'RPC YANG校验通过' : 'RPC YANG校验未通过');
+        } catch (error) {
+            return errorResponse(`RPC YANG校验失败: ${error.message}`, {
+                code: error.code || 'YANG_RPC_VALIDATION_FAILED'
+            });
+        }
     }
 
     async handleCompiledQuery(event, request, operation, errorPrefix) {

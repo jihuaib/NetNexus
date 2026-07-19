@@ -4,6 +4,11 @@ const os = require('os');
 const path = require('path');
 const { validateAuthoritativeSchemaTree } = require('../../electron/utils/yang/yangCompiler');
 const {
+    buildRpcValidationPayload,
+    normalizeLibyangRpcDiagnostic,
+    resolveRpcValidationTarget
+} = require('../../electron/utils/yang/yangRpcInstanceValidation');
+const {
     buildGet,
     buildGetConfig,
     childValues,
@@ -44,6 +49,7 @@ const yangPageApiScript = `
         getSchemaRoots: request => call('yang.registry.getSchemaRoots', request),
         getSchemaChildren: request => call('yang.registry.getSchemaChildren', request),
         getSchemaNode: request => call('yang.registry.getSchemaNode', request),
+        validateRpc: request => call('yang.registry.validateRpc', request),
         getModuleSource: request => call('yang.registry.getModuleSource', request),
         getDiagnostics: request => call('yang.registry.getDiagnostics', request)
     };`;
@@ -141,7 +147,8 @@ function createCompilerStatus() {
                 validation: true,
                 schemaExport: true,
                 coreSchemaExport: true,
-                extensionSchemaExport: false
+                extensionSchemaExport: false,
+                dataValidation: true
             }
         };
     } catch (error) {
@@ -262,6 +269,87 @@ function executeSchemaHelper(yang, targets) {
             throw new Error(`libyang Schema helper 返回了无效 JSON：${error.message}`);
         }
         return validateAuthoritativeSchemaTree(output);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+}
+
+function validateRpcInstance(yang, request = {}) {
+    const rpc = String(request.rpc || '');
+    const target = resolveRpcValidationTarget(rpc);
+    if (target.skipped) {
+        return {
+            valid: true,
+            diagnostics: [],
+            operation: target.operation,
+            engine: 'libyang',
+            authoritative: true,
+            performed: false,
+            validationType: null,
+            skippedReason: target.reason
+        };
+    }
+    if (!yang.compiler.available || !yang.compiler.path) throw new Error('E2E libyang runtime is unavailable');
+
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-rpc-validation-e2e-'));
+    try {
+        const pathsById = materializeModuleSources(yang, directory);
+        const schemaPaths = yang.compiledModuleIds.map(moduleId => pathsById.get(moduleId)).filter(Boolean);
+        if (!schemaPaths.length) throw new Error('E2E YANG compilation has no reusable schema inputs');
+        const inputPath = path.join(directory, 'rpc-payload.xml');
+        fs.writeFileSync(inputPath, buildRpcValidationPayload(rpc, target.nodes), { encoding: 'utf8', mode: 0o600 });
+        const runtimeModulePaths = [
+            path.join(yang.compiler.runtimeDirectory || '', 'share', 'yang', 'modules', 'libyang'),
+            path.join(yang.compiler.runtimeDirectory || '', 'share', 'yang', 'modules')
+        ].filter(directoryPath => {
+            try {
+                return fs.statSync(directoryPath).isDirectory();
+            } catch (_error) {
+                return false;
+            }
+        });
+        const args = [
+            ...[...runtimeModulePaths, directory].flatMap(directoryPath => ['-p', directoryPath]),
+            '-I',
+            'xml',
+            '-t',
+            target.validationType,
+            ...schemaPaths,
+            inputPath
+        ];
+        const execution = childProcess.spawnSync(yang.compiler.path, args, {
+            cwd: directory,
+            encoding: 'utf8',
+            timeout: 30_000,
+            maxBuffer: 2 * 1024 * 1024,
+            windowsHide: true
+        });
+        if (execution.error) throw execution.error;
+        const primaryLine = String(execution.stderr || '')
+            .split(/\r?\n/u)
+            .find(line => /^libyang\s+(?:err|error)\s*:/iu.test(line));
+        const rawMessage = primaryLine?.replace(/^libyang\s+(?:err|error)\s*:\s*/iu, '') || '';
+        const lineMatch = rawMessage.match(/\(line(?: number)?\s*:?\s*(\d+)\)/iu);
+        const diagnostics =
+            execution.status === 0
+                ? []
+                : [
+                      normalizeLibyangRpcDiagnostic(rpc, {
+                          code: 'LIBYANG_DATA',
+                          message: rawMessage || String(execution.stderr || 'YANG data validation failed').trim(),
+                          line: lineMatch ? Number(lineMatch[1]) : 1
+                      })
+                  ];
+        return {
+            valid: execution.status === 0 && diagnostics.length === 0,
+            diagnostics,
+            operation: target.operation,
+            engine: 'libyang',
+            authoritative: true,
+            performed: true,
+            validationType: target.validationType,
+            skippedReason: ''
+        };
     } finally {
         fs.rmSync(directory, { recursive: true, force: true });
     }
@@ -774,6 +862,13 @@ function handleRegistryCall(controller, yang, method, args) {
     if (method === 'yang.registry.getSchemaNode') {
         const node = schemaNodeSummary(yang, args[0]?.nodeId);
         return node ? successResponse(node) : errorResponse('Schema 节点不存在');
+    }
+    if (method === 'yang.registry.validateRpc') {
+        try {
+            return successResponse(validateRpcInstance(yang, args[0] || {}));
+        } catch (error) {
+            return errorResponse(`RPC YANG校验失败: ${error.message}`);
+        }
     }
     if (method === 'yang.registry.getModuleSource') {
         const module = findModule(yang, args[0]);

@@ -36,6 +36,7 @@
  * - getSchemaRoots({ compileId? }) -> data: SchemaNode[] | { nodes: SchemaNode[] }
  * - getSchemaChildren({ compileId?, parentId, nodeId? }) -> data: SchemaNode[] | { nodes: SchemaNode[] }
  * - getSchemaNode({ compileId?, nodeId }) -> data: SchemaNode
+ * - validateRpc({ compileId, rpc }) -> data: { valid, diagnostics, engine, performed, validationType? }
  * - getModuleSource({ moduleId?, name?, revision? }) -> data: string | { source, module? }
  * - getDiagnostics({ compileId? }) -> data: Diagnostic[] | { diagnostics: Diagnostic[] }
  */
