@@ -3,6 +3,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { Platform } = require('app-builder-lib');
+const { Arch } = require('builder-util');
+const { configureBuildCommand, createYargs, normalizeOptions } = require('electron-builder/out/builder');
+const { computeArchToTargetNamesMap } = require('app-builder-lib/out/targets/targetFactory');
 const {
     PINNED_IANA_MODULE_FILES,
     REQUIRED_RUNTIME_IETF_MODULES,
@@ -26,6 +30,25 @@ const beforePack = require('../../scripts/verify-libyang-runtime');
 
 const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.resolve(__dirname, '..', '..'));
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-libyang-packaging-'));
+
+function resolvedMacDistributionTargets(command, macOptions) {
+    const [executable, ...args] = String(command || '')
+        .trim()
+        .split(/\s+/u);
+    assert.equal(executable, 'electron-builder');
+    const parsed = configureBuildCommand(createYargs()).exitProcess(false).parse(args);
+    const rawTargets = normalizeOptions(parsed).targets.get(Platform.MAC);
+    assert(rawTargets, `macOS distribution command did not select the macOS platform: ${command}`);
+    const resolvedTargets = computeArchToTargetNamesMap(
+        rawTargets,
+        {
+            platformSpecificBuildOptions: macOptions,
+            defaultTarget: ['dmg', 'zip']
+        },
+        Platform.MAC
+    );
+    return [...resolvedTargets.entries()].map(([arch, targets]) => [Arch[arch], [...targets]]);
+}
 
 function assertCommandSucceeds(command, args, description) {
     const result = spawnSync(command, args, {
@@ -467,6 +490,23 @@ function testPinnedReleaseAndPackageContract() {
     for (const licenseFile of ['LICENSE.libyang', 'LICENSE.pcre2', 'NOTICE.pthreads']) {
         assert(fs.statSync(path.join(projectRoot, 'resources', 'libyang', licenseFile)).isFile());
     }
+}
+
+function testMacDistributionArchitectureSelection() {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    assert.deepEqual(resolvedMacDistributionTargets(packageJson.scripts['dist:mac:arm64'], packageJson.build.mac), [
+        ['arm64', ['dmg', 'zip']]
+    ]);
+    assert.deepEqual(resolvedMacDistributionTargets(packageJson.scripts['dist:mac'], packageJson.build.mac), [
+        ['x64', ['dmg', 'zip']]
+    ]);
+    assert.deepEqual(resolvedMacDistributionTargets(packageJson.scripts['dist:mac:all'], packageJson.build.mac), [
+        ['x64', ['dmg', 'zip']],
+        ['arm64', ['dmg', 'zip']]
+    ]);
+    assert.deepEqual(resolvedMacDistributionTargets(packageJson.scripts['dist:mac:universal'], packageJson.build.mac), [
+        ['universal', ['dmg', 'zip']]
+    ]);
 }
 
 async function testInstallRuntimeEnsureContract() {
@@ -1050,11 +1090,28 @@ function testCiRuntimeInstallOrdering() {
         /(?:VCPKG_ROOT|VCPKG_INSTALLATION_ROOT):\s*['"]{2}/,
         'Windows CI must not hide the runner-provided vcpkg installation from the build'
     );
+
+    const macReleaseJobSource = getWorkflowJobSource('.github/workflows/release.yml', 'build-macos', 'publish');
+    assert.match(
+        macReleaseJobSource,
+        /- arch:\s*arm64\s+runner:\s*macos-15\s+dist_script:\s*dist:mac:arm64/s,
+        'the release matrix must build arm64 artifacts on an Apple Silicon runner'
+    );
+    assert.match(
+        macReleaseJobSource,
+        /- arch:\s*x64\s+runner:\s*macos-15-intel\s+dist_script:\s*dist:mac(?:\s|$)/s,
+        'the release matrix must build x64 artifacts and its libyang runtime on an Intel runner'
+    );
+    assert.match(macReleaseJobSource, /runs-on:\s*\$\{\{ matrix\.runner \}\}/);
+    assert.match(macReleaseJobSource, /run:\s*npm run \$\{\{ matrix\.dist_script \}\} -- --publish never/);
+    assert.match(macReleaseJobSource, /PACKAGED_SQLITE_EXPECTED_ARCH:\s*\$\{\{ matrix\.arch \}\}/);
+    assert.match(macReleaseJobSource, /name:\s*macos-\$\{\{ matrix\.arch \}\}/);
 }
 
 async function run() {
     try {
         testPinnedReleaseAndPackageContract();
+        testMacDistributionArchitectureSelection();
         await testInstallRuntimeEnsureContract();
         testRuntimePathMapping();
         testRuntimeVerifierWithoutNativeRuntime();
