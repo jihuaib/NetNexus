@@ -10,6 +10,15 @@ const resourcesPath = path.join(projectRoot, 'resources');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-yang-compile-'));
 const repositoryRoot = path.join(tempDir, 'repository');
 
+function readSchemaPathList(listPath) {
+    const content = fs.readFileSync(listPath);
+    assert(content.length > 0 && content.at(-1) === 0, 'schema path list must be NUL-terminated');
+    return content
+        .subarray(0, content.length - 1)
+        .toString('utf8')
+        .split('\0');
+}
+
 const commonTypes = `module common-types {
   yang-version 1.1;
   namespace "urn:common";
@@ -135,6 +144,24 @@ async function run() {
         assert.equal(compiled.compiler.version, release.libyangVersion);
         assert.equal(compiled.validation.authoritative, true);
         assert.equal(compiled.externalCompiler.succeeded, true);
+        assert(path.isAbsolute(compiled.externalCompiler.schemaListPath));
+        assert.equal(
+            compiled.externalCompiler.args[compiled.externalCompiler.args.indexOf('--schema-list') + 1],
+            compiled.externalCompiler.schemaListPath
+        );
+        const compiledTopLevelHashes = new Set(
+            compiled.modules.filter(module => module.metadata?.kind === 'module').map(module => module.hash)
+        );
+        assert.deepEqual(
+            readSchemaPathList(compiled.externalCompiler.schemaListPath),
+            compiled.externalCompiler.schemaInputs
+                .filter(input => compiledTopLevelHashes.has(input.hash))
+                .map(input => input.path)
+        );
+        assert(
+            compiled.externalCompiler.schemaInputs.every(input => !compiled.externalCompiler.args.includes(input.path)),
+            'schema paths must stay out of the process command line'
+        );
         assert.equal(compiled.schemaTree.authoritative, true);
         assert.equal(compiled.schemaTree.source, 'libyang-effective');
         assert.equal(compiled.schemaTree.scope, 'core-effective-schema');
@@ -405,9 +432,11 @@ async function run() {
         assert.equal(repositoryDeviation.success, true, JSON.stringify(repositoryDeviation.diagnostics, null, 2));
         const selectedDeviationPath = repositoryDeviation.externalCompiler.deviations[0];
         assert.equal(
-            repositoryDeviation.externalCompiler.args.filter(argument => argument === selectedDeviationPath).length,
+            readSchemaPathList(repositoryDeviation.externalCompiler.schemaListPath).filter(
+                schemaPath => schemaPath === selectedDeviationPath
+            ).length,
             1,
-            'a repository deviation must be passed exactly once as a top-level workspace module'
+            'a repository deviation must be listed exactly once as a top-level workspace module'
         );
         const repositoryDeviationRoots = deviationRegistry.getSchemaRoots({
             compileId: repositoryDeviation.compileId

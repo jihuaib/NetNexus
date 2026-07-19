@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { parseYang } = require('./yangParser');
-const { sha256, stableStringify, atomicWriteJson } = require('./yangRepository');
+const { sha256, stableStringify, atomicWriteFile, atomicWriteJson } = require('./yangRepository');
 const { LibyangRuntime } = require('./libyangRuntime');
 const {
     buildRpcValidationPayload,
@@ -667,6 +667,29 @@ class YangCompiler {
         return { inputDirectory, inputs };
     }
 
+    materializeSchemaPathList(inputDirectory, schemaPaths) {
+        if (!schemaPaths.length) return null;
+        const content = Buffer.from(`${schemaPaths.map(schemaPath => path.resolve(schemaPath)).join('\0')}\0`, 'utf8');
+        const listPath = path.join(inputDirectory, `.schema-${sha256(content).slice(0, 24)}.list`);
+        atomicWriteFile(listPath, content);
+        return listPath;
+    }
+
+    readSchemaPathList(listPath) {
+        const content = fs.readFileSync(listPath);
+        if (!content.length || content[content.length - 1] !== 0) {
+            throw new Error(`Invalid schema path list: ${listPath}`);
+        }
+        const schemaPaths = content
+            .subarray(0, content.length - 1)
+            .toString('utf8')
+            .split('\0');
+        if (schemaPaths.some(schemaPath => !schemaPath)) {
+            throw new Error(`Invalid empty entry in schema path list: ${listPath}`);
+        }
+        return schemaPaths;
+    }
+
     schemaInputDescriptors(inputs, deviationPaths = []) {
         const descriptors = inputs.map(input => ({
             hash: input.module.hash,
@@ -988,7 +1011,8 @@ class YangCompiler {
          * applies any deviations it defines automatically and its own schema remains exportable.
          * -D is reserved for additional files outside the selected repository inputs. */
         for (const deviationPath of externalDeviationPaths) generatedArgs.push('-D', deviationPath);
-        const args = [...generatedArgs, ...schemaPaths];
+        const schemaListPath = this.materializeSchemaPathList(materialized.inputDirectory, schemaPaths);
+        const args = [...generatedArgs, '--schema-list', schemaListPath];
         const timeout = normalizePositiveInteger(options.externalTimeout, this.externalTimeout, 100, 10 * 60_000);
         const maxBuffer = normalizePositiveInteger(
             options.externalMaxBuffer,
@@ -1069,6 +1093,7 @@ class YangCompiler {
             features: featureArguments,
             deviations: deviationPaths,
             schemaInputs,
+            schemaListPath,
             timeout,
             maxBuffer,
             exitCode,
@@ -1216,6 +1241,7 @@ class YangCompiler {
             features: execution.features || [],
             deviations: execution.deviations || [],
             schemaInputs: execution.schemaInputs || [],
+            schemaListPath: execution.schemaListPath || null,
             timeout: execution.timeout || null,
             maxBuffer: execution.maxBuffer || null,
             exitCode: execution.exitCode ?? null,
@@ -1576,18 +1602,20 @@ class YangCompiler {
 
     dataValidationSchemaPaths(externalCompiler = {}) {
         const args = Array.isArray(externalCompiler.args) ? externalCompiler.args : [];
-        const generatedArgs = Array.isArray(externalCompiler.generatedArgs) ? externalCompiler.generatedArgs : [];
-        let schemaPaths = generatedArgs.length <= args.length ? args.slice(generatedArgs.length) : [];
-        if (!schemaPaths.length) {
-            const optionWithValue = new Set(['-p', '--path', '-F', '--features', '-D']);
-            schemaPaths = [];
-            for (let index = 0; index < args.length; index += 1) {
-                if (optionWithValue.has(args[index])) {
-                    index += 1;
-                    continue;
-                }
-                if (!args[index].startsWith('-')) schemaPaths.push(args[index]);
+        const optionWithValue = new Set(['-p', '--path', '-F', '--features', '-D', '--deviation']);
+        const schemaPaths = [];
+        for (let index = 0; index < args.length; index += 1) {
+            if (args[index] === '--schema-list') {
+                const listPath = args[index + 1];
+                if (listPath) schemaPaths.push(...this.readSchemaPathList(listPath));
+                index += 1;
+                continue;
             }
+            if (optionWithValue.has(args[index])) {
+                index += 1;
+                continue;
+            }
+            if (!args[index].startsWith('-')) schemaPaths.push(args[index]);
         }
         const seen = new Set(schemaPaths.map(normalizedPathKey));
         for (const deviationPath of externalCompiler.deviations || []) {

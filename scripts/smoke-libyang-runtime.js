@@ -63,6 +63,8 @@ async function run() {
         path.join(bundledModuleDirectory, 'ietf-subscribed-notifications@2019-09-09.yang'),
         path.join(bundledModuleDirectory, 'ietf-yang-push@2019-09-09.yang')
     ];
+    const notificationSchemaListPath = path.join(tempRoot, 'notification-schema-paths.list');
+    fs.writeFileSync(notificationSchemaListPath, Buffer.from(`${notificationSchemaPaths.join('\0')}\0`, 'utf8'));
     const notificationYanglint = spawnSync(
         packagedStatus.path,
         ['-p', bundledModuleDirectory, ...notificationSchemaPaths],
@@ -88,7 +90,8 @@ async function run() {
             'ietf-subscribed-notifications:xpath',
             '-F',
             'ietf-yang-push:on-change',
-            ...notificationSchemaPaths
+            '--schema-list',
+            notificationSchemaListPath
         ],
         { cwd: bundledModuleDirectory, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
     );

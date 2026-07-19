@@ -379,6 +379,9 @@ function verifyScriptSyntax() {
     assert.match(schemaExporterSource, /Schema export exceeded the maxNodes limit/);
     assert.match(schemaExporterSource, /Schema export exceeded the maxDepth limit/);
     assert.match(schemaExporterSource, /Schema export exceeded the maxJsonBytes limit/);
+    assert.match(schemaExporterSource, /MAX_SCHEMA_LIST_BYTES/);
+    assert.match(schemaExporterSource, /load_schema_path_list/);
+    assert.match(schemaExporterSource, /--schema-list/);
     assert.match(schemaExporterSource, /candidate->augmented_by/);
     assert.match(schemaExporterSource, /candidate->deviated_by/);
     assert.match(schemaExporterSource, /if \(!node->parent_id\)/);

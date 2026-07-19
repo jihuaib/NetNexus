@@ -23,6 +23,7 @@
 #define MAX_EXPORT_DEPTH ((size_t)256)
 #define MAX_JSON_ALLOCATION_BYTES ((size_t)64 * 1024 * 1024)
 #define MAX_JSON_BYTES (MAX_JSON_ALLOCATION_BYTES - 1)
+#define MAX_SCHEMA_LIST_BYTES ((size_t)64 * 1024 * 1024)
 #ifdef _WIN32
 #define SEARCH_PATH_SEPARATOR ';'
 #else
@@ -159,6 +160,69 @@ string_list_erase(struct string_list *list)
     }
     free(list->items);
     memset(list, 0, sizeof *list);
+}
+
+static int
+load_schema_path_list(const char *path, struct string_list *schema_paths)
+{
+    FILE *stream = NULL;
+    char *buffer = NULL, *cursor, *terminator, *end;
+    long file_length;
+    size_t length;
+    int result = -1;
+
+    stream = fopen(path, "rb");
+    if (!stream) {
+        fprintf(stderr, "Unable to open schema path list '%s': %s.\n", path, strerror(errno));
+        goto cleanup;
+    }
+    if (fseek(stream, 0, SEEK_END)) {
+        fprintf(stderr, "Unable to determine the size of schema path list '%s'.\n", path);
+        goto cleanup;
+    }
+    file_length = ftell(stream);
+    if ((file_length < 0) || fseek(stream, 0, SEEK_SET)) {
+        fprintf(stderr, "Unable to determine the size of schema path list '%s'.\n", path);
+        goto cleanup;
+    }
+    length = (size_t)file_length;
+    if (!length || (length > MAX_SCHEMA_LIST_BYTES)) {
+        fprintf(stderr, "Schema path list '%s' must contain 1 to %" PRIuMAX " bytes.\n", path,
+                (uintmax_t)MAX_SCHEMA_LIST_BYTES);
+        goto cleanup;
+    }
+    buffer = malloc(length);
+    if (!buffer) {
+        fprintf(stderr, "Out of memory while reading schema path list '%s'.\n", path);
+        goto cleanup;
+    }
+    if (fread(buffer, 1, length, stream) != length) {
+        fprintf(stderr, "Unable to read schema path list '%s'.\n", path);
+        goto cleanup;
+    }
+
+    cursor = buffer;
+    end = buffer + length;
+    while (cursor < end) {
+        terminator = memchr(cursor, '\0', (size_t)(end - cursor));
+        if (!terminator || (terminator == cursor)) {
+            fprintf(stderr, "Schema path list '%s' is not a valid non-empty NUL-separated list.\n", path);
+            goto cleanup;
+        }
+        if (string_list_add(schema_paths, cursor, 1)) {
+            fprintf(stderr, "Unable to add an entry from schema path list '%s'.\n", path);
+            goto cleanup;
+        }
+        cursor = terminator + 1;
+    }
+    result = 0;
+
+cleanup:
+    free(buffer);
+    if (stream) {
+        fclose(stream);
+    }
+    return result;
 }
 
 static struct feature_spec *
@@ -1210,7 +1274,8 @@ print_usage(FILE *stream)
 {
     fprintf(stream,
             "Usage: netnexus-libyang-schema [-p DIR]... [-F MODULE:FEATURES]... "
-            "[-D DEVIATION.yang]... MODULE.yang...\n");
+            "[-D DEVIATION.yang]... [--schema-list PATHS.list]... MODULE.yang...\n"
+            "Schema path lists contain UTF-8 paths separated and terminated by NUL bytes.\n");
 }
 
 static const char *
@@ -1271,6 +1336,11 @@ main(int argc, char **argv)
         } else if (!strcmp(argv[argument], "-D") || !strcmp(argv[argument], "--deviation")) {
             value = required_option_value(argc, argv, &argument, argv[argument]);
             if (!value || string_list_add(&deviations, value, 1)) {
+                goto cleanup;
+            }
+        } else if (!strcmp(argv[argument], "--schema-list")) {
+            value = required_option_value(argc, argv, &argument, argv[argument]);
+            if (!value || load_schema_path_list(value, &schema_paths)) {
                 goto cleanup;
             }
         } else if (argv[argument][0] == '-') {
