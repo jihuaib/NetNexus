@@ -16,9 +16,10 @@
  * - selectPrivateKey() -> data: string | { filePath, path? } (opens a native file picker)
  * - discoverModules(profileId) -> data: Module[] | { modules: Module[], jobId? }
  * - downloadModules({ profileId, modules: [{ name, revision? }], includeDependencies: true })
- * - executeOperation({ operation, ...operationFields })
+ * - executeOperation({ operationId?, operation, ...operationFields })
  *   -> data: { rpc?, requestXml?, reply?, messageId? } | string
- * - sendRpc({ rpc }) -> data: { rpc?, requestXml?, reply?, messageId? } | string
+ * - sendRpc({ operationId?, rpc }) -> data: { rpc?, requestXml?, reply?, messageId? } | string
+ * - cancelOperation({ profileId, operationId }) -> stops only that local RPC wait; the Session stays connected
  *   (`rpc` is the operation fragment; `requestXml` is the complete envelope written to the transport.)
  *
  * window.yangApi
@@ -43,6 +44,7 @@
 
 export const YANG_EVENT = Object.freeze({
     TASK_PROGRESS: 'yang:taskProgress',
+    PROFILE_DATA_REFRESH: 'yang:profileDataRefresh',
     SESSION_EVENT: 'netconf:sessionEvent',
     NOTIFICATION: 'netconf:notification',
     SUBSCRIPTION_EVENT: 'netconf:subscriptionEvent'
@@ -53,8 +55,7 @@ export const YANG_EVENT_PAGE_ID = Object.freeze({
     MODULES: 'yang-modules',
     WORKSPACE: 'yang-workspace',
     OPERATIONS: 'yang-operations',
-    NOTIFICATION_COLLECTOR: 'yang-notification-collector',
-    TASK_NOTIFICATION: 'yang-task-notification'
+    NOTIFICATION_COLLECTOR: 'yang-notification-collector'
 });
 
 export const YANG_ROUTE = Object.freeze({
@@ -107,6 +108,7 @@ export const DEFAULT_NETCONF_PROFILE = Object.freeze({
     rememberCredentials: false,
     hostKeyFingerprint: '',
     connectTimeout: 15000,
+    rpcTimeout: 300000,
     keepaliveInterval: 30000,
     autoReconnect: false
 });

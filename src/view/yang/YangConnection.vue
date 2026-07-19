@@ -283,6 +283,59 @@
             </div>
         </nn-drawer>
 
+        <nn-modal
+            :open="profileDataLoad.visible"
+            title="切换 Profile"
+            width="500px"
+            :footer="null"
+            :closable="profileDataLoadTerminal"
+            :keyboard="profileDataLoadTerminal"
+            :mask-closable="false"
+            :draggable="false"
+            data-testid="yang-profile-data-load-modal"
+            @update:open="handleProfileDataLoadOpenChange"
+        >
+            <section
+                class="profile-data-load"
+                :class="`profile-data-load-${profileDataLoad.status}`"
+                data-testid="yang-profile-data-load"
+                role="status"
+                aria-live="polite"
+            >
+                <div class="profile-data-load-header">
+                    <div class="profile-data-load-heading">
+                        <span class="profile-data-load-title">Profile 数据载入</span>
+                        <span class="profile-data-load-profile">{{ profileDataLoad.profileName }}</span>
+                    </div>
+                    <nn-tag :color="profileDataLoadStatus.color">
+                        {{ profileDataLoadStatus.text }}
+                    </nn-tag>
+                </div>
+                <div class="profile-data-load-detail">
+                    <span>{{ profileDataLoad.message }}</span>
+                    <span>{{ profileDataLoad.percent }}%</span>
+                </div>
+                <div
+                    class="profile-data-load-track"
+                    role="progressbar"
+                    :aria-valuenow="profileDataLoad.percent"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-label="profileDataLoad.message"
+                >
+                    <span class="profile-data-load-bar" :style="{ width: `${profileDataLoad.percent}%` }" />
+                </div>
+                <div v-if="profileDataLoadTerminal" class="profile-data-load-summary">
+                    <span>模型 {{ profileDataLoad.moduleCount }}</span>
+                    <span>Schema 模块 {{ profileDataLoad.workspaceModuleCount }}</span>
+                    <span>节点 {{ profileDataLoad.nodeCount }}</span>
+                </div>
+                <div v-if="profileDataLoadTerminal" class="profile-data-load-actions">
+                    <nn-button type="primary" @click="closeProfileDataLoad">完成</nn-button>
+                </div>
+            </section>
+        </nn-modal>
+
         <nn-modal v-model:open="testResultOpen" title="连接测试结果" :footer="null" width="680px">
             <nn-alert
                 :type="testResult.success ? 'success' : 'error'"
@@ -360,6 +413,19 @@
     const capabilityQuery = ref('');
     const testResultOpen = ref(false);
     const testResult = ref({ success: false, message: '' });
+    const profileDataLoad = ref({
+        visible: false,
+        status: 'idle',
+        phase: 'idle',
+        percent: 0,
+        profileId: '',
+        profileName: '',
+        message: '',
+        operationId: '',
+        moduleCount: 0,
+        workspaceModuleCount: 0,
+        nodeCount: 0
+    });
     let profileContextRevision = 0;
     let profileListRequestRevision = 0;
     let saveRequestRevision = 0;
@@ -367,6 +433,12 @@
     let privateKeyRequestRevision = 0;
     let connectRequestRevision = 0;
     let disconnectRequestRevision = 0;
+    let profileDataLoadRevision = 0;
+    let profileDataLoadOperationSequence = 0;
+    let dismissedProfileDataLoadOperationId = '';
+    const profileConnectionStatuses = new Map();
+    const processedProfileConnections = new Map();
+    const pendingProfileSwitches = new Map();
 
     const profileContextMatches = (profileId, revision) =>
         revision === profileContextRevision && String(selectedProfileId.value || '') === String(profileId || '');
@@ -387,6 +459,9 @@
         id: profile?.id || profile?.profileId || '',
         port: Number(profile?.port || 830),
         connectTimeout: Number(profile?.connectTimeout || 15000),
+        rpcTimeout: Number.isFinite(Number(profile?.rpcTimeout))
+            ? Number(profile.rpcTimeout)
+            : DEFAULT_NETCONF_PROFILE.rpcTimeout,
         keepaliveInterval: Number.isFinite(Number(profile?.keepaliveInterval))
             ? Number(profile.keepaliveInterval)
             : 30000,
@@ -408,6 +483,21 @@
     });
     const sessionStatusMeta = computed(
         () => NETCONF_SESSION_STATUS_META[sessionStatus.value] || NETCONF_SESSION_STATUS_META.disconnected
+    );
+    const profileDataLoadStatus = computed(() => {
+        if (profileDataLoad.value.status === 'connecting') return { text: '连接中', color: 'processing' };
+        if (profileDataLoad.value.status === 'completed') return { text: '切换完成', color: 'success' };
+        if (profileDataLoad.value.status === 'warning') return { text: '部分载入', color: 'warning' };
+        if (profileDataLoad.value.status === 'failed') {
+            return {
+                text: profileDataLoad.value.phase === 'connect' ? '连接失败' : '载入失败',
+                color: 'error'
+            };
+        }
+        return { text: '载入中', color: 'processing' };
+    });
+    const profileDataLoadTerminal = computed(() =>
+        ['completed', 'warning', 'failed'].includes(profileDataLoad.value.status)
     );
     const isConnected = computed(() => sessionStatus.value === NETCONF_SESSION_STATUS.CONNECTED);
     const activeProfileId = computed(() => session.value?.profileId || session.value?.connectionId || '');
@@ -452,6 +542,190 @@
         savedFingerprint.value = stableDraft(draft.value);
     };
 
+    const createProfileDataLoadOperation = profileId =>
+        `${String(profileId || 'profile')}:${Date.now()}:${++profileDataLoadOperationSequence}`;
+
+    const currentProfileDataLoadOperation = profileId =>
+        profileDataLoad.value.profileId === String(profileId || '') ? profileDataLoad.value.operationId : '';
+
+    const connectionInstanceKey = state => {
+        const profileId = String(state?.profileId || state?.connectionId || '');
+        const sessionId = String(state?.sessionId || state?.sessionID || '');
+        const connectedAt = String(state?.connectedAt || '');
+        return profileId && (sessionId || connectedAt) ? `${profileId}:${sessionId}:${connectedAt}` : '';
+    };
+
+    const showProfileConnectionProgress = (profile, message = '正在连接设备，连接成功后将切换 Profile') => {
+        const profileId = String(profile?.id || profile?.profileId || '');
+        const operationId = createProfileDataLoadOperation(profileId);
+        profileDataLoadRevision += 1;
+        profileDataLoad.value = {
+            visible: true,
+            status: 'connecting',
+            phase: 'connect',
+            percent: 10,
+            profileId,
+            profileName: profile?.name || profile?.host || profileId,
+            message,
+            operationId,
+            moduleCount: 0,
+            workspaceModuleCount: 0,
+            nodeCount: 0
+        };
+    };
+
+    const showProfileConnectionFailure = (profileId, error) => {
+        const normalizedProfileId = String(profileId || '');
+        const profile = profiles.value.find(item => item.id === normalizedProfileId) || draft.value;
+        const operationId =
+            currentProfileDataLoadOperation(normalizedProfileId) || createProfileDataLoadOperation(normalizedProfileId);
+        profileDataLoadRevision += 1;
+        profileDataLoad.value = {
+            visible: dismissedProfileDataLoadOperationId !== operationId,
+            status: 'failed',
+            phase: 'connect',
+            percent: 100,
+            profileId: normalizedProfileId,
+            profileName: profile?.name || profile?.host || normalizedProfileId,
+            message: `连接失败，仍保留当前 Profile：${error?.message || error}`,
+            operationId,
+            moduleCount: 0,
+            workspaceModuleCount: 0,
+            nodeCount: 0
+        };
+    };
+
+    const closeProfileDataLoad = () => {
+        if (!profileDataLoadTerminal.value) return;
+        dismissedProfileDataLoadOperationId = profileDataLoad.value.operationId;
+        profileDataLoadRevision += 1;
+        profileDataLoad.value = { ...profileDataLoad.value, visible: false };
+    };
+
+    const handleProfileDataLoadOpenChange = open => {
+        if (!open) closeProfileDataLoad();
+    };
+
+    const loadConnectedProfileData = async (connectedSession, reason = 'connected', profileChanged = false) => {
+        const profileId = String(connectedSession?.profileId || connectedSession?.connectionId || '');
+        if (!profileId) return;
+        const operationId = currentProfileDataLoadOperation(profileId) || createProfileDataLoadOperation(profileId);
+        const requestRevision = ++profileDataLoadRevision;
+        const profile = profiles.value.find(item => item.id === profileId);
+        const profileName = connectedSession?.profileName || profile?.name || connectedSession?.host || profileId;
+        const errors = [];
+        let moduleCount = 0;
+        let workspaceModuleCount = 0;
+        let nodeCount = 0;
+        let compileId = '';
+
+        profileDataLoad.value = {
+            visible: dismissedProfileDataLoadOperationId !== operationId,
+            status: 'loading',
+            phase: 'data',
+            percent: 35,
+            profileId,
+            profileName,
+            message: '连接成功，正在载入模型库',
+            operationId,
+            moduleCount: 0,
+            workspaceModuleCount: 0,
+            nodeCount: 0
+        };
+
+        try {
+            const { data } = await invokeBridge('yangApi', 'listModules', { profileId });
+            if (requestRevision !== profileDataLoadRevision) return;
+            moduleCount = unwrapArray(data, ['modules', 'items', 'records']).length;
+        } catch (error) {
+            if (requestRevision !== profileDataLoadRevision) return;
+            errors.push({ stage: 'modules', message: error.message });
+        }
+
+        profileDataLoad.value = {
+            ...profileDataLoad.value,
+            percent: 70,
+            message: '正在载入 Schema 工作区',
+            moduleCount
+        };
+
+        try {
+            const { data } = await invokeBridge('yangApi', 'getWorkspace', { profileId });
+            if (requestRevision !== profileDataLoadRevision) return;
+            const workspace = data?.workspace || data || {};
+            const summary = workspace.summary || {};
+            compileId = workspace.compileId || '';
+            workspaceModuleCount =
+                Number(summary.moduleCount ?? unwrapArray(workspace.modules, ['modules']).length) || 0;
+            nodeCount = Number(summary.nodeCount ?? workspace.schemaTree?.nodeCount) || 0;
+        } catch (error) {
+            if (requestRevision !== profileDataLoadRevision) return;
+            errors.push({ stage: 'workspace', message: error.message });
+        }
+
+        const status = errors.length === 0 ? 'completed' : errors.length === 1 ? 'warning' : 'failed';
+        const message =
+            status === 'completed'
+                ? '模型库与 Schema 工作区已载入'
+                : status === 'warning'
+                  ? `部分数据载入失败：${errors[0].message}`
+                  : '模型库与 Schema 工作区载入失败';
+        profileDataLoad.value = {
+            ...profileDataLoad.value,
+            status,
+            phase: 'data',
+            percent: 100,
+            message,
+            moduleCount,
+            workspaceModuleCount,
+            nodeCount
+        };
+        EventBus.emit(YANG_EVENT.PROFILE_DATA_REFRESH, {
+            profileId,
+            revision: requestRevision,
+            reason,
+            profileChanged,
+            modules: { count: moduleCount },
+            workspace: { compileId, moduleCount: workspaceModuleCount, nodeCount },
+            errors
+        });
+    };
+
+    const updateConnectedProfile = (state, options = {}) => {
+        const profileId = String(state?.profileId || state?.connectionId || '');
+        if (!profileId) return false;
+        const status = String(state?.status || state?.state || '').toLowerCase();
+        const previousStatus = profileConnectionStatuses.get(profileId);
+        profileConnectionStatuses.set(profileId, status);
+        const connected = state?.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
+        const connectionKey = connectionInstanceKey(state);
+        const connectionAlreadyProcessed =
+            Boolean(connectionKey) && processedProfileConnections.get(profileId) === connectionKey;
+        if (
+            !connected ||
+            (!options.force && (previousStatus === NETCONF_SESSION_STATUS.CONNECTED || connectionAlreadyProcessed))
+        ) {
+            return false;
+        }
+        const profileChanged =
+            options.profileChanged ??
+            (pendingProfileSwitches.has(profileId)
+                ? pendingProfileSwitches.get(profileId)
+                : sharedProfileId.value !== profileId);
+        pendingProfileSwitches.delete(profileId);
+        selectSharedProfile(profileId);
+        if (connectionKey) processedProfileConnections.set(profileId, connectionKey);
+        if (options.loadData !== false) {
+            void loadConnectedProfileData(
+                state,
+                options.reason ||
+                    (previousStatus === NETCONF_SESSION_STATUS.RECONNECTING ? 'reconnected' : 'connected'),
+                profileChanged
+            );
+        }
+        return true;
+    };
+
     const loadProfiles = async ({ preserveSelection = true } = {}) => {
         const requestRevision = ++profileListRequestRevision;
         profileLoading.value = true;
@@ -461,15 +735,14 @@
             const localDrafts = profiles.value.filter(profile => String(profile.id).startsWith('draft-'));
             profiles.value = [
                 ...loadedProfiles.map(normalizeProfile),
-                ...localDrafts.filter(draftProfile =>
-                    loadedProfiles.every(profile => profile.id !== draftProfile.id)
-                )
+                ...localDrafts.filter(draftProfile => loadedProfiles.every(profile => profile.id !== draftProfile.id))
             ];
             const existing = preserveSelection
                 ? profiles.value.find(profile => profile.id === selectedProfileId.value)
                 : null;
             const shared = profiles.value.find(profile => profile.id === sharedProfileId.value);
-            const nextProfile = (existing && String(existing.id).startsWith('draft-') ? existing : null) ||
+            const nextProfile =
+                (existing && String(existing.id).startsWith('draft-') ? existing : null) ||
                 shared ||
                 existing ||
                 profiles.value[0];
@@ -477,7 +750,6 @@
                 const preserveCurrentDraft = existing === nextProfile && isDirty.value;
                 if (!preserveCurrentDraft) invalidateProfileContext();
                 selectedProfileId.value = nextProfile.id;
-                if (!String(nextProfile.id).startsWith('draft-')) selectSharedProfile(nextProfile.id);
                 if (!preserveCurrentDraft) applyDraft(nextProfile);
             } else {
                 invalidateProfileContext();
@@ -493,7 +765,7 @@
         }
     };
 
-    const loadSessionState = async () => {
+    const loadSessionState = async ({ activateSharedProfile = false } = {}) => {
         const profileId = String(selectedProfileId.value || '');
         const requestRevision = profileContextRevision;
         if (!profileId || profileId.startsWith('draft-')) {
@@ -504,6 +776,7 @@
             const { data } = await invokeBridge('netconfApi', 'getSessionState', profileId);
             if (!profileContextMatches(profileId, requestRevision)) return;
             session.value = { ...session.value, ...(data || {}) };
+            if (activateSharedProfile) updateConnectedProfile(session.value, { loadData: false });
         } catch (error) {
             if (profileContextMatches(profileId, requestRevision)) {
                 console.warn('Unable to load NETCONF session state:', error.message);
@@ -514,7 +787,6 @@
     const selectProfile = profile => {
         invalidateProfileContext();
         selectedProfileId.value = profile.id;
-        if (!String(profile.id).startsWith('draft-')) selectSharedProfile(profile.id);
         applyDraft(profile);
         session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
         void loadSessionState();
@@ -585,7 +857,7 @@
             if (contextCurrent) {
                 profileContextRevision += 1;
                 selectedProfileId.value = saved.id;
-                upsertSharedProfile(saved);
+                upsertSharedProfile(saved, { select: false });
                 applyDraft(saved);
             } else {
                 upsertSharedProfile(saved, { select: false });
@@ -615,13 +887,19 @@
                     if (!String(profile.id).startsWith('draft-')) {
                         await invokeBridge('netconfApi', 'deleteProfile', profile.id);
                     }
+                    profileConnectionStatuses.delete(String(profile.id));
+                    processedProfileConnections.delete(String(profile.id));
+                    pendingProfileSwitches.delete(String(profile.id));
+                    if (profileDataLoad.value.profileId === String(profile.id)) {
+                        profileDataLoadRevision += 1;
+                        profileDataLoad.value = { ...profileDataLoad.value, visible: false };
+                    }
                     profiles.value = profiles.value.filter(item => item.id !== profile.id);
                     const nextId = removeSharedProfile(profile.id);
                     if (selectedProfileId.value === profile.id) {
                         const next = profiles.value.find(item => item.id === nextId) || profiles.value[0];
                         invalidateProfileContext();
                         selectedProfileId.value = next?.id || '';
-                        if (next?.id && !String(next.id).startsWith('draft-')) selectSharedProfile(next.id);
                         applyDraft(next || DEFAULT_NETCONF_PROFILE);
                         session.value = {
                             status: NETCONF_SESSION_STATUS.DISCONNECTED,
@@ -691,7 +969,6 @@
         let targetProfileId = initialProfileId;
         let targetContextRevision = initialContextRevision;
         connecting.value = true;
-        session.value = { ...session.value, status: NETCONF_SESSION_STATUS.CONNECTING, message: '正在连接设备' };
         try {
             const saved = isDirty.value ? await persistProfile({ silent: true }) : selectedProfile.value || draft.value;
             if (!saved) {
@@ -701,7 +978,10 @@
             targetProfileId = String(saved.id || '');
             targetContextRevision = profileContextRevision;
             if (!profileContextMatches(targetProfileId, targetContextRevision)) return;
-            selectSharedProfile(saved.id);
+            pendingProfileSwitches.set(targetProfileId, sharedProfileId.value !== targetProfileId);
+            profileConnectionStatuses.set(targetProfileId, NETCONF_SESSION_STATUS.CONNECTING);
+            showProfileConnectionProgress(saved);
+            session.value = { ...session.value, status: NETCONF_SESSION_STATUS.CONNECTING, message: '正在连接设备' };
             const target = saved.id || clonePlain(saved);
             const { data } = await invokeBridge('netconfApi', 'connect', target);
             if (!profileContextMatches(targetProfileId, targetContextRevision)) return;
@@ -712,7 +992,11 @@
                 connected: true,
                 profileId: data?.profileId || saved.id
             };
-            notify.success(`已连接 ${saved.name || saved.host}`);
+            updateConnectedProfile(session.value, {
+                force: true,
+                reason: 'connected',
+                profileChanged: pendingProfileSwitches.get(targetProfileId)
+            });
         } catch (error) {
             if (!profileContextMatches(targetProfileId, targetContextRevision)) return;
             session.value = {
@@ -721,8 +1005,13 @@
                 connected: false,
                 message: error.message
             };
-            notify.error(`连接失败：${error.message}`);
+            profileConnectionStatuses.set(targetProfileId, NETCONF_SESSION_STATUS.ERROR);
+            pendingProfileSwitches.delete(targetProfileId);
+            showProfileConnectionFailure(targetProfileId, error);
         } finally {
+            if (profileConnectionStatuses.get(targetProfileId) !== NETCONF_SESSION_STATUS.CONNECTED) {
+                pendingProfileSwitches.delete(targetProfileId);
+            }
             if (actionRevision === connectRequestRevision) connecting.value = false;
         }
     };
@@ -741,6 +1030,7 @@
                 connected: false,
                 capabilities: []
             };
+            updateConnectedProfile(session.value);
             notify.success('NETCONF 连接已断开');
         } catch (error) {
             if (profileContextMatches(profileId, requestContextRevision)) {
@@ -757,6 +1047,29 @@
             return;
         }
         const data = normalizeSessionEvent(payload, session.value);
+        const profileId = String(data?.profileId || data?.connectionId || '');
+        const status = String(data?.status || data?.state || '').toLowerCase();
+        const previousStatus = profileConnectionStatuses.get(profileId);
+        const pendingExplicitConnect = pendingProfileSwitches.has(profileId);
+        const connected = data?.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
+        if (connected && !pendingExplicitConnect && profileId && profileId !== sharedProfileId.value) {
+            profileConnectionStatuses.set(profileId, status);
+            return;
+        }
+        if (
+            status === NETCONF_SESSION_STATUS.RECONNECTING &&
+            previousStatus !== NETCONF_SESSION_STATUS.RECONNECTING &&
+            profileId === sharedProfileId.value &&
+            !pendingExplicitConnect
+        ) {
+            const profile = profiles.value.find(item => item.id === profileId) || data;
+            showProfileConnectionProgress(profile, '连接中断，正在重新连接设备');
+        }
+        if (pendingExplicitConnect && connected) {
+            profileConnectionStatuses.set(profileId, NETCONF_SESSION_STATUS.CONNECTED);
+        } else {
+            updateConnectedProfile(data);
+        }
         if (data?.profileId && data.profileId !== selectedProfileId.value) return;
         session.value = data;
         connecting.value = ['connecting', 'reconnecting'].includes(data.status || data.state);
@@ -769,7 +1082,7 @@
         clearValidationErrors,
         refresh: async () => {
             await loadProfiles();
-            await loadSessionState();
+            await loadSessionState({ activateSharedProfile: true });
         }
     });
 
@@ -787,16 +1100,17 @@
     onMounted(async () => {
         EventBus.on(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.CONNECTION, handleSessionEvent);
         await loadProfiles();
-        await loadSessionState();
+        await loadSessionState({ activateSharedProfile: true });
     });
 
     onActivated(async () => {
         await loadProfiles();
-        await loadSessionState();
+        await loadSessionState({ activateSharedProfile: true });
     });
 
     onBeforeUnmount(() => {
         EventBus.off(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.CONNECTION);
+        profileDataLoadRevision += 1;
     });
 </script>
 
@@ -1028,6 +1342,93 @@
     .session-panel-body {
         padding: 8px;
         overflow: hidden;
+    }
+
+    .profile-data-load {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+        background: var(--nn-color-bg-muted);
+    }
+
+    .profile-data-load-warning {
+        border-color: var(--nn-color-warning);
+    }
+
+    .profile-data-load-failed {
+        border-color: var(--nn-color-error);
+    }
+
+    .profile-data-load-header,
+    .profile-data-load-heading,
+    .profile-data-load-detail,
+    .profile-data-load-summary {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+    }
+
+    .profile-data-load-header,
+    .profile-data-load-detail {
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    .profile-data-load-heading,
+    .profile-data-load-summary {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .profile-data-load-title {
+        flex: none;
+        color: var(--nn-color-text-strong);
+        font-size: 14px;
+        font-weight: 600;
+    }
+
+    .profile-data-load-profile,
+    .profile-data-load-detail,
+    .profile-data-load-summary {
+        color: var(--nn-color-text-muted);
+        font-size: 11px;
+    }
+
+    .profile-data-load-profile,
+    .profile-data-load-detail > span:first-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .profile-data-load-detail > span:last-child {
+        flex: none;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .profile-data-load-track {
+        height: 4px;
+        overflow: hidden;
+        border-radius: 2px;
+        background: var(--nn-color-bg-progress);
+    }
+
+    .profile-data-load-bar {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--nn-gradient-progress);
+        transition: width 0.2s ease;
+    }
+
+    .profile-data-load-actions {
+        display: flex;
+        justify-content: flex-end;
     }
 
     .session-table :deep(.nn-table-row) {

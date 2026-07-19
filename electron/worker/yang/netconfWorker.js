@@ -6,6 +6,7 @@ const { parentPort } = require('worker_threads');
 const { XMLBuilder, XMLParser } = require('fast-xml-parser');
 const {
     NetconfClient,
+    NetconfRpcCancelledError,
     calculateFingerprints,
     createHostVerifier,
     buildGet,
@@ -38,6 +39,7 @@ const {
     childText,
     getAttribute,
     decodeXmlText,
+    extractRpcMessageId,
     rpcReplyDataToConfig
 } = require('../../utils/netconf');
 const { parseYang } = require('../../utils/yang');
@@ -714,6 +716,10 @@ class NetconfWorkerService {
         this.sessions = new Map();
         this.subscriptions = new Map();
         this.subscriptionStopTimers = new Map();
+        this.connectQueue = Promise.resolve();
+        this.cancelledRequests = new Set();
+        this.activeConnectRequests = new Map();
+        this.activeRpcRequests = new Map();
         this.closing = false;
         if (this.port) this.port.on('message', message => this.handleMessage(message));
     }
@@ -729,22 +735,51 @@ class NetconfWorkerService {
 
     async handleMessage(message = {}) {
         const { messageId, op, data } = message;
-        if (op === '__cancel__') return;
+        if (op === '__cancel__') {
+            this.cancelRequest(data?.messageId);
+            return;
+        }
         try {
-            const result = await this.dispatch(op, data || {});
-            this.sendResponse(messageId, 'success', result);
+            const result = await this.dispatch(op, data || {}, { messageId });
+            if (!this.cancelledRequests.has(messageId)) this.sendResponse(messageId, 'success', result);
         } catch (error) {
             const detail = errorData(error);
-            this.sendResponse(messageId, 'error', detail, detail.message, detail.code);
+            if (!this.cancelledRequests.has(messageId)) {
+                this.sendResponse(messageId, 'error', detail, detail.message, detail.code);
+            }
+        } finally {
+            this.cancelledRequests.delete(messageId);
         }
     }
 
-    async dispatch(operation, data) {
+    cancelRequest(messageId) {
+        if (!messageId) return;
+        this.cancelledRequests.add(messageId);
+        const entry = this.activeConnectRequests.get(messageId);
+        if (entry) {
+            entry.manualClose = true;
+            if (entry.reconnectTimer) {
+                clearTimeout(entry.reconnectTimer);
+                entry.reconnectTimer = null;
+            }
+            entry.client?.disconnect?.('connection request cancelled');
+        }
+        const rpcRequest = this.activeRpcRequests.get(messageId);
+        if (rpcRequest) rpcRequest.client?.cancelRpc?.(rpcRequest.messageId);
+    }
+
+    requestCancelledError() {
+        const error = new Error('NETCONF连接请求已取消');
+        error.code = 'NETCONF_CONNECT_CANCELLED';
+        return error;
+    }
+
+    async dispatch(operation, data, context = {}) {
         switch (operation) {
             case NETCONF_REQ_TYPES.TEST_CONNECTION:
                 return this.testConnection(data);
             case NETCONF_REQ_TYPES.CONNECT:
-                return this.connect(data);
+                return this.connect(data, context.messageId);
             case NETCONF_REQ_TYPES.DISCONNECT:
                 return this.disconnect(data.profileId);
             case NETCONF_REQ_TYPES.DISCONNECT_ALL:
@@ -760,9 +795,9 @@ class NetconfWorkerService {
             case NETCONF_REQ_TYPES.GET_SCHEMA:
                 return this.getSchema(data.profileId, data.module || data);
             case NETCONF_REQ_TYPES.EXECUTE_OPERATION:
-                return this.executeOperation(data.profileId, data);
+                return this.executeOperation(data.profileId, data, context.messageId);
             case NETCONF_REQ_TYPES.SEND_RPC:
-                return this.sendRpc(data.profileId, data);
+                return this.sendRpc(data.profileId, data, context.messageId);
             default: {
                 const error = new Error(`不支持的NETCONF Worker操作: ${operation}`);
                 error.code = 'NETCONF_UNKNOWN_OPERATION';
@@ -1864,7 +1899,7 @@ class NetconfWorkerService {
         });
     }
 
-    async connectEntry(entry, reconnecting = false) {
+    async connectEntry(entry, reconnecting = false, requestId = null) {
         if (reconnecting) this.terminateSessionSubscriptions(entry, 'session-reconnected');
         entry.manualClose = false;
         entry.status = reconnecting ? 'reconnecting' : 'connecting';
@@ -1881,6 +1916,10 @@ class NetconfWorkerService {
         this.bindClient(entry, client);
         try {
             await client.connect(runtime);
+            if (entry.client !== client || entry.manualClose || (requestId && this.cancelledRequests.has(requestId))) {
+                client.disconnect?.('connection request cancelled');
+                throw this.requestCancelledError();
+            }
             if (!entry.profile.hostKeyFingerprint && entry.observed.hostKeyFingerprint) {
                 entry.profile = {
                     ...entry.profile,
@@ -1896,10 +1935,16 @@ class NetconfWorkerService {
             return this.publicState(entry);
         } catch (error) {
             if (entry.client === client) entry.client = null;
-            entry.lastError = errorData(error);
-            if (entry.profile.autoReconnect && !entry.manualClose && !this.closing) this.scheduleReconnect(entry);
-            entry.status = entry.reconnectTimer ? 'reconnecting' : 'error';
+            const cancelled = error?.code === 'NETCONF_CONNECT_CANCELLED' || entry.manualClose;
+            if (cancelled) client.disconnect?.('connection request cancelled');
+            entry.lastError = cancelled ? null : errorData(error);
+            if (reconnecting && entry.profile.autoReconnect && !entry.manualClose && !this.closing) {
+                this.scheduleReconnect(entry);
+            }
+            entry.status = cancelled ? 'disconnected' : entry.reconnectTimer ? 'reconnecting' : 'error';
+            if (cancelled) this.scrubEntrySecrets(entry);
             this.emitState(entry);
+            if (cancelled && error?.code !== 'NETCONF_CONNECT_CANCELLED') throw this.requestCancelledError();
             throw error;
         }
     }
@@ -2039,15 +2084,46 @@ class NetconfWorkerService {
         }
     }
 
-    async connect(profile) {
+    async connectProfile(profile, requestId = null) {
         if (!profile?.id) throw new Error('NETCONF连接缺少profile id');
+        if (requestId && this.cancelledRequests.has(requestId)) throw this.requestCancelledError();
         const profileId = String(profile.id);
         const existing = this.sessions.get(profileId);
-        if (existing?.client?.connected) return this.publicState(existing);
+        if (existing?.client?.connected) {
+            await this.disconnectOtherProfiles(profileId);
+            return this.publicState(existing);
+        }
         if (existing) await this.disconnect(profileId);
+        if (requestId && this.cancelledRequests.has(requestId)) throw this.requestCancelledError();
         const entry = this.createEntry(profile);
         this.sessions.set(profileId, entry);
-        return this.connectEntry(entry);
+        if (requestId) this.activeConnectRequests.set(requestId, entry);
+        try {
+            const state = await this.connectEntry(entry, false, requestId);
+            if (requestId && this.cancelledRequests.has(requestId)) throw this.requestCancelledError();
+            await this.disconnectOtherProfiles(profileId);
+            return state;
+        } finally {
+            if (requestId) this.activeConnectRequests.delete(requestId);
+        }
+    }
+
+    connect(profile, requestId = null) {
+        const request = this.connectQueue.then(() => this.connectProfile(profile, requestId));
+        this.connectQueue = request.catch(() => {});
+        return request;
+    }
+
+    async disconnectOtherProfiles(activeProfileId) {
+        const retainedId = String(activeProfileId || '');
+        for (const [profileId, entry] of [...this.sessions.entries()]) {
+            if (profileId === retainedId) continue;
+            const active =
+                entry?.client ||
+                entry?.reconnectTimer ||
+                ['connected', 'connecting', 'reconnecting', 'disconnecting'].includes(entry?.status);
+            if (active) await this.disconnect(profileId);
+        }
     }
 
     requireConnected(profileId) {
@@ -2436,7 +2512,7 @@ class NetconfWorkerService {
         return { request: normalized, subscription, publisherSubscriptionId };
     }
 
-    async executeOperation(profileId, request) {
+    async executeOperation(profileId, request, workerRequestId = null) {
         const entry = this.requireConnected(profileId);
         if (request.operation === 'establish-subscription') await this.ensureModernCapabilityKnown(entry);
         let normalizedRequest = request;
@@ -2481,10 +2557,10 @@ class NetconfWorkerService {
                     request.operation === 'modify-subscription' ? this.modernParameters(normalizedRequest, false) : null
             };
         }
-        return this.performRpc(entry, rpc, { ...normalizedRequest, subscriptionOperation });
+        return this.performRpc(entry, rpc, { ...normalizedRequest, subscriptionOperation, workerRequestId });
     }
 
-    async sendRpc(profileId, request) {
+    async sendRpc(profileId, request, workerRequestId = null) {
         const entry = this.requireConnected(profileId);
         const rpc = String(request.rpc || request.xml || '').trim();
         if (!rpc) throw new Error('请输入NETCONF RPC XML');
@@ -2527,7 +2603,7 @@ class NetconfWorkerService {
                 throw error;
             }
         }
-        return this.performRpc(entry, rpc, { ...request, subscriptionOperation });
+        return this.performRpc(entry, rpc, { ...request, subscriptionOperation, workerRequestId });
     }
 
     async performRpc(entry, rpc, options = {}) {
@@ -2561,28 +2637,51 @@ class NetconfWorkerService {
         }
         if (pendingType) this.beginSubscription(entry, pendingType);
         let reply;
+        let activeRpcRequest = null;
         try {
-            reply = await client.rpc(rpc, {
+            const rpcMessageId =
+                options.messageId === undefined || options.messageId === null
+                    ? (extractRpcMessageId(rpc) ??
+                      (typeof client.reserveMessageId === 'function' ? String(client.reserveMessageId()) : null))
+                    : String(options.messageId);
+            if (options.workerRequestId && this.cancelledRequests.has(options.workerRequestId)) {
+                throw new NetconfRpcCancelledError(rpcMessageId || 'pending');
+            }
+            const rpcPromise = client.rpc(rpc, {
                 timeout:
                     Number(options.timeout) || Number(entry.profile.rpcTimeout) || NETCONF_LIMITS.DEFAULT_RPC_TIMEOUT,
-                messageId: options.messageId,
+                messageId: rpcMessageId ?? options.messageId,
                 rejectOnRpcError: false
             });
+            if (options.workerRequestId && rpcMessageId !== null) {
+                activeRpcRequest = { client, messageId: rpcMessageId, profileId: entry.profile.id };
+                this.activeRpcRequests.set(options.workerRequestId, activeRpcRequest);
+            }
+            reply = await rpcPromise;
         } catch (error) {
             if (error?.code === 'NETCONF_RPC_TIMEOUT') {
                 if (isLegacyEstablish || isModernEstablish) {
                     if (client.connected) client.disconnect(error);
-                } else if (
-                    ['modify-subscription', 'delete-subscription', 'kill-subscription', 'resync-subscription'].includes(
-                        subscriptionOperation?.operation
-                    ) &&
-                    managedSubscription
-                ) {
-                    this.markSubscriptionUnknown(entry, managedSubscription, subscriptionOperation.operation, error);
                 }
+            }
+            if (
+                ['NETCONF_RPC_TIMEOUT', 'NETCONF_RPC_CANCELLED'].includes(error?.code) &&
+                ['modify-subscription', 'delete-subscription', 'kill-subscription', 'resync-subscription'].includes(
+                    subscriptionOperation?.operation
+                ) &&
+                managedSubscription
+            ) {
+                this.markSubscriptionUnknown(entry, managedSubscription, subscriptionOperation.operation, error);
             }
             throw error;
         } finally {
+            if (
+                options.workerRequestId &&
+                activeRpcRequest &&
+                this.activeRpcRequests.get(options.workerRequestId) === activeRpcRequest
+            ) {
+                this.activeRpcRequests.delete(options.workerRequestId);
+            }
             if (pendingType) this.endSubscription(entry, pendingType);
         }
         const replyBytes = Buffer.byteLength(reply.xml, 'utf8');

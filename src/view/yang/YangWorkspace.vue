@@ -25,12 +25,10 @@
 
             <div class="workspace-toolbar">
                 <div class="workspace-context">
-                    <YangProfileField
-                        :value="selectedProfileId"
-                        :options="profileOptions"
+                    <YangCurrentProfile
+                        :profile="selectedProfile"
                         :loading="profilesLoading"
-                        test-id="yang-workspace-profile-select"
-                        @update:value="selectProfile"
+                        test-id="yang-workspace-current-profile"
                     />
                     <span v-if="workspaceSummary.cacheHit" class="cache-hint">缓存命中</span>
                 </div>
@@ -83,14 +81,18 @@
                             class="tree-search"
                         />
                     </div>
-                    <div class="schema-tree-scroll">
+                    <div ref="schemaTreeScrollRef" class="schema-tree-scroll">
                         <nn-spin :spinning="treeLoading">
                             <nn-tree
                                 v-if="displayTree.length"
                                 v-model:expanded-keys="expandedKeys"
                                 v-model:selected-keys="selectedKeys"
                                 :tree-data="displayTree"
+                                :height="schemaTreeViewportHeight"
+                                :item-height="24"
+                                :overscan="8"
                                 block-node
+                                virtual
                                 @expand="handleTreeExpand"
                                 @select="handleTreeSelect"
                                 @right-click="handleTreeRightClick"
@@ -300,7 +302,7 @@
     import YangExecutionHistoryDrawer from './YangExecutionHistoryDrawer.vue';
     import YangNotificationDrawer from './YangNotificationDrawer.vue';
     import YangOperations from './YangOperations.vue';
-    import YangProfileField from './YangProfileField.vue';
+    import YangCurrentProfile from './YangCurrentProfile.vue';
     import { resolveNetconfSubscriptionCapabilities } from './netconfSubscriptionCapabilities';
     import {
         invokeBridge,
@@ -383,8 +385,13 @@
         minFirst: 320,
         minSecond: 420,
         dividerSize: 8,
+        frameSynchronized: true,
+        previewStyleProperty: '--schema-pane-width',
         activeWhen: () => window.matchMedia('(min-width: 981px)').matches
     });
+    const schemaTreeScrollRef = ref(null);
+    const schemaTreeViewportHeight = ref(480);
+    let schemaTreeResizeObserver = null;
     let contextMenuOpenRequest = 0;
     let detailRequestRevision = 0;
     let workspaceRequestRevision = 0;
@@ -395,8 +402,8 @@
     let schemaRestoreFailedCompileId = '';
     let clearWorkspaceConfirmHandle = null;
     let notificationDisconnectConfirmHandle = null;
-    let pendingSubscriptionManagement = null;
-    const { profilesLoading, selectedProfileId, profileOptions, refreshProfiles, selectProfile, taskMatchesProfile } =
+    let initialWorkspaceLoadSettled = false;
+    const { profilesLoading, selectedProfileId, selectedProfile, refreshProfiles, taskMatchesProfile } =
         useYangProfileContext();
     const {
         unreadCount: notificationUnreadCount,
@@ -704,11 +711,7 @@
             const workspace = data?.workspace || data || {};
             const nextCompileId = workspace.compileId || '';
             const preserveExistingTree = Boolean(
-                preserveTree &&
-                    previousCompileId &&
-                    previousCompileId === nextCompileId &&
-                    workspaceHasSchemaCompilation(workspace) &&
-                    treeData.value.length
+                preserveTree && previousCompileId && previousCompileId === nextCompileId && treeData.value.length
             );
 
             if (!preserveExistingTree) {
@@ -726,11 +729,7 @@
             if (!preserveExistingTree && previousCompileId && previousCompileId !== compileId.value) {
                 resetOperationContext();
             }
-            if (
-                workspaceHasSchemaCompilation(workspace) &&
-                treeData.value.length === 0 &&
-                !['ready', 'partial'].includes(schemaStatus.value)
-            ) {
+            if (workspaceHasSchemaCompilation(workspace) && treeData.value.length === 0) {
                 await loadRoots({ force: retrySchemaRestore });
             }
             if (workspaceModules.value.length === 0) await loadWorkspaceModules();
@@ -1739,10 +1738,7 @@
             return;
         }
         if (targetProfileId !== selectedProfileId.value) {
-            pendingSubscriptionManagement = { ...subscription };
-            notificationHistoryOpen.value = false;
-            selectProfile(targetProfileId);
-            notify.info('正在切换到订阅所属 Profile');
+            notify.warning('该订阅不属于当前 Profile，请先在连接设置中连接对应 Profile');
             return;
         }
         activateSubscriptionManagement(subscription);
@@ -1903,6 +1899,11 @@
                     detailLoading.value = false;
                     nodePropertyOpen.value = false;
                     resetOperationContext();
+                    EventBus.emit(YANG_EVENT.PROFILE_DATA_REFRESH, {
+                        profileId,
+                        reason: 'workspace-cleared',
+                        profileChanged: false
+                    });
                     notify.success('Schema 工作区已清空');
                 } catch (error) {
                     if (requestRevision === profileRequestRevision && profileId === selectedProfileId.value) {
@@ -1922,8 +1923,16 @@
         if (!data || typeof data !== 'object') return;
         if (!taskMatchesProfile(data, selectedProfileId.value)) return;
         const action = data.action || data.taskType || data.kind || data.type || '';
-        if (action !== 'compile' || !isTaskTerminal(data.phase || data.status)) return;
-        loadWorkspace();
+        if (!['compile', 'download', 'import'].includes(action) || !isTaskTerminal(data.phase || data.status)) return;
+        void loadWorkspace({ preserveTree: true });
+    };
+
+    const handleProfileDataRefresh = payload => {
+        const profileId = String(payload?.profileId || '');
+        if (!profileId) return;
+        if (payload?.reason === 'workspace-cleared' && profileId === selectedProfileId.value) return;
+        if (profileId !== selectedProfileId.value) return;
+        if (profileContextReady) void reloadCurrentProfile({ preserveTree: true });
     };
 
     const resetProfileWorkspace = () => {
@@ -1964,11 +1973,6 @@
         if (profileId === previousProfileId) return;
         resetProfileWorkspace();
         if (profileContextReady) await reloadCurrentProfile();
-        if (pendingSubscriptionManagement?.profileId === profileId) {
-            const subscription = pendingSubscriptionManagement;
-            pendingSubscriptionManagement = null;
-            activateSubscriptionManagement(subscription);
-        }
     });
 
     watch(notificationHistoryOpen, open => {
@@ -1994,6 +1998,27 @@
         hideContextMenu();
     };
 
+    const updateSchemaTreeViewportHeight = observedHeight => {
+        const scrollElement = schemaTreeScrollRef.value;
+        const fallbackHeight = scrollElement ? Math.max(0, scrollElement.clientHeight - 12) : 0;
+        const measuredHeight = Number.isFinite(Number(observedHeight)) ? Number(observedHeight) : fallbackHeight;
+        if (measuredHeight <= 0) return;
+        const nextHeight = Math.max(120, Math.floor(measuredHeight));
+        if (nextHeight !== schemaTreeViewportHeight.value) schemaTreeViewportHeight.value = nextHeight;
+    };
+
+    const observeSchemaTreeViewport = () => {
+        schemaTreeResizeObserver?.disconnect();
+        schemaTreeResizeObserver = null;
+        updateSchemaTreeViewportHeight();
+        if (typeof ResizeObserver === 'undefined' || !schemaTreeScrollRef.value) return;
+        schemaTreeResizeObserver = new ResizeObserver(entries => {
+            const entry = entries[entries.length - 1];
+            updateSchemaTreeViewportHeight(entry?.contentRect?.height);
+        });
+        schemaTreeResizeObserver.observe(schemaTreeScrollRef.value);
+    };
+
     const handleWorkspaceDeactivated = () => {
         stopSchemaPaneResize();
         hideContextMenu();
@@ -2008,18 +2033,31 @@
     onMounted(async () => {
         EventBus.on(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE, handleCompileProgress);
         EventBus.on(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`, handleSessionEvent);
+        EventBus.on(
+            YANG_EVENT.PROFILE_DATA_REFRESH,
+            `${YANG_EVENT_PAGE_ID.WORKSPACE}-profile-data`,
+            handleProfileDataRefresh
+        );
         document.addEventListener('keydown', handleContextMenuKeydown);
         window.addEventListener('resize', hideContextMenu);
+        window.addEventListener('resize', updateSchemaTreeViewportHeight);
         window.addEventListener('scroll', handleWorkspaceScroll, true);
-        await refreshProfiles();
-        profileContextReady = true;
-        await reloadCurrentProfile();
+        await nextTick();
+        observeSchemaTreeViewport();
+        try {
+            await refreshProfiles();
+            profileContextReady = true;
+            await reloadCurrentProfile();
+        } finally {
+            initialWorkspaceLoadSettled = true;
+        }
     });
 
     onActivated(async () => {
+        if (!initialWorkspaceLoadSettled) return;
         await refreshProfiles();
         profileContextReady = true;
-        await reloadCurrentProfile({ preserveTree: true, retrySchemaRestore: false });
+        await reloadCurrentProfile({ preserveTree: true });
     });
 
     onDeactivated(handleWorkspaceDeactivated);
@@ -2029,9 +2067,13 @@
         closeNotificationDisconnectConfirm();
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE);
         EventBus.off(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`);
+        EventBus.off(YANG_EVENT.PROFILE_DATA_REFRESH, `${YANG_EVENT_PAGE_ID.WORKSPACE}-profile-data`);
         document.removeEventListener('keydown', handleContextMenuKeydown);
         window.removeEventListener('resize', hideContextMenu);
+        window.removeEventListener('resize', updateSchemaTreeViewportHeight);
         window.removeEventListener('scroll', handleWorkspaceScroll, true);
+        schemaTreeResizeObserver?.disconnect();
+        schemaTreeResizeObserver = null;
     });
 </script>
 
@@ -2214,7 +2256,7 @@
     .schema-tree-scroll {
         min-height: 0;
         flex: 1;
-        overflow: auto;
+        overflow: hidden;
         padding: 6px;
     }
 

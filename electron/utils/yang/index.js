@@ -36,6 +36,7 @@ class YangRegistry {
         this.workspaceId = options.workspaceId || 'default';
         this.latestCompileIds = new Map();
         this.compileScopeContentHashes = new Map();
+        this.compileScopeModuleHashes = new Map();
         this.repository = options.repository || new YangRepository(options);
         this.compiler =
             options.compiler ||
@@ -85,14 +86,25 @@ class YangRegistry {
         let compileId = this.latestCompileIds.get(scopeKey);
         if (compileId) {
             const expectedContentHash = this.compileScopeContentHashes.get(scopeKey);
-            const currentContentHash = normalized.snapshotId
-                ? this.repository.getSnapshot(normalized.snapshotId)?.contentHash
+            const expectedModuleHashes = this.compileScopeModuleHashes.get(scopeKey);
+            const manifest = normalized.snapshotId
+                ? this.repository.getSnapshot(normalized.snapshotId)
                 : this.repository.getWorkspace(
                       normalized.workspaceId === undefined ? this.workspaceId : normalized.workspaceId
-                  )?.contentHash;
-            if (!expectedContentHash || expectedContentHash !== currentContentHash) {
+                  );
+            const currentModuleHashes = new Set((manifest?.modules || []).map(module => module.hash).filter(Boolean));
+            const modulesAreCurrent =
+                Array.isArray(expectedModuleHashes) &&
+                expectedModuleHashes.length > 0 &&
+                expectedModuleHashes.every(hash => currentModuleHashes.has(hash));
+            const contentIsCurrent =
+                (!Array.isArray(expectedModuleHashes) || expectedModuleHashes.length === 0) &&
+                Boolean(expectedContentHash) &&
+                expectedContentHash === manifest?.contentHash;
+            if (!modulesAreCurrent && !contentIsCurrent) {
                 this.latestCompileIds.delete(scopeKey);
                 this.compileScopeContentHashes.delete(scopeKey);
+                this.compileScopeModuleHashes.delete(scopeKey);
                 compileId = null;
             }
         }
@@ -109,6 +121,7 @@ class YangRegistry {
         const removedCompileId = this.latestCompileIds.get(scopeKey);
         this.latestCompileIds.delete(scopeKey);
         this.compileScopeContentHashes.delete(scopeKey);
+        this.compileScopeModuleHashes.delete(scopeKey);
         if (removedCompileId && this.compiler.latestCompileId === removedCompileId) {
             this.compiler.latestCompileId = this.latestCompileIds.get(this.compileScopeKey()) || null;
         }
@@ -186,6 +199,7 @@ class YangRegistry {
             : this.repository.getWorkspace(compileOptions.workspaceId)?.contentHash;
         this.latestCompileIds.set(scopeKey, result.compileId);
         this.compileScopeContentHashes.set(scopeKey, scopeContentHash || null);
+        this.compileScopeModuleHashes.set(scopeKey, [...new Set((result.moduleHashes || []).filter(Boolean))]);
         return result;
     }
 

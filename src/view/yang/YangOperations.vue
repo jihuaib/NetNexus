@@ -708,14 +708,27 @@
                                     </nn-button>
                                 </span>
                             </nn-tooltip>
+                            <nn-tooltip v-if="executing" :title="terminationTooltip">
+                                <span class="operation-execute-wrap">
+                                    <nn-button danger :loading="terminating" @click="terminateOperation">
+                                        {{ activeCancellationRequiresDisconnect ? '终止并断开' : '终止请求' }}
+                                    </nn-button>
+                                </span>
+                            </nn-tooltip>
                         </nn-space>
                         <span class="confirmation-hint">
                             {{
-                                requestOverrideActive
-                                    ? '手工报文发送前需要二次确认'
-                                    : activeOperationMeta.category === 'read'
-                                      ? '只读操作将直接发送'
-                                      : '发送前需要二次确认'
+                                executing
+                                    ? activeCancellationRequiresDisconnect
+                                        ? '订阅建立中；终止需要断开当前 NETCONF Session'
+                                        : !requestOverrideActive && activeOperationMeta.category === 'read'
+                                          ? '操作执行中；可只终止本地等待，连接保持不变'
+                                          : '操作执行中；终止等待不代表设备撤销写操作'
+                                    : requestOverrideActive
+                                      ? '手工报文发送前需要二次确认'
+                                      : activeOperationMeta.category === 'read'
+                                        ? '只读操作将直接发送'
+                                        : '发送前需要二次确认'
                             }}
                         </span>
                     </div>
@@ -742,8 +755,23 @@
                 <nn-card :title="embedded ? 'RPC 响应' : 'RPC 结果'" class="operation-result-card">
                     <template #extra>
                         <nn-space>
-                            <nn-tag v-if="result.status" :color="result.status === 'success' ? 'success' : 'error'">
-                                {{ result.status === 'success' ? '成功' : '失败' }}
+                            <nn-tag
+                                v-if="result.status"
+                                :color="
+                                    result.status === 'success'
+                                        ? 'success'
+                                        : result.status === 'cancelled'
+                                          ? 'warning'
+                                          : 'error'
+                                "
+                            >
+                                {{
+                                    result.status === 'success'
+                                        ? '成功'
+                                        : result.status === 'cancelled'
+                                          ? '已终止'
+                                          : '失败'
+                                }}
                             </nn-tag>
                             <span v-if="result.duration !== null" class="result-duration">
                                 {{ result.duration }} ms
@@ -1083,7 +1111,13 @@
 
         <nn-modal
             v-model:open="confirmationOpen"
-            :title="requestOverrideActive ? '确认发送手工 RPC' : `确认执行 ${activeOperationMeta.label}`"
+            :title="
+                confirmationOverrideRequired
+                    ? '确认仍然下发 RPC'
+                    : requestOverrideActive
+                      ? '确认发送手工 RPC'
+                      : `确认执行 ${activeOperationMeta.label}`
+            "
             :footer="null"
             width="520px"
             :z-index="1300"
@@ -1094,16 +1128,33 @@
                 :message="confirmationDescription"
                 description="请再次确认目标设备、datastore 和参数无误。"
             />
+            <nn-alert
+                v-if="confirmationOverrideRequired"
+                class="operation-confirmation-yang-warning"
+                type="warning"
+                show-icon
+                :message="confirmationYangWarningMessage"
+                :description="confirmationYangWarningDescription"
+            />
+            <div v-if="confirmationOverrideRequired" class="operation-confirmation-override">
+                <nn-checkbox v-model:checked="confirmationOverrideAccepted">
+                    我已了解本地 YANG 校验未通过，仍要下发该 RPC
+                </nn-checkbox>
+            </div>
             <div class="operation-confirmation-footer">
-                <nn-button @click="confirmationOpen = false">取消</nn-button>
+                <nn-button @click="closeConfirmation">取消</nn-button>
                 <nn-button
                     type="primary"
-                    :danger="requestOverrideActive || activeOperationMeta.category === 'danger'"
+                    :danger="
+                        confirmationOverrideRequired ||
+                        requestOverrideActive ||
+                        activeOperationMeta.category === 'danger'
+                    "
                     :loading="executing || requestValidating"
-                    :disabled="requestValidating"
+                    :disabled="requestValidating || (confirmationOverrideRequired && !confirmationOverrideAccepted)"
                     @click="confirmAndExecute"
                 >
-                    确认执行
+                    {{ confirmationOverrideRequired ? '仍然下发' : '确认执行' }}
                 </nn-button>
             </div>
         </nn-modal>
@@ -1272,11 +1323,17 @@
         defaultRatio: 0.5,
         minFirst: 260,
         minSecond: 200,
-        dividerSize: 8
+        dividerSize: 8,
+        frameSynchronized: true,
+        previewStyleProperty: '--request-pane-height'
     });
     const activeOperation = ref('get');
     const sessionLoading = ref(false);
     const executing = ref(false);
+    const terminating = ref(false);
+    const terminationRequested = ref(false);
+    const activeOperationId = ref('');
+    const activeCancellationRequiresDisconnect = ref(false);
     const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, capabilities: [] });
     const confirmationOpen = ref(false);
     const previewOpen = ref(false);
@@ -1325,6 +1382,8 @@
         minFirst: 280,
         minSecond: 320,
         dividerSize: 8,
+        frameSynchronized: true,
+        previewStyleProperty: '--parameter-pane-width',
         activeWhen: () => props.embedded && !requestOptionsCollapsed.value
     });
     const replyDisplayMode = ref('formatted');
@@ -1338,6 +1397,9 @@
         engine: '',
         performed: false
     });
+    const confirmationValidation = ref(null);
+    const confirmationSnapshot = ref(null);
+    const confirmationOverrideAccepted = ref(false);
     const modernManagementTargetLocked = ref(false);
     let requestValidationRevision = 0;
     const editConfigLoading = ref(false);
@@ -1348,6 +1410,7 @@
     let editConfigBaseline = '';
     let editConfigLoadRevision = 0;
     let applyingOperationContext = false;
+    let operationRequestSequence = 0;
     const result = reactive({
         status: '',
         operation: '',
@@ -3158,6 +3221,12 @@
     const executeDisabledReason = computed(() =>
         executing.value ? '操作执行中' : requestValidating.value ? '正在执行 YANG 数据校验' : validateOperation()
     );
+    const terminationTooltip = computed(() => {
+        if (activeCancellationRequiresDisconnect.value) {
+            return '设备可能已经建立订阅；为避免留下未跟踪订阅，终止时会断开当前 NETCONF Session';
+        }
+        return '只停止本地等待并忽略该 RPC 的迟到响应；NETCONF Session 保持连接，设备端可能仍在处理';
+    });
 
     const escapeXmlAttribute = value =>
         String(value || '')
@@ -3557,7 +3626,10 @@
         if (!structuralValidation.valid) {
             requestValidationRevision += 1;
             requestValidating.value = false;
-            return applyRequestValidation(structuralValidation, { notifyResult });
+            return applyRequestValidation(
+                { ...structuralValidation, stage: 'structure', canOverride: false },
+                { notifyResult }
+            );
         }
         // Subscription control RPCs belong to protocol/system models rather than
         // the device business modules selected in this workspace. The dedicated
@@ -3571,6 +3643,8 @@
             return applyRequestValidation(
                 {
                     ...structuralValidation,
+                    stage: 'structure',
+                    canOverride: false,
                     engine:
                         structuralValidation.operation === 'create-subscription' ? 'xml+rfc5277' : 'xml+rfc8639/8641',
                     authoritative: false,
@@ -3583,6 +3657,8 @@
             return applyRequestValidation(
                 {
                     ...structuralValidation,
+                    stage: 'yang',
+                    canOverride: false,
                     engine: 'xml',
                     authoritative: false,
                     performed: false,
@@ -3601,7 +3677,14 @@
                 rpc: source
             });
             if (revision !== requestValidationRevision || source !== currentRequestXml.value) {
-                return { valid: false, stale: true, diagnostics: [], operation: structuralValidation.operation };
+                return {
+                    valid: false,
+                    stale: true,
+                    stage: 'stale',
+                    canOverride: false,
+                    diagnostics: [],
+                    operation: structuralValidation.operation
+                };
             }
             const diagnostics = mergeRequestDiagnostics([
                 ...structuralValidation.diagnostics,
@@ -3611,6 +3694,8 @@
                 {
                     ...data,
                     valid: structuralValidation.valid && data?.valid !== false && diagnostics.length === 0,
+                    stage: 'yang',
+                    canOverride: data?.valid === false || diagnostics.length > 0,
                     diagnostics,
                     operation: structuralValidation.operation || data?.operation || '',
                     engine: data?.engine || 'libyang',
@@ -3620,12 +3705,21 @@
             );
         } catch (error) {
             if (revision !== requestValidationRevision || source !== currentRequestXml.value) {
-                return { valid: false, stale: true, diagnostics: [], operation: structuralValidation.operation };
+                return {
+                    valid: false,
+                    stale: true,
+                    stage: 'stale',
+                    canOverride: false,
+                    diagnostics: [],
+                    operation: structuralValidation.operation
+                };
             }
             return applyRequestValidation(
                 {
                     ...structuralValidation,
                     valid: false,
+                    stage: 'yang',
+                    canOverride: true,
                     engine: 'libyang',
                     performed: false,
                     validationError: `无法执行 YANG 数据校验：${error.message}`
@@ -3814,6 +3908,66 @@
         return clonePlain(payload);
     };
 
+    const confirmationOverrideRequired = computed(
+        () => confirmationValidation.value?.valid === false && confirmationValidation.value?.canOverride === true
+    );
+    const confirmationYangWarningMessage = computed(() => {
+        const diagnosticCount = confirmationValidation.value?.diagnostics?.length || 0;
+        if (diagnosticCount) return `本地 YANG 校验发现 ${diagnosticCount} 处问题`;
+        if (confirmationValidation.value?.validationError) return '本地 YANG 校验无法完成';
+        return '本地 YANG 校验未通过';
+    });
+    const confirmationYangWarningDescription = computed(() => {
+        const validation = confirmationValidation.value;
+        const reason = validation?.diagnostics?.[0]?.message || validation?.validationError || '未获得具体错误信息';
+        return `XML/NETCONF 结构已通过。${reason}。设备将执行最终校验，可能接受该 RPC，也可能返回 rpc-error。`;
+    });
+    const resetConfirmation = () => {
+        confirmationValidation.value = null;
+        confirmationSnapshot.value = null;
+        confirmationOverrideAccepted.value = false;
+    };
+    const closeConfirmation = () => {
+        confirmationOpen.value = false;
+        resetConfirmation();
+    };
+    const openConfirmation = validation => {
+        confirmationValidation.value = validation;
+        confirmationSnapshot.value = {
+            requestXml: currentRequestXml.value,
+            profileId: props.profileId || '',
+            compileId: props.compileId || '',
+            contextRevision: props.contextRevision,
+            sessionId: session.value.sessionId || '',
+            connectedAt: session.value.connectedAt || '',
+            host: session.value.host || '',
+            port: session.value.port || '',
+            manualRequest: requestOverrideActive.value,
+            operation: activeOperation.value
+        };
+        confirmationOverrideAccepted.value = false;
+        confirmationOpen.value = true;
+    };
+    const confirmationContextUnchanged = () => {
+        const snapshot = confirmationSnapshot.value;
+        return (
+            snapshot &&
+            snapshot.requestXml === currentRequestXml.value &&
+            snapshot.profileId === (props.profileId || '') &&
+            snapshot.compileId === (props.compileId || '') &&
+            snapshot.contextRevision === props.contextRevision &&
+            snapshot.sessionId === (session.value.sessionId || '') &&
+            snapshot.connectedAt === (session.value.connectedAt || '') &&
+            snapshot.host === (session.value.host || '') &&
+            snapshot.port === (session.value.port || '') &&
+            snapshot.manualRequest === requestOverrideActive.value &&
+            snapshot.operation === activeOperation.value
+        );
+    };
+    watch(confirmationOpen, open => {
+        if (!open) resetConfirmation();
+    });
+
     const confirmationDescription = computed(() => {
         if (requestOverrideActive.value) {
             return '将按编辑器中的完整 RPC 原文发送；它可能读取或修改任意设备状态。';
@@ -3858,7 +4012,7 @@
             return;
         }
         const validation = await validateRequestEditor({ notifyResult: false });
-        if (!validation.valid) {
+        if (!validation.valid && validation.canOverride !== true) {
             if (!validation.stale) {
                 notify.warning(
                     validation.validationError ||
@@ -3867,28 +4021,31 @@
             }
             return;
         }
-        if (!requestOverrideActive.value && activeOperationMeta.value.category === 'read') {
+        if (validation.valid && !requestOverrideActive.value && activeOperationMeta.value.category === 'read') {
             void executeOperation();
             return;
         }
-        confirmationOpen.value = true;
+        openConfirmation(validation);
     };
 
     const confirmAndExecute = async () => {
         const error = validateOperation();
-        const validation = error ? null : await validateRequestEditor({ notifyResult: false });
-        if (error || !validation?.valid) {
-            confirmationOpen.value = false;
-            if (!validation?.stale) {
-                notify.warning(
-                    error ||
-                        validation?.validationError ||
-                        `RPC 验证失败：${validation?.diagnostics?.[0]?.message || '请输入合法报文'}`
-                );
-            }
+        const structuralValidation = error ? null : validateNetconfRpc(currentRequestXml.value);
+        if (error || !structuralValidation?.valid) {
+            closeConfirmation();
+            if (structuralValidation) applyRequestValidation(structuralValidation);
+            notify.warning(
+                error || `RPC 验证失败：${structuralValidation?.diagnostics?.[0]?.message || '请输入合法报文'}`
+            );
             return;
         }
-        confirmationOpen.value = false;
+        if (!confirmationContextUnchanged()) {
+            closeConfirmation();
+            notify.warning('RPC、设备会话或 YANG 编译上下文已变化，请重新验证后再发送');
+            return;
+        }
+        if (confirmationOverrideRequired.value && !confirmationOverrideAccepted.value) return;
+        closeConfirmation();
         void executeOperation();
     };
 
@@ -3926,26 +4083,32 @@
     const executeOperation = async () => {
         if (executing.value) return;
         const manualRequest = requestOverrideActive.value;
-        const manualValidation = manualRequest ? validateNetconfRpc(currentRequestXml.value) : null;
-        if (manualRequest && !manualValidation.valid) {
-            applyRequestValidation(manualValidation);
-            notify.warning(`RPC 验证失败：${manualValidation.diagnostics[0]?.message || '请输入合法报文'}`);
+        const requestXml = manualRequest ? currentRequestXml.value : requestPreview.value;
+        const structuralValidation = validateNetconfRpc(requestXml);
+        if (!structuralValidation.valid) {
+            applyRequestValidation(structuralValidation);
+            notify.warning(`RPC 验证失败：${structuralValidation.diagnostics[0]?.message || '请输入合法报文'}`);
             return;
         }
+        terminationRequested.value = false;
         executing.value = true;
         emit('executing-change', true);
         const startedAt = performance.now();
-        const operation = manualRequest ? manualValidation.operation || 'raw-rpc' : activeOperation.value;
+        const operation = manualRequest ? structuralValidation.operation || 'raw-rpc' : activeOperation.value;
         const operationLabel = manualRequest ? `${operation}（手工 RPC）` : activeOperationMeta.value.label;
+        const operationCategory = manualRequest ? 'danger' : activeOperationMeta.value.category;
+        const operationId = `netconf-operation-${Date.now()}-${++operationRequestSequence}`;
+        const cancellationRequiresDisconnect = ['create-subscription', 'establish-subscription'].includes(operation);
+        activeOperationId.value = operationId;
+        activeCancellationRequiresDisconnect.value = cancellationRequiresDisconnect;
         const executionContextRevision = props.contextRevision;
-        const requestXml = manualRequest ? currentRequestXml.value : requestPreview.value;
         const operationRequest = manualRequest || operation === 'raw-rpc' ? { rpc: requestXml } : buildPayload();
-        const request = { ...operationRequest, profileId: props.profileId };
+        const request = { ...operationRequest, profileId: props.profileId, operationId };
         const method = manualRequest || operation === 'raw-rpc' ? 'sendRpc' : 'executeOperation';
         const historyId = beginOperationHistory({
             operation,
             operationLabel,
-            category: manualRequest ? 'danger' : activeOperationMeta.value.category,
+            category: operationCategory,
             origin: 'manual',
             requestXml
         });
@@ -3988,9 +4151,17 @@
             const duration = Math.max(0, Math.round(performance.now() - startedAt));
             const details = error.details || {};
             const failedRequestXml = requestEnvelopeForResult(details, requestXml);
-            const failedReplyXml = details.replyXml || error.message;
+            const localCancellationConfirmed = ['WORKER_CANCELLED', 'NETCONF_RPC_CANCELLED'].includes(error.code);
+            const cancelled =
+                terminationRequested.value && (cancellationRequiresDisconnect || localCancellationConfirmed);
+            const cancellationMessage = cancellationRequiresDisconnect
+                ? '操作已由用户终止，当前 NETCONF Session 已断开。设备可能已经处理该订阅请求。'
+                : operationCategory === 'read'
+                  ? '已停止等待该 RPC，NETCONF Session 保持连接；设备可能仍在处理，迟到响应将被忽略。'
+                  : '已停止等待该 RPC，NETCONF Session 保持连接。RPC 已发送到设备，写操作的最终状态可能无法确认。';
+            const failedReplyXml = cancelled ? cancellationMessage : details.replyXml || error.message;
             completeNetconfExecution(historyId, {
-                status: 'failed',
+                status: cancelled ? 'cancelled' : 'failed',
                 requestXml: failedRequestXml,
                 replyXml: failedReplyXml,
                 ...responseReplyMetadata(details),
@@ -4003,7 +4174,7 @@
             if (contextUnchanged) {
                 if (manualRequest) requestDraft.value = failedRequestXml;
                 Object.assign(result, {
-                    status: 'error',
+                    status: cancelled ? 'cancelled' : 'error',
                     operation: operationLabel,
                     reply: failedReplyXml,
                     request: failedRequestXml,
@@ -4014,10 +4185,40 @@
                 });
             }
             const contextSuffix = contextUnchanged ? '' : '（工作区上下文已切换）';
-            notify.error(`${operationLabel} 执行失败${contextSuffix}：${error.message}`);
+            if (cancelled) {
+                notify.warning(
+                    cancellationRequiresDisconnect
+                        ? `${operationLabel} 已终止，NETCONF Session 已断开${contextSuffix}`
+                        : `${operationLabel} 已停止等待，NETCONF Session 保持连接${contextSuffix}`
+                );
+            } else notify.error(`${operationLabel} 执行失败${contextSuffix}：${error.message}`);
         } finally {
             executing.value = false;
+            terminating.value = false;
+            terminationRequested.value = false;
+            if (activeOperationId.value === operationId) activeOperationId.value = '';
+            activeCancellationRequiresDisconnect.value = false;
             emit('executing-change', false);
+        }
+    };
+
+    const terminateOperation = async () => {
+        if (!executing.value || terminating.value) return;
+        const operationId = activeOperationId.value;
+        if (!operationId) return;
+        terminating.value = true;
+        terminationRequested.value = true;
+        try {
+            if (activeCancellationRequiresDisconnect.value) {
+                await invokeBridge('netconfApi', 'disconnect', props.profileId);
+            } else {
+                await invokeBridge('netconfApi', 'cancelOperation', { profileId: props.profileId, operationId });
+            }
+        } catch (error) {
+            terminationRequested.value = false;
+            if (executing.value) notify.error(`终止 NETCONF 操作失败：${error.message}`);
+        } finally {
+            if (!terminationRequested.value) terminating.value = false;
         }
     };
 
@@ -4327,7 +4528,7 @@
         form.rawRpc = props.contextRawRpc || DEFAULT_RAW_RPC;
         editConfigReadbackStatus.value = 'idle';
         editConfigReadbackSource.value = form.target;
-        confirmationOpen.value = false;
+        closeConfirmation();
         previewOpen.value = false;
         clearResult();
         void nextTick(() => {
@@ -4491,7 +4692,7 @@
         const readbackWasLoading = editConfigLoading.value;
         cancelEditConfigReadback();
         if (readbackWasLoading) editConfigReadbackStatus.value = 'idle';
-        confirmationOpen.value = false;
+        closeConfirmation();
         previewOpen.value = false;
     });
 
@@ -5234,6 +5435,15 @@
         justify-content: flex-end;
         gap: 8px;
         margin-top: 16px;
+    }
+
+    .operation-confirmation-yang-warning,
+    .operation-confirmation-override {
+        margin-top: 12px;
+    }
+
+    .operation-confirmation-override {
+        padding: 0 4px;
     }
 
     .operation-execute-wrap {

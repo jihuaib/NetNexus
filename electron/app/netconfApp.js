@@ -13,6 +13,8 @@ const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
 const { NETCONF_REQ_TYPES, YANG_EVT_TYPES, DEFAULT_NETCONF_PROFILE, NETCONF_LIMITS } = require('../const/yangConst');
 
 const PROFILE_STORE_KEY = 'netconf-profiles';
+const RPC_TIMEOUT_MIGRATION_STORE_KEY = 'netconf-rpc-timeout-default-v2';
+const LEGACY_DEFAULT_RPC_TIMEOUT = 30000;
 const ALLOWED_AUTH_METHODS = new Set(['password', 'privateKey', 'agent']);
 const ALLOWED_HOST_KEY_POLICIES = new Set(['ask', 'strict', 'accept-new']);
 const INITIAL_PASSWORD_CHANGE_REQUIRED_CODE = 'NETCONF_INITIAL_PASSWORD_CHANGE_REQUIRED';
@@ -81,6 +83,8 @@ class NetconfApp {
         this.sessionSnapshots = new Map();
         this.subscriptionSnapshots = new Map();
         this.profileRpcTimeouts = new Map();
+        this.pendingProfileConnections = new Set();
+        this.activeRpcOperations = new Map();
         this.rpcReplyArtifacts = new Map();
         this.rpcReplyArtifactDirectory = null;
         this.rpcReplyArtifactDirectoryPromise = null;
@@ -99,6 +103,7 @@ class NetconfApp {
                 }
             }
         });
+        this.migrateLegacyRpcTimeouts();
         this.registerIpcHandlers();
     }
 
@@ -117,6 +122,7 @@ class NetconfApp {
         handle('netconf:downloadModules', this.handleDownloadModules);
         handle('netconf:executeOperation', this.handleExecuteOperation);
         handle('netconf:sendRpc', this.handleSendRpc);
+        handle('netconf:cancelOperation', this.handleCancelOperation);
         handle('netconf:saveRpcReply', this.handleSaveRpcReply);
         handle('netconf:getTask', this.handleGetTask);
         handle('netconf:cancelTask', this.handleCancelTask);
@@ -343,6 +349,19 @@ class NetconfApp {
         return Array.isArray(profiles) ? profiles : [];
     }
 
+    migrateLegacyRpcTimeouts() {
+        if (this.store.get(RPC_TIMEOUT_MIGRATION_STORE_KEY, false) === true) return;
+        const profiles = this.getStoredProfiles();
+        let changed = false;
+        const migrated = profiles.map(profile => {
+            if (Number(profile?.rpcTimeout) !== LEGACY_DEFAULT_RPC_TIMEOUT) return profile;
+            changed = true;
+            return { ...profile, rpcTimeout: NETCONF_LIMITS.DEFAULT_RPC_TIMEOUT };
+        });
+        if (changed) this.saveStoredProfiles(migrated);
+        this.store.set(RPC_TIMEOUT_MIGRATION_STORE_KEY, true);
+    }
+
     saveStoredProfiles(profiles) {
         this.store.set(PROFILE_STORE_KEY, profiles);
     }
@@ -363,6 +382,42 @@ class NetconfApp {
         // The worker-side NETCONF timer must always win. Otherwise the IPC call can
         // report a timeout while the in-flight create-subscription later succeeds.
         return Math.max(120000, rpcTimeout + 5000);
+    }
+
+    rpcOperationKey(event, operationId) {
+        const id = String(operationId || '').trim();
+        if (!id) return '';
+        return `${String(event?.sender?.id ?? 'unknown')}:${id}`;
+    }
+
+    registerRpcOperation(event, request, profileId) {
+        const operationId = String(request?.operationId || '').trim();
+        if (!operationId) return null;
+        if (operationId.length > 160) {
+            const error = new Error('NETCONF operationId 超过长度限制');
+            error.code = 'NETCONF_OPERATION_ID_INVALID';
+            throw error;
+        }
+        const key = this.rpcOperationKey(event, operationId);
+        if (this.activeRpcOperations.has(key)) {
+            const error = new Error('相同 NETCONF operationId 的操作仍在执行');
+            error.code = 'NETCONF_OPERATION_ID_DUPLICATE';
+            throw error;
+        }
+        const operation = {
+            key,
+            operationId,
+            profileId: String(profileId || ''),
+            controller: new AbortController()
+        };
+        this.activeRpcOperations.set(key, operation);
+        return operation;
+    }
+
+    finishRpcOperation(operation) {
+        if (operation && this.activeRpcOperations.get(operation.key) === operation) {
+            this.activeRpcOperations.delete(operation.key);
+        }
     }
 
     rememberSessionSnapshot(state) {
@@ -447,7 +502,7 @@ class NetconfApp {
         if (eventName === YANG_EVT_TYPES.SESSION_EVENT) {
             this.rememberSessionSnapshot(state);
             if (state?.profileId && !this.closing && !this.deletingProfiles.has(state.profileId)) {
-                if (['connected', 'connecting', 'reconnecting'].includes(state.status)) {
+                if (state.status === 'connected' && !this.pendingProfileConnections.has(String(state.profileId))) {
                     this.activeProfileId = state.profileId;
                     this.yangApp?.setActiveProfileId?.(state.profileId);
                 } else if (
@@ -577,7 +632,12 @@ class NetconfApp {
             rememberCredentials: Boolean(input.rememberCredentials ?? existing?.rememberCredentials),
             autoReconnect: Boolean(input.autoReconnect ?? existing?.autoReconnect),
             connectTimeout: number(input.connectTimeout, existing?.connectTimeout || 15000, 1000, 120000),
-            rpcTimeout: number(input.rpcTimeout, existing?.rpcTimeout || 30000, 1000, 300000),
+            rpcTimeout: number(
+                input.rpcTimeout,
+                existing?.rpcTimeout || DEFAULT_NETCONF_PROFILE.rpcTimeout,
+                1000,
+                300000
+            ),
             keepaliveInterval: number(input.keepaliveInterval, existing?.keepaliveInterval || 30000, 0, 300000),
             keepaliveCountMax: number(input.keepaliveCountMax, existing?.keepaliveCountMax || 3, 1, 20)
         };
@@ -744,6 +804,7 @@ class NetconfApp {
     }
 
     async handleConnect(event, profileOrId) {
+        let pendingProfileId = '';
         try {
             const requestedId =
                 profileOrId && typeof profileOrId === 'object' ? profileOrId.id : profileOrId || this.activeProfileId;
@@ -751,6 +812,8 @@ class NetconfApp {
             const runtime = this.resolveRuntimeProfile(profileOrId);
             const generation = this.assertProfileAvailable(runtime.id, requestedGeneration);
             this.profileRpcTimeouts.set(runtime.id, runtime.rpcTimeout);
+            pendingProfileId = String(runtime.id);
+            this.pendingProfileConnections.add(pendingProfileId);
             const client = this.ensureWorker(event);
             const result = await client.sendRequest(NETCONF_REQ_TYPES.CONNECT, runtime, {
                 timeoutMs: runtime.connectTimeout + runtime.rpcTimeout + 5000
@@ -774,6 +837,8 @@ class NetconfApp {
         } catch (error) {
             logger.error('NETCONF连接失败:', error.message);
             return errorResponse('NETCONF连接失败: ' + error.message, { code: error.code, details: error.data });
+        } finally {
+            if (pendingProfileId) this.pendingProfileConnections.delete(pendingProfileId);
         }
     }
 
@@ -1234,14 +1299,16 @@ class NetconfApp {
     }
 
     async handleExecuteOperation(event, request = {}) {
+        let activeOperation = null;
         try {
             const profileId = this.resolveProfileId(request);
             const generation = this.assertProfileAvailable(profileId);
+            activeOperation = this.registerRpcOperation(event, request, profileId);
             const timeoutMs = this.operationWorkerTimeoutMs(profileId, request.timeout);
             const result = await this.ensureWorker(event).sendRequest(
                 NETCONF_REQ_TYPES.EXECUTE_OPERATION,
                 { ...request, profileId },
-                { timeoutMs }
+                { timeoutMs, signal: activeOperation?.controller.signal }
             );
             this.assertProfileAvailable(profileId, generation);
             return successResponse(await this.externalizeRpcPayload(result.data), 'NETCONF操作完成');
@@ -1255,18 +1322,22 @@ class NetconfApp {
                 if (details && typeof details === 'object') delete details.replyXml;
             }
             return errorResponse('NETCONF操作失败: ' + error.message, { code: error.code, details });
+        } finally {
+            this.finishRpcOperation(activeOperation);
         }
     }
 
     async handleSendRpc(event, request = {}) {
+        let activeOperation = null;
         try {
             const profileId = this.resolveProfileId(request);
             const generation = this.assertProfileAvailable(profileId);
+            activeOperation = this.registerRpcOperation(event, request, profileId);
             const timeoutMs = this.operationWorkerTimeoutMs(profileId, request.timeout);
             const result = await this.ensureWorker(event).sendRequest(
                 NETCONF_REQ_TYPES.SEND_RPC,
                 { ...request, profileId },
-                { timeoutMs }
+                { timeoutMs, signal: activeOperation?.controller.signal }
             );
             this.assertProfileAvailable(profileId, generation);
             return successResponse(await this.externalizeRpcPayload(result.data), 'NETCONF RPC完成');
@@ -1280,6 +1351,34 @@ class NetconfApp {
                 if (details && typeof details === 'object') delete details.replyXml;
             }
             return errorResponse('NETCONF RPC失败: ' + error.message, { code: error.code, details });
+        } finally {
+            this.finishRpcOperation(activeOperation);
+        }
+    }
+
+    async handleCancelOperation(event, request = {}) {
+        try {
+            const operationId = String(request?.operationId || '').trim();
+            const key = this.rpcOperationKey(event, operationId);
+            const operation = key ? this.activeRpcOperations.get(key) : null;
+            if (!operation) {
+                const error = new Error('NETCONF RPC 已结束或不存在');
+                error.code = 'NETCONF_RPC_NOT_PENDING';
+                throw error;
+            }
+            const profileId = String(request?.profileId || '');
+            if (profileId && profileId !== operation.profileId) {
+                const error = new Error('NETCONF RPC 与目标 Profile 不匹配');
+                error.code = 'NETCONF_RPC_CANCEL_PROFILE_MISMATCH';
+                throw error;
+            }
+            operation.controller.abort();
+            return successResponse(
+                { operationId: operation.operationId, profileId: operation.profileId, cancelled: true },
+                'NETCONF RPC 本地等待已终止'
+            );
+        } catch (error) {
+            return errorResponse('终止 NETCONF RPC 失败: ' + error.message, { code: error.code });
         }
     }
 
@@ -1309,6 +1408,8 @@ class NetconfApp {
         if (this.closePromise) return this.closePromise;
         const closePromise = (async () => {
             this.closing = true;
+            for (const operation of this.activeRpcOperations.values()) operation.controller.abort();
+            this.activeRpcOperations.clear();
             const pendingTasks = [];
             for (const task of this.taskManager.tasks.values()) {
                 if (task.status !== 'running') continue;
@@ -1333,6 +1434,8 @@ class NetconfApp {
             this.activeProfileId = null;
             this.yangApp?.setActiveProfileId?.(null);
             this.deletingProfiles.clear();
+            this.pendingProfileConnections.clear();
+            this.activeRpcOperations.clear();
             this.profileDeletionPromises.clear();
             this.eventDispatcher.cleanup();
         })();

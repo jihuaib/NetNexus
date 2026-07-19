@@ -176,6 +176,18 @@ function configPayloadNodes(operation) {
     return [];
 }
 
+function nodeNamespaces(nodes) {
+    const namespaces = new Set();
+    const queue = Array.isArray(nodes) ? [...nodes] : [];
+    while (queue.length) {
+        const node = queue.shift();
+        if (!node) continue;
+        if (node.namespace && node.namespace !== NETCONF_BASE_NAMESPACE) namespaces.add(node.namespace);
+        queue.push(...(node.children || []));
+    }
+    return [...namespaces];
+}
+
 function resolveRpcValidationTarget(value) {
     const text = String(value || '');
     const scanned = scanXmlElements(text);
@@ -207,6 +219,7 @@ function resolveRpcValidationTarget(value) {
                 operation: operation.localName,
                 validationType: 'edit',
                 nodes,
+                namespaces: nodeNamespaces(nodes),
                 skipped: false,
                 reason: ''
             };
@@ -216,6 +229,7 @@ function resolveRpcValidationTarget(value) {
                 operation: operation.localName,
                 validationType: 'rpc',
                 nodes: operation.children,
+                namespaces: nodeNamespaces(operation.children),
                 skipped: false,
                 reason: ''
             };
@@ -233,6 +247,7 @@ function resolveRpcValidationTarget(value) {
         operation: operation.localName,
         validationType: 'rpc',
         nodes: [operation],
+        namespaces: nodeNamespaces([operation]),
         skipped: false,
         reason: ''
     };

@@ -243,6 +243,7 @@
     const statusMeta = status => {
         if (status === 'success') return { color: 'success', label: '成功' };
         if (status === 'rpc-error') return { color: 'error', label: 'RPC 错误' };
+        if (status === 'cancelled') return { color: 'warning', label: '已终止' };
         if (status === 'failed') return { color: 'error', label: '执行失败' };
         return { color: 'blue', label: '执行中' };
     };

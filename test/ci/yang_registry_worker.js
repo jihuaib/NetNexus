@@ -164,7 +164,10 @@ async function run() {
         const deleted = await worker.sendRequest(YANG_REQ_TYPES.DELETE_WORKSPACE, {});
         assert.equal(deleted.data, true);
         assert.equal((await worker.sendRequest(YANG_REQ_TYPES.DELETE_WORKSPACE, {})).data, false);
-        assert.equal((await worker.sendRequest(YANG_REQ_TYPES.LIST_MODULES, { workspaceId: 'replica' })).data.length, 1);
+        assert.equal(
+            (await worker.sendRequest(YANG_REQ_TYPES.LIST_MODULES, { workspaceId: 'replica' })).data.length,
+            1
+        );
         assert.equal(
             (await worker.sendRequest(YANG_REQ_TYPES.DELETE_WORKSPACE, { workspaceId: 'replica' })).data,
             true

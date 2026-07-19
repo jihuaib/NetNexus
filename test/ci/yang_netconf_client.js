@@ -6,7 +6,9 @@ const {
     NetconfClient,
     NetconfRpcError,
     NetconfTimeoutError,
+    NetconfRpcCancelledError,
     NetconfConnectionError,
+    NetconfProtocolError,
     DelimiterFramer,
     ChunkedFramer,
     encodeDelimiter,
@@ -119,9 +121,7 @@ async function runClientTests() {
     });
     const largeRpc = decodeChunkedWrite(transport.writes[3]);
     const largeId = extractMessageId(largeRpc);
-    const largeData = Array.from({ length: 20_000 }, (_value, index) => `<item><name>${index}</name></item>`).join(
-        ''
-    );
+    const largeData = Array.from({ length: 20_000 }, (_value, index) => `<item><name>${index}</name></item>`).join('');
     const largeReplyXml =
         `<nc:rpc-reply xmlns:nc="${BASE_10}" message-id="${largeId}">` +
         `<nc:data>${largeData}</nc:data>` +
@@ -223,6 +223,112 @@ async function runVersion10Test() {
     client.disconnect();
 }
 
+async function runRpcCancellationTest() {
+    const transport = new FakeTransport();
+    const client = new NetconfClient({
+        transport,
+        rpcTimeout: 100,
+        helloTimeout: 100,
+        initialMessageId: 12
+    });
+    const orphanReplies = [];
+    client.on('orphan-reply', reply => orphanReplies.push(reply));
+
+    const connected = client.connect();
+    transport.receive(encodeDelimiter(serverHello([BASE_10, BASE_11], 'cancel-test')));
+    await connected;
+
+    const cancelledMessageId = client.reserveMessageId();
+    assert.equal(cancelledMessageId, 12);
+    assert.equal(typeof cancelledMessageId, 'number');
+    const cancelledPromise = client.rpc('<get><filter type="subtree"><cancelled/></filter></get>', {
+        messageId: cancelledMessageId
+    });
+    const survivingPromise = client.rpc('<get><filter type="subtree"><surviving/></filter></get>');
+    const cancelledRequest = decodeChunkedWrite(transport.writes[1]);
+    const survivingRequest = decodeChunkedWrite(transport.writes[2]);
+    assert.equal(extractMessageId(cancelledRequest), '12');
+    assert.equal(extractMessageId(survivingRequest), '13');
+    const timedOutMessageId = client.reserveMessageId();
+    assert.equal(timedOutMessageId, 14);
+    assert.equal(client.pending.size, 2);
+
+    assert.equal(client.cancelRpc(cancelledMessageId), true);
+    assert.equal(client.pending.size, 1);
+    assert.equal(client.connected, true);
+    assert.equal(transport.ended, false);
+    assert.equal(transport.destroyed, false);
+    await assert.rejects(
+        cancelledPromise,
+        error =>
+            error instanceof NetconfRpcCancelledError &&
+            error.code === 'NETCONF_RPC_CANCELLED' &&
+            error.messageId === '12' &&
+            error.requestXml === cancelledRequest
+    );
+
+    const writesBeforeRetiredReuse = transport.writes.length;
+    await assert.rejects(
+        client.rpc('<get><filter type="subtree"><too-early/></filter></get>', {
+            messageId: cancelledMessageId
+        }),
+        error => error instanceof NetconfProtocolError && error.code === 'NETCONF_RETIRED_MESSAGE_ID'
+    );
+    assert.equal(transport.writes.length, writesBeforeRetiredReuse);
+
+    transport.receive(
+        Buffer.concat([
+            encodeChunked('<rpc-reply message-id="12"><ok/></rpc-reply>'),
+            encodeChunked('<rpc-reply message-id="13"><ok/></rpc-reply>')
+        ])
+    );
+    const survivingReply = await survivingPromise;
+    assert.equal(survivingReply.ok, true);
+    assert.equal(survivingReply.messageId, '13');
+    assert.equal(orphanReplies.length, 1);
+    assert.equal(orphanReplies[0].messageId, '12');
+    assert.equal(client.pending.size, 0);
+    assert.equal(client.connected, true);
+    assert.equal(client.cancelRpc(cancelledMessageId), false);
+
+    const reusedPromise = client.rpc('<get><filter type="subtree"><reused/></filter></get>', {
+        messageId: cancelledMessageId
+    });
+    assert.equal(extractMessageId(decodeChunkedWrite(transport.writes[3])), '12');
+    transport.receive(encodeChunked('<rpc-reply message-id="12"><ok/></rpc-reply>'));
+    assert.equal((await reusedPromise).messageId, '12');
+
+    const timedOutPromise = client.rpc('<get><filter type="subtree"><timed-out/></filter></get>', {
+        messageId: timedOutMessageId,
+        timeout: 10
+    });
+    await assert.rejects(
+        timedOutPromise,
+        error => error instanceof NetconfTimeoutError && error.code === 'NETCONF_RPC_TIMEOUT'
+    );
+    await assert.rejects(
+        client.rpc('<get><filter type="subtree"><timeout-reuse/></filter></get>', {
+            messageId: timedOutMessageId
+        }),
+        error => error instanceof NetconfProtocolError && error.code === 'NETCONF_RETIRED_MESSAGE_ID'
+    );
+
+    client.disconnect();
+
+    const reconnectTransport = new FakeTransport();
+    const reconnected = client.connect(reconnectTransport);
+    reconnectTransport.receive(encodeDelimiter(serverHello([BASE_10, BASE_11], 'reconnected')));
+    await reconnected;
+    const reusedAfterReconnect = client.rpc('<get><filter type="subtree"><new-session/></filter></get>', {
+        messageId: timedOutMessageId
+    });
+    assert.equal(extractMessageId(decodeChunkedWrite(reconnectTransport.writes[1])), '14');
+    reconnectTransport.receive(encodeChunked('<rpc-reply message-id="14"><ok/></rpc-reply>'));
+    assert.equal((await reusedAfterReconnect).messageId, '14');
+    assert.equal(client.connected, true);
+    client.disconnect();
+}
+
 async function runHelloTimeoutTest() {
     const transport = new FakeTransport();
     const client = new NetconfClient({ transport, helloTimeout: 15 });
@@ -297,6 +403,7 @@ async function runSshInjectionTest() {
 async function run() {
     await runClientTests();
     await runVersion10Test();
+    await runRpcCancellationTest();
     await runHelloTimeoutTest();
     await runSshInjectionTest();
     console.log('YANG NETCONF client and SSH transport tests passed');

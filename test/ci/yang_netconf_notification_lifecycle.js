@@ -42,6 +42,46 @@ const profile = {
 };
 
 async function main() {
+    const activationApp = new NetconfApp(new FakeIpcMain(), new MemoryStore(), {
+        yangApp: { setActiveProfileId() {} }
+    });
+    activationApp.relayWorkerEvent(YANG_EVT_TYPES.SESSION_EVENT, {
+        profileId: 'pending-router',
+        status: 'connecting',
+        connected: false
+    });
+    assert.equal(activationApp.activeProfileId, null);
+    activationApp.relayWorkerEvent(YANG_EVT_TYPES.SESSION_EVENT, {
+        profileId: 'pending-router',
+        status: 'reconnecting',
+        connected: false
+    });
+    assert.equal(activationApp.activeProfileId, null);
+    activationApp.pendingProfileConnections.add('pending-router');
+    activationApp.relayWorkerEvent(YANG_EVT_TYPES.SESSION_EVENT, {
+        profileId: 'pending-router',
+        status: 'connected',
+        connected: true
+    });
+    assert.equal(activationApp.activeProfileId, null);
+    activationApp.pendingProfileConnections.delete('pending-router');
+    activationApp.relayWorkerEvent(YANG_EVT_TYPES.SESSION_EVENT, {
+        profileId: profile.id,
+        status: 'connected',
+        connected: true
+    });
+    activationApp.relayWorkerEvent(YANG_EVT_TYPES.SESSION_EVENT, {
+        profileId: 'replacement-router',
+        status: 'connected',
+        connected: true
+    });
+    activationApp.relayWorkerEvent(YANG_EVT_TYPES.SESSION_EVENT, {
+        profileId: profile.id,
+        status: 'disconnected',
+        connected: false
+    });
+    assert.equal(activationApp.activeProfileId, 'replacement-router');
+
     const app = new NetconfApp(new FakeIpcMain(), new MemoryStore(), {
         yangApp: { setActiveProfileId() {} }
     });
@@ -49,6 +89,7 @@ async function main() {
     const sent = [];
     const event = {
         sender: {
+            id: 77,
             isDestroyed: () => false,
             send: (channel, payload) => sent.push({ channel, payload })
         }
@@ -126,6 +167,62 @@ async function main() {
     assert.equal(rpcResult.status, 'success');
     assert.equal(calls[1].operation, NETCONF_REQ_TYPES.SEND_RPC);
     assert.equal(calls[1].options.timeoutMs, 185000);
+
+    let pendingRpcSignal = null;
+    app.workerClient = {
+        sendRequest(operation, data, options) {
+            calls.push({ operation, data, options });
+            pendingRpcSignal = options.signal;
+            return new Promise((_resolve, reject) => {
+                options.signal.addEventListener(
+                    'abort',
+                    () => {
+                        const error = new Error(`Worker request cancelled: ${operation}`);
+                        error.code = 'WORKER_CANCELLED';
+                        reject(error);
+                    },
+                    { once: true }
+                );
+            });
+        }
+    };
+    const cancellableOperation = app.handleExecuteOperation(event, {
+        profileId: profile.id,
+        operation: 'get',
+        operationId: 'renderer-operation-1'
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pendingRpcSignal.aborted, false);
+    assert.equal(app.activeRpcOperations.size, 1);
+
+    const wrongProfileCancellation = await app.handleCancelOperation(event, {
+        profileId: 'different-router',
+        operationId: 'renderer-operation-1'
+    });
+    assert.equal(wrongProfileCancellation.status, 'error');
+    assert.equal(wrongProfileCancellation.data.code, 'NETCONF_RPC_CANCEL_PROFILE_MISMATCH');
+    assert.equal(pendingRpcSignal.aborted, false);
+
+    const missingCancellation = await app.handleCancelOperation(event, {
+        profileId: profile.id,
+        operationId: 'missing-operation'
+    });
+    assert.equal(missingCancellation.status, 'error');
+    assert.equal(missingCancellation.data.code, 'NETCONF_RPC_NOT_PENDING');
+    assert.equal(pendingRpcSignal.aborted, false);
+
+    const acceptedCancellation = await app.handleCancelOperation(event, {
+        profileId: profile.id,
+        operationId: 'renderer-operation-1'
+    });
+    assert.equal(acceptedCancellation.status, 'success');
+    assert.equal(acceptedCancellation.data.cancelled, true);
+    assert.equal(pendingRpcSignal.aborted, true);
+    const cancelledOperation = await cancellableOperation;
+    assert.equal(cancelledOperation.status, 'error');
+    assert.equal(cancelledOperation.data.code, 'WORKER_CANCELLED');
+    assert.equal(app.activeRpcOperations.size, 0);
+    assert.equal(app.activeProfileId, profile.id, 'local RPC cancellation must keep the active Session selected');
 
     const workerEntry = {
         profileId: profile.id,

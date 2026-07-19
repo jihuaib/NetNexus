@@ -280,6 +280,7 @@ contextBridge.exposeInMainWorld('netconfApi', {
     downloadModules: request => ipcRenderer.invoke('netconf:downloadModules', request),
     executeOperation: request => ipcRenderer.invoke('netconf:executeOperation', request),
     sendRpc: request => ipcRenderer.invoke('netconf:sendRpc', request),
+    cancelOperation: request => ipcRenderer.invoke('netconf:cancelOperation', request),
     saveRpcReply: request => ipcRenderer.invoke('netconf:saveRpcReply', request)
 });
 

@@ -3,10 +3,7 @@
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const NetconfWorkerService = require('../../electron/worker/yang/netconfWorker');
-const {
-    SUBSCRIBED_NOTIFICATIONS_NAMESPACE,
-    YANG_PUSH_NAMESPACE
-} = require('../../electron/utils/netconf');
+const { SUBSCRIBED_NOTIFICATIONS_NAMESPACE, YANG_PUSH_NAMESPACE } = require('../../electron/utils/netconf');
 const { YANG_EVT_TYPES } = require('../../electron/const/yangConst');
 
 const BASE_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:base:1.0';
@@ -183,12 +180,20 @@ async function raceAndAssociationTests() {
     const unknownIdEvent = [...strictPort.messages]
         .reverse()
         .find(message => message.eventName === YANG_EVT_TYPES.NOTIFICATION)?.data;
-    assert.equal(unknownIdEvent.subscriptionId, null, 'an explicit unknown publisher id must not use sole-live fallback');
+    assert.equal(
+        unknownIdEvent.subscriptionId,
+        null,
+        'an explicit unknown publisher id must not use sole-live fallback'
+    );
     emitNotification(
         strictClient,
         `<subscription-terminated xmlns="${SUBSCRIBED_NOTIFICATIONS_NAMESPACE}"><reason>no-such-subscription</reason></subscription-terminated>`
     );
-    assert.equal(strictService.subscriptions.get(strictLocalId).state, 'ACTIVE', 'a malformed lifecycle event has no id');
+    assert.equal(
+        strictService.subscriptions.get(strictLocalId).state,
+        'ACTIVE',
+        'a malformed lifecycle event has no id'
+    );
 }
 
 async function timeoutAndOwnershipTests() {

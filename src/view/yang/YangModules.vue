@@ -13,13 +13,11 @@
             </template>
 
             <div class="module-toolbar">
-                <div class="module-profile-row" data-testid="yang-modules-profile-row">
-                    <YangProfileField
-                        :value="selectedProfileId"
-                        :options="profileOptions"
+                <div class="module-toolbar-row" data-testid="yang-modules-toolbar">
+                    <YangCurrentProfile
+                        :profile="selectedProfile"
                         :loading="profilesLoading"
-                        test-id="yang-modules-profile-select"
-                        @update:value="selectProfile"
+                        test-id="yang-modules-current-profile"
                     />
                     <div class="module-actions" data-testid="yang-modules-actions">
                         <nn-tooltip :title="connected ? '' : '请先在连接设置中建立 NETCONF 会话'">
@@ -85,7 +83,7 @@
                     :disabled="filteredModules.length === 0"
                     @change="toggleAllVisible"
                 >
-                    选择当前筛选结果
+                    选择全部筛选结果
                 </nn-checkbox>
                 <div class="selection-filters" data-testid="yang-modules-selection-filters">
                     <div class="selection-search">
@@ -119,16 +117,17 @@
                     :columns="columns"
                     :data-source="filteredModules"
                     :loading="loading"
-                    :pagination="false"
-                    :scroll="{ x: 990, y: '100%' }"
+                    :pagination="modulePagination"
+                    :scroll="MODULE_TABLE_SCROLL"
                     row-key="_key"
                     size="small"
                     class="module-table"
+                    @change="handleModuleTableChange"
                 >
                     <template #bodyCell="{ column, record }">
                         <template v-if="column.key === 'selection'">
                             <nn-checkbox
-                                :checked="selectedKeys.includes(record._key)"
+                                :checked="selectedKeySet.has(record._key)"
                                 :disabled="record.status === 'downloading' || record.status === 'compiling'"
                                 @change="event => toggleModule(record, event.target.checked)"
                             />
@@ -211,10 +210,13 @@
                         </div>
                         <div class="compile-log-actions">
                             <nn-segmented
-                                v-if="compileContext.compileId"
+                                v-if="hasCompileLogContent"
                                 v-model:value="diagnosticFilter"
                                 :options="diagnosticFilterOptions"
                             />
+                            <span v-if="compileProgressText" class="compile-log-progress" role="status">
+                                {{ compileProgressText }}
+                            </span>
                             <span v-if="compileContext.compileId" class="compile-log-summary">
                                 错误 {{ diagnosticErrorCount }} · 警告 {{ diagnosticWarningCount }}
                             </span>
@@ -227,15 +229,13 @@
 
                     <div class="compile-log-list">
                         <nn-spin :spinning="diagnosticLoading">
-                            <nn-empty
-                                v-if="!compileContext.compileId"
-                                description="执行“编译所选”后在这里查看编译日志"
-                            />
+                            <nn-empty v-if="!hasCompileLogContent" description="执行“编译所选”后在这里查看编译日志" />
                             <template v-else>
                                 <div
-                                    v-for="(diagnostic, index) in filteredDiagnostics"
+                                    v-for="(diagnostic, index) in visibleDiagnostics"
                                     :key="diagnostic.id || `${diagnostic.file || ''}:${diagnostic.line || 0}:${index}`"
                                     class="compile-log-row"
+                                    :data-log-id="diagnostic.id || undefined"
                                 >
                                     <nn-tag :color="diagnosticColor(diagnostic.severity)">
                                         {{ diagnosticLabel(diagnostic.severity) }}
@@ -252,12 +252,35 @@
                                         </span>
                                     </span>
                                 </div>
-                                <nn-empty
-                                    v-if="filteredDiagnostics.length === 0"
-                                    description="当前筛选下没有编译日志"
-                                />
+                                <nn-empty v-if="visibleDiagnostics.length === 0" description="当前筛选下没有编译日志" />
                             </template>
                         </nn-spin>
+                    </div>
+                    <div
+                        v-if="compileLogPageCount > 1"
+                        class="compile-log-pagination"
+                        data-testid="yang-compile-log-pagination"
+                    >
+                        <span>
+                            {{ compileLogPageStart }}–{{ compileLogPageEnd }} / 共 {{ filteredDiagnostics.length }} 条
+                        </span>
+                        <nn-button
+                            size="small"
+                            :disabled="compileLogPage <= 1"
+                            aria-label="编译日志上一页"
+                            @click="changeCompileLogPage(compileLogPage - 1)"
+                        >
+                            ‹
+                        </nn-button>
+                        <span>第 {{ compileLogPage }} / {{ compileLogPageCount }} 页</span>
+                        <nn-button
+                            size="small"
+                            :disabled="compileLogPage >= compileLogPageCount"
+                            aria-label="编译日志下一页"
+                            @click="changeCompileLogPage(compileLogPage + 1)"
+                        >
+                            ›
+                        </nn-button>
                     </div>
                 </section>
             </div>
@@ -322,7 +345,7 @@
                         :disabled="deviceSelectableVisibleModules.length === 0 || downloading"
                         @change="toggleAllVisibleDeviceModules"
                     >
-                        选择当前结果中未下载的模型
+                        选择全部筛选结果中未下载的模型
                     </nn-checkbox>
                     <span>
                         显示 {{ filteredDeviceModules.length }}，选择 {{ selectedDeviceModules.length }} 个根模型
@@ -333,16 +356,17 @@
                     :columns="deviceModuleColumns"
                     :data-source="filteredDeviceModules"
                     :loading="discovering"
-                    :pagination="false"
+                    :pagination="deviceModulePagination"
                     :scroll="{ x: 860, y: 'min(48vh, 430px)' }"
                     row-key="_key"
                     size="small"
                     class="device-module-table"
+                    @change="handleDeviceModuleTableChange"
                 >
                     <template #bodyCell="{ column, record }">
                         <template v-if="column.key === 'selection'">
                             <nn-checkbox
-                                :checked="deviceSelectedKeys.includes(record._key)"
+                                :checked="deviceSelectedKeySet.has(record._key)"
                                 :disabled="!canDownloadDeviceModule(record) || downloading"
                                 :aria-label="`选择设备模型 ${record.name}`"
                                 @change="event => toggleDeviceModule(record, event.target.checked)"
@@ -413,7 +437,7 @@
 </template>
 
 <script setup>
-    import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
+    import { computed, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
     import {
         NETCONF_SESSION_STATUS,
         YANG_EVENT,
@@ -431,7 +455,7 @@
         ReloadOutlined,
         SearchOutlined
     } from '../../ui/icons';
-    import YangProfileField from './YangProfileField.vue';
+    import YangCurrentProfile from './YangCurrentProfile.vue';
     import { usePaneResize } from './usePaneResize';
     import { useYangCompilerStatus } from './yangCompilerStatus';
     import { useYangProfileContext } from './useYangProfileContext';
@@ -470,15 +494,38 @@
         { label: '已编译', value: 'compiled' },
         { label: '异常', value: 'problem' }
     ];
+    const MODULE_TABLE_PAGE_SIZE = 50;
+    const MODULE_TABLE_SCROLL = Object.freeze({ x: 990, y: '100%' });
+    const COMPILE_LOG_PAGE_SIZE = 100;
+    const COMPILE_PHASE_LABELS = Object.freeze({
+        queued: '编译任务已排队',
+        preparing: '正在准备编译',
+        runtime: '正在检查 libyang 运行时',
+        parsing: '正在解析 YANG 文件',
+        dependencies: '正在解析依赖关系',
+        external: '正在生成有效 Schema',
+        schema: '有效 Schema 已生成',
+        'file-validation': '正在确认逐文件编译结果',
+        'file-result': '正在更新逐文件编译结果',
+        'partial-schema': '正在生成部分有效 Schema',
+        caching: '正在保存编译缓存',
+        completed: 'YANG 编译完成',
+        failed: 'YANG 编译失败',
+        cancelled: 'YANG 编译已取消'
+    });
 
     const modules = ref([]);
     const selectedKeys = ref([]);
     const query = ref('');
     const statusFilter = ref('all');
+    const modulePage = ref(1);
+    const modulePageSize = ref(MODULE_TABLE_PAGE_SIZE);
     const deviceModuleModalOpen = ref(false);
     const deviceModules = ref([]);
     const deviceSelectedKeys = ref([]);
     const deviceModuleQuery = ref('');
+    const deviceModulePage = ref(1);
+    const deviceModulePageSize = ref(50);
     const deviceModuleError = ref('');
     const deviceDownloadFailures = ref([]);
     const deviceDownloadTerminalHandled = ref(false);
@@ -497,6 +544,8 @@
     const diagnosticLoading = ref(false);
     const diagnostics = ref([]);
     const diagnosticFilter = ref('all');
+    const liveCompileLogs = ref([]);
+    const compileLogPage = ref(1);
     const compileContext = ref({ compileId: '', success: null, compiledAt: null, summary: {}, modules: [] });
     const moduleResultsRef = ref(null);
     const {
@@ -515,15 +564,21 @@
         defaultRatio: 0.32,
         minFirst: 140,
         minSecond: 220,
-        dividerSize: 8
+        dividerSize: 8,
+        frameSynchronized: true,
+        previewStyleProperty: '--compile-log-preview-height'
     });
     let diagnosticRequestRevision = 0;
     let compileContextRequestRevision = 0;
     let sourceRequestRevision = 0;
     let profileRequestRevision = 0;
     let profileContextReady = false;
+    let liveCompileLogFrame = 0;
+    let liveCompileTaskId = '';
+    let pendingCompileProgress = null;
+    const pendingLiveCompileLogs = new Map();
     const { compilerAvailable, refreshCompilerStatus } = useYangCompilerStatus();
-    const { profilesLoading, selectedProfileId, profileOptions, refreshProfiles, selectProfile, taskMatchesProfile } =
+    const { profilesLoading, selectedProfileId, selectedProfile, refreshProfiles, taskMatchesProfile } =
         useYangProfileContext();
     const profileRequestMatches = (profileId, requestRevision) =>
         requestRevision === profileRequestRevision && profileId === selectedProfileId.value;
@@ -628,6 +683,20 @@
             return matchesSearch && matchesStatus;
         });
     });
+    const modulePageCount = computed(() => Math.max(1, Math.ceil(filteredModules.value.length / modulePageSize.value)));
+    const modulePagination = computed(() =>
+        filteredModules.value.length > modulePageSize.value
+            ? {
+                  current: modulePage.value,
+                  pageSize: modulePageSize.value,
+                  showSizeChanger: true,
+                  pageSizeOptions: [25, 50, 100],
+                  showQuickJumper: true,
+                  position: ['bottomCenter'],
+                  showTotal: total => `共 ${total} 个模型`
+              }
+            : false
+    );
     const isYangDeviceModule = module => String(module?.format || 'yang').toLowerCase() === 'yang';
     const isDeviceModuleLocal = module =>
         modules.value.some(
@@ -648,16 +717,29 @@
             )
         );
     });
+    const deviceSelectedKeySet = computed(() => new Set(deviceSelectedKeys.value));
     const deviceSelectableVisibleModules = computed(() => filteredDeviceModules.value.filter(canDownloadDeviceModule));
     const selectedDeviceModules = computed(() =>
         deviceModules.value.filter(
-            module => deviceSelectedKeys.value.includes(module._key) && canDownloadDeviceModule(module)
+            module => deviceSelectedKeySet.value.has(module._key) && canDownloadDeviceModule(module)
         )
     );
     const allVisibleDeviceModulesSelected = computed(
         () =>
             deviceSelectableVisibleModules.value.length > 0 &&
-            deviceSelectableVisibleModules.value.every(module => deviceSelectedKeys.value.includes(module._key))
+            deviceSelectableVisibleModules.value.every(module => deviceSelectedKeySet.value.has(module._key))
+    );
+    const deviceModulePagination = computed(() =>
+        filteredDeviceModules.value.length > deviceModulePageSize.value
+            ? {
+                  current: deviceModulePage.value,
+                  pageSize: deviceModulePageSize.value,
+                  showSizeChanger: true,
+                  pageSizeOptions: [25, 50, 100],
+                  showQuickJumper: true,
+                  position: ['bottomCenter']
+              }
+            : false
     );
     const deviceLocalCount = computed(() => deviceModules.value.filter(isDeviceModuleLocal).length);
     const deviceDownloadFailureText = computed(() =>
@@ -673,16 +755,16 @@
         const count = Number(progress.total || 0) ? `${Number(progress.completed || 0)}/${Number(progress.total)}` : '';
         return [progress.module || progress.message || '正在下载模型及其依赖', count].filter(Boolean).join(' · ');
     });
+    const selectedKeySet = computed(() => new Set(selectedKeys.value));
     const allVisibleSelected = computed(
         () =>
             filteredModules.value.length > 0 &&
-            filteredModules.value.every(module => selectedKeys.value.includes(module._key))
+            filteredModules.value.every(module => selectedKeySet.value.has(module._key))
     );
     const someVisibleSelected = computed(
-        () =>
-            !allVisibleSelected.value && filteredModules.value.some(module => selectedKeys.value.includes(module._key))
+        () => !allVisibleSelected.value && filteredModules.value.some(module => selectedKeySet.value.has(module._key))
     );
-    const selectedModules = computed(() => modules.value.filter(module => selectedKeys.value.includes(module._key)));
+    const selectedModules = computed(() => modules.value.filter(module => selectedKeySet.value.has(module._key)));
     const selectedLocalModules = computed(() => selectedModules.value.filter(module => module.isLocal && module.id));
     const localModuleCount = computed(() => modules.value.filter(module => module.isLocal).length);
     const failedModuleCount = computed(
@@ -694,6 +776,16 @@
     const diagnosticWarningCount = computed(
         () => diagnostics.value.filter(item => ['warning', 'warn'].includes(item.severity)).length
     );
+    const compileProgressText = computed(() => {
+        const progress = taskProgress.value;
+        if (!progress || progress.action !== 'compile' || !compiling.value) return '';
+        const completed = Number(progress.completed);
+        const total = Number(progress.total);
+        const count = Number.isFinite(completed) && Number.isFinite(total) && total > 0 ? `${completed}/${total}` : '';
+        const percent = Number(progress.percent);
+        const percentage = Number.isFinite(percent) ? `${Math.round(percent)}%` : '';
+        return [count, percentage].filter(Boolean).join(' · ');
+    });
     const compileFileLogs = computed(() =>
         (compileContext.value.modules || [])
             .filter(module => ['compiled', 'failed'].includes(module.compileStatus))
@@ -735,7 +827,7 @@
         compileLogHeight.value > 0 ? { '--compile-log-height': `${compileLogHeight.value}px` } : undefined
     );
     const filteredDiagnostics = computed(() => {
-        const compileLogs = [...compileFileLogs.value, ...diagnostics.value];
+        const compileLogs = [...liveCompileLogs.value, ...compileFileLogs.value, ...diagnostics.value];
         if (diagnosticFilter.value === 'all') return compileLogs;
         if (diagnosticFilter.value === 'error') {
             return compileLogs.filter(item => ['error', 'fatal'].includes(item.severity));
@@ -745,6 +837,23 @@
         }
         return compileLogs.filter(item => !['error', 'fatal', 'warning', 'warn'].includes(item.severity));
     });
+    const hasCompileLogContent = computed(
+        () => compiling.value || Boolean(compileContext.value.compileId) || liveCompileLogs.value.length > 0
+    );
+    const compileLogPageCount = computed(() =>
+        Math.max(1, Math.ceil(filteredDiagnostics.value.length / COMPILE_LOG_PAGE_SIZE))
+    );
+    const visibleDiagnostics = computed(() => {
+        const page = Math.min(compileLogPage.value, compileLogPageCount.value);
+        const offset = (page - 1) * COMPILE_LOG_PAGE_SIZE;
+        return filteredDiagnostics.value.slice(offset, offset + COMPILE_LOG_PAGE_SIZE);
+    });
+    const compileLogPageStart = computed(() =>
+        filteredDiagnostics.value.length ? (compileLogPage.value - 1) * COMPILE_LOG_PAGE_SIZE + 1 : 0
+    );
+    const compileLogPageEnd = computed(() =>
+        Math.min(filteredDiagnostics.value.length, compileLogPage.value * COMPILE_LOG_PAGE_SIZE)
+    );
     const compileDisabledReason = computed(() => {
         if (!selectedProfileId.value) return '请先选择连接 Profile';
         if (!compilerAvailable.value) return 'YANG 编译暂不可用，请在“设置 → 运行时诊断”中检查';
@@ -773,10 +882,22 @@
         if (!checked) selectedKeys.value = selectedKeys.value.filter(key => key !== module._key);
     };
 
+    const changeCompileLogPage = page => {
+        compileLogPage.value = Math.min(compileLogPageCount.value, Math.max(1, Number(page) || 1));
+    };
+
+    const handleModuleTableChange = pagination => {
+        modulePage.value = Number(pagination?.current) || 1;
+        modulePageSize.value = Number(pagination?.pageSize) || MODULE_TABLE_PAGE_SIZE;
+    };
+
     const toggleAllVisible = event => {
         const keys = filteredModules.value.map(module => module._key);
         if (event.target.checked) selectedKeys.value = [...new Set([...selectedKeys.value, ...keys])];
-        else selectedKeys.value = selectedKeys.value.filter(key => !keys.includes(key));
+        else {
+            const keySet = new Set(keys);
+            selectedKeys.value = selectedKeys.value.filter(key => !keySet.has(key));
+        }
     };
 
     const toggleDeviceModule = (module, checked) => {
@@ -790,7 +911,15 @@
     const toggleAllVisibleDeviceModules = event => {
         const keys = deviceSelectableVisibleModules.value.map(module => module._key);
         if (event.target.checked) deviceSelectedKeys.value = [...new Set([...deviceSelectedKeys.value, ...keys])];
-        else deviceSelectedKeys.value = deviceSelectedKeys.value.filter(key => !keys.includes(key));
+        else {
+            const keySet = new Set(keys);
+            deviceSelectedKeys.value = deviceSelectedKeys.value.filter(key => !keySet.has(key));
+        }
+    };
+
+    const handleDeviceModuleTableChange = pagination => {
+        deviceModulePage.value = Number(pagination?.current) || 1;
+        deviceModulePageSize.value = Number(pagination?.pageSize) || 50;
     };
 
     const deviceModuleFileName = module =>
@@ -974,6 +1103,7 @@
         if (!connected.value || !selectedProfileId.value) return;
         deviceModuleModalOpen.value = true;
         deviceModuleQuery.value = '';
+        deviceModulePage.value = 1;
         deviceSelectedKeys.value = [];
         deviceDownloadFailures.value = [];
         deviceModuleError.value = '';
@@ -990,6 +1120,7 @@
         const requestRevision = profileRequestRevision;
         if (!profileId) return;
         discovering.value = true;
+        deviceModulePage.value = 1;
         deviceModuleError.value = '';
         deviceDownloadFailures.value = [];
         deviceSelectedKeys.value = [];
@@ -1113,6 +1244,7 @@
         const requestRevision = profileRequestRevision;
         const targets = [...selectedLocalModules.value];
         compiling.value = true;
+        beginCompileLog(targets);
         targets.forEach(module => {
             module.compileStatus = 'compiling';
         });
@@ -1127,6 +1259,7 @@
                 compiling.value = false;
                 await Promise.all([loadModules(), loadDiagnostics({ quiet: true })]);
                 if (!profileRequestMatches(profileId, requestRevision)) return;
+                clearLiveCompileLogs();
                 notify.success(data?.cacheHit ? '编译完成（缓存命中）' : 'YANG 编译完成');
             }
         } catch (error) {
@@ -1138,6 +1271,7 @@
                 module.compileMessage = error.message;
             });
             compiling.value = false;
+            queueCompileProgressLog({ phase: 'failed', percent: 100, message: error.message });
             notify.error(`编译失败：${error.message}`);
         }
     };
@@ -1191,6 +1325,100 @@
         return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : String(value || '-');
     };
 
+    const flushLiveCompileLogs = () => {
+        liveCompileLogFrame = 0;
+        liveCompileLogs.value = [...pendingLiveCompileLogs.values()].reverse();
+        if (pendingCompileProgress) {
+            taskProgress.value = pendingCompileProgress;
+            pendingCompileProgress = null;
+        }
+    };
+
+    const scheduleLiveCompileLogFlush = () => {
+        if (liveCompileLogFrame) return;
+        liveCompileLogFrame = window.requestAnimationFrame(flushLiveCompileLogs);
+    };
+
+    const clearLiveCompileLogs = ({ keepTaskId = false } = {}) => {
+        if (liveCompileLogFrame) {
+            window.cancelAnimationFrame(liveCompileLogFrame);
+            liveCompileLogFrame = 0;
+        }
+        pendingLiveCompileLogs.clear();
+        pendingCompileProgress = null;
+        liveCompileLogs.value = [];
+        compileLogPage.value = 1;
+        if (!keepTaskId) liveCompileTaskId = '';
+    };
+
+    const compileProgressCountText = data => {
+        const completed = Number(data?.completed);
+        const total = Number(data?.total);
+        return Number.isFinite(completed) && Number.isFinite(total) && total > 0 ? `${completed}/${total}` : '';
+    };
+
+    const compileProgressPercentText = data => {
+        const percent = Number(data?.percent);
+        return Number.isFinite(percent) ? `${Math.round(percent)}%` : '';
+    };
+
+    const queueCompileProgressLog = data => {
+        const taskId = getTaskId(data);
+        if (taskId && liveCompileTaskId && taskId !== liveCompileTaskId) clearLiveCompileLogs();
+        if (taskId) liveCompileTaskId = taskId;
+
+        const phase = String(data?.phase || data?.status || 'preparing');
+        const countText = compileProgressCountText(data);
+        const percentText = compileProgressPercentText(data);
+        const phaseLabel = COMPILE_PHASE_LABELS[phase] || data?.message || '正在编译 YANG';
+        const phaseSeverity = phase === 'failed' ? 'error' : phase === 'completed' ? 'success' : 'info';
+        const phaseKey = `phase:${phase}`;
+        pendingLiveCompileLogs.delete(phaseKey);
+        pendingLiveCompileLogs.set(phaseKey, {
+            id: `compile-progress:${taskId || 'pending'}:${phaseKey}`,
+            severity: phaseSeverity,
+            progressKind: 'phase',
+            message: [phaseLabel, countText, percentText].filter(Boolean).join(' · ')
+        });
+
+        const currentFile = String(data?.currentFile || data?.fileName || '');
+        if (currentFile) {
+            let fileStatus = String(data?.fileStatus || '');
+            if (!fileStatus && phase === 'parsing') fileStatus = 'parsed';
+            if (!fileStatus && phase === 'file-validation') {
+                fileStatus = /fail|error/u.test(String(data?.message || '').toLowerCase()) ? 'failed' : 'compiled';
+            }
+            const fileName = fileBaseName(currentFile) || currentFile;
+            const fileIdentity = String(data?.currentHash || data?.hash || currentFile || data?.completed || fileName);
+            const fileKey = `file:${fileIdentity}`;
+            const failed = fileStatus === 'failed';
+            const compiled = fileStatus === 'compiled';
+            const actionLabel = compiled ? '编译成功' : failed ? '编译失败' : '解析完成';
+            pendingLiveCompileLogs.delete(fileKey);
+            pendingLiveCompileLogs.set(fileKey, {
+                id: `compile-progress:${taskId || 'pending'}:${fileKey}`,
+                severity: compiled ? 'success' : failed ? 'error' : 'info',
+                fileStatus,
+                file: currentFile,
+                fileName,
+                progressKind: 'file',
+                message: `${fileName} ${actionLabel}${countText ? ` · ${countText}` : ''}`
+            });
+        }
+        scheduleLiveCompileLogFlush();
+    };
+
+    const beginCompileLog = targets => {
+        clearLiveCompileLogs();
+        diagnosticFilter.value = 'all';
+        queueCompileProgressLog({
+            phase: 'queued',
+            completed: 0,
+            total: targets.length,
+            percent: 0
+        });
+    };
+
     const handleTaskProgress = payload => {
         if (payload?.status === 'error') return;
         const data = payload?.status === 'success' ? payload.data : payload?.data || payload;
@@ -1202,7 +1430,11 @@
             Object.entries(activeTasks.value).find(([_key, value]) => value && value === taskId)?.[0] ||
             actionFromPayload;
         if (!['discover', 'download', 'import', 'compile'].includes(action)) return;
-        taskProgress.value = { ...data, action };
+        if (action === 'compile') {
+            pendingCompileProgress = { ...data, action };
+            queueCompileProgressLog(data);
+            if (!isTaskTerminal(data.phase || data.status)) compiling.value = true;
+        } else taskProgress.value = { ...data, action };
         if (!isTaskTerminal(data.phase || data.status)) return;
 
         activeTasks.value[action] = '';
@@ -1234,10 +1466,16 @@
             notify.error(data.message || data.error?.message || 'YANG 任务失败');
         }
         if (action !== 'download') {
-            Promise.all([
+            const refresh = Promise.all([
                 loadModules(),
                 action === 'compile' ? loadDiagnostics({ quiet: true }) : loadCompileContext({ quiet: true })
             ]);
+            if (action === 'compile') {
+                const completedTaskId = taskId;
+                refresh.then(() => {
+                    if (!completedTaskId || liveCompileTaskId === completedTaskId) clearLiveCompileLogs();
+                });
+            }
         }
         window.setTimeout(() => {
             if (taskProgress.value && getTaskId(taskProgress.value) === taskId) taskProgress.value = null;
@@ -1246,9 +1484,17 @@
 
     const handleSessionEvent = payload => {
         const data = normalizeSessionEvent(payload);
-        if (data?.profileId && data.profileId !== selectedProfileId.value) return;
         const status = data?.status || data?.state;
-        connected.value = data?.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
+        const isConnected = data?.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
+        if (data?.profileId && data.profileId !== selectedProfileId.value) return;
+        connected.value = isConnected;
+    };
+
+    const handleProfileDataRefresh = payload => {
+        const profileId = String(payload?.profileId || '');
+        if (!profileId) return;
+        if (profileId !== selectedProfileId.value) return;
+        if (profileContextReady) void reloadCurrentProfile();
     };
 
     const resetProfileState = () => {
@@ -1258,13 +1504,16 @@
         sourceRequestRevision += 1;
         modules.value = [];
         selectedKeys.value = [];
+        modulePage.value = 1;
         deviceModules.value = [];
         deviceSelectedKeys.value = [];
         deviceModuleQuery.value = '';
+        deviceModulePage.value = 1;
         deviceModuleError.value = '';
         deviceDownloadFailures.value = [];
         deviceDownloadTerminalHandled.value = false;
         diagnostics.value = [];
+        clearLiveCompileLogs();
         compileContext.value = { compileId: '', success: null, compiledAt: null, summary: {}, modules: [] };
         connected.value = false;
         activeTasks.value = { discover: '', download: '', import: '', compile: '' };
@@ -1290,15 +1539,34 @@
         if (profileContextReady) reloadCurrentProfile();
     });
 
+    watch([query, statusFilter], () => {
+        modulePage.value = 1;
+    });
+
+    watch(modulePageCount, pageCount => {
+        if (modulePage.value > pageCount) modulePage.value = pageCount;
+    });
+
+    watch(deviceModuleQuery, () => {
+        deviceModulePage.value = 1;
+    });
+
+    watch(diagnosticFilter, () => {
+        compileLogPage.value = 1;
+    });
+
+    watch(compileLogPageCount, pageCount => {
+        if (compileLogPage.value > pageCount) compileLogPage.value = pageCount;
+    });
+
     onMounted(async () => {
         EventBus.on(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.MODULES, handleTaskProgress);
         EventBus.on(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.MODULES}-session`, handleSessionEvent);
-        await refreshProfiles();
-        profileContextReady = true;
-        await Promise.all([reloadCurrentProfile(), refreshCompilerStatus()]);
-    });
-
-    onActivated(async () => {
+        EventBus.on(
+            YANG_EVENT.PROFILE_DATA_REFRESH,
+            `${YANG_EVENT_PAGE_ID.MODULES}-profile-data`,
+            handleProfileDataRefresh
+        );
         await refreshProfiles();
         profileContextReady = true;
         await Promise.all([reloadCurrentProfile(), refreshCompilerStatus()]);
@@ -1316,8 +1584,10 @@
     });
 
     onBeforeUnmount(() => {
+        clearLiveCompileLogs();
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.MODULES);
         EventBus.off(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.MODULES}-session`);
+        EventBus.off(YANG_EVENT.PROFILE_DATA_REFRESH, `${YANG_EVENT_PAGE_ID.MODULES}-profile-data`);
     });
 </script>
 
@@ -1344,14 +1614,14 @@
         margin-bottom: 8px;
     }
 
-    .module-profile-row,
+    .module-toolbar-row,
     .module-actions {
         display: flex;
         align-items: center;
         gap: 6px;
     }
 
-    .module-profile-row {
+    .module-toolbar-row {
         min-width: 0;
         min-height: 32px;
         flex-wrap: wrap;
@@ -1435,7 +1705,9 @@
         display: grid;
         min-height: 0;
         flex: 1;
-        grid-template-rows: minmax(220px, 1fr) 8px var(--compile-log-height, 190px);
+        grid-template-rows:
+            minmax(220px, 1fr) 8px
+            var(--compile-log-preview-height, var(--compile-log-height, 190px));
         overflow: hidden;
     }
 
@@ -1468,6 +1740,12 @@
     .module-table :deep(.nn-table-content) {
         max-height: none !important;
         overflow: auto;
+    }
+
+    .module-results-resizing .module-table :deep(.nn-table-content),
+    .module-results-resizing .compile-log-list {
+        content-visibility: hidden;
+        pointer-events: none;
     }
 
     .module-name-cell {
@@ -1532,6 +1810,7 @@
         background: var(--nn-color-bg-muted);
         color: var(--nn-color-text-muted);
         font-size: 11px;
+        white-space: nowrap;
     }
 
     .device-module-table {
@@ -1596,6 +1875,7 @@
         border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
         background: var(--nn-color-bg-surface);
+        contain: layout paint;
     }
 
     .compile-log-header,
@@ -1636,7 +1916,8 @@
     }
 
     .compile-log-time,
-    .compile-log-summary {
+    .compile-log-summary,
+    .compile-log-progress {
         flex: none;
         color: var(--nn-color-text-muted);
         font-size: 11px;
@@ -1668,6 +1949,9 @@
         color: var(--nn-color-text);
         font-size: 12px;
         line-height: 18px;
+        content-visibility: auto;
+        contain: layout paint style;
+        contain-intrinsic-size: auto 29px;
     }
 
     .compile-log-row:last-child {
@@ -1697,6 +1981,26 @@
     .compile-log-context :deep(.nn-tag),
     .compile-log-row :deep(.nn-tag) {
         margin-inline-end: 0;
+    }
+
+    .compile-log-pagination {
+        display: flex;
+        min-height: 34px;
+        flex: none;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 3px 8px;
+        border-top: 1px solid var(--nn-color-border-light);
+        background: var(--nn-color-bg-muted);
+        color: var(--nn-color-text-muted);
+        font-size: 11px;
+        white-space: nowrap;
+    }
+
+    .compile-log-pagination :deep(.nn-button) {
+        min-width: 28px;
+        padding-inline: 7px;
     }
 
     .source-preview {
@@ -1752,12 +2056,12 @@
     }
 
     @media (max-width: 720px) {
-        .module-profile-row {
+        .module-toolbar-row {
             align-items: flex-start;
             flex-direction: column;
         }
 
-        .module-profile-row,
+        .module-toolbar-row,
         .module-actions {
             width: 100%;
         }

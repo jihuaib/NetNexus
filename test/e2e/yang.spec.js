@@ -129,8 +129,8 @@ async function moduleToolbarGeometry(page) {
         const find = selector => body.querySelector(selector);
         return {
             body: rect(body),
-            profileRow: rect(find('[data-testid="yang-modules-profile-row"]')),
-            profile: rect(find('[data-testid="yang-modules-profile-select-field"]')),
+            toolbar: rect(find('[data-testid="yang-modules-toolbar"]')),
+            currentProfile: rect(find('[data-testid="yang-modules-current-profile"]')),
             actions: rect(find('[data-testid="yang-modules-actions"]')),
             selectionRow: rect(find('.selection-row')),
             selectionCheckbox: rect(find('.selection-row .nn-checkbox-wrapper')),
@@ -139,7 +139,7 @@ async function moduleToolbarGeometry(page) {
             table: rect(find('.module-table')),
             compileLog: rect(find('[data-testid="yang-compile-log-panel"]')),
             controls: [
-                find('[data-testid="yang-modules-profile-select-field"]'),
+                find('[data-testid="yang-modules-current-profile"]'),
                 find('.module-refresh-action'),
                 find('.selection-row .selection-search'),
                 find('.selection-row .selection-status')
@@ -148,19 +148,6 @@ async function moduleToolbarGeometry(page) {
             pageHasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
         };
     });
-}
-
-async function relativeProfileGeometry(page, cardSelector, fieldTestId) {
-    return page.locator(`${cardSelector} > .nn-card-body`).evaluate((body, testId) => {
-        const bodyBounds = body.getBoundingClientRect();
-        const fieldBounds = body.querySelector(`[data-testid="${testId}"]`).getBoundingClientRect();
-        return {
-            x: fieldBounds.x - bodyBounds.x,
-            y: fieldBounds.y - bodyBounds.y,
-            width: fieldBounds.width,
-            height: fieldBounds.height
-        };
-    }, fieldTestId);
 }
 
 function expectSameGeometry(before, after) {
@@ -188,7 +175,14 @@ async function expectSelectableXmlTextarea(input) {
         const inputStyle = getComputedStyle(element);
         const selectedStyle = getComputedStyle(element, '::selection');
         const highlight = element.parentElement.querySelector('[data-xml-highlight-layer]');
+        const highlightContent = element.parentElement.querySelector('[data-xml-highlight-content]');
         const highlightStyle = getComputedStyle(highlight);
+        const highlightTransformValue = getComputedStyle(highlightContent).transform;
+        const highlightTransform =
+            highlightTransformValue === 'none'
+                ? new DOMMatrixReadOnly()
+                : new DOMMatrixReadOnly(highlightTransformValue);
+        const normalizeZero = value => (Object.is(value, -0) ? 0 : value);
         const canvas = document.createElement('canvas');
         canvas.width = 1;
         canvas.height = 1;
@@ -221,7 +215,11 @@ async function expectSelectableXmlTextarea(input) {
                 lineHeight: highlightStyle.lineHeight
             },
             inputScroll: { top: element.scrollTop, left: element.scrollLeft },
-            highlightScroll: { top: highlight.scrollTop, left: highlight.scrollLeft }
+            highlightTransform: {
+                top: normalizeZero(-highlightTransform.m42),
+                left: normalizeZero(-highlightTransform.m41)
+            },
+            highlightViewportScroll: { top: highlight.scrollTop, left: highlight.scrollLeft }
         };
     });
     expect(selectionStyle.userSelect).toBe('text');
@@ -231,7 +229,8 @@ async function expectSelectableXmlTextarea(input) {
     expect(['rgba(0, 0, 0, 0)', 'transparent']).toContain(selectionStyle.color);
     expect(['rgba(0, 0, 0, 0)', 'transparent']).toContain(selectionStyle.textFillColor);
     expect(selectionStyle.highlightMetrics).toEqual(selectionStyle.inputMetrics);
-    expect(selectionStyle.highlightScroll).toEqual(selectionStyle.inputScroll);
+    expect(selectionStyle.highlightTransform).toEqual(selectionStyle.inputScroll);
+    expect(selectionStyle.highlightViewportScroll).toEqual({ top: 0, left: 0 });
 }
 
 async function expectXmlTextareaLineNumbers(input) {
@@ -264,10 +263,198 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(settingsDialog.getByText(`libyang ${bundledLibyangVersion}`, { exact: false })).toBeVisible();
     });
 
-    test('isolates model and Schema workspaces when switching Profiles', async ({ page }) => {
-        const scopedCalls = [];
+    test('keeps hidden model tooltips off the global capture-scroll path at scale', async ({ page }) => {
+        test.setTimeout(60_000);
+
+        await page.addInitScript(() => {
+            const captureScrollListeners = new Set();
+            const originalAddEventListener = window.addEventListener;
+            const originalRemoveEventListener = window.removeEventListener;
+            const usesCapture = options => options === true || Boolean(options?.capture);
+
+            window.addEventListener = function addTrackedEventListener(type, listener, options) {
+                if (type === 'scroll' && usesCapture(options) && listener) {
+                    captureScrollListeners.add(listener);
+                }
+                return originalAddEventListener.call(this, type, listener, options);
+            };
+            window.removeEventListener = function removeTrackedEventListener(type, listener, options) {
+                if (type === 'scroll' && usesCapture(options) && listener) {
+                    captureScrollListeners.delete(listener);
+                }
+                return originalRemoveEventListener.call(this, type, listener, options);
+            };
+            window.__yangCaptureScrollListenerCount = () => captureScrollListeners.size;
+        });
+
+        const scaleModules = Array.from({ length: 1000 }, (_value, index) => ({
+            id: `scale-module-${index}@2026-07-19`,
+            moduleId: `scale-module-${index}@2026-07-19`,
+            name: `scale-module-${index}`,
+            revision: '2026-07-19',
+            namespace: `urn:netnexus:e2e:scale:${index}`,
+            conformanceType: 'implement',
+            features: [`feature-${index}`],
+            deviations: [],
+            imports: [],
+            isLocal: true,
+            source: 'file',
+            status: 'downloaded',
+            downloadStatus: 'downloaded',
+            fileName: `scale-module-${index}@2026-07-19.yang`,
+            filePath: `/tmp/netnexus-e2e/scale-module-${index}@2026-07-19.yang`,
+            contentHash: `scale-${index}`,
+            compiled: false,
+            compileStatus: 'pending'
+        }));
         const originalControllerCall = harness.controller.call.bind(harness.controller);
         harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.registry.listModules') {
+                return { status: 'success', data: { modules: scaleModules } };
+            }
+            return originalControllerCall(method, ...args);
+        };
+        const captureScrollListenerCount = () =>
+            page.evaluate(() => window.__yangCaptureScrollListenerCount?.() ?? Number.POSITIVE_INFINITY);
+
+        await page.goto('/#/yang/yang-modules');
+        const moduleTable = page.locator('.module-table');
+        const moduleRows = moduleTable.locator('.nn-table-tbody > .nn-table-row');
+        const modulePagination = moduleTable.getByRole('navigation', { name: '表格分页' });
+        await expect(moduleRows).toHaveCount(50);
+        await expect(moduleTable.locator('.nn-tooltip')).toHaveCount(200);
+        await expect(modulePagination.locator('.nn-pagination-total')).toHaveText('共 1000 个模型');
+        await expect(modulePagination.locator('.nn-pagination-page-count')).toHaveText('第 1 / 20 页');
+        await expect(page.getByRole('tooltip')).toHaveCount(0);
+
+        const baselineListenerCount = await captureScrollListenerCount();
+        expect(baselineListenerCount).toBeLessThan(20);
+
+        const titledTooltip = moduleTable
+            .locator('.nn-tooltip')
+            .filter({ has: page.locator('.ellipsis-text') })
+            .first();
+        await titledTooltip.hover();
+        await expect(page.getByRole('tooltip')).toBeVisible();
+        await expect.poll(captureScrollListenerCount).toBe(baselineListenerCount + 1);
+
+        await page.locator('.modules-card > .nn-card-head').hover();
+        await expect(page.getByRole('tooltip')).toHaveCount(0);
+        await expect.poll(captureScrollListenerCount).toBe(baselineListenerCount);
+
+        const pageJumper = modulePagination.getByRole('spinbutton', { name: '跳转页码' });
+        await pageJumper.fill('20');
+        await pageJumper.press('Enter');
+        await expect(modulePagination.locator('.nn-pagination-page-count')).toHaveText('第 20 / 20 页');
+        await expect(moduleRows).toHaveCount(50);
+        await expect(moduleTable.getByText('scale-module-999', { exact: true })).toBeVisible();
+
+        const moduleSearch = page.getByLabel('搜索模型', { exact: true });
+        await moduleSearch.fill('scale-module-99');
+        await expect(moduleRows).toHaveCount(11);
+        await expect(modulePagination).toHaveCount(0);
+        await expect(moduleTable.getByText('scale-module-99', { exact: true })).toBeVisible();
+
+        await moduleSearch.clear();
+        await expect(modulePagination.locator('.nn-pagination-page-count')).toHaveText('第 1 / 20 页');
+        await expect(moduleRows).toHaveCount(50);
+
+        await page.goto('/#/yang/yang-workspace');
+        await expect(page.getByText('Schema 与设备操作', { exact: true })).toBeVisible();
+        await expect.poll(captureScrollListenerCount).toBeLessThan(20);
+    });
+
+    test('windows 1000 Schema roots while preserving the full workspace index', async ({ page }) => {
+        test.setTimeout(60_000);
+
+        const scaleRoots = Array.from({ length: 1000 }, (_value, index) => {
+            const suffix = String(index).padStart(4, '0');
+            const name = `scale-schema-${suffix}`;
+            return {
+                id: `yang-module-${suffix}`,
+                key: `yang-module-${suffix}`,
+                name,
+                title: name,
+                keyword: 'module',
+                kind: 'module',
+                module: name,
+                revision: '2026-07-19',
+                namespace: `urn:netnexus:e2e:schema:${index}`,
+                path: `/${name}`,
+                hasChildren: true,
+                childCount: 1,
+                isLeaf: false
+            };
+        });
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            const response = await originalControllerCall(method, ...args);
+            if (method !== 'yang.registry.getWorkspace' || response?.status !== 'success') return response;
+            return {
+                ...response,
+                data: {
+                    ...response.data,
+                    compileId: 'e2e-scale-schema',
+                    summary: {
+                        ...(response.data.summary || {}),
+                        moduleCount: scaleRoots.length,
+                        nodeCount: scaleRoots.length
+                    },
+                    schemaTree: {
+                        ...(response.data.schemaTree || {}),
+                        rootId: 'yang-schema-root',
+                        roots: scaleRoots,
+                        nodeCount: scaleRoots.length,
+                        authoritative: true,
+                        source: 'libyang-effective',
+                        scope: 'core-effective-schema'
+                    }
+                }
+            };
+        };
+
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.goto('/#/yang/yang-workspace');
+
+        const workspacePage = page.locator('.yang-workspace-page:visible');
+        const treeScroll = workspacePage.locator('.schema-tree-scroll .nn-tree');
+        const treeItems = schemaTreeItems(page);
+        await expect(workspacePage.getByText('模块 1000', { exact: true })).toBeVisible();
+        await expect(treeItems.filter({ hasText: 'scale-schema-0000' })).toBeVisible();
+        await expect(treeItems.filter({ hasText: 'scale-schema-0999' })).toHaveCount(0);
+        await expect.poll(() => treeItems.count()).toBeLessThan(100);
+        expect(await treeScroll.evaluate(element => element.scrollHeight > element.clientHeight * 10)).toBe(true);
+
+        await treeScroll.evaluate(element => {
+            element.scrollTop = element.scrollHeight;
+            element.dispatchEvent(new Event('scroll'));
+        });
+        await expect(treeItems.filter({ hasText: 'scale-schema-0999' })).toBeVisible();
+        await expect(treeItems.filter({ hasText: 'scale-schema-0000' })).toHaveCount(0);
+        await expect.poll(() => treeItems.count()).toBeLessThan(100);
+    });
+
+    test('follows the connected Profile without page-level Profile switches', async ({ page }) => {
+        const backupCompile = await harness.controller.call('yang.registry.compile', {
+            profileId: 'e2e-netconf-profile-2'
+        });
+        expect(backupCompile.status).toBe('success');
+        await harness.controller.call('yang.registry.getWorkspace', { profileId: 'e2e-netconf-profile' });
+
+        const scopedCalls = [];
+        let releaseBackupConnect = null;
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            const targetProfileId = args[0]?.id || args[0];
+            if (
+                method === 'yang.netconf.connect' &&
+                targetProfileId === 'e2e-netconf-profile-2' &&
+                !releaseBackupConnect
+            ) {
+                return new Promise(resolve => {
+                    releaseBackupConnect = async () => resolve(await originalControllerCall(method, ...args));
+                });
+            }
             if (method.startsWith('yang.registry.')) {
                 scopedCalls.push({ method, profileId: args[0]?.profileId || '' });
             }
@@ -275,40 +462,80 @@ test.describe('NETCONF/YANG workbench', () => {
         };
 
         await page.goto('/#/yang/yang-modules');
-        const moduleProfileSelect = page.getByTestId('yang-modules-profile-select');
-        await expect(moduleProfileSelect).toContainText('NETCONF E2E 设备');
-        const moduleProfileGeometry = await relativeProfileGeometry(
-            page,
-            '.modules-card',
-            'yang-modules-profile-select-field'
-        );
+        const moduleCurrentProfile = page.getByTestId('yang-modules-current-profile');
+        await expect(moduleCurrentProfile).toContainText('NETCONF E2E 设备');
+        await expect(page.getByTestId('yang-modules-profile-select')).toHaveCount(0);
+        await expect(page.getByRole('combobox', { name: 'Profile' })).toHaveCount(0);
         await expect(page.getByText('ietf-interfaces', { exact: true })).toBeVisible();
-        await moduleProfileSelect.click();
-        await page.getByRole('option', { name: 'NETCONF E2E 备用设备', exact: true }).click();
-
-        await expect(moduleProfileSelect).toContainText('NETCONF E2E 备用设备');
-        await expect(page.getByText('vendor-system', { exact: true })).toBeVisible();
-        await expect(page.getByText('ietf-interfaces', { exact: true })).toHaveCount(0);
-        await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeDisabled();
 
         await page.goto('/#/yang/yang-workspace');
-        const workspaceProfileSelect = page.getByTestId('yang-workspace-profile-select');
-        await expect(workspaceProfileSelect).toContainText('NETCONF E2E 备用设备');
-        const workspaceProfileGeometry = await relativeProfileGeometry(
-            page,
-            '.workspace-card',
-            'yang-workspace-profile-select-field'
-        );
-        Object.entries(moduleProfileGeometry).forEach(([property, value]) => {
-            expect(Math.abs(workspaceProfileGeometry[property] - value), `Profile.${property}`).toBeLessThanOrEqual(1);
-        });
-        await expect(page.getByText('暂无 Schema', { exact: true })).toBeVisible();
-        await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' })).toHaveCount(0);
-        await workspaceProfileSelect.click();
-        await page.getByRole('option', { name: 'NETCONF E2E 设备', exact: true }).click();
-
-        await expect(workspaceProfileSelect).toContainText('NETCONF E2E 设备');
+        const workspaceCurrentProfile = page.getByTestId('yang-workspace-current-profile');
+        await expect(workspaceCurrentProfile).toContainText('NETCONF E2E 设备');
+        await expect(page.getByTestId('yang-workspace-profile-select')).toHaveCount(0);
+        await expect(page.getByRole('combobox', { name: 'Profile' })).toHaveCount(0);
         await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
+
+        await page.goto('/#/yang/yang-connection');
+        await page.locator('.profile-list-item').filter({ hasText: 'NETCONF E2E 备用设备' }).click();
+        await page.locator('.profile-editor-card').getByRole('button', { name: '连接', exact: true }).click();
+        await expect.poll(() => Boolean(releaseBackupConnect)).toBe(true);
+        const profileSwitchDialog = page.getByRole('dialog', { name: '切换 Profile' });
+        await expect(profileSwitchDialog).toBeVisible();
+        const profileDataLoad = page.getByTestId('yang-profile-data-load');
+        await expect(profileDataLoad).toContainText('连接中');
+        await expect(profileDataLoad.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '10');
+        const modalCenterOffset = await profileSwitchDialog.evaluate(dialog => {
+            const bounds = dialog.getBoundingClientRect();
+            return {
+                x: Math.abs(bounds.left + bounds.width / 2 - window.innerWidth / 2),
+                y: Math.abs(bounds.top + bounds.height / 2 - window.innerHeight / 2)
+            };
+        });
+        expect(modalCenterOffset.x).toBeLessThanOrEqual(1);
+        expect(modalCenterOffset.y).toBeLessThanOrEqual(1);
+
+        await releaseBackupConnect();
+        await expect(profileDataLoad).toContainText('切换完成');
+        await expect(profileDataLoad.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+        await expect
+            .poll(
+                () =>
+                    scopedCalls.filter(
+                        call =>
+                            call.method === 'yang.registry.getWorkspace' && call.profileId === 'e2e-netconf-profile-2'
+                    ).length
+            )
+            .toBeGreaterThanOrEqual(3);
+        const primarySession = await page.evaluate(() => window.netconfApi.getSessionState('e2e-netconf-profile'));
+        expect(primarySession.data.connected).toBe(false);
+        await profileSwitchDialog.getByRole('button', { name: '完成', exact: true }).click();
+        await expect(profileSwitchDialog).toBeHidden();
+        harness.controller.emitEvent('netconf:sessionEvent', {
+            status: 'success',
+            data: {
+                profileId: 'e2e-netconf-profile-2',
+                profileName: 'NETCONF E2E 备用设备',
+                status: 'connected',
+                state: 'connected',
+                connected: true,
+                sessionId: 'e2e-session-backup',
+                connectedAt: '2026-07-19T08:00:00.000Z'
+            }
+        });
+        await page.waitForTimeout(220);
+        await expect(profileSwitchDialog).toBeHidden();
+
+        await page.goto('/#/yang/yang-modules');
+        await expect(moduleCurrentProfile).toContainText('NETCONF E2E 备用设备');
+        await expect(page.getByText('vendor-system', { exact: true })).toBeVisible();
+        await expect(page.getByText('ietf-interfaces', { exact: true })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeEnabled();
+
+        await page.goto('/#/yang/yang-workspace');
+        await expect(workspaceCurrentProfile).toContainText('NETCONF E2E 备用设备');
+        await expect(page.getByText('Schema 已就绪', { exact: true })).toBeVisible();
+        await expect(schemaTreeItems(page).filter({ hasText: 'vendor-system' }).first()).toBeVisible();
+        await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' })).toHaveCount(0);
         expect(
             scopedCalls.some(
                 call => call.method === 'yang.registry.listModules' && call.profileId === 'e2e-netconf-profile-2'
@@ -316,9 +543,81 @@ test.describe('NETCONF/YANG workbench', () => {
         ).toBe(true);
         expect(
             scopedCalls.some(
-                call => call.method === 'yang.registry.getWorkspace' && call.profileId === 'e2e-netconf-profile'
+                call => call.method === 'yang.registry.getWorkspace' && call.profileId === 'e2e-netconf-profile-2'
             )
         ).toBe(true);
+
+        await page.goto('/#/yang/yang-connection');
+        await page.locator('.session-card').getByRole('button', { name: '断开连接', exact: true }).click();
+        await page.goto('/#/yang/yang-modules');
+        await expect(moduleCurrentProfile).toContainText('NETCONF E2E 备用设备');
+        await expect(page.getByText('vendor-system', { exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeDisabled();
+    });
+
+    test('keeps the current Profile when a replacement connection fails', async ({ page }) => {
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            const targetProfileId = args[0]?.id || args[0];
+            if (method !== 'yang.netconf.connect' || targetProfileId !== 'e2e-netconf-profile-2') {
+                return originalControllerCall(method, ...args);
+            }
+            harness.controller.emitEvent('netconf:sessionEvent', {
+                status: 'success',
+                data: {
+                    profileId: targetProfileId,
+                    profileName: 'NETCONF E2E 备用设备',
+                    status: 'connecting',
+                    state: 'connecting',
+                    connected: false
+                }
+            });
+            harness.controller.emitEvent('netconf:sessionEvent', {
+                status: 'success',
+                data: {
+                    profileId: targetProfileId,
+                    profileName: 'NETCONF E2E 备用设备',
+                    status: 'error',
+                    state: 'error',
+                    connected: false,
+                    message: '模拟连接失败'
+                }
+            });
+            return { status: 'error', msg: '模拟连接失败' };
+        };
+
+        await page.goto('/#/yang/yang-modules');
+        await expect(page.getByTestId('yang-modules-current-profile')).toContainText('NETCONF E2E 设备');
+        await page.goto('/#/yang/yang-connection');
+        await page.locator('.profile-list-item').filter({ hasText: 'NETCONF E2E 备用设备' }).click();
+        await page.locator('.profile-editor-card').getByRole('button', { name: '连接', exact: true }).click();
+
+        const profileSwitchDialog = page.getByRole('dialog', { name: '切换 Profile' });
+        await expect(profileSwitchDialog).toContainText('连接失败');
+        await expect(profileSwitchDialog).toContainText('仍保留当前 Profile');
+        await profileSwitchDialog.getByRole('button', { name: '完成', exact: true }).click();
+        await expect(profileSwitchDialog).toBeHidden();
+        harness.controller.emitEvent('netconf:sessionEvent', {
+            status: 'success',
+            data: {
+                profileId: 'e2e-netconf-profile-2',
+                profileName: 'NETCONF E2E 备用设备',
+                status: 'connected',
+                state: 'connected',
+                connected: true,
+                sessionId: 'late-session-after-failure',
+                connectedAt: '2026-07-19T08:00:01.000Z'
+            }
+        });
+        await page.waitForTimeout(220);
+        await expect(profileSwitchDialog).toBeHidden();
+
+        await page.goto('/#/yang/yang-modules');
+        await expect(page.getByTestId('yang-modules-current-profile')).toContainText('NETCONF E2E 设备');
+        await expect(page.getByText('ietf-interfaces', { exact: true })).toBeVisible();
+        await expect(page.getByText('vendor-system', { exact: true })).toHaveCount(0);
+        const primarySession = await page.evaluate(() => window.netconfApi.getSessionState('e2e-netconf-profile'));
+        expect(primarySession.data.connected).toBe(true);
     });
 
     test('keeps a delayed Profile save attached to its original editor context', async ({ page }) => {
@@ -359,7 +658,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(nameInput).toHaveValue('NETCONF E2E 备用设备');
     });
 
-    test('ignores an out-of-order module failure after a Profile round trip', async ({ page }) => {
+    test('ignores an out-of-order module failure after the connected Profile changes', async ({ page }) => {
         let releaseImport = null;
         let delayed = false;
         const originalControllerCall = harness.controller.call.bind(harness.controller);
@@ -377,13 +676,14 @@ test.describe('NETCONF/YANG workbench', () => {
         await page.getByRole('button', { name: '导入文件', exact: true }).click();
         await expect.poll(() => Boolean(releaseImport)).toBe(true);
 
-        const profileSelect = page.getByTestId('yang-modules-profile-select');
-        await profileSelect.click();
-        await page.getByRole('option', { name: 'NETCONF E2E 备用设备', exact: true }).click();
+        await page.goto('/#/yang/yang-connection');
+        await page.locator('.profile-list-item').filter({ hasText: 'NETCONF E2E 备用设备' }).click();
+        await page.locator('.profile-editor-card').getByRole('button', { name: '连接', exact: true }).click();
+        const profileSwitchDialog = page.getByRole('dialog', { name: '切换 Profile' });
+        await expect(profileSwitchDialog).toContainText('切换完成');
+        await profileSwitchDialog.getByRole('button', { name: '完成', exact: true }).click();
+        await page.goto('/#/yang/yang-modules');
         await expect(page.getByText('vendor-system', { exact: true })).toBeVisible();
-        await profileSelect.click();
-        await page.getByRole('option', { name: 'NETCONF E2E 设备', exact: true }).click();
-        await expect(page.getByText('ietf-interfaces', { exact: true })).toBeVisible();
 
         releaseImport();
         await page.evaluate(() => new Promise(resolve => window.setTimeout(resolve, 100)));
@@ -482,17 +782,22 @@ test.describe('NETCONF/YANG workbench', () => {
 
     test('restores persisted Schema roots when the successful workspace omits its inline tree', async ({ page }) => {
         let rootReads = 0;
+        let workspaceReads = 0;
         const originalControllerCall = harness.controller.call.bind(harness.controller);
         harness.controller.call = async (method, ...args) => {
             const response = await originalControllerCall(method, ...args);
             if (method === 'yang.registry.getSchemaRoots') rootReads += 1;
+            if (method === 'yang.registry.getWorkspace') workspaceReads += 1;
             if (method !== 'yang.registry.getWorkspace' || response.status !== 'success') return response;
             return {
                 ...response,
                 data: {
                     ...response.data,
                     success: true,
-                    schemaTree: null
+                    schemaTree: {
+                        ...response.data.schemaTree,
+                        roots: []
+                    }
                 }
             };
         };
@@ -502,6 +807,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(page.getByText('Schema 生成失败', { exact: true })).toHaveCount(0);
         await expect.poll(() => rootReads).toBeGreaterThan(0);
         await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
+        expect(workspaceReads).toBe(1);
     });
 
     test('restores a partial Schema when one model fails compilation', async ({ page }) => {
@@ -543,6 +849,64 @@ test.describe('NETCONF/YANG workbench', () => {
                 .filter({ has: page.getByText('interfaces', { exact: true }) })
                 .first()
         ).toBeVisible();
+    });
+
+    test('keeps the compiled Schema visible while additive downloads refresh a large workspace', async ({ page }) => {
+        let refreshWorkspace = false;
+        let workspaceRefreshReads = 0;
+        let refreshRootReads = 0;
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            const response = await originalControllerCall(method, ...args);
+            if (!refreshWorkspace) return response;
+            if (method === 'yang.registry.getWorkspace' && response.status === 'success') {
+                workspaceRefreshReads += 1;
+                return {
+                    ...response,
+                    data: {
+                        ...response.data,
+                        schemaTree: null
+                    }
+                };
+            }
+            if (method === 'yang.registry.getSchemaRoots') {
+                refreshRootReads += 1;
+                await new Promise(resolve => setTimeout(resolve, 800));
+            }
+            return response;
+        };
+
+        await page.goto('/#/yang/yang-workspace');
+        const interfacesRoot = schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first();
+        await expect(interfacesRoot).toBeVisible();
+        await expandSchemaModule(page, 'ietf-interfaces');
+        const interfacesNode = schemaTreeItems(page)
+            .filter({ has: page.getByText('interfaces', { exact: true }) })
+            .first();
+        await expect(interfacesNode).toBeVisible();
+
+        refreshWorkspace = true;
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('yang:taskProgress', {
+                status: 'success',
+                data: {
+                    taskId: 'e2e-additive-download',
+                    action: 'download',
+                    phase: 'completed',
+                    completed: 2,
+                    total: 2,
+                    percent: 100,
+                    profileId: 'e2e-netconf-profile'
+                }
+            });
+        });
+
+        await expect.poll(() => workspaceRefreshReads).toBeGreaterThan(0);
+        await page.waitForTimeout(100);
+        expect(await interfacesRoot.isVisible()).toBe(true);
+        await expect(interfacesRoot).toHaveAttribute('aria-expanded', 'true');
+        await expect(interfacesNode).toBeVisible();
+        expect(refreshRootReads).toBe(0);
     });
 
     test('keeps lazily loaded Schema branches expanded when returning to the workspace', async ({ page }) => {
@@ -674,6 +1038,9 @@ test.describe('NETCONF/YANG workbench', () => {
         expectSameGeometry(connectedGeometry, await connectionGeometry(page));
 
         await editorConnectButton.click();
+        const profileSwitchDialog = page.getByRole('dialog', { name: '切换 Profile' });
+        await expect(profileSwitchDialog).toContainText('切换完成');
+        await profileSwitchDialog.getByRole('button', { name: '完成', exact: true }).click();
         await expect(capabilityButton).toBeVisible();
         await expect(sessionTable.getByRole('button', { name: '断开连接', exact: true })).toBeVisible();
         await expect(editorConnectButton).toHaveCount(0);
@@ -683,6 +1050,78 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(workspacePage.getByRole('button', { name: /Capability/u })).toHaveCount(0);
         await expect(workspacePage.getByText('设备 Capability', { exact: true })).toHaveCount(0);
         await expect(workspacePage.locator('.operation-context-bar')).toHaveCount(0);
+    });
+
+    test('coalesces workspace splitter pointer events into one visual frame', async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.goto('/#/yang/yang-workspace');
+
+        const separator = page
+            .locator('.yang-workspace-page:visible')
+            .getByRole('separator', { name: '调整 Schema 树宽度' });
+        await expect(separator).toBeVisible();
+
+        const result = await separator.evaluate(async element => {
+            const win = element.ownerDocument.defaultView;
+            const documentRef = element.ownerDocument;
+            const originalRequestAnimationFrame = win.requestAnimationFrame;
+            const originalCancelAnimationFrame = win.cancelAnimationFrame;
+            const callbacks = new Map();
+            const pointerId = 731;
+            let nextFrameId = 0;
+            const separatorRect = element.getBoundingClientRect();
+            const layout = element.closest('.workspace-layout');
+            const schemaPanel = layout.querySelector('.schema-panel');
+            const startX = separatorRect.x + separatorRect.width / 2;
+            const startY = separatorRect.y + separatorRect.height / 2;
+            const widthBefore = schemaPanel.getBoundingClientRect().width;
+            const dispatchPointer = (target, type, clientX, buttons) =>
+                target.dispatchEvent(
+                    new PointerEvent(type, {
+                        bubbles: true,
+                        cancelable: true,
+                        pointerId,
+                        pointerType: 'mouse',
+                        isPrimary: true,
+                        button: type === 'pointerdown' ? 0 : -1,
+                        buttons,
+                        clientX,
+                        clientY: startY
+                    })
+                );
+
+            win.requestAnimationFrame = callback => {
+                nextFrameId += 1;
+                callbacks.set(nextFrameId, callback);
+                return nextFrameId;
+            };
+            win.cancelAnimationFrame = frameId => callbacks.delete(frameId);
+
+            try {
+                dispatchPointer(element, 'pointerdown', startX, 1);
+                for (let index = 1; index <= 100; index += 1) {
+                    dispatchPointer(documentRef, 'pointermove', startX + (120 * index) / 100, 1);
+                }
+
+                const scheduledFrames = callbacks.size;
+                const widthBeforeFlush = schemaPanel.getBoundingClientRect().width;
+                const pendingCallbacks = [...callbacks.values()];
+                callbacks.clear();
+                pendingCallbacks[0]?.(performance.now());
+                await Promise.resolve();
+                await Promise.resolve();
+                const widthAfterFlush = schemaPanel.getBoundingClientRect().width;
+                return { scheduledFrames, widthBefore, widthBeforeFlush, widthAfterFlush };
+            } finally {
+                dispatchPointer(documentRef, 'pointerup', startX + 120, 0);
+                win.requestAnimationFrame = originalRequestAnimationFrame;
+                win.cancelAnimationFrame = originalCancelAnimationFrame;
+            }
+        });
+
+        expect(result.scheduledFrames).toBe(1);
+        expect(Math.abs(result.widthBeforeFlush - result.widthBefore)).toBeLessThanOrEqual(1);
+        expect(result.widthAfterFlush - result.widthBefore).toBeGreaterThan(100);
     });
 
     test('resizes the Schema, RPC messages, and full-height parameter tree without resizing containers', async ({
@@ -902,9 +1341,7 @@ test.describe('NETCONF/YANG workbench', () => {
                 message: 'YANG 编译存在错误，请查看编译日志'
             }
         });
-        const compileNotification = page.locator('.yang-task-notification');
-        await expect(compileNotification).toBeVisible();
-        await expect(compileNotification.locator('.notification-title')).toHaveText('YANG 编译失败');
+        await expect(page.locator('.yang-task-notification')).toHaveCount(0);
         await expect(page.locator('.nn-toast-error')).toHaveCount(0);
 
         await expect(compileLog.getByRole('button', { name: '查看源码', exact: true })).toHaveCount(0);
@@ -958,20 +1395,220 @@ test.describe('NETCONF/YANG workbench', () => {
         ).toBe('auto');
     });
 
-    test('keeps Profile fixed and model filters beside selection at responsive widths', async ({ page }) => {
+    test('batches 1000 live compile logs and keeps height dragging bounded', async ({ page }) => {
+        test.setTimeout(60_000);
+        const taskId = 'e2e-bulk-live-compile';
+        let compileRequest = null;
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.registry.compile') {
+                compileRequest = JSON.parse(JSON.stringify(args[0]));
+                return { status: 'success', data: { taskId } };
+            }
+            return originalControllerCall(method, ...args);
+        };
+
+        await page.goto('/#/yang/yang-modules');
+        await page
+            .getByRole('checkbox', { name: '选择全部筛选结果', exact: true })
+            .evaluate(element => element.click());
+        await page.getByRole('button', { name: '编译所选', exact: true }).click();
+        await expect.poll(() => compileRequest?.moduleIds?.length || 0).toBe(2);
+
+        await page.evaluate(
+            ({ progressTaskId }) => {
+                for (let completed = 1; completed <= 1005; completed += 1) {
+                    window.__featureE2eEmit?.('yang:taskProgress', {
+                        status: 'success',
+                        data: {
+                            taskId: progressTaskId,
+                            action: 'compile',
+                            phase: 'parsing',
+                            currentHash: `bulk-compile-${completed}`,
+                            currentFile: `bulk-compile-${completed}.yang`,
+                            fileStatus: 'parsed',
+                            completed,
+                            total: 1005,
+                            percent: Math.round((completed / 1005) * 55),
+                            profileId: 'e2e-netconf-profile'
+                        }
+                    });
+                }
+            },
+            { progressTaskId: taskId }
+        );
+
+        const compileLog = page.getByTestId('yang-compile-log-panel');
+        const logRows = compileLog.locator('.compile-log-row');
+        await expect(compileLog.getByText('1005/1005 · 55%', { exact: true })).toBeVisible();
+        await expect(
+            compileLog.getByText('bulk-compile-1005.yang 解析完成 · 1005/1005', { exact: true })
+        ).toBeVisible();
+        await expect(logRows).toHaveCount(100);
+
+        const pagination = page.getByTestId('yang-compile-log-pagination');
+        await expect(pagination).toContainText('第 1 / 11 页');
+        const allLogIds = [];
+        for (let pageNumber = 1; pageNumber <= 11; pageNumber += 1) {
+            await expect(pagination).toContainText(`第 ${pageNumber} / 11 页`);
+            const pageLogIds = await logRows.evaluateAll(elements => elements.map(element => element.dataset.logId));
+            expect(pageLogIds.length).toBeLessThanOrEqual(100);
+            expect(pageLogIds.every(Boolean)).toBe(true);
+            allLogIds.push(...pageLogIds);
+            if (pageNumber < 11) {
+                await pagination.getByRole('button', { name: '编译日志下一页', exact: true }).click();
+            }
+        }
+        expect(allLogIds).toHaveLength(1009);
+        expect(new Set(allLogIds).size).toBe(allLogIds.length);
+
+        const logResizer = page.getByRole('separator', { name: '调整模型列表和编译日志高度' });
+        const logBeforeResize = await compileLog.boundingBox();
+        const resizePreview = await logResizer.evaluate(async separator => {
+            const layout = separator.closest('.module-results-layout');
+            const tableContent = layout.querySelector('.module-table .nn-table-content');
+            const logList = layout.querySelector('.compile-log-list');
+            const bounds = separator.getBoundingClientRect();
+            const pointerId = 73;
+            const startX = bounds.x + bounds.width / 2;
+            const startY = bounds.y + bounds.height / 2;
+            const ariaBefore = separator.getAttribute('aria-valuenow');
+            const cssBefore = layout.style.getPropertyValue('--compile-log-preview-height');
+            const originalRequestAnimationFrame = window.requestAnimationFrame;
+            const originalCancelAnimationFrame = window.cancelAnimationFrame;
+            const queuedFrames = new Map();
+            let nextFrameId = 1;
+            window.requestAnimationFrame = callback => {
+                const frameId = nextFrameId++;
+                queuedFrames.set(frameId, callback);
+                return frameId;
+            };
+            window.cancelAnimationFrame = frameId => queuedFrames.delete(frameId);
+            try {
+                separator.dispatchEvent(
+                    new PointerEvent('pointerdown', {
+                        bubbles: true,
+                        button: 0,
+                        clientX: startX,
+                        clientY: startY,
+                        isPrimary: true,
+                        pointerId
+                    })
+                );
+                for (let index = 1; index <= 100; index += 1) {
+                    document.dispatchEvent(
+                        new PointerEvent('pointermove', {
+                            bubbles: true,
+                            button: 0,
+                            clientX: startX,
+                            clientY: startY - index,
+                            isPrimary: true,
+                            pointerId
+                        })
+                    );
+                }
+                await Promise.resolve();
+                const queuedFrameCount = queuedFrames.size;
+                const callbacks = [...queuedFrames.values()];
+                queuedFrames.clear();
+                callbacks.forEach(callback => callback(performance.now()));
+                const result = {
+                    ariaBefore,
+                    ariaDuring: separator.getAttribute('aria-valuenow'),
+                    cssBefore,
+                    cssDuring: layout.style.getPropertyValue('--compile-log-preview-height'),
+                    queuedFrameCount,
+                    tableVisibility: getComputedStyle(tableContent).contentVisibility,
+                    logVisibility: getComputedStyle(logList).contentVisibility
+                };
+                document.dispatchEvent(
+                    new PointerEvent('pointerup', {
+                        bubbles: true,
+                        button: 0,
+                        clientX: startX,
+                        clientY: startY - 100,
+                        isPrimary: true,
+                        pointerId
+                    })
+                );
+                return result;
+            } finally {
+                window.requestAnimationFrame = originalRequestAnimationFrame;
+                window.cancelAnimationFrame = originalCancelAnimationFrame;
+            }
+        });
+        expect(resizePreview.queuedFrameCount).toBe(1);
+        expect(resizePreview.ariaDuring).toBe(resizePreview.ariaBefore);
+        expect(resizePreview.cssDuring).not.toBe(resizePreview.cssBefore);
+        expect(resizePreview.tableVisibility).toBe('hidden');
+        expect(resizePreview.logVisibility).toBe('hidden');
+        await expect
+            .poll(async () => Number(await logResizer.getAttribute('aria-valuenow')))
+            .toBeGreaterThan(Number(resizePreview.ariaBefore));
+        await expect
+            .poll(async () => (await compileLog.boundingBox())?.height || 0)
+            .toBeGreaterThan(logBeforeResize.height + 40);
+        await expect(logRows).toHaveCount(9);
+    });
+
+    test('keeps the model tab state without reloading when returning', async ({ page }) => {
+        const modelReadMethods = new Set([
+            'yang.registry.listModules',
+            'yang.registry.getWorkspace',
+            'yang.registry.getDiagnostics',
+            'yang.registry.getCompilerStatus',
+            'yang.netconf.listProfiles',
+            'yang.netconf.getSessionState'
+        ]);
+        const modelReads = [];
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            if (modelReadMethods.has(method)) modelReads.push(method);
+            return originalControllerCall(method, ...args);
+        };
+
+        await page.goto('/#/yang/yang-modules');
+        const modelSearch = page.getByPlaceholder('模块名 / namespace / revision');
+        await expect(page.getByText('ietf-interfaces', { exact: true })).toBeVisible();
+        await modelSearch.fill('ietf-interfaces');
+        const interfaceRow = page.getByRole('row').filter({ hasText: 'ietf-interfaces' });
+        await interfaceRow.getByRole('checkbox').evaluate(element => element.click());
+        await expect(interfaceRow.getByRole('checkbox')).toBeChecked();
+
+        await page.getByRole('tab', { name: '连接设置', exact: true }).click();
+        await expect(page.locator('.yang-connection-page:visible')).toBeVisible();
+        await page.waitForTimeout(150);
+        modelReads.length = 0;
+        await page.getByRole('tab', { name: '模型列表', exact: true }).click();
+        await expect(page.locator('.yang-modules-page:visible')).toBeVisible();
+        await page.waitForTimeout(150);
+
+        expect(modelReads).toEqual([]);
+        await expect(modelSearch).toHaveValue('ietf-interfaces');
+        await expect(interfaceRow.getByRole('checkbox')).toBeChecked();
+    });
+
+    test('keeps the current Profile context and model filters responsive', async ({ page }) => {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto('/#/yang/yang-modules');
 
-        const profileSelect = page.getByTestId('yang-modules-profile-select');
+        const currentProfile = page.getByTestId('yang-modules-current-profile');
         const modelSearch = page.getByPlaceholder('模块名 / namespace / revision');
         const statusSelect = page.getByTestId('yang-modules-status-select');
-        await expect(profileSelect).toBeVisible();
+        await expect(currentProfile).toBeVisible();
+        await expect(page.getByRole('combobox', { name: 'Profile' })).toHaveCount(0);
         await expect(modelSearch).toBeVisible();
         await expect(statusSelect).toBeVisible();
 
         const wideBefore = await moduleToolbarGeometry(page);
-        expect(Math.abs(wideBefore.profile.y - wideBefore.actions.y)).toBeLessThanOrEqual(1);
-        expect(wideBefore.profile.right).toBeLessThanOrEqual(wideBefore.actions.x + 1);
+        expect(
+            Math.abs(
+                wideBefore.currentProfile.y +
+                    wideBefore.currentProfile.height / 2 -
+                    (wideBefore.actions.y + wideBefore.actions.height / 2)
+            )
+        ).toBeLessThanOrEqual(1);
+        expect(wideBefore.currentProfile.right).toBeLessThanOrEqual(wideBefore.actions.x + 1);
         expect(wideBefore.actions.bottom).toBeLessThanOrEqual(wideBefore.selectionRow.y + 1);
         expect(wideBefore.selectionCheckbox.right).toBeLessThanOrEqual(wideBefore.search.x + 1);
         expect(wideBefore.search.right).toBeLessThanOrEqual(wideBefore.status.x + 1);
@@ -1010,12 +1647,12 @@ test.describe('NETCONF/YANG workbench', () => {
         });
 
         await page.setViewportSize({ width: 900, height: 900 });
-        await expect(profileSelect).toBeVisible();
+        await expect(currentProfile).toBeVisible();
         const narrow = await moduleToolbarGeometry(page);
-        expect(narrow.profile.y).toBeGreaterThanOrEqual(narrow.profileRow.y - 1);
-        expect(narrow.actions.y).toBeGreaterThanOrEqual(narrow.profileRow.y - 1);
-        expect(narrow.actions.bottom).toBeLessThanOrEqual(narrow.profileRow.bottom + 1);
-        expect(narrow.profileRow.bottom).toBeLessThanOrEqual(narrow.selectionRow.y + 1);
+        expect(narrow.currentProfile.y).toBeGreaterThanOrEqual(narrow.toolbar.y - 1);
+        expect(narrow.actions.y).toBeGreaterThanOrEqual(narrow.toolbar.y - 1);
+        expect(narrow.actions.bottom).toBeLessThanOrEqual(narrow.toolbar.bottom + 1);
+        expect(narrow.toolbar.bottom).toBeLessThanOrEqual(narrow.selectionRow.y + 1);
         expect(narrow.pageHasHorizontalOverflow).toBe(false);
         expect(narrow.table.bottom).toBeLessThanOrEqual(narrow.compileLog.y + 1);
         expect(narrow.compileLog.bottom).toBeLessThanOrEqual(narrow.body.bottom + 1);
@@ -1099,6 +1736,78 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(moduleTable.getByRole('button', { name: '下载', exact: true })).toHaveCount(0);
     });
 
+    test('keeps the 1000-model download dialog bounded and draggable while progress updates', async ({ page }) => {
+        const bulkModules = Array.from({ length: 1000 }, (_value, index) => ({
+            name: `bulk-module-${String(index + 1).padStart(4, '0')}`,
+            revision: '2026-07-19',
+            namespace: `urn:netnexus:e2e:bulk:${index + 1}`,
+            format: 'yang',
+            features: []
+        }));
+        let downloadRequest = null;
+        const taskId = 'e2e-bulk-download';
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.netconf.discoverModules') {
+                return { status: 'success', data: { modules: bulkModules, source: 'ietf-yang-library' } };
+            }
+            if (method === 'yang.netconf.downloadModules') {
+                downloadRequest = JSON.parse(JSON.stringify(args[0]));
+                return { status: 'success', data: { taskId } };
+            }
+            return originalControllerCall(method, ...args);
+        };
+
+        await page.goto('/#/yang/yang-modules');
+        await page.getByRole('button', { name: '获取设备列表', exact: true }).click();
+        const deviceDialog = page.getByRole('dialog', { name: '设备 YANG 模型' });
+        await expect(deviceDialog).toContainText('设备 1000');
+        await expect(deviceDialog.locator('.device-module-table tbody .nn-table-row')).toHaveCount(50);
+        await expect(deviceDialog.locator('.nn-pagination-page-count')).toHaveText('第 1 / 20 页');
+
+        await deviceDialog
+            .getByRole('checkbox', { name: '选择全部筛选结果中未下载的模型', exact: true })
+            .evaluate(element => element.click());
+        await expect(deviceDialog.getByRole('button', { name: '下载所选 (1000)', exact: true })).toBeEnabled();
+        await deviceDialog.getByRole('button', { name: '下载所选 (1000)', exact: true }).click();
+        expect(downloadRequest.modules).toHaveLength(1000);
+
+        await page.evaluate(
+            ({ progressTaskId }) => {
+                for (let completed = 1; completed <= 20; completed += 1) {
+                    window.__featureE2eEmit?.('yang:taskProgress', {
+                        status: 'success',
+                        data: {
+                            taskId: progressTaskId,
+                            action: 'download',
+                            phase: 'downloading',
+                            completed,
+                            total: 1000,
+                            percent: completed / 10,
+                            profileId: 'e2e-netconf-profile'
+                        }
+                    });
+                }
+            },
+            { progressTaskId: taskId }
+        );
+        await expect(deviceDialog).toContainText('20/1000');
+        await expect(deviceDialog.locator('.device-module-table tbody .nn-table-row')).toHaveCount(50);
+
+        const header = deviceDialog.locator('.nn-modal-header');
+        const before = await deviceDialog.boundingBox();
+        const headerBox = await header.boundingBox();
+        expect(before).not.toBeNull();
+        expect(headerBox).not.toBeNull();
+        await page.mouse.move(headerBox.x + headerBox.width / 2, headerBox.y + headerBox.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(headerBox.x + headerBox.width / 2 + 80, headerBox.y + headerBox.height / 2, {
+            steps: 24
+        });
+        await page.mouse.up();
+        await expect.poll(async () => (await deviceDialog.boundingBox())?.x).toBeGreaterThan(before.x + 10);
+    });
+
     test('keeps successful models when an initial-password error stops device download', async ({ page }) => {
         const taskId = 'e2e-partial-device-download';
         let downloadResult = null;
@@ -1174,12 +1883,7 @@ test.describe('NETCONF/YANG workbench', () => {
             result: downloadResult
         });
 
-        const notification = page.locator('.yang-task-notification');
-        await expect(notification).toBeVisible();
-        await expect(notification.locator('.notification-title')).toHaveText('模型下载部分完成');
-        await expect(notification.locator('.notification-description')).toHaveText(
-            '已保存 1 个模型，1 个失败，1 个未尝试，请先修改设备初始密码后重试'
-        );
+        await expect(page.locator('.yang-task-notification')).toHaveCount(0);
         await expect(deviceDialog).toBeVisible();
         await expect(deviceDialog.getByText('部分模型或依赖下载失败', { exact: true })).toBeVisible();
         await expect(deviceDialog).toContainText('ietf-netconf-monitoring：设备要求先修改初始密码');
@@ -1196,8 +1900,8 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(page.locator('.module-table').getByText('ietf-system', { exact: true })).toBeVisible();
     });
 
-    test('shows and compiles every filtered model without pagination', async ({ page }) => {
-        const additionalModules = Array.from({ length: 24 }, (_value, index) => {
+    test('selects and compiles every filtered model across pages', async ({ page }) => {
+        const additionalModules = Array.from({ length: 74 }, (_value, index) => {
             const suffix = String(index + 1).padStart(2, '0');
             const name = `bulk-local-${suffix}`;
             return {
@@ -1227,12 +1931,17 @@ test.describe('NETCONF/YANG workbench', () => {
 
         await page.goto('/#/yang/yang-modules');
         const moduleTable = page.locator('.module-table');
-        await expect(moduleTable.getByRole('navigation', { name: '表格分页' })).toHaveCount(0);
+        const moduleRows = moduleTable.locator('tbody .nn-table-row');
+        const modulePagination = moduleTable.getByRole('navigation', { name: '表格分页' });
+        await expect(modulePagination.locator('.nn-pagination-total')).toHaveText('共 76 个模型');
+        await expect(modulePagination.locator('.nn-pagination-page-count')).toHaveText('第 1 / 2 页');
         await expect(moduleTable.getByRole('columnheader', { name: '来源', exact: true })).toHaveCount(0);
 
-        const lastAdditionalModule = page.getByText('bulk-local-24', { exact: true });
-        await expect(lastAdditionalModule).toHaveCount(1);
-        await lastAdditionalModule.scrollIntoViewIfNeeded();
+        const lastAdditionalModule = page.getByText('bulk-local-74', { exact: true });
+        await expect(lastAdditionalModule).toHaveCount(0);
+        await modulePagination.getByRole('button', { name: '下一页', exact: true }).click();
+        await expect(modulePagination.locator('.nn-pagination-page-count')).toHaveText('第 2 / 2 页');
+        await expect(moduleRows).toHaveCount(26);
         await expect(lastAdditionalModule).toBeVisible();
 
         const statusSelect = page.getByTestId('yang-modules-status-select');
@@ -1246,28 +1955,37 @@ test.describe('NETCONF/YANG workbench', () => {
             .sort();
         await expect(page.locator('.selection-meta')).toHaveCount(0);
         await expect(page.getByText('仅本地模型可参与编译', { exact: true })).toHaveCount(0);
-        await expect(moduleTable.locator('tbody .nn-table-row')).toHaveCount(expectedLocalNames.length);
 
-        const selectFiltered = page.getByRole('checkbox', { name: '选择当前筛选结果' });
+        const selectFiltered = page.getByRole('checkbox', { name: '选择全部筛选结果' });
         await selectFiltered.evaluate(element => element.click());
         await expect(selectFiltered).toBeChecked();
         await expect(
-            moduleTable.getByRole('row').filter({ hasText: 'bulk-local-24' }).getByRole('checkbox')
+            moduleTable.getByRole('row').filter({ hasText: 'bulk-local-74' }).getByRole('checkbox')
         ).toBeChecked();
+
+        await modulePagination.getByRole('button', { name: '上一页', exact: true }).click();
+        await expect(modulePagination.locator('.nn-pagination-page-count')).toHaveText('第 1 / 2 页');
+        await expect(moduleRows).toHaveCount(50);
+        expect(await moduleRows.getByRole('checkbox').evaluateAll(inputs => inputs.every(input => input.checked))).toBe(
+            true
+        );
 
         await page.getByRole('button', { name: '编译所选', exact: true }).click();
         await expect.poll(() => compileRequest?.moduleIds?.length || 0).toBe(expectedLocalNames.length);
         expect(compileRequest.moduleIds.map(module => module.name).sort()).toEqual(expectedLocalNames);
     });
 
-    test('imports a local model and reports task completion', async ({ page }) => {
+    test('imports a local model without clearing the active compilation', async ({ page }) => {
         await page.goto('/#/yang/yang-modules');
+        const compileLog = page.getByTestId('yang-compile-log-panel');
+        await expect(compileLog.getByText('ietf-yang-types@2013-07-15.yang 编译成功', { exact: true })).toBeVisible();
         await page.getByRole('button', { name: '导入文件' }).click();
         await expect(page.getByText('netnexus-demo', { exact: true })).toBeVisible();
-
-        const notification = page.locator('.yang-task-notification');
-        await expect(notification).toBeVisible();
-        await expect(notification.locator('.notification-title')).toContainText('模型导入完成');
+        const importedRow = page.locator('.module-table').getByRole('row').filter({ hasText: 'netnexus-demo' });
+        await expect(importedRow.getByText('未编译', { exact: true })).toBeVisible();
+        await expect(compileLog.getByText('编译成功', { exact: true }).first()).toBeVisible();
+        await expect(compileLog.getByText('ietf-yang-types@2013-07-15.yang 编译成功', { exact: true })).toBeVisible();
+        await expect(page.locator('.yang-task-notification')).toHaveCount(0);
     });
 
     test('shows save and validation feedback as floating alerts without resizing the page', async ({ page }) => {
@@ -1349,10 +2067,148 @@ test.describe('NETCONF/YANG workbench', () => {
         await editDialog.getByRole('button', { name: '确认', exact: true }).click();
     });
 
+    test('coalesces rich XML scrolling onto compositor content layers', async ({ page }) => {
+        await page.goto('/#/yang/yang-workspace');
+        const operationPanel = page.locator('.workspace-operation-panel');
+        const requestCard = operationPanel.locator('.operation-form-card');
+        const requestEditor = requestCard.locator('.rpc-request-preview');
+        const requestInput = requestEditor.locator('textarea[aria-label="RPC 请求 XML"]');
+        const validateButton = requestCard.getByRole('button', { name: '验证', exact: true });
+        const scrollStressRpc = [
+            '<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="scroll-stress">',
+            '  <get>',
+            '    <filter type="subtree">',
+            ...Array.from(
+                { length: 100 },
+                (_value, index) =>
+                    `      <probe-${index + 1}>${'scroll-compositor-probe-'.repeat(10)}${index + 1}</probe-${index + 1}>`
+            ),
+            '    </filter>',
+            '  </get>',
+            '</rpc>'
+        ].join('\n');
+
+        await requestInput.fill(scrollStressRpc);
+        await expect(requestEditor.locator('[data-xml-line-number]')).toHaveCount(scrollStressRpc.split('\n').length);
+        await expect(requestEditor.locator('[data-xml-highlight-content]')).toBeVisible();
+        await expect(requestEditor.locator('[data-xml-line-number-content]')).toBeVisible();
+        await expect(requestEditor.locator('[data-xml-diagnostics-layer]')).toHaveAttribute('role', 'status');
+        await expect(requestEditor.locator('[data-xml-diagnostics-content]')).toHaveCount(0);
+
+        const scrollFrame = await requestInput.evaluate(async element => {
+            const editor = element.parentElement;
+            const readTransform = selector => {
+                const content = editor.querySelector(selector);
+                const transformValue = getComputedStyle(content).transform;
+                const transform =
+                    transformValue === 'none' ? new DOMMatrixReadOnly() : new DOMMatrixReadOnly(transformValue);
+                const normalizeZero = value => (Object.is(value, -0) ? 0 : value);
+                return { x: normalizeZero(transform.m41), y: normalizeZero(transform.m42) };
+            };
+            const readContentTransforms = () => ({
+                highlight: readTransform('[data-xml-highlight-content]'),
+                lineNumbers: readTransform('[data-xml-line-number-content]')
+            });
+
+            element.scrollTop = 0;
+            element.scrollLeft = 0;
+            element.dispatchEvent(new Event('scroll'));
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+            const before = readContentTransforms();
+            const maximumTop = element.scrollHeight - element.clientHeight;
+            const maximumLeft = element.scrollWidth - element.clientWidth;
+            for (let step = 1; step <= 16; step += 1) {
+                element.scrollTop = Math.round((maximumTop * step) / 16);
+                element.scrollLeft = Math.round((maximumLeft * step) / 16);
+                element.dispatchEvent(new Event('scroll'));
+            }
+
+            const target = { top: element.scrollTop, left: element.scrollLeft };
+            const synchronous = readContentTransforms();
+            const viewportScroll = {
+                highlight: {
+                    top: editor.querySelector('[data-xml-highlight-layer]').scrollTop,
+                    left: editor.querySelector('[data-xml-highlight-layer]').scrollLeft
+                },
+                lineNumbers: {
+                    top: editor.querySelector('[data-xml-line-number-gutter]').scrollTop,
+                    left: editor.querySelector('[data-xml-line-number-gutter]').scrollLeft
+                }
+            };
+            const nextFrame = await new Promise(resolve =>
+                requestAnimationFrame(() => resolve(readContentTransforms()))
+            );
+
+            return { before, synchronous, nextFrame, target, maximumTop, maximumLeft, viewportScroll };
+        });
+        expect(scrollFrame.maximumTop).toBeGreaterThan(0);
+        expect(scrollFrame.maximumLeft).toBeGreaterThan(0);
+        expect(scrollFrame.synchronous).toEqual(scrollFrame.before);
+        expect(scrollFrame.nextFrame).toEqual({
+            highlight: { x: -scrollFrame.target.left, y: -scrollFrame.target.top },
+            lineNumbers: { x: 0, y: -scrollFrame.target.top }
+        });
+        expect(scrollFrame.viewportScroll).toEqual({
+            highlight: { top: 0, left: 0 },
+            lineNumbers: { top: 0, left: 0 }
+        });
+
+        const invalidBooleanRpc =
+            '<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="scroll-diagnostic">\n' +
+            '  <edit-config>\n' +
+            '    <target><running/></target>\n' +
+            '    <config>\n' +
+            '      <interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces">\n' +
+            '        <interface>\n' +
+            '          <name>eth0</name>\n' +
+            '          <enabled>not-a-bool</enabled>\n' +
+            '        </interface>\n' +
+            '      </interfaces>\n' +
+            '    </config>\n' +
+            '  </edit-config>\n' +
+            '</rpc>';
+        await requestInput.fill(invalidBooleanRpc);
+        await validateButton.click();
+        await expect(requestEditor.locator('[data-xml-diagnostic][data-line="8"]')).toBeVisible();
+        await expect(requestEditor.locator('[data-xml-diagnostics-content]')).toBeVisible();
+        const diagnosticScrollAlignment = await requestInput.evaluate(async element => {
+            const editor = element.parentElement;
+            element.scrollTop = element.scrollHeight - element.clientHeight;
+            element.dispatchEvent(new Event('scroll'));
+            const transform = await new Promise(resolve =>
+                requestAnimationFrame(() => {
+                    const content = editor.querySelector('[data-xml-diagnostics-content]');
+                    const transformValue = getComputedStyle(content).transform;
+                    resolve(
+                        transformValue === 'none' ? new DOMMatrixReadOnly() : new DOMMatrixReadOnly(transformValue)
+                    );
+                })
+            );
+            return {
+                inputTop: element.scrollTop,
+                contentY: Object.is(transform.m42, -0) ? 0 : transform.m42,
+                viewportTop: editor.querySelector('[data-xml-diagnostics-layer]').scrollTop
+            };
+        });
+        expect(diagnosticScrollAlignment.inputTop).toBeGreaterThan(0);
+        expect(diagnosticScrollAlignment.contentY).toBe(-diagnosticScrollAlignment.inputTop);
+        expect(diagnosticScrollAlignment.viewportTop).toBe(0);
+
+        await requestInput.fill(invalidBooleanRpc.replace('not-a-bool', 'false'));
+        await validateButton.click();
+        await expect(requestEditor.locator('[data-xml-diagnostics-layer]')).toHaveAttribute('role', 'status');
+        await expect(requestEditor.locator('[data-xml-diagnostics-content]')).toHaveCount(0);
+    });
+
     test('validates, marks, confirms, and sends an edited complete RPC', async ({ page }) => {
         const rawRequests = [];
+        let forcedValidationError = '';
         const originalControllerCall = harness.controller.call.bind(harness.controller);
         harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.registry.validateRpc' && forcedValidationError) {
+                return { status: 'error', msg: forcedValidationError };
+            }
             if (method === 'yang.netconf.sendRpc') rawRequests.push(JSON.parse(JSON.stringify(args[0])));
             return originalControllerCall(method, ...args);
         };
@@ -1412,6 +2268,10 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(Math.abs(malformedCardBox.height - initialCardBox.height)).toBeLessThanOrEqual(1);
         await operationPanel.getByRole('button', { name: '发送手工 RPC', exact: true }).click();
         await expect(page.getByRole('dialog', { name: '确认发送手工 RPC' })).toHaveCount(0);
+        await expect(page.getByRole('dialog', { name: '确认仍然下发 RPC' })).toHaveCount(0);
+        await expect(page.getByRole('checkbox', { name: '我已了解本地 YANG 校验未通过，仍要下发该 RPC' })).toHaveCount(
+            0
+        );
         expect(rawRequests).toHaveLength(0);
 
         const unsafeRpc =
@@ -1453,16 +2313,61 @@ test.describe('NETCONF/YANG workbench', () => {
         const booleanDiagnostic = requestEditor.locator('[data-xml-diagnostic][data-line="8"]');
         await expect(booleanDiagnostic).toBeVisible();
         await expect(booleanDiagnostic).toContainText(/boolean|true|false/u);
+        await expect(requestEditor.locator('[data-xml-diagnostics-content]')).toBeVisible();
         await expect(requestEditor.locator('[data-xml-line-number="8"]')).toHaveClass(/xml-code-line-number-error/u);
         await expect(requestInput).toHaveAttribute('aria-invalid', 'true');
         await operationPanel.getByRole('button', { name: '发送手工 RPC', exact: true }).click();
-        await expect(page.getByRole('dialog', { name: '确认发送手工 RPC' })).toHaveCount(0);
+        const overrideConfirmation = page.getByRole('dialog', { name: '确认仍然下发 RPC' });
+        const overrideCheckbox = overrideConfirmation.getByRole('checkbox', {
+            name: '我已了解本地 YANG 校验未通过，仍要下发该 RPC'
+        });
+        const overrideAcknowledgement = overrideConfirmation.getByText('我已了解本地 YANG 校验未通过，仍要下发该 RPC', {
+            exact: true
+        });
+        const overrideButton = overrideConfirmation.getByRole('button', { name: '仍然下发', exact: true });
+        await expect(overrideConfirmation).toBeVisible();
+        await expect(overrideConfirmation).toContainText(/本地 YANG 校验发现 1 处问题/u);
+        await expect(overrideConfirmation).toContainText(/boolean|true|false/u);
+        await expect(overrideCheckbox).not.toBeChecked();
+        await expect(overrideButton).toBeDisabled();
+        await overrideConfirmation.getByRole('button', { name: '取消', exact: true }).click();
         expect(rawRequests).toHaveLength(0);
+
+        await operationPanel.getByRole('button', { name: '发送手工 RPC', exact: true }).click();
+        await expect(overrideConfirmation).toBeVisible();
+        await expect(overrideCheckbox).not.toBeChecked();
+        await overrideAcknowledgement.click();
+        await expect(overrideButton).toBeEnabled();
+        await overrideButton.click();
+        await expect.poll(() => rawRequests.length).toBe(1);
+        expect(rawRequests[0]).toMatchObject({ rpc: invalidBooleanRpc });
+        await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
+        rawRequests.length = 0;
+
+        const unrelatedSchemaRpc = invalidBooleanRpc
+            .replace('manual-yang-invalid', 'manual-yang-context-error')
+            .replace('not-a-bool', 'false');
+        forcedValidationError = 'Not found node "bras-cu-controller" in unrelated BRAS deviation';
+        await requestInput.fill(unrelatedSchemaRpc);
+        await operationPanel.getByRole('button', { name: '发送手工 RPC', exact: true }).click();
+        await expect(overrideConfirmation).toBeVisible();
+        await expect(overrideConfirmation).toContainText('本地 YANG 校验无法完成');
+        await expect(overrideConfirmation).toContainText('bras-cu-controller');
+        await expect(overrideCheckbox).not.toBeChecked();
+        await overrideAcknowledgement.click();
+        await overrideButton.click();
+        await expect.poll(() => rawRequests.length).toBe(1);
+        expect(rawRequests[0]).toMatchObject({ rpc: unrelatedSchemaRpc });
+        await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
+        rawRequests.length = 0;
+        forcedValidationError = '';
 
         const validBooleanRpc = invalidBooleanRpc.replace('not-a-bool', 'false');
         await requestInput.fill(validBooleanRpc);
         await validateButton.click();
         await expect(requestDiagnostics).toHaveCount(0);
+        await expect(requestEditor.locator('[data-xml-diagnostics-layer]')).toHaveAttribute('role', 'status');
+        await expect(requestEditor.locator('[data-xml-diagnostics-content]')).toHaveCount(0);
         await expect(requestInput).toHaveAttribute('aria-invalid', 'false');
 
         await regenerateButton.click();
@@ -1484,6 +2389,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await validateButton.click();
         await expect(requestDiagnostics).toHaveCount(0);
         await expect(requestEditor.locator('[data-xml-diagnostics-layer]')).toHaveAttribute('role', 'status');
+        await expect(requestEditor.locator('[data-xml-diagnostics-content]')).toHaveCount(0);
         expect(
             await toolbarButtons.evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().width))
         ).toEqual(initialButtonWidths);
@@ -1636,10 +2542,95 @@ test.describe('NETCONF/YANG workbench', () => {
         expect((await historyButton.boundingBox()).width).toBe(initialHistoryButtonWidth);
     });
 
-    test('executes node operations from the Schema tree context menu', async ({ page }) => {
-        const capturedRequests = [];
+    test('terminates one pending NETCONF RPC without disconnecting its Session', async ({ page }) => {
+        let resolvePendingOperation;
+        let markOperationStarted;
+        let capturedOperationId = '';
+        let cancelledOperation = null;
+        let disconnectCalls = 0;
+        const operationStarted = new Promise(resolve => {
+            markOperationStarted = resolve;
+        });
         const originalControllerCall = harness.controller.call.bind(harness.controller);
         harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.netconf.executeOperation') {
+                capturedOperationId = args[0]?.operationId || '';
+                markOperationStarted();
+                return new Promise(resolve => {
+                    resolvePendingOperation = resolve;
+                });
+            }
+            if (method === 'yang.netconf.disconnect') {
+                disconnectCalls += 1;
+            }
+            if (method === 'yang.netconf.cancelOperation') {
+                cancelledOperation = args[0];
+                resolvePendingOperation?.({
+                    status: 'error',
+                    msg: 'mock NETCONF RPC cancelled',
+                    data: { code: 'WORKER_CANCELLED' }
+                });
+                return { status: 'success', data: { cancelled: true } };
+            }
+            return originalControllerCall(method, ...args);
+        };
+
+        await page.goto('/#/yang/yang-workspace');
+        const operationPanel = page.locator('.workspace-operation-panel');
+        const executeButton = operationPanel.getByRole('button', { name: '执行 get', exact: true });
+        await executeButton.click();
+        await operationStarted;
+
+        const terminateButton = operationPanel.getByRole('button', { name: '终止请求', exact: true });
+        await expect(terminateButton).toBeVisible();
+        await expect(operationPanel.getByText('操作执行中；可只终止本地等待，连接保持不变')).toBeVisible();
+        await terminateButton.click();
+
+        await expect(terminateButton).toBeHidden();
+        expect(capturedOperationId).toMatch(/^netconf-operation-/u);
+        expect(cancelledOperation).toEqual({
+            profileId: 'e2e-netconf-profile',
+            operationId: capturedOperationId
+        });
+        expect(disconnectCalls).toBe(0);
+        await expect(operationPanel.locator('.operation-result-card')).toContainText('已终止');
+        await expect(operationPanel.locator('.rpc-result')).toContainText('NETCONF Session 保持连接');
+        await expect(executeButton).toBeEnabled();
+
+        await page.getByRole('button', { name: '执行记录', exact: true }).click();
+        const historyDrawer = page.getByRole('dialog', { name: 'NETCONF 执行记录' });
+        const historyItems = historyDrawer.getByTestId('netconf-history-item');
+        await expect(historyItems).toHaveCount(1);
+        await expect(historyItems.first()).toContainText('已终止');
+        await expect(historyDrawer.getByTestId('netconf-history-reply')).toHaveValue(/NETCONF Session 保持连接/u);
+    });
+
+    test('executes node operations from the Schema tree context menu', async ({ page }) => {
+        const capturedRequests = [];
+        let forceGeneratedYangFailure = false;
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.registry.validateRpc' && forceGeneratedYangFailure) {
+                return {
+                    status: 'success',
+                    data: {
+                        valid: false,
+                        diagnostics: [
+                            {
+                                severity: 'error',
+                                code: 'LIBYANG_DATA',
+                                message: 'YANG 校验失败：generated edit-config regression',
+                                line: 1,
+                                column: 1
+                            }
+                        ],
+                        operation: 'edit-config',
+                        engine: 'libyang',
+                        authoritative: true,
+                        performed: true
+                    }
+                };
+            }
             if (method === 'yang.netconf.executeOperation') {
                 capturedRequests.push(JSON.parse(JSON.stringify(args[0])));
             }
@@ -1666,7 +2657,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(propertyDialog).toBeVisible();
         await expect(propertyDialog).toContainText('/ietf-interfaces:interfaces');
         await propertyDialog.getByRole('button', { name: '关闭' }).click();
-
+        await expect(propertyDialog).toBeHidden();
         await interfacesNode.click({ button: 'right' });
 
         await expect(contextMenu).toBeVisible();
@@ -2019,11 +3010,21 @@ test.describe('NETCONF/YANG workbench', () => {
         await page.getByRole('option', { name: 'false', exact: true }).click();
         await enabledDialog.getByRole('button', { name: '确认', exact: true }).click();
         await expect(requestPreview).toContainText('<enabled>false</enabled>');
+        forceGeneratedYangFailure = true;
         await executeEditButton.click();
-        const editConfirmation = page.getByRole('dialog', { name: '确认执行 edit-config' });
+        const editConfirmation = page.getByRole('dialog', { name: '确认仍然下发 RPC' });
         await expect(editConfirmation).toBeVisible();
-        await editConfirmation.getByRole('button', { name: '确认执行', exact: true }).click();
+        await expect(editConfirmation).toContainText('generated edit-config regression');
+        const generatedOverrideCheckbox = editConfirmation.getByRole('checkbox', {
+            name: '我已了解本地 YANG 校验未通过，仍要下发该 RPC'
+        });
+        const generatedOverrideButton = editConfirmation.getByRole('button', { name: '仍然下发', exact: true });
+        await expect(generatedOverrideCheckbox).not.toBeChecked();
+        await expect(generatedOverrideButton).toBeDisabled();
+        await editConfirmation.getByText('我已了解本地 YANG 校验未通过，仍要下发该 RPC', { exact: true }).click();
+        await generatedOverrideButton.click();
         await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
+        forceGeneratedYangFailure = false;
         expect(capturedRequests.slice(-2).map(request => request.operation)).toEqual(['get-config', 'edit-config']);
         expect(capturedRequests.at(-1).config).toContain('<enabled>false</enabled>');
 
@@ -2297,7 +3298,13 @@ test.describe('NETCONF/YANG workbench', () => {
         const notificationNode = schemaTreeItems(page)
             .filter({ has: page.getByText('interface-event', { exact: true }) })
             .first();
-        await notificationNode.click({ button: 'right' });
+        await notificationNode.dispatchEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            clientX: 180,
+            clientY: 180
+        });
         const contextMenu = page.locator('.schema-context-menu');
         await expect(contextMenu).toBeVisible();
         await contextMenu.getByRole('menuitem', { name: '建立动态订阅（RFC 8639）', exact: true }).click();

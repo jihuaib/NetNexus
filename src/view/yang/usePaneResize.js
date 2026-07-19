@@ -10,7 +10,11 @@ export function usePaneResize({
     minFirst = 0,
     minSecond = 0,
     dividerSize = 0,
-    activeWhen = () => true
+    activeWhen = () => true,
+    frameSynchronized = false,
+    previewStyleProperty = '',
+    previewTargetRef,
+    previewStyleValue = value => `${value}px`
 }) {
     const paneSize = ref(0);
     const minSize = ref(minFirst);
@@ -23,16 +27,55 @@ export function usePaneResize({
     let previousBodyCursor = '';
     let previousBodyUserSelect = '';
     let activePointerId = null;
+    let dragRect = null;
+    let livePaneSize = 0;
+    let pendingPointerCoordinate = null;
+    let resizeFrameId = null;
+    let boundsFrameId = null;
+    let pendingObservedAxisSize = null;
+    let pendingBoundsMeasurement = false;
+    let lastObservedAxisSize = null;
 
-    const containerSize = () => containerRef.value?.getBoundingClientRect?.()[axis] || 0;
+    const readContainerRect = () => containerRef.value?.getBoundingClientRect?.() || null;
+    const resolvePreviewTarget = () => previewTargetRef?.value || containerRef.value;
+    const hasDomPreview = () => Boolean(frameSynchronized && previewStyleProperty && resolvePreviewTarget()?.style);
 
-    const updateBounds = ({ reset = false } = {}) => {
+    const writeDomPreview = size => {
+        const target = resolvePreviewTarget();
+        if (!frameSynchronized || !previewStyleProperty || !target?.style) return false;
+        const styleValue =
+            typeof previewStyleValue === 'function' ? previewStyleValue(size) : `${size}${previewStyleValue || 'px'}`;
+        target.style.setProperty(previewStyleProperty, styleValue);
+        return true;
+    };
+
+    const commitPaneSize = size => {
+        const nextSize = Math.round(size);
+        livePaneSize = nextSize;
+        paneSize.value = nextSize;
+        writeDomPreview(nextSize);
+    };
+
+    const previewPaneSize = size => {
+        const nextSize = Math.round(size);
+        livePaneSize = nextSize;
+        if (!writeDomPreview(nextSize)) paneSize.value = nextSize;
+    };
+
+    const updateBounds = ({ reset = false, rect = null, axisSize = null } = {}) => {
         if (!activeWhen()) {
             stopResize();
             return;
         }
-        const total = containerSize();
+        const suppliedAxisSize = Number(axisSize);
+        const hasSuppliedAxisSize = Number.isFinite(suppliedAxisSize) && suppliedAxisSize > 0;
+        const containerRect = rect || (hasSuppliedAxisSize ? null : readContainerRect());
+        const total = hasSuppliedAxisSize ? suppliedAxisSize : containerRect?.[axis] || 0;
         if (total <= 0) return;
+
+        if (frameSynchronized && resizing.value) {
+            dragRect = containerRect || readContainerRect() || dragRect;
+        }
 
         const available = Math.max(0, total - dividerSize);
         const nextMaximum = Math.max(0, available - minSecond);
@@ -41,12 +84,15 @@ export function usePaneResize({
         maxSize.value = Math.round(Math.max(nextMinimum, nextMaximum));
 
         if (!initialized || reset) {
-            paneSize.value = Math.round(clamp(available * defaultRatio, nextMinimum, nextMaximum));
+            commitPaneSize(clamp(available * defaultRatio, nextMinimum, nextMaximum));
             initialized = true;
             return;
         }
 
-        paneSize.value = Math.round(clamp(paneSize.value, nextMinimum, nextMaximum));
+        const currentSize = frameSynchronized && resizing.value ? livePaneSize : paneSize.value;
+        const nextSize = clamp(currentSize, nextMinimum, nextMaximum);
+        if (frameSynchronized && resizing.value && hasDomPreview()) previewPaneSize(nextSize);
+        else commitPaneSize(nextSize);
     };
 
     const removePointerListeners = () => {
@@ -63,49 +109,160 @@ export function usePaneResize({
         resizing.value = false;
     };
 
-    const updateFromPointer = event => {
-        const rect = containerRef.value?.getBoundingClientRect?.();
+    const pointerCoordinate = event => (orientation === 'horizontal' ? event.clientY : event.clientX);
+
+    const sizeFromPointerCoordinate = (coordinate, rect) => {
         if (!rect) return;
         const pointerPosition =
             orientation === 'horizontal'
                 ? reverse
-                    ? rect.bottom - event.clientY
-                    : event.clientY - rect.top
+                    ? rect.bottom - coordinate
+                    : coordinate - rect.top
                 : reverse
-                  ? rect.right - event.clientX
-                  : event.clientX - rect.left;
-        paneSize.value = Math.round(clamp(pointerPosition - dividerSize / 2, minSize.value, maxSize.value));
+                  ? rect.right - coordinate
+                  : coordinate - rect.left;
+        return clamp(pointerPosition - dividerSize / 2, minSize.value, maxSize.value);
+    };
+
+    const updateFromPointer = event => {
+        const size = sizeFromPointerCoordinate(pointerCoordinate(event), readContainerRect());
+        if (size === undefined) return;
+        commitPaneSize(size);
+    };
+
+    const updateFromPointerCoordinate = coordinate => {
+        const size = sizeFromPointerCoordinate(coordinate, dragRect);
+        if (size === undefined) return;
+        previewPaneSize(size);
+    };
+
+    const flushPendingPointerUpdate = () => {
+        if (pendingPointerCoordinate === null) return;
+        const coordinate = pendingPointerCoordinate;
+        pendingPointerCoordinate = null;
+        updateFromPointerCoordinate(coordinate);
+    };
+
+    const cancelResizeFrame = () => {
+        if (resizeFrameId === null) return;
+        if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(resizeFrameId);
+        resizeFrameId = null;
+    };
+
+    const flushPendingBoundsUpdate = () => {
+        const shouldMeasure = pendingBoundsMeasurement;
+        const observedAxisSize = pendingObservedAxisSize;
+        pendingBoundsMeasurement = false;
+        pendingObservedAxisSize = null;
+        updateBounds(shouldMeasure || observedAxisSize === null ? undefined : { axisSize: observedAxisSize });
+    };
+
+    const cancelBoundsFrame = () => {
+        if (boundsFrameId === null) return;
+        if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(boundsFrameId);
+        boundsFrameId = null;
+    };
+
+    const queueBoundsUpdate = ({ measure = false, axisSize: nextAxisSize = null } = {}) => {
+        if (!frameSynchronized) {
+            updateBounds();
+            return;
+        }
+        if (measure) pendingBoundsMeasurement = true;
+        if (nextAxisSize !== null && Number.isFinite(Number(nextAxisSize))) {
+            pendingObservedAxisSize = Number(nextAxisSize);
+        }
+        if (boundsFrameId !== null) return;
+        if (typeof window.requestAnimationFrame !== 'function') {
+            flushPendingBoundsUpdate();
+            return;
+        }
+        boundsFrameId = window.requestAnimationFrame(() => {
+            boundsFrameId = null;
+            flushPendingBoundsUpdate();
+        });
+    };
+
+    const handleContainerResize = entries => {
+        if (!frameSynchronized) {
+            updateBounds();
+            return;
+        }
+        const entry = Array.isArray(entries) ? entries[entries.length - 1] : null;
+        const nextAxisSize = Number(entry?.contentRect?.[axis]);
+        if (!Number.isFinite(nextAxisSize) || nextAxisSize <= 0) {
+            queueBoundsUpdate({ measure: true });
+            return;
+        }
+        if (lastObservedAxisSize !== null && Math.abs(nextAxisSize - lastObservedAxisSize) < 0.5) return;
+        lastObservedAxisSize = nextAxisSize;
+        queueBoundsUpdate({ axisSize: nextAxisSize });
+    };
+
+    const handleViewportResize = () => (frameSynchronized ? queueBoundsUpdate({ measure: true }) : updateBounds());
+
+    const queuePointerUpdate = event => {
+        pendingPointerCoordinate = pointerCoordinate(event);
+        if (resizeFrameId !== null) return;
+        if (typeof window.requestAnimationFrame !== 'function') {
+            flushPendingPointerUpdate();
+            return;
+        }
+        resizeFrameId = window.requestAnimationFrame(() => {
+            resizeFrameId = null;
+            flushPendingPointerUpdate();
+        });
     };
 
     function handlePointerMove(event) {
         if (!resizing.value || event.pointerId !== activePointerId) return;
         event.preventDefault();
-        updateFromPointer(event);
+        if (frameSynchronized) queuePointerUpdate(event);
+        else updateFromPointer(event);
     }
 
     function handlePointerEnd(event) {
         if (event.pointerId !== activePointerId) return;
+        if (frameSynchronized && event.type !== 'pointercancel') {
+            pendingPointerCoordinate = pointerCoordinate(event);
+        }
         stopResize();
     }
 
     function stopResize() {
         removePointerListeners();
+        if (frameSynchronized) {
+            cancelResizeFrame();
+            flushPendingPointerUpdate();
+            if (resizing.value) commitPaneSize(livePaneSize);
+        }
         restoreDocumentInteraction();
         activePointerId = null;
+        if (frameSynchronized) {
+            dragRect = null;
+            pendingPointerCoordinate = null;
+        }
     }
 
     const startResize = event => {
         if (!activeWhen() || event.button !== 0 || event.isPrimary === false) return;
         event.preventDefault();
         stopResize();
-        updateBounds();
+        const rect = frameSynchronized ? readContainerRect() : null;
+        if (frameSynchronized && !rect) return;
+        updateBounds(frameSynchronized ? { rect } : undefined);
         previousBodyCursor = document.body.style.cursor;
         previousBodyUserSelect = document.body.style.userSelect;
         document.body.style.cursor = cursor;
         document.body.style.userSelect = 'none';
         activePointerId = event.pointerId;
+        if (frameSynchronized) {
+            dragRect = rect;
+            livePaneSize = paneSize.value;
+        }
         resizing.value = true;
-        updateFromPointer(event);
+        if (frameSynchronized) queuePointerUpdate(event);
+        else updateFromPointer(event);
         document.addEventListener('pointermove', handlePointerMove);
         document.addEventListener('pointerup', handlePointerEnd);
         document.addEventListener('pointercancel', handlePointerEnd);
@@ -130,7 +287,7 @@ export function usePaneResize({
 
         if (nextSize === null) return;
         event.preventDefault();
-        paneSize.value = Math.round(clamp(nextSize, minSize.value, maxSize.value));
+        commitPaneSize(clamp(nextSize, minSize.value, maxSize.value));
     };
 
     const resetResize = () => updateBounds({ reset: true });
@@ -139,17 +296,18 @@ export function usePaneResize({
         nextTick(() => {
             updateBounds();
             if (typeof ResizeObserver !== 'undefined' && containerRef.value) {
-                resizeObserver = new ResizeObserver(() => updateBounds());
+                resizeObserver = new ResizeObserver(handleContainerResize);
                 resizeObserver.observe(containerRef.value);
             }
         });
-        window.addEventListener('resize', updateBounds);
+        window.addEventListener('resize', handleViewportResize);
     });
 
     onBeforeUnmount(() => {
         stopResize();
+        cancelBoundsFrame();
         resizeObserver?.disconnect();
-        window.removeEventListener('resize', updateBounds);
+        window.removeEventListener('resize', handleViewportResize);
     });
 
     return {

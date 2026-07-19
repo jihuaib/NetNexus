@@ -131,7 +131,7 @@ function createSnmpPageState() {
     };
 }
 
-function handlePageCall(controller, method) {
+function handlePageCall(controller, method, args) {
     const snmp = controller.state.snmp;
     if (method === 'snmp.getSnmpConfig') return successResponse(snmp.config);
     if (method === 'snmp.getTrapList') {
@@ -150,7 +150,12 @@ function handlePageCall(controller, method) {
     if (method === 'snmp.getMibStatus') return successResponse(snmp.mibStatus);
     if (method === 'snmp.getMibTreeChildren') return successResponse([]);
     if (method === 'snmp.translateOid')
-        return successResponse({ ...snmp.mibStatus.oidTree[0], matched: true, matchedOid: '1.3.6.1.2.1.1.1' });
+        return successResponse({
+            ...snmp.mibStatus.oidTree[0],
+            oid: typeof args?.[0] === 'string' ? args[0] : snmp.mibStatus.oidTree[0].oid,
+            matched: true,
+            matchedOid: '1.3.6.1.2.1.1.1'
+        });
     if (method === 'snmp.listMibProjects') return successResponse({ rootDir: controller.protocolRoot, projects: [] });
     if (method === 'snmp.selectMibFiles')
         return successResponse({ filePaths: ['scripts/manual/snmp/mibs/NETNEXUS-DEMO-MIB.mib'] });

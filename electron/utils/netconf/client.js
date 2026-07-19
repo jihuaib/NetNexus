@@ -62,6 +62,15 @@ class NetconfTimeoutError extends Error {
     }
 }
 
+class NetconfRpcCancelledError extends Error {
+    constructor(messageId) {
+        super(`NETCONF RPC ${messageId} was cancelled`);
+        this.name = 'NetconfRpcCancelledError';
+        this.code = 'NETCONF_RPC_CANCELLED';
+        this.messageId = messageId;
+    }
+}
+
 function withRpcContext(error, requestXml, messageId) {
     const source = error instanceof Error ? error : new Error(String(error));
     const contextualError = Object.create(Object.getPrototypeOf(source));
@@ -130,7 +139,8 @@ class NetconfClient extends EventEmitter {
         this.clientCapabilities = capabilitySet(options.clientCapabilities || DEFAULT_CLIENT_CAPABILITIES);
         this.transportFactory = options.transportFactory || createSshTransport;
         this.transport = options.transport || null;
-        this.rpcTimeout = options.rpcTimeout === undefined ? 30000 : Number(options.rpcTimeout);
+        this.rpcTimeout =
+            options.rpcTimeout === undefined ? NETCONF_LIMITS.DEFAULT_RPC_TIMEOUT : Number(options.rpcTimeout);
         this.helloTimeout = options.helloTimeout === undefined ? 20000 : Number(options.helloTimeout);
         this.maxMessageSize = options.maxMessageSize;
         this.maxChunkSize = options.maxChunkSize;
@@ -152,6 +162,7 @@ class NetconfClient extends EventEmitter {
         this.serverCapabilities = this.capabilities;
         this.baseVersion = null;
         this.pending = new Map();
+        this._retiredMessageIds = new Set();
         this.nextMessageId = options.initialMessageId === undefined ? 1 : Number(options.initialMessageId);
         if (!Number.isSafeInteger(this.nextMessageId) || this.nextMessageId < 0) {
             throw new TypeError('initialMessageId must be a non-negative safe integer');
@@ -223,6 +234,7 @@ class NetconfClient extends EventEmitter {
             }
 
             this.transport = transport;
+            this._retiredMessageIds.clear();
             this._inboundMessageSequence = 0;
             this._bindTransport(transport);
             this._helloFramer = new DelimiterFramer(this._framerOptions());
@@ -408,6 +420,10 @@ class NetconfClient extends EventEmitter {
         });
         message.transportSequence = ++this._inboundMessageSequence;
         if (message.type === 'rpc-reply') {
+            if (message.messageId && this._retiredMessageIds.delete(message.messageId)) {
+                this.emit('orphan-reply', message);
+                return;
+            }
             if (!message.messageId || !this.pending.has(message.messageId)) {
                 this.emit('orphan-reply', message);
                 return;
@@ -438,6 +454,15 @@ class NetconfClient extends EventEmitter {
         this.emit('message', message);
     }
 
+    reserveMessageId() {
+        const messageId = this.nextMessageId;
+        if (!Number.isSafeInteger(messageId) || messageId < 0) {
+            throw new RangeError('NETCONF RPC message-id sequence is exhausted');
+        }
+        this.nextMessageId += 1;
+        return messageId;
+    }
+
     rpc(operationOrRpc, options = {}) {
         if (!this.connected) {
             return Promise.reject(
@@ -455,7 +480,11 @@ class NetconfClient extends EventEmitter {
             requestedMessageId = existingMessageId;
         }
         if (requestedMessageId === undefined || requestedMessageId === null) {
-            requestedMessageId = String(this.nextMessageId++);
+            try {
+                requestedMessageId = String(this.reserveMessageId());
+            } catch (error) {
+                return Promise.reject(error);
+            }
         } else {
             requestedMessageId = String(requestedMessageId);
         }
@@ -475,6 +504,14 @@ class NetconfClient extends EventEmitter {
                 )
             );
         }
+        if (this._retiredMessageIds.has(messageId)) {
+            return Promise.reject(
+                new NetconfProtocolError(
+                    `RPC message-id ${messageId} is retired until its late reply arrives or the session ends`,
+                    'NETCONF_RETIRED_MESSAGE_ID'
+                )
+            );
+        }
 
         const timeout =
             options.timeout === undefined || options.timeout === null ? this.rpcTimeout : Number(options.timeout);
@@ -488,6 +525,7 @@ class NetconfClient extends EventEmitter {
                     return;
                 }
                 this.pending.delete(messageId);
+                this._retiredMessageIds.add(messageId);
                 reject(withRpcContext(new NetconfTimeoutError(messageId, timeout), envelope.xml, messageId));
             }, timeout);
             this.pending.set(messageId, {
@@ -509,6 +547,24 @@ class NetconfClient extends EventEmitter {
                 reject(withRpcContext(error, envelope.xml, messageId));
             }
         });
+    }
+
+    cancelRpc(messageId) {
+        if (messageId === undefined || messageId === null) {
+            return false;
+        }
+        const normalizedMessageId = String(messageId);
+        const pending = this.pending.get(normalizedMessageId);
+        if (!pending) {
+            return false;
+        }
+        clearTimeout(pending.timer);
+        this.pending.delete(normalizedMessageId);
+        this._retiredMessageIds.add(normalizedMessageId);
+        pending.reject(
+            withRpcContext(new NetconfRpcCancelledError(normalizedMessageId), pending.requestXml, normalizedMessageId)
+        );
+        return true;
     }
 
     get(options = {}, rpcOptions = {}) {
@@ -680,6 +736,7 @@ class NetconfClient extends EventEmitter {
             reject(terminalError);
         }
         this._rejectPending(terminalError);
+        this._retiredMessageIds.clear();
         this._unbindTransport();
         if (destroyTransport && transport) {
             try {
@@ -704,6 +761,7 @@ module.exports = {
     NetconfConnectionError,
     NetconfProtocolError,
     NetconfTimeoutError,
+    NetconfRpcCancelledError,
     ensureRpcEnvelope,
     extractRpcMessageId,
     supportsBase

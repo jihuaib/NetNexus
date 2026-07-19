@@ -12,7 +12,7 @@ const {
     resolveRpcValidationTarget
 } = require('./yangRpcInstanceValidation');
 
-const COMPILE_CACHE_SCHEMA_VERSION = 4;
+const COMPILE_CACHE_SCHEMA_VERSION = 5;
 const LIBYANG_SCHEMA_OUTPUT_VERSION = 1;
 const DEFAULT_COMPILER_EXECUTABLE = 'yanglint';
 const DEFAULT_EXTERNAL_TIMEOUT = 60_000;
@@ -62,6 +62,22 @@ function normalizeCacheValues(value) {
 function normalizedPathKey(value) {
     const resolved = path.resolve(value);
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function terminalSchemaNodePrefix(value) {
+    const terminalNode = String(value || '')
+        .trim()
+        .split('/')
+        .filter(Boolean)
+        .at(-1);
+    const match = String(terminalNode || '').match(/^\s*(?:([A-Za-z_][A-Za-z0-9_.-]*)\s*:)?[A-Za-z_][A-Za-z0-9_.-]*/u);
+    return match ? match[1] || '' : null;
+}
+
+function validationContextError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
 }
 
 function schemaFileFingerprint(filePath) {
@@ -651,6 +667,29 @@ class YangCompiler {
         return { inputDirectory, inputs };
     }
 
+    schemaInputDescriptors(inputs, deviationPaths = []) {
+        const descriptors = inputs.map(input => ({
+            hash: input.module.hash,
+            path: path.resolve(input.path),
+            externalDeviation: false
+        }));
+        const knownPaths = new Set(descriptors.map(descriptor => normalizedPathKey(descriptor.path)));
+        for (const deviationPath of deviationPaths) {
+            const resolvedPath = path.resolve(deviationPath);
+            if (knownPaths.has(normalizedPathKey(resolvedPath))) continue;
+            const source = fs.readFileSync(resolvedPath);
+            const parsed = parseYang(source.toString('utf8'), { sourceName: path.basename(resolvedPath) });
+            descriptors.push({
+                hash: sha256(source),
+                path: resolvedPath,
+                externalDeviation: true,
+                metadata: parsed.metadata
+            });
+            knownPaths.add(normalizedPathKey(resolvedPath));
+        }
+        return descriptors;
+    }
+
     normalizeFeatureArguments(features, modules) {
         const byModule = new Map();
         const add = (moduleName, featureNames) => {
@@ -902,6 +941,7 @@ class YangCompiler {
         }
         const deviationResolution = this.resolveDeviationInputs(options.deviations, materialized.inputs);
         const deviationPaths = deviationResolution.paths;
+        const schemaInputs = this.schemaInputDescriptors(materialized.inputs, deviationPaths);
         if (deviationResolution.diagnostics.length) {
             return {
                 invoked: false,
@@ -912,6 +952,7 @@ class YangCompiler {
                 searchPaths: [],
                 features: featureArguments,
                 deviations: deviationPaths,
+                schemaInputs,
                 timeout: null,
                 maxBuffer: null,
                 exitCode: null,
@@ -1027,6 +1068,7 @@ class YangCompiler {
             searchPaths,
             features: featureArguments,
             deviations: deviationPaths,
+            schemaInputs,
             timeout,
             maxBuffer,
             exitCode,
@@ -1097,6 +1139,10 @@ class YangCompiler {
                     total: topLevelModules.length,
                     percent: 88 + Math.round((completed / Math.max(1, topLevelModules.length)) * 7),
                     currentFile: module.fileName,
+                    currentHash: module.hash,
+                    currentName: module.metadata?.name || module.fileName,
+                    currentRevision: module.metadata?.revision || null,
+                    fileStatus: validation.succeeded ? 'compiled' : 'failed',
                     message: `${module.fileName} ${validation.succeeded ? 'compiled successfully' : 'failed compilation'}`
                 });
             }
@@ -1169,6 +1215,7 @@ class YangCompiler {
             searchPaths: execution.searchPaths || [],
             features: execution.features || [],
             deviations: execution.deviations || [],
+            schemaInputs: execution.schemaInputs || [],
             timeout: execution.timeout || null,
             maxBuffer: execution.maxBuffer || null,
             exitCode: execution.exitCode ?? null,
@@ -1273,6 +1320,10 @@ class YangCompiler {
             progress('parsing', {
                 completed,
                 currentFile: entry.fileName,
+                currentHash: entry.hash,
+                currentName: entry.metadata?.name || entry.fileName,
+                currentRevision: entry.metadata?.revision || null,
+                fileStatus: 'parsed',
                 message: `Parsed ${entry.fileName}`,
                 counts: { parsed: completed, failed }
             });
@@ -1355,6 +1406,22 @@ class YangCompiler {
             compileId,
             options,
             progress
+        });
+        fileResults.forEach((fileResult, index) => {
+            const completed = index + 1;
+            progress('file-result', {
+                completed,
+                total: fileResults.length,
+                percent: 88 + Math.round((completed / Math.max(1, fileResults.length)) * 7),
+                currentFile: fileResult.fileName,
+                currentHash: fileResult.hash,
+                currentName: fileResult.name,
+                currentRevision: fileResult.revision,
+                fileStatus: fileResult.status,
+                message: `${fileResult.fileName} ${
+                    fileResult.status === 'compiled' ? 'compiled successfully' : 'failed compilation'
+                }`
+            });
         });
         const compiledFileCount = fileResults.filter(result => result.status === 'compiled').length;
         const failedFileCount = fileResults.filter(result => result.status === 'failed').length;
@@ -1532,6 +1599,230 @@ class YangCompiler {
         return schemaPaths.map(filePath => path.resolve(filePath));
     }
 
+    rpcValidationSchemaCatalog(compilation, schemaCompiler) {
+        const modules = Array.isArray(compilation.result?.modules) ? compilation.result.modules : [];
+        const modulesByHash = new Map(modules.map(module => [module.hash, module]));
+        let inputs = Array.isArray(schemaCompiler.schemaInputs) ? schemaCompiler.schemaInputs : [];
+        if (!inputs.length) {
+            const deviationPaths = new Set(
+                normalizeStringList(schemaCompiler.deviations).map(deviationPath => normalizedPathKey(deviationPath))
+            );
+            inputs = this.dataValidationSchemaPaths(schemaCompiler).map(schemaPath => {
+                const source = fs.readFileSync(schemaPath);
+                const hash = sha256(source);
+                const parsed = parseYang(source.toString('utf8'), { sourceName: path.basename(schemaPath) });
+                return {
+                    hash,
+                    path: schemaPath,
+                    externalDeviation: deviationPaths.has(normalizedPathKey(schemaPath)),
+                    metadata: parsed.metadata
+                };
+            });
+        }
+        return inputs.map(input => {
+            const externalDeviation = input.externalDeviation === true;
+            const module = externalDeviation ? null : modulesByHash.get(input.hash);
+            return {
+                ...(module || {}),
+                hash: input.hash || module?.hash || '',
+                path: path.resolve(input.path),
+                metadata: input.metadata || module?.metadata || null,
+                externalDeviation
+            };
+        });
+    }
+
+    deviationTargetsScope(metadata, targetModules) {
+        if (!metadata || !Array.isArray(metadata.deviations) || !metadata.deviations.length) return false;
+        const prefixes = new Map();
+        const ownerName = metadata.kind === 'submodule' ? metadata.belongsTo : metadata.name;
+        const ownerPrefix = metadata.kind === 'submodule' ? metadata.belongsToPrefix : metadata.prefix;
+        const ownerRevision = metadata.kind === 'submodule' ? null : metadata.revision || null;
+        if (ownerName && ownerPrefix) {
+            prefixes.set(ownerPrefix, { name: ownerName, revisionDate: ownerRevision });
+        }
+        for (const imported of metadata.imports || []) {
+            if (!imported?.prefix || !imported?.name) continue;
+            prefixes.set(imported.prefix, {
+                name: imported.name,
+                revisionDate: imported.revisionDate || null
+            });
+        }
+        return metadata.deviations.some(deviation => {
+            /* The first path segment only identifies the datastore root. For augmented
+             * data, the terminal node's prefix identifies the module whose schema is
+             * actually changed by the deviation. */
+            const prefix = terminalSchemaNodePrefix(deviation?.target);
+            if (prefix === null) return false;
+            const target = prefix ? prefixes.get(prefix) : { name: ownerName, revisionDate: ownerRevision };
+            if (!target?.name) return false;
+            return targetModules.some(
+                module =>
+                    module.metadata?.kind === 'module' &&
+                    module.metadata?.name === target.name &&
+                    (!target.revisionDate || module.metadata?.revision === target.revisionDate)
+            );
+        });
+    }
+
+    selectRpcValidationScope(compilation, schemaCompiler, target) {
+        const catalog = this.rpcValidationSchemaCatalog(compilation, schemaCompiler);
+        const repositoryModules = catalog.filter(input => !input.externalDeviation && input.hash && input.metadata);
+        const configuredDeviationPaths = new Set(
+            normalizeStringList(schemaCompiler.deviations).map(deviationPath => normalizedPathKey(deviationPath))
+        );
+        const configuredRepositoryDeviations = repositoryModules.filter(input =>
+            configuredDeviationPaths.has(normalizedPathKey(input.path))
+        );
+        const activeRootHashes = new Set(
+            normalizeStringList(
+                Array.isArray(schemaCompiler.moduleHashes) && schemaCompiler.moduleHashes.length
+                    ? schemaCompiler.moduleHashes
+                    : compilation.result?.schemaModuleHashes
+            )
+        );
+        if (!activeRootHashes.size) {
+            repositoryModules
+                .filter(module => module.metadata?.kind === 'module')
+                .forEach(module => activeRootHashes.add(module.hash));
+        }
+
+        const availabilityRootHashes = new Set(activeRootHashes);
+        configuredRepositoryDeviations.forEach(module => availabilityRootHashes.add(module.hash));
+        for (const externalDeviation of catalog.filter(input => input.externalDeviation)) {
+            for (const imported of externalDeviation.metadata?.imports || []) {
+                const dependency = repositoryModules
+                    .filter(module => module.metadata?.kind === 'module')
+                    .filter(module => module.metadata?.name === imported.name)
+                    .filter(module => !imported.revisionDate || module.metadata?.revision === imported.revisionDate)
+                    .sort((left, right) =>
+                        (right.metadata?.revision || '').localeCompare(left.metadata?.revision || '')
+                    )[0];
+                if (dependency?.hash) availabilityRootHashes.add(dependency.hash);
+            }
+        }
+        const repositoryTopLevelModules = repositoryModules.filter(module => module.metadata?.kind === 'module');
+        const availableModules = repositoryTopLevelModules.every(module => availabilityRootHashes.has(module.hash))
+            ? repositoryModules
+            : this.moduleDependencyClosure(repositoryModules, availabilityRootHashes);
+        const availableTopLevelModules = availableModules.filter(module => module.metadata?.kind === 'module');
+        const namespaces = normalizeStringList(target.namespaces);
+        if (!namespaces.length) {
+            throw validationContextError(
+                'YANG_RPC_NAMESPACE_NOT_COMPILED',
+                'The RPC payload does not identify a compiled YANG module namespace'
+            );
+        }
+
+        const seedModules = new Map();
+        const resolveNamespace = namespace => {
+            const matches = availableTopLevelModules.filter(module => module.metadata?.namespace === namespace);
+            if (matches.length > 1) {
+                throw validationContextError(
+                    'YANG_RPC_NAMESPACE_AMBIGUOUS',
+                    `More than one compiled YANG module uses RPC payload namespace ${namespace}`
+                );
+            }
+            if (!matches.length) {
+                throw validationContextError(
+                    'YANG_RPC_NAMESPACE_NOT_COMPILED',
+                    `No active compiled YANG module uses RPC payload namespace ${namespace}`
+                );
+            }
+            seedModules.set(matches[0].hash, matches[0]);
+        };
+        namespaces.forEach(resolveNamespace);
+        if (!seedModules.size) {
+            throw validationContextError(
+                'YANG_RPC_NAMESPACE_NOT_COMPILED',
+                'No active compiled YANG module matches the RPC payload'
+            );
+        }
+
+        const baseClosure = this.moduleDependencyClosure(repositoryModules, new Set(seedModules.keys()));
+        const baseTargetModules = baseClosure.filter(module => module.metadata?.kind === 'module');
+        const candidateRootHashes = new Set(activeRootHashes);
+        configuredRepositoryDeviations.forEach(module => candidateRootHashes.add(module.hash));
+        const deviationSourcesByOwner = new Map();
+        for (const source of repositoryModules) {
+            if (!source.metadata?.deviations?.length) continue;
+            const owner = source.metadata.kind === 'submodule' ? source.metadata.belongsTo : source.metadata.name;
+            if (!owner) continue;
+            if (!deviationSourcesByOwner.has(owner)) deviationSourcesByOwner.set(owner, []);
+            deviationSourcesByOwner.get(owner).push(source);
+        }
+        const relevantDeviationRoots = repositoryModules.filter(module => {
+            if (module.metadata?.kind !== 'module' || !candidateRootHashes.has(module.hash)) return false;
+            const moduleSources = deviationSourcesByOwner.get(module.metadata.name) || [];
+            return moduleSources.some(source => this.deviationTargetsScope(source.metadata, baseTargetModules));
+        });
+        const relevantExternalDeviations = catalog.filter(
+            input => input.externalDeviation && this.deviationTargetsScope(input.metadata, baseTargetModules)
+        );
+
+        const scopeRootHashes = new Set(seedModules.keys());
+        relevantDeviationRoots.forEach(module => scopeRootHashes.add(module.hash));
+        for (const externalDeviation of relevantExternalDeviations) {
+            for (const imported of externalDeviation.metadata?.imports || []) {
+                const matches = repositoryModules
+                    .filter(module => module.metadata?.kind === 'module' && module.metadata?.name === imported.name)
+                    .filter(module => !imported.revisionDate || module.metadata?.revision === imported.revisionDate)
+                    .sort((left, right) =>
+                        (right.metadata?.revision || '').localeCompare(left.metadata?.revision || '')
+                    );
+                if (matches[0]?.hash) scopeRootHashes.add(matches[0].hash);
+            }
+        }
+        const scopeModules = this.moduleDependencyClosure(repositoryModules, scopeRootHashes);
+        const scopeHashes = new Set(scopeModules.map(module => module.hash));
+        const relevantExternalPaths = new Set(relevantExternalDeviations.map(input => normalizedPathKey(input.path)));
+        const selectedInputs = catalog.filter(input =>
+            input.externalDeviation
+                ? relevantExternalPaths.has(normalizedPathKey(input.path))
+                : scopeHashes.has(input.hash)
+        );
+        const missingSchema = selectedInputs.find(input => !fs.existsSync(input.path));
+        if (missingSchema) {
+            throw validationContextError(
+                'YANG_VALIDATION_CONTEXT_UNAVAILABLE',
+                `Compiled YANG input is no longer available: ${missingSchema.path}`
+            );
+        }
+        const schemaPaths = selectedInputs.filter(input => input.metadata?.kind === 'module').map(input => input.path);
+        if (!schemaPaths.length) {
+            throw validationContextError(
+                'YANG_VALIDATION_CONTEXT_UNAVAILABLE',
+                'The RPC payload has no reusable compiled YANG schema inputs'
+            );
+        }
+
+        const scopeModuleNames = new Set(selectedInputs.map(input => input.metadata?.name).filter(Boolean));
+        const configuredFeatures = normalizeStringList(schemaCompiler.features);
+        let features = configuredFeatures.filter(feature => {
+            const separator = feature.indexOf(':');
+            return separator > 0 && scopeModuleNames.has(feature.slice(0, separator));
+        });
+        if (configuredFeatures.length && !features.length) {
+            const seedModuleName = seedModules.values().next().value?.metadata?.name;
+            if (seedModuleName) features = [`${seedModuleName}:`];
+        }
+        return {
+            schemaPaths,
+            features,
+            namespaces,
+            modules: selectedInputs
+                .filter(input => input.metadata?.kind === 'module')
+                .map(input => ({
+                    name: input.metadata.name,
+                    revision: input.metadata.revision || null,
+                    namespace: input.metadata.namespace || null,
+                    deviation:
+                        relevantExternalPaths.has(normalizedPathKey(input.path)) ||
+                        relevantDeviationRoots.some(module => module.hash === input.hash)
+                }))
+        };
+    }
+
     async validateRpc(options = {}) {
         const rpc = String(options.rpc ?? '');
         if (Buffer.byteLength(rpc, 'utf8') > MAX_RPC_VALIDATION_BYTES) {
@@ -1560,17 +1851,8 @@ class YangCompiler {
         }
 
         const schemaCompiler = compilation.result.schemaCompiler || compilation.result.externalCompiler || {};
-        const schemaPaths = this.dataValidationSchemaPaths(schemaCompiler);
-        const missingSchema = schemaPaths.find(schemaPath => !fs.existsSync(schemaPath));
-        if (!schemaPaths.length || missingSchema) {
-            const error = new Error(
-                missingSchema
-                    ? `Compiled YANG input is no longer available: ${missingSchema}`
-                    : 'The active YANG compilation has no reusable schema inputs'
-            );
-            error.code = 'YANG_VALIDATION_CONTEXT_UNAVAILABLE';
-            throw error;
-        }
+        const validationScope = this.selectRpcValidationScope(compilation, schemaCompiler, target);
+        const schemaPaths = validationScope.schemaPaths;
 
         const runtime = this.createRuntime(options);
         const compilerStatus = await runtime.getStatus();
@@ -1581,10 +1863,9 @@ class YangCompiler {
         }
 
         const searchPaths = normalizeStringList(schemaCompiler.searchPaths).map(searchPath => path.resolve(searchPath));
-        const features = normalizeStringList(schemaCompiler.features);
         const args = [];
         for (const searchPath of searchPaths) args.push('-p', searchPath);
-        for (const feature of features) args.push('-F', feature);
+        for (const feature of validationScope.features) args.push('-F', feature);
 
         const temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'netnexus-rpc-validation-'));
         const inputPath = path.join(temporaryDirectory, 'rpc-payload.xml');
@@ -1652,6 +1933,8 @@ class YangCompiler {
                 authoritative: true,
                 performed: true,
                 validationType: target.validationType,
+                namespaces: validationScope.namespaces,
+                modules: validationScope.modules,
                 skippedReason: ''
             };
         } finally {

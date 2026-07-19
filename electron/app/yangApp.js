@@ -30,12 +30,7 @@ function profileWorkspaceId(profileId) {
         const codePoint = character.codePointAt(0);
         return codePoint <= 0x1f || codePoint === 0x7f;
     });
-    if (
-        !value ||
-        /^\s+$/u.test(value) ||
-        containsControlCharacter ||
-        Buffer.byteLength(value) > MAX_PROFILE_ID_BYTES
-    ) {
+    if (!value || /^\s+$/u.test(value) || containsControlCharacter || Buffer.byteLength(value) > MAX_PROFILE_ID_BYTES) {
         throw new Error('缺少有效的 NETCONF Profile ID');
     }
     return `profile-${createHash('sha256').update(value, 'utf8').digest('hex')}`;
@@ -201,12 +196,7 @@ class YangApp {
         if (this.closing) throw this.lifecycleError('YANG_APP_CLOSING', 'YANG 服务正在关闭');
         if (!this.closed) return;
         const sender = event?.sender;
-        if (
-            sender &&
-            typeof sender === 'object' &&
-            !sender.isDestroyed?.() &&
-            !this.retiredWebContents.has(sender)
-        ) {
+        if (sender && typeof sender === 'object' && !sender.isDestroyed?.() && !this.retiredWebContents.has(sender)) {
             this.closed = false;
             return;
         }
@@ -416,7 +406,7 @@ class YangApp {
                         },
                         { timeoutMs: 10 * 60 * 1000, signal }
                     );
-                    this.invalidateCompilation(context.workspaceId);
+                    this.reconcileCompilationFreshness(context.workspaceId, result?.workspace);
                     return result;
                 } finally {
                     this.progressReporters.delete(taskId);
@@ -480,7 +470,7 @@ class YangApp {
                 discoveredAt: options.inventory?.discoveredAt || new Date().toISOString()
             }
         });
-        this.invalidateCompilation(context.workspaceId);
+        this.reconcileCompilationFreshness(context.workspaceId, result?.workspace);
         return result;
     }
 
@@ -541,7 +531,23 @@ class YangApp {
             }
             const modules = await this.listRawModules(event, { workspaceId: context.workspaceId });
             if (!modules.length) return errorResponse('请先下载或导入YANG模型');
-            const hashes = this.resolveCompileHashes(options.hashes || options.moduleIds || options.modules, modules);
+            const requestedHashes = this.resolveCompileHashes(
+                options.hashes || options.moduleIds || options.modules,
+                modules
+            );
+            const availableHashes = new Set(modules.map(module => module.hash).filter(Boolean));
+            const stored = this.lastCompile.get(context.workspaceId);
+            const storedModuleHashes = Array.isArray(stored?.moduleHashes)
+                ? stored.moduleHashes.filter(hash => availableHashes.has(hash))
+                : [];
+            const canExtendStoredCompilation =
+                requestedHashes &&
+                options.replaceContext !== true &&
+                storedModuleHashes.length > 0 &&
+                storedModuleHashes.length === stored.moduleHashes.length;
+            const hashes = canExtendStoredCompilation
+                ? [...new Set([...storedModuleHashes, ...requestedHashes])]
+                : requestedHashes;
             const task = this.taskManager.start(
                 'compile',
                 async ({ taskId, signal, report }) => {
@@ -612,9 +618,13 @@ class YangApp {
 
     isStoredCompilationCurrent(workspaceId, workspace) {
         const stored = this.lastCompile.get(workspaceId);
-        return Boolean(
-            stored?.compileId && workspace?.contentHash && stored.workspaceContentHash === workspace.contentHash
-        );
+        if (!stored?.compileId || !workspace) return false;
+        const storedModuleHashes = Array.isArray(stored.moduleHashes) ? stored.moduleHashes.filter(Boolean) : [];
+        if (storedModuleHashes.length > 0 && Array.isArray(workspace.modules)) {
+            const workspaceModuleHashes = new Set(workspace.modules.map(module => module.hash).filter(Boolean));
+            return storedModuleHashes.every(hash => workspaceModuleHashes.has(hash));
+        }
+        return Boolean(workspace.contentHash && stored.workspaceContentHash === workspace.contentHash);
     }
 
     reconcileCompilationFreshness(workspaceId, workspace) {
@@ -632,7 +642,7 @@ class YangApp {
 
     async restoreStoredCompilation(event, context, workspace, requestedCompileId, options = {}) {
         const stored = this.lastCompile.get(context.workspaceId);
-        if (!stored?.compileId || !workspace?.contentHash || stored.workspaceContentHash !== workspace.contentHash) {
+        if (!this.isStoredCompilationCurrent(context.workspaceId, workspace)) {
             throw new Error('当前工作区尚未编译');
         }
         const expected = requestedCompileId || stored.compileId;
@@ -644,7 +654,10 @@ class YangApp {
             return currentResult;
         }
 
-        const restoreKey = `${context.workspaceId}\u0000${workspace.contentHash}\u0000${expected}`;
+        // The persisted compile ID identifies the exact source/option context. Do not include the
+        // whole workspace content hash: additive imports may change it without invalidating the
+        // stored Schema and must still share one in-flight restore.
+        const restoreKey = `${context.workspaceId}\u0000${expected}`;
         const pending = this.compilationRestorePromises.get(restoreKey);
         if (pending) return pending;
 
@@ -666,8 +679,17 @@ class YangApp {
                 },
                 { timeoutMs: 10 * 60 * 1000 }
             );
-            if (restored.compileId !== expected) {
-                throw new Error('YANG工作区内容或编译选项已经变化，请重新编译');
+            const restoredModuleHashes =
+                restored.moduleHashes ||
+                restored.fileResults?.map(fileResult => fileResult.hash).filter(Boolean) ||
+                restored.modules?.map(module => module.hash).filter(Boolean) ||
+                [];
+            const storedModuleHashes = Array.isArray(stored.moduleHashes) ? stored.moduleHashes.filter(Boolean) : [];
+            if (
+                storedModuleHashes.length > 0 &&
+                JSON.stringify([...storedModuleHashes].sort()) !== JSON.stringify([...restoredModuleHashes].sort())
+            ) {
+                throw new Error('恢复后的YANG源文件集合与已保存的编译上下文不一致');
             }
             const restoredHasAuthoritativeSchema =
                 restored.schemaAvailable === true &&
@@ -701,20 +723,14 @@ class YangApp {
             });
             if (
                 this.lastCompile.get(context.workspaceId) !== stored ||
-                latestWorkspace?.contentHash !== workspace.contentHash ||
-                stored.workspaceContentHash !== latestWorkspace.contentHash
+                !this.isStoredCompilationCurrent(context.workspaceId, latestWorkspace)
             ) {
                 throw new Error('YANG工作区在恢复编译上下文时已发生变化');
             }
 
             const compileResult = {
                 ...restored,
-                moduleHashes:
-                    restored.moduleHashes ||
-                    restored.fileResults?.map(fileResult => fileResult.hash).filter(Boolean) ||
-                    restored.modules?.map(module => module.hash).filter(Boolean) ||
-                    stored.moduleHashes ||
-                    [],
+                moduleHashes: restoredModuleHashes.length ? restoredModuleHashes : stored.moduleHashes || [],
                 restoreOptions
             };
             this.compileResult.set(context.workspaceId, compileResult);
@@ -809,8 +825,10 @@ class YangApp {
                 } catch (error) {
                     if (this.isLifecycleInterruption(error, lifecycleGeneration)) throw error;
                     logger.warn(`恢复YANG编译缓存失败 (${context.workspaceId}):`, error.message);
-                    restoreError = error.message;
-                    this.invalidateCompilation(context.workspaceId);
+                    // A runtime discovery or cache migration failure can be transient during startup.
+                    // Keep the persisted compilation descriptor so the workspace can retry instead of
+                    // permanently losing its Schema tree after the first failed restore attempt.
+                    if (this.lastCompile.get(context.workspaceId) === stored) restoreError = error.message;
                 }
             }
             const decorated = await this.decorateWorkspace(event, context, workspace);
@@ -844,15 +862,19 @@ class YangApp {
         if (requestedCompileId && requestedCompileId !== stored.compileId) {
             throw new Error('指定的YANG编译上下文已失效');
         }
+        let loadedCompileId = expected;
         try {
             await this.send(event, WORKER_REQ_TYPES.GET_DIAGNOSTICS, {
                 workspaceId: context.workspaceId,
                 compileId: expected
             });
         } catch (_error) {
-            await this.restoreStoredCompilation(event, context, workspace, expected, { forceWorkerRestore: true });
+            const restored = await this.restoreStoredCompilation(event, context, workspace, expected, {
+                forceWorkerRestore: true
+            });
+            loadedCompileId = restored.compileId;
         }
-        return { ...context, compileId: expected };
+        return { ...context, compileId: loadedCompileId };
     }
 
     async handleClearWorkspace(event, request = {}) {

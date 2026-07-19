@@ -268,7 +268,10 @@ async function main() {
     assert.equal(rejectedTask.status, 'failed');
     assert.equal(rejectedTask.error.code, 'NETCONF_INITIAL_PASSWORD_CHANGE_REQUIRED');
     assert.match(rejectedTask.error.message, /设备要求先修改初始密码/u);
-    assert.deepEqual(requested.map(item => item.name), ['example-system']);
+    assert.deepEqual(
+        requested.map(item => item.name),
+        ['example-system']
+    );
     assert.equal(importedBatches.length, importsBeforeRejectedBatch, 'a fully rejected batch has no source to import');
     schemaFailures.clear();
 

@@ -9,9 +9,9 @@
                     @click.self="handleMaskClick"
                 >
                     <div
+                        ref="positionerRef"
                         class="nn-modal-positioner"
                         :class="{ 'nn-modal-positioner-dragging': dragging }"
-                        :style="dragStyle"
                     >
                         <section
                             ref="dialogRef"
@@ -157,20 +157,22 @@
     const emit = defineEmits(['update:open', 'ok', 'cancel']);
     const attrs = useAttrs();
     const slots = useSlots();
+    const positionerRef = ref(null);
     const dialogRef = ref(null);
     const hasOpened = ref(props.open);
     const dragging = ref(false);
-    const dragOffset = ref({ x: 0, y: 0 });
     const titleId = `nn-modal-title-${useId()}`;
     const overlayToken = Symbol('nn-modal');
     const previousFocus = ref(null);
     let overlayActive = false;
     let dragOrigin = null;
+    let dragOffset = { x: 0, y: 0 };
+    let pendingDragOffset = null;
+    let dragFrameId = 0;
+    let activePointerId = null;
+    let dragCaptureTarget = null;
 
     const DRAG_VIEWPORT_MARGIN = 8;
-    const dragStyle = computed(() => ({
-        transform: `translate3d(${dragOffset.value.x}px, ${dragOffset.value.y}px, 0)`
-    }));
 
     const hasTitle = computed(
         () => Boolean(slots.title) || (props.title !== '' && props.title !== null && props.title !== undefined)
@@ -204,34 +206,80 @@
 
     const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
-    const stopDrag = () => {
-        if (!dragging.value) {
-            return;
+    const applyDragOffset = offset => {
+        dragOffset = offset;
+        if (positionerRef.value) {
+            positionerRef.value.style.transform = `translate3d(${offset.x}px, ${offset.y}px, 0)`;
         }
+    };
 
+    const flushPendingDrag = () => {
+        if (dragFrameId && canUseDom()) {
+            window.cancelAnimationFrame(dragFrameId);
+            dragFrameId = 0;
+        }
+        if (!pendingDragOffset) return;
+        const nextOffset = pendingDragOffset;
+        pendingDragOffset = null;
+        applyDragOffset(nextOffset);
+    };
+
+    const scheduleDragOffset = offset => {
+        pendingDragOffset = offset;
+        if (dragFrameId) return;
+        dragFrameId = window.requestAnimationFrame(() => {
+            dragFrameId = 0;
+            if (!pendingDragOffset) return;
+            const nextOffset = pendingDragOffset;
+            pendingDragOffset = null;
+            applyDragOffset(nextOffset);
+        });
+    };
+
+    const stopDrag = event => {
+        if (event?.pointerId !== undefined && activePointerId !== null && event.pointerId !== activePointerId) return;
+        if (!dragging.value && !dragOrigin && !pendingDragOffset && !dragFrameId) return;
+
+        flushPendingDrag();
         dragging.value = false;
         dragOrigin = null;
+        if (dragCaptureTarget && activePointerId !== null) {
+            try {
+                if (dragCaptureTarget.hasPointerCapture?.(activePointerId)) {
+                    dragCaptureTarget.releasePointerCapture(activePointerId);
+                }
+            } catch (_error) {
+                // Pointer capture can already be released by the browser on pointerup/cancel.
+            }
+        }
+        dragCaptureTarget = null;
+        activePointerId = null;
         document.removeEventListener('pointermove', handleDragMove);
         document.removeEventListener('pointerup', stopDrag);
         document.removeEventListener('pointercancel', stopDrag);
     };
 
     const handleDragMove = event => {
-        if (!dragging.value || !dragOrigin || !dialogRef.value) {
+        if (
+            !dragging.value ||
+            !dragOrigin ||
+            !dialogRef.value ||
+            (activePointerId !== null && event.pointerId !== activePointerId)
+        ) {
             return;
         }
 
         const deltaX = event.clientX - dragOrigin.pointerX;
         const deltaY = event.clientY - dragOrigin.pointerY;
         const minDeltaX = DRAG_VIEWPORT_MARGIN - dragOrigin.rect.left;
-        const maxDeltaX = window.innerWidth - DRAG_VIEWPORT_MARGIN - dragOrigin.rect.right;
+        const maxDeltaX = dragOrigin.viewportWidth - DRAG_VIEWPORT_MARGIN - dragOrigin.rect.right;
         const minDeltaY = DRAG_VIEWPORT_MARGIN - dragOrigin.rect.top;
-        const maxDeltaY = window.innerHeight - DRAG_VIEWPORT_MARGIN - dragOrigin.rect.bottom;
+        const maxDeltaY = dragOrigin.viewportHeight - DRAG_VIEWPORT_MARGIN - dragOrigin.rect.bottom;
 
-        dragOffset.value = {
+        scheduleDragOffset({
             x: Math.round(dragOrigin.offsetX + clamp(deltaX, minDeltaX, maxDeltaX)),
             y: Math.round(dragOrigin.offsetY + clamp(deltaY, minDeltaY, maxDeltaY))
-        };
+        });
     };
 
     const startDrag = event => {
@@ -246,14 +294,24 @@
         }
 
         event.preventDefault();
+        stopDrag();
         const rect = dialogRef.value.getBoundingClientRect();
         dragOrigin = {
             pointerX: event.clientX,
             pointerY: event.clientY,
-            offsetX: dragOffset.value.x,
-            offsetY: dragOffset.value.y,
-            rect
+            offsetX: dragOffset.x,
+            offsetY: dragOffset.y,
+            rect,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight
         };
+        activePointerId = event.pointerId;
+        dragCaptureTarget = event.currentTarget;
+        try {
+            dragCaptureTarget?.setPointerCapture?.(event.pointerId);
+        } catch (_error) {
+            // Document listeners remain the fallback when pointer capture is unavailable.
+        }
         dragging.value = true;
         document.addEventListener('pointermove', handleDragMove);
         document.addEventListener('pointerup', stopDrag);
@@ -262,7 +320,7 @@
 
     const resetDragPosition = () => {
         stopDrag();
-        dragOffset.value = { x: 0, y: 0 };
+        applyDragOffset({ x: 0, y: 0 });
     };
 
     const keepModalInViewport = async () => {
@@ -271,6 +329,7 @@
         }
 
         await nextTick();
+        if (dragging.value) stopDrag();
         const rect = dialogRef.value?.getBoundingClientRect();
         if (!rect) {
             return;
@@ -288,10 +347,10 @@
         }
 
         if (correctionX || correctionY) {
-            dragOffset.value = {
-                x: Math.round(dragOffset.value.x + correctionX),
-                y: Math.round(dragOffset.value.y + correctionY)
-            };
+            applyDragOffset({
+                x: Math.round(dragOffset.x + correctionX),
+                y: Math.round(dragOffset.y + correctionY)
+            });
         }
     };
 

@@ -148,6 +148,20 @@ async function run() {
         assert(progress.some(event => event.phase === 'runtime'));
         assert(progress.some(event => event.phase === 'external'));
         assert(progress.some(event => event.phase === 'schema'));
+        const parsingProgress = progress.filter(event => event.phase === 'parsing');
+        assert.equal(parsingProgress.length, compiled.fileResults.length);
+        assert(
+            parsingProgress.every(event => event.currentFile && event.currentHash && event.fileStatus === 'parsed'),
+            'parsing progress must identify each source file without claiming compilation success'
+        );
+        const fileResultProgress = progress.filter(event => event.phase === 'file-result');
+        assert.equal(fileResultProgress.length, compiled.fileResults.length);
+        assert(
+            fileResultProgress.every(
+                event => event.currentFile && event.currentHash && ['compiled', 'failed'].includes(event.fileStatus)
+            ),
+            'final per-file progress must carry a stable source identity and compilation status'
+        );
         assert.equal(progress.at(-1).phase, 'completed');
         assert.equal(progress.at(-1).percent, 100);
 
@@ -272,6 +286,10 @@ async function run() {
         const replicaCompiled = await registry.compile({ workspaceId: 'replica' });
         assert.equal(replicaCompiled.compileId, compiled.compileId);
         assert.equal(replicaCompiled.cacheHit, true, 'compiled cache must remain shared across isolated workspaces');
+        const replicaRootsBeforeAdditiveImport = registry
+            .getSchemaRoots({ workspaceId: 'replica', compileId: replicaCompiled.compileId })
+            .map(root => root.name)
+            .sort();
         registry.importContents(
             [
                 {
@@ -282,14 +300,16 @@ async function run() {
             ],
             { workspaceId: 'replica' }
         );
-        assert.throws(
-            () =>
-                registry.getSchemaRoots({
+        assert.deepEqual(
+            registry
+                .getSchemaRoots({
                     workspaceId: 'replica',
                     compileId: replicaCompiled.compileId
-                }),
-            /is not loaded for workspace:replica/u,
-            'changing workspace sources must invalidate its implicit compiled context'
+                })
+                .map(root => root.name)
+                .sort(),
+            replicaRootsBeforeAdditiveImport,
+            'adding a source hash outside the compiled input set must retain the loaded Schema context'
         );
         registry.clearWorkspace('replica');
         assert.equal(registry.listModules({ workspaceId: 'replica' }).length, 0);
@@ -508,7 +528,10 @@ async function run() {
         assert.equal(semanticFailure.success, false);
         assert.equal(semanticFailure.schemaAvailable, false);
         assert.equal(semanticFailure.schemaTree, null);
-        assert.deepEqual(semanticFailure.fileResults.map(fileResult => fileResult.status), ['failed']);
+        assert.deepEqual(
+            semanticFailure.fileResults.map(fileResult => fileResult.status),
+            ['failed']
+        );
         assert.equal(semanticFailure.summary.compiledFiles, 0);
         assert.equal(semanticFailure.summary.failedFiles, 1);
         assert(

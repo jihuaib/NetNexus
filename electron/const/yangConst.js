@@ -55,7 +55,7 @@ const DEFAULT_NETCONF_PROFILE = Object.freeze({
     hostKeyPolicy: 'ask',
     hostKeyFingerprint: '',
     connectTimeout: 15000,
-    rpcTimeout: 30000,
+    rpcTimeout: 300000,
     keepaliveInterval: 30000,
     keepaliveCountMax: 3,
     autoReconnect: false
@@ -66,7 +66,7 @@ const NETCONF_LIMITS = Object.freeze({
     MAX_SCHEMA_BYTES: 8 * 1024 * 1024,
     MAX_RAW_RPC_BYTES: 8 * 1024 * 1024,
     MAX_INLINE_RPC_REPLY_BYTES: 256 * 1024,
-    DEFAULT_RPC_TIMEOUT: 30000,
+    DEFAULT_RPC_TIMEOUT: 300000,
     DEFAULT_CONNECT_TIMEOUT: 15000,
     DOWNLOAD_CONCURRENCY: 3
 });

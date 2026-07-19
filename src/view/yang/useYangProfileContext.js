@@ -16,7 +16,9 @@ const isSavedProfileId = profileId => Boolean(profileId) && !String(profileId).s
 
 const selectYangProfile = profileOrId => {
     const profileId = String(profileOrId?.id || profileOrId?.profileId || profileOrId || '');
-    selectedProfileId.value = isSavedProfileId(profileId) ? profileId : '';
+    const nextProfileId = isSavedProfileId(profileId) ? profileId : '';
+    if (nextProfileId !== selectedProfileId.value) profilesEpoch += 1;
+    selectedProfileId.value = nextProfileId;
     return selectedProfileId.value;
 };
 
@@ -29,8 +31,9 @@ const replaceYangProfiles = (nextProfiles, options = {}) => {
     const preferredId = String(options.preferredId || '');
     const retained = normalized.find(profile => profile.id === selectedProfileId.value);
     const preferred = normalized.find(profile => profile.id === preferredId);
-    const next = retained || preferred || normalized[0] || null;
-    selectedProfileId.value = next?.id || '';
+    const next = options.preferPreferred === true ? preferred || retained : retained || preferred;
+    const selected = next || normalized[0] || null;
+    selectedProfileId.value = selected?.id || '';
     return normalized;
 };
 
@@ -43,6 +46,7 @@ const refreshYangProfiles = async (options = {}) => {
             const activeProfileId = data?.activeProfileId || data?.session?.profileId || '';
             return replaceYangProfiles(unwrapArray(data, ['profiles', 'items']), {
                 preferredId: options.preferredId || activeProfileId,
+                preferPreferred: Boolean(activeProfileId) || options.preferPreferred === true,
                 requestEpoch
             });
         })

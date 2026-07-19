@@ -1,14 +1,13 @@
 const childProcess = require('child_process');
 const path = require('path');
-const {
-    PROJECT_ROOT,
-    normalizeArch,
-    normalizePlatform,
-    verifyRuntime
-} = require('./libyang-runtime-config');
+const { PROJECT_ROOT, normalizeArch, normalizePlatform, verifyRuntime } = require('./libyang-runtime-config');
 
 function isTruthyEnv(value) {
-    return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+    return ['1', 'true', 'yes', 'on'].includes(
+        String(value || '')
+            .trim()
+            .toLowerCase()
+    );
 }
 
 function resolveBuildCommand(options = {}) {

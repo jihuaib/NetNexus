@@ -70,6 +70,8 @@
     const viewportMargin = 8;
     const popupGap = 8;
     const arrowMargin = 8;
+    let mounted = false;
+    let globalListenersAttached = false;
 
     const isControlled = computed(() => props.open !== undefined);
     const hasContent = computed(() => props.title !== '' || Boolean(slots.title));
@@ -122,6 +124,8 @@
         placement === 'top' || placement === 'bottom' ? popupRect.height : popupRect.width;
 
     const updatePopupPosition = async () => {
+        if (!visible.value) return;
+
         await nextTick();
 
         if (!visible.value) return;
@@ -261,12 +265,44 @@
         }
     };
 
+    const attachGlobalListeners = () => {
+        if (!mounted || globalListenersAttached || !visible.value) return;
+
+        document.addEventListener('pointerdown', handleDocumentPointerDown);
+        document.addEventListener('keydown', handleDocumentKeydown);
+        window.addEventListener('resize', updatePopupPosition);
+        window.addEventListener('scroll', updatePopupPosition, true);
+        globalListenersAttached = true;
+    };
+
+    const detachGlobalListeners = () => {
+        if (!globalListenersAttached) return;
+
+        document.removeEventListener('pointerdown', handleDocumentPointerDown);
+        document.removeEventListener('keydown', handleDocumentKeydown);
+        window.removeEventListener('resize', updatePopupPosition);
+        window.removeEventListener('scroll', updatePopupPosition, true);
+        globalListenersAttached = false;
+    };
+
     watch(
         () => props.open,
         () => {
             controlledDismissed.value = false;
             overlayFocusReturnPending.value = false;
         }
+    );
+
+    watch(
+        visible,
+        isVisible => {
+            if (isVisible) {
+                attachGlobalListeners();
+            } else {
+                detachGlobalListeners();
+            }
+        },
+        { flush: 'sync' }
     );
 
     watch(
@@ -278,19 +314,15 @@
     );
 
     onMounted(() => {
-        document.addEventListener('pointerdown', handleDocumentPointerDown);
-        document.addEventListener('keydown', handleDocumentKeydown);
-        window.addEventListener('resize', updatePopupPosition);
-        window.addEventListener('scroll', updatePopupPosition, true);
+        mounted = true;
+        attachGlobalListeners();
 
         if (visible.value) updatePopupPosition();
     });
 
     onBeforeUnmount(() => {
-        document.removeEventListener('pointerdown', handleDocumentPointerDown);
-        document.removeEventListener('keydown', handleDocumentKeydown);
-        window.removeEventListener('resize', updatePopupPosition);
-        window.removeEventListener('scroll', updatePopupPosition, true);
+        mounted = false;
+        detachGlobalListeners();
     });
 </script>
 

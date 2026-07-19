@@ -73,6 +73,71 @@ const CROSS_MODULE_IFM_TRUNK = `module netnexus-validation-ifm-trunk {
   }
 }`;
 
+const SCOPE_TYPES = `module netnexus-validation-scope-types {
+  yang-version 1.1;
+  namespace "urn:netnexus:validation:scope:types";
+  prefix st;
+  revision 2026-07-19;
+  typedef small-number { type uint8 { range "1..9"; } }
+}`;
+
+const SCOPE_SHARED = `module netnexus-validation-scope-shared {
+  yang-version 1.1;
+  namespace "urn:netnexus:validation:scope:shared";
+  prefix ss;
+  import netnexus-validation-scope-types { prefix st; }
+  revision 2026-07-19;
+  grouping payload { leaf count { type st:small-number; } }
+}`;
+
+const SCOPE_TARGET = `module netnexus-validation-scope-target {
+  yang-version 1.1;
+  namespace "urn:netnexus:validation:scope:target";
+  prefix target;
+  import netnexus-validation-scope-shared { prefix ss; }
+  revision 2026-07-19;
+  feature writable;
+  container scoped-root {
+    uses ss:payload;
+    leaf featured { if-feature writable; type boolean; }
+    leaf removed-by-device { type string; }
+  }
+}`;
+
+const SCOPE_TARGET_DEVIATION = `module netnexus-validation-scope-target-deviation {
+  yang-version 1.1;
+  namespace "urn:netnexus:validation:scope:target-deviation";
+  prefix td;
+  import netnexus-validation-scope-target { prefix target; }
+  revision 2026-07-19;
+  deviation "/target:scoped-root/target:removed-by-device" { deviate not-supported; }
+}`;
+
+/* The noise deviation shares the target module's datastore root but changes a node
+ * owned by an unrelated augmenting module. It mirrors vendor deviation bundles. */
+const SCOPE_NOISE = `module netnexus-validation-scope-noise {
+  yang-version 1.1;
+  namespace "urn:netnexus:validation:scope:noise";
+  prefix noise;
+  import netnexus-validation-scope-target { prefix target; }
+  revision 2026-07-19;
+  feature noisy;
+  augment "/target:scoped-root" {
+    leaf featured { if-feature noisy; type boolean; }
+    leaf removed { type string; }
+  }
+}`;
+
+const SCOPE_NOISE_DEVIATION = `module netnexus-validation-scope-noise-deviation {
+  yang-version 1.1;
+  namespace "urn:netnexus:validation:scope:noise-deviation";
+  prefix nd;
+  import netnexus-validation-scope-noise { prefix noise; }
+  import netnexus-validation-scope-target { prefix target; }
+  revision 2026-07-19;
+  deviation "/target:scoped-root/noise:removed" { deviate not-supported; }
+}`;
+
 function editConfigRpc(body) {
     return [
         '<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="validation-1">',
@@ -184,6 +249,136 @@ async function assertReferencedImportValidation() {
         validationArgs.indexOf('-i') < validationArgs.indexOf('-I'),
         `yanglint -i must configure the Schema context before XML input parsing: ${JSON.stringify(validationArgs)}`
     );
+}
+
+function hasSchemaModule(args, moduleName) {
+    return args.some(argument => {
+        const fileName = path.basename(String(argument));
+        return fileName.startsWith(`${moduleName}@`) && fileName.endsWith('.yang');
+    });
+}
+
+function optionValues(args, option) {
+    const values = [];
+    for (let index = 0; index < args.length - 1; index += 1) {
+        if (args[index] === option) values.push(args[index + 1]);
+    }
+    return values;
+}
+
+async function assertRpcSchemaScoping() {
+    const registry = new YangRegistry({
+        rootDir: path.join(temporaryRoot, 'rpc-scope-repository'),
+        resourcesPath: path.join(projectRoot, 'resources'),
+        isPackaged: false
+    });
+    registry.importContents([
+        { content: SCOPE_TARGET, expectedName: 'netnexus-validation-scope-target', source: 'test' },
+        { content: SCOPE_SHARED, expectedName: 'netnexus-validation-scope-shared', source: 'test' },
+        { content: SCOPE_TYPES, expectedName: 'netnexus-validation-scope-types', source: 'test' },
+        {
+            content: SCOPE_TARGET_DEVIATION,
+            expectedName: 'netnexus-validation-scope-target-deviation',
+            source: 'test'
+        },
+        { content: SCOPE_NOISE, expectedName: 'netnexus-validation-scope-noise', source: 'test' },
+        {
+            content: SCOPE_NOISE_DEVIATION,
+            expectedName: 'netnexus-validation-scope-noise-deviation',
+            source: 'test'
+        }
+    ]);
+    const compiled = await registry.compile({
+        force: true,
+        features: ['netnexus-validation-scope-target:writable', 'netnexus-validation-scope-noise:noisy']
+    });
+    assert.equal(compiled.success, true, JSON.stringify(compiled.diagnostics, null, 2));
+    assert.equal(compiled.schemaCompiler.schemaInputs.length, 6);
+    assert(
+        compiled.schemaCompiler.schemaInputs.every(input => input.hash && path.isAbsolute(input.path)),
+        JSON.stringify(compiled.schemaCompiler.schemaInputs, null, 2)
+    );
+
+    const validRpc = editConfigRpc(
+        [
+            '      <scoped-root xmlns="urn:netnexus:validation:scope:target">',
+            '        <count>7</count>',
+            '        <featured>true</featured>',
+            '      </scoped-root>'
+        ].join('\n')
+    );
+    const runtime = registry.compiler.createRuntime();
+    let validationArgs = null;
+    const capturingRuntime = {
+        getStatus: options => runtime.getStatus(options),
+        execute: (args, options) => {
+            validationArgs = [...args];
+            return runtime.execute(args, options);
+        }
+    };
+    const validation = await registry.validateRpc({
+        compileId: compiled.compileId,
+        rpc: validRpc,
+        runtime: capturingRuntime
+    });
+    assert.equal(validation.valid, true, JSON.stringify(validation.diagnostics, null, 2));
+    assert(validationArgs, 'scoped RPC validation must invoke yanglint');
+    for (const moduleName of [
+        'netnexus-validation-scope-target',
+        'netnexus-validation-scope-shared',
+        'netnexus-validation-scope-types',
+        'netnexus-validation-scope-target-deviation'
+    ]) {
+        assert(hasSchemaModule(validationArgs, moduleName), `${moduleName} must be in the RPC validation scope`);
+    }
+    for (const moduleName of ['netnexus-validation-scope-noise', 'netnexus-validation-scope-noise-deviation']) {
+        assert(!hasSchemaModule(validationArgs, moduleName), `${moduleName} must be outside the RPC validation scope`);
+    }
+    assert.equal(validationArgs.filter(argument => argument === '-i').length, 1);
+    assert.deepEqual(optionValues(validationArgs, '-F'), ['netnexus-validation-scope-target:writable']);
+    assert.deepEqual(
+        validation.modules.map(module => module.name),
+        [
+            'netnexus-validation-scope-target',
+            'netnexus-validation-scope-shared',
+            'netnexus-validation-scope-types',
+            'netnexus-validation-scope-target-deviation'
+        ]
+    );
+
+    const deviatedNode = await registry.validateRpc({
+        compileId: compiled.compileId,
+        rpc: editConfigRpc(
+            [
+                '      <scoped-root xmlns="urn:netnexus:validation:scope:target">',
+                '        <count>7</count>',
+                '        <removed-by-device>must-fail</removed-by-device>',
+                '      </scoped-root>'
+            ].join('\n')
+        )
+    });
+    assert.equal(deviatedNode.valid, false);
+    assert.match(deviatedNode.diagnostics[0]?.rawMessage || '', /not found|unknown|schema node/iu);
+
+    const unrelatedFeatureOnly = await registry.compile({
+        force: true,
+        features: ['netnexus-validation-scope-noise:noisy']
+    });
+    assert.equal(unrelatedFeatureOnly.success, true, JSON.stringify(unrelatedFeatureOnly.diagnostics, null, 2));
+    validationArgs = null;
+    const sentinelFeatureValidation = await registry.validateRpc({
+        compileId: unrelatedFeatureOnly.compileId,
+        rpc: editConfigRpc(
+            [
+                '      <scoped-root xmlns="urn:netnexus:validation:scope:target">',
+                '        <count>7</count>',
+                '      </scoped-root>'
+            ].join('\n')
+        ),
+        runtime: capturingRuntime
+    });
+    assert.equal(sentinelFeatureValidation.valid, true, JSON.stringify(sentinelFeatureValidation.diagnostics, null, 2));
+    assert.deepEqual(optionValues(validationArgs, '-F'), ['netnexus-validation-scope-target:']);
 }
 
 async function run() {
@@ -309,6 +504,7 @@ async function run() {
         );
 
         await assertReferencedImportValidation();
+        await assertRpcSchemaScoping();
 
         console.log('YANG RPC libyang instance validation tests passed');
     } finally {

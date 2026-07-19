@@ -645,12 +645,12 @@ class YangRepository {
             snapshotId: request.snapshotId ?? options.snapshotId
         };
         let candidates = this.listModules(scope);
-        const hash =
-            typeof identifier === 'string' && /^[a-f0-9]{64}$/.test(identifier) ? identifier : request.hash;
+        const hash = typeof identifier === 'string' && /^[a-f0-9]{64}$/.test(identifier) ? identifier : request.hash;
         if (hash) candidates = candidates.filter(entry => entry.hash === hash);
         else {
             if (request.name) candidates = candidates.filter(entry => entry.metadata?.name === request.name);
-            if (request.revision) candidates = candidates.filter(entry => entry.metadata?.revision === request.revision);
+            if (request.revision)
+                candidates = candidates.filter(entry => entry.metadata?.revision === request.revision);
             if (request.kind) candidates = candidates.filter(entry => entry.metadata?.kind === request.kind);
         }
         const entry = candidates[0];

@@ -2,27 +2,40 @@
     <div
         ref="treeRootRef"
         class="nn-tree"
-        :class="{ 'nn-tree-block-node': blockNode }"
+        :class="{
+            'nn-tree-block-node': blockNode,
+            'nn-tree-virtual': virtualEnabled
+        }"
+        :style="treeStyle"
+        :data-nn-tree-virtual="virtualEnabled ? '' : undefined"
         role="tree"
         :aria-multiselectable="multiple ? 'true' : undefined"
+        @scroll.passive="handleVirtualScroll"
     >
         <div
-            v-for="(record, index) in visibleNodes"
+            v-if="virtualEnabled"
+            class="nn-tree-virtual-spacer"
+            :style="{ height: `${virtualWindow.beforeHeight}px` }"
+            aria-hidden="true"
+        />
+        <div
+            v-for="(record, index) in renderedNodes"
             :key="record.key"
             :ref="element => setNodeRef(record.key, element)"
             class="nn-tree-node"
             :class="getNodeClass(record)"
             role="treeitem"
-            :tabindex="getNodeTabIndex(record, index)"
+            :tabindex="getNodeTabIndex(record, visibleIndex(index))"
             :aria-level="record.level + 1"
             :aria-selected="isSelected(record.key) ? 'true' : 'false'"
             :aria-expanded="record.isLeaf ? undefined : isExpanded(record.key) ? 'true' : 'false'"
             :aria-disabled="record.data.disabled ? 'true' : undefined"
-            :style="{ paddingInlineStart: `${record.level * 18}px` }"
+            :style="getNodeStyle(record)"
+            :data-nn-tree-virtual-index="virtualEnabled ? visibleIndex(index) : undefined"
             @click="handleSelect(record, $event)"
             @contextmenu="handleRightClick(record, $event)"
             @focus="focusedKey = record.key"
-            @keydown="handleKeydown(record, index, $event)"
+            @keydown="handleKeydown(record, visibleIndex(index), $event)"
         >
             <button
                 v-if="!record.isLeaf"
@@ -46,11 +59,18 @@
                 </span>
             </span>
         </div>
+        <div
+            v-if="virtualEnabled"
+            class="nn-tree-virtual-spacer"
+            :style="{ height: `${virtualWindow.afterHeight}px` }"
+            aria-hidden="true"
+        />
     </div>
 </template>
 
 <script setup>
-    import { computed, nextTick, onBeforeUpdate, ref } from 'vue';
+    import { computed, nextTick, onBeforeUpdate, ref, watch } from 'vue';
+    import { resolveTreeVirtualScrollTop, resolveTreeVirtualWindow } from '../treeVirtualization';
 
     defineOptions({ name: 'NnTree' });
 
@@ -73,7 +93,19 @@
         },
         virtual: {
             type: Boolean,
-            default: true
+            default: false
+        },
+        height: {
+            type: Number,
+            default: undefined
+        },
+        itemHeight: {
+            type: Number,
+            default: 24
+        },
+        overscan: {
+            type: Number,
+            default: 4
         },
         multiple: {
             type: Boolean,
@@ -86,6 +118,26 @@
     const treeRootRef = ref(null);
     const nodeRefs = new Map();
     const focusedKey = ref(undefined);
+    const virtualScrollTop = ref(0);
+
+    const virtualViewportHeight = computed(() =>
+        Number.isFinite(props.height) && props.height > 0 ? props.height : 0
+    );
+    const virtualItemHeight = computed(() =>
+        Number.isFinite(props.itemHeight) && props.itemHeight > 0 ? props.itemHeight : 24
+    );
+    const virtualOverscan = computed(() =>
+        Number.isFinite(props.overscan) && props.overscan > 0 ? Math.floor(props.overscan) : 0
+    );
+    const virtualEnabled = computed(() => props.virtual === true && virtualViewportHeight.value > 0);
+    const treeStyle = computed(() =>
+        virtualEnabled.value
+            ? {
+                  height: `${virtualViewportHeight.value}px`,
+                  '--nn-tree-virtual-item-height': `${virtualItemHeight.value}px`
+              }
+            : undefined
+    );
 
     const valuesEqual = (left, right) => Object.is(left, right);
     const includesKey = (keys, key) => (Array.isArray(keys) ? keys : []).some(item => valuesEqual(item, key));
@@ -157,6 +209,39 @@
         return records;
     });
 
+    const virtualWindow = computed(() =>
+        resolveTreeVirtualWindow({
+            itemCount: visibleNodes.value.length,
+            itemHeight: virtualItemHeight.value,
+            viewportHeight: virtualViewportHeight.value,
+            scrollTop: virtualScrollTop.value,
+            overscan: virtualOverscan.value
+        })
+    );
+    const renderedNodes = computed(() =>
+        virtualEnabled.value
+            ? visibleNodes.value.slice(virtualWindow.value.start, virtualWindow.value.end)
+            : visibleNodes.value
+    );
+    const visibleNodeIndexMap = computed(() => new Map(visibleNodes.value.map((record, index) => [record.key, index])));
+    const virtualTabStopKey = computed(() => {
+        if (!virtualEnabled.value) return undefined;
+        const renderedKeys = new Set(renderedNodes.value.map(record => record.key));
+        if (renderedKeys.has(focusedKey.value)) return focusedKey.value;
+        const selectedKey = props.selectedKeys.find(key => renderedKeys.has(key));
+        return selectedKey ?? renderedNodes.value[0]?.key;
+    });
+
+    const visibleIndex = renderedIndex =>
+        virtualEnabled.value ? virtualWindow.value.start + renderedIndex : renderedIndex;
+
+    const getNodeStyle = record => ({ paddingInlineStart: `${record.level * 18}px` });
+
+    const handleVirtualScroll = event => {
+        if (!virtualEnabled.value) return;
+        virtualScrollTop.value = event.currentTarget?.scrollTop || 0;
+    };
+
     const isSelected = key => includesKey(props.selectedKeys, key);
     const isExpanded = key => includesKey(props.expandedKeys, key);
 
@@ -174,6 +259,10 @@
     });
 
     const getNodeTabIndex = (record, index) => {
+        if (virtualEnabled.value) {
+            return valuesEqual(virtualTabStopKey.value, record.key) ? 0 : -1;
+        }
+
         if (valuesEqual(focusedKey.value, record.key)) {
             return 0;
         }
@@ -238,12 +327,38 @@
         });
     };
 
+    const setVirtualScrollTop = value => {
+        const nextScrollTop = Number(value) || 0;
+        virtualScrollTop.value = nextScrollTop;
+        if (treeRootRef.value && treeRootRef.value.scrollTop !== nextScrollTop) {
+            treeRootRef.value.scrollTop = nextScrollTop;
+        }
+    };
+
+    const scrollVirtualIndexIntoView = (index, align = 'auto', offset = 0) => {
+        if (!virtualEnabled.value || index < 0) return;
+        setVirtualScrollTop(
+            resolveTreeVirtualScrollTop({
+                index,
+                itemCount: visibleNodes.value.length,
+                itemHeight: virtualItemHeight.value,
+                viewportHeight: virtualViewportHeight.value,
+                currentScrollTop: virtualScrollTop.value,
+                align,
+                offset
+            })
+        );
+    };
+
     const focusRecord = async record => {
         if (!record) {
             return;
         }
 
         focusedKey.value = record.key;
+        if (virtualEnabled.value) {
+            scrollVirtualIndexIntoView(visibleNodeIndexMap.value.get(record.key) ?? -1);
+        }
         await nextTick();
         nodeRefs.get(record.key)?.focus();
     };
@@ -310,6 +425,14 @@
 
     const scrollTo = async ({ key, align = 'auto', offset = 0 } = {}) => {
         await nextTick();
+        if (virtualEnabled.value) {
+            const index = visibleNodeIndexMap.value.get(key);
+            if (index === undefined) return;
+            scrollVirtualIndexIntoView(index, align, offset);
+            await nextTick();
+            return;
+        }
+
         const element = nodeRefs.get(key);
         if (!element) {
             return;
@@ -336,6 +459,24 @@
         }
     };
 
+    watch(
+        [virtualEnabled, () => visibleNodes.value.length, virtualViewportHeight, virtualItemHeight],
+        () => {
+            if (!virtualEnabled.value) {
+                virtualScrollTop.value = 0;
+                return;
+            }
+            const nextScrollTop = virtualWindow.value.scrollTop;
+            if (nextScrollTop !== virtualScrollTop.value) virtualScrollTop.value = nextScrollTop;
+            nextTick(() => {
+                if (treeRootRef.value && treeRootRef.value.scrollTop !== nextScrollTop) {
+                    treeRootRef.value.scrollTop = nextScrollTop;
+                }
+            });
+        },
+        { flush: 'post' }
+    );
+
     onBeforeUpdate(() => {
         nodeRefs.clear();
     });
@@ -356,12 +497,33 @@
         outline: none;
     }
 
+    .nn-tree-virtual {
+        display: block;
+        width: 100%;
+        overflow: auto;
+        overflow-anchor: none;
+        contain: layout paint;
+    }
+
+    .nn-tree-virtual-spacer {
+        width: 1px;
+        min-height: 0;
+        pointer-events: none;
+    }
+
     .nn-tree-node {
         display: flex;
         align-items: center;
         min-width: max-content;
         min-height: 24px;
         outline: none;
+    }
+
+    .nn-tree-virtual .nn-tree-node {
+        box-sizing: border-box;
+        height: var(--nn-tree-virtual-item-height);
+        min-height: var(--nn-tree-virtual-item-height);
+        overflow: hidden;
     }
 
     .nn-tree-block-node .nn-tree-node {

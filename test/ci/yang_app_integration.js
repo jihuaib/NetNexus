@@ -121,6 +121,7 @@ async function main() {
     const freshnessApp = new YangApp(new FakeIpcMain(), freshnessStore, appOptions);
     const freshnessWorkspaceId = profileWorkspaceId(PROFILE_A);
     const freshnessModuleHash = 'a'.repeat(64);
+    const addedModuleHash = 'b'.repeat(64);
     const freshnessResult = {
         compileId: 'stale-compile',
         success: true,
@@ -129,25 +130,68 @@ async function main() {
     };
     freshnessApp.compileResult.set(freshnessWorkspaceId, freshnessResult);
     freshnessApp.persistCompileState(freshnessWorkspaceId, freshnessResult, { contentHash: 'old-content' });
+    let freshnessWorkspaceModules = [{ hash: freshnessModuleHash }, { hash: addedModuleHash }];
+    let freshnessModules = [
+        {
+            hash: freshnessModuleHash,
+            fileName: 'freshness.yang',
+            metadata: { name: 'freshness', kind: 'module' }
+        },
+        {
+            hash: addedModuleHash,
+            fileName: 'added.yang',
+            metadata: { name: 'added', kind: 'module' }
+        }
+    ];
     freshnessApp.send = async (_event, operation) => {
+        if (operation === WORKER_REQ_TYPES.IMPORT_CONTENTS) {
+            return {
+                imported: [{ hash: addedModuleHash }],
+                workspace: {
+                    id: freshnessWorkspaceId,
+                    contentHash: 'new-content',
+                    modules: freshnessWorkspaceModules
+                }
+            };
+        }
         if (operation === WORKER_REQ_TYPES.GET_WORKSPACE) {
-            return { id: freshnessWorkspaceId, contentHash: 'new-content' };
+            return {
+                id: freshnessWorkspaceId,
+                contentHash: 'new-content',
+                modules: freshnessWorkspaceModules
+            };
         }
         if (operation === WORKER_REQ_TYPES.LIST_MODULES) {
-            return [
-                {
-                    hash: freshnessModuleHash,
-                    fileName: 'freshness.yang',
-                    metadata: { name: 'freshness', kind: 'module' }
-                }
-            ];
+            return freshnessModules;
         }
         throw new Error(`unexpected freshness operation: ${operation}`);
     };
+    await freshnessApp.importDownloadedContents(
+        [{ content: 'module added { namespace "urn:added"; prefix added; }', expectedName: 'added' }],
+        { profileId: PROFILE_A },
+        event
+    );
+    assert.equal(
+        freshnessApp.lastCompile.has(freshnessWorkspaceId),
+        true,
+        'device downloads that only add hashes must retain the active compilation'
+    );
     const freshnessResponse = await freshnessApp.handleListModules(event, { profileId: PROFILE_A });
     assert.equal(freshnessResponse.status, 'success');
-    assert.equal(freshnessResponse.data[0].compiled, false);
-    assert.equal(freshnessResponse.data[0].compileStatus, 'pending');
+    assert.deepEqual(
+        Object.fromEntries(freshnessResponse.data.map(module => [module.name, module.compileStatus])),
+        { added: 'pending', freshness: 'compiled' },
+        'adding an unrelated source hash must retain the existing compilation context'
+    );
+    assert.equal(freshnessApp.lastCompile.has(freshnessWorkspaceId), true);
+    assert.equal(freshnessApp.compileResult.has(freshnessWorkspaceId), true);
+    assert.equal(freshnessStore.get(STATE_STORE_KEY).workspaces[freshnessWorkspaceId].compileId, 'stale-compile');
+
+    freshnessWorkspaceModules = [{ hash: addedModuleHash }];
+    freshnessModules = freshnessModules.filter(module => module.hash === addedModuleHash);
+    const missingCompiledSourceResponse = await freshnessApp.handleListModules(event, { profileId: PROFILE_A });
+    assert.equal(missingCompiledSourceResponse.status, 'success');
+    assert.equal(missingCompiledSourceResponse.data[0].compileStatus, 'pending');
     assert.equal(freshnessApp.lastCompile.has(freshnessWorkspaceId), false);
     assert.equal(freshnessApp.compileResult.has(freshnessWorkspaceId), false);
     assert.equal(freshnessStore.get(STATE_STORE_KEY).workspaces[freshnessWorkspaceId], undefined);
@@ -380,18 +424,74 @@ async function main() {
         staleStore.values = new Map(store.values);
         const staleApp = new YangApp(new FakeIpcMain(), staleStore, appOptions);
         try {
-            staleApp.restoreStoredCompilation = async () => {
-                throw new Error('simulated restore failure');
+            const restoreStoredCompilation = staleApp.restoreStoredCompilation.bind(staleApp);
+            let restoreAttempts = 0;
+            staleApp.restoreStoredCompilation = async (...args) => {
+                restoreAttempts += 1;
+                if (restoreAttempts === 1) throw new Error('simulated restore failure');
+                return restoreStoredCompilation(...args);
             };
             const staleWorkspace = await staleApp.handleGetWorkspace(event, { profileId: PROFILE_A });
             assert.equal(staleWorkspace.status, 'success');
-            assert.equal(staleWorkspace.data.compileId, '');
-            assert.equal(staleWorkspace.data.success, null);
+            assert.equal(staleWorkspace.data.compileId, compiled.compileId);
+            assert.equal(staleWorkspace.data.success, true);
             assert.equal(staleWorkspace.data.schemaTree, null);
             assert.equal(staleWorkspace.data.restoreError, 'simulated restore failure');
-            assert.equal(staleStore.get(STATE_STORE_KEY).workspaces[profileWorkspaceId(PROFILE_A)], undefined);
+            assert.equal(
+                staleStore.get(STATE_STORE_KEY).workspaces[profileWorkspaceId(PROFILE_A)].compileId,
+                compiled.compileId,
+                'a transient startup restore failure must not delete the persisted Schema context'
+            );
+
+            const recoveredWorkspace = await staleApp.handleGetWorkspace(event, { profileId: PROFILE_A });
+            assert.equal(recoveredWorkspace.status, 'success');
+            assert.equal(recoveredWorkspace.data.compileId, compiled.compileId);
+            assert.equal(recoveredWorkspace.data.schemaTree.authoritative, true);
+            assert.equal(restoreAttempts, 2, 'the next workspace read must retry a failed startup restore');
+            const recoveredRoots = await staleApp.handleGetSchemaRoots(event, {
+                profileId: PROFILE_A,
+                compileId: compiled.compileId
+            });
+            assert.equal(recoveredRoots.status, 'success');
+            assert(recoveredRoots.data.some(node => node.name === 'example-system'));
         } finally {
             await staleApp.close();
+        }
+
+        const migrationStore = new MemoryStore();
+        migrationStore.values = new Map(store.values);
+        const storedState = store.get(STATE_STORE_KEY);
+        const legacyCompileId = `legacy-${compiled.compileId}`;
+        migrationStore.set(STATE_STORE_KEY, {
+            ...storedState,
+            workspaces: {
+                ...storedState.workspaces,
+                [profileWorkspaceId(PROFILE_A)]: {
+                    ...storedState.workspaces[profileWorkspaceId(PROFILE_A)],
+                    compileId: legacyCompileId
+                }
+            }
+        });
+        const migrationApp = new YangApp(new FakeIpcMain(), migrationStore, appOptions);
+        try {
+            const migratedRoots = await migrationApp.handleGetSchemaRoots(event, {
+                profileId: PROFILE_A,
+                compileId: legacyCompileId
+            });
+            assert.equal(migratedRoots.status, 'success');
+            assert(migratedRoots.data.some(node => node.name === 'example-system'));
+            const migratedWorkspace = await migrationApp.handleGetWorkspace(event, { profileId: PROFILE_A });
+            assert.equal(migratedWorkspace.status, 'success');
+            assert.equal(migratedWorkspace.data.compileId, compiled.compileId);
+            assert.notEqual(migratedWorkspace.data.compileId, legacyCompileId);
+            assert.equal(migratedWorkspace.data.schemaTree.authoritative, true);
+            assert.equal(
+                migrationStore.get(STATE_STORE_KEY).workspaces[profileWorkspaceId(PROFILE_A)].compileId,
+                compiled.compileId,
+                'a runtime or cache-version change must migrate the stored compile ID after Schema verification'
+            );
+        } finally {
+            await migrationApp.close();
         }
 
         app = new YangApp(new FakeIpcMain(), store, appOptions);
@@ -448,7 +548,65 @@ async function main() {
         assert.equal(invalidImportResponse.status, 'success');
         const invalidImport = await waitForTask(app, invalidImportResponse.data.taskId);
         assert.equal(invalidImport.summary.imported, 1);
-        const failedCompileResponse = await app.handleCompile(event, { profileId: PROFILE_A, force: true });
+        const workspaceAfterAdditiveImport = await app.handleGetWorkspace(event, { profileId: PROFILE_A });
+        assert.equal(workspaceAfterAdditiveImport.data.compileId, compiled.compileId);
+        assert.deepEqual(
+            Object.fromEntries(
+                workspaceAfterAdditiveImport.data.modules.map(module => [module.name, module.compileStatus])
+            ),
+            {
+                'example-invalid': 'pending',
+                'example-system': 'compiled',
+                'example-types': 'compiled'
+            },
+            'newly imported sources must be pending without clearing previously compiled sources'
+        );
+        assert(
+            (
+                await app.handleGetSchemaRoots(event, {
+                    profileId: PROFILE_A,
+                    compileId: compiled.compileId
+                })
+            ).data.some(root => root.name === 'example-system')
+        );
+        await app.close();
+        app = new YangApp(new FakeIpcMain(), store, appOptions);
+        const restartedAfterAdditiveImport = await app.handleGetWorkspace(event, { profileId: PROFILE_A });
+        assert.equal(restartedAfterAdditiveImport.status, 'success');
+        assert.equal(restartedAfterAdditiveImport.data.compileId, compiled.compileId);
+        assert.deepEqual(
+            Object.fromEntries(
+                restartedAfterAdditiveImport.data.modules.map(module => [module.name, module.compileStatus])
+            ),
+            {
+                'example-invalid': 'pending',
+                'example-system': 'compiled',
+                'example-types': 'compiled'
+            },
+            'restarting after an additive import must preserve the compiled Schema and pending new source'
+        );
+        assert(
+            (
+                await app.handleGetSchemaRoots(event, {
+                    profileId: PROFILE_A,
+                    compileId: compiled.compileId
+                })
+            ).data.some(root => root.name === 'example-system')
+        );
+        const invalidModule = workspaceAfterAdditiveImport.data.modules.find(
+            module => module.name === 'example-invalid'
+        );
+        const failedCompileResponse = await app.handleCompile(event, {
+            profileId: PROFILE_A,
+            force: true,
+            moduleIds: [
+                {
+                    id: invalidModule.id,
+                    name: invalidModule.name,
+                    revision: invalidModule.revision
+                }
+            ]
+        });
         const failedTask = app.taskManager.tasks.get(failedCompileResponse.data.taskId);
         await failedTask.promise;
         assert.equal(failedTask.status, 'failed');
@@ -568,6 +726,19 @@ async function main() {
         const retainedModules = await app.handleListModules(event, { profileId: PROFILE_A });
         assert.equal(retainedModules.data.length, 3, 'clearing schema context must retain local source modules');
         assert(events.some(item => item.type === 'yang:taskProgress'));
+        const liveCompileFileEvent = events.find(
+            item =>
+                item.type === 'yang:taskProgress' &&
+                item.data?.data?.phase === 'file-result' &&
+                item.data.data.profileId === PROFILE_A
+        );
+        assert(liveCompileFileEvent, 'per-file compiler progress must reach the renderer task event stream');
+        assert(liveCompileFileEvent.data.data.currentFile);
+        assert(liveCompileFileEvent.data.data.currentHash);
+        assert(['compiled', 'failed'].includes(liveCompileFileEvent.data.data.fileStatus));
+        assert.equal(liveCompileFileEvent.data.data.action, 'compile');
+        assert.equal(liveCompileFileEvent.data.data.profileId, PROFILE_A);
+        assert.equal(liveCompileFileEvent.data.data.workspaceId, profileWorkspaceId(PROFILE_A));
         assert(
             events.some(
                 item =>

@@ -40,7 +40,8 @@ const yangPageApiScript = `
         discoverModules: profileId => call('yang.netconf.discoverModules', profileId),
         downloadModules: request => call('yang.netconf.downloadModules', request),
         executeOperation: request => call('yang.netconf.executeOperation', request),
-        sendRpc: request => call('yang.netconf.sendRpc', request)
+        sendRpc: request => call('yang.netconf.sendRpc', request),
+        cancelOperation: request => call('yang.netconf.cancelOperation', request)
     };
     window.yangApi = {
         listModules: query => call('yang.registry.listModules', query),
@@ -675,8 +676,12 @@ function currentWorkspace(yang) {
     return clone(yang.workspace);
 }
 
+function emitSessionState(controller, state) {
+    controller.emitEvent('netconf:sessionEvent', successResponse(clone(state), 'NETCONF 会话状态更新'));
+}
+
 function emitSession(controller, yang) {
-    controller.emitEvent('netconf:sessionEvent', successResponse(clone(yang.session), 'NETCONF 会话状态更新'));
+    emitSessionState(controller, yang.session);
 }
 
 function emitSubscription(controller, subscription) {
@@ -847,6 +852,19 @@ function connectSession(controller, yang, target) {
     yang.sessions[profile.id] = yang.session;
     yang.activeProfileId = profile.id;
     emitSession(controller, yang);
+    for (const [otherProfileId, otherSession] of Object.entries(yang.sessions)) {
+        if (otherProfileId === profile.id || otherSession?.connected !== true) continue;
+        const disconnectedSession = {
+            ...otherSession,
+            status: 'disconnected',
+            state: 'disconnected',
+            connected: false,
+            capabilities: [],
+            disconnectedAt: new Date().toISOString()
+        };
+        yang.sessions[otherProfileId] = disconnectedSession;
+        emitSessionState(controller, disconnectedSession);
+    }
     return successResponse(clone(yang.session), 'NETCONF 连接成功');
 }
 

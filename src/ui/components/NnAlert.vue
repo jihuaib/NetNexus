@@ -89,12 +89,16 @@
         font-size: 14px;
         font-weight: 500;
         line-height: 1.5;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
 
     .nn-alert-description {
         color: var(--nn-color-text-secondary);
         font-size: 13px;
         line-height: 1.6;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
 
     .nn-alert-message + .nn-alert-description {

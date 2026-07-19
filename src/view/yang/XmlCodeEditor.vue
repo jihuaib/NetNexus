@@ -25,7 +25,11 @@
             data-xml-highlight-layer
             data-xml-code-content
             aria-hidden="true"
-        ><XmlHighlight :value="displayValue" /></pre>
+        ><code
+            ref="highlightContentRef"
+            class="xml-code-editor-highlight-content"
+            data-xml-highlight-content
+        ><XmlHighlight :value="displayValue" /></code></pre>
         <div
             v-if="effectiveLineNumbers"
             ref="gutterRef"
@@ -33,7 +37,7 @@
             data-xml-line-number-gutter
             aria-hidden="true"
         >
-            <div class="xml-code-editor-gutter-content">
+            <div ref="gutterContentRef" class="xml-code-editor-gutter-content" data-xml-line-number-content>
                 <span
                     v-for="row in diagnosticRows"
                     :key="row.line"
@@ -52,7 +56,12 @@
             role="status"
             aria-live="polite"
         >
-            <div class="xml-code-editor-diagnostics-content">
+            <div
+                v-if="hasDiagnostics"
+                ref="diagnosticsContentRef"
+                class="xml-code-editor-diagnostics-content"
+                data-xml-diagnostics-content
+            >
                 <div
                     v-for="row in diagnosticRows"
                     :key="row.line"
@@ -100,7 +109,7 @@
 </template>
 
 <script setup>
-    import { computed, nextTick, onMounted, ref, useAttrs, watch } from 'vue';
+    import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, watch } from 'vue';
     import XmlHighlight from './XmlHighlight.vue';
 
     defineOptions({
@@ -159,14 +168,20 @@
     const attrs = useAttrs();
     const textareaRef = ref(null);
     const highlightRef = ref(null);
+    const highlightContentRef = ref(null);
     const gutterRef = ref(null);
+    const gutterContentRef = ref(null);
     const diagnosticsRef = ref(null);
+    const diagnosticsContentRef = ref(null);
     const displayValue = computed(() => (props.value === null || props.value === undefined ? '' : String(props.value)));
     const MAX_RICH_DISPLAY_CHARACTERS = 128 * 1024;
     const richRendering = computed(
         () => !props.lightweight && displayValue.value.length <= MAX_RICH_DISPLAY_CHARACTERS
     );
     const effectiveLineNumbers = computed(() => props.lineNumbers && richRendering.value);
+    const hasDiagnostics = computed(() =>
+        props.diagnostics.some(diagnostic => String(diagnostic?.message || '').trim())
+    );
     const lineCount = computed(() => Math.max(1, displayValue.value.split('\n').length));
     const editorStyle = computed(() => {
         if (!effectiveLineNumbers.value) return undefined;
@@ -202,26 +217,37 @@
         Object.fromEntries(Object.entries(attrs).filter(([key]) => !['class', 'style'].includes(key)))
     );
 
-    const syncHighlightScroll = event => {
-        const textarea = event?.target || textareaRef.value;
-        const highlight = highlightRef.value;
-        if (!textarea || !highlight) return;
-        highlight.scrollTop = textarea.scrollTop;
-        highlight.scrollLeft = textarea.scrollLeft;
-        if (gutterRef.value) gutterRef.value.scrollTop = textarea.scrollTop;
-        if (diagnosticsRef.value) diagnosticsRef.value.scrollTop = textarea.scrollTop;
+    let scrollSyncFrame = null;
+
+    const applyHighlightScroll = () => {
+        scrollSyncFrame = null;
+        const textarea = textareaRef.value;
+        const highlightContent = highlightContentRef.value;
+        if (!textarea || !highlightContent) return;
+
+        const scrollTop = textarea.scrollTop;
+        const scrollLeft = textarea.scrollLeft;
+        highlightContent.style.transform = `translate3d(${-scrollLeft}px, ${-scrollTop}px, 0)`;
+        if (gutterContentRef.value) {
+            gutterContentRef.value.style.transform = `translate3d(0, ${-scrollTop}px, 0)`;
+        }
+        if (diagnosticsContentRef.value) {
+            diagnosticsContentRef.value.style.transform = `translate3d(0, ${-scrollTop}px, 0)`;
+        }
     };
 
-    const syncHighlightAfterSelection = event => {
-        const textarea = event?.target;
-        requestAnimationFrame(() => syncHighlightScroll({ target: textarea }));
+    const syncHighlightScroll = () => {
+        if (scrollSyncFrame !== null) return;
+        scrollSyncFrame = requestAnimationFrame(applyHighlightScroll);
     };
+
+    const syncHighlightAfterSelection = () => syncHighlightScroll();
 
     const handleInput = event => {
         emit('update:value', event.target.value);
         emit('input', event);
         emit('change', event);
-        nextTick(() => syncHighlightScroll(event));
+        nextTick(syncHighlightScroll);
     };
 
     const handleKeydown = event => {
@@ -240,6 +266,9 @@
     );
 
     onMounted(syncHighlightScroll);
+    onBeforeUnmount(() => {
+        if (scrollSyncFrame !== null) cancelAnimationFrame(scrollSyncFrame);
+    });
 
     const focus = options => textareaRef.value?.focus(options);
     const blur = () => textareaRef.value?.blur();
@@ -304,8 +333,19 @@
         pointer-events: none;
     }
 
-    .xml-code-editor > .xml-code-editor-highlight::after {
+    .xml-code-editor-highlight-content::after {
         content: ' ';
+    }
+
+    .xml-code-editor-highlight-content {
+        display: block;
+        width: max-content;
+        min-width: 100%;
+        min-height: 100%;
+        color: inherit;
+        font: inherit;
+        letter-spacing: inherit;
+        white-space: inherit;
     }
 
     .xml-code-editor-line-numbers .xml-code-editor-highlight,
@@ -317,7 +357,27 @@
     .xml-code-editor-diagnostics-layer {
         position: absolute;
         overflow: hidden;
+        overflow: clip;
         pointer-events: none;
+    }
+
+    .xml-code-editor-highlight {
+        overflow: hidden;
+        overflow: clip;
+    }
+
+    .xml-code-editor-highlight,
+    .xml-code-editor-gutter,
+    .xml-code-editor-diagnostics-layer {
+        contain: paint;
+    }
+
+    .xml-code-editor-highlight-content,
+    .xml-code-editor-gutter-content,
+    .xml-code-editor-diagnostics-content {
+        transform: translate3d(0, 0, 0);
+        transform-origin: top left;
+        will-change: transform;
     }
 
     .xml-code-editor-gutter {

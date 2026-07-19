@@ -26,31 +26,58 @@ test.describe('SNMP pages', () => {
         }
     });
 
-    test('shows live MIB file progress in one update-style notification', async ({ page }) => {
+    test('shows live MIB file progress in the MIB page without a global notification', async ({ page }) => {
         await page.goto('/#/snmp/snmp-mib');
 
         const recompileButton = page.getByRole('button', { name: '重新编译' });
         await expect(recompileButton).toBeEnabled();
         await recompileButton.click();
 
-        const notification = page.locator('.mib-compile-notification');
-        await expect(notification).toBeVisible();
-        await notification.evaluate(element => {
-            element.dataset.e2eProgressNotification = 'same-node';
-        });
-        await expect(page.locator('.mib-compile-progress')).toBeVisible();
-        await expect(notification.locator('.notification-title')).toContainText(/正在(准备|编译|解析)/u);
-        await expect(notification.locator('[role="progressbar"]')).toBeVisible();
+        const inlineProgress = page.locator('.mib-compile-progress');
+        await expect(inlineProgress).toBeVisible();
+        await expect(inlineProgress).toContainText(/(准备编译|编译 \d+\/3)/u);
+        await expect(inlineProgress.getByRole('progressbar', { name: 'MIB编译进度' })).toBeVisible();
+        await expect(page.locator('.mib-compile-notification')).toHaveCount(0);
 
-        await expect(notification.locator('.notification-title')).toContainText('MIB 编译完成');
-        await expect(notification.locator('.notification-description')).toContainText('成功 3');
-        await expect(notification).toHaveAttribute('data-e2e-progress-notification', 'same-node');
-        await expect(page.locator('.mib-compile-notification')).toHaveCount(1);
         await expect(recompileButton).toBeEnabled();
+        await expect(inlineProgress).toHaveCount(0);
+    });
 
-        await page.getByRole('tab', { name: 'Trap监控', exact: true }).click();
-        await expect(page).toHaveURL(/#\/snmp\/snmp-trap$/u);
-        await expect(notification).toBeVisible();
+    test('keeps a long OID inside the translation result dialog', async ({ page }) => {
+        const longOid = ['1', '3', '6', '1', ...Array.from({ length: 90 }, (_, index) => String(100000 + index))].join(
+            '.'
+        );
+        await page.setViewportSize({ width: 520, height: 720 });
+        await page.goto('/#/snmp/snmp-mib');
+
+        await page.getByPlaceholder('输入OID，例如 1.3.6.1.2.1.1.3.0').fill(longOid);
+        await page.getByRole('button', { name: '解析OID', exact: true }).click();
+
+        const dialog = page.getByRole('dialog', { name: 'OID解析结果' });
+        await expect(dialog).toBeVisible();
+        await expect(dialog.locator('.nn-alert-description')).toHaveText(longOid);
+
+        const layout = await dialog.evaluate(element => {
+            const overflow = selector => {
+                const target = element.querySelector(selector);
+                return target ? Math.ceil(target.scrollWidth - target.clientWidth) : Number.POSITIVE_INFINITY;
+            };
+            const bounds = element.getBoundingClientRect();
+            return {
+                alertOverflow: overflow('.nn-alert-description'),
+                bodyOverflow: overflow('.nn-modal-body'),
+                queryOidOverflow: overflow('.oid-result-detail .nn-descriptions-item-content'),
+                left: bounds.left,
+                right: bounds.right,
+                viewportWidth: window.innerWidth
+            };
+        });
+
+        expect(layout.alertOverflow).toBeLessThanOrEqual(1);
+        expect(layout.bodyOverflow).toBeLessThanOrEqual(1);
+        expect(layout.queryOidOverflow).toBeLessThanOrEqual(1);
+        expect(layout.left).toBeGreaterThanOrEqual(8);
+        expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth - 8);
     });
 
     test('keeps disabled MIB context actions visible and the menu inside the viewport', async ({ page }) => {
