@@ -43,7 +43,9 @@
 
 export const YANG_EVENT = Object.freeze({
     TASK_PROGRESS: 'yang:taskProgress',
-    SESSION_EVENT: 'netconf:sessionEvent'
+    SESSION_EVENT: 'netconf:sessionEvent',
+    NOTIFICATION: 'netconf:notification',
+    SUBSCRIPTION_EVENT: 'netconf:subscriptionEvent'
 });
 
 export const YANG_EVENT_PAGE_ID = Object.freeze({
@@ -51,6 +53,7 @@ export const YANG_EVENT_PAGE_ID = Object.freeze({
     MODULES: 'yang-modules',
     WORKSPACE: 'yang-workspace',
     OPERATIONS: 'yang-operations',
+    NOTIFICATION_COLLECTOR: 'yang-notification-collector',
     TASK_NOTIFICATION: 'yang-task-notification'
 });
 
@@ -153,6 +156,7 @@ export const NETCONF_OPERATIONS = Object.freeze([
     { key: 'commit', label: 'commit', category: 'write', capability: 'candidate' },
     { key: 'cancel-commit', label: 'cancel-commit', category: 'danger', capability: 'confirmedCommit' },
     { key: 'discard-changes', label: 'discard-changes', category: 'danger', capability: 'candidate' },
+    { key: 'create-subscription', label: 'create-subscription', category: 'write', capability: 'notification' },
     { key: 'raw-rpc', label: '原始 RPC', category: 'danger' }
 ]);
 
@@ -162,6 +166,8 @@ export const NETCONF_CAPABILITY_HINTS = Object.freeze({
     startup: ':startup',
     writableRunning: ':writable-running',
     xpath: ':xpath',
+    notification: ':notification',
+    interleave: ':interleave',
     confirmedCommit: ':confirmed-commit',
     rollbackOnError: ':rollback-on-error'
 });

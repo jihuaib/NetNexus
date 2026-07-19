@@ -7,17 +7,29 @@ import App from './App.vue';
 import router from './router';
 import store from './store';
 import EventBus from './utils/eventBus';
+import { YANG_EVENT } from './const/yangConst';
+import { installNetconfNotificationCollector } from './view/yang/useNetconfNotificationHistory';
 import { registerUiComponents } from './ui/registerUiComponents';
 import { initializeTheme, syncThemeFromGeneralSettings } from './utils/themeManager';
 // 引入弹出框缩放自适应处理工具
 import './utils/modalResizeHandler';
 
 // 初始化全局事件监听器
+const disposeNotificationCollector = installNetconfNotificationCollector(EventBus, YANG_EVENT);
+let disposeUnifiedEvent = null;
 if (window.commonApi && window.commonApi.onUnifiedEvent) {
-    window.commonApi.onUnifiedEvent(({ type, data }) => {
+    disposeUnifiedEvent = window.commonApi.onUnifiedEvent(({ type, data }) => {
         EventBus.emit(type, data);
     });
 }
+const disposeGlobalEventListeners = () => {
+    window.removeEventListener('beforeunload', disposeGlobalEventListeners);
+    disposeUnifiedEvent?.();
+    disposeUnifiedEvent = null;
+    disposeNotificationCollector();
+};
+window.addEventListener('beforeunload', disposeGlobalEventListeners, { once: true });
+if (import.meta.hot) import.meta.hot.dispose(disposeGlobalEventListeners);
 
 initializeTheme();
 

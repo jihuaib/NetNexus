@@ -18,7 +18,12 @@ validationModule.filename = sourcePath;
 validationModule.paths = Module._nodeModulePaths(path.dirname(sourcePath));
 validationModule._compile(transformed, sourcePath);
 
-const { NETCONF_BASE_NAMESPACE, validateNetconfRpc } = validationModule.exports;
+const {
+    NETCONF_BASE_NAMESPACE,
+    NETCONF_NOTIFICATION_NAMESPACE,
+    isRfc3339DateTime,
+    validateNetconfRpc
+} = validationModule.exports;
 
 const rpc = body => `<rpc xmlns="${NETCONF_BASE_NAMESPACE}" message-id="101">${body}</rpc>`;
 const firstError = value => validateNetconfRpc(value).diagnostics[0];
@@ -77,5 +82,54 @@ const operationError = result.diagnostics.find(item => /一个操作元素/u.tes
 assert(operationError);
 assert.equal(operationError.index, multipleOperationRpc.indexOf('get-config'));
 assert.equal(operationError.length, 'get-config'.length);
+
+result = validateNetconfRpc(
+    rpc(
+        `<create-subscription xmlns="${NETCONF_NOTIFICATION_NAMESPACE}">` +
+            '<stream>NETCONF</stream><filter type="subtree"><alarm xmlns="urn:example:alarm"/></filter>' +
+            '<startTime>2026-07-19T01:00:00Z</startTime><stopTime>2026-07-19T02:00:00Z</stopTime>' +
+            '</create-subscription>'
+    )
+);
+assert.equal(result.valid, true);
+assert.equal(result.operation, 'create-subscription');
+assert.equal(isRfc3339DateTime('2026-07-19T09:00:00+08:00'), true);
+assert.equal(isRfc3339DateTime('2026-07-19'), false);
+
+result = validateNetconfRpc(rpc('<create-subscription><stream>NETCONF</stream></create-subscription>'));
+assert.equal(result.valid, false);
+assert(result.diagnostics.some(item => /RFC 5277 命名空间/u.test(item.message)));
+
+result = validateNetconfRpc(
+    rpc(
+        `<create-subscription xmlns="${NETCONF_NOTIFICATION_NAMESPACE}">` +
+            '<filter type="xpath"/><stopTime>2026-07-19T02:00:00Z</stopTime>' +
+            '</create-subscription>'
+    )
+);
+assert.equal(result.valid, false);
+assert(result.diagnostics.some(item => /非空 select/u.test(item.message)));
+assert(result.diagnostics.some(item => /必须与 startTime/u.test(item.message)));
+
+result = validateNetconfRpc(
+    rpc(
+        `<create-subscription xmlns="${NETCONF_NOTIFICATION_NAMESPACE}">` +
+            '<stopTime>2026-07-19T01:00:00Z</stopTime><startTime>2026-07-19T02:00:00Z</startTime>' +
+            '</create-subscription>'
+    )
+);
+assert.equal(result.valid, false);
+assert(result.diagnostics.some(item => /顺序不符合/u.test(item.message)));
+assert(result.diagnostics.some(item => /晚于 startTime/u.test(item.message)));
+
+result = validateNetconfRpc(
+    rpc(
+        `<create-subscription xmlns="${NETCONF_NOTIFICATION_NAMESPACE}">` +
+            '<startTime>2026-07-19</startTime>' +
+            '</create-subscription>'
+    )
+);
+assert.equal(result.valid, false);
+assert(result.diagnostics.some(item => /RFC 3339/u.test(item.message)));
 
 console.log('NETCONF RPC frontend validation tests passed');

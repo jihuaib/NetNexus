@@ -43,23 +43,25 @@ The automatic build requires network access to fetch the pinned upstream
 sources, plus these host tools:
 
 - macOS and Linux: Git, CMake, and a working C compiler toolchain.
-- Windows: an x64 host with Git, CMake 3.15 or newer, the Visual Studio C++ x64
-  Build Tools (or the **Desktop development with C++** workload), the Windows
-  SDK, and network access. A preinstalled vcpkg checkout is not required. When
-  `VCPKG_ROOT` is unset, the build downloads the pinned vcpkg baseline into
-  `%LOCALAPPDATA%\NetNexus\BuildTools\vcpkg\<baseline-key>`, bootstraps it, and
-  reuses that per-user checkout on later installs.
+- Windows: an x64 host with Git, CMake 3.22 or newer, Visual Studio 2022 Build
+  Tools with **Desktop development with C++**, the Windows SDK, vcpkg, and
+  network access. Install vcpkg yourself, either as the Visual Studio 2022
+  vcpkg component or as a separate checkout bootstrapped with
+  `bootstrap-vcpkg.bat`.
 
-`VCPKG_ROOT` is an explicit override and must identify a complete Git checkout;
-the build bootstraps it when `vcpkg.exe` is missing. `VCPKG_INSTALLATION_ROOT`
-is used only when it identifies a complete checkout; an incomplete value is
-ignored in favor of the managed per-user cache.
+The build searches `VCPKG_ROOT`, `VCPKG_INSTALLATION_ROOT`, `PATH`, and finally
+the vcpkg component under Visual Studio 2022. Set `VCPKG_ROOT` for a custom
+installation. The project validates `vcpkg.exe` and its CMake toolchain, but it
+never clones, installs, or bootstraps vcpkg. It still invokes `vcpkg install` in
+manifest mode to build the pinned dirent and pthreads dependencies in a
+temporary build directory. For a Git checkout with missing baseline objects,
+the build fetches only the pinned registry objects; the Visual Studio bundle
+uses its remote built-in registry.
 
-If the managed vcpkg or another pinned-source download fails, fix network or
-proxy access and rerun `npm install` (or `npm run libyang:build:windows`). The
-download honors Git proxy configuration and the standard `HTTP_PROXY` /
-`HTTPS_PROXY` environment variables. An incomplete managed checkout is removed
-and downloaded again automatically on the retry.
+If an upstream source, registry, or dependency download fails, fix network or
+proxy access and rerun `npm install` (or `npm run libyang:build:windows`). Git
+operations honor Git proxy configuration, and downloads honor the standard
+`HTTP_PROXY` / `HTTPS_PROXY` environment variables.
 
 Force a clean build for the current platform with:
 

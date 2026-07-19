@@ -100,7 +100,7 @@
                                 </nn-descriptions-item>
                                 <nn-descriptions-item label="Schema 节点">
                                     <span class="execution-history-context" :title="selectedRecord.contextPath">
-                                        {{ selectedRecord.contextPath || selectedRecord.contextName || '设备级操作' }}
+                                        {{ selectedRecord.contextPath || selectedRecord.contextName || '未关联 Schema 节点' }}
                                     </span>
                                 </nn-descriptions-item>
                             </nn-descriptions>

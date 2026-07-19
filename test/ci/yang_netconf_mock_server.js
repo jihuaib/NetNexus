@@ -7,6 +7,7 @@ const path = require('node:path');
 const { NetconfClient, NetconfRpcError } = require('../../electron/utils/netconf');
 const { YangRegistry } = require('../../electron/utils/yang');
 const NetconfWorkerService = require('../../electron/worker/yang/netconfWorker');
+const { YANG_EVT_TYPES } = require('../../electron/const/yangConst');
 const {
     MOCK_DEVICE_YANG,
     MOCK_INVALID_YANG,
@@ -43,6 +44,10 @@ function waitFor(predicate, message, timeoutMs = 3_000) {
         };
         check();
     });
+}
+
+function delay(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 function createClient() {
@@ -110,7 +115,7 @@ async function compileDownloadedModules(tempRoot, deviceSource, typesSource) {
     assert.equal(compiled.externalCompiler.exitCode, 0);
 }
 
-async function compileInvalidDownloadedModule(tempRoot, invalidSource) {
+async function compileInvalidDownloadedModule(tempRoot, deviceSource, typesSource, invalidSource) {
     assert.equal(invalidSource.trim(), MOCK_INVALID_YANG.trim());
     const registry = new YangRegistry({
         rootDir: path.join(tempRoot, 'invalid-repository'),
@@ -119,21 +124,55 @@ async function compileInvalidDownloadedModule(tempRoot, invalidSource) {
     });
     const imported = registry.importContents([
         {
+            content: typesSource,
+            expectedName: 'netnexus-mock-types',
+            fileName: 'netnexus-mock-types@2026-07-18.yang'
+        },
+        {
+            content: deviceSource,
+            expectedName: 'netnexus-mock-device',
+            fileName: 'netnexus-mock-device@2026-07-18.yang'
+        },
+        {
             content: invalidSource,
             expectedName: 'netnexus-mock-invalid',
             fileName: 'netnexus-mock-invalid@2026-07-18.yang'
         }
     ]);
-    assert.equal(imported.summary.imported, 1);
+    assert.equal(imported.summary.imported, 3);
     assert.equal(imported.summary.invalid, 0, 'the mock file must download cleanly before libyang compilation');
 
-    const compiled = await registry.compile({ force: true });
+    const compiled = await registry.compile({
+        force: true,
+        features: ['netnexus-mock-device:interface-counters']
+    });
     assert.equal(compiled.success, false);
     assert.equal(compiled.externalCompiler.exitCode, 1);
+    assert.equal(compiled.schemaAvailable, true);
+    assert.equal(compiled.partialSchema, true);
+    assert.equal(compiled.schemaTree.partial, true);
+    assert.equal(compiled.schemaCompiler.succeeded, true);
+    assert.deepEqual(Object.fromEntries(compiled.fileResults.map(result => [result.name, result.status])), {
+        'netnexus-mock-device': 'compiled',
+        'netnexus-mock-invalid': 'failed',
+        'netnexus-mock-types': 'compiled'
+    });
+    assert.deepEqual(
+        registry
+            .getSchemaRoots({ compileId: compiled.compileId })
+            .map(root => root.name)
+            .sort(),
+        ['netnexus-mock-device', 'netnexus-mock-types']
+    );
+    assert.equal(
+        compiled.schemaCompiler.args.some(argument => /netnexus-mock-invalid/u.test(argument)),
+        false
+    );
     assert(
         compiled.diagnostics.some(
             diagnostic =>
-                diagnostic.severity === 'error' && /intentionally-undefined-type|Referenced type/u.test(diagnostic.message)
+                diagnostic.severity === 'error' &&
+                /intentionally-undefined-type|Referenced type/u.test(diagnostic.message)
         ),
         JSON.stringify(compiled.diagnostics, null, 2)
     );
@@ -149,7 +188,13 @@ async function run() {
 
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-netconf-mock-'));
     const server = new MockNetconfServer({ port: 0, quiet: true });
-    const pageWorker = new NetconfWorkerService(null);
+    const pageWorkerMessages = [];
+    const pageWorker = new NetconfWorkerService({
+        on() {},
+        postMessage(message) {
+            pageWorkerMessages.push(message);
+        }
+    });
     const clients = [];
 
     try {
@@ -206,7 +251,76 @@ async function run() {
         });
         assert.equal(pageGetConfig.ok, false);
         assert.match(pageGetConfig.xml, /<hostname>netnexus-mock<\/hostname>/u);
+
+        const pageSubscriptionReply = await pageWorker.executeOperation(pageProfile.id, {
+            operation: 'create-subscription',
+            stream: 'NETCONF',
+            filter: {
+                type: 'subtree',
+                content:
+                    `<mock-event xmlns="${MOCK_DEVICE_NAMESPACE}">` +
+                    '<message>page-worker-notification</message></mock-event>'
+            },
+            timeout: RPC_OPTIONS.timeout
+        });
+        assert.equal(pageSubscriptionReply.ok, true);
+        assert.equal(pageSubscriptionReply.subscription.state, 'ACTIVE');
+        assert.equal(pageSubscriptionReply.subscription.profileId, pageProfile.id);
+        assert.equal(pageSubscriptionReply.subscription.sessionId, pageConnection.sessionId);
+        assert.doesNotMatch(pageSubscriptionReply.reply, /<notification(?:\s|>)/u);
+        assert(
+            pageWorkerMessages.some(
+                message =>
+                    message.eventName === YANG_EVT_TYPES.SUBSCRIPTION_EVENT &&
+                    message.data.id === pageSubscriptionReply.subscription.id &&
+                    message.data.state === 'ACTIVE'
+            ),
+            'the page Worker must publish an active subscription event for notification history'
+        );
+
+        server.notify('page-worker-filter-miss');
+        await delay(100);
+        assert.equal(
+            pageWorkerMessages.some(
+                message =>
+                    message.eventName === YANG_EVT_TYPES.NOTIFICATION &&
+                    message.data.xml.includes('page-worker-filter-miss')
+            ),
+            false,
+            'the real SSH Worker path must preserve server-side notification filtering'
+        );
+        server.notify('page-worker-notification');
+        const pageNotificationEvent = await waitFor(
+            () =>
+                pageWorkerMessages.find(
+                    message =>
+                        message.eventName === YANG_EVT_TYPES.NOTIFICATION &&
+                        message.data.xml.includes('page-worker-notification')
+                ),
+            'the real SSH notification did not reach the page Worker event stream'
+        );
+        assert.equal(pageNotificationEvent.data.profileId, pageProfile.id);
+        assert.equal(pageNotificationEvent.data.sessionId, pageConnection.sessionId);
+        assert.equal(pageNotificationEvent.data.subscriptionId, pageSubscriptionReply.subscription.id);
+        assert.equal(pageNotificationEvent.data.state, 'ACTIVE');
+        assert.equal(pageNotificationEvent.data.eventName, 'mock-event');
+        assert.equal(pageNotificationEvent.data.namespace, MOCK_DEVICE_NAMESPACE);
+        assert.match(pageNotificationEvent.data.xml, /^<notification\b/u);
+        const pageSubscriptions = pageWorker.getSubscriptions(pageProfile.id);
+        assert.equal(pageSubscriptions.activeCount, 1);
+        assert.equal(pageSubscriptions.subscriptions[0].id, pageSubscriptionReply.subscription.id);
+
         await pageWorker.disconnectAll();
+        assert(
+            pageWorkerMessages.some(
+                message =>
+                    message.eventName === YANG_EVT_TYPES.SUBSCRIPTION_EVENT &&
+                    message.data.id === pageSubscriptionReply.subscription.id &&
+                    message.data.state === 'TERMINATED' &&
+                    message.data.terminationReason === 'application-close'
+            ),
+            'disconnecting the page Worker must publish the terminated subscription for notification history'
+        );
 
         const rejectedClient = createClient();
         clients.push(rejectedClient);
@@ -224,6 +338,9 @@ async function run() {
         assert.equal(primarySession.baseVersion, '1.1');
         assert(primarySession.sessionId);
         assert(primarySession.capabilities.includes('urn:ietf:params:netconf:base:1.1'));
+        assert(primarySession.capabilities.includes('urn:ietf:params:netconf:capability:notification:1.0'));
+        assert(primarySession.capabilities.includes('urn:ietf:params:netconf:capability:interleave:1.0'));
+        assert(primarySession.capabilities.includes('urn:ietf:params:netconf:capability:xpath:1.0'));
         assert(primarySession.capabilities.some(capability => capability.includes(':candidate:')));
         assert(primarySession.capabilities.some(capability => capability.includes('yang-library')));
 
@@ -264,7 +381,12 @@ async function run() {
         assert.match(typesSchema.content, /^module netnexus-mock-types/u);
         assert.match(invalidSchema.content, /^module netnexus-mock-invalid/u);
         await compileDownloadedModules(tempRoot, deviceSchema.content, typesSchema.content);
-        await compileInvalidDownloadedModule(tempRoot, invalidSchema.content);
+        await compileInvalidDownloadedModule(
+            tempRoot,
+            deviceSchema.content,
+            typesSchema.content,
+            invalidSchema.content
+        );
 
         const initialRunning = await primary.getConfig({ source: 'running' }, RPC_OPTIONS);
         assert.match(initialRunning.xml, /<hostname>netnexus-mock<\/hostname>/u);
@@ -284,6 +406,7 @@ async function run() {
         );
         assert.doesNotMatch(sessionCountOnly.xml, /<(?:uptime|datastore-revision|last-operation)>/u);
         assert.doesNotMatch(sessionCountOnly.xml, /<(?:system|interfaces)(?:\s|>)/u);
+        assert.doesNotMatch(sessionCountOnly.xml, /<(?:yang-library|modules-state|netconf-state)(?:\s|>)/u);
 
         const hostnameOnly = await primary.getConfig(
             {
@@ -407,18 +530,105 @@ async function run() {
             assertRpcError(error, 'operation-not-supported')
         );
 
+        await assert.rejects(secondary.rpc('<create-subscription/>', RPC_OPTIONS), error =>
+            assertRpcError(error, 'unknown-namespace')
+        );
+        await assert.rejects(secondary.createSubscription({ stream: 'UNKNOWN' }, RPC_OPTIONS), error =>
+            assertRpcError(error, 'invalid-value')
+        );
+        await assert.rejects(
+            secondary.createSubscription({ stopTime: new Date(Date.now() + 5_000).toISOString() }, RPC_OPTIONS),
+            error => assertRpcError(error, 'invalid-value')
+        );
+
         const notifications = [];
         primary.on('notification', notification => notifications.push(notification));
-        const subscriptionReply = await primary.createSubscription({}, RPC_OPTIONS);
+        const subscriptionReply = await primary.createSubscription(
+            {
+                stream: 'NETCONF',
+                filter: {
+                    type: 'subtree',
+                    content:
+                        `<mock-event xmlns="${MOCK_DEVICE_NAMESPACE}">` +
+                        '<message>integration-test-notification</message></mock-event>'
+                }
+            },
+            RPC_OPTIONS
+        );
         assert.equal(subscriptionReply.ok, true);
+        assert.equal(
+            server.getStatus().sessions.find(session => session.sessionId === primarySession.sessionId)?.subscribed,
+            true
+        );
+        await assert.rejects(primary.createSubscription({}, RPC_OPTIONS), error =>
+            assertRpcError(error, 'operation-failed')
+        );
+
+        server.notify('filtered-out-notification');
+        await delay(100);
+        assert.equal(
+            notifications.some(item => item.xml.includes('filtered-out-notification')),
+            false,
+            'a notification that does not match the subtree filter must not be delivered'
+        );
         server.notify('integration-test-notification');
         const notification = await waitFor(
             () => notifications.find(item => item.xml.includes('integration-test-notification')),
             'mock server did not deliver the NETCONF notification'
         );
         assert.match(notification.eventTime, /^\d{4}-\d{2}-\d{2}T/u);
+        assert.match(notification.xml, /^<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1\.0">/u);
         assert.match(notification.xml, /<mock-event/u);
+        assert.match(notification.xml, /<message>integration-test-notification<\/message>/u);
         assert.match(notification.xml, /<datastore-revision>\d+<\/datastore-revision>/u);
+
+        const expiringNotifications = [];
+        secondary.on('notification', item => expiringNotifications.push(item));
+        const startTime = new Date(Date.now() - 5_000).toISOString();
+        const stopTime = new Date(Date.now() + 700).toISOString();
+        const expiringReply = await secondary.createSubscription(
+            {
+                stream: 'NETCONF',
+                filter: {
+                    type: 'xpath',
+                    select: "/nnmd:mock-event[nnmd:message='xpath-match']",
+                    namespaces: { nnmd: MOCK_DEVICE_NAMESPACE }
+                },
+                startTime,
+                stopTime
+            },
+            RPC_OPTIONS
+        );
+        assert.equal(expiringReply.ok, true);
+        server.notify('xpath-miss');
+        server.notify('xpath-match');
+        await waitFor(
+            () => expiringNotifications.find(item => item.xml.includes('xpath-match')),
+            'mock server did not deliver the matching XPath-filtered notification'
+        );
+        await delay(100);
+        assert.equal(
+            expiringNotifications.some(item => item.xml.includes('xpath-miss')),
+            false,
+            'a notification that does not match the XPath filter must not be delivered'
+        );
+        await waitFor(
+            () => expiringNotifications.find(item => item.xml.includes('<notificationComplete/>')),
+            'mock server did not end the subscription at stopTime'
+        );
+        await waitFor(
+            () =>
+                server.getStatus().sessions.find(session => session.sessionId === secondarySession.sessionId)
+                    ?.subscribed === false,
+            'expired subscription state was not cleared'
+        );
+        server.notify('xpath-match-after-stop');
+        await delay(100);
+        assert.equal(
+            expiringNotifications.some(item => item.xml.includes('xpath-match-after-stop')),
+            false,
+            'an expired subscription must not receive later notifications'
+        );
 
         const secondaryId = secondarySession.sessionId;
         const closeReply = await secondary.closeSession(RPC_OPTIONS);
@@ -435,6 +645,15 @@ async function run() {
         await waitFor(
             () => !server.getStatus().sessions.some(session => session.sessionId === primaryId),
             'primary NETCONF session remained registered after close-session'
+        );
+        assert(
+            server.logs.some(
+                record =>
+                    record.event === 'subscription-ended' &&
+                    record.sessionId === primaryId &&
+                    record.reason === 'session-close'
+            ),
+            'closing a NETCONF session must clear its active subscription'
         );
 
         assert(server.logs.some(record => record.event === 'rpc' && record.operation === 'get-schema'));

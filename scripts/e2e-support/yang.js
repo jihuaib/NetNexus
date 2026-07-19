@@ -11,6 +11,7 @@ const {
 const {
     buildGet,
     buildGetConfig,
+    buildCreateSubscription,
     childValues,
     filterSubtreeXml,
     findRoot,
@@ -30,6 +31,7 @@ const yangPageApiScript = `
         connect: profile => call('yang.netconf.connect', profile),
         disconnect: profileId => call('yang.netconf.disconnect', profileId),
         getSessionState: profileId => call('yang.netconf.getSessionState', profileId),
+        getSubscriptions: profileId => call('yang.netconf.getSubscriptions', profileId),
         selectPrivateKey: () => call('yang.netconf.selectPrivateKey'),
         discoverModules: profileId => call('yang.netconf.discoverModules', profileId),
         downloadModules: request => call('yang.netconf.downloadModules', request),
@@ -64,7 +66,8 @@ const capabilities = Object.freeze([
     'urn:ietf:params:netconf:capability:validate:1.1',
     'urn:ietf:params:netconf:capability:xpath:1.0',
     'urn:ietf:params:netconf:capability:yang-library:1.1?revision=2019-01-04',
-    'urn:ietf:params:netconf:capability:notification:1.0'
+    'urn:ietf:params:netconf:capability:notification:1.0',
+    'urn:ietf:params:netconf:capability:interleave:1.0'
 ]);
 
 const PAGE_INTERFACES_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-interfaces';
@@ -98,6 +101,10 @@ const moduleSources = Object.freeze({
       leaf enabled { type boolean; default true; }
       leaf in-octets { config false; type yang:counter32; }
     }
+  }
+  notification interface-event {
+    leaf name { type string; }
+    leaf enabled { type boolean; }
   }
 }`,
     'ietf-system': `module ietf-system {
@@ -496,6 +503,7 @@ function createYangPageState() {
         activeWorkspaceProfileId: profile.id,
         profileWorkspaces: {},
         sessions: {},
+        subscriptions: [],
         connected: true,
         rpcSequence: 100,
         compileSequence: 0,
@@ -652,6 +660,37 @@ function emitSession(controller, yang) {
     controller.emitEvent('netconf:sessionEvent', successResponse(clone(yang.session), 'NETCONF 会话状态更新'));
 }
 
+function emitSubscription(controller, subscription) {
+    controller.emitEvent('netconf:subscriptionEvent', successResponse(clone(subscription), 'NETCONF 通知订阅状态更新'));
+}
+
+function emitMockNotification(controller, yang, subscription) {
+    const eventTime = new Date().toISOString();
+    const xml =
+        '<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0">' +
+        `<eventTime>${eventTime}</eventTime>` +
+        `<interface-event xmlns="${PAGE_INTERFACES_NAMESPACE}"><name>eth0</name><enabled>true</enabled></interface-event>` +
+        '</notification>';
+    controller.emitEvent(
+        'netconf:notification',
+        successResponse({
+            profileId: yang.session.profileId,
+            profileName: yang.session.profileName,
+            host: yang.session.host,
+            port: yang.session.port,
+            sessionId: yang.session.sessionId,
+            subscriptionId: subscription.id,
+            subscriptionType: 'rfc5277',
+            state: 'active',
+            eventTime,
+            receivedAt: new Date().toISOString(),
+            eventName: 'interface-event',
+            namespace: PAGE_INTERFACES_NAMESPACE,
+            xml
+        })
+    );
+}
+
 function emitTask(controller, yang, action, count, message) {
     const taskId = `e2e-${action}-${Date.now()}`;
     const profileId = yang.activeWorkspaceProfileId;
@@ -783,6 +822,13 @@ function handleNetconfCall(controller, yang, method, args) {
     if (method === 'yang.netconf.disconnect') {
         const profileId = requestProfileId(yang, args[0], { stringIsProfileId: true });
         activateProfileWorkspace(yang, { profileId });
+        const terminatedAt = new Date().toISOString();
+        yang.subscriptions
+            .filter(subscription => subscription.profileId === profileId && subscription.state === 'active')
+            .forEach(subscription => {
+                Object.assign(subscription, { state: 'terminated', terminatedAt, reason: 'session-closed' });
+                emitSubscription(controller, subscription);
+            });
         yang.connected = false;
         yang.session = {
             status: 'disconnected',
@@ -799,6 +845,14 @@ function handleNetconfCall(controller, yang, method, args) {
     if (method === 'yang.netconf.getSessionState') {
         const profileId = requestProfileId(yang, args[0], { stringIsProfileId: true });
         return successResponse(clone(sessionForProfile(yang, profileId)));
+    }
+    if (method === 'yang.netconf.getSubscriptions') {
+        const profileId = requestProfileId(yang, args[0], { stringIsProfileId: true });
+        return successResponse({
+            subscriptions: clone(
+                yang.subscriptions.filter(subscription => !profileId || subscription.profileId === profileId)
+            )
+        });
     }
     if (method === 'yang.netconf.selectPrivateKey') {
         return successResponse({ filePath: '/tmp/netnexus-e2e/id_ed25519' });
@@ -868,7 +922,34 @@ function handleNetconfCall(controller, yang, method, args) {
     }
     if (method === 'yang.netconf.executeOperation') {
         activateProfileSession(yang, args[0]);
-        return executeNetconfOperation(yang, args[0] || {});
+        const request = args[0] || {};
+        if (request.operation === 'create-subscription') {
+            if (yang.subscriptions.some(item => item.sessionId === yang.session.sessionId && item.state === 'active')) {
+                return errorResponse('当前 NETCONF Session 已存在活动订阅');
+            }
+            const subscription = {
+                id: `rfc5277-${yang.session.sessionId}`,
+                profileId: yang.session.profileId,
+                profileName: yang.session.profileName,
+                host: yang.session.host,
+                port: yang.session.port,
+                sessionId: yang.session.sessionId,
+                type: 'rfc5277',
+                state: 'active',
+                stream: request.stream || 'NETCONF',
+                filter: clone(request.filter || null),
+                startTime: request.startTime || '',
+                stopTime: request.stopTime || '',
+                createdAt: new Date().toISOString()
+            };
+            yang.subscriptions.unshift(subscription);
+            yang.session.subscriptionActive = true;
+            yang.session.activeSubscription = clone(subscription);
+            emitSubscription(controller, subscription);
+            emitSession(controller, yang);
+            emitMockNotification(controller, yang, subscription);
+        }
+        return executeNetconfOperation(yang, request);
     }
     if (method === 'yang.netconf.sendRpc') {
         activateProfileSession(yang, args[0]);
@@ -925,6 +1006,11 @@ function executeNetconfOperation(yang, request) {
         delete readOptions.messageId;
         delete readOptions.wrap;
         operationXml = operation === 'get' ? buildGet(readOptions) : buildGetConfig(readOptions);
+    } else if (operation === 'create-subscription') {
+        const subscriptionOptions = { ...request };
+        delete subscriptionOptions.operation;
+        delete subscriptionOptions.profileId;
+        operationXml = buildCreateSubscription(subscriptionOptions);
     }
     const rpc = rpcEnvelope(messageId, operationXml);
     if (operation === 'get' || operation === 'get-config') {

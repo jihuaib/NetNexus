@@ -71,8 +71,11 @@ async function dragSeparator(page, separator, deltaX, deltaY) {
     const startY = box.y + box.height / 2;
     await page.mouse.move(startX, startY);
     await page.mouse.down();
-    await page.mouse.move(startX + deltaX, startY + deltaY, { steps: 10 });
-    await page.mouse.up();
+    try {
+        await page.mouse.move(startX + deltaX, startY + deltaY, { steps: 10 });
+    } finally {
+        await page.mouse.up();
+    }
 }
 
 async function workspaceGeometry(page) {
@@ -501,6 +504,47 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
     });
 
+    test('restores a partial Schema when one model fails compilation', async ({ page }) => {
+        let rootReads = 0;
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            const response = await originalControllerCall(method, ...args);
+            if (method === 'yang.registry.getSchemaRoots') rootReads += 1;
+            if (method !== 'yang.registry.getWorkspace' || response.status !== 'success') return response;
+            return {
+                ...response,
+                data: {
+                    ...response.data,
+                    success: false,
+                    schemaAvailable: true,
+                    partialSchema: true,
+                    schemaTree: null,
+                    summary: {
+                        ...response.data.summary,
+                        compiledFiles: 2,
+                        failedFiles: 1
+                    }
+                }
+            };
+        };
+
+        await page.goto('/#/yang/yang-workspace');
+
+        const partialTag = page.getByText('Schema 部分可用', { exact: true });
+        await expect(partialTag).toBeVisible();
+        await expect(partialTag).toHaveAttribute('title', '已载入 2 个有效文件，排除 1 个编译失败文件');
+        await expect(page.getByText('Schema 生成失败', { exact: true })).toHaveCount(0);
+        await expect.poll(() => rootReads).toBeGreaterThan(0);
+        await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
+        await expect(schemaTreeItems(page).filter({ hasText: 'ietf-system' })).toHaveCount(0);
+        await expandSchemaModule(page, 'ietf-interfaces');
+        await expect(
+            schemaTreeItems(page)
+                .filter({ has: page.getByText('interfaces', { exact: true }) })
+                .first()
+        ).toBeVisible();
+    });
+
     test('keeps lazily loaded Schema branches expanded when returning to the workspace', async ({ page }) => {
         let workspaceReads = 0;
         let childReads = 0;
@@ -796,19 +840,49 @@ test.describe('NETCONF/YANG workbench', () => {
         const originalControllerCall = harness.controller.call.bind(harness.controller);
         harness.controller.call = async (method, ...args) => {
             if (method === 'yang.registry.getDiagnostics') requestedCompileId = args[0]?.compileId || '';
-            return originalControllerCall(method, ...args);
+            const response = await originalControllerCall(method, ...args);
+            if (method !== 'yang.registry.getWorkspace' || response.status !== 'success') return response;
+            return {
+                ...response,
+                data: {
+                    ...response.data,
+                    summary: { ...response.data.summary, compiledFiles: 1, failedFiles: 1 }
+                }
+            };
         };
 
         await page.goto('/#/yang/yang-modules');
 
         const compileLog = page.getByTestId('yang-compile-log-panel');
         await expect(compileLog).toBeVisible();
+        await expect(compileLog.getByText('部分编译成功', { exact: true })).toBeVisible();
         await expect(
             compileLog.getByText('ietf-interfaces@2018-02-20.yang 编译失败', { exact: true })
         ).toBeVisible();
         await expect(
             compileLog.getByText('ietf-yang-types@2013-07-15.yang 编译成功', { exact: true })
         ).toBeVisible();
+        const logTypography = await compileLog.evaluate(element => {
+            const row = getComputedStyle(element.querySelector('.compile-log-row'));
+            const message = getComputedStyle(element.querySelector('.compile-log-message'));
+            const location = getComputedStyle(element.querySelector('.compile-log-location'));
+            return {
+                rowFontSize: row.fontSize,
+                rowLineHeight: row.lineHeight,
+                rowPaddingTop: row.paddingTop,
+                messageFontSize: message.fontSize,
+                locationFontSize: location.fontSize,
+                locationLineHeight: location.lineHeight
+            };
+        });
+        expect(logTypography).toEqual({
+            rowFontSize: '12px',
+            rowLineHeight: '18px',
+            rowPaddingTop: '5px',
+            messageFontSize: '12px',
+            locationFontSize: '10px',
+            locationLineHeight: '15px'
+        });
         await expect(compileLog.getByText('missing import ietf-ip', { exact: true })).toBeVisible();
         await expect(compileLog.getByText('unused typedef demo-type', { exact: true })).toBeVisible();
         await expect(compileLog.getByText('libyang validation started', { exact: true })).toBeVisible();
@@ -818,14 +892,34 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(page.getByRole('button', { name: /编译诊断/u })).toHaveCount(0);
         await expect(page.getByRole('dialog', { name: '编译诊断' })).toHaveCount(0);
 
-        const errorRow = compileLog.locator('.compile-log-row').filter({ hasText: 'missing import ietf-ip' });
-        await errorRow.getByRole('button', { name: '查看源码', exact: true }).click();
-        const sourceDrawer = page.getByRole('dialog', { name: 'ietf-interfaces@2018-02-20' });
-        await expect(sourceDrawer).toBeVisible();
-        await expect(sourceDrawer).toContainText('module ietf-interfaces');
-        await expect(compileLog).toBeVisible();
-        await sourceDrawer.getByRole('button', { name: '关闭' }).click();
-        await expect(compileLog).toBeVisible();
+        await expect(compileLog.getByRole('button', { name: '查看源码', exact: true })).toHaveCount(0);
+        await expect(
+            page.locator('.module-table').getByRole('button', { name: '源码', exact: true }).first()
+        ).toBeVisible();
+
+        const logResizer = page.getByRole('separator', { name: '调整模型列表和编译日志高度' });
+        await expect(logResizer).toBeVisible();
+        await expect(logResizer).toHaveAttribute('aria-orientation', 'horizontal');
+        expect(await logResizer.evaluate(element => getComputedStyle(element).cursor)).toBe('row-resize');
+        const moduleTable = page.locator('.module-table');
+        const logBeforeResize = await compileLog.boundingBox();
+        const tableBeforeResize = await moduleTable.boundingBox();
+        const valueBeforeResize = Number(await logResizer.getAttribute('aria-valuenow'));
+        expect(logBeforeResize).not.toBeNull();
+        expect(tableBeforeResize).not.toBeNull();
+        expect(valueBeforeResize).toBeGreaterThanOrEqual(140);
+
+        await dragSeparator(page, logResizer, 0, -80);
+
+        await expect
+            .poll(async () => (await compileLog.boundingBox())?.height || 0)
+            .toBeGreaterThan(logBeforeResize.height + 40);
+        await expect
+            .poll(async () => Number(await logResizer.getAttribute('aria-valuenow')))
+            .toBeGreaterThan(valueBeforeResize);
+        await expect
+            .poll(async () => (await moduleTable.boundingBox())?.height || 0)
+            .toBeLessThan(tableBeforeResize.height - 40);
 
         await compileLog.getByRole('tab', { name: '错误', exact: true }).click();
         await expect(compileLog.getByText('missing import ietf-ip', { exact: true })).toBeVisible();
@@ -1470,12 +1564,8 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(contextMenu).toBeVisible();
         await expect(contextMenu.getByRole('menuitem', { name: '查看所属 YANG 源码' })).toHaveCount(0);
         await expect(contextMenu.getByRole('menuitem', { name: '查看 Capability', exact: true })).toHaveCount(0);
-        const datastoreMenu = await openSchemaSubmenu(contextMenu, ['配置存储']);
-        await expect(
-            datastoreMenu.getByRole('menuitem', { name: '复制配置存储（copy-config）…', exact: true })
-        ).toBeVisible();
-        const startupMenu = await openSchemaSubmenu(contextMenu, ['配置存储', 'Startup']);
-        await expect(startupMenu.getByRole('menuitem', { name: '删除整个 Startup…', exact: true })).toBeVisible();
+        await expect(contextMenu.getByRole('menuitem', { name: 'Candidate 工作区', exact: true })).toHaveCount(0);
+        await expect(contextMenu.getByRole('menuitem', { name: '配置存储', exact: true })).toHaveCount(0);
         await contextMenu.getByRole('menuitem', { name: '读取当前节点（get）', exact: true }).click();
 
         const operationPanel = page.locator('.workspace-operation-panel');
@@ -1840,7 +1930,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await executionHistoryDrawer.getByRole('button', { name: '关闭', exact: true }).click();
     });
 
-    test('routes datastore workflows through the cascading Schema context menu', async ({ page }) => {
+    test('keeps Schema context operations node-scoped and hides device-level workflows', async ({ page }) => {
         const capturedRequests = [];
         const originalControllerCall = harness.controller.call.bind(harness.controller);
         harness.controller.call = async (method, ...args) => {
@@ -1902,48 +1992,12 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(await requestXml()).toMatch(/<target>\s*<running\/>\s*<\/target>/u);
 
         await openInterfacesContextMenu();
-        const candidateMenu = await openSchemaSubmenu(contextMenu, ['Candidate 工作区']);
+        await expect(contextMenu.getByRole('menuitem', { name: 'Candidate 工作区', exact: true })).toHaveCount(0);
+        await expect(contextMenu.getByRole('menuitem', { name: '配置存储', exact: true })).toHaveCount(0);
         await expect(
-            candidateMenu.getByRole('menuitem', { name: '提交整个 Candidate → Running', exact: true })
-        ).toBeVisible();
-        await expect(
-            candidateMenu.getByRole('menuitem', { name: 'Confirmed Commit → Running…', exact: true })
-        ).toBeVisible();
-        await expect(candidateMenu.getByRole('menuitem', { name: '取消 Confirmed Commit', exact: true })).toBeVisible();
-        await expect(candidateMenu.getByRole('menuitem', { name: '放弃全部未提交修改', exact: true })).toBeVisible();
-        await candidateMenu.getByRole('menuitem', { name: '提交整个 Candidate → Running', exact: true }).click();
-        await expect(operationPanel.getByRole('button', { name: '执行 commit', exact: true })).toBeVisible();
-        await expect(requestPreview).toContainText('<commit/>');
-
-        await openInterfacesContextMenu();
-        await selectSchemaMenuPath(contextMenu, ['Candidate 工作区'], 'Confirmed Commit → Running…');
-        expect(await requestXml()).toMatch(
-            /<commit>\s*<confirmed\/>\s*<confirm-timeout>600<\/confirm-timeout>\s*<\/commit>/u
-        );
-
-        await openInterfacesContextMenu();
-        await selectSchemaMenuPath(contextMenu, ['Candidate 工作区'], '取消 Confirmed Commit');
-        await expect(operationPanel.getByRole('button', { name: '执行 cancel-commit', exact: true })).toBeVisible();
-        await expect(requestPreview).toContainText('<cancel-commit/>');
-
-        await openInterfacesContextMenu();
-        await selectSchemaMenuPath(contextMenu, ['Candidate 工作区'], '放弃全部未提交修改');
-        await expect(operationPanel.getByRole('button', { name: '执行 discard-changes', exact: true })).toBeVisible();
-        await expect(requestPreview).toContainText('<discard-changes/>');
-
-        await openInterfacesContextMenu();
-        const startupMenu = await openSchemaSubmenu(contextMenu, ['配置存储', 'Startup']);
-        await expect(startupMenu.getByRole('menuitem', { name: '保存 Running → Startup', exact: true })).toBeVisible();
-        await expect(startupMenu.getByRole('menuitem', { name: '删除整个 Startup…', exact: true })).toBeVisible();
-        await startupMenu.getByRole('menuitem', { name: '保存 Running → Startup', exact: true }).click();
-        await expect(operationPanel.getByRole('button', { name: '执行 copy-config', exact: true })).toBeVisible();
-        expect(await requestXml()).toMatch(/<target>\s*<startup\/>\s*<\/target>/u);
-        expect(await requestXml()).toMatch(/<source>\s*<running\/>\s*<\/source>/u);
-
-        await openInterfacesContextMenu();
-        await selectSchemaMenuPath(contextMenu, ['配置存储', 'Startup'], '删除整个 Startup…');
-        await expect(operationPanel.getByRole('button', { name: '执行 delete-config', exact: true })).toBeVisible();
-        expect(await requestXml()).toMatch(/<target>\s*<startup\/>\s*<\/target>/u);
+            contextMenu.getByRole('menuitem', { name: '提交整个 Candidate → Running', exact: true })
+        ).toHaveCount(0);
+        await expect(contextMenu.getByRole('menuitem', { name: '删除整个 Startup…', exact: true })).toHaveCount(0);
     });
 
     test('keeps the Schema edit draft when reading current device config fails', async ({ page }) => {
@@ -2113,6 +2167,88 @@ test.describe('NETCONF/YANG workbench', () => {
         await page.goto('/#/yang/yang-modules');
         await expect(confirmationDialog).toBeHidden();
         await expect(page.getByText('YANG 模型库', { exact: true })).toBeVisible();
+    });
+
+    test('subscribes from a YANG notification node and monitors asynchronous notifications', async ({ page }) => {
+        await page.goto('/#/yang/yang-workspace');
+        await expandSchemaModule(page, 'ietf-interfaces');
+
+        const notificationNode = schemaTreeItems(page)
+            .filter({ has: page.getByText('interface-event', { exact: true }) })
+            .first();
+        await expect(notificationNode).toBeVisible();
+        await expect(notificationNode.locator('[data-node-icon="notification"]')).toBeVisible();
+
+        await notificationNode.dispatchEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            clientX: 180,
+            clientY: 180
+        });
+        const contextMenu = page.locator('.schema-context-menu');
+        await expect(contextMenu).toBeVisible();
+        await expect(contextMenu.getByRole('menuitem', { name: '读取全部数据（get）' })).toHaveCount(0);
+        await contextMenu.getByRole('menuitem', { name: '订阅此通知（RFC 5277）', exact: true }).click();
+
+        const operationPanel = page.locator('.workspace-operation-panel');
+        const requestEditor = operationPanel.getByRole('textbox', { name: 'RPC 请求 XML' });
+        await expect.poll(() => requestEditor.inputValue()).toContain('<create-subscription');
+        expect(await requestEditor.inputValue()).toContain('urn:ietf:params:xml:ns:netconf:notification:1.0');
+        expect(await requestEditor.inputValue()).toContain(
+            '<interface-event xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"/>'
+        );
+
+        await operationPanel.getByRole('button', { name: '执行 create-subscription', exact: true }).click();
+        const confirmation = page.getByRole('dialog', { name: '确认执行 create-subscription' });
+        await expect(confirmation).toBeVisible();
+        await confirmation.getByRole('button', { name: '确认执行', exact: true }).click();
+        await expect(operationPanel.locator('.rpc-result')).toContainText('<rpc-reply');
+        await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
+
+        const notificationButton = page.locator('.notification-history-trigger');
+        await expect(notificationButton).toBeVisible();
+        await expect(notificationButton.locator('.notification-history-badge')).toHaveText('1');
+        await notificationButton.click();
+
+        const drawer = page.getByRole('dialog', { name: 'NETCONF 通知记录' });
+        await expect(drawer).toBeVisible();
+        await expect(drawer.getByText('Session e2e-session-101', { exact: true })).toBeVisible();
+        const notificationRow = drawer.getByTestId('netconf-notification-row');
+        await expect(notificationRow).toHaveCount(1);
+        await expect(notificationRow).toContainText('interface-event');
+        await notificationRow.click();
+
+        const notificationXml = drawer.getByRole('textbox', { name: 'NETCONF Notification XML' });
+        await expect(notificationXml).toBeVisible();
+        expect(await notificationXml.inputValue()).toContain('<notification');
+        expect(await notificationXml.inputValue()).toContain('<interface-event');
+        await expectXmlTextareaLineNumbers(notificationXml);
+        await expectSelectableXmlTextarea(notificationXml);
+
+        await drawer.getByRole('button', { name: '关闭' }).click();
+        await page.getByRole('button', { name: '执行记录', exact: true }).click();
+        const historyDrawer = page.getByRole('dialog', { name: 'NETCONF 执行记录' });
+        await expect(historyDrawer.getByTestId('netconf-history-item')).toHaveCount(1);
+        await expect(historyDrawer.getByTestId('netconf-history-item').first()).toContainText('create-subscription');
+        expect(await historyDrawer.getByRole('textbox', { name: 'RPC 响应 XML' }).inputValue()).not.toContain(
+            '<notification'
+        );
+
+        await historyDrawer.getByRole('button', { name: '关闭' }).click();
+        await notificationButton.click();
+        await expect(drawer).toBeVisible();
+        const subscriptionItem = drawer.locator('.notification-subscription-item').first();
+        await expect(subscriptionItem).toContainText('活动');
+        await subscriptionItem.click();
+        const disconnectSubscription = drawer.getByTestId('netconf-notification-disconnect-session');
+        await expect(disconnectSubscription).toBeEnabled();
+        await disconnectSubscription.click();
+        const disconnectConfirmation = page.getByRole('dialog', { name: '结束 RFC 5277 订阅' });
+        await expect(disconnectConfirmation).toContainText('必须断开 Session e2e-session-101');
+        await disconnectConfirmation.getByRole('button', { name: '断开 Session', exact: true }).click();
+        await expect(subscriptionItem).toContainText('已结束');
+        await expect(disconnectSubscription).toBeDisabled();
     });
 
     test('redirects the retired operations page to the Schema workspace', async ({ page }) => {

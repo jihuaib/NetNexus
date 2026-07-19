@@ -7,10 +7,10 @@
         <nn-card title="Schema 与设备操作" class="workspace-card">
             <template #extra>
                 <nn-space>
-                    <nn-tag :color="connected ? 'success' : 'default'">
-                        NETCONF {{ connected ? '已连接' : '未连接' }}
-                    </nn-tag>
                     <nn-tag v-if="schemaStatus === 'ready'" color="success">Schema 已就绪</nn-tag>
+                    <nn-tag v-else-if="schemaStatus === 'partial'" color="warning" :title="schemaStatusMessage">
+                        Schema 部分可用
+                    </nn-tag>
                     <nn-tag v-else-if="schemaStatus === 'compile-failed'" color="error">Schema 生成失败</nn-tag>
                     <nn-tag v-else-if="schemaStatus === 'restore-failed'" color="error" :title="schemaStatusMessage">
                         Schema 恢复失败
@@ -42,6 +42,17 @@
                     <nn-button class="execution-history-trigger" @click="executionHistoryOpen = true">
                         <template #icon><ClockCircleOutlined /></template>
                         执行记录
+                    </nn-button>
+                    <nn-button class="notification-history-trigger" @click="openNotificationDrawer">
+                        <template #icon><BellOutlined /></template>
+                        通知记录
+                        <span
+                            v-if="notificationUnreadCount"
+                            class="notification-history-badge"
+                            :aria-label="`${notificationUnreadCount} 条未读通知`"
+                        >
+                            {{ notificationUnreadCount > 99 ? '99+' : notificationUnreadCount }}
+                        </span>
                     </nn-button>
                     <nn-button
                         danger
@@ -229,6 +240,12 @@
         </nn-modal>
 
         <YangExecutionHistoryDrawer v-model:open="executionHistoryOpen" />
+        <YangNotificationDrawer
+            v-model:open="notificationHistoryOpen"
+            :disconnecting="notificationDisconnecting"
+            @export="exportNotifications"
+            @disconnect-session="disconnectNotificationSession"
+        />
     </div>
 </template>
 
@@ -273,11 +290,11 @@
         KeyOutlined,
         LoadingOutlined,
         ReloadOutlined,
-        SafetyOutlined,
         SendOutlined,
         UnorderedListOutlined
     } from '../../ui/icons';
     import YangExecutionHistoryDrawer from './YangExecutionHistoryDrawer.vue';
+    import YangNotificationDrawer from './YangNotificationDrawer.vue';
     import YangOperations from './YangOperations.vue';
     import YangProfileField from './YangProfileField.vue';
     import {
@@ -288,6 +305,7 @@
         unwrapArray
     } from './yangUiUtils';
     import { usePaneResize } from './usePaneResize';
+    import { useNetconfNotificationHistory } from './useNetconfNotificationHistory';
     import { useYangProfileContext } from './useYangProfileContext';
 
     defineOptions({ name: 'YangWorkspace' });
@@ -317,6 +335,7 @@
     const compileId = ref('');
     const schemaStatus = ref('none');
     const schemaStatusMessage = ref('');
+    const schemaPartial = ref(false);
     const workspaceSummary = ref({ moduleCount: 0, nodeCount: 0, cacheHit: false });
     const workspaceModules = ref([]);
     const treeData = ref([]);
@@ -340,6 +359,8 @@
     const operationExecuting = ref(false);
     const nodePropertyOpen = ref(false);
     const executionHistoryOpen = ref(false);
+    const notificationHistoryOpen = ref(false);
+    const notificationDisconnecting = ref(false);
     const workspaceLayoutRef = ref(null);
     const {
         paneSize: schemaPaneWidth,
@@ -368,6 +389,7 @@
     let schemaRootsPromiseKey = '';
     let schemaRestoreFailedCompileId = '';
     let clearWorkspaceConfirmHandle = null;
+    let notificationDisconnectConfirmHandle = null;
     const {
         profilesLoading,
         selectedProfileId,
@@ -376,6 +398,11 @@
         selectProfile,
         taskMatchesProfile
     } = useYangProfileContext();
+    const {
+        unreadCount: notificationUnreadCount,
+        upsertSubscription: upsertNotificationSubscription,
+        endSession: endNotificationSession
+    } = useNetconfNotificationHistory();
 
     const normalizeModule = (module, index) => {
         if (typeof module === 'string') return { id: '', name: module, revision: '', _key: module };
@@ -482,9 +509,12 @@
         if (operationExecuting.value) return '设备操作执行中，请等待 rpc-reply 后再切换操作';
         if (!connected.value) return '设备未连接；Schema 仍可查看，设备操作需先建立连接';
         const node = contextMenu.node;
-        if (node?.config === false) return 'state 节点只允许 get；datastore 操作作用于整个配置存储';
+        if (isNotificationNode(node)) {
+            return '订阅绑定当前 NETCONF Session；此节点用于生成 RFC 5277 subtree filter';
+        }
+        if (node?.config === false) return 'state 节点只允许执行 get';
         if (isRpcNode(node)) return `${node.keyword} 将以原始 RPC 草稿打开，请确认实例路径和参数`;
-        return '节点操作会自动预填 XML；Candidate 工作区和配置存储菜单始终作用于整个 datastore';
+        return '节点操作会根据当前 Schema 路径自动预填 XML';
     });
     const displayTree = computed(() => {
         const query = treeQuery.value.trim().toLowerCase();
@@ -524,8 +554,19 @@
         const authoritativeSchema = schemaTree.authoritative === true && schemaTree.source === 'libyang-effective';
         const workspaceSucceeded = workspace.success === true || workspace.validation?.succeeded === true;
         const workspaceFailed = workspace.success === false;
+        const partialSchema = Boolean(
+            workspace.partialSchema === true || schemaTree.partial === true || (authoritativeSchema && workspaceFailed)
+        );
+        schemaPartial.value = partialSchema;
         if (!compileId.value) {
             schemaStatus.value = 'none';
+            schemaStatusMessage.value = '';
+        } else if (authoritativeSchema && partialSchema) {
+            schemaStatus.value = 'partial';
+            schemaStatusMessage.value = `已载入 ${Number(summary.compiledFiles || 0)} 个有效文件，排除 ${Number(summary.failedFiles || 0)} 个编译失败文件`;
+            schemaRestoreFailedCompileId = '';
+        } else if (workspaceFailed && workspace.schemaAvailable === true) {
+            schemaStatus.value = schemaRestoreFailedCompileId === compileId.value ? 'restore-failed' : 'restoring';
             schemaStatusMessage.value = '';
         } else if (workspaceFailed) {
             schemaStatus.value = 'compile-failed';
@@ -562,6 +603,7 @@
     const loadRoots = async ({ force = false } = {}) => {
         if (!compileId.value) {
             treeData.value = [];
+            schemaPartial.value = false;
             schemaStatus.value = 'none';
             schemaStatusMessage.value = '';
             return false;
@@ -590,8 +632,10 @@
                     return false;
                 }
                 treeData.value = unwrapArray(data, ['nodes', 'roots']).map((node, index) => normalizeNode(node, index));
-                schemaStatus.value = 'ready';
-                schemaStatusMessage.value = '';
+                schemaStatus.value = schemaPartial.value ? 'partial' : 'ready';
+                schemaStatusMessage.value = schemaPartial.value
+                    ? `已载入 ${Number(workspaceSummary.value.compiledFiles || 0)} 个有效文件，排除 ${Number(workspaceSummary.value.failedFiles || 0)} 个编译失败文件`
+                    : '';
                 schemaRestoreFailedCompileId = '';
                 return true;
             } catch (error) {
@@ -620,10 +664,14 @@
         return request;
     };
 
-    const workspaceHasSuccessfulCompilation = workspace =>
+    const workspaceHasSchemaCompilation = workspace =>
         Boolean(
             workspace?.compileId &&
-                (workspace?.success === true || workspace?.validation?.succeeded === true)
+                (workspace?.success === true ||
+                    workspace?.schemaAvailable === true ||
+                    workspace?.schemaTree?.authoritative === true ||
+                    workspace?.validation?.schemaAvailable === true ||
+                    workspace?.validation?.succeeded === true)
         );
 
     const loadWorkspace = async ({ preserveTree = false, retrySchemaRestore = true } = {}) => {
@@ -651,7 +699,7 @@
                 preserveTree &&
                     previousCompileId &&
                     previousCompileId === nextCompileId &&
-                    workspace.success !== false &&
+                    workspaceHasSchemaCompilation(workspace) &&
                     treeData.value.length
             );
 
@@ -671,9 +719,9 @@
                 resetOperationContext();
             }
             if (
-                workspaceHasSuccessfulCompilation(workspace) &&
+                workspaceHasSchemaCompilation(workspace) &&
                 treeData.value.length === 0 &&
-                schemaStatus.value !== 'ready'
+                !['ready', 'partial'].includes(schemaStatus.value)
             ) {
                 await loadRoots({ force: retrySchemaRestore });
             }
@@ -727,6 +775,7 @@
     const isDataNode = node => DATA_NODE_KEYWORDS.has(String(node?.keyword || node?.kind || '').toLowerCase());
     const isConfigDataNode = node => isDataNode(node) && node?.config !== false;
     const isRpcNode = node => RPC_NODE_KEYWORDS.has(String(node?.keyword || node?.kind || '').toLowerCase());
+    const isNotificationNode = node => schemaNodeKeyword(node) === 'notification';
     const capabilityIncludes = hint =>
         capabilities.value.some(capability => capability.toLowerCase().includes(hint.toLowerCase()));
     const hasCapability = name => capabilityIncludes(NETCONF_CAPABILITY_HINTS[name] || name);
@@ -734,6 +783,15 @@
     const operationDisabledReason = (operation, node = null, params = {}) => {
         if (operationExecuting.value) return '设备操作执行中，请等待 rpc-reply';
         if (!connected.value) return '请先建立 NETCONF 会话';
+        const subscriptionActive =
+            session.value.subscriptionActive === true ||
+            String(session.value.activeSubscription?.state || '').toLowerCase() === 'active';
+        if (operation === 'create-subscription' && subscriptionActive) {
+            return '当前 NETCONF Session 已存在 RFC 5277 订阅';
+        }
+        if (subscriptionActive && !hasCapability('interleave') && operation !== 'raw-rpc') {
+            return '当前订阅 Session 未声明 :interleave；普通 RPC 暂不可用';
+        }
         if (operation === 'get-config' && isDataNode(node) && node?.config === false) {
             return 'state 节点不属于配置 datastore';
         }
@@ -750,6 +808,9 @@
             return '标准 delete-config 需要设备声明 :startup 能力';
         }
         if (operation === 'validate' && !hasCapability('validate')) return '设备未声明 :validate 能力';
+        if (operation === 'create-subscription' && !hasCapability('notification')) {
+            return '设备未声明 :notification 能力';
+        }
         if (['commit', 'cancel-commit', 'discard-changes'].includes(operation) && !hasCapability('candidate')) {
             return '设备未声明 :candidate 能力';
         }
@@ -782,7 +843,7 @@
 
     const menuIcon = component => () => h(component, { strokeWidth: 1.8 });
     const operationMenuItem = ({ key, label, operation, icon, scope = 'node', params = {} }) => {
-        const node = scope === 'node' ? contextMenu.node : null;
+        const node = ['node', 'notification'].includes(scope) ? contextMenu.node : null;
         const disabledReason = operationDisabledReason(operation, node, params);
         return {
             key,
@@ -801,6 +862,42 @@
     const schemaContextMenuItems = computed(() => {
         const node = contextMenu.node;
         if (!node) return [];
+
+        if (isNotificationNode(node)) {
+            const items = [
+                {
+                    key: 'node-properties',
+                    label: '查看节点属性',
+                    icon: menuIcon(EyeOutlined),
+                    action: { type: 'properties' }
+                },
+                {
+                    key: 'copy-path',
+                    label: '复制 Schema 路径',
+                    icon: menuIcon(CopyOutlined),
+                    disabled: !node.path,
+                    action: { type: 'copy-path' }
+                },
+                { type: 'divider', key: 'notification-divider-subscribe' },
+                operationMenuItem({
+                    key: 'notification:create-subscription',
+                    label: '订阅此通知（RFC 5277）',
+                    operation: 'create-subscription',
+                    icon: BellOutlined,
+                    scope: 'notification',
+                    params: { subscriptionStream: 'NETCONF', filterType: 'subtree' }
+                })
+            ];
+            if (!connected.value) {
+                items.push({
+                    key: 'connection',
+                    label: '前往连接设置',
+                    icon: menuIcon(ApiOutlined),
+                    action: { type: 'connection' }
+                });
+            }
+            return items;
+        }
 
         const getConfigChildren = [
             operationMenuItem({
@@ -858,179 +955,6 @@
             );
         }
 
-        const candidateChildren = [];
-        if (hasCapability('validate')) {
-            candidateChildren.push(
-                operationMenuItem({
-                    key: 'candidate:validate',
-                    label: '校验 Candidate（validate）',
-                    operation: 'validate',
-                    icon: CodeOutlined,
-                    scope: 'datastore',
-                    params: { validateSource: 'candidate' }
-                })
-            );
-        }
-        candidateChildren.push(
-            operationMenuItem({
-                key: 'candidate:commit',
-                label: '提交整个 Candidate → Running',
-                operation: 'commit',
-                icon: SendOutlined,
-                scope: 'datastore',
-                params: { confirmed: false }
-            })
-        );
-        if (hasCapability('confirmedCommit')) {
-            candidateChildren.push(
-                operationMenuItem({
-                    key: 'candidate:confirmed-commit',
-                    label: 'Confirmed Commit → Running…',
-                    operation: 'commit',
-                    icon: SendOutlined,
-                    scope: 'datastore',
-                    params: { confirmed: true }
-                }),
-                operationMenuItem({
-                    key: 'candidate:cancel-commit',
-                    label: '取消 Confirmed Commit',
-                    operation: 'cancel-commit',
-                    icon: DeleteOutlined,
-                    scope: 'datastore'
-                })
-            );
-        }
-        candidateChildren.push(
-            operationMenuItem({
-                key: 'candidate:discard',
-                label: '放弃全部未提交修改',
-                operation: 'discard-changes',
-                icon: DeleteOutlined,
-                scope: 'datastore'
-            }),
-            { type: 'divider', key: 'candidate-divider-lock' },
-            operationMenuItem({
-                key: 'candidate:lock',
-                label: '锁定 Candidate',
-                operation: 'lock',
-                icon: SafetyOutlined,
-                scope: 'datastore',
-                params: { lockTarget: 'candidate' }
-            }),
-            operationMenuItem({
-                key: 'candidate:unlock',
-                label: '解锁 Candidate',
-                operation: 'unlock',
-                icon: SafetyOutlined,
-                scope: 'datastore',
-                params: { lockTarget: 'candidate' }
-            })
-        );
-
-        const validateChildren = [
-            operationMenuItem({
-                key: 'datastore:validate:running',
-                label: 'Running',
-                operation: 'validate',
-                icon: CodeOutlined,
-                scope: 'datastore',
-                params: { validateSource: 'running' }
-            })
-        ];
-        if (hasCapability('startup')) {
-            validateChildren.push(
-                operationMenuItem({
-                    key: 'datastore:validate:startup',
-                    label: 'Startup',
-                    operation: 'validate',
-                    icon: CodeOutlined,
-                    scope: 'datastore',
-                    params: { validateSource: 'startup' }
-                })
-            );
-        }
-        const lockChildren = ['running', ...(hasCapability('startup') ? ['startup'] : [])].map(datastore =>
-            operationMenuItem({
-                key: `datastore:lock:${datastore}`,
-                label: datastore === 'running' ? 'Running' : 'Startup',
-                operation: 'lock',
-                icon: SafetyOutlined,
-                scope: 'datastore',
-                params: { lockTarget: datastore }
-            })
-        );
-        const unlockChildren = ['running', ...(hasCapability('startup') ? ['startup'] : [])].map(datastore =>
-            operationMenuItem({
-                key: `datastore:unlock:${datastore}`,
-                label: datastore === 'running' ? 'Running' : 'Startup',
-                operation: 'unlock',
-                icon: SafetyOutlined,
-                scope: 'datastore',
-                params: { lockTarget: datastore }
-            })
-        );
-        const datastoreChildren = [
-            operationMenuItem({
-                key: 'datastore:copy-config',
-                label: '复制配置存储（copy-config）…',
-                operation: 'copy-config',
-                icon: CopyOutlined,
-                scope: 'datastore'
-            })
-        ];
-        if (hasCapability('validate')) {
-            datastoreChildren.push({
-                key: 'datastore:validate',
-                label: '校验配置（validate）',
-                icon: menuIcon(CodeOutlined),
-                disabled: allMenuActionsDisabled(validateChildren),
-                children: validateChildren
-            });
-        }
-        datastoreChildren.push(
-            {
-                key: 'datastore:lock',
-                label: '锁定配置存储（lock）',
-                icon: menuIcon(SafetyOutlined),
-                disabled: allMenuActionsDisabled(lockChildren),
-                children: lockChildren
-            },
-            {
-                key: 'datastore:unlock',
-                label: '解锁配置存储（unlock）',
-                icon: menuIcon(SafetyOutlined),
-                disabled: allMenuActionsDisabled(unlockChildren),
-                children: unlockChildren
-            }
-        );
-        if (hasCapability('startup')) {
-            const startupChildren = [
-                operationMenuItem({
-                    key: 'startup:save-running',
-                    label: '保存 Running → Startup',
-                    operation: 'copy-config',
-                    icon: CopyOutlined,
-                    scope: 'datastore',
-                    params: { copySource: 'running', copyTarget: 'startup' }
-                }),
-                operationMenuItem({
-                    key: 'startup:delete',
-                    label: '删除整个 Startup…',
-                    operation: 'delete-config',
-                    icon: DeleteOutlined,
-                    scope: 'datastore',
-                    params: { deleteTarget: 'startup' }
-                })
-            ];
-            datastoreChildren.push({
-                key: 'datastore:startup',
-                label: 'Startup',
-                icon: menuIcon(FileSearchOutlined),
-                disabled: allMenuActionsDisabled(startupChildren),
-                children: startupChildren
-            });
-        }
-
         const items = [
             {
                 key: 'node-properties',
@@ -1069,24 +993,7 @@
                 children: editConfigChildren
             });
         }
-        items.push({ type: 'divider', key: 'node-divider-datastore' });
-        if (hasCapability('candidate')) {
-            items.push({
-                key: 'candidate-workspace',
-                label: 'Candidate 工作区',
-                icon: menuIcon(EditOutlined),
-                disabled: allMenuActionsDisabled(candidateChildren),
-                children: candidateChildren
-            });
-        }
         items.push(
-            {
-                key: 'datastore-workspace',
-                label: '配置存储',
-                icon: menuIcon(SafetyOutlined),
-                disabled: allMenuActionsDisabled(datastoreChildren),
-                children: datastoreChildren
-            },
             { type: 'divider', key: 'node-divider-advanced' },
             operationMenuItem({
                 key: 'raw-rpc',
@@ -1202,6 +1109,14 @@
         return `<${name}${namespaceAttribute}>\n  <!-- NETNEXUS_REQUIRED: 根据 YANG input 补充参数；无参数时删除本注释 -->\n</${name}>`;
     };
 
+    const buildNotificationFilter = node => {
+        if (!isNotificationNode(node)) return '';
+        const name = schemaLocalName(node?.name || node?.title || 'notification').replace(/[^\w.-]/gu, '');
+        const namespace = namespaceForNode(node);
+        const namespaceAttribute = namespace ? ` xmlns="${escapeXmlAttribute(namespace)}"` : '';
+        return `<${name || 'notification'}${namespaceAttribute}/>`;
+    };
+
     const getContextMenuPosition = (anchor, menuRect) => {
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
@@ -1256,9 +1171,134 @@
         }
     };
 
+    const refreshNotificationSubscriptions = async (requestedProfileId = selectedProfileId.value) => {
+        const profileId = String(requestedProfileId || '');
+        if (!profileId) return;
+        try {
+            const { data } = await invokeBridge('netconfApi', 'getSubscriptions', profileId);
+            unwrapArray(data, ['subscriptions', 'items']).forEach(upsertNotificationSubscription);
+        } catch (error) {
+            // Notification events continue to be collected globally even if an older
+            // preload bridge does not expose the subscription snapshot API.
+            console.warn('Unable to load NETCONF notification subscriptions:', error.message);
+        }
+    };
+
+    const openNotificationDrawer = () => {
+        notificationHistoryOpen.value = true;
+        void refreshNotificationSubscriptions();
+    };
+
+    const closeNotificationDisconnectConfirm = () => {
+        notificationDisconnectConfirmHandle?.destroy?.();
+        notificationDisconnectConfirmHandle = null;
+    };
+
+    const disconnectNotificationSession = subscription => {
+        const profileId = String(subscription?.profileId || '');
+        const sessionId = String(subscription?.sessionId || '');
+        const subscriptionId = String(subscription?.subscriptionId || '');
+        if (!profileId || notificationDisconnecting.value) return;
+        closeNotificationDisconnectConfirm();
+        const subscriptionLabel = subscription?.label || subscription?.subscriptionId || '当前订阅';
+        const sessionLabel = sessionId ? `Session ${sessionId}` : '所属 NETCONF Session';
+        let confirmHandle = null;
+        confirmHandle = dialog.confirm({
+            title: '结束 RFC 5277 订阅',
+            content: `RFC 5277 没有单独的取消订阅 RPC。结束“${subscriptionLabel}”必须断开 ${sessionLabel}，该 Session 上正在进行或后续的其他操作也会终止。是否继续？`,
+            okText: '断开 Session',
+            okType: 'danger',
+            onCancel: () => {
+                if (notificationDisconnectConfirmHandle === confirmHandle) {
+                    notificationDisconnectConfirmHandle = null;
+                }
+            },
+            onOk: async () => {
+                notificationDisconnecting.value = true;
+                try {
+                    const { data: currentState } = await invokeBridge('netconfApi', 'getSessionState', profileId);
+                    const currentConnected =
+                        currentState?.connected === true ||
+                        String(currentState?.status || currentState?.state || '').toLowerCase() ===
+                            NETCONF_SESSION_STATUS.CONNECTED;
+                    const currentSessionId = String(currentState?.sessionId || '');
+                    const currentSubscriptionId = String(
+                        currentState?.activeSubscription?.id ||
+                            currentState?.activeSubscription?.subscriptionId ||
+                            currentState?.subscription?.id ||
+                            currentState?.subscription?.subscriptionId ||
+                            ''
+                    );
+                    if (!currentConnected) {
+                        endNotificationSession(profileId, sessionId, 'ended');
+                        await refreshNotificationSubscriptions(profileId);
+                        notify.info(`${sessionLabel} 已不再连接，订阅状态已刷新`);
+                        return;
+                    }
+                    if (sessionId && currentSessionId !== sessionId) {
+                        await refreshNotificationSubscriptions(profileId);
+                        notify.warning(
+                            `订阅所属 ${sessionLabel} 已变化，未断开当前 Session ${currentSessionId || '未知'}`
+                        );
+                        return;
+                    }
+                    if (subscriptionId && currentSubscriptionId !== subscriptionId) {
+                        await refreshNotificationSubscriptions(profileId);
+                        notify.warning('当前 Session 已没有所选活动订阅，未执行断开');
+                        return;
+                    }
+                    const { data } = await invokeBridge('netconfApi', 'disconnect', profileId);
+                    endNotificationSession(profileId, sessionId, 'ended');
+                    if (selectedProfileId.value === profileId) {
+                        session.value = {
+                            ...(data || {}),
+                            profileId,
+                            status: NETCONF_SESSION_STATUS.DISCONNECTED,
+                            connected: false,
+                            capabilities: []
+                        };
+                    }
+                    await refreshNotificationSubscriptions(profileId);
+                    notify.success(`${sessionLabel} 已断开，RFC 5277 订阅已结束`);
+                } catch (error) {
+                    notify.error(`结束订阅失败：${error.message}`);
+                } finally {
+                    notificationDisconnecting.value = false;
+                    if (notificationDisconnectConfirmHandle === confirmHandle) {
+                        notificationDisconnectConfirmHandle = null;
+                    }
+                }
+            }
+        });
+        notificationDisconnectConfirmHandle = confirmHandle;
+    };
+
+    const exportNotifications = descriptor => {
+        const content = String(descriptor?.content || '');
+        if (!content) {
+            notify.warning('当前筛选下没有可导出的通知');
+            return;
+        }
+        try {
+            const blob = new Blob([content], { type: descriptor.mimeType || 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = descriptor.filename || 'netconf-notifications.json';
+            anchor.style.display = 'none';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+            notify.success('通知记录已导出');
+        } catch (error) {
+            notify.error(`导出通知失败：${error.message}`);
+        }
+    };
+
     const openOperation = (operation, { scope = 'node', params = {} } = {}) => {
         const contextNode = contextMenu.node;
-        const node = scope === 'node' ? contextNode : null;
+        const node = ['node', 'notification'].includes(scope) ? contextNode : null;
         const disabledReason = operationDisabledReason(operation, node, params);
         if (disabledReason) {
             notify.warning(disabledReason);
@@ -1267,7 +1307,12 @@
         Object.assign(operationContext, {
             operation,
             node,
-            subtree: ['get', 'get-config', 'edit-config'].includes(operation) ? buildNodeXml(node, 'filter') : '',
+            subtree:
+                operation === 'create-subscription'
+                    ? buildNotificationFilter(node)
+                    : ['get', 'get-config', 'edit-config'].includes(operation)
+                      ? buildNodeXml(node, 'filter')
+                      : '',
             config: operation === 'edit-config' ? buildNodeXml(node, 'config') : '',
             rawRpc: operation === 'raw-rpc' ? buildRawRpcDraft(node) : '',
             params: { ...params }
@@ -1416,6 +1461,7 @@
                         return;
                     }
                     compileId.value = '';
+                    schemaPartial.value = false;
                     schemaStatus.value = 'none';
                     schemaStatusMessage.value = '';
                     schemaRestoreFailedCompileId = '';
@@ -1461,6 +1507,7 @@
         schemaRootsPromiseKey = '';
         schemaRestoreFailedCompileId = '';
         compileId.value = '';
+        schemaPartial.value = false;
         schemaStatus.value = 'none';
         schemaStatusMessage.value = '';
         workspaceSummary.value = { moduleCount: 0, nodeCount: 0, cacheHit: false };
@@ -1472,11 +1519,14 @@
         detailLoading.value = false;
         nodePropertyOpen.value = false;
         executionHistoryOpen.value = false;
+        notificationHistoryOpen.value = false;
+        notificationDisconnecting.value = false;
         treeLoading.value = false;
         loading.value = false;
         session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
         hideContextMenu();
         closeClearWorkspaceConfirm();
+        closeNotificationDisconnectConfirm();
         resetOperationContext();
     };
 
@@ -1486,6 +1536,10 @@
         if (profileId === previousProfileId) return;
         resetProfileWorkspace();
         if (profileContextReady) reloadCurrentProfile();
+    });
+
+    watch(notificationHistoryOpen, open => {
+        if (!open) closeNotificationDisconnectConfirm();
     });
 
     const formatBoolean = value => (value === true ? 'true' : value === false ? 'false' : '-');
@@ -1511,9 +1565,11 @@
         stopSchemaPaneResize();
         hideContextMenu();
         closeClearWorkspaceConfirm();
+        closeNotificationDisconnectConfirm();
         detailRequestRevision += 1;
         nodePropertyOpen.value = false;
         executionHistoryOpen.value = false;
+        notificationHistoryOpen.value = false;
     };
 
     onMounted(async () => {
@@ -1537,6 +1593,7 @@
 
     onBeforeUnmount(() => {
         closeClearWorkspaceConfirm();
+        closeNotificationDisconnectConfirm();
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE);
         EventBus.off(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`);
         document.removeEventListener('keydown', handleContextMenuKeydown);
@@ -1590,9 +1647,34 @@
         justify-content: flex-end;
     }
 
-    .execution-history-trigger {
+    .execution-history-trigger,
+    .notification-history-trigger {
         width: 100px;
         flex: 0 0 100px;
+    }
+
+    .notification-history-trigger {
+        position: relative;
+    }
+
+    .notification-history-badge {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        display: inline-flex;
+        min-width: 18px;
+        height: 18px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 5px;
+        border: 2px solid var(--nn-color-bg-surface);
+        border-radius: 999px;
+        background: var(--nn-color-error);
+        color: #fff;
+        font-size: 10px;
+        font-weight: 600;
+        line-height: 14px;
+        pointer-events: none;
     }
 
     .cache-hint {

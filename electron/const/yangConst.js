@@ -4,6 +4,7 @@ const NETCONF_REQ_TYPES = Object.freeze({
     DISCONNECT: 'disconnect',
     DISCONNECT_ALL: 'disconnectAll',
     GET_SESSION_STATE: 'getSessionState',
+    GET_SUBSCRIPTIONS: 'getSubscriptions',
     DISCOVER_MODULES: 'discoverModules',
     GET_SCHEMA: 'getSchema',
     EXECUTE_OPERATION: 'executeOperation',
@@ -29,7 +30,13 @@ const YANG_REQ_TYPES = Object.freeze({
 const YANG_EVT_TYPES = Object.freeze({
     TASK_PROGRESS: 'yang:taskProgress',
     SESSION_EVENT: 'netconf:sessionEvent',
+    SUBSCRIPTION_EVENT: 'netconf:subscriptionEvent',
     NOTIFICATION: 'netconf:notification'
+});
+
+const NETCONF_CAPABILITIES = Object.freeze({
+    NOTIFICATION: 'urn:ietf:params:netconf:capability:notification:1.0',
+    INTERLEAVE: 'urn:ietf:params:netconf:capability:interleave:1.0'
 });
 
 const DEFAULT_NETCONF_PROFILE = Object.freeze({
@@ -64,6 +71,7 @@ module.exports = {
     NETCONF_REQ_TYPES,
     YANG_REQ_TYPES,
     YANG_EVT_TYPES,
+    NETCONF_CAPABILITIES,
     DEFAULT_NETCONF_PROFILE,
     NETCONF_LIMITS
 };

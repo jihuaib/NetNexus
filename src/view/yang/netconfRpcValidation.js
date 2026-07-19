@@ -1,6 +1,14 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 
 export const NETCONF_BASE_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:base:1.0';
+export const NETCONF_NOTIFICATION_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:notification:1.0';
+const RFC3339_DATE_TIME_PATTERN =
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
+
+export const isRfc3339DateTime = value => {
+    const normalized = String(value || '').trim();
+    return RFC3339_DATE_TIME_PATTERN.test(normalized) && Number.isFinite(Date.parse(normalized));
+};
 
 const XML_PARSE_OPTIONS = Object.freeze({
     allowBooleanAttributes: false,
@@ -138,6 +146,30 @@ const localNameOf = qualifiedName =>
         .split(':')
         .pop();
 
+const attributesOf = entry => (entry && typeof entry === 'object' ? entry[':@'] || {} : {});
+
+const elementChildrenOf = (entry, name) => {
+    const children = entry && typeof entry === 'object' ? entry[name] : [];
+    return Array.isArray(children) ? children.filter(child => elementNameOf(child)) : [];
+};
+
+const elementTextOf = (entry, name) => {
+    const children = entry && typeof entry === 'object' ? entry[name] : [];
+    if (!Array.isArray(children)) return '';
+    return children
+        .filter(child => Object.prototype.hasOwnProperty.call(child || {}, '#text'))
+        .map(child => String(child['#text'] ?? ''))
+        .join('')
+        .trim();
+};
+
+const namespaceForElement = (name, entry, inheritedAttributes = {}) => {
+    const prefix = prefixOf(name);
+    const namespaceName = prefix ? `xmlns:${prefix}` : 'xmlns';
+    const attributes = attributesOf(entry);
+    return attributes[`@_${namespaceName}`] || inheritedAttributes[`@_${namespaceName}`] || '';
+};
+
 const prefixOf = qualifiedName => {
     const parts = String(qualifiedName || '').split(':');
     return parts.length > 1 ? parts.slice(0, -1).join(':') : '';
@@ -167,6 +199,140 @@ const resultFrom = (diagnostics, operation = '') => ({
     diagnostics: diagnostics.sort((left, right) => left.index - right.index),
     operation
 });
+
+const validateCreateSubscription = ({ text, rootAttributes, operationEntry, operationName, tags, diagnostics }) => {
+    const operationTag = tags.find(tag => !tag.closing && tag.depth === 1);
+    const operationNamespace = namespaceForElement(operationName, operationEntry, rootAttributes);
+    if (operationNamespace !== NETCONF_NOTIFICATION_NAMESPACE) {
+        diagnostics.push(
+            diagnosticAt(
+                text,
+                `create-subscription 必须使用 RFC 5277 命名空间 ${NETCONF_NOTIFICATION_NAMESPACE}`,
+                operationTag?.nameIndex ?? 0,
+                operationTag?.length ?? 1
+            )
+        );
+    }
+
+    const children = elementChildrenOf(operationEntry, operationName);
+    const allowedOrder = ['stream', 'filter', 'startTime', 'stopTime'];
+    const seen = new Map();
+    let previousOrder = -1;
+    children.forEach((child, index) => {
+        const childName = elementNameOf(child);
+        const localName = localNameOf(childName);
+        const childTag = tags.filter(tag => !tag.closing && tag.depth === 2)[index];
+        const order = allowedOrder.indexOf(localName);
+        if (order < 0) {
+            diagnostics.push(
+                diagnosticAt(
+                    text,
+                    `create-subscription 不支持子元素 ${localName || childName}`,
+                    childTag?.nameIndex ?? operationTag?.nameIndex ?? 0,
+                    childTag?.length ?? operationTag?.length ?? 1
+                )
+            );
+            return;
+        }
+        const count = (seen.get(localName) || 0) + 1;
+        seen.set(localName, count);
+        if (count > 1) {
+            diagnostics.push(
+                diagnosticAt(
+                    text,
+                    `${localName} 在 create-subscription 中只能出现一次`,
+                    childTag?.nameIndex ?? operationTag?.nameIndex ?? 0,
+                    childTag?.length ?? operationTag?.length ?? 1
+                )
+            );
+        }
+        if (order < previousOrder) {
+            diagnostics.push(
+                diagnosticAt(
+                    text,
+                    `${localName} 的顺序不符合 RFC 5277（stream、filter、startTime、stopTime）`,
+                    childTag?.nameIndex ?? operationTag?.nameIndex ?? 0,
+                    childTag?.length ?? operationTag?.length ?? 1
+                )
+            );
+        }
+        previousOrder = Math.max(previousOrder, order);
+    });
+
+    const childByName = localName => children.find(child => localNameOf(elementNameOf(child)) === localName) || null;
+    const streamEntry = childByName('stream');
+    if (streamEntry && !elementTextOf(streamEntry, elementNameOf(streamEntry))) {
+        const streamTag = tags.find(tag => !tag.closing && tag.depth === 2 && localNameOf(tag.name) === 'stream');
+        diagnostics.push(
+            diagnosticAt(
+                text,
+                'stream 不能为空',
+                streamTag?.nameIndex ?? operationTag?.nameIndex ?? 0,
+                streamTag?.length ?? 1
+            )
+        );
+    }
+
+    const filterEntry = childByName('filter');
+    if (filterEntry) {
+        const filterName = elementNameOf(filterEntry);
+        const filterAttributes = attributesOf(filterEntry);
+        const filterType = String(filterAttributes['@_type'] || filterAttributes['@_nc:type'] || '').trim();
+        const select = String(filterAttributes['@_select'] || filterAttributes['@_nc:select'] || '').trim();
+        const filterTag = tags.find(tag => !tag.closing && tag.depth === 2 && localNameOf(tag.name) === 'filter');
+        if (filterType && !['subtree', 'xpath'].includes(filterType)) {
+            diagnostics.push(
+                diagnosticAt(
+                    text,
+                    'filter type 只能是 subtree 或 xpath',
+                    filterTag?.nameIndex ?? operationTag?.nameIndex ?? 0,
+                    filterTag?.length ?? 1
+                )
+            );
+        }
+        if (filterType === 'xpath' && !select) {
+            diagnostics.push(
+                diagnosticAt(
+                    text,
+                    'XPath filter 必须包含非空 select 属性',
+                    filterTag?.nameIndex ?? operationTag?.nameIndex ?? 0,
+                    filterTag?.length ?? 1
+                )
+            );
+        }
+        if (filterType === 'xpath' && elementChildrenOf(filterEntry, filterName).length) {
+            diagnostics.push(
+                diagnosticAt(
+                    text,
+                    'XPath filter 不能同时包含 subtree 子元素',
+                    filterTag?.nameIndex ?? operationTag?.nameIndex ?? 0,
+                    filterTag?.length ?? 1
+                )
+            );
+        }
+    }
+
+    const dateValue = name => {
+        const entry = childByName(name);
+        return entry ? elementTextOf(entry, elementNameOf(entry)) : '';
+    };
+    const startTime = dateValue('startTime');
+    const stopTime = dateValue('stopTime');
+    const timeDiagnostic = (name, message) => {
+        const tag = tags.find(tag => !tag.closing && tag.depth === 2 && localNameOf(tag.name) === name);
+        diagnostics.push(diagnosticAt(text, message, tag?.nameIndex ?? operationTag?.nameIndex ?? 0, tag?.length ?? 1));
+    };
+    if (seen.has('startTime') && !isRfc3339DateTime(startTime)) {
+        timeDiagnostic('startTime', 'startTime 必须是合法 RFC 3339 时间');
+    }
+    if (seen.has('stopTime') && !isRfc3339DateTime(stopTime)) {
+        timeDiagnostic('stopTime', 'stopTime 必须是合法 RFC 3339 时间');
+    }
+    if (stopTime && !startTime) timeDiagnostic('stopTime', 'stopTime 必须与 startTime 一起使用');
+    if (isRfc3339DateTime(startTime) && isRfc3339DateTime(stopTime)) {
+        if (Date.parse(stopTime) <= Date.parse(startTime)) timeDiagnostic('stopTime', 'stopTime 必须晚于 startTime');
+    }
+};
 
 /**
  * Validate an editable NETCONF RPC envelope before it is sent to a device.
@@ -292,6 +458,17 @@ export const validateNetconfRpc = value => {
                 1
             )
         );
+    }
+
+    if (operationEntries.length === 1 && operation === 'create-subscription') {
+        validateCreateSubscription({
+            text,
+            rootAttributes,
+            operationEntry: operationEntries[0],
+            operationName,
+            tags,
+            diagnostics
+        });
     }
 
     return resultFrom(diagnostics, operation);

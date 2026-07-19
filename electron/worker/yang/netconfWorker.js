@@ -1,7 +1,9 @@
 'use strict';
 
 const fs = require('fs');
+const { randomUUID } = require('crypto');
 const { parentPort } = require('worker_threads');
+const { XMLParser } = require('fast-xml-parser');
 const {
     NetconfClient,
     calculateFingerprints,
@@ -19,14 +21,201 @@ const {
     buildDiscardChanges,
     buildKillSession,
     buildCreateSubscription,
+    BASE_NAMESPACE,
+    NETCONF_NOTIFICATION_NAMESPACE,
     assertSafeXml,
+    parseXml,
+    findRoot,
+    childValues,
+    childText,
+    getAttribute,
+    localName,
     rpcReplyDataToConfig
 } = require('../../utils/netconf');
 const { parseYang } = require('../../utils/yang');
-const { NETCONF_REQ_TYPES, YANG_EVT_TYPES, NETCONF_LIMITS } = require('../../const/yangConst');
+const { NETCONF_REQ_TYPES, YANG_EVT_TYPES, NETCONF_CAPABILITIES, NETCONF_LIMITS } = require('../../const/yangConst');
 
 const MAX_PRIVATE_KEY_BYTES = 1024 * 1024;
 const MAX_RECONNECT_DELAY = 30000;
+const orderedXmlParser = new XMLParser({
+    preserveOrder: true,
+    ignoreAttributes: false,
+    attributeNamePrefix: '@_',
+    trimValues: false,
+    parseTagValue: false,
+    parseAttributeValue: false,
+    processEntities: false,
+    commentPropName: '#comment',
+    cdataPropName: '#cdata'
+});
+
+function orderedElement(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const name = Object.keys(item).find(key => key !== ':@' && !key.startsWith('#') && !key.startsWith('?'));
+    if (!name) return null;
+    return {
+        name,
+        children: Array.isArray(item[name]) ? item[name] : [],
+        attributes: item[':@'] && typeof item[':@'] === 'object' ? item[':@'] : {}
+    };
+}
+
+function extendNamespaces(parentNamespaces, attributes) {
+    const namespaces = new Map(parentNamespaces || []);
+    for (const [name, value] of Object.entries(attributes || {})) {
+        if (name === '@_xmlns') namespaces.set('', String(value));
+        else if (name.startsWith('@_xmlns:')) namespaces.set(name.slice('@_xmlns:'.length), String(value));
+    }
+    return namespaces;
+}
+
+function resolveOrderedElement(element, parentNamespaces = null) {
+    if (!element) return null;
+    const namespaces = extendNamespaces(parentNamespaces, element.attributes);
+    const separator = element.name.indexOf(':');
+    const prefix = separator < 0 ? '' : element.name.slice(0, separator);
+    return {
+        ...element,
+        localName: separator < 0 ? element.name : element.name.slice(separator + 1),
+        namespace: namespaces.get(prefix) || '',
+        namespaces
+    };
+}
+
+function orderedRoot(xml) {
+    const document = orderedXmlParser.parse(xml);
+    for (const item of document || []) {
+        const root = resolveOrderedElement(orderedElement(item));
+        if (root) return root;
+    }
+    return null;
+}
+
+function directOperationDescriptor(xml) {
+    const root = orderedRoot(xml);
+    if (!root) return null;
+    if (root.localName !== 'rpc') return root;
+    if (root.namespace !== BASE_NAMESPACE) return null;
+    for (const item of root.children) {
+        const operation = resolveOrderedElement(orderedElement(item), root.namespaces);
+        if (operation) return operation;
+    }
+    return null;
+}
+
+function supportsCapability(capabilities, expected) {
+    return (capabilities || []).some(capability => capability === expected || capability.startsWith(`${expected}?`));
+}
+
+function capabilitySupportFrom(capabilities) {
+    return {
+        notification: supportsCapability(capabilities, NETCONF_CAPABILITIES.NOTIFICATION),
+        interleave: supportsCapability(capabilities, NETCONF_CAPABILITIES.INTERLEAVE)
+    };
+}
+
+function profileSummary(entry) {
+    return {
+        profileName: entry?.profile?.name || entry?.profileId || '',
+        host: entry?.profile?.host || '',
+        port: Number(entry?.profile?.port) || 830
+    };
+}
+
+function normalizeFilter(filter) {
+    if (filter === undefined || filter === null || filter === '') return null;
+    if (typeof filter === 'string') {
+        const xml = filter.trim();
+        if (!/^<(?:[A-Za-z_][\w.-]*:)?filter\b/i.test(xml)) {
+            return { type: 'subtree', content: xml };
+        }
+        try {
+            const root = findRoot(parseXml(xml));
+            const node = root?.name === 'filter' ? root.value : null;
+            if (!node) return { type: 'subtree', xml };
+            const type = getAttribute(node, 'type') || 'subtree';
+            return type === 'xpath' ? { type, select: getAttribute(node, 'select') || '', xml } : { type, xml };
+        } catch (_error) {
+            return { type: 'subtree', xml };
+        }
+    }
+    if (typeof filter !== 'object' || Array.isArray(filter)) return null;
+    const type = filter.type || 'subtree';
+    if (type === 'xpath') {
+        return {
+            type,
+            select: filter.select || '',
+            namespaces: filter.namespaces && typeof filter.namespaces === 'object' ? { ...filter.namespaces } : {}
+        };
+    }
+    return {
+        type,
+        ...(filter.document && typeof filter.document === 'object'
+            ? { document: filter.document }
+            : { content: filter.xml !== undefined ? filter.xml : filter.content || '' })
+    };
+}
+
+function directCreateSubscriptionNode(xml) {
+    const document = parseXml(xml);
+    const operation = directOperationDescriptor(xml);
+    if (operation?.localName !== 'create-subscription' || operation.namespace !== NETCONF_NOTIFICATION_NAMESPACE) {
+        return null;
+    }
+    const root = findRoot(document);
+    if (!root) return null;
+    if (root.name === 'create-subscription') {
+        return root.value && typeof root.value === 'object' ? root.value : {};
+    }
+    if (root.name !== 'rpc') return null;
+    const nodes = childValues(root.value, 'create-subscription');
+    if (nodes.length === 0) return null;
+    return nodes[0] && typeof nodes[0] === 'object' ? nodes[0] : {};
+}
+
+function rawSubscriptionParameters(xml) {
+    const node = directCreateSubscriptionNode(xml);
+    if (node === null) return null;
+    const filterNodes = childValues(node, 'filter');
+    const filterNode = filterNodes.length > 0 ? filterNodes[0] : null;
+    let filter = null;
+    if (filterNode) {
+        const type = getAttribute(filterNode, 'type') || 'subtree';
+        filter =
+            type === 'xpath'
+                ? { type, select: getAttribute(filterNode, 'select') || '' }
+                : { type, document: filterNode };
+    }
+    return {
+        stream: childText(node, 'stream') || 'NETCONF',
+        filter,
+        startTime: childText(node, 'startTime'),
+        stopTime: childText(node, 'stopTime')
+    };
+}
+
+function notificationEventDescriptor(notification) {
+    try {
+        const root = orderedRoot(notification?.xml || '');
+        if (root?.localName === 'notification') {
+            for (const item of root.children) {
+                const event = resolveOrderedElement(orderedElement(item), root.namespaces);
+                if (event && event.localName !== 'eventTime') {
+                    return { name: event.localName, namespace: event.namespace };
+                }
+            }
+        }
+    } catch (_error) {
+        // The NETCONF client has already parsed the message. Fall back to its document.
+    }
+    const root = notification?.root || findRoot(notification?.document || {})?.value;
+    if (!root || typeof root !== 'object' || Array.isArray(root)) return { name: null, namespace: '' };
+    const key = Object.keys(root).find(name => {
+        if (name.startsWith('@_') || name.startsWith('#')) return false;
+        return localName(name) !== 'eventTime';
+    });
+    return { name: key ? localName(key) : null, namespace: '' };
+}
 
 function errorData(error) {
     return {
@@ -36,7 +225,8 @@ function errorData(error) {
         errors: error?.errors || [],
         messageId: error?.messageId || null,
         requestXml: error?.requestXml || null,
-        replyXml: error?.replyXml || null
+        replyXml: error?.replyXml || null,
+        subscription: error?.subscription || null
     };
 }
 
@@ -45,6 +235,7 @@ class NetconfWorkerService {
         this.port = port;
         this.clientFactory = options.clientFactory || (clientOptions => new NetconfClient(clientOptions));
         this.sessions = new Map();
+        this.subscriptions = new Map();
         this.closing = false;
         if (this.port) this.port.on('message', message => this.handleMessage(message));
     }
@@ -82,6 +273,8 @@ class NetconfWorkerService {
                 return this.disconnectAll();
             case NETCONF_REQ_TYPES.GET_SESSION_STATE:
                 return this.getSessionState(data.profileId);
+            case NETCONF_REQ_TYPES.GET_SUBSCRIPTIONS:
+                return this.getSubscriptions(data.profileId);
             case NETCONF_REQ_TYPES.DISCOVER_MODULES:
                 return this.discoverModules(data.profileId);
             case NETCONF_REQ_TYPES.GET_SCHEMA:
@@ -150,15 +343,33 @@ class NetconfWorkerService {
             observed: {},
             manualClose: false,
             reconnectAttempt: 0,
-            reconnectTimer: null
+            reconnectTimer: null,
+            activeSubscriptionId: null,
+            subscriptionPending: false
         };
     }
 
     publicState(entry) {
-        if (!entry) return { profileId: null, status: 'disconnected', connected: false, capabilities: [] };
+        if (!entry) {
+            return {
+                profileId: null,
+                status: 'disconnected',
+                connected: false,
+                capabilities: [],
+                supportsNotification: false,
+                supportsInterleave: false,
+                capabilitySupport: { notification: false, interleave: false },
+                subscription: null,
+                activeSubscription: null,
+                subscriptionActive: false
+            };
+        }
         const info = entry.client?.connected ? entry.client.sessionInfo() : {};
+        const capabilitySupport = capabilitySupportFrom(info.capabilities || []);
+        const activeSubscription = this.publicSubscription(this.activeSubscription(entry));
         return {
             profileId: entry.profileId,
+            ...profileSummary(entry),
             status: entry.status,
             state: entry.status,
             connected: entry.status === 'connected' && Boolean(entry.client?.connected),
@@ -166,6 +377,12 @@ class NetconfWorkerService {
             baseVersion: info.baseVersion || null,
             capabilities: info.capabilities || [],
             serverCapabilities: info.capabilities || [],
+            supportsNotification: capabilitySupport.notification,
+            supportsInterleave: capabilitySupport.interleave,
+            capabilitySupport,
+            subscription: activeSubscription,
+            activeSubscription,
+            subscriptionActive: Boolean(activeSubscription),
             connectedAt: entry.connectedAt,
             disconnectedAt: entry.disconnectedAt,
             reconnectAttempt: entry.reconnectAttempt,
@@ -187,14 +404,163 @@ class NetconfWorkerService {
         this.emit(YANG_EVT_TYPES.SESSION_EVENT, { ...this.publicState(entry), ...extra });
     }
 
+    publicSubscription(subscription) {
+        if (!subscription) return null;
+        return {
+            ...subscription,
+            filter: subscription.filter ? { ...subscription.filter } : null,
+            capabilitySupport: { ...subscription.capabilitySupport }
+        };
+    }
+
+    activeSubscription(entry) {
+        if (!entry?.activeSubscriptionId) return null;
+        const subscription = this.subscriptions.get(entry.activeSubscriptionId) || null;
+        return subscription?.state === 'ACTIVE' ? subscription : null;
+    }
+
+    subscriptionForSession(entry, sessionId) {
+        const active = this.activeSubscription(entry);
+        if (active?.sessionId === sessionId) return active;
+        const history = [...this.subscriptions.values()];
+        for (let index = history.length - 1; index >= 0; index -= 1) {
+            const subscription = history[index];
+            if (subscription.profileId === entry?.profileId && subscription.sessionId === sessionId) {
+                return subscription;
+            }
+        }
+        return null;
+    }
+
+    emitSubscription(subscription) {
+        this.emit(YANG_EVT_TYPES.SUBSCRIPTION_EVENT, this.publicSubscription(subscription));
+    }
+
+    assertCanCreateSubscription(entry) {
+        const info = entry.client?.sessionInfo?.() || {};
+        const capabilities = info.capabilities || [];
+        if (!supportsCapability(capabilities, NETCONF_CAPABILITIES.NOTIFICATION)) {
+            const error = new Error('设备未声明 NETCONF :notification 能力，不能建立 RFC 5277 订阅');
+            error.code = 'NETCONF_NOTIFICATION_NOT_SUPPORTED';
+            throw error;
+        }
+        const active = this.activeSubscription(entry);
+        if (active || entry.subscriptionPending) {
+            const error = new Error(
+                entry.subscriptionPending
+                    ? '当前 NETCONF Session 正在建立 RFC 5277 订阅'
+                    : '当前 NETCONF Session 已有活动的 RFC 5277 订阅'
+            );
+            error.code = 'NETCONF_SUBSCRIPTION_ALREADY_ACTIVE';
+            error.subscription = this.publicSubscription(active);
+            throw error;
+        }
+    }
+
+    activateSubscription(entry, parameters, requestXml, messageId, sessionInfo = null) {
+        const info = sessionInfo || entry.client?.sessionInfo?.() || {};
+        const capabilitySupport = capabilitySupportFrom(info.capabilities || []);
+        // History is kept by the renderer across worker restarts, so a process-local
+        // counter would eventually overwrite an older subscription record.
+        const id = `rfc5277-${randomUUID()}`;
+        const subscription = {
+            id,
+            subscriptionId: id,
+            profileId: entry.profileId,
+            ...profileSummary(entry),
+            sessionId: info.sessionId || null,
+            baseVersion: info.baseVersion || null,
+            type: 'rfc5277',
+            subscriptionType: 'rfc5277',
+            state: 'ACTIVE',
+            stream: parameters.stream || 'NETCONF',
+            filter: normalizeFilter(parameters.filter),
+            startTime: parameters.startTime || null,
+            stopTime: parameters.stopTime || null,
+            messageId: messageId || null,
+            requestXml: requestXml || null,
+            capabilitySupport,
+            createdAt: new Date().toISOString(),
+            terminatedAt: null,
+            terminationReason: null,
+            error: null
+        };
+        this.subscriptions.set(id, subscription);
+        entry.activeSubscriptionId = id;
+        this.emitSubscription(subscription);
+        this.emitState(entry, { subscriptionChanged: true });
+        return this.publicSubscription(subscription);
+    }
+
+    terminateActiveSubscription(entry, reason, error = null) {
+        const subscription = this.activeSubscription(entry);
+        if (!subscription) return null;
+        subscription.state = 'TERMINATED';
+        subscription.terminatedAt = new Date().toISOString();
+        subscription.terminationReason = reason || 'session-closed';
+        subscription.error = error ? errorData(error) : null;
+        entry.activeSubscriptionId = null;
+        this.emitSubscription(subscription);
+        this.emitState(entry, { subscriptionChanged: true });
+        return this.publicSubscription(subscription);
+    }
+
+    getSubscriptions(profileId = null) {
+        const normalizedProfileId =
+            profileId === undefined || profileId === null || profileId === '' ? null : String(profileId);
+        const subscriptions = [...this.subscriptions.values()]
+            .filter(subscription => !normalizedProfileId || subscription.profileId === normalizedProfileId)
+            .map(subscription => this.publicSubscription(subscription))
+            .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+        return {
+            profileId: normalizedProfileId,
+            subscriptions,
+            activeCount: subscriptions.filter(subscription => subscription.state === 'ACTIVE').length,
+            total: subscriptions.length,
+            queriedAt: new Date().toISOString()
+        };
+    }
+
     bindClient(entry, client) {
         client.on('notification', notification => {
-            this.emit(YANG_EVT_TYPES.NOTIFICATION, {
-                profileId: entry.profileId,
-                eventTime: notification.eventTime,
-                xml: notification.xml,
-                document: notification.document
-            });
+            const receivedAt = new Date().toISOString();
+            const emitNotification = () => {
+                const info = client.sessionInfo?.() || {};
+                const activeSubscription = this.activeSubscription(entry);
+                const subscription =
+                    (activeSubscription?.sessionId === (info.sessionId || null) ? activeSubscription : null) ||
+                    (entry.client !== client ? this.subscriptionForSession(entry, info.sessionId || null) : null);
+                const event = notificationEventDescriptor(notification);
+                const eventName = event.name;
+                this.emit(YANG_EVT_TYPES.NOTIFICATION, {
+                    profileId: entry.profileId,
+                    ...profileSummary(entry),
+                    sessionId: info.sessionId || subscription?.sessionId || null,
+                    baseVersion: info.baseVersion || subscription?.baseVersion || null,
+                    capabilitySupport: capabilitySupportFrom(info.capabilities || []),
+                    subscriptionId: subscription?.subscriptionId || null,
+                    subscriptionType: subscription?.subscriptionType || null,
+                    state: subscription?.state || 'UNSUBSCRIBED',
+                    receivedAt,
+                    eventTime: notification.eventTime,
+                    eventName,
+                    namespace: event.namespace,
+                    xml: notification.xml,
+                    document: notification.document
+                });
+                if (
+                    eventName === 'notificationComplete' &&
+                    event.namespace === NETCONF_NOTIFICATION_NAMESPACE &&
+                    subscription?.id === entry.activeSubscriptionId
+                ) {
+                    this.terminateActiveSubscription(entry, 'notification-complete');
+                }
+            };
+            // A server may put the first notification in the same transport read as the
+            // successful rpc-reply. Let the waiting RPC continuation register the
+            // subscription first so that notification keeps its Session association.
+            if (entry.subscriptionPending) setImmediate(emitNotification);
+            else emitNotification();
         });
         client.on('protocol-error', error => {
             entry.lastError = errorData(error);
@@ -202,6 +568,11 @@ class NetconfWorkerService {
         });
         client.on('close', error => {
             if (entry.client !== client) return;
+            this.terminateActiveSubscription(
+                entry,
+                entry.manualClose ? (this.closing ? 'application-close' : 'session-disconnected') : 'connection-lost',
+                entry.manualClose ? null : error
+            );
             entry.client = null;
             entry.connectedAt = null;
             entry.disconnectedAt = new Date().toISOString();
@@ -214,6 +585,7 @@ class NetconfWorkerService {
     }
 
     async connectEntry(entry, reconnecting = false) {
+        if (reconnecting) this.terminateActiveSubscription(entry, 'session-reconnected');
         entry.manualClose = false;
         entry.status = reconnecting ? 'reconnecting' : 'connecting';
         entry.lastError = null;
@@ -277,7 +649,20 @@ class NetconfWorkerService {
         });
         try {
             const info = await client.connect(runtime);
-            return { ...info, ...observed, connected: true, status: 'connected' };
+            const capabilitySupport = capabilitySupportFrom(info.capabilities || []);
+            return {
+                ...info,
+                ...observed,
+                profileId: profile?.id ? String(profile.id) : null,
+                profileName: profile?.name || profile?.id || '',
+                host: profile?.host || '',
+                port: Number(profile?.port) || 830,
+                connected: true,
+                status: 'connected',
+                supportsNotification: capabilitySupport.notification,
+                supportsInterleave: capabilitySupport.interleave,
+                capabilitySupport
+            };
         } finally {
             if (client.connected) {
                 try {
@@ -313,12 +698,14 @@ class NetconfWorkerService {
     }
 
     getSessionState(profileId) {
-        return this.publicState(this.sessions.get(String(profileId || '')));
+        const normalizedProfileId = String(profileId || '');
+        const entry = this.sessions.get(normalizedProfileId);
+        return entry ? this.publicState(entry) : { ...this.publicState(null), profileId: normalizedProfileId || null };
     }
 
     async disconnect(profileId) {
         const entry = this.sessions.get(String(profileId || ''));
-        if (!entry) return { profileId: profileId || null, status: 'disconnected', connected: false, capabilities: [] };
+        if (!entry) return { ...this.publicState(null), profileId: profileId || null };
         entry.manualClose = true;
         if (entry.reconnectTimer) {
             clearTimeout(entry.reconnectTimer);
@@ -337,6 +724,7 @@ class NetconfWorkerService {
             client.disconnect('session disconnected');
         }
         entry.client = null;
+        this.terminateActiveSubscription(entry, this.closing ? 'application-close' : 'session-disconnected');
         entry.status = 'disconnected';
         entry.connectedAt = null;
         entry.disconnectedAt = new Date().toISOString();
@@ -436,7 +824,16 @@ class NetconfWorkerService {
     async executeOperation(profileId, request) {
         const entry = this.requireConnected(profileId);
         const rpc = this.buildOperation(request);
-        return this.performRpc(entry, rpc, request);
+        const subscriptionParameters =
+            request.operation === 'create-subscription'
+                ? {
+                      stream: request.stream || 'NETCONF',
+                      filter: request.filter || null,
+                      startTime: request.startTime || null,
+                      stopTime: request.stopTime || null
+                  }
+                : null;
+        return this.performRpc(entry, rpc, { ...request, subscriptionParameters });
     }
 
     async sendRpc(profileId, request) {
@@ -449,16 +846,30 @@ class NetconfWorkerService {
             throw error;
         }
         assertSafeXml(rpc, { maxXmlSize: NETCONF_LIMITS.MAX_RAW_RPC_BYTES });
-        return this.performRpc(entry, rpc, request);
+        const subscriptionParameters = rawSubscriptionParameters(rpc);
+        return this.performRpc(entry, rpc, { ...request, subscriptionParameters });
     }
 
     async performRpc(entry, rpc, options = {}) {
         const startedAt = Date.now();
-        const reply = await entry.client.rpc(rpc, {
-            timeout: Number(options.timeout) || Number(entry.profile.rpcTimeout) || NETCONF_LIMITS.DEFAULT_RPC_TIMEOUT,
-            messageId: options.messageId,
-            rejectOnRpcError: false
-        });
+        const client = entry.client;
+        const sessionInfo = client?.sessionInfo?.() || {};
+        const isSubscription = Boolean(options.subscriptionParameters);
+        if (isSubscription) {
+            this.assertCanCreateSubscription(entry);
+            entry.subscriptionPending = true;
+        }
+        let reply;
+        try {
+            reply = await client.rpc(rpc, {
+                timeout:
+                    Number(options.timeout) || Number(entry.profile.rpcTimeout) || NETCONF_LIMITS.DEFAULT_RPC_TIMEOUT,
+                messageId: options.messageId,
+                rejectOnRpcError: false
+            });
+        } finally {
+            if (isSubscription) entry.subscriptionPending = false;
+        }
         const result = {
             rpc,
             requestXml: reply.requestXml || rpc,
@@ -470,6 +881,20 @@ class NetconfWorkerService {
             errors: reply.errors,
             duration: Date.now() - startedAt
         };
+        if (isSubscription && reply.ok && (!Array.isArray(reply.errors) || reply.errors.length === 0)) {
+            result.subscription = this.activateSubscription(
+                entry,
+                options.subscriptionParameters,
+                result.requestXml,
+                result.messageId,
+                sessionInfo
+            );
+            if (entry.client !== client || !client.connected || entry.status !== 'connected') {
+                result.subscription = this.terminateActiveSubscription(entry, 'connection-lost');
+            }
+        } else if (isSubscription) {
+            result.subscription = null;
+        }
         if (options.operation === 'get-config' && (!Array.isArray(reply.errors) || reply.errors.length === 0)) {
             Object.assign(
                 result,

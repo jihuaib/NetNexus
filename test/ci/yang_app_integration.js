@@ -455,18 +455,110 @@ async function main() {
         assert.match(failedTask.error.code, /^LIBYANG/);
         const failedWorkspace = await app.handleGetWorkspace(event, { profileId: PROFILE_A });
         assert.equal(failedWorkspace.data.success, false);
+        assert.equal(failedWorkspace.data.schemaAvailable, true);
+        assert.equal(failedWorkspace.data.partialSchema, true);
+        assert.equal(failedWorkspace.data.schemaTree.partial, true);
+        assert(failedWorkspace.data.summary.nodeCount > 0);
         assert(failedWorkspace.data.compileId);
         assert(failedWorkspace.data.diagnostics.some(item => item.authoritative && item.severity === 'error'));
-        assert.equal(failedWorkspace.data.modules.filter(module => module.compiled).length, 0);
-        assert.equal(failedWorkspace.data.modules.filter(module => module.compileStatus === 'failed').length, 3);
+        assert.deepEqual(
+            Object.fromEntries(failedWorkspace.data.modules.map(module => [module.name, module.compileStatus])),
+            {
+                'example-invalid': 'failed',
+                'example-system': 'compiled',
+                'example-types': 'compiled'
+            }
+        );
+        assert.equal(failedWorkspace.data.summary.compiledFiles, 2);
+        assert.equal(failedWorkspace.data.summary.failedFiles, 1);
+        assert.deepEqual(
+            Object.fromEntries(failedWorkspace.data.fileResults.map(result => [result.name, result.status])),
+            {
+                'example-invalid': 'failed',
+                'example-system': 'compiled',
+                'example-types': 'compiled'
+            }
+        );
+        const failedModuleList = await app.handleListModules(event, { profileId: PROFILE_A });
+        assert.deepEqual(Object.fromEntries(failedModuleList.data.map(module => [module.name, module.compileStatus])), {
+            'example-invalid': 'failed',
+            'example-system': 'compiled',
+            'example-types': 'compiled'
+        });
         assert.deepEqual(
             (
                 await app.handleGetSchemaRoots(event, {
                     profileId: PROFILE_A,
                     compileId: failedWorkspace.data.compileId
                 })
-            ).data,
-            []
+            ).data
+                .map(root => root.name)
+                .sort(),
+            ['example-system', 'example-types']
+        );
+        const partialValidation = await app.handleValidateRpc(event, {
+            profileId: PROFILE_A,
+            compileId: failedWorkspace.data.compileId,
+            rpc: `<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="partial-schema-validation">
+  <edit-config>
+    <target><running/></target>
+    <config><system xmlns="urn:example:system"><enabled>not-a-boolean</enabled></system></config>
+  </edit-config>
+</rpc>`
+        });
+        assert.equal(partialValidation.status, 'success');
+        assert.equal(partialValidation.data.performed, true);
+        assert.equal(partialValidation.data.valid, false);
+
+        const failedCompileId = failedWorkspace.data.compileId;
+        await app.close();
+        app = new YangApp(new FakeIpcMain(), store, appOptions);
+        const restartedFailedWorkspace = await app.handleGetWorkspace(event, { profileId: PROFILE_A });
+        assert.equal(restartedFailedWorkspace.data.compileId, failedCompileId);
+        assert.equal(restartedFailedWorkspace.data.success, false);
+        assert.equal(restartedFailedWorkspace.data.schemaAvailable, true);
+        assert.equal(restartedFailedWorkspace.data.partialSchema, true);
+        assert.equal(restartedFailedWorkspace.data.schemaTree.partial, true);
+        assert.deepEqual(
+            Object.fromEntries(
+                restartedFailedWorkspace.data.modules.map(module => [module.name, module.compileStatus])
+            ),
+            {
+                'example-invalid': 'failed',
+                'example-system': 'compiled',
+                'example-types': 'compiled'
+            }
+        );
+        const restoredFailedDiagnostics = await app.handleGetDiagnostics(event, {
+            profileId: PROFILE_A,
+            compileId: failedCompileId
+        });
+        assert.equal(restoredFailedDiagnostics.status, 'success');
+        assert(
+            restoredFailedDiagnostics.data.some(
+                diagnostic =>
+                    diagnostic.severity === 'error' && /does-not-exist|Referenced type/u.test(diagnostic.message)
+            )
+        );
+        const restoredFailedWorkspace = await app.handleGetWorkspace(event, { profileId: PROFILE_A });
+        assert.deepEqual(
+            Object.fromEntries(restoredFailedWorkspace.data.modules.map(module => [module.name, module.compileStatus])),
+            {
+                'example-invalid': 'failed',
+                'example-system': 'compiled',
+                'example-types': 'compiled'
+            }
+        );
+        assert.deepEqual(
+            (
+                await app.handleGetSchemaRoots(event, {
+                    profileId: PROFILE_A,
+                    compileId: failedCompileId
+                })
+            ).data
+                .map(root => root.name)
+                .sort(),
+            ['example-system', 'example-types']
         );
 
         const clearResponse = await app.handleClearWorkspace(event, { profileId: PROFILE_A });

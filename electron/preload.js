@@ -275,6 +275,7 @@ contextBridge.exposeInMainWorld('netconfApi', {
     connect: profileId => ipcRenderer.invoke('netconf:connect', profileId),
     disconnect: profileId => ipcRenderer.invoke('netconf:disconnect', profileId),
     getSessionState: profileId => ipcRenderer.invoke('netconf:getSessionState', profileId),
+    getSubscriptions: request => ipcRenderer.invoke('netconf:getSubscriptions', request),
     discoverModules: profileId => ipcRenderer.invoke('netconf:discoverModules', profileId),
     downloadModules: request => ipcRenderer.invoke('netconf:downloadModules', request),
     executeOperation: request => ipcRenderer.invoke('netconf:executeOperation', request),

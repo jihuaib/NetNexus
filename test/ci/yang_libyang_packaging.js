@@ -102,73 +102,57 @@ function assertVcpkgBaselinePreflightContract(powershellSource) {
     );
 }
 
-function assertVcpkgBootstrapContract(powershellSource) {
+function assertUserInstalledVcpkgContract(powershellSource) {
     const resolverSource = extractPowerShellFunction(powershellSource, 'Resolve-VcpkgLocation');
     const explicitRootIndex = resolverSource.indexOf('$env:VCPKG_ROOT');
     const installationRootIndex = resolverSource.indexOf('$env:VCPKG_INSTALLATION_ROOT');
-    const userCacheIndex = resolverSource.indexOf('LocalApplicationData');
+    const pathIndex = resolverSource.indexOf("Get-Command 'vcpkg.exe'");
+    const visualStudioIndex = resolverSource.indexOf("Join-Path $VisualStudioRoot 'VC/vcpkg'");
     assert(
         explicitRootIndex >= 0 &&
             explicitRootIndex < installationRootIndex &&
-            installationRootIndex < userCacheIndex,
-        'vcpkg resolution must prefer VCPKG_ROOT, then a usable installation root, then the user cache'
+            installationRootIndex < pathIndex &&
+            pathIndex < visualStudioIndex,
+        'vcpkg resolution must prefer VCPKG_ROOT, then the CI installation root, PATH, and the VS component'
     );
-    assert.match(resolverSource, /NetNexus\\BuildTools\\vcpkg/);
-    assert.match(resolverSource, /Managed = \$true/);
+    assert.match(resolverSource, /Get-Command 'vcpkg\.exe' -CommandType Application/);
+    assert.match(resolverSource, /Test-Path \$Executable -PathType Leaf/);
+    assert.match(resolverSource, /scripts\/buildsystems\/vcpkg\.cmake/);
+    assert.match(
+        resolverSource,
+        /Install the Visual Studio 2022 vcpkg component, or install vcpkg separately and set VCPKG_ROOT/,
+        'a missing user-installed vcpkg must produce an actionable prerequisite error'
+    );
+    assert.match(
+        resolverSource,
+        /IsGitCheckout = Test-Path \(Join-Path \$Root '\.git'\)/,
+        'Git checkouts must be identified without rejecting the Visual Studio manifest bundle'
+    );
     assert.doesNotMatch(
         resolverSource,
-        /else\s*\{\s*['"]C:\\vcpkg['"]/,
-        'ordinary Windows installs must not assume the GitHub runner C:\\vcpkg path'
+        /not a Git checkout/,
+        'the read-only Visual Studio vcpkg manifest bundle must not require local Git metadata'
+    );
+    assert.doesNotMatch(
+        powershellSource,
+        /function (?:Invoke-VcpkgBootstrap|Test-VcpkgCheckoutAtBaseline|Ensure-VcpkgCheckout)|LocalApplicationData|NetNexus\\BuildTools\\vcpkg|System\.Threading\.Mutex|git init \$Staging/,
+        'the project must not download, bootstrap, cache, or publish its own vcpkg installation'
     );
 
-    const bootstrapSource = extractPowerShellFunction(powershellSource, 'Invoke-VcpkgBootstrap');
-    const bootstrapCallIndex = bootstrapSource.indexOf('& $Bootstrap -disableMetrics');
-    const bootstrapExitCheckIndex = bootstrapSource.indexOf('if ($LASTEXITCODE -ne 0)', bootstrapCallIndex);
-    const executableCheckIndex = bootstrapSource.lastIndexOf('Test-Path $Executable -PathType Leaf');
-    assert(
-        bootstrapCallIndex >= 0 &&
-            bootstrapCallIndex < bootstrapExitCheckIndex &&
-            bootstrapExitCheckIndex < executableCheckIndex,
-        'managed vcpkg bootstrap must check both the command exit code and the generated executable'
+    const resolveIndex = powershellSource.lastIndexOf(
+        'Resolve-VcpkgLocation -VisualStudioRoot $VisualStudioRoot'
     );
-
-    const checkoutSource = extractPowerShellFunction(powershellSource, 'Ensure-VcpkgCheckout');
-    const mutexWaitIndex = checkoutSource.indexOf('$CacheMutex.WaitOne');
-    const firstCacheProbeIndex = checkoutSource.indexOf("$Executable = Join-Path $Path 'vcpkg.exe'");
-    const mutexReleaseIndex = checkoutSource.lastIndexOf('$CacheMutex.ReleaseMutex()');
-    assert(
-        mutexWaitIndex >= 0 && mutexWaitIndex < firstCacheProbeIndex && mutexReleaseIndex > firstCacheProbeIndex,
-        'managed vcpkg cache inspection, replacement, and publication must be protected by a cross-process lock'
-    );
-    assert.match(checkoutSource, /catch \[System\.Threading\.AbandonedMutexException\]/);
-    assert.match(checkoutSource, /Downloading pinned vcpkg baseline \$Baseline into the user cache/);
-    assert.match(checkoutSource, /git -c core\.longpaths=true -C \$Staging fetch --filter=blob:none --depth 1/);
-    assert.match(checkoutSource, /https:\/\/github\.com\/microsoft\/vcpkg\.git/);
-    assert.match(checkoutSource, /Unable to download pinned vcpkg baseline \$Baseline/);
-    assert.match(checkoutSource, /config core\.longpaths true/);
-    assert.match(checkoutSource, /Invoke-VcpkgBootstrap -Path \$Staging/);
-    assert.match(checkoutSource, /\[IO\.Directory\]::Move\(\$Staging, \$Path\)/);
-    assert.match(checkoutSource, /Test-VcpkgCheckoutAtBaseline -Path \$Path -Baseline \$Baseline/);
-    assert.match(
-        checkoutSource,
-        /unset VCPKG_ROOT and VCPKG_INSTALLATION_ROOT to use the managed user cache/,
-        'an invalid explicit checkout must explain how to select the automatic managed cache'
-    );
-
-    const resolveIndex = powershellSource.lastIndexOf('Resolve-VcpkgLocation -Baseline $VcpkgBaseline');
-    const ensureCheckoutIndex = powershellSource.lastIndexOf(
-        'Ensure-VcpkgCheckout -Path $VcpkgRoot -Baseline $VcpkgBaseline'
-    );
+    const gitCheckoutGuardIndex = powershellSource.lastIndexOf('if ($VcpkgLocation.IsGitCheckout) {');
     const ensureBaselineIndex = powershellSource.lastIndexOf(
         'Ensure-VcpkgBaseline -Path $VcpkgRoot -Baseline $VcpkgBaseline'
     );
     const installIndex = powershellSource.indexOf('& $Vcpkg install');
     assert(
         resolveIndex >= 0 &&
-            resolveIndex < ensureCheckoutIndex &&
-            ensureCheckoutIndex < ensureBaselineIndex &&
+            resolveIndex < gitCheckoutGuardIndex &&
+            gitCheckoutGuardIndex < ensureBaselineIndex &&
             ensureBaselineIndex < installIndex,
-        'Windows builds must provision vcpkg before checking the baseline and installing dependencies'
+        'a user-provided Git checkout must repair its pinned baseline before dependency installation'
     );
 }
 
@@ -233,7 +217,7 @@ function verifyScriptSyntax() {
     }
     const powershellSource = fs.readFileSync(powershellScript, 'utf8');
     assertVcpkgBaselinePreflightContract(powershellSource);
-    assertVcpkgBootstrapContract(powershellSource);
+    assertUserInstalledVcpkgContract(powershellSource);
     assert.match(powershellSource, /CMAKE_FIND_LIBRARY_SUFFIXES \.lib/);
     assert.match(powershellSource, /pcre2-8-static/);
     assert.match(
@@ -292,7 +276,16 @@ function verifyScriptSyntax() {
     assert.match(powershellSource, /--x-buildtrees-root=/);
     assert.match(powershellSource, /--x-packages-root=/);
     assert.match(powershellSource, /--downloads-root=/);
-    assert.match(powershellSource, /CMake 3\.15 or newer/);
+    assert.match(powershellSource, /CMake 3\.22 or newer/);
+    assert.doesNotMatch(powershellSource, /CMake 3\.15/);
+    assert.match(powershellSource, /-version '\[17\.0,18\.0\)'/);
+    assert.match(powershellSource, /Microsoft\.VisualStudio\.Component\.VC\.Tools\.x86\.x64/);
+    assert.equal(
+        Array.from(powershellSource.matchAll(/-G 'Visual Studio 17 2022' -A x64/g)).length,
+        2,
+        'PCRE2 and libyang must both use the Visual Studio 2022 x64 generator'
+    );
+    assert.match(powershellSource, /\$env:VCPKG_VISUAL_STUDIO_PATH = \$VisualStudioRoot/);
     const baselinePreflight = 'Ensure-VcpkgBaseline -Path $VcpkgRoot -Baseline $VcpkgBaseline';
     const baselinePreflightIndex = powershellSource.lastIndexOf(baselinePreflight);
     const vcpkgInstallIndex = powershellSource.indexOf('& $Vcpkg install');
@@ -911,12 +904,15 @@ function testCiRuntimeInstallOrdering() {
     );
 
     const windowsJobSource = getWorkflowJobSource('.github/workflows/test.yml', 'e2e-windows', null);
-    const managedInstallStep = windowsJobSource.match(
-        /- name: Install dependencies with managed vcpkg bootstrap[\s\S]*?run: npm ci[\s\S]*?VCPKG_ROOT:\s*['"]{2}[\s\S]*?VCPKG_INSTALLATION_ROOT:\s*['"]{2}/
+    assert.match(
+        windowsJobSource,
+        /- name: Install dependencies\s+run: npm ci/,
+        'Windows CI must use its preinstalled vcpkg while npm ci ensures the bundled runtime'
     );
-    assert(
-        managedInstallStep,
-        'Windows CI must clear preinstalled vcpkg roots so npm ci exercises the managed bootstrap path'
+    assert.doesNotMatch(
+        windowsJobSource,
+        /(?:VCPKG_ROOT|VCPKG_INSTALLATION_ROOT):\s*['"]{2}/,
+        'Windows CI must not hide the runner-provided vcpkg installation from the build'
     );
 }
 

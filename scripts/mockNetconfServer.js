@@ -205,6 +205,7 @@ const MOCK_KEY_DEFINITIONS = Object.freeze([
 const SERVER_CAPABILITIES = Object.freeze([
     'urn:ietf:params:netconf:base:1.0',
     'urn:ietf:params:netconf:base:1.1',
+    'urn:ietf:params:netconf:capability:xpath:1.0',
     'urn:ietf:params:netconf:capability:writable-running:1.0',
     'urn:ietf:params:netconf:capability:candidate:1.0',
     'urn:ietf:params:netconf:capability:startup:1.0',
@@ -483,6 +484,177 @@ function cdata(value) {
     return '<![CDATA[' + String(value).replace(/\]\]>/gu, ']]]]><![CDATA[>') + ']]>';
 }
 
+function openingElement(xml, elementName) {
+    const escapedName = String(elementName).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const expression = new RegExp('<((?:[A-Za-z_][\\w.-]*:)?' + escapedName + ')\\b([^>]*)>', 'iu');
+    const match = expression.exec(String(xml || ''));
+    if (!match) return null;
+    return {
+        qualifiedName: match[1],
+        attributes: match[2],
+        source: match[0],
+        index: match.index,
+        endIndex: match.index + match[0].length,
+        selfClosing: /\/\s*>$/u.test(match[0])
+    };
+}
+
+function namespaceDeclarations(attributes, target = new Map()) {
+    const expression = /\sxmlns(?::([A-Za-z_][\w.-]*))?\s*=\s*(?:"([^"]*)"|'([^']*)')/giu;
+    let match;
+    while ((match = expression.exec(String(attributes || ''))) !== null) {
+        target.set(match[1] || '', match[2] === undefined ? match[3] : match[2]);
+    }
+    return target;
+}
+
+function namespaceContext(xml, elementNames) {
+    const namespaces = new Map();
+    for (const name of elementNames) {
+        const element = openingElement(xml, name);
+        if (element) namespaceDeclarations(element.attributes, namespaces);
+    }
+    return namespaces;
+}
+
+function resolvedElementNamespace(xml, elementName) {
+    const element = openingElement(xml, elementName);
+    if (!element) return '';
+    const namespaces = namespaceContext(xml, ['rpc', elementName]);
+    const separator = element.qualifiedName.indexOf(':');
+    const prefix = separator < 0 ? '' : element.qualifiedName.slice(0, separator);
+    return namespaces.get(prefix) || '';
+}
+
+function extractElementXml(xml, elementName) {
+    const source = String(xml || '');
+    const opening = openingElement(source, elementName);
+    if (!opening) return null;
+    if (opening.selfClosing) return opening.source;
+    const escapedName = String(elementName).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const closingExpression = new RegExp('<\\/(?:[A-Za-z_][\\w.-]*:)?' + escapedName + '\\s*>', 'giu');
+    closingExpression.lastIndex = opening.endIndex;
+    const closing = closingExpression.exec(source);
+    return closing ? source.slice(opening.index, closing.index + closing[0].length) : null;
+}
+
+function standaloneFilterXml(requestXml) {
+    const filterXml = extractElementXml(requestXml, 'filter');
+    if (!filterXml) return null;
+    const inherited = namespaceContext(requestXml, ['rpc', 'create-subscription']);
+    const filterOpening = openingElement(filterXml, 'filter');
+    namespaceDeclarations(filterOpening?.attributes, inherited);
+    const existing = namespaceDeclarations(filterOpening?.attributes);
+    const missing = [...inherited.entries()].filter(([prefix]) => !existing.has(prefix));
+    if (missing.length === 0) return filterXml;
+    const declarations = missing
+        .map(([prefix, namespace]) => {
+            return ' xmlns' + (prefix ? ':' + prefix : '') + '="' + escapeXmlAttribute(namespace) + '"';
+        })
+        .join('');
+    return filterXml.replace(/^(<(?:(?:[A-Za-z_][\w.-]*):)?filter\b)/iu, '$1' + declarations);
+}
+
+function parseEventTime(value, fieldName) {
+    const normalized = String(value || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(normalized)) {
+        throw new MockRpcError(fieldName + ' must be an RFC 3339 date-time', 'invalid-value');
+    }
+    const timestamp = Date.parse(normalized);
+    if (!Number.isFinite(timestamp)) {
+        throw new MockRpcError(fieldName + ' must be a valid RFC 3339 date-time', 'invalid-value');
+    }
+    return { value: normalized, timestamp };
+}
+
+function resolveXPathName(value, namespaces) {
+    const match = /^(?:([A-Za-z_][\w.-]*):)?([A-Za-z_][\w.-]*|\*)$/u.exec(String(value || ''));
+    if (!match) throw new MockRpcError('unsupported XPath name: ' + value, 'invalid-value');
+    if (!match[1]) {
+        return { namespace: '', localName: match[2], anyNamespace: match[2] === '*' };
+    }
+    if (!namespaces.has(match[1])) {
+        throw new MockRpcError('XPath prefix is not declared: ' + match[1], 'invalid-value');
+    }
+    return { namespace: namespaces.get(match[1]), localName: match[2], anyNamespace: false };
+}
+
+function xpathNameMatches(actual, expected) {
+    return (
+        (expected.localName === '*' || actual.localName === expected.localName) &&
+        (expected.anyNamespace || actual.namespace === expected.namespace)
+    );
+}
+
+function compileMockXPath(select, namespaces) {
+    const normalized = String(select || '').trim();
+    if (!normalized) throw new MockRpcError('XPath filter select is required', 'missing-attribute');
+    if (normalized === '.' || normalized === '/*' || normalized === '//*')
+        return function () {
+            return true;
+        };
+    if (!normalized.startsWith('/')) {
+        throw new MockRpcError('the mock supports absolute XPath notification filters', 'invalid-value');
+    }
+
+    const descendant = normalized.startsWith('//');
+    let pathAndPredicate = normalized.slice(descendant ? 2 : 1);
+    let predicate = null;
+    const predicateMatch = /\[([^\[\]]+)\]\s*$/u.exec(pathAndPredicate);
+    if (predicateMatch) {
+        predicate = predicateMatch[1].trim();
+        pathAndPredicate = pathAndPredicate.slice(0, predicateMatch.index);
+    }
+    if (!pathAndPredicate || /[()[\]|]/u.test(pathAndPredicate)) {
+        throw new MockRpcError('unsupported XPath expression for the mock notification stream', 'invalid-value');
+    }
+    const expectedPath = pathAndPredicate.split('/').map(value => resolveXPathName(value, namespaces));
+    let predicateMatcher = function () {
+        return true;
+    };
+    if (predicate) {
+        const selfMatch = /^(?:\.|text\(\))\s*=\s*(["'])(.*?)\1$/u.exec(predicate);
+        const childMatch = /^((?:[A-Za-z_][\w.-]*:)?[A-Za-z_][\w.-]*)\s*=\s*(["'])(.*?)\2$/u.exec(predicate);
+        if (selfMatch) {
+            predicateMatcher = node => String(node.value ?? '') === selfMatch[2];
+        } else if (childMatch) {
+            const childName = resolveXPathName(childMatch[1], namespaces);
+            predicateMatcher = node =>
+                node.children.some(
+                    child => xpathNameMatches(child, childName) && String(child.value ?? '') === childMatch[3]
+                );
+        } else {
+            throw new MockRpcError('unsupported XPath predicate for the mock notification stream', 'invalid-value');
+        }
+    }
+
+    return function matchesMockEvent(message, revision) {
+        const mockEvent = {
+            namespace: MOCK_NAMESPACE,
+            localName: 'mock-event',
+            value: '',
+            children: [
+                { namespace: MOCK_NAMESPACE, localName: 'message', value: String(message), children: [] },
+                {
+                    namespace: MOCK_NAMESPACE,
+                    localName: 'datastore-revision',
+                    value: String(revision),
+                    children: []
+                }
+            ]
+        };
+        const paths = [[mockEvent], ...mockEvent.children.map(child => [mockEvent, child])];
+        for (const path of paths) {
+            if (expectedPath.length > path.length) continue;
+            const offset = descendant ? path.length - expectedPath.length : 0;
+            if (!descendant && expectedPath.length !== path.length) continue;
+            if (!expectedPath.every((expected, index) => xpathNameMatches(path[offset + index], expected))) continue;
+            if (predicateMatcher(path[path.length - 1])) return true;
+        }
+        return false;
+    };
+}
+
 class MockNetconfSession {
     constructor(server, sshClient, stream, sessionId) {
         this.server = server;
@@ -493,7 +665,9 @@ class MockNetconfSession {
         this.framer = null;
         this.baseVersion = null;
         this.established = false;
+        this.subscription = null;
         this.subscribed = false;
+        this.subscriptionStopTimer = null;
         this.closed = false;
         this.boundData = this.handleData.bind(this);
 
@@ -554,7 +728,15 @@ class MockNetconfSession {
         return {
             sessionId: this.sessionId,
             baseVersion: this.baseVersion,
-            subscribed: this.subscribed
+            subscribed: this.subscribed,
+            subscription: this.subscription
+                ? {
+                      stream: this.subscription.stream,
+                      filterType: this.subscription.filter?.type || null,
+                      startTime: this.subscription.startTime?.value || null,
+                      stopTime: this.subscription.stopTime?.value || null
+                  }
+                : null
         };
     }
 
@@ -624,10 +806,9 @@ class MockNetconfSession {
             case 'get-schema':
                 return { reply: this.handleGetSchema(node, messageId) };
             case 'create-subscription':
-                this.subscribed = true;
                 return {
-                    reply: rpcReply(messageId, '<ok/>'),
-                    afterWrite: this.sendInitialNotification.bind(this)
+                    reply: this.handleCreateSubscription(node, xml, messageId),
+                    afterWrite: this.activateSubscription.bind(this)
                 };
             case 'kill-session':
                 return { reply: this.handleKillSession(node, messageId) };
@@ -775,6 +956,93 @@ class MockNetconfSession {
         );
     }
 
+    handleCreateSubscription(node, xml, messageId) {
+        const operationNamespace = resolvedElementNamespace(xml, 'create-subscription');
+        if (operationNamespace !== NOTIFICATION_NAMESPACE) {
+            throw new MockRpcError(
+                'create-subscription must use the NETCONF notification namespace',
+                'unknown-namespace',
+                {
+                    type: 'protocol',
+                    info:
+                        '<bad-element>create-subscription</bad-element><bad-namespace>' +
+                        escapeXml(operationNamespace) +
+                        '</bad-namespace>'
+                }
+            );
+        }
+        if (this.subscription) {
+            throw new MockRpcError('this NETCONF session already has an active RFC 5277 subscription');
+        }
+
+        const streamNodes = childValues(node, 'stream');
+        if (streamNodes.length > 1) {
+            throw new MockRpcError('create-subscription accepts at most one stream', 'invalid-value');
+        }
+        const stream = streamNodes.length === 0 ? 'NETCONF' : childText(node, 'stream');
+        if (stream !== 'NETCONF') {
+            throw new MockRpcError('the mock supports only the NETCONF notification stream', 'invalid-value');
+        }
+
+        const filterNodes = childValues(node, 'filter');
+        if (filterNodes.length > 1) {
+            throw new MockRpcError('create-subscription accepts at most one filter', 'invalid-value');
+        }
+        let filter = null;
+        if (filterNodes.length === 1) {
+            const filterNode = filterNodes[0];
+            const type = String(getAttribute(filterNode, 'type') || 'subtree').toLowerCase();
+            if (type === 'subtree') {
+                const filterXml = standaloneFilterXml(xml);
+                if (!filterXml) throw new MockRpcError('unable to parse the subtree filter', 'invalid-value');
+                // Parse and exercise the existing namespace-aware matcher now so malformed
+                // filters fail with the subscription RPC rather than during /notify.
+                filterSubtreeXml('<mock-event xmlns="' + MOCK_NAMESPACE + '"/>', filterXml, {
+                    keyDefinitions: MOCK_KEY_DEFINITIONS
+                });
+                filter = { type, xml: filterXml };
+            } else if (type === 'xpath') {
+                const select = getAttribute(filterNode, 'select');
+                const namespaces = namespaceContext(xml, ['rpc', 'create-subscription', 'filter']);
+                filter = {
+                    type,
+                    select,
+                    matches: compileMockXPath(select, namespaces)
+                };
+            } else {
+                throw new MockRpcError('unsupported notification filter type: ' + type, 'invalid-value');
+            }
+        }
+
+        const startNodes = childValues(node, 'startTime');
+        const stopNodes = childValues(node, 'stopTime');
+        if (startNodes.length > 1 || stopNodes.length > 1) {
+            throw new MockRpcError('startTime and stopTime may appear at most once', 'invalid-value');
+        }
+        const startTime = startNodes.length > 0 ? parseEventTime(childText(node, 'startTime'), 'startTime') : null;
+        const stopTime = stopNodes.length > 0 ? parseEventTime(childText(node, 'stopTime'), 'stopTime') : null;
+        if (startTime && startTime.timestamp > Date.now()) {
+            throw new MockRpcError('startTime must not be later than the current time', 'invalid-value');
+        }
+        if (stopTime && !startTime) {
+            throw new MockRpcError('stopTime requires startTime', 'invalid-value');
+        }
+        if (stopTime && stopTime.timestamp <= startTime.timestamp) {
+            throw new MockRpcError('stopTime must be later than startTime', 'invalid-value');
+        }
+
+        this.subscription = { stream, filter, startTime, stopTime };
+        this.subscribed = true;
+        this.server.log('subscription-created', {
+            sessionId: this.sessionId,
+            stream,
+            filterType: filter?.type || null,
+            startTime: startTime?.value || null,
+            stopTime: stopTime?.value || null
+        });
+        return rpcReply(messageId, '<ok/>');
+    }
+
     handleKillSession(node, messageId) {
         const targetId = childText(node, 'session-id');
         const target = this.server.sessions.get(String(targetId || ''));
@@ -804,17 +1072,81 @@ class MockNetconfSession {
         );
     }
 
-    sendInitialNotification() {
+    activateSubscription() {
+        if (!this.subscription || this.closed) return;
+        this.scheduleSubscriptionStop();
         setTimeout(
             function () {
-                if (!this.closed && this.subscribed) this.server.notify('subscription-ready');
+                if (!this.closed && this.subscription) this.server.notify('subscription-ready');
             }.bind(this),
             25
         );
     }
 
+    scheduleSubscriptionStop() {
+        if (this.subscriptionStopTimer) clearTimeout(this.subscriptionStopTimer);
+        this.subscriptionStopTimer = null;
+        const stopTimestamp = this.subscription?.stopTime?.timestamp;
+        if (!Number.isFinite(stopTimestamp)) return;
+        const remaining = stopTimestamp - Date.now();
+        if (remaining <= 0) {
+            setImmediate(this.completeSubscription.bind(this));
+            return;
+        }
+        this.subscriptionStopTimer = setTimeout(
+            this.scheduleSubscriptionStop.bind(this),
+            Math.min(remaining, 2_147_483_647)
+        );
+    }
+
+    completeSubscription() {
+        if (!this.subscription || this.closed) return;
+        const xml =
+            '<notification xmlns="' +
+            NOTIFICATION_NAMESPACE +
+            '"><eventTime>' +
+            new Date().toISOString() +
+            '</eventTime><notificationComplete/></notification>';
+        this.send(xml);
+        this.clearSubscription('stop-time');
+    }
+
+    clearSubscription(reason = 'cleared') {
+        if (this.subscriptionStopTimer) clearTimeout(this.subscriptionStopTimer);
+        this.subscriptionStopTimer = null;
+        if (this.subscription) {
+            this.server.log('subscription-ended', { sessionId: this.sessionId, reason });
+        }
+        this.subscription = null;
+        this.subscribed = false;
+    }
+
+    subscriptionMatches(message, payloadXml) {
+        const filter = this.subscription?.filter;
+        if (!filter) return true;
+        if (filter.type === 'xpath') return filter.matches(message, this.server.state.revision);
+        try {
+            return Boolean(filterSubtreeXml(payloadXml, filter.xml, { keyDefinitions: MOCK_KEY_DEFINITIONS }).trim());
+        } catch (error) {
+            this.server.log('notification-filter-error', {
+                sessionId: this.sessionId,
+                message: error.message
+            });
+            return false;
+        }
+    }
+
     sendNotification(message) {
-        if (!this.established || !this.subscribed || this.closed) return;
+        if (!this.established || !this.subscription || this.closed) return false;
+        const payload =
+            '<mock-event xmlns="' +
+            MOCK_NAMESPACE +
+            '"><message>' +
+            escapeXml(message) +
+            '</message><datastore-revision>' +
+            this.server.state.revision +
+            '</datastore-revision></mock-event>';
+        if (!this.subscriptionMatches(message, payload)) return false;
         const xml =
             '<notification xmlns="' +
             NOTIFICATION_NAMESPACE +
@@ -822,12 +1154,11 @@ class MockNetconfSession {
             new Date().toISOString() +
             '</eventTime><mock-event xmlns="' +
             MOCK_NAMESPACE +
-            '"><message>' +
-            escapeXml(message) +
-            '</message><datastore-revision>' +
-            this.server.state.revision +
-            '</datastore-revision></mock-event></notification>';
+            '">' +
+            extractElementContent(payload, 'mock-event') +
+            '</mock-event></notification>';
         this.send(xml);
+        return true;
     }
 
     send(xml, callback) {
@@ -838,6 +1169,7 @@ class MockNetconfSession {
     close() {
         if (this.closed) return;
         this.closed = true;
+        this.clearSubscription('session-close');
         this.stream.removeListener('data', this.boundData);
         for (const datastore of Object.keys(this.server.state.locks)) {
             if (this.server.state.locks[datastore] === this.sessionId) {

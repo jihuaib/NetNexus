@@ -141,8 +141,17 @@ class YangApp {
                   contextHash: result.contextHash,
                   compiledAt: result.compiledAt,
                   success: result.success,
+                  schemaAvailable: result.schemaAvailable === true,
+                  partialSchema: result.partialSchema === true,
                   summary: result.summary || {},
                   moduleHashes: result.moduleHashes || result.modules?.map(module => module.hash).filter(Boolean) || [],
+                  schemaModuleHashes: Array.isArray(result.schemaModuleHashes) ? [...result.schemaModuleHashes] : [],
+                  excludedModuleHashes: Array.isArray(result.excludedModuleHashes)
+                      ? [...result.excludedModuleHashes]
+                      : [],
+                  fileResults: Array.isArray(result.fileResults)
+                      ? result.fileResults.map(fileResult => ({ ...fileResult }))
+                      : undefined,
                   restoreOptions: result.restoreOptions || {},
                   workspaceContentHash: workspace?.contentHash || null
               }
@@ -337,17 +346,33 @@ class YangApp {
     }
 
     compiledHashes(workspaceId) {
-        const result = this.compileResult.get(workspaceId);
-        if (result) return new Set(result.success ? result.moduleHashes || [] : []);
-        const stored = this.lastCompile.get(workspaceId);
-        return new Set(stored?.success ? stored.moduleHashes || [] : []);
+        return new Set(
+            this.compilationFileResults(workspaceId)
+                .filter(fileResult => fileResult.status === 'compiled')
+                .map(fileResult => fileResult.hash)
+        );
     }
 
     failedCompileHashes(workspaceId) {
+        return new Set(
+            this.compilationFileResults(workspaceId)
+                .filter(fileResult => fileResult.status === 'failed')
+                .map(fileResult => fileResult.hash)
+        );
+    }
+
+    compilationFileResults(workspaceId) {
         const result = this.compileResult.get(workspaceId);
-        if (result) return new Set(result.success ? [] : result.moduleHashes || []);
         const stored = this.lastCompile.get(workspaceId);
-        return new Set(stored?.success === false ? stored.moduleHashes || [] : []);
+        const compilation = result || stored;
+        if (!compilation) return [];
+        if (Array.isArray(compilation.fileResults)) {
+            return compilation.fileResults.filter(
+                fileResult => fileResult?.hash && ['compiled', 'failed'].includes(fileResult.status)
+            );
+        }
+        const fallbackStatus = compilation.success === true ? 'compiled' : 'failed';
+        return (compilation.moduleHashes || []).map(hash => ({ hash, status: fallbackStatus }));
     }
 
     async listRawModules(event, query = {}) {
@@ -540,7 +565,11 @@ class YangApp {
                         });
                         const compileResult = {
                             ...result,
-                            moduleHashes: result.modules?.map(module => module.hash).filter(Boolean) || [],
+                            moduleHashes:
+                                result.moduleHashes ||
+                                result.fileResults?.map(fileResult => fileResult.hash).filter(Boolean) ||
+                                result.modules?.map(module => module.hash).filter(Boolean) ||
+                                [],
                             restoreOptions: {
                                 features: Array.isArray(options.features) ? options.features : [],
                                 deviations: Array.isArray(options.deviations) ? options.deviations : [],
@@ -640,16 +669,31 @@ class YangApp {
             if (restored.compileId !== expected) {
                 throw new Error('YANG工作区内容或编译选项已经变化，请重新编译');
             }
+            const restoredHasAuthoritativeSchema =
+                restored.schemaAvailable === true &&
+                restored.schemaTree?.authoritative === true &&
+                restored.schemaTree?.source === 'libyang-effective';
+            const storedExpectsSchema =
+                stored.success === true ||
+                stored.schemaAvailable === true ||
+                Number(stored.summary?.schemaNodes || 0) > 0;
             if (
-                stored.success === true &&
-                (restored.success !== true ||
-                    restored.schemaTree?.authoritative !== true ||
-                    restored.schemaTree?.source !== 'libyang-effective')
+                (stored.success === true && restored.success !== true) ||
+                (storedExpectsSchema && !restoredHasAuthoritativeSchema)
             ) {
                 const diagnostic = restored.diagnostics?.find(
                     item => item.severity === 'error' && item.authoritative !== false
                 );
                 throw new Error(diagnostic?.message || '无法恢复已保存的libyang权威Schema缓存');
+            }
+            if (
+                stored.schemaAvailable === true &&
+                Array.isArray(stored.schemaModuleHashes) &&
+                stored.schemaModuleHashes.length > 0 &&
+                JSON.stringify([...stored.schemaModuleHashes].sort()) !==
+                    JSON.stringify([...(restored.schemaModuleHashes || [])].sort())
+            ) {
+                throw new Error('恢复后的部分Schema模块集合与已保存的编译上下文不一致');
             }
 
             const latestWorkspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE, {
@@ -665,7 +709,12 @@ class YangApp {
 
             const compileResult = {
                 ...restored,
-                moduleHashes: restored.modules?.map(module => module.hash).filter(Boolean) || stored.moduleHashes || [],
+                moduleHashes:
+                    restored.moduleHashes ||
+                    restored.fileResults?.map(fileResult => fileResult.hash).filter(Boolean) ||
+                    restored.modules?.map(module => module.hash).filter(Boolean) ||
+                    stored.moduleHashes ||
+                    [],
                 restoreOptions
             };
             this.compileResult.set(context.workspaceId, compileResult);
@@ -688,11 +737,20 @@ class YangApp {
             : null;
         const workspaceResult = this.compileResult.get(context.workspaceId);
         const result = workspaceResult?.compileId === current?.compileId ? workspaceResult : null;
-        const compiled = new Set(current?.success ? current.moduleHashes || [] : []);
-        const failed = new Set(current?.success === false ? current.moduleHashes || [] : []);
+        const fileResults = this.compilationFileResults(context.workspaceId);
+        const compiled = new Set(
+            fileResults.filter(fileResult => fileResult.status === 'compiled').map(fileResult => fileResult.hash)
+        );
+        const failed = new Set(
+            fileResults.filter(fileResult => fileResult.status === 'failed').map(fileResult => fileResult.hash)
+        );
         const rawModules = await this.listRawModules(event, { workspaceId: context.workspaceId });
         const modules = rawModules.map(module => this.normalizeModule(module, compiled, failed));
         const compiler = await this.send(event, WORKER_REQ_TYPES.GET_COMPILER_STATUS);
+        const schemaAvailable = Boolean(
+            result?.schemaTree?.authoritative === true || current?.schemaAvailable === true
+        );
+        const partialSchema = Boolean(result?.partialSchema === true || current?.partialSchema === true);
         return {
             profileId: context.profileId,
             workspaceId: workspace?.id || context.workspaceId,
@@ -703,15 +761,22 @@ class YangApp {
             compileId: current?.compileId || '',
             compiledAt: current?.compiledAt || null,
             success: current?.success ?? null,
+            schemaAvailable,
+            partialSchema,
+            schemaModuleHashes: result?.schemaModuleHashes || current?.schemaModuleHashes || [],
+            excludedModuleHashes: result?.excludedModuleHashes || current?.excludedModuleHashes || [],
             compiler,
             modules,
+            fileResults,
             diagnostics: result?.diagnostics || [],
             summary: {
                 moduleCount: modules.length,
                 nodeCount: result?.schemaTree?.nodeCount || current?.summary?.schemaNodes || 0,
                 cacheHit: Boolean(current?.cacheHit),
                 errors: current?.summary?.errors || 0,
-                warnings: current?.summary?.warnings || 0
+                warnings: current?.summary?.warnings || 0,
+                compiledFiles: fileResults.filter(fileResult => fileResult.status === 'compiled').length,
+                failedFiles: fileResults.filter(fileResult => fileResult.status === 'failed').length
             },
             schemaTree: result?.schemaTree || null
         };
@@ -728,7 +793,17 @@ class YangApp {
             const storedIsCurrent = this.reconcileCompilationFreshness(context.workspaceId, workspace);
             const result = this.compileResult.get(context.workspaceId);
             let restoreError = '';
-            if (storedIsCurrent && stored?.success === true && result?.compileId !== stored.compileId) {
+            const needsStoredResult =
+                storedIsCurrent &&
+                result?.compileId !== stored?.compileId &&
+                (stored?.success === true ||
+                    stored?.schemaAvailable === true ||
+                    Number(stored?.summary?.schemaNodes || 0) > 0 ||
+                    (stored?.success === false &&
+                        Number(stored?.summary?.compiledFiles || 0) > 0 &&
+                        Number(stored?.summary?.failedFiles || 0) > 0) ||
+                    !Array.isArray(stored?.fileResults));
+            if (needsStoredResult) {
                 try {
                     await this.restoreStoredCompilation(event, context, workspace, stored.compileId);
                 } catch (error) {

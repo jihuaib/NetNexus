@@ -109,135 +109,161 @@
                 </div>
             </div>
 
-            <nn-table
-                :columns="columns"
-                :data-source="filteredModules"
-                :loading="loading"
-                :pagination="false"
-                :scroll="{ x: 990, y: 'calc(100vh - 510px)' }"
-                row-key="_key"
-                size="small"
-                class="module-table"
+            <div
+                ref="moduleResultsRef"
+                class="module-results-layout"
+                :class="{ 'module-results-resizing': compileLogResizing }"
+                :style="moduleResultsStyle"
             >
-                <template #bodyCell="{ column, record }">
-                    <template v-if="column.key === 'selection'">
-                        <nn-checkbox
-                            :checked="selectedKeys.includes(record._key)"
-                            :disabled="record.status === 'downloading' || record.status === 'compiling'"
-                            @change="event => toggleModule(record, event.target.checked)"
-                        />
-                    </template>
-                    <template v-else-if="column.key === 'name'">
-                        <div class="module-name-cell">
-                            <span class="module-name">{{ record.name }}</span>
-                            <nn-tag v-if="record.submodule" color="default">submodule</nn-tag>
-                            <nn-tag v-else-if="record.importOnly" color="default">import-only</nn-tag>
-                        </div>
-                    </template>
-                    <template v-else-if="column.key === 'revision'">
-                        <span class="mono-text">{{ record.revision || '-' }}</span>
-                    </template>
-                    <template v-else-if="column.key === 'namespace'">
-                        <nn-tooltip :title="record.namespace || '-'">
-                            <span class="ellipsis-text">{{ record.namespace || '-' }}</span>
-                        </nn-tooltip>
-                    </template>
-                    <template v-else-if="column.key === 'features'">
-                        <nn-tooltip :title="record.features.join(', ') || '无'">
-                            <span>{{ record.features.length }}</span>
-                        </nn-tooltip>
-                    </template>
-                    <template v-else-if="column.key === 'status'">
-                        <nn-tooltip :title="record.message || record.error || ''">
-                            <nn-tag :color="getStatusMeta(record.status).color">
-                                <LoadingOutlined v-if="['downloading', 'compiling'].includes(record.status)" spin />
-                                {{ getStatusMeta(record.status).text }}
-                            </nn-tag>
-                        </nn-tooltip>
-                    </template>
-                    <template v-else-if="column.key === 'compileStatus'">
-                        <nn-tooltip :title="record.compileMessage || record.diagnostic || ''">
-                            <nn-tag :color="getCompileMeta(record.compileStatus).color">
-                                {{ getCompileMeta(record.compileStatus).text }}
-                            </nn-tag>
-                        </nn-tooltip>
-                    </template>
-                    <template v-else-if="column.key === 'action'">
-                        <nn-button size="small" :disabled="!record.isLocal" @click="openSource(record)">
-                            源码
-                        </nn-button>
-                    </template>
-                </template>
-            </nn-table>
-
-            <section class="compile-log-panel" data-testid="yang-compile-log-panel" aria-label="编译日志">
-                <div class="compile-log-header">
-                    <div class="compile-log-context">
-                        <span class="compile-log-title">编译日志</span>
-                        <nn-tag :color="compileContextColor">{{ compileContextLabel }}</nn-tag>
-                        <span v-if="compileContext.compiledAt" class="compile-log-time">
-                            {{ formatCompileTime(compileContext.compiledAt) }}
-                        </span>
-                        <span
-                            v-if="compileContext.compileId"
-                            class="compile-log-id"
-                            :title="compileContext.compileId"
-                        >
-                            {{ compileContext.compileId }}
-                        </span>
-                    </div>
-                    <div class="compile-log-actions">
-                        <nn-segmented
-                            v-if="compileContext.compileId"
-                            v-model:value="diagnosticFilter"
-                            :options="diagnosticFilterOptions"
-                        />
-                        <span v-if="compileContext.compileId" class="compile-log-summary">
-                            错误 {{ diagnosticErrorCount }} · 警告 {{ diagnosticWarningCount }}
-                        </span>
-                        <nn-button size="small" :loading="diagnosticLoading" @click="loadDiagnostics">
-                            <template #icon><ReloadOutlined /></template>
-                            刷新
-                        </nn-button>
-                    </div>
-                </div>
-
-                <div class="compile-log-list">
-                    <nn-spin :spinning="diagnosticLoading">
-                        <nn-empty
-                            v-if="!compileContext.compileId"
-                            description="执行“编译所选”后在这里查看编译日志"
-                        />
-                        <template v-else>
-                            <div
-                                v-for="(diagnostic, index) in filteredDiagnostics"
-                                :key="diagnostic.id || `${diagnostic.file || ''}:${diagnostic.line || 0}:${index}`"
-                                class="compile-log-row"
-                            >
-                                <nn-tag :color="diagnosticColor(diagnostic.severity)">
-                                    {{ diagnosticLabel(diagnostic.severity) }}
-                                </nn-tag>
-                                <span class="compile-log-content">
-                                    <span class="compile-log-message">
-                                        {{ diagnostic.message || diagnostic.msg || '未知日志' }}
-                                    </span>
-                                    <span v-if="!diagnostic.fileStatus" class="compile-log-location">
-                                        {{ formatDiagnosticLocation(diagnostic) }}
-                                    </span>
-                                </span>
-                                <nn-button
-                                    v-if="moduleForDiagnostic(diagnostic)"
-                                    size="small"
-                                    @click="openDiagnosticSource(diagnostic)"
-                                >
-                                    查看源码
-                                </nn-button>
-                            </div>
-                            <nn-empty v-if="filteredDiagnostics.length === 0" description="当前筛选下没有编译日志" />
+                <nn-table
+                    :columns="columns"
+                    :data-source="filteredModules"
+                    :loading="loading"
+                    :pagination="false"
+                    :scroll="{ x: 990, y: '100%' }"
+                    row-key="_key"
+                    size="small"
+                    class="module-table"
+                >
+                    <template #bodyCell="{ column, record }">
+                        <template v-if="column.key === 'selection'">
+                            <nn-checkbox
+                                :checked="selectedKeys.includes(record._key)"
+                                :disabled="record.status === 'downloading' || record.status === 'compiling'"
+                                @change="event => toggleModule(record, event.target.checked)"
+                            />
                         </template>
-                    </nn-spin>
+                        <template v-else-if="column.key === 'name'">
+                            <div class="module-name-cell">
+                                <span class="module-name">{{ record.name }}</span>
+                                <nn-tag v-if="record.submodule" color="default">submodule</nn-tag>
+                                <nn-tag v-else-if="record.importOnly" color="default">import-only</nn-tag>
+                            </div>
+                        </template>
+                        <template v-else-if="column.key === 'revision'">
+                            <span class="mono-text">{{ record.revision || '-' }}</span>
+                        </template>
+                        <template v-else-if="column.key === 'namespace'">
+                            <nn-tooltip :title="record.namespace || '-'">
+                                <span class="ellipsis-text">{{ record.namespace || '-' }}</span>
+                            </nn-tooltip>
+                        </template>
+                        <template v-else-if="column.key === 'features'">
+                            <nn-tooltip :title="record.features.join(', ') || '无'">
+                                <span>{{ record.features.length }}</span>
+                            </nn-tooltip>
+                        </template>
+                        <template v-else-if="column.key === 'status'">
+                            <nn-tooltip :title="record.message || record.error || ''">
+                                <nn-tag :color="getStatusMeta(record.status).color">
+                                    <LoadingOutlined
+                                        v-if="['downloading', 'compiling'].includes(record.status)"
+                                        spin
+                                    />
+                                    {{ getStatusMeta(record.status).text }}
+                                </nn-tag>
+                            </nn-tooltip>
+                        </template>
+                        <template v-else-if="column.key === 'compileStatus'">
+                            <nn-tooltip :title="record.compileMessage || record.diagnostic || ''">
+                                <nn-tag :color="getCompileMeta(record.compileStatus).color">
+                                    {{ getCompileMeta(record.compileStatus).text }}
+                                </nn-tag>
+                            </nn-tooltip>
+                        </template>
+                        <template v-else-if="column.key === 'action'">
+                            <nn-button size="small" :disabled="!record.isLocal" @click="openSource(record)">
+                                源码
+                            </nn-button>
+                        </template>
+                    </template>
+                </nn-table>
+
+                <div
+                    class="compile-log-resizer"
+                    role="separator"
+                    aria-label="调整模型列表和编译日志高度"
+                    aria-orientation="horizontal"
+                    :aria-valuemin="compileLogMinHeight"
+                    :aria-valuemax="compileLogMaxHeight"
+                    :aria-valuenow="compileLogHeight"
+                    tabindex="0"
+                    title="拖动调整模型列表和编译日志高度；双击恢复默认高度"
+                    @pointerdown="startCompileLogResize"
+                    @keydown="handleCompileLogResizeKeydown"
+                    @dblclick="resetCompileLogResize"
+                >
+                    <span class="pane-resizer-grip" aria-hidden="true" />
                 </div>
-            </section>
+
+                <section class="compile-log-panel" data-testid="yang-compile-log-panel" aria-label="编译日志">
+                    <div class="compile-log-header">
+                        <div class="compile-log-context">
+                            <span class="compile-log-title">编译日志</span>
+                            <nn-tag :color="compileContextColor">{{ compileContextLabel }}</nn-tag>
+                            <span v-if="compileContext.compiledAt" class="compile-log-time">
+                                {{ formatCompileTime(compileContext.compiledAt) }}
+                            </span>
+                            <span
+                                v-if="compileContext.compileId"
+                                class="compile-log-id"
+                                :title="compileContext.compileId"
+                            >
+                                {{ compileContext.compileId }}
+                            </span>
+                        </div>
+                        <div class="compile-log-actions">
+                            <nn-segmented
+                                v-if="compileContext.compileId"
+                                v-model:value="diagnosticFilter"
+                                :options="diagnosticFilterOptions"
+                            />
+                            <span v-if="compileContext.compileId" class="compile-log-summary">
+                                错误 {{ diagnosticErrorCount }} · 警告 {{ diagnosticWarningCount }}
+                            </span>
+                            <nn-button size="small" :loading="diagnosticLoading" @click="loadDiagnostics">
+                                <template #icon><ReloadOutlined /></template>
+                                刷新
+                            </nn-button>
+                        </div>
+                    </div>
+
+                    <div class="compile-log-list">
+                        <nn-spin :spinning="diagnosticLoading">
+                            <nn-empty
+                                v-if="!compileContext.compileId"
+                                description="执行“编译所选”后在这里查看编译日志"
+                            />
+                            <template v-else>
+                                <div
+                                    v-for="(diagnostic, index) in filteredDiagnostics"
+                                    :key="diagnostic.id || `${diagnostic.file || ''}:${diagnostic.line || 0}:${index}`"
+                                    class="compile-log-row"
+                                >
+                                    <nn-tag :color="diagnosticColor(diagnostic.severity)">
+                                        {{ diagnosticLabel(diagnostic.severity) }}
+                                    </nn-tag>
+                                    <span class="compile-log-content">
+                                        <span class="compile-log-message">
+                                            {{ diagnostic.message || diagnostic.msg || '未知日志' }}
+                                        </span>
+                                        <span
+                                            v-if="!diagnostic.fileStatus && formatDiagnosticLocation(diagnostic)"
+                                            class="compile-log-location"
+                                        >
+                                            {{ formatDiagnosticLocation(diagnostic) }}
+                                        </span>
+                                    </span>
+                                </div>
+                                <nn-empty
+                                    v-if="filteredDiagnostics.length === 0"
+                                    description="当前筛选下没有编译日志"
+                                />
+                            </template>
+                        </nn-spin>
+                    </div>
+                </section>
+            </div>
         </nn-card>
 
         <nn-modal
@@ -407,6 +433,7 @@
         SearchOutlined
     } from '../../ui/icons';
     import YangProfileField from './YangProfileField.vue';
+    import { usePaneResize } from './usePaneResize';
     import { useYangCompilerStatus } from './yangCompilerStatus';
     import { useYangProfileContext } from './useYangProfileContext';
     import {
@@ -472,6 +499,25 @@
     const diagnostics = ref([]);
     const diagnosticFilter = ref('all');
     const compileContext = ref({ compileId: '', success: null, compiledAt: null, summary: {}, modules: [] });
+    const moduleResultsRef = ref(null);
+    const {
+        paneSize: compileLogHeight,
+        minSize: compileLogMinHeight,
+        maxSize: compileLogMaxHeight,
+        resizing: compileLogResizing,
+        startResize: startCompileLogResize,
+        handleResizeKeydown: handleCompileLogResizeKeydown,
+        resetResize: resetCompileLogResize,
+        stopResize: stopCompileLogResize
+    } = usePaneResize({
+        containerRef: moduleResultsRef,
+        orientation: 'horizontal',
+        reverse: true,
+        defaultRatio: 0.32,
+        minFirst: 140,
+        minSecond: 220,
+        dividerSize: 8
+    });
     let diagnosticRequestRevision = 0;
     let compileContextRequestRevision = 0;
     let sourceRequestRevision = 0;
@@ -680,16 +726,26 @@
                 };
             })
     );
+    const compileContextPartial = computed(
+        () =>
+            Number(compileContext.value.summary?.compiledFiles || 0) > 0 &&
+            Number(compileContext.value.summary?.failedFiles || 0) > 0
+    );
     const compileContextColor = computed(() => {
         if (compiling.value) return 'processing';
         if (!compileContext.value.compileId) return 'default';
+        if (compileContextPartial.value) return 'warning';
         return compileContext.value.success === true ? 'success' : 'error';
     });
     const compileContextLabel = computed(() => {
         if (compiling.value) return '编译中';
         if (!compileContext.value.compileId) return '尚未编译';
+        if (compileContextPartial.value) return '部分编译成功';
         return compileContext.value.success === true ? '编译成功' : '编译失败';
     });
+    const moduleResultsStyle = computed(() =>
+        compileLogHeight.value > 0 ? { '--compile-log-height': `${compileLogHeight.value}px` } : undefined
+    );
     const filteredDiagnostics = computed(() => {
         const compileLogs = [...compileFileLogs.value, ...diagnostics.value];
         if (diagnosticFilter.value === 'all') return compileLogs;
@@ -1124,57 +1180,6 @@
         }
     };
 
-    const moduleForDiagnostic = diagnostic => {
-        const localModules = modules.value.filter(module => module.isLocal);
-        const moduleId = diagnostic?.moduleId;
-        if (moduleId) {
-            const idMatch = localModules.find(module =>
-                [module.id, module.moduleId, module.hash].filter(Boolean).includes(moduleId)
-            );
-            if (idMatch) return idMatch;
-        }
-
-        const sourceValues = [diagnostic?.source, diagnostic?.file, diagnostic?.filePath, diagnostic?.fileName]
-            .filter(Boolean)
-            .map(String);
-        const exactPathMatch = localModules.find(module =>
-            [module.filePath, module.path, module.localPath].filter(Boolean).some(value => sourceValues.includes(value))
-        );
-        if (exactPathMatch) return exactPathMatch;
-
-        const sourceFileNames = new Set(sourceValues.map(fileBaseName));
-        const fileMatches = localModules.filter(module => {
-            const canonicalName = `${module.name}${module.revision ? `@${module.revision}` : ''}.yang`;
-            const hashSuffixName = module.hash
-                ? `${module.name}${module.revision ? `@${module.revision}` : ''}-${String(module.hash).slice(0, 12)}.yang`
-                : '';
-            return [
-                module.fileName,
-                fileBaseName(module.filePath),
-                fileBaseName(module.path),
-                fileBaseName(module.localPath),
-                canonicalName,
-                hashSuffixName
-            ]
-                .filter(Boolean)
-                .some(value => sourceFileNames.has(value));
-        });
-        if (fileMatches.length === 1) return fileMatches[0];
-
-        const namedMatches = localModules.filter(module => {
-            const diagnosticModule = diagnostic?.module || diagnostic?.moduleName;
-            const diagnosticRevision = diagnostic?.revision || diagnostic?.revisionDate;
-            return diagnosticModule === module.name && (!diagnosticRevision || diagnosticRevision === module.revision);
-        });
-        return namedMatches.length === 1 ? namedMatches[0] : null;
-    };
-
-    const openDiagnosticSource = diagnostic => {
-        const module = moduleForDiagnostic(diagnostic);
-        if (!module) return;
-        openSource(module);
-    };
-
     const diagnosticColor = severity => {
         if (severity === 'success') return 'success';
         if (['error', 'fatal'].includes(severity)) return 'error';
@@ -1190,7 +1195,8 @@
     };
 
     const formatDiagnosticLocation = diagnostic => {
-        const location = diagnostic?.fileName || diagnostic?.file || diagnostic?.module || '-';
+        const location = diagnostic?.fileName || diagnostic?.file || diagnostic?.module || '';
+        if (!location) return '';
         if (!diagnostic?.line) return location;
         return `${location}:${diagnostic.line}${diagnostic.column ? `:${diagnostic.column}` : ''}`;
     };
@@ -1316,6 +1322,7 @@
     });
 
     onDeactivated(() => {
+        stopCompileLogResize();
         diagnosticRequestRevision += 1;
         compileContextRequestRevision += 1;
         sourceRequestRevision += 1;
@@ -1441,9 +1448,43 @@
         width: 100%;
     }
 
-    .module-table {
+    .module-results-layout {
+        display: grid;
         min-height: 0;
         flex: 1;
+        grid-template-rows: minmax(220px, 1fr) 8px var(--compile-log-height, 190px);
+        overflow: hidden;
+    }
+
+    .module-table,
+    .module-table :deep(.nn-spin-nested-loading),
+    .module-table :deep(.nn-spin-container) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .module-table {
+        overflow: hidden;
+    }
+
+    .module-table :deep(.nn-spin-container),
+    .module-table :deep(.nn-table),
+    .module-table :deep(.nn-table-container) {
+        display: flex;
+        min-height: 0;
+        flex-direction: column;
+    }
+
+    .module-table :deep(.nn-table),
+    .module-table :deep(.nn-table-container),
+    .module-table :deep(.nn-table-content) {
+        min-height: 0;
+        flex: 1 1 0;
+    }
+
+    .module-table :deep(.nn-table-content) {
+        max-height: none !important;
+        overflow: auto;
     }
 
     .module-name-cell {
@@ -1535,14 +1576,39 @@
         text-align: left;
     }
 
+    .compile-log-resizer {
+        display: flex;
+        min-height: 8px;
+        align-items: center;
+        justify-content: center;
+        cursor: row-resize;
+        outline: none;
+        touch-action: none;
+        user-select: none;
+    }
+
+    .compile-log-resizer .pane-resizer-grip {
+        width: 34px;
+        height: 2px;
+        border-radius: 999px;
+        background: var(--nn-color-border-light);
+        transition:
+            height 0.15s ease,
+            background-color 0.15s ease;
+    }
+
+    .compile-log-resizer:hover .pane-resizer-grip,
+    .compile-log-resizer:focus-visible .pane-resizer-grip,
+    .module-results-resizing .compile-log-resizer .pane-resizer-grip {
+        height: 3px;
+        background: var(--nn-color-primary);
+    }
+
     .compile-log-panel {
         display: flex;
-        height: clamp(160px, 23vh, 210px);
         min-width: 0;
         min-height: 0;
-        flex: 0 0 clamp(160px, 23vh, 210px);
         flex-direction: column;
-        margin-top: 8px;
         overflow: hidden;
         border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
@@ -1614,9 +1680,11 @@
         width: 100%;
         align-items: flex-start;
         gap: 8px;
-        padding: 6px 8px;
+        padding: 5px 8px;
         border-bottom: 1px solid var(--nn-color-border-light);
         color: var(--nn-color-text);
+        font-size: 12px;
+        line-height: 18px;
     }
 
     .compile-log-row:last-child {
@@ -1636,10 +1704,16 @@
     }
 
     .compile-log-location {
-        margin-top: 2px;
+        margin-top: 1px;
         color: var(--nn-color-text-muted);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 10px;
+        line-height: 15px;
+    }
+
+    .compile-log-context :deep(.nn-tag),
+    .compile-log-row :deep(.nn-tag) {
+        margin-inline-end: 0;
     }
 
     .source-preview {

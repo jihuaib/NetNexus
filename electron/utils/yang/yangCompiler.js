@@ -12,7 +12,7 @@ const {
     resolveRpcValidationTarget
 } = require('./yangRpcInstanceValidation');
 
-const COMPILE_CACHE_SCHEMA_VERSION = 3;
+const COMPILE_CACHE_SCHEMA_VERSION = 4;
 const LIBYANG_SCHEMA_OUTPUT_VERSION = 1;
 const DEFAULT_COMPILER_EXECUTABLE = 'yanglint';
 const DEFAULT_EXTERNAL_TIMEOUT = 60_000;
@@ -20,6 +20,7 @@ const DEFAULT_EXTERNAL_MAX_BUFFER = 64 * 1024 * 1024;
 const DEFAULT_VERSION_TIMEOUT = 5_000;
 const MAX_RPC_VALIDATION_BYTES = 8 * 1024 * 1024;
 const ROOT_NODE_ID = 'yang-schema-root';
+const FILE_VALIDATION_CONCURRENCY = 3;
 
 function diagnosticKey(diagnostic) {
     return [
@@ -680,6 +681,38 @@ class YangCompiler {
             .map(([moduleName, enabled]) => `${moduleName}:${[...enabled].sort().join(',')}`);
     }
 
+    moduleDependencyClosure(modules, rootHashes) {
+        if (!rootHashes) return modules;
+        const requested = rootHashes instanceof Set ? rootHashes : new Set(rootHashes);
+        const selectTarget = (kind, name, revisionDate) =>
+            modules
+                .filter(module => module.metadata?.kind === kind && module.metadata?.name === name)
+                .filter(module => !revisionDate || module.metadata?.revision === revisionDate)
+                .sort((left, right) =>
+                    (right.metadata?.revision || '').localeCompare(left.metadata?.revision || '')
+                )[0] || null;
+        const closure = new Map();
+        const queue = modules.filter(module => requested.has(module.hash));
+        while (queue.length) {
+            const module = queue.shift();
+            if (!module?.hash || closure.has(module.hash)) continue;
+            closure.set(module.hash, module);
+            for (const dependency of module.metadata?.imports || []) {
+                const target = selectTarget('module', dependency.name, dependency.revisionDate);
+                if (target && !closure.has(target.hash)) queue.push(target);
+            }
+            for (const dependency of module.metadata?.includes || []) {
+                const target = selectTarget('submodule', dependency.name, dependency.revisionDate);
+                if (target && !closure.has(target.hash)) queue.push(target);
+            }
+            if (module.metadata?.kind === 'submodule' && module.metadata.belongsTo) {
+                const target = selectTarget('module', module.metadata.belongsTo);
+                if (target && !closure.has(target.hash)) queue.push(target);
+            }
+        }
+        return [...closure.values()];
+    }
+
     resolveDeviationInputs(deviations, inputs) {
         const requested = Array.isArray(deviations) ? deviations : deviations ? [deviations] : [];
         const resolved = [];
@@ -845,14 +878,28 @@ class YangCompiler {
         return diagnostics;
     }
 
-    async runLibyangSchemaCompiler(runtime, compilerStatus, contextHash, modules, options) {
+    async runLibyangSchemaCompiler(runtime, compilerStatus, contextHash, modules, options, rootHashes = null) {
         const materialized = this.materializeExternalInputs(contextHash, modules);
         const bundledSearchPath =
             compilerStatus.moduleSearchPath ||
             (compilerStatus.runtimeRoot
                 ? path.join(compilerStatus.runtimeRoot, 'share', 'yang', 'modules', 'libyang')
                 : null);
-        const featureArguments = this.normalizeFeatureArguments(options.features, modules);
+        const activeModules = this.moduleDependencyClosure(modules, rootHashes);
+        const activeModuleNames = new Set(activeModules.map(module => module.metadata?.name).filter(Boolean));
+        for (const module of activeModules) {
+            for (const dependency of module.metadata?.imports || []) activeModuleNames.add(dependency.name);
+        }
+        const configuredFeatureArguments = this.normalizeFeatureArguments(options.features, modules);
+        let featureArguments = rootHashes
+            ? configuredFeatureArguments.filter(argument =>
+                  activeModuleNames.has(argument.slice(0, argument.indexOf(':')))
+              )
+            : configuredFeatureArguments;
+        if (rootHashes && configuredFeatureArguments.length && featureArguments.length === 0) {
+            const rootModule = modules.find(module => rootHashes.has(module.hash));
+            if (rootModule?.metadata?.name) featureArguments = [`${rootModule.metadata.name}:`];
+        }
         const deviationResolution = this.resolveDeviationInputs(options.deviations, materialized.inputs);
         const deviationPaths = deviationResolution.paths;
         if (deviationResolution.diagnostics.length) {
@@ -885,7 +932,9 @@ class YangCompiler {
             materialized.inputDirectory
         ]).map(searchPath => path.resolve(searchPath));
         const schemaPaths = materialized.inputs
-            .filter(input => input.module.metadata?.kind === 'module')
+            .filter(
+                input => input.module.metadata?.kind === 'module' && (!rootHashes || rootHashes.has(input.module.hash))
+            )
             .map(input => input.path);
         const schemaPathKeys = new Set(schemaPaths.map(normalizedPathKey));
         const externalDeviationPaths = deviationPaths.filter(
@@ -990,15 +1039,145 @@ class YangCompiler {
         };
     }
 
-    publicModules(modules) {
+    async buildFileResults({
+        entries,
+        modules,
+        dependencies,
+        succeeded,
+        runtime,
+        compilerStatus,
+        compileId,
+        options,
+        progress
+    }) {
+        const createResult = (entry, module, status, diagnosticCount = 0) => ({
+            hash: entry.hash,
+            moduleId: module?.id || entry.hash,
+            name: module?.metadata?.name || entry.metadata?.name || entry.fileName,
+            revision: module?.metadata?.revision || entry.metadata?.revision || null,
+            kind: module?.metadata?.kind || entry.metadata?.kind || 'invalid',
+            fileName: entry.fileName,
+            status,
+            compileStatus: status,
+            compiled: status === 'compiled',
+            diagnosticCount
+        });
+        const modulesByHash = new Map(modules.map(module => [module.hash, module]));
+        if (succeeded) {
+            return entries.map(entry => createResult(entry, modulesByHash.get(entry.hash), 'compiled'));
+        }
+
+        const topLevelModules = modules.filter(module => module.metadata?.kind === 'module');
+        const statusByModuleId = new Map();
+        const diagnosticsByModuleId = new Map();
+        let nextIndex = 0;
+        let completed = 0;
+        const validateNext = async () => {
+            while (nextIndex < topLevelModules.length) {
+                const index = nextIndex++;
+                const module = topLevelModules[index];
+                let validation;
+                if (compilerStatus.available) {
+                    validation = await this.runLibyangSchemaCompiler(
+                        runtime,
+                        compilerStatus,
+                        compileId,
+                        modules,
+                        options,
+                        new Set([module.hash])
+                    );
+                } else {
+                    validation = { succeeded: false, diagnostics: [] };
+                }
+                statusByModuleId.set(module.id, validation.succeeded ? 'compiled' : 'failed');
+                diagnosticsByModuleId.set(module.id, validation.diagnostics?.length || 0);
+                completed += 1;
+                progress('file-validation', {
+                    completed,
+                    total: topLevelModules.length,
+                    percent: 88 + Math.round((completed / Math.max(1, topLevelModules.length)) * 7),
+                    currentFile: module.fileName,
+                    message: `${module.fileName} ${validation.succeeded ? 'compiled successfully' : 'failed compilation'}`
+                });
+            }
+        };
+        await Promise.all(
+            Array.from({ length: Math.min(FILE_VALIDATION_CONCURRENCY, Math.max(1, topLevelModules.length)) }, () =>
+                validateNext()
+            )
+        );
+
+        const incomingEdges = new Map();
+        for (const edge of dependencies.graph.edges || []) {
+            if (!edge.to) continue;
+            if (!incomingEdges.has(edge.to)) incomingEdges.set(edge.to, []);
+            incomingEdges.get(edge.to).push(edge.from);
+        }
+        const pendingSubmodules = modules.filter(module => module.metadata?.kind === 'submodule');
+        for (let pass = 0; pass <= pendingSubmodules.length; pass += 1) {
+            let changed = false;
+            for (const module of pendingSubmodules) {
+                if (statusByModuleId.has(module.id)) continue;
+                const parentStatuses = (incomingEdges.get(module.id) || [])
+                    .map(parentId => statusByModuleId.get(parentId))
+                    .filter(Boolean);
+                if (parentStatuses.includes('compiled')) {
+                    statusByModuleId.set(module.id, 'compiled');
+                    changed = true;
+                } else if (parentStatuses.length) {
+                    statusByModuleId.set(module.id, 'failed');
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+        for (const module of pendingSubmodules) {
+            if (!statusByModuleId.has(module.id)) statusByModuleId.set(module.id, 'failed');
+        }
+
+        return entries.map(entry => {
+            const module = modulesByHash.get(entry.hash);
+            const status = module ? statusByModuleId.get(module.id) || 'failed' : 'failed';
+            const diagnosticCount = module
+                ? diagnosticsByModuleId.get(module.id) || module.diagnostics?.length || 0
+                : 1;
+            return createResult(entry, module, status, diagnosticCount);
+        });
+    }
+
+    publicModules(modules, fileResults = []) {
+        const resultsByHash = new Map(fileResults.map(result => [result.hash, result]));
         return modules.map(module => ({
             id: module.id,
             hash: module.hash,
             fileName: module.fileName,
             size: module.size,
             metadata: module.metadata,
-            diagnosticCount: module.diagnostics.length
+            diagnosticCount: module.diagnostics.length,
+            compileStatus: resultsByHash.get(module.hash)?.status || 'pending',
+            compiled: resultsByHash.get(module.hash)?.status === 'compiled'
         }));
+    }
+
+    publicCompilerExecution(execution = {}, extra = {}) {
+        return {
+            invoked: Boolean(execution.invoked),
+            succeeded: Boolean(execution.succeeded),
+            path: execution.path || null,
+            args: execution.args || [],
+            generatedArgs: execution.generatedArgs || [],
+            searchPaths: execution.searchPaths || [],
+            features: execution.features || [],
+            deviations: execution.deviations || [],
+            timeout: execution.timeout || null,
+            maxBuffer: execution.maxBuffer || null,
+            exitCode: execution.exitCode ?? null,
+            signal: execution.signal || null,
+            durationMs: execution.durationMs || null,
+            timedOut: Boolean(execution.timedOut),
+            outputTruncated: Boolean(execution.outputTruncated),
+            ...extra
+        };
     }
 
     async compile(options = {}) {
@@ -1163,16 +1342,77 @@ class YangCompiler {
             diagnostic => diagnostic.severity === 'error' && diagnostic.authoritative === false
         ).length;
         const warningCount = finalDiagnostics.filter(diagnostic => diagnostic.severity === 'warning').length;
-        const tree = externalCompiler.tree;
-        const succeeded = externalCompiler.succeeded === true && Boolean(tree) && authoritativeErrorCount === 0;
+        const aggregateTree = externalCompiler.tree;
+        const succeeded =
+            externalCompiler.succeeded === true && Boolean(aggregateTree) && authoritativeErrorCount === 0;
+        const fileResults = await this.buildFileResults({
+            entries: uniqueEntries,
+            modules,
+            dependencies,
+            succeeded,
+            runtime,
+            compilerStatus,
+            compileId,
+            options,
+            progress
+        });
+        const compiledFileCount = fileResults.filter(result => result.status === 'compiled').length;
+        const failedFileCount = fileResults.filter(result => result.status === 'failed').length;
+        const compiledTopLevelHashes = fileResults
+            .filter(result => result.kind === 'module' && result.status === 'compiled')
+            .map(result => result.hash);
+        const failedTopLevelHashes = fileResults
+            .filter(result => result.kind === 'module' && result.status === 'failed')
+            .map(result => result.hash);
+        let tree = aggregateTree;
+        let schemaCompiler = externalCompiler;
+        let partialSchema = !succeeded && Boolean(aggregateTree);
+        if (
+            !succeeded &&
+            compilerStatus.available &&
+            compiledTopLevelHashes.length > 0 &&
+            failedTopLevelHashes.length > 0
+        ) {
+            progress('partial-schema', {
+                completed: uniqueEntries.length,
+                percent: 96,
+                message: 'Building an authoritative Schema from successfully compiled modules'
+            });
+            const partialCompiler = await this.runLibyangSchemaCompiler(
+                runtime,
+                compilerStatus,
+                compileId,
+                modules,
+                options,
+                new Set(compiledTopLevelHashes)
+            );
+            if (partialCompiler.succeeded && partialCompiler.tree) {
+                tree = partialCompiler.tree;
+                schemaCompiler = partialCompiler;
+                partialSchema = true;
+            }
+        }
+        const schemaAvailable = Boolean(tree);
+        const schemaModuleHashes = schemaAvailable
+            ? partialSchema
+                ? compiledTopLevelHashes
+                : fileResults.filter(result => result.kind === 'module').map(result => result.hash)
+            : [];
+        const excludedModuleHashes = failedTopLevelHashes;
         const publicResult = {
             success: succeeded,
+            schemaAvailable,
+            partialSchema,
             cacheHit: false,
             compileId,
             contentHash: hashes.contentHash,
             contextHash: hashes.contextHash,
             compiledAt: new Date().toISOString(),
-            modules: this.publicModules(modules),
+            modules: this.publicModules(modules, fileResults),
+            moduleHashes: fileResults.map(result => result.hash),
+            schemaModuleHashes,
+            excludedModuleHashes,
+            fileResults,
             diagnostics: finalDiagnostics,
             dependencyGraph: dependencies.graph,
             schemaTree: tree
@@ -1180,33 +1420,27 @@ class YangCompiler {
                       authoritative: true,
                       source: 'libyang-effective',
                       scope: tree.scope,
+                      partial: partialSchema,
+                      moduleHashes: schemaModuleHashes,
+                      excludedModuleHashes,
                       rootId: tree.rootId,
                       roots: tree.roots.map(id => nodesPublicView(tree.nodes[id])),
                       nodeCount: tree.nodeCount
                   }
                 : null,
-            externalCompiler: {
-                invoked: externalCompiler.invoked,
-                succeeded: externalCompiler.succeeded,
-                path: externalCompiler.path,
-                args: externalCompiler.args,
-                generatedArgs: externalCompiler.generatedArgs || [],
-                searchPaths: externalCompiler.searchPaths || [],
-                features: externalCompiler.features || [],
-                deviations: externalCompiler.deviations || [],
-                timeout: externalCompiler.timeout || null,
-                maxBuffer: externalCompiler.maxBuffer || null,
-                exitCode: externalCompiler.exitCode,
-                signal: externalCompiler.signal || null,
-                durationMs: externalCompiler.durationMs || null,
-                timedOut: externalCompiler.timedOut,
-                outputTruncated: externalCompiler.outputTruncated
-            },
+            externalCompiler: this.publicCompilerExecution(externalCompiler),
+            schemaCompiler: this.publicCompilerExecution(schemaCompiler, {
+                partial: partialSchema,
+                moduleHashes: schemaModuleHashes,
+                excludedModuleHashes
+            }),
             compiler: compilerStatus,
             validation: {
                 authoritative: true,
                 engine: 'libyang',
-                succeeded
+                succeeded,
+                schemaAvailable,
+                partial: partialSchema
             },
             summary: {
                 requested: uniqueEntries.length,
@@ -1218,7 +1452,12 @@ class YangCompiler {
                 errors: errorCount,
                 authoritativeErrors: authoritativeErrorCount,
                 indexErrors: indexErrorCount,
-                warnings: warningCount
+                warnings: warningCount,
+                compiledFiles: compiledFileCount,
+                failedFiles: failedFileCount,
+                schemaModules: schemaModuleHashes.length,
+                excludedModules: excludedModuleHashes.length,
+                partialSchema
             }
         };
 
@@ -1226,8 +1465,8 @@ class YangCompiler {
             progress('caching', { completed: uniqueEntries.length, message: 'Saving YANG compilation cache' });
             this.saveCache(compileId, publicResult, tree);
         }
-        /* Failed compilations expose no Schema contract. Keep only an empty query
-         * index so diagnostics remain addressable by compileId. */
+        /* A mixed-result batch may expose a separately compiled authoritative Schema
+         * for its valid roots. Batches without a safe combined subset keep an empty index. */
         this.installResult(publicResult, tree || emptySchemaIndex());
         progress('completed', {
             completed: uniqueEntries.length,
@@ -1301,8 +1540,8 @@ class YangCompiler {
             throw error;
         }
         const compilation = this.resolveCompilation(options.compileId);
-        if (compilation.result?.success !== true) {
-            const error = new Error('The active YANG compilation did not complete successfully');
+        if (compilation.result?.schemaAvailable !== true) {
+            const error = new Error('The active YANG compilation has no authoritative Schema available');
             error.code = 'YANG_COMPILATION_UNAVAILABLE';
             throw error;
         }
@@ -1320,8 +1559,8 @@ class YangCompiler {
             };
         }
 
-        const externalCompiler = compilation.result.externalCompiler || {};
-        const schemaPaths = this.dataValidationSchemaPaths(externalCompiler);
+        const schemaCompiler = compilation.result.schemaCompiler || compilation.result.externalCompiler || {};
+        const schemaPaths = this.dataValidationSchemaPaths(schemaCompiler);
         const missingSchema = schemaPaths.find(schemaPath => !fs.existsSync(schemaPath));
         if (!schemaPaths.length || missingSchema) {
             const error = new Error(
@@ -1341,10 +1580,10 @@ class YangCompiler {
             throw error;
         }
 
-        const searchPaths = normalizeStringList(externalCompiler.searchPaths).map(searchPath =>
+        const searchPaths = normalizeStringList(schemaCompiler.searchPaths).map(searchPath =>
             path.resolve(searchPath)
         );
-        const features = normalizeStringList(externalCompiler.features);
+        const features = normalizeStringList(schemaCompiler.features);
         const args = [];
         for (const searchPath of searchPaths) args.push('-p', searchPath);
         for (const feature of features) args.push('-F', feature);

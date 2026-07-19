@@ -128,6 +128,8 @@ async function run() {
             force: true
         });
         assert.equal(compiled.success, true, JSON.stringify(compiled.diagnostics, null, 2));
+        assert.equal(compiled.schemaAvailable, true);
+        assert.equal(compiled.partialSchema, false);
         assert.equal(compiled.cacheHit, false);
         assert.equal(compiled.compiler.engine, 'libyang');
         assert.equal(compiled.compiler.version, release.libyangVersion);
@@ -139,6 +141,9 @@ async function run() {
         assert.equal(compiled.summary.modules, 3);
         assert.equal(compiled.summary.submodules, 1);
         assert.equal(compiled.summary.missingDependencies, 0);
+        assert.equal(compiled.summary.compiledFiles, compiled.fileResults.length);
+        assert.equal(compiled.summary.failedFiles, 0);
+        assert(compiled.fileResults.every(fileResult => fileResult.status === 'compiled'));
         assert(!compiled.diagnostics.some(diagnostic => diagnostic.code === 'DEPENDENCY_CYCLE'));
         assert(progress.some(event => event.phase === 'runtime'));
         assert(progress.some(event => event.phase === 'external'));
@@ -432,6 +437,8 @@ async function run() {
         );
         const dependencyFailure = await registry.compile({ workspaceId: 'dependency-errors', force: true });
         assert.equal(dependencyFailure.success, false);
+        assert.equal(dependencyFailure.schemaAvailable, true);
+        assert.equal(dependencyFailure.partialSchema, true);
         assert(
             dependencyFailure.diagnostics.some(
                 item => item.code === 'MISSING_DEPENDENCY' && item.authoritative === false
@@ -442,8 +449,48 @@ async function run() {
                 item => item.code === 'DUPLICATE_REVISION' && item.authoritative === false
             )
         );
+        assert.deepEqual(
+            registry
+                .getSchemaRoots({ workspaceId: 'dependency-errors', compileId: dependencyFailure.compileId })
+                .map(root => root.name),
+            ['duplicate-demo']
+        );
+
+        const sharedNamespaceOne = `module shared-namespace-one {
+  yang-version 1.1;
+  namespace "urn:shared:namespace";
+  prefix sno;
+  revision 2026-07-19;
+  leaf one { type string; }
+}`;
+        const sharedNamespaceTwo = `module shared-namespace-two {
+  yang-version 1.1;
+  namespace "urn:shared:namespace";
+  prefix snt;
+  revision 2026-07-19;
+  leaf two { type string; }
+}`;
+        registry.importContents(
+            [
+                { content: sharedNamespaceOne, expectedName: 'shared-namespace-one' },
+                { content: sharedNamespaceTwo, expectedName: 'shared-namespace-two' }
+            ],
+            { workspaceId: 'partial-schema-conflict' }
+        );
+        const partialSchemaConflict = await registry.compile({
+            workspaceId: 'partial-schema-conflict',
+            force: true
+        });
+        assert.equal(partialSchemaConflict.success, false);
+        assert(partialSchemaConflict.fileResults.every(fileResult => fileResult.status === 'compiled'));
+        assert.equal(partialSchemaConflict.schemaAvailable, false);
+        assert.equal(partialSchemaConflict.partialSchema, false);
+        assert.equal(partialSchemaConflict.schemaTree, null);
         assert.equal(
-            registry.getSchemaRoots({ workspaceId: 'dependency-errors', compileId: dependencyFailure.compileId }).length,
+            registry.getSchemaRoots({
+                workspaceId: 'partial-schema-conflict',
+                compileId: partialSchemaConflict.compileId
+            }).length,
             0
         );
 
@@ -459,6 +506,11 @@ async function run() {
         });
         const semanticFailure = await registry.compile({ workspaceId: 'semantic-error', force: true });
         assert.equal(semanticFailure.success, false);
+        assert.equal(semanticFailure.schemaAvailable, false);
+        assert.equal(semanticFailure.schemaTree, null);
+        assert.deepEqual(semanticFailure.fileResults.map(fileResult => fileResult.status), ['failed']);
+        assert.equal(semanticFailure.summary.compiledFiles, 0);
+        assert.equal(semanticFailure.summary.failedFiles, 1);
         assert(
             semanticFailure.diagnostics.some(
                 item =>
@@ -482,6 +534,8 @@ async function run() {
         });
         const unavailable = await unavailableRegistry.compile({ env: { PATH: '' }, force: true });
         assert.equal(unavailable.success, false);
+        assert.equal(unavailable.schemaAvailable, false);
+        assert.equal(unavailable.schemaTree, null);
         assert.equal(unavailable.compiler.available, false);
         assert.equal(unavailable.externalCompiler.invoked, false);
         assert(unavailable.diagnostics.some(item => item.code === 'LIBYANG_RUNTIME_UNAVAILABLE'));

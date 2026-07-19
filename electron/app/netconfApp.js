@@ -27,6 +27,9 @@ class NetconfApp {
         this.deletingProfiles = new Set();
         this.profileGenerations = new Map();
         this.profileDeletionPromises = new Map();
+        this.sessionSnapshots = new Map();
+        this.subscriptionSnapshots = new Map();
+        this.profileRpcTimeouts = new Map();
         this.closing = false;
         this.closePromise = null;
         this.activeProfileId = null;
@@ -52,6 +55,7 @@ class NetconfApp {
         handle('netconf:connect', this.handleConnect);
         handle('netconf:disconnect', this.handleDisconnect);
         handle('netconf:getSessionState', this.handleGetSessionState);
+        handle('netconf:getSubscriptions', this.handleGetSubscriptions);
         handle('netconf:discoverModules', this.handleDiscoverModules);
         handle('netconf:downloadModules', this.handleDownloadModules);
         handle('netconf:executeOperation', this.handleExecuteOperation);
@@ -102,6 +106,129 @@ class NetconfApp {
 
     findStoredProfile(profileId) {
         return this.getStoredProfiles().find(profile => profile.id === profileId) || null;
+    }
+
+    operationWorkerTimeoutMs(profileId, requestedTimeout) {
+        const requested = Number(requestedTimeout);
+        const cached = Number(this.profileRpcTimeouts.get(String(profileId || '')));
+        const stored = Number(this.findStoredProfile(String(profileId || ''))?.rpcTimeout);
+        const rpcTimeout =
+            (Number.isFinite(requested) && requested > 0 && requested) ||
+            (Number.isFinite(cached) && cached > 0 && cached) ||
+            (Number.isFinite(stored) && stored > 0 && stored) ||
+            NETCONF_LIMITS.DEFAULT_RPC_TIMEOUT;
+        // The worker-side NETCONF timer must always win. Otherwise the IPC call can
+        // report a timeout while the in-flight create-subscription later succeeds.
+        return Math.max(120000, rpcTimeout + 5000);
+    }
+
+    rememberSessionSnapshot(state) {
+        if (!state?.profileId) return;
+        const profileId = String(state.profileId);
+        this.sessionSnapshots.set(profileId, {
+            ...(this.sessionSnapshots.get(profileId) || {}),
+            ...state,
+            profileId
+        });
+    }
+
+    rememberSubscriptionSnapshot(subscription) {
+        const subscriptionId = String(subscription?.subscriptionId || subscription?.id || '');
+        if (!subscriptionId) return;
+        this.subscriptionSnapshots.set(subscriptionId, {
+            ...(this.subscriptionSnapshots.get(subscriptionId) || {}),
+            ...subscription,
+            id: subscription.id || subscriptionId,
+            subscriptionId
+        });
+    }
+
+    subscriptionSnapshot(profileId = null) {
+        const normalizedProfileId = profileId ? String(profileId) : null;
+        const subscriptions = [...this.subscriptionSnapshots.values()]
+            .filter(subscription => !normalizedProfileId || subscription.profileId === normalizedProfileId)
+            .sort((left, right) => String(left.createdAt || '').localeCompare(String(right.createdAt || '')));
+        return {
+            profileId: normalizedProfileId,
+            subscriptions,
+            activeCount: subscriptions.filter(subscription => String(subscription.state).toUpperCase() === 'ACTIVE')
+                .length,
+            total: subscriptions.length,
+            queriedAt: new Date().toISOString()
+        };
+    }
+
+    relayWorkerEvent(eventName, data) {
+        const state = data && typeof data === 'object' ? data : null;
+        if (eventName === YANG_EVT_TYPES.SESSION_EVENT) {
+            this.rememberSessionSnapshot(state);
+            if (state?.profileId && !this.closing && !this.deletingProfiles.has(state.profileId)) {
+                if (['connected', 'connecting', 'reconnecting'].includes(state.status)) {
+                    this.activeProfileId = state.profileId;
+                    this.yangApp?.setActiveProfileId?.(state.profileId);
+                } else if (
+                    this.activeProfileId === state.profileId &&
+                    ['disconnected', 'error'].includes(state.status)
+                ) {
+                    this.activeProfileId = null;
+                    this.yangApp?.setActiveProfileId?.(null);
+                }
+            }
+        } else if (eventName === YANG_EVT_TYPES.SUBSCRIPTION_EVENT) {
+            this.rememberSubscriptionSnapshot(state);
+        }
+        if (!this.eventDispatcher.canEmit()) return;
+        if (eventName === YANG_EVT_TYPES.NOTIFICATION) {
+            this.eventDispatcher.emit(YANG_EVT_TYPES.NOTIFICATION, successResponse(data));
+        } else if (eventName === YANG_EVT_TYPES.SUBSCRIPTION_EVENT) {
+            this.eventDispatcher.emit(YANG_EVT_TYPES.SUBSCRIPTION_EVENT, successResponse(data));
+        } else {
+            this.eventDispatcher.emit(YANG_EVT_TYPES.SESSION_EVENT, successResponse(data));
+        }
+    }
+
+    handleWorkerExit(client, code) {
+        if (this.workerClient !== client) return;
+        if (!this.closing && !client.closed) {
+            const terminatedAt = new Date().toISOString();
+            const workerError = {
+                name: 'Error',
+                code: 'NETCONF_WORKER_EXIT',
+                message: `NETCONF Worker 异常退出（退出码 ${code}）`
+            };
+            for (const subscription of [...this.subscriptionSnapshots.values()]) {
+                if (String(subscription.state).toUpperCase() !== 'ACTIVE') continue;
+                this.relayWorkerEvent(YANG_EVT_TYPES.SUBSCRIPTION_EVENT, {
+                    ...subscription,
+                    state: 'TERMINATED',
+                    terminatedAt,
+                    terminationReason: 'worker-exit',
+                    error: workerError
+                });
+            }
+            for (const state of [...this.sessionSnapshots.values()]) {
+                if (String(state.status || state.state).toLowerCase() === 'disconnected') continue;
+                this.relayWorkerEvent(YANG_EVT_TYPES.SESSION_EVENT, {
+                    ...state,
+                    status: 'disconnected',
+                    state: 'disconnected',
+                    connected: false,
+                    capabilities: [],
+                    serverCapabilities: [],
+                    supportsNotification: false,
+                    supportsInterleave: false,
+                    capabilitySupport: { notification: false, interleave: false },
+                    subscription: null,
+                    activeSubscription: null,
+                    subscriptionActive: false,
+                    disconnectedAt: terminatedAt,
+                    lastError: workerError
+                });
+            }
+        }
+        this.workerClient = null;
+        this.activeProfileId = null;
+        this.yangApp?.setActiveProfileId?.(null);
     }
 
     normalizeProfile(input = {}, existing = null) {
@@ -191,41 +318,13 @@ class NetconfApp {
         }
         this.setWebContents(event);
         if (this.workerClient) return this.workerClient;
-        this.workerClient = new RequestWorkerClient(resolveWorkerPath('yang/netconfWorker.js'), {
+        const client = new RequestWorkerClient(resolveWorkerPath('yang/netconfWorker.js'), {
             defaultTimeoutMs: NETCONF_LIMITS.DEFAULT_RPC_TIMEOUT + 5000
         });
-        this.workerClient.on('event', (eventName, data) => {
-            const state = data && typeof data === 'object' ? data : null;
-            if (
-                eventName !== YANG_EVT_TYPES.NOTIFICATION &&
-                state?.profileId &&
-                !this.closing &&
-                !this.deletingProfiles.has(state.profileId)
-            ) {
-                if (['connected', 'connecting', 'reconnecting'].includes(state.status)) {
-                    this.activeProfileId = state.profileId;
-                    this.yangApp?.setActiveProfileId?.(state.profileId);
-                } else if (
-                    this.activeProfileId === state.profileId &&
-                    ['disconnected', 'error'].includes(state.status)
-                ) {
-                    this.activeProfileId = null;
-                    this.yangApp?.setActiveProfileId?.(null);
-                }
-            }
-            if (!this.eventDispatcher.canEmit()) return;
-            if (eventName === YANG_EVT_TYPES.NOTIFICATION) {
-                this.eventDispatcher.emit(YANG_EVT_TYPES.NOTIFICATION, successResponse(data));
-            } else {
-                this.eventDispatcher.emit(YANG_EVT_TYPES.SESSION_EVENT, successResponse(data));
-            }
-        });
-        this.workerClient.on('exit', () => {
-            this.workerClient = null;
-            this.activeProfileId = null;
-            this.yangApp?.setActiveProfileId?.(null);
-        });
-        return this.workerClient;
+        this.workerClient = client;
+        client.on('event', (eventName, data) => this.relayWorkerEvent(eventName, data));
+        client.on('exit', code => this.handleWorkerExit(client, code));
+        return client;
     }
 
     async handleListProfiles() {
@@ -280,6 +379,8 @@ class NetconfApp {
             this.saveStoredProfiles(this.getStoredProfiles().filter(profile => profile.id !== id));
             this.transientSecrets.delete(id);
             this.inventories.delete(id);
+            this.profileRpcTimeouts.delete(id);
+            this.sessionSnapshots.delete(id);
             return successResponse(null, '连接配置已删除');
         })();
         this.profileDeletionPromises.set(id, deletionPromise);
@@ -336,6 +437,7 @@ class NetconfApp {
             const requestedGeneration = requestedId ? this.assertProfileAvailable(requestedId) : undefined;
             const runtime = this.resolveRuntimeProfile(profileOrId);
             const generation = this.assertProfileAvailable(runtime.id, requestedGeneration);
+            this.profileRpcTimeouts.set(runtime.id, runtime.rpcTimeout);
             const client = this.ensureWorker(event);
             const result = await client.sendRequest(NETCONF_REQ_TYPES.CONNECT, runtime, {
                 timeoutMs: runtime.connectTimeout + runtime.rpcTimeout + 5000
@@ -398,18 +500,52 @@ class NetconfApp {
         try {
             const id = String(profileId || this.activeProfileId || '');
             if (!id || !this.workerClient) {
+                const cached = id ? this.sessionSnapshots.get(id) : null;
                 return successResponse({
+                    ...(cached || {}),
                     profileId: id || null,
                     status: 'disconnected',
+                    state: 'disconnected',
+                    connected: false,
+                    capabilities: [],
+                    serverCapabilities: [],
+                    supportsNotification: false,
+                    supportsInterleave: false,
+                    capabilitySupport: { notification: false, interleave: false },
+                    subscription: null,
+                    activeSubscription: null,
+                    subscriptionActive: false,
                     activeProfileId: this.activeProfileId
                 });
             }
             const result = await this.ensureWorker(event).sendRequest(NETCONF_REQ_TYPES.GET_SESSION_STATE, {
                 profileId: id
             });
+            this.rememberSessionSnapshot(result.data);
             return successResponse({ ...result.data, activeProfileId: this.activeProfileId });
         } catch (error) {
             return errorResponse('获取NETCONF状态失败: ' + error.message);
+        }
+    }
+
+    async handleGetSubscriptions(event, request = null) {
+        try {
+            const profileId = request && typeof request === 'object' ? request.profileId : request;
+            if (!this.workerClient) {
+                return successResponse(this.subscriptionSnapshot(profileId));
+            }
+            const result = await this.ensureWorker(event).sendRequest(NETCONF_REQ_TYPES.GET_SUBSCRIPTIONS, {
+                profileId: profileId ? String(profileId) : null
+            });
+            for (const subscription of result.data?.subscriptions || []) {
+                this.rememberSubscriptionSnapshot(subscription);
+            }
+            return successResponse(this.subscriptionSnapshot(profileId));
+        } catch (error) {
+            return errorResponse('获取 NETCONF 订阅状态失败: ' + error.message, {
+                code: error.code,
+                details: error.data
+            });
         }
     }
 
@@ -645,10 +781,11 @@ class NetconfApp {
         try {
             const profileId = this.resolveProfileId(request);
             const generation = this.assertProfileAvailable(profileId);
+            const timeoutMs = this.operationWorkerTimeoutMs(profileId, request.timeout);
             const result = await this.ensureWorker(event).sendRequest(
                 NETCONF_REQ_TYPES.EXECUTE_OPERATION,
                 { ...request, profileId },
-                { timeoutMs: Number(request.timeout) || 120000 }
+                { timeoutMs }
             );
             this.assertProfileAvailable(profileId, generation);
             return successResponse(result.data, 'NETCONF操作完成');
@@ -661,10 +798,11 @@ class NetconfApp {
         try {
             const profileId = this.resolveProfileId(request);
             const generation = this.assertProfileAvailable(profileId);
+            const timeoutMs = this.operationWorkerTimeoutMs(profileId, request.timeout);
             const result = await this.ensureWorker(event).sendRequest(
                 NETCONF_REQ_TYPES.SEND_RPC,
                 { ...request, profileId },
-                { timeoutMs: Number(request.timeout) || 120000 }
+                { timeoutMs }
             );
             this.assertProfileAvailable(profileId, generation);
             return successResponse(result.data, 'NETCONF RPC完成');

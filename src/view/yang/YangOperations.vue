@@ -356,6 +356,53 @@
                             />
                         </template>
 
+                        <template v-else-if="activeOperation === 'create-subscription'">
+                            <nn-form-item label="事件流">
+                                <nn-input
+                                    v-model:value="form.subscriptionStream"
+                                    placeholder="NETCONF（留空同样表示默认流）"
+                                />
+                            </nn-form-item>
+                            <nn-form-item label="过滤类型">
+                                <nn-select v-model:value="form.filterType" :options="filterTypeOptions" />
+                            </nn-form-item>
+                            <nn-form-item v-if="form.filterType === 'xpath'" label="XPath" required>
+                                <nn-input v-model:value="form.xpath" placeholder="例如：/notification/example:event" />
+                            </nn-form-item>
+                            <nn-form-item v-if="form.filterType === 'subtree'" label="Subtree" required>
+                                <XmlCodeEditor
+                                    v-model:value="form.subtree"
+                                    :rows="10"
+                                    placeholder='例如 <alarm xmlns="urn:example:alarms"/>'
+                                    class="xml-editor"
+                                />
+                            </nn-form-item>
+                            <nn-row :gutter="12">
+                                <nn-col :span="12">
+                                    <nn-form-item label="startTime">
+                                        <nn-input
+                                            v-model:value="form.subscriptionStartTime"
+                                            placeholder="RFC 3339，可留空"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                                <nn-col :span="12">
+                                    <nn-form-item label="stopTime">
+                                        <nn-input
+                                            v-model:value="form.subscriptionStopTime"
+                                            placeholder="必须与 startTime 一起使用"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                            </nn-row>
+                            <nn-alert
+                                type="info"
+                                show-icon
+                                message="RFC 5277 会话级订阅"
+                                description="订阅绑定当前 NETCONF Session；没有 :interleave 能力时，设备可能拒绝该 Session 上的其他 RPC。"
+                            />
+                        </template>
+
                         <template v-else-if="activeOperation === 'raw-rpc'">
                             <nn-form-item label="RPC XML" required>
                                 <XmlCodeEditor
@@ -836,7 +883,7 @@
     } from '../../ui/icons';
     import XmlCodeEditor from './XmlCodeEditor.vue';
     import XmlHighlight from './XmlHighlight.vue';
-    import { validateNetconfRpc } from './netconfRpcValidation';
+    import { isRfc3339DateTime, validateNetconfRpc } from './netconfRpcValidation';
     import {
         clonePlain,
         formatXmlForDisplay,
@@ -902,6 +949,7 @@
     const router = useRouter();
     const labelCol = { style: { width: '132px' } };
     const NETCONF_BASE_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:base:1.0';
+    const NETCONF_NOTIFICATION_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:notification:1.0';
     const DEFAULT_RAW_RPC = '<get>\n  <filter type="subtree">\n    <!-- subtree filter -->\n  </filter>\n</get>';
     const PARAMETER_CONTEXT_MENU_MARGIN = 8;
     const PARAMETER_DATA_NODE_KEYWORDS = new Set(['container', 'list', 'leaf', 'leaf-list', 'anydata', 'anyxml']);
@@ -1033,6 +1081,9 @@
         validateSource: 'candidate',
         confirmed: false,
         confirmTimeout: 600,
+        subscriptionStream: 'NETCONF',
+        subscriptionStartTime: '',
+        subscriptionStopTime: '',
         rawRpc: DEFAULT_RAW_RPC
     });
 
@@ -1059,7 +1110,8 @@
             'validate',
             'commit',
             'cancel-commit',
-            'discard-changes'
+            'discard-changes',
+            'create-subscription'
         ].includes(operation.key)
     );
     const advancedOperations = NETCONF_OPERATIONS.filter(operation => operation.key === 'raw-rpc');
@@ -1536,6 +1588,52 @@
                     })
                 );
             }
+        } else if (operation === 'create-subscription') {
+            children.push(
+                makeParameterNode({
+                    key: 'stream',
+                    title: 'stream',
+                    field: 'subscriptionStream',
+                    editor: 'text',
+                    parameterPath: `${operationPath}/stream`
+                })
+            );
+            const filterChildren = [];
+            if (form.filterType === 'xpath') {
+                filterChildren.push(
+                    makeParameterNode({
+                        key: 'filter/@select',
+                        title: '@select',
+                        field: 'xpath',
+                        editor: 'text',
+                        parameterPath: `${operationPath}/filter/@select`
+                    })
+                );
+            } else if (form.filterType === 'subtree') {
+                filterChildren.push(...makeXmlPayloadChildren('subtree', `${operationPath}/filter`, 'filter'));
+            }
+            children.push(
+                selectNode('filter', 'filter', 'filterType', filterTypeOptions.value, {
+                    ...(form.filterType === 'subtree' ? makeXmlContainerDescriptor('subtree', 'filter') : {}),
+                    children: filterChildren
+                })
+            );
+            children.push(
+                makeParameterNode({
+                    key: 'startTime',
+                    title: 'startTime',
+                    field: 'subscriptionStartTime',
+                    editor: 'text',
+                    parameterPath: `${operationPath}/startTime`
+                }),
+                makeParameterNode({
+                    key: 'stopTime',
+                    title: 'stopTime',
+                    field: 'subscriptionStopTime',
+                    editor: 'text',
+                    parameterPath: `${operationPath}/stopTime`
+                })
+            );
         }
 
         const operationNode = makeParameterNode({
@@ -2155,6 +2253,15 @@
     const operationDisabledReason = operation => {
         if (executing.value) return '操作执行中';
         if (!connected.value) return '请先建立 NETCONF 会话';
+        const subscriptionActive =
+            session.value.subscriptionActive === true ||
+            String(session.value.activeSubscription?.state || '').toLowerCase() === 'active';
+        if (operation === 'create-subscription' && subscriptionActive) {
+            return '当前 NETCONF Session 已存在 RFC 5277 订阅';
+        }
+        if (subscriptionActive && !hasCapability('interleave') && operation !== 'raw-rpc') {
+            return '当前订阅 Session 未声明 :interleave；只能关闭 Session 或发送允许的手工 RPC';
+        }
         if (operation === 'edit-config' && editDatastoreOptions.value.length === 0) {
             return '设备未声明 :candidate 或 :writable-running 能力';
         }
@@ -2165,6 +2272,9 @@
             return '设备未声明 :startup 能力';
         }
         if (operation === 'validate' && !hasCapability('validate')) return '设备未声明 :validate 能力';
+        if (operation === 'create-subscription' && !hasCapability('notification')) {
+            return '设备未声明 :notification 能力';
+        }
         if (['commit', 'cancel-commit', 'discard-changes'].includes(operation) && !hasCapability('candidate')) {
             return '设备未声明 :candidate 能力';
         }
@@ -2200,6 +2310,18 @@
             if (form.filterType === 'xpath' && !form.xpath.trim()) return '请输入 XPath 表达式';
             if (form.filterType === 'subtree' && !form.subtree.trim()) return '请输入 subtree 过滤内容';
         }
+        if (activeOperation.value === 'create-subscription') {
+            if (form.filterType === 'xpath' && !form.xpath.trim()) return '请输入 XPath 表达式';
+            if (form.filterType === 'subtree' && !form.subtree.trim()) return '请输入 subtree 过滤内容';
+            const startTime = form.subscriptionStartTime.trim();
+            const stopTime = form.subscriptionStopTime.trim();
+            if (stopTime && !startTime) return 'stopTime 必须与 startTime 一起使用';
+            if (startTime && !isRfc3339DateTime(startTime)) return 'startTime 必须是合法 RFC 3339 时间';
+            if (stopTime && !isRfc3339DateTime(stopTime)) return 'stopTime 必须是合法 RFC 3339 时间';
+            if (startTime && stopTime && Date.parse(stopTime) <= Date.parse(startTime)) {
+                return 'stopTime 必须晚于 startTime';
+            }
+        }
         if (activeOperation.value === 'edit-config') {
             if (!form.target) return '请选择目标 datastore';
             if (!form.config.trim()) return '请输入 config XML';
@@ -2225,6 +2347,11 @@
             .replaceAll('&', '&amp;')
             .replaceAll('"', '&quot;')
             .replaceAll('<', '&lt;');
+    const escapeXmlText = value =>
+        String(value || '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;');
     const datastoreElement = value => `<${value}/>`;
     const makeFilterXml = () => {
         if (form.filterType === 'xpath') return `<filter type="xpath" select="${escapeXmlAttribute(form.xpath)}"/>`;
@@ -2275,6 +2402,22 @@
                 return '<cancel-commit/>';
             case 'discard-changes':
                 return '<discard-changes/>';
+            case 'create-subscription': {
+                const content = [];
+                if (form.subscriptionStream.trim()) {
+                    content.push(`<stream>${escapeXmlText(form.subscriptionStream.trim())}</stream>`);
+                }
+                if (makeFilterXml()) content.push(makeFilterXml());
+                if (form.subscriptionStartTime.trim()) {
+                    content.push(`<startTime>${escapeXmlText(form.subscriptionStartTime.trim())}</startTime>`);
+                }
+                if (form.subscriptionStopTime.trim()) {
+                    content.push(`<stopTime>${escapeXmlText(form.subscriptionStopTime.trim())}</stopTime>`);
+                }
+                return `<create-subscription xmlns="${NETCONF_NOTIFICATION_NAMESPACE}">${
+                    content.length ? `\n${content.join('\n')}\n` : ''
+                }</create-subscription>`;
+            }
             case 'raw-rpc':
                 return form.rawRpc.trim();
             default:
@@ -2389,6 +2532,20 @@
             requestValidationRevision += 1;
             requestValidating.value = false;
             return applyRequestValidation(structuralValidation, { notifyResult });
+        }
+        // RFC 5277 defines create-subscription with an XML schema rather than the
+        // device's business YANG modules. Its protocol-specific checks are handled
+        // by validateNetconfRpc, so do not report a false libyang schema error here.
+        if (structuralValidation.operation === 'create-subscription') {
+            return applyRequestValidation(
+                {
+                    ...structuralValidation,
+                    engine: 'xml+rfc5277',
+                    authoritative: true,
+                    performed: true
+                },
+                { notifyResult }
+            );
         }
         if (!props.compileId) {
             return applyRequestValidation(
@@ -2518,6 +2675,13 @@
                 confirmed: form.confirmed,
                 confirmTimeout: form.confirmed ? form.confirmTimeout : undefined
             });
+        } else if (activeOperation.value === 'create-subscription') {
+            Object.assign(payload, {
+                stream: form.subscriptionStream.trim() || undefined,
+                filter,
+                startTime: form.subscriptionStartTime.trim() || undefined,
+                stopTime: form.subscriptionStopTime.trim() || undefined
+            });
         }
         return clonePlain(payload);
     };
@@ -2535,6 +2699,9 @@
         if (operation === 'discard-changes') return '将永久放弃 candidate 中尚未提交的修改。';
         if (operation === 'lock') return `将锁定 ${form.lockTarget}。`;
         if (operation === 'unlock') return `将解锁 ${form.lockTarget}。`;
+        if (operation === 'create-subscription') {
+            return `将在当前 NETCONF Session 上订阅 ${form.subscriptionStream.trim() || 'NETCONF'} 事件流。`;
+        }
         if (operation === 'raw-rpc') return '原始 RPC 可能读取或修改任意设备状态。';
         return `即将执行 ${activeOperationMeta.value.label}。`;
     });
@@ -2858,8 +3025,22 @@
         if (typeof contextParams.validateSource === 'string') form.validateSource = contextParams.validateSource;
         if (typeof contextParams.confirmed === 'boolean') form.confirmed = contextParams.confirmed;
         if (Number.isFinite(contextParams.confirmTimeout)) form.confirmTimeout = contextParams.confirmTimeout;
-        form.filterType = props.contextSubtree ? 'subtree' : 'none';
-        form.xpath = '';
+        if (typeof contextParams.subscriptionStream === 'string') {
+            form.subscriptionStream = contextParams.subscriptionStream;
+        } else if (activeOperation.value === 'create-subscription') {
+            form.subscriptionStream = 'NETCONF';
+        }
+        form.subscriptionStartTime =
+            typeof contextParams.subscriptionStartTime === 'string' ? contextParams.subscriptionStartTime : '';
+        form.subscriptionStopTime =
+            typeof contextParams.subscriptionStopTime === 'string' ? contextParams.subscriptionStopTime : '';
+        form.filterType =
+            typeof contextParams.filterType === 'string'
+                ? contextParams.filterType
+                : props.contextSubtree
+                  ? 'subtree'
+                  : 'none';
+        form.xpath = typeof contextParams.xpath === 'string' ? contextParams.xpath : '';
         form.subtree = props.contextSubtree || '';
         editConfigFallback = props.contextConfig || '';
         form.config = editConfigFallback;

@@ -31,6 +31,7 @@ async function verifyBrowserBridge() {
         'connect',
         'disconnect',
         'getSessionState',
+        'getSubscriptions',
         'selectPrivateKey',
         'discoverModules',
         'downloadModules',
@@ -159,6 +160,20 @@ async function verifyControllerFlow() {
     assert.equal(response.status, 'success');
     assert.match(response.data.rpc, /<get><\/get>/u);
     assert.match(response.data.reply, /<interfaces/u);
+
+    response = await controller.call('yang.netconf.executeOperation', {
+        operation: 'create-subscription',
+        stream: 'NETCONF',
+        filter: {
+            type: 'subtree',
+            content: `<interface-event xmlns="${INTERFACES_NAMESPACE}"/>`
+        }
+    });
+    assert.equal(response.status, 'success');
+    assert.match(response.data.rpc, /create-subscription/u);
+    response = await controller.call('yang.netconf.getSubscriptions', 'e2e-netconf-profile');
+    assert.equal(response.data.subscriptions.length, 1);
+    assert.equal(response.data.subscriptions[0].state, 'active');
 
     response = await controller.call('yang.netconf.executeOperation', {
         operation: 'get',
