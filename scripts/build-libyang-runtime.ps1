@@ -6,20 +6,9 @@ $RuntimeKey = 'win32-x64'
 $RuntimeTarget = Join-Path $ProjectRoot "resources/libyang/$RuntimeKey"
 $SchemaHelperSource = Join-Path $ProjectRoot 'scripts/netnexus-libyang-schema.c'
 $WindowsRuntimeManifestSource = Join-Path $ProjectRoot 'scripts/netnexus-libyang-windows.manifest.in'
-$VcpkgRoot = if ($env:VCPKG_ROOT) {
-    $env:VCPKG_ROOT
-} elseif ($env:VCPKG_INSTALLATION_ROOT) {
-    $env:VCPKG_INSTALLATION_ROOT
-} else {
-    'C:\vcpkg'
-}
-$Vcpkg = Join-Path $VcpkgRoot 'vcpkg.exe'
 $VcpkgManifestRoot = Join-Path $ProjectRoot 'scripts/libyang-vcpkg'
 $VcpkgManifest = Get-Content (Join-Path $VcpkgManifestRoot 'vcpkg.json') -Raw | ConvertFrom-Json
 $VcpkgBaseline = $VcpkgManifest.'builtin-baseline'
-if (-not (Test-Path $Vcpkg -PathType Leaf)) {
-    throw "vcpkg was not found at $Vcpkg. Set VCPKG_ROOT to a bootstrapped vcpkg checkout."
-}
 if (-not (Test-Path $SchemaHelperSource -PathType Leaf)) {
     throw "The required libyang Schema helper source was not found at $SchemaHelperSource."
 }
@@ -47,7 +36,8 @@ if ($PthreadsVersion -ne $Release.windowsDependencies.pthreads.version) {
     throw 'The Windows pthreads override does not match the bundled runtime release manifest.'
 }
 
-$BuildRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("netnexus-libyang-" + [guid]::NewGuid())
+$BuildRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ("nn-ly-" + [guid]::NewGuid().ToString('N').Substring(0, 12))
 $SourceDir = Join-Path $BuildRoot 'source'
 $BuildDir = Join-Path $BuildRoot 'build'
 $Pcre2SourceDir = Join-Path $BuildRoot 'pcre2-source'
@@ -55,6 +45,9 @@ $Pcre2BuildDir = Join-Path $BuildRoot 'pcre2-build'
 $Pcre2Prefix = Join-Path $BuildRoot 'pcre2-install'
 $GetoptSourceDir = Join-Path $BuildRoot 'getopt-source'
 $VcpkgInstalled = Join-Path $BuildRoot 'vcpkg-installed'
+$VcpkgBuildtrees = Join-Path $BuildRoot 'vcpkg-buildtrees'
+$VcpkgPackages = Join-Path $BuildRoot 'vcpkg-packages'
+$VcpkgDownloads = Join-Path $BuildRoot 'vcpkg-downloads'
 New-Item -ItemType Directory -Force -Path $BuildRoot | Out-Null
 
 function Assert-GitCommit {
@@ -65,6 +58,201 @@ function Assert-GitCommit {
     $Actual = (& git -C $Path rev-parse HEAD | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $Actual -ne $Expected) {
         throw "Pinned dependency commit mismatch in ${Path}: expected $Expected, got $Actual."
+    }
+}
+
+function Resolve-VcpkgLocation {
+    param([Parameter(Mandatory = $true)][string]$Baseline)
+
+    if (-not [string]::IsNullOrWhiteSpace($env:VCPKG_ROOT)) {
+        return [pscustomobject]@{
+            Path = [IO.Path]::GetFullPath($env:VCPKG_ROOT)
+            Managed = $false
+            Source = 'VCPKG_ROOT'
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:VCPKG_INSTALLATION_ROOT)) {
+        $InstallationRoot = [IO.Path]::GetFullPath($env:VCPKG_INSTALLATION_ROOT)
+        $InstallationGit = Join-Path $InstallationRoot '.git'
+        $InstallationExecutable = Join-Path $InstallationRoot 'vcpkg.exe'
+        $InstallationBootstrap = Join-Path $InstallationRoot 'bootstrap-vcpkg.bat'
+        $InstallationToolchain = Join-Path $InstallationRoot 'scripts/buildsystems/vcpkg.cmake'
+        if ((Test-Path $InstallationGit -PathType Container) -and
+            (Test-Path $InstallationToolchain -PathType Leaf) -and
+            ((Test-Path $InstallationExecutable -PathType Leaf) -or
+             (Test-Path $InstallationBootstrap -PathType Leaf))) {
+            return [pscustomobject]@{
+                Path = $InstallationRoot
+                Managed = $false
+                Source = 'VCPKG_INSTALLATION_ROOT'
+            }
+        }
+        Write-Host "Ignoring incomplete VCPKG_INSTALLATION_ROOT checkout at $InstallationRoot."
+    }
+    if ($Baseline -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "Cannot create a managed vcpkg checkout for invalid baseline $Baseline."
+    }
+
+    $LocalAppData = $env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($LocalAppData)) {
+        $LocalAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+    }
+    if ([string]::IsNullOrWhiteSpace($LocalAppData)) {
+        throw 'Unable to locate the user LocalApplicationData directory for the managed vcpkg checkout.'
+    }
+    $BaselineKey = $Baseline.Substring(0, 12).ToLowerInvariant()
+    return [pscustomobject]@{
+        Path = Join-Path $LocalAppData "NetNexus\BuildTools\vcpkg\$BaselineKey"
+        Managed = $true
+        Source = 'managed user cache'
+    }
+}
+
+function Invoke-VcpkgBootstrap {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $Bootstrap = Join-Path $Path 'bootstrap-vcpkg.bat'
+    if (-not (Test-Path $Bootstrap -PathType Leaf)) {
+        throw "The vcpkg checkout at $Path does not contain bootstrap-vcpkg.bat."
+    }
+    Write-Host "Bootstrapping vcpkg in $Path..."
+    & $Bootstrap -disableMetrics
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to bootstrap vcpkg in $Path."
+    }
+    $Executable = Join-Path $Path 'vcpkg.exe'
+    if (-not (Test-Path $Executable -PathType Leaf)) {
+        throw "vcpkg bootstrap completed without producing $Executable."
+    }
+}
+
+function Test-VcpkgCheckoutAtBaseline {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Baseline
+    )
+    try {
+        $Actual = (& git -C $Path rev-parse HEAD 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $Actual -ne $Baseline) { return $false }
+        return (Test-Path (Join-Path $Path 'bootstrap-vcpkg.bat') -PathType Leaf) -and
+            (Test-Path (Join-Path $Path 'scripts/buildsystems/vcpkg.cmake') -PathType Leaf)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Ensure-VcpkgCheckout {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Baseline,
+        [Parameter(Mandatory = $true)][bool]$Managed
+    )
+
+    $CacheMutex = $null
+    $CacheMutexHeld = $false
+    try {
+        if ($Managed) {
+            $CacheMutexName = "Local\NetNexus-libyang-vcpkg-$($Baseline.ToLowerInvariant())"
+            $CacheMutex = [System.Threading.Mutex]::new($false, $CacheMutexName)
+            try {
+                $CacheMutexHeld = $CacheMutex.WaitOne([TimeSpan]::FromMinutes(30))
+            }
+            catch [System.Threading.AbandonedMutexException] {
+                $CacheMutexHeld = $true
+            }
+            if (-not $CacheMutexHeld) {
+                throw "Timed out waiting for another process to finish the managed vcpkg cache at $Path."
+            }
+        }
+
+    $Executable = Join-Path $Path 'vcpkg.exe'
+    $GitDirectory = Join-Path $Path '.git'
+    $Toolchain = Join-Path $Path 'scripts/buildsystems/vcpkg.cmake'
+    $CheckoutAtBaseline = Test-VcpkgCheckoutAtBaseline -Path $Path -Baseline $Baseline
+    if (Test-Path $Executable -PathType Leaf) {
+        if ((-not $Managed -and (Test-Path $GitDirectory -PathType Container) -and
+             (Test-Path $Toolchain -PathType Leaf)) -or
+            ($Managed -and $CheckoutAtBaseline)) {
+            return
+        }
+        if (-not $Managed) {
+            throw "vcpkg at $Path must be a Git checkout so pinned manifest versions can be resolved."
+        }
+    }
+
+    if ((Test-Path $GitDirectory -PathType Container) -and
+        (Test-Path $Toolchain -PathType Leaf) -and
+        (Test-Path (Join-Path $Path 'bootstrap-vcpkg.bat') -PathType Leaf)) {
+        if (-not $Managed -or $CheckoutAtBaseline) {
+            Invoke-VcpkgBootstrap -Path $Path
+            return
+        }
+    }
+    if (-not $Managed) {
+        throw "Configured vcpkg checkout $Path is missing or incomplete. Bootstrap it, or unset VCPKG_ROOT and VCPKG_INSTALLATION_ROOT to use the managed user cache."
+    }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw 'Git is required to download the managed vcpkg checkout.'
+    }
+
+    $Parent = Split-Path $Path -Parent
+    New-Item -ItemType Directory -Force -Path $Parent | Out-Null
+    $Staging = Join-Path $Parent ".vcpkg-$PID-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    try {
+        Write-Host "Downloading pinned vcpkg baseline $Baseline into the user cache..."
+        & git init $Staging
+        if ($LASTEXITCODE -ne 0) { throw "Unable to initialize the managed vcpkg checkout at $Staging." }
+        & git -C $Staging config core.longpaths true
+        if ($LASTEXITCODE -ne 0) { throw "Unable to enable long path support in $Staging." }
+        & git -c core.longpaths=true -C $Staging fetch --filter=blob:none --depth 1 --no-tags `
+            https://github.com/microsoft/vcpkg.git `
+            "+${Baseline}:refs/netnexus/bootstrap/${Baseline}"
+        if ($LASTEXITCODE -ne 0) { throw "Unable to download pinned vcpkg baseline $Baseline." }
+        & git -C $Staging checkout --detach $Baseline
+        if ($LASTEXITCODE -ne 0) { throw "Unable to check out pinned vcpkg baseline $Baseline." }
+        Assert-GitCommit -Path $Staging -Expected $Baseline
+        Invoke-VcpkgBootstrap -Path $Staging
+
+        # Another npm install may have populated this cache while the staging
+        # checkout was bootstrapping. Never replace a complete pinned checkout.
+        if (Test-Path $Path) {
+            if ((Test-Path $Executable -PathType Leaf) -and
+                (Test-VcpkgCheckoutAtBaseline -Path $Path -Baseline $Baseline)) {
+                return
+            }
+            Write-Host "Replacing incomplete managed vcpkg cache at $Path..."
+            Remove-Item $Path -Recurse -Force
+        }
+        try {
+            [IO.Directory]::Move($Staging, $Path)
+        }
+        catch {
+            # Directory.Move is atomic on this volume. If another installer won
+            # the race, use its verified checkout and discard this staging copy.
+            if ((Test-Path $Executable -PathType Leaf) -and
+                (Test-VcpkgCheckoutAtBaseline -Path $Path -Baseline $Baseline)) {
+                return
+            }
+            throw
+        }
+    }
+    finally {
+        if (Test-Path $Staging) {
+            try { Remove-Item $Staging -Recurse -Force }
+            catch { Write-Warning "Unable to remove temporary vcpkg checkout ${Staging}: $($_.Exception.Message)" }
+        }
+    }
+    if (-not (Test-Path $Executable -PathType Leaf)) {
+        throw "Managed vcpkg bootstrap completed without producing $Executable."
+    }
+    }
+    finally {
+        if ($CacheMutexHeld) {
+            try { $CacheMutex.ReleaseMutex() }
+            catch { Write-Warning "Unable to release managed vcpkg cache lock: $($_.Exception.Message)" }
+        }
+        if ($null -ne $CacheMutex) { $CacheMutex.Dispose() }
     }
 }
 
@@ -82,7 +270,8 @@ function Test-VcpkgBaselineAvailable {
         foreach ($RequiredVersionFile in @(
             'versions/baseline.json',
             'versions/d-/dirent.json',
-            'versions/p-/pthreads.json'
+            'versions/p-/pthreads.json',
+            'versions/v-/vcpkg-cmake-config.json'
         )) {
             & git -C $Path cat-file -e "${Baseline}:${RequiredVersionFile}" 2>$null
             if ($LASTEXITCODE -ne 0) { return $false }
@@ -134,6 +323,45 @@ function Replace-PinnedSourceText {
         throw "Pinned dependency source changed; expected exactly one source patch location in $Path, found $OccurrenceCount."
     }
     [System.IO.File]::WriteAllText($Path, $Content.Replace($ExpectedForFile, $ReplacementForFile))
+}
+
+function Get-CMakePath {
+    $Command = Get-Command 'cmake.exe' -ErrorAction SilentlyContinue
+    if (-not $Command) { $Command = Get-Command 'cmake' -ErrorAction SilentlyContinue }
+    if ($Command) { return $Command.Source }
+
+    $Vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    if (Test-Path $Vswhere -PathType Leaf) {
+        $VisualStudioRoot = (& $Vswhere -latest -products '*' `
+            -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
+            -property installationPath | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and $VisualStudioRoot) {
+            $Candidate = Join-Path $VisualStudioRoot `
+                'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
+            if (Test-Path $Candidate -PathType Leaf) { return $Candidate }
+        }
+    }
+    throw 'CMake 3.15 or newer was not found. Install CMake or the Visual Studio C++ CMake tools component.'
+}
+
+function Assert-WindowsBuildPrerequisites {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw 'Git for Windows is required to download the pinned libyang build sources.'
+    }
+    $Cmake = Get-CMakePath
+    $CmakeVersionOutput = (& $Cmake --version | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Unable to execute CMake at $Cmake." }
+    $CmakeVersionMatch = [regex]::Match($CmakeVersionOutput, '(?im)^cmake version (\d+\.\d+\.\d+)')
+    if (-not $CmakeVersionMatch.Success) {
+        throw "Unable to determine the CMake version from: $CmakeVersionOutput"
+    }
+    $CmakeVersion = [version]$CmakeVersionMatch.Groups[1].Value
+    if ($CmakeVersion -lt [version]'3.15.0') {
+        throw "CMake 3.15 or newer is required; found $($CmakeVersionMatch.Groups[1].Value) at $Cmake."
+    }
+    $null = Get-DumpbinPath
+    $null = Get-MtPath
+    return $Cmake
 }
 
 function Get-DumpbinPath {
@@ -230,18 +458,34 @@ function Assert-WindowsSystemDependencies {
 }
 
 try {
+    $Cmake = Assert-WindowsBuildPrerequisites
+    $VcpkgLocation = Resolve-VcpkgLocation -Baseline $VcpkgBaseline
+    $VcpkgRoot = $VcpkgLocation.Path
+    $Vcpkg = Join-Path $VcpkgRoot 'vcpkg.exe'
+    Write-Host "Using vcpkg from $VcpkgRoot ($($VcpkgLocation.Source))."
+    Ensure-VcpkgCheckout -Path $VcpkgRoot -Baseline $VcpkgBaseline -Managed $VcpkgLocation.Managed
     Ensure-VcpkgBaseline -Path $VcpkgRoot -Baseline $VcpkgBaseline
+    $env:VCPKG_ROOT = $VcpkgRoot
+    $env:VCPKG_DISABLE_METRICS = '1'
+    $env:CMAKE_GENERATOR = $null
+    $env:CMAKE_GENERATOR_PLATFORM = $null
+    $env:CMAKE_GENERATOR_TOOLSET = $null
     & $Vcpkg install `
+        "--vcpkg-root=$VcpkgRoot" `
         "--x-manifest-root=$VcpkgManifestRoot" `
         "--x-install-root=$VcpkgInstalled" `
+        "--x-buildtrees-root=$VcpkgBuildtrees" `
+        "--x-packages-root=$VcpkgPackages" `
+        "--downloads-root=$VcpkgDownloads" `
         --triplet x64-windows-static `
         --disable-metrics
     if ($LASTEXITCODE -ne 0) { throw 'Unable to install pinned libyang Windows build dependencies with vcpkg.' }
 
-    & git clone --depth 1 --branch $Release.pcre2Tag https://github.com/PCRE2Project/pcre2.git $Pcre2SourceDir
+    & git -c core.longpaths=true clone --depth 1 --branch $Release.pcre2Tag `
+        https://github.com/PCRE2Project/pcre2.git $Pcre2SourceDir
     if ($LASTEXITCODE -ne 0) { throw "Unable to clone PCRE2 $($Release.pcre2Tag)." }
     Assert-GitCommit $Pcre2SourceDir ($Release.pcre2Commit)
-    & cmake -S $Pcre2SourceDir -B $Pcre2BuildDir -A x64 `
+    & $Cmake -S $Pcre2SourceDir -B $Pcre2BuildDir -A x64 `
         '-DCMAKE_BUILD_TYPE=Release' `
         '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded' `
         "-DCMAKE_INSTALL_PREFIX=$Pcre2Prefix" `
@@ -253,16 +497,17 @@ try {
         '-DPCRE2_BUILD_PCRE2GREP=OFF' `
         '-DPCRE2_BUILD_TESTS=OFF'
     if ($LASTEXITCODE -ne 0) { throw 'Unable to configure the Windows PCRE2 runtime dependency.' }
-    & cmake --build $Pcre2BuildDir --config Release --parallel
+    & $Cmake --build $Pcre2BuildDir --config Release --parallel
     if ($LASTEXITCODE -ne 0) { throw 'Unable to build the Windows PCRE2 runtime dependency.' }
-    & cmake --install $Pcre2BuildDir --config Release
+    & $Cmake --install $Pcre2BuildDir --config Release
     if ($LASTEXITCODE -ne 0) { throw 'Unable to install the Windows PCRE2 runtime dependency.' }
 
-    & git clone --depth 1 --branch $Release.tag https://github.com/CESNET/libyang.git $SourceDir
+    & git -c core.longpaths=true clone --depth 1 --branch $Release.tag `
+        https://github.com/CESNET/libyang.git $SourceDir
     if ($LASTEXITCODE -ne 0) { throw "Unable to clone libyang $($Release.tag)." }
     Assert-GitCommit $SourceDir ($Release.libyangCommit)
 
-    & git init $GetoptSourceDir
+    & git -c core.longpaths=true init $GetoptSourceDir
     if ($LASTEXITCODE -ne 0) { throw 'Unable to initialize the pinned getopt source checkout.' }
     & git -C $GetoptSourceDir remote add origin ($Release.windowsDependencies.getopt.source)
     if ($LASTEXITCODE -ne 0) { throw 'Unable to configure the pinned getopt source checkout.' }
@@ -424,7 +669,7 @@ endif()
         $ToolSubdirectories `
         $ToolSubdirectoriesWithSchemaHelper
 
-    & cmake -S $SourceDir -B $BuildDir -A x64 `
+    & $Cmake -S $SourceDir -B $BuildDir -A x64 `
         "-DCMAKE_TOOLCHAIN_FILE=$VcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
         "-DVCPKG_INSTALLED_DIR=$VcpkgInstalled" `
         '-DVCPKG_TARGET_TRIPLET=x64-windows-static' `
@@ -441,7 +686,7 @@ endif()
         '-DENABLE_YANGLINT_INTERACTIVE=OFF' `
         '-DENABLE_COMMON_TARGETS=OFF'
     if ($LASTEXITCODE -ne 0) { throw 'Unable to configure the Windows libyang runtime.' }
-    & cmake --build $BuildDir --config Release --target yanglint netnexus-libyang-schema --parallel
+    & $Cmake --build $BuildDir --config Release --target yanglint netnexus-libyang-schema --parallel
     if ($LASTEXITCODE -ne 0) { throw 'Unable to build the Windows libyang runtime executables.' }
 
     $BuiltYanglint = @(Get-ChildItem $BuildDir -Filter 'yanglint.exe' -File -Recurse)
@@ -481,5 +726,8 @@ endif()
     if ($LASTEXITCODE -ne 0) { throw 'The generated Windows libyang runtime did not pass verification.' }
 }
 finally {
-    if (Test-Path $BuildRoot) { Remove-Item $BuildRoot -Recurse -Force }
+    if (Test-Path $BuildRoot) {
+        try { Remove-Item $BuildRoot -Recurse -Force }
+        catch { Write-Warning "Unable to remove temporary libyang build directory ${BuildRoot}: $($_.Exception.Message)" }
+    }
 }

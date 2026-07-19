@@ -136,8 +136,11 @@ jobs:
               with:
                   python-version: '3.11'
 
-            - name: Install dependencies
+            - name: Install dependencies with managed vcpkg bootstrap
               run: npm ci
+              env:
+                  VCPKG_ROOT: ''
+                  VCPKG_INSTALLATION_ROOT: ''
 
             - name: Run Windows lint
               run: npm run lint

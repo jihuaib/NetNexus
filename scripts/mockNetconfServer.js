@@ -29,6 +29,7 @@ const {
 
 const MOCK_NAMESPACE = 'urn:netnexus:params:xml:ns:yang:mock-device';
 const MOCK_TYPES_NAMESPACE = 'urn:netnexus:params:xml:ns:yang:mock-types';
+const MOCK_INVALID_NAMESPACE = 'urn:netnexus:params:xml:ns:yang:mock-invalid';
 const YANG_LIBRARY_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-yang-library';
 const IETF_DATASTORES_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-datastores';
 const NETCONF_MONITORING_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring';
@@ -147,6 +148,25 @@ const MOCK_DEVICE_YANG = [
     ''
 ].join('\n');
 
+const MOCK_INVALID_YANG = [
+    'module netnexus-mock-invalid {',
+    '  yang-version 1.1;',
+    '  namespace "' + MOCK_INVALID_NAMESPACE + '";',
+    '  prefix nnmi;',
+    '',
+    '  revision ' + REVISION + ' {',
+    '    description "Intentionally invalid model for testing compilation diagnostics.";',
+    '  }',
+    '',
+    '  container broken {',
+    '    leaf invalid-value {',
+    '      type intentionally-undefined-type;',
+    '    }',
+    '  }',
+    '}',
+    ''
+].join('\n');
+
 const MOCK_MODULES = Object.freeze({
     'netnexus-mock-device': Object.freeze({
         name: 'netnexus-mock-device',
@@ -163,6 +183,14 @@ const MOCK_MODULES = Object.freeze({
         source: MOCK_TYPES_YANG,
         features: [],
         conformanceType: 'import'
+    }),
+    'netnexus-mock-invalid': Object.freeze({
+        name: 'netnexus-mock-invalid',
+        revision: REVISION,
+        namespace: MOCK_INVALID_NAMESPACE,
+        source: MOCK_INVALID_YANG,
+        features: [],
+        conformanceType: 'implement'
     })
 });
 
@@ -186,7 +214,8 @@ const SERVER_CAPABILITIES = Object.freeze([
     'urn:ietf:params:netconf:capability:yang-library:1.1?revision=2019-01-04&content-id=netnexus-mock-1',
     NETCONF_MONITORING_NAMESPACE + '?module=ietf-netconf-monitoring&revision=2010-10-04',
     MOCK_NAMESPACE + '?module=netnexus-mock-device&revision=' + REVISION + '&features=interface-counters',
-    MOCK_TYPES_NAMESPACE + '?module=netnexus-mock-types&revision=' + REVISION
+    MOCK_TYPES_NAMESPACE + '?module=netnexus-mock-types&revision=' + REVISION,
+    MOCK_INVALID_NAMESPACE + '?module=netnexus-mock-invalid&revision=' + REVISION
 ]);
 
 class MockRpcError extends Error {
@@ -1056,6 +1085,7 @@ class MockNetconfServer extends EventEmitter {
     yangLibraryXml() {
         const implemented = MOCK_MODULES['netnexus-mock-device'];
         const imported = MOCK_MODULES['netnexus-mock-types'];
+        const invalid = MOCK_MODULES['netnexus-mock-invalid'];
         return (
             '<yang-library xmlns="' +
             YANG_LIBRARY_NAMESPACE +
@@ -1071,6 +1101,13 @@ class MockNetconfServer extends EventEmitter {
             '</revision><namespace>' +
             implemented.namespace +
             '</namespace><location>NETCONF</location><feature>interface-counters</feature></module>' +
+            '<module><name>' +
+            invalid.name +
+            '</name><revision>' +
+            invalid.revision +
+            '</revision><namespace>' +
+            invalid.namespace +
+            '</namespace><location>NETCONF</location></module>' +
             '<import-only-module><name>' +
             imported.name +
             '</name><revision>' +
@@ -1339,6 +1376,7 @@ if (require.main === module) {
 module.exports = {
     DEFAULT_OPTIONS,
     MOCK_DEVICE_YANG,
+    MOCK_INVALID_YANG,
     MOCK_TYPES_YANG,
     MOCK_MODULES,
     SERVER_CAPABILITIES,

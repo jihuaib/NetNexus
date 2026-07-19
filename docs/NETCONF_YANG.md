@@ -61,9 +61,9 @@ Mock 启动后会打印监听地址、SSH Host Key 指纹和 Profile 参数。�
 
 连接成功后，可以按以下顺序验证完整流程：
 
-1. 进入“模型列表”，点击“读取设备列表”，确认发现 `netnexus-mock-device` 和 `netnexus-mock-types`。
-2. 选择并下载这两个模型。`netnexus-mock-device` 会通过 `import` 引用 `netnexus-mock-types`，可用于验证 `get-schema` 和依赖处理。
-3. 在模型列表中选择下载后的模型并执行“编译所选”，确认 libyang 编译成功，然后进入 Schema 工作区浏览 `system`、`interfaces` 和 `state` 节点。
+1. 进入“模型列表”，点击“读取设备列表”，确认发现 `netnexus-mock-device`、`netnexus-mock-types` 和 `netnexus-mock-invalid`。
+2. 选择并下载前两个有效模型。`netnexus-mock-device` 会通过 `import` 引用 `netnexus-mock-types`，可用于验证 `get-schema` 和依赖处理。
+3. 在模型列表中选择下载后的有效模型并执行“编译所选”，确认编译日志逐文件显示“编译成功”，然后进入 Schema 工作区浏览 `system`、`interfaces` 和 `state` 节点。
 4. 在 Schema 树中右键 `system` 或其他数据节点，执行 `get` 或 `get-config`，确认初始 hostname 为 `netnexus-mock`。
 5. 右键 config 数据节点选择 `edit-config`，目标 datastore 设为 `candidate`，`default-operation` 设为 `merge`，在“config XML”中粘贴下面的内容并执行：
 
@@ -84,6 +84,8 @@ Mock 启动后会打印监听地址、SSH Host Key 指纹和 Profile 参数。�
 
 6. 对 `candidate` 执行 `validate`，再执行 `commit`。最后对 `running` 执行 `get-config`，确认 hostname、location、接口描述和 MTU 已更新。
 7. 还可以继续验证 `copy-config`、`delete-config`、`lock`、`unlock`、`discard-changes`、原始 RPC、通知和 Mock 模型中定义的 `reboot` RPC。服务端收到的 RPC 及 datastore revision 会实时输出到启动 Mock 的终端。
+
+要验证失败流程，可单独下载并编译 `netnexus-mock-invalid`。该文件的元数据和下载流程均有效，但故意引用了不存在的 YANG 类型，因此 libyang 会稳定返回编译失败；模型列表中的编译日志会显示该文件的失败状态和具体诊断。不要把它加入正常 Schema 工作区的有效模型编译批次。
 
 Mock datastore 只保存在当前进程内存中，重启服务会恢复初始配置。在 Mock 终端中可使用 `/status`、`/show running`、`/show candidate`、`/reset`、`/notify <message>` 和 `/quit` 辅助观察或重置状态。查看完整启动参数：
 
@@ -155,7 +157,11 @@ Schema 工作区中的树直接来自 libyang 编译后的 effective schema。`u
 自动构建需要网络访问以取得锁定版本的上游源码，并要求本机具备以下工具：
 
 - macOS / Linux：Git、CMake 和可用的 C 编译工具链。
-- Windows：仅支持 x64 构建，需要 Git、CMake、Visual Studio C++ Build Tools、Windows SDK，以及已完成 bootstrap 的 vcpkg；vcpkg 不在默认位置时通过 `VCPKG_ROOT` 指定。
+- Windows：仅支持 x64 构建，需要 Git、CMake 3.15 或更高版本、Visual Studio C++ x64 Build Tools（或“使用 C++ 的桌面开发”工作负载）、Windows SDK 和网络访问；不再要求预先安装或 bootstrap vcpkg。未设置 `VCPKG_ROOT` 时，安装流程会把固定 baseline 的 vcpkg 下载到 `%LOCALAPPDATA%\NetNexus\BuildTools\vcpkg\<baseline-key>`，自动 bootstrap，并在后续安装中复用该用户级缓存。
+
+`VCPKG_ROOT` 是显式覆盖，必须指向完整的 Git checkout；缺少 `vcpkg.exe` 时构建流程会自动 bootstrap。只有 `VCPKG_INSTALLATION_ROOT` 指向完整 checkout 时才会使用它；不完整的路径会被忽略并改用上述用户级缓存。
+
+如果自动下载 vcpkg 或其他固定版本源码失败，请在修复网络或代理配置后重新执行 `npm install`，也可以单独重试 `npm run libyang:build:windows`。下载过程遵循 Git 代理配置和标准的 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量；重试时会自动移除不完整的托管 vcpkg checkout 并重新下载。
 
 维护者需要无条件重新构建当前平台运行时时，可以执行：
 

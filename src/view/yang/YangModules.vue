@@ -21,65 +21,60 @@
                         test-id="yang-modules-profile-select"
                         @update:value="selectProfile"
                     />
-                    <nn-button class="module-refresh-action" :loading="loading" @click="loadModules">
-                        <template #icon><ReloadOutlined /></template>
-                        刷新
-                    </nn-button>
-                </div>
-
-                <div class="module-actions" data-testid="yang-modules-actions">
-                    <nn-tooltip :title="connected ? '' : '请先在连接设置中建立 NETCONF 会话'">
-                        <span class="disabled-action-wrap module-action-device-wrap">
-                            <nn-button
-                                class="module-action-button module-action-device"
-                                :loading="discovering"
-                                :disabled="!connected"
-                                @click="openDeviceModules"
-                            >
-                                <template #icon><SearchOutlined /></template>
-                                获取设备列表
-                            </nn-button>
-                        </span>
-                    </nn-tooltip>
-                    <nn-button
-                        class="module-action-button"
-                        :loading="importing"
-                        :disabled="!selectedProfileId"
-                        @click="importFiles"
-                    >
-                        <template #icon><FileSearchOutlined /></template>
-                        导入文件
-                    </nn-button>
-                    <nn-button
-                        class="module-action-button"
-                        :loading="importing"
-                        :disabled="!selectedProfileId"
-                        @click="importDirectory"
-                    >
-                        <template #icon><FolderOpenOutlined /></template>
-                        导入目录
-                    </nn-button>
-                    <nn-tooltip :title="compileDisabledReason">
-                        <span class="disabled-action-wrap module-action-standard-wrap">
-                            <nn-button
-                                class="module-action-button"
-                                :loading="compiling"
-                                :disabled="Boolean(compileDisabledReason)"
-                                @click="compileSelected"
-                            >
-                                <template #icon><CodeOutlined /></template>
-                                编译所选
-                            </nn-button>
-                        </span>
-                    </nn-tooltip>
-                    <nn-button
-                        class="module-action-button module-action-diagnostics"
-                        :loading="diagnosticLoading"
-                        @click="openDiagnostics"
-                    >
-                        <template #icon><FileSearchOutlined /></template>
-                        编译诊断 ({{ diagnosticCountHint }})
-                    </nn-button>
+                    <div class="module-actions" data-testid="yang-modules-actions">
+                        <nn-tooltip :title="connected ? '' : '请先在连接设置中建立 NETCONF 会话'">
+                            <span class="disabled-action-wrap module-action-device-wrap">
+                                <nn-button
+                                    class="module-action-button module-action-device"
+                                    :loading="discovering"
+                                    :disabled="!connected"
+                                    @click="openDeviceModules"
+                                >
+                                    <template #icon><SearchOutlined /></template>
+                                    获取设备列表
+                                </nn-button>
+                            </span>
+                        </nn-tooltip>
+                        <nn-button
+                            class="module-action-button"
+                            :loading="importing"
+                            :disabled="!selectedProfileId"
+                            @click="importFiles"
+                        >
+                            <template #icon><FileSearchOutlined /></template>
+                            导入文件
+                        </nn-button>
+                        <nn-button
+                            class="module-action-button"
+                            :loading="importing"
+                            :disabled="!selectedProfileId"
+                            @click="importDirectory"
+                        >
+                            <template #icon><FolderOpenOutlined /></template>
+                            导入目录
+                        </nn-button>
+                        <nn-tooltip :title="compileDisabledReason">
+                            <span class="disabled-action-wrap module-action-standard-wrap">
+                                <nn-button
+                                    class="module-action-button"
+                                    :loading="compiling"
+                                    :disabled="Boolean(compileDisabledReason)"
+                                    @click="compileSelected"
+                                >
+                                    <template #icon><CodeOutlined /></template>
+                                    编译所选
+                                </nn-button>
+                            </span>
+                        </nn-tooltip>
+                        <nn-button
+                            class="module-action-button module-refresh-action"
+                            :loading="loading"
+                            @click="loadModules"
+                        >
+                            <template #icon><ReloadOutlined /></template>
+                            刷新
+                        </nn-button>
+                    </div>
                 </div>
             </div>
 
@@ -119,7 +114,7 @@
                 :data-source="filteredModules"
                 :loading="loading"
                 :pagination="false"
-                :scroll="{ x: 990, y: 'calc(100vh - 350px)' }"
+                :scroll="{ x: 990, y: 'calc(100vh - 510px)' }"
                 row-key="_key"
                 size="small"
                 class="module-table"
@@ -174,6 +169,75 @@
                     </template>
                 </template>
             </nn-table>
+
+            <section class="compile-log-panel" data-testid="yang-compile-log-panel" aria-label="编译日志">
+                <div class="compile-log-header">
+                    <div class="compile-log-context">
+                        <span class="compile-log-title">编译日志</span>
+                        <nn-tag :color="compileContextColor">{{ compileContextLabel }}</nn-tag>
+                        <span v-if="compileContext.compiledAt" class="compile-log-time">
+                            {{ formatCompileTime(compileContext.compiledAt) }}
+                        </span>
+                        <span
+                            v-if="compileContext.compileId"
+                            class="compile-log-id"
+                            :title="compileContext.compileId"
+                        >
+                            {{ compileContext.compileId }}
+                        </span>
+                    </div>
+                    <div class="compile-log-actions">
+                        <nn-segmented
+                            v-if="compileContext.compileId"
+                            v-model:value="diagnosticFilter"
+                            :options="diagnosticFilterOptions"
+                        />
+                        <span v-if="compileContext.compileId" class="compile-log-summary">
+                            错误 {{ diagnosticErrorCount }} · 警告 {{ diagnosticWarningCount }}
+                        </span>
+                        <nn-button size="small" :loading="diagnosticLoading" @click="loadDiagnostics">
+                            <template #icon><ReloadOutlined /></template>
+                            刷新
+                        </nn-button>
+                    </div>
+                </div>
+
+                <div class="compile-log-list">
+                    <nn-spin :spinning="diagnosticLoading">
+                        <nn-empty
+                            v-if="!compileContext.compileId"
+                            description="执行“编译所选”后在这里查看编译日志"
+                        />
+                        <template v-else>
+                            <div
+                                v-for="(diagnostic, index) in filteredDiagnostics"
+                                :key="diagnostic.id || `${diagnostic.file || ''}:${diagnostic.line || 0}:${index}`"
+                                class="compile-log-row"
+                            >
+                                <nn-tag :color="diagnosticColor(diagnostic.severity)">
+                                    {{ diagnosticLabel(diagnostic.severity) }}
+                                </nn-tag>
+                                <span class="compile-log-content">
+                                    <span class="compile-log-message">
+                                        {{ diagnostic.message || diagnostic.msg || '未知日志' }}
+                                    </span>
+                                    <span v-if="!diagnostic.fileStatus" class="compile-log-location">
+                                        {{ formatDiagnosticLocation(diagnostic) }}
+                                    </span>
+                                </span>
+                                <nn-button
+                                    v-if="moduleForDiagnostic(diagnostic)"
+                                    size="small"
+                                    @click="openDiagnosticSource(diagnostic)"
+                                >
+                                    查看源码
+                                </nn-button>
+                            </div>
+                            <nn-empty v-if="filteredDiagnostics.length === 0" description="当前筛选下没有编译日志" />
+                        </template>
+                    </nn-spin>
+                </div>
+            </section>
         </nn-card>
 
         <nn-modal
@@ -320,67 +384,6 @@
                 <pre class="source-preview">{{ sourceText || '暂无源码' }}</pre>
             </nn-spin>
         </nn-drawer>
-
-        <nn-modal
-            v-model:open="diagnosticModalOpen"
-            title="编译诊断"
-            :footer="null"
-            width="900px"
-            :body-style="{ padding: '12px', overflow: 'hidden' }"
-        >
-            <div class="diagnostic-context-bar">
-                <div class="diagnostic-context-main">
-                    <nn-tag :color="compileContextColor">{{ compileContextLabel }}</nn-tag>
-                    <span v-if="compileContext.compiledAt">{{ formatCompileTime(compileContext.compiledAt) }}</span>
-                    <span
-                        v-if="compileContext.compileId"
-                        class="diagnostic-compile-id"
-                        :title="compileContext.compileId"
-                    >
-                        {{ compileContext.compileId }}
-                    </span>
-                </div>
-                <nn-button size="small" :loading="diagnosticLoading" @click="loadDiagnostics">刷新</nn-button>
-            </div>
-
-            <div v-if="compileContext.compileId" class="diagnostic-filter-bar">
-                <nn-segmented v-model:value="diagnosticFilter" :options="diagnosticFilterOptions" />
-                <span>错误 {{ diagnosticErrorCount }} · 警告 {{ diagnosticWarningCount }}</span>
-            </div>
-
-            <div class="diagnostic-list">
-                <nn-spin :spinning="diagnosticLoading">
-                    <nn-empty v-if="!compileContext.compileId" description="请先选择本地模型并执行“编译所选”" />
-                    <template v-else>
-                        <div
-                            v-for="(diagnostic, index) in filteredDiagnostics"
-                            :key="diagnostic.id || `${diagnostic.file || ''}:${diagnostic.line || 0}:${index}`"
-                            class="diagnostic-row"
-                        >
-                            <nn-tag :color="diagnosticColor(diagnostic.severity)">
-                                {{ diagnosticLabel(diagnostic.severity) }}
-                            </nn-tag>
-                            <span class="diagnostic-content">
-                                <span class="diagnostic-message">
-                                    {{ diagnostic.message || diagnostic.msg || '未知诊断' }}
-                                </span>
-                                <span class="diagnostic-location">
-                                    {{ formatDiagnosticLocation(diagnostic) }}
-                                </span>
-                            </span>
-                            <nn-button
-                                v-if="moduleForDiagnostic(diagnostic)"
-                                size="small"
-                                @click="openDiagnosticSource(diagnostic)"
-                            >
-                                查看源码
-                            </nn-button>
-                        </div>
-                        <nn-empty v-if="filteredDiagnostics.length === 0" description="当前筛选下没有编译诊断" />
-                    </template>
-                </nn-spin>
-            </div>
-        </nn-modal>
     </div>
 </template>
 
@@ -465,12 +468,10 @@
     const sourceLoading = ref(false);
     const sourceText = ref('');
     const sourceModule = ref(null);
-    const diagnosticModalOpen = ref(false);
     const diagnosticLoading = ref(false);
     const diagnostics = ref([]);
     const diagnosticFilter = ref('all');
-    const diagnosticLoadedCompileId = ref('');
-    const compileContext = ref({ compileId: '', success: null, compiledAt: null, summary: {} });
+    const compileContext = ref({ compileId: '', success: null, compiledAt: null, summary: {}, modules: [] });
     let diagnosticRequestRevision = 0;
     let compileContextRequestRevision = 0;
     let sourceRequestRevision = 0;
@@ -659,28 +660,46 @@
     const diagnosticWarningCount = computed(
         () => diagnostics.value.filter(item => ['warning', 'warn'].includes(item.severity)).length
     );
-    const diagnosticCountHint = computed(() => {
-        if (!compileContext.value.compileId) return 0;
-        if (diagnosticLoadedCompileId.value === compileContext.value.compileId) return diagnostics.value.length;
-        return Number(compileContext.value.summary?.errors || 0) + Number(compileContext.value.summary?.warnings || 0);
-    });
+    const compileFileLogs = computed(() =>
+        (compileContext.value.modules || [])
+            .filter(module => ['compiled', 'failed'].includes(module.compileStatus))
+            .map(module => {
+                const fileName =
+                    module.fileName || `${module.name}${module.revision ? `@${module.revision}` : ''}.yang`;
+                const compiled = module.compileStatus === 'compiled';
+                return {
+                    id: `compile-file:${module.id || module._key}:${module.compileStatus}`,
+                    severity: compiled ? 'success' : 'error',
+                    fileStatus: module.compileStatus,
+                    moduleId: module.id || module.moduleId || module.hash,
+                    module: module.name,
+                    revision: module.revision,
+                    file: module.filePath || module.localPath || fileName,
+                    fileName,
+                    message: `${fileName} 编译${compiled ? '成功' : '失败'}`
+                };
+            })
+    );
     const compileContextColor = computed(() => {
+        if (compiling.value) return 'processing';
         if (!compileContext.value.compileId) return 'default';
         return compileContext.value.success === true ? 'success' : 'error';
     });
     const compileContextLabel = computed(() => {
+        if (compiling.value) return '编译中';
         if (!compileContext.value.compileId) return '尚未编译';
         return compileContext.value.success === true ? '编译成功' : '编译失败';
     });
     const filteredDiagnostics = computed(() => {
-        if (diagnosticFilter.value === 'all') return diagnostics.value;
+        const compileLogs = [...compileFileLogs.value, ...diagnostics.value];
+        if (diagnosticFilter.value === 'all') return compileLogs;
         if (diagnosticFilter.value === 'error') {
-            return diagnostics.value.filter(item => ['error', 'fatal'].includes(item.severity));
+            return compileLogs.filter(item => ['error', 'fatal'].includes(item.severity));
         }
         if (diagnosticFilter.value === 'warning') {
-            return diagnostics.value.filter(item => ['warning', 'warn'].includes(item.severity));
+            return compileLogs.filter(item => ['warning', 'warn'].includes(item.severity));
         }
-        return diagnostics.value.filter(item => !['error', 'fatal', 'warning', 'warn'].includes(item.severity));
+        return compileLogs.filter(item => !['error', 'fatal', 'warning', 'warn'].includes(item.severity));
     });
     const compileDisabledReason = computed(() => {
         if (!selectedProfileId.value) return '请先选择连接 Profile';
@@ -763,14 +782,14 @@
             compileId: workspace.compileId || '',
             success: workspace.success ?? null,
             compiledAt: workspace.compiledAt || null,
-            summary: workspace.summary || {}
+            summary: workspace.summary || {},
+            modules: Array.isArray(workspace.modules) ? workspace.modules.map(normalizeModule) : []
         };
     };
 
     const applyCompileContext = context => {
         if (!context.compileId || context.compileId !== compileContext.value.compileId) {
             diagnostics.value = [];
-            diagnosticLoadedCompileId.value = '';
             diagnosticFilter.value = 'all';
         }
         compileContext.value = context;
@@ -847,14 +866,12 @@
             applyCompileContext(confirmedContext);
             if (confirmedContext.compileId !== context.compileId) return;
             diagnostics.value = unwrapArray(data, ['diagnostics', 'items']).map(normalizeDiagnostic);
-            diagnosticLoadedCompileId.value = context.compileId;
         } catch (error) {
             const requestIsCurrent =
                 requestRevision === diagnosticRequestRevision &&
                 contextRequestRevision === compileContextRequestRevision;
             if (requestIsCurrent && requestedCompileId) {
                 diagnostics.value = [];
-                diagnosticLoadedCompileId.value = '';
                 try {
                     const latestContext = await fetchCompileContext(profileId);
                     if (
@@ -877,11 +894,6 @@
         } finally {
             if (requestRevision === diagnosticRequestRevision) diagnosticLoading.value = false;
         }
-    };
-
-    const openDiagnostics = () => {
-        diagnosticModalOpen.value = true;
-        loadDiagnostics();
     };
 
     const loadSession = async () => {
@@ -1164,12 +1176,14 @@
     };
 
     const diagnosticColor = severity => {
+        if (severity === 'success') return 'success';
         if (['error', 'fatal'].includes(severity)) return 'error';
         if (['warning', 'warn'].includes(severity)) return 'warning';
         return 'blue';
     };
 
     const diagnosticLabel = severity => {
+        if (severity === 'success') return '成功';
         if (['error', 'fatal'].includes(severity)) return '错误';
         if (['warning', 'warn'].includes(severity)) return '警告';
         return '信息';
@@ -1261,8 +1275,7 @@
         deviceDownloadFailures.value = [];
         deviceDownloadTerminalHandled.value = false;
         diagnostics.value = [];
-        diagnosticLoadedCompileId.value = '';
-        compileContext.value = { compileId: '', success: null, compiledAt: null, summary: {} };
+        compileContext.value = { compileId: '', success: null, compiledAt: null, summary: {}, modules: [] };
         connected.value = false;
         activeTasks.value = { discover: '', download: '', import: '', compile: '' };
         taskProgress.value = null;
@@ -1274,14 +1287,13 @@
         diagnosticLoading.value = false;
         sourceLoading.value = false;
         deviceModuleModalOpen.value = false;
-        diagnosticModalOpen.value = false;
         sourceDrawerOpen.value = false;
         sourceModule.value = null;
         sourceText.value = '';
     };
 
     const reloadCurrentProfile = () =>
-        Promise.all([loadModules(), loadSession(), loadCompileContext({ quiet: true })]);
+        Promise.all([loadModules(), loadSession(), loadDiagnostics({ quiet: true })]);
 
     watch(selectedProfileId, (profileId, previousProfileId) => {
         if (profileId === previousProfileId) return;
@@ -1310,7 +1322,6 @@
         diagnosticLoading.value = false;
         sourceLoading.value = false;
         deviceModuleModalOpen.value = false;
-        diagnosticModalOpen.value = false;
         sourceDrawerOpen.value = false;
     });
 
@@ -1340,9 +1351,6 @@
     }
 
     .module-toolbar {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
         margin-bottom: 8px;
     }
 
@@ -1367,8 +1375,10 @@
     }
 
     .module-actions {
+        flex: none;
         min-height: 32px;
         flex-wrap: wrap;
+        justify-content: flex-end;
     }
 
     .module-action-button {
@@ -1380,11 +1390,6 @@
     .module-action-device-wrap {
         width: 136px;
         flex-basis: 136px;
-    }
-
-    .module-action-diagnostics {
-        width: 150px;
-        flex-basis: 150px;
     }
 
     .module-action-standard-wrap {
@@ -1530,76 +1535,107 @@
         text-align: left;
     }
 
-    .diagnostic-context-bar,
-    .diagnostic-filter-bar,
-    .diagnostic-context-main {
+    .compile-log-panel {
+        display: flex;
+        height: clamp(160px, 23vh, 210px);
+        min-width: 0;
+        min-height: 0;
+        flex: 0 0 clamp(160px, 23vh, 210px);
+        flex-direction: column;
+        margin-top: 8px;
+        overflow: hidden;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+        background: var(--nn-color-bg-surface);
+    }
+
+    .compile-log-header,
+    .compile-log-context,
+    .compile-log-actions {
         display: flex;
         min-width: 0;
         align-items: center;
         gap: 8px;
     }
 
-    .diagnostic-context-bar,
-    .diagnostic-filter-bar {
+    .compile-log-header {
+        min-height: 42px;
+        flex: none;
         justify-content: space-between;
+        padding: 5px 8px;
+        border-bottom: 1px solid var(--nn-color-border-light);
+        background: var(--nn-color-bg-muted);
     }
 
-    .diagnostic-context-bar {
-        padding-bottom: 9px;
+    .compile-log-context {
+        flex: 1;
+        overflow: hidden;
         color: var(--nn-color-text-muted);
         font-size: 11px;
     }
 
-    .diagnostic-filter-bar {
-        padding: 8px 0;
-        border-top: 1px solid var(--nn-color-border-light);
-        color: var(--nn-color-text-muted);
-        font-size: 11px;
+    .compile-log-actions {
+        flex: none;
+        justify-content: flex-end;
     }
 
-    .diagnostic-compile-id {
-        max-width: 360px;
+    .compile-log-title {
+        flex: none;
+        color: var(--nn-color-text-strong);
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    .compile-log-time,
+    .compile-log-summary {
+        flex: none;
+        color: var(--nn-color-text-muted);
+        font-size: 11px;
+        white-space: nowrap;
+    }
+
+    .compile-log-id {
+        min-width: 0;
+        max-width: 240px;
         overflow: hidden;
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    .diagnostic-list {
-        min-height: 240px;
-        max-height: calc(100vh - 260px);
+    .compile-log-list {
+        min-height: 0;
+        flex: 1;
         overflow-y: auto;
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
     }
 
-    .diagnostic-row {
+    .compile-log-row {
         display: flex;
         width: 100%;
         align-items: flex-start;
         gap: 8px;
-        padding: 8px;
+        padding: 6px 8px;
         border-bottom: 1px solid var(--nn-color-border-light);
         color: var(--nn-color-text);
     }
 
-    .diagnostic-row:last-child {
+    .compile-log-row:last-child {
         border-bottom: 0;
     }
 
-    .diagnostic-content {
+    .compile-log-content {
         display: flex;
         min-width: 0;
         flex: 1;
         flex-direction: column;
     }
 
-    .diagnostic-message {
+    .compile-log-message {
         white-space: pre-wrap;
         overflow-wrap: anywhere;
     }
 
-    .diagnostic-location {
+    .compile-log-location {
         margin-top: 2px;
         color: var(--nn-color-text-muted);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -1647,10 +1683,34 @@
     }
 
     @media (max-width: 1100px) {
+        .compile-log-id {
+            display: none;
+        }
+
         .device-module-selection-row,
         .device-module-footer {
             align-items: flex-start;
             flex-direction: column;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .module-profile-row {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .module-profile-row,
+        .module-actions {
+            width: 100%;
+        }
+
+        .module-actions {
+            justify-content: flex-start;
+        }
+
+        .compile-log-time {
+            display: none;
         }
     }
 </style>

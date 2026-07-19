@@ -102,6 +102,76 @@ function assertVcpkgBaselinePreflightContract(powershellSource) {
     );
 }
 
+function assertVcpkgBootstrapContract(powershellSource) {
+    const resolverSource = extractPowerShellFunction(powershellSource, 'Resolve-VcpkgLocation');
+    const explicitRootIndex = resolverSource.indexOf('$env:VCPKG_ROOT');
+    const installationRootIndex = resolverSource.indexOf('$env:VCPKG_INSTALLATION_ROOT');
+    const userCacheIndex = resolverSource.indexOf('LocalApplicationData');
+    assert(
+        explicitRootIndex >= 0 &&
+            explicitRootIndex < installationRootIndex &&
+            installationRootIndex < userCacheIndex,
+        'vcpkg resolution must prefer VCPKG_ROOT, then a usable installation root, then the user cache'
+    );
+    assert.match(resolverSource, /NetNexus\\BuildTools\\vcpkg/);
+    assert.match(resolverSource, /Managed = \$true/);
+    assert.doesNotMatch(
+        resolverSource,
+        /else\s*\{\s*['"]C:\\vcpkg['"]/,
+        'ordinary Windows installs must not assume the GitHub runner C:\\vcpkg path'
+    );
+
+    const bootstrapSource = extractPowerShellFunction(powershellSource, 'Invoke-VcpkgBootstrap');
+    const bootstrapCallIndex = bootstrapSource.indexOf('& $Bootstrap -disableMetrics');
+    const bootstrapExitCheckIndex = bootstrapSource.indexOf('if ($LASTEXITCODE -ne 0)', bootstrapCallIndex);
+    const executableCheckIndex = bootstrapSource.lastIndexOf('Test-Path $Executable -PathType Leaf');
+    assert(
+        bootstrapCallIndex >= 0 &&
+            bootstrapCallIndex < bootstrapExitCheckIndex &&
+            bootstrapExitCheckIndex < executableCheckIndex,
+        'managed vcpkg bootstrap must check both the command exit code and the generated executable'
+    );
+
+    const checkoutSource = extractPowerShellFunction(powershellSource, 'Ensure-VcpkgCheckout');
+    const mutexWaitIndex = checkoutSource.indexOf('$CacheMutex.WaitOne');
+    const firstCacheProbeIndex = checkoutSource.indexOf("$Executable = Join-Path $Path 'vcpkg.exe'");
+    const mutexReleaseIndex = checkoutSource.lastIndexOf('$CacheMutex.ReleaseMutex()');
+    assert(
+        mutexWaitIndex >= 0 && mutexWaitIndex < firstCacheProbeIndex && mutexReleaseIndex > firstCacheProbeIndex,
+        'managed vcpkg cache inspection, replacement, and publication must be protected by a cross-process lock'
+    );
+    assert.match(checkoutSource, /catch \[System\.Threading\.AbandonedMutexException\]/);
+    assert.match(checkoutSource, /Downloading pinned vcpkg baseline \$Baseline into the user cache/);
+    assert.match(checkoutSource, /git -c core\.longpaths=true -C \$Staging fetch --filter=blob:none --depth 1/);
+    assert.match(checkoutSource, /https:\/\/github\.com\/microsoft\/vcpkg\.git/);
+    assert.match(checkoutSource, /Unable to download pinned vcpkg baseline \$Baseline/);
+    assert.match(checkoutSource, /config core\.longpaths true/);
+    assert.match(checkoutSource, /Invoke-VcpkgBootstrap -Path \$Staging/);
+    assert.match(checkoutSource, /\[IO\.Directory\]::Move\(\$Staging, \$Path\)/);
+    assert.match(checkoutSource, /Test-VcpkgCheckoutAtBaseline -Path \$Path -Baseline \$Baseline/);
+    assert.match(
+        checkoutSource,
+        /unset VCPKG_ROOT and VCPKG_INSTALLATION_ROOT to use the managed user cache/,
+        'an invalid explicit checkout must explain how to select the automatic managed cache'
+    );
+
+    const resolveIndex = powershellSource.lastIndexOf('Resolve-VcpkgLocation -Baseline $VcpkgBaseline');
+    const ensureCheckoutIndex = powershellSource.lastIndexOf(
+        'Ensure-VcpkgCheckout -Path $VcpkgRoot -Baseline $VcpkgBaseline'
+    );
+    const ensureBaselineIndex = powershellSource.lastIndexOf(
+        'Ensure-VcpkgBaseline -Path $VcpkgRoot -Baseline $VcpkgBaseline'
+    );
+    const installIndex = powershellSource.indexOf('& $Vcpkg install');
+    assert(
+        resolveIndex >= 0 &&
+            resolveIndex < ensureCheckoutIndex &&
+            ensureCheckoutIndex < ensureBaselineIndex &&
+            ensureBaselineIndex < installIndex,
+        'Windows builds must provision vcpkg before checking the baseline and installing dependencies'
+    );
+}
+
 function verifyScriptSyntax() {
     const javascriptScripts = [
         'scripts/ensure-libyang-runtime.js',
@@ -163,6 +233,7 @@ function verifyScriptSyntax() {
     }
     const powershellSource = fs.readFileSync(powershellScript, 'utf8');
     assertVcpkgBaselinePreflightContract(powershellSource);
+    assertVcpkgBootstrapContract(powershellSource);
     assert.match(powershellSource, /CMAKE_FIND_LIBRARY_SUFFIXES \.lib/);
     assert.match(powershellSource, /pcre2-8-static/);
     assert.match(
@@ -212,11 +283,16 @@ function verifyScriptSyntax() {
     assert.match(powershellSource, /cat-file -e "\$\{Baseline\}:\$\{RequiredVersionFile\}"/);
     assert.match(powershellSource, /versions\/d-\/dirent\.json/);
     assert.match(powershellSource, /versions\/p-\/pthreads\.json/);
+    assert.match(powershellSource, /versions\/v-\/vcpkg-cmake-config\.json/);
     assert.match(
         powershellSource,
         /git -C \$Path fetch --refetch --no-tags https:\/\/github\.com\/microsoft\/vcpkg\.git/
     );
     assert.doesNotMatch(powershellSource, /git -C \$Path fetch[^\r\n]*--depth/);
+    assert.match(powershellSource, /--x-buildtrees-root=/);
+    assert.match(powershellSource, /--x-packages-root=/);
+    assert.match(powershellSource, /--downloads-root=/);
+    assert.match(powershellSource, /CMake 3\.15 or newer/);
     const baselinePreflight = 'Ensure-VcpkgBaseline -Path $VcpkgRoot -Baseline $VcpkgBaseline';
     const baselinePreflightIndex = powershellSource.lastIndexOf(baselinePreflight);
     const vcpkgInstallIndex = powershellSource.indexOf('& $Vcpkg install');
@@ -832,6 +908,15 @@ function testCiRuntimeInstallOrdering() {
         frrJobSource,
         /NETNEXUS_SKIP_LIBYANG_BUILD:\s*['"]1['"]/,
         'the FRR-only job must explicitly skip the unrelated libyang postinstall build'
+    );
+
+    const windowsJobSource = getWorkflowJobSource('.github/workflows/test.yml', 'e2e-windows', null);
+    const managedInstallStep = windowsJobSource.match(
+        /- name: Install dependencies with managed vcpkg bootstrap[\s\S]*?run: npm ci[\s\S]*?VCPKG_ROOT:\s*['"]{2}[\s\S]*?VCPKG_INSTALLATION_ROOT:\s*['"]{2}/
+    );
+    assert(
+        managedInstallStep,
+        'Windows CI must clear preinstalled vcpkg roots so npm ci exercises the managed bootstrap path'
     );
 }
 

@@ -7,7 +7,13 @@ const path = require('node:path');
 const { NetconfClient, NetconfRpcError } = require('../../electron/utils/netconf');
 const { YangRegistry } = require('../../electron/utils/yang');
 const NetconfWorkerService = require('../../electron/worker/yang/netconfWorker');
-const { MOCK_DEVICE_YANG, MOCK_TYPES_YANG, MockNetconfServer, parseArgs } = require('../../scripts/mockNetconfServer');
+const {
+    MOCK_DEVICE_YANG,
+    MOCK_INVALID_YANG,
+    MOCK_TYPES_YANG,
+    MockNetconfServer,
+    parseArgs
+} = require('../../scripts/mockNetconfServer');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const SOURCE_PROJECT_ROOT = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || PROJECT_ROOT);
@@ -104,6 +110,35 @@ async function compileDownloadedModules(tempRoot, deviceSource, typesSource) {
     assert.equal(compiled.externalCompiler.exitCode, 0);
 }
 
+async function compileInvalidDownloadedModule(tempRoot, invalidSource) {
+    assert.equal(invalidSource.trim(), MOCK_INVALID_YANG.trim());
+    const registry = new YangRegistry({
+        rootDir: path.join(tempRoot, 'invalid-repository'),
+        resourcesPath: path.join(SOURCE_PROJECT_ROOT, 'resources'),
+        isPackaged: false
+    });
+    const imported = registry.importContents([
+        {
+            content: invalidSource,
+            expectedName: 'netnexus-mock-invalid',
+            fileName: 'netnexus-mock-invalid@2026-07-18.yang'
+        }
+    ]);
+    assert.equal(imported.summary.imported, 1);
+    assert.equal(imported.summary.invalid, 0, 'the mock file must download cleanly before libyang compilation');
+
+    const compiled = await registry.compile({ force: true });
+    assert.equal(compiled.success, false);
+    assert.equal(compiled.externalCompiler.exitCode, 1);
+    assert(
+        compiled.diagnostics.some(
+            diagnostic =>
+                diagnostic.severity === 'error' && /intentionally-undefined-type|Referenced type/u.test(diagnostic.message)
+        ),
+        JSON.stringify(compiled.diagnostics, null, 2)
+    );
+}
+
 async function run() {
     const defaults = parseArgs([], {});
     assert.equal(defaults.host, '127.0.0.1');
@@ -156,6 +191,7 @@ async function run() {
         assert.equal(pageInventory.source, 'rfc8525');
         assert.deepEqual(pageInventory.modules.map(module => module.name).sort(), [
             'netnexus-mock-device',
+            'netnexus-mock-invalid',
             'netnexus-mock-types'
         ]);
         const pageSchema = await pageWorker.getSchema(pageProfile.id, {
@@ -193,13 +229,16 @@ async function run() {
 
         const inventory = await primary.discoverSchemas(RPC_OPTIONS);
         assert.equal(inventory.source, 'rfc8525');
-        assert.equal(inventory.modules.length, 2);
+        assert.equal(inventory.modules.length, 3);
         const deviceModule = inventory.modules.find(module => module.name === 'netnexus-mock-device');
+        const invalidModule = inventory.modules.find(module => module.name === 'netnexus-mock-invalid');
         const typesModule = inventory.modules.find(module => module.name === 'netnexus-mock-types');
         assert(deviceModule);
+        assert(invalidModule);
         assert(typesModule);
         assert.equal(deviceModule.revision, '2026-07-18');
         assert.equal(deviceModule.implemented, true);
+        assert.equal(invalidModule.implemented, true);
         assert.equal(typesModule.conformanceType, 'import');
 
         const deviceSchema = await primary.getSchema({
@@ -214,10 +253,18 @@ async function run() {
             format: 'yang',
             timeout: RPC_OPTIONS.timeout
         });
+        const invalidSchema = await primary.getSchema({
+            identifier: invalidModule.name,
+            version: invalidModule.revision,
+            format: 'yang',
+            timeout: RPC_OPTIONS.timeout
+        });
         assert.match(deviceSchema.content, /^module netnexus-mock-device/u);
         assert.match(deviceSchema.content, /import netnexus-mock-types/u);
         assert.match(typesSchema.content, /^module netnexus-mock-types/u);
+        assert.match(invalidSchema.content, /^module netnexus-mock-invalid/u);
         await compileDownloadedModules(tempRoot, deviceSchema.content, typesSchema.content);
+        await compileInvalidDownloadedModule(tempRoot, invalidSchema.content);
 
         const initialRunning = await primary.getConfig({ source: 'running' }, RPC_OPTIONS);
         assert.match(initialRunning.xml, /<hostname>netnexus-mock<\/hostname>/u);

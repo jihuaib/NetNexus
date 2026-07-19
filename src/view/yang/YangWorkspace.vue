@@ -138,7 +138,7 @@
                         :compile-id="compileId"
                         :schema-tree="treeData"
                         :context-revision="operationContextRevision"
-                        :context-node="operationContext.node || deviceOperationRoot"
+                        :context-node="operationContext.node"
                         :context-subtree="operationContext.subtree"
                         :context-config="operationContext.config"
                         :context-raw-rpc="operationContext.rawRpc"
@@ -163,7 +163,7 @@
                 </span>
             </div>
             <div class="schema-context-menu-path" :title="contextMenu.node?.path">
-                {{ contextMenu.node?.path || '设备级操作' }}
+                {{ contextMenu.node?.path || '-' }}
             </div>
             <nn-menu
                 class="schema-context-menu-list"
@@ -260,7 +260,6 @@
         ApiOutlined,
         BellOutlined,
         ClockCircleOutlined,
-        CloudServerOutlined,
         ClusterOutlined,
         CodeOutlined,
         CopyOutlined,
@@ -299,7 +298,6 @@
     const LEAF_NODE_KEYWORDS = new Set(['leaf', 'leaf-list', 'anydata', 'anyxml']);
     const CONTEXT_MENU_MARGIN = 8;
     const SCHEMA_NODE_ICONS = Object.freeze({
-        device: CloudServerOutlined,
         module: CodeOutlined,
         container: FolderOutlined,
         list: UnorderedListOutlined,
@@ -445,7 +443,6 @@
 
     const schemaNodeIconKind = node => {
         if (node?.loading) return 'loading';
-        if (node?.virtualDevice) return 'device';
         if (node?.isListKey) return 'key';
         const keyword = schemaNodeKeyword(node);
         if (['module', 'submodule'].includes(keyword)) return 'module';
@@ -489,20 +486,9 @@
         if (isRpcNode(node)) return `${node.keyword} 将以原始 RPC 草稿打开，请确认实例路径和参数`;
         return '节点操作会自动预填 XML；Candidate 工作区和配置存储菜单始终作用于整个 datastore';
     });
-    const deviceOperationRoot = computed(() => ({
-        id: 'netconf-device-root',
-        key: 'netconf-device-root',
-        title: `当前设备：${session.value.profileName || session.value.host || 'NETCONF'}`,
-        name: session.value.profileName || session.value.host || '当前设备',
-        keyword: 'device',
-        virtualDevice: true,
-        selectable: false,
-        isLeaf: true,
-        children: []
-    }));
     const displayTree = computed(() => {
         const query = treeQuery.value.trim().toLowerCase();
-        if (!query) return [deviceOperationRoot.value, ...treeData.value];
+        if (!query) return treeData.value;
         const filterNodes = nodes =>
             nodes.flatMap(node => {
                 const children = filterNodes(node.children || []);
@@ -510,7 +496,7 @@
                 if (haystack.includes(query) || children.length) return [{ ...node, children }];
                 return [];
             });
-        return [deviceOperationRoot.value, ...filterNodes(treeData.value)];
+        return filterNodes(treeData.value);
     });
     const resetOperationContext = () => {
         Object.assign(operationContext, {
@@ -1050,7 +1036,6 @@
                 key: 'node-properties',
                 label: '查看节点属性',
                 icon: menuIcon(EyeOutlined),
-                disabled: Boolean(node.virtualDevice),
                 action: { type: 'properties' }
             },
             {
@@ -1281,7 +1266,7 @@
         }
         Object.assign(operationContext, {
             operation,
-            node: node?.virtualDevice ? null : node,
+            node,
             subtree: ['get', 'get-config', 'edit-config'].includes(operation) ? buildNodeXml(node, 'filter') : '',
             config: operation === 'edit-config' ? buildNodeXml(node, 'config') : '',
             rawRpc: operation === 'raw-rpc' ? buildRawRpcDraft(node) : '',
@@ -1368,7 +1353,7 @@
     };
 
     const showNodeProperties = async node => {
-        if (!node || node.virtualDevice) return;
+        if (!node) return;
         const requestRevision = ++detailRequestRevision;
         const profileId = selectedProfileId.value;
         const requestedCompileId = compileId.value;

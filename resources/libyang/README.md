@@ -43,9 +43,23 @@ The automatic build requires network access to fetch the pinned upstream
 sources, plus these host tools:
 
 - macOS and Linux: Git, CMake, and a working C compiler toolchain.
-- Windows: an x64 host with Git, CMake, Visual Studio C++ build tools, the
-  Windows SDK, and a bootstrapped vcpkg checkout. Set `VCPKG_ROOT` when vcpkg
-  is not in the default location.
+- Windows: an x64 host with Git, CMake 3.15 or newer, the Visual Studio C++ x64
+  Build Tools (or the **Desktop development with C++** workload), the Windows
+  SDK, and network access. A preinstalled vcpkg checkout is not required. When
+  `VCPKG_ROOT` is unset, the build downloads the pinned vcpkg baseline into
+  `%LOCALAPPDATA%\NetNexus\BuildTools\vcpkg\<baseline-key>`, bootstraps it, and
+  reuses that per-user checkout on later installs.
+
+`VCPKG_ROOT` is an explicit override and must identify a complete Git checkout;
+the build bootstraps it when `vcpkg.exe` is missing. `VCPKG_INSTALLATION_ROOT`
+is used only when it identifies a complete checkout; an incomplete value is
+ignored in favor of the managed per-user cache.
+
+If the managed vcpkg or another pinned-source download fails, fix network or
+proxy access and rerun `npm install` (or `npm run libyang:build:windows`). The
+download honors Git proxy configuration and the standard `HTTP_PROXY` /
+`HTTPS_PROXY` environment variables. An incomplete managed checkout is removed
+and downloaded again automatically on the retry.
 
 Force a clean build for the current platform with:
 

@@ -133,6 +133,8 @@ async function moduleToolbarGeometry(page) {
             selectionCheckbox: rect(find('.selection-row .nn-checkbox-wrapper')),
             search: rect(find('.selection-row .selection-search')),
             status: rect(find('.selection-row .selection-status')),
+            table: rect(find('.module-table')),
+            compileLog: rect(find('[data-testid="yang-compile-log-panel"]')),
             controls: [
                 find('[data-testid="yang-modules-profile-select-field"]'),
                 find('.module-refresh-action'),
@@ -766,7 +768,7 @@ test.describe('NETCONF/YANG workbench', () => {
         );
     });
 
-    test('shows the current compilation diagnostics in the model list', async ({ page }) => {
+    test('shows the current compilation logs inline in the model list', async ({ page }) => {
         harness.controller.state.yang.diagnostics = [
             {
                 severity: 'error',
@@ -785,6 +787,10 @@ test.describe('NETCONF/YANG workbench', () => {
             },
             { severity: 'info', module: 'ietf-interfaces', message: 'libyang validation started' }
         ];
+        const failedModule = harness.controller.state.yang.modules.find(module => module.name === 'ietf-interfaces');
+        failedModule.compiled = false;
+        failedModule.compileStatus = 'failed';
+        failedModule.status = 'failed';
         harness.controller.state.yang.workspace = null;
         let requestedCompileId = '';
         const originalControllerCall = harness.controller.call.bind(harness.controller);
@@ -794,26 +800,57 @@ test.describe('NETCONF/YANG workbench', () => {
         };
 
         await page.goto('/#/yang/yang-modules');
-        await page.getByRole('button', { name: /编译诊断/u }).click();
 
-        const diagnosticDialog = page.getByRole('dialog', { name: '编译诊断' });
-        await expect(diagnosticDialog).toBeVisible();
-        await expect(diagnosticDialog.getByText('missing import ietf-ip', { exact: true })).toBeVisible();
-        await expect(diagnosticDialog.getByText('ietf-interfaces@2018-02-20.yang:12:7', { exact: true })).toBeVisible();
-        expect(requestedCompileId).toBe(harness.controller.state.yang.workspace.compileId);
+        const compileLog = page.getByTestId('yang-compile-log-panel');
+        await expect(compileLog).toBeVisible();
+        await expect(
+            compileLog.getByText('ietf-interfaces@2018-02-20.yang 编译失败', { exact: true })
+        ).toBeVisible();
+        await expect(
+            compileLog.getByText('ietf-yang-types@2013-07-15.yang 编译成功', { exact: true })
+        ).toBeVisible();
+        await expect(compileLog.getByText('missing import ietf-ip', { exact: true })).toBeVisible();
+        await expect(compileLog.getByText('unused typedef demo-type', { exact: true })).toBeVisible();
+        await expect(compileLog.getByText('libyang validation started', { exact: true })).toBeVisible();
+        await expect(compileLog.getByText('ietf-interfaces@2018-02-20.yang:12:7', { exact: true })).toBeVisible();
+        await expect(compileLog.getByText('错误 1 · 警告 1', { exact: true })).toBeVisible();
+        await expect.poll(() => requestedCompileId).toBe(harness.controller.state.yang.workspace.compileId);
+        await expect(page.getByRole('button', { name: /编译诊断/u })).toHaveCount(0);
+        await expect(page.getByRole('dialog', { name: '编译诊断' })).toHaveCount(0);
 
-        const errorRow = diagnosticDialog.locator('.diagnostic-row').filter({ hasText: 'missing import ietf-ip' });
+        const errorRow = compileLog.locator('.compile-log-row').filter({ hasText: 'missing import ietf-ip' });
         await errorRow.getByRole('button', { name: '查看源码', exact: true }).click();
         const sourceDrawer = page.getByRole('dialog', { name: 'ietf-interfaces@2018-02-20' });
         await expect(sourceDrawer).toBeVisible();
         await expect(sourceDrawer).toContainText('module ietf-interfaces');
-        await expect(diagnosticDialog).toBeVisible();
+        await expect(compileLog).toBeVisible();
         await sourceDrawer.getByRole('button', { name: '关闭' }).click();
-        await expect(diagnosticDialog).toBeVisible();
+        await expect(compileLog).toBeVisible();
 
-        await diagnosticDialog.getByRole('tab', { name: '错误', exact: true }).click();
-        await expect(diagnosticDialog.getByText('unused typedef demo-type', { exact: true })).toHaveCount(0);
-        await expect(diagnosticDialog.getByText('libyang validation started', { exact: true })).toHaveCount(0);
+        await compileLog.getByRole('tab', { name: '错误', exact: true }).click();
+        await expect(compileLog.getByText('missing import ietf-ip', { exact: true })).toBeVisible();
+        await expect(
+            compileLog.getByText('ietf-interfaces@2018-02-20.yang 编译失败', { exact: true })
+        ).toBeVisible();
+        await expect(compileLog.locator('.compile-log-list').getByText(/编译成功$/u)).toHaveCount(0);
+        await expect(compileLog.getByText('unused typedef demo-type', { exact: true })).toHaveCount(0);
+        await expect(compileLog.getByText('libyang validation started', { exact: true })).toHaveCount(0);
+
+        await compileLog.getByRole('tab', { name: '警告', exact: true }).click();
+        await expect(compileLog.getByText('missing import ietf-ip', { exact: true })).toHaveCount(0);
+        await expect(compileLog.getByText('unused typedef demo-type', { exact: true })).toBeVisible();
+        await expect(compileLog.getByText('libyang validation started', { exact: true })).toHaveCount(0);
+
+        await compileLog.getByRole('tab', { name: '信息', exact: true }).click();
+        await expect(compileLog.getByText('missing import ietf-ip', { exact: true })).toHaveCount(0);
+        await expect(compileLog.getByText('unused typedef demo-type', { exact: true })).toHaveCount(0);
+        await expect(compileLog.getByText('libyang validation started', { exact: true })).toBeVisible();
+        await expect(
+            compileLog.getByText('ietf-yang-types@2013-07-15.yang 编译成功', { exact: true })
+        ).toBeVisible();
+        expect(await compileLog.locator('.compile-log-list').evaluate(element => getComputedStyle(element).overflowY)).toBe(
+            'auto'
+        );
     });
 
     test('keeps Profile fixed and model filters beside selection at responsive widths', async ({ page }) => {
@@ -828,17 +865,25 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(statusSelect).toBeVisible();
 
         const wideBefore = await moduleToolbarGeometry(page);
-        expect(wideBefore.profileRow.bottom).toBeLessThanOrEqual(wideBefore.actions.y + 1);
+        expect(Math.abs(wideBefore.profile.y - wideBefore.actions.y)).toBeLessThanOrEqual(1);
+        expect(wideBefore.profile.right).toBeLessThanOrEqual(wideBefore.actions.x + 1);
         expect(wideBefore.actions.bottom).toBeLessThanOrEqual(wideBefore.selectionRow.y + 1);
         expect(wideBefore.selectionCheckbox.right).toBeLessThanOrEqual(wideBefore.search.x + 1);
         expect(wideBefore.search.right).toBeLessThanOrEqual(wideBefore.status.x + 1);
         expect(wideBefore.search.width).toBeLessThanOrEqual(341);
         expect(wideBefore.status.width).toBeLessThanOrEqual(151);
         expect(wideBefore.pageHasHorizontalOverflow).toBe(false);
+        expect(wideBefore.table.bottom).toBeLessThanOrEqual(wideBefore.compileLog.y + 1);
+        expect(wideBefore.compileLog.bottom).toBeLessThanOrEqual(wideBefore.body.bottom + 1);
+        expect(wideBefore.compileLog.height).toBeGreaterThanOrEqual(159);
         [...wideBefore.controls, ...wideBefore.actionButtons].forEach(bounds => {
             expect(bounds.x).toBeGreaterThanOrEqual(wideBefore.body.x - 1);
             expect(bounds.right).toBeLessThanOrEqual(wideBefore.body.right + 1);
         });
+        for (const action of ['获取设备列表', '导入文件', '导入目录', '编译所选', '刷新']) {
+            await expect(page.getByTestId('yang-modules-actions').getByRole('button', { name: action, exact: true })).toBeVisible();
+        }
+        await expect(page.getByRole('button', { name: /编译诊断/u })).toHaveCount(0);
 
         await modelSearch.fill('ietf-interfaces');
         await statusSelect.click();
@@ -860,9 +905,13 @@ test.describe('NETCONF/YANG workbench', () => {
         await page.setViewportSize({ width: 900, height: 900 });
         await expect(profileSelect).toBeVisible();
         const narrow = await moduleToolbarGeometry(page);
-        expect(narrow.profileRow.bottom).toBeLessThanOrEqual(narrow.actions.y + 1);
-        expect(narrow.actions.bottom).toBeLessThanOrEqual(narrow.selectionRow.y + 1);
+        expect(narrow.profile.y).toBeGreaterThanOrEqual(narrow.profileRow.y - 1);
+        expect(narrow.actions.y).toBeGreaterThanOrEqual(narrow.profileRow.y - 1);
+        expect(narrow.actions.bottom).toBeLessThanOrEqual(narrow.profileRow.bottom + 1);
+        expect(narrow.profileRow.bottom).toBeLessThanOrEqual(narrow.selectionRow.y + 1);
         expect(narrow.pageHasHorizontalOverflow).toBe(false);
+        expect(narrow.table.bottom).toBeLessThanOrEqual(narrow.compileLog.y + 1);
+        expect(narrow.compileLog.bottom).toBeLessThanOrEqual(narrow.body.bottom + 1);
         [...narrow.controls, ...narrow.actionButtons].forEach(bounds => {
             expect(bounds.x).toBeGreaterThanOrEqual(narrow.body.x - 1);
             expect(bounds.right).toBeLessThanOrEqual(narrow.body.right + 1);
@@ -2034,63 +2083,19 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(sessionReadCount).toBe(sessionReadsAfterMount);
     });
 
-    test('keeps global device operations in the tree when no Schema nodes are available', async ({ page }) => {
+    test('removes the virtual device entry and device-level context menu', async ({ page }) => {
         harness.controller.state.yang.schemaTree = null;
         harness.controller.state.yang.compiledModuleIds = [];
         harness.controller.state.yang.workspace = null;
-        await page.setViewportSize({ width: 1000, height: 420 });
 
         await page.goto('/#/yang/yang-workspace');
-        const deviceNode = schemaTreeItems(page).filter({
-            has: page.getByText('当前设备：NETCONF E2E 设备', { exact: true })
-        });
-        await expect(deviceNode).toBeVisible();
-        await deviceNode.click({ button: 'right' });
-
-        const contextMenu = page.locator('.schema-context-menu');
-        const menuMetrics = await contextMenu.evaluate(element => {
-            const bounds = element.getBoundingClientRect();
-            return { top: bounds.top, bottom: bounds.bottom, viewportHeight: window.innerHeight };
-        });
-        expect(menuMetrics.top).toBeGreaterThanOrEqual(0);
-        expect(menuMetrics.bottom).toBeLessThanOrEqual(menuMetrics.viewportHeight);
-        await expect(contextMenu).toBeVisible();
-
-        await page.setViewportSize({ width: 1280, height: 900 });
-        await deviceNode.click({ button: 'right' });
-        await expect(contextMenu.getByRole('menuitem', { name: '读取全部数据（get）', exact: true })).toBeVisible();
-        await expect(contextMenu.getByRole('menuitem', { name: '原始 RPC', exact: true })).toBeVisible();
-
-        await selectSchemaMenuPath(contextMenu, ['配置存储', 'Startup'], '删除整个 Startup…');
-        const operationPanel = page.locator('.workspace-operation-panel');
-        const operationParameters = operationPanel.getByRole('complementary', { name: '操作参数' });
-        const targetPath = '/rpc/delete-config/target';
-        const deleteTargetNode = parameterNode(operationParameters, targetPath);
-        await expect(deleteTargetNode).toContainText('startup');
-        const parameterMenu = (await openParameterContextMenu(page, operationParameters, targetPath)).menu;
-        await parameterMenu.getByRole('menuitem', { name: '修改值', exact: true }).click();
-        const targetDialog = page.getByRole('dialog', { name: '修改值 · target' });
-        const deleteTarget = targetDialog.getByRole('combobox', { name: '节点值' });
-        await expect(deleteTarget).toContainText('startup');
-        await deleteTarget.click();
-        await expect(page.getByRole('option', { name: 'startup', exact: true })).toBeVisible();
-        await expect(page.getByRole('option', { name: 'candidate', exact: true })).toHaveCount(0);
-        await page.getByRole('option', { name: 'startup', exact: true }).click();
-        await targetDialog.getByRole('button', { name: '确认', exact: true }).click();
-
-        await deviceNode.click({ button: 'right' });
-        await selectSchemaMenuPath(contextMenu, ['配置存储'], '复制配置存储（copy-config）…');
-        await operationPanel.getByRole('button', { name: '执行 copy-config', exact: true }).click();
-        const confirmationDialog = page.getByRole('dialog', { name: '确认执行 copy-config' });
-        await expect(confirmationDialog).toBeVisible();
-        await page.keyboard.press('Escape');
-        await expect(confirmationDialog).toBeHidden();
-        await expect(operationPanel.getByRole('button', { name: '执行 copy-config', exact: true })).toBeVisible();
-
-        await deviceNode.click({ button: 'right' });
-        await contextMenu.getByRole('menuitem', { name: '读取全部数据（get）', exact: true }).click();
-        await expect(operationPanel.getByRole('button', { name: '执行 get', exact: true })).toBeVisible();
-        await expect(page.getByRole('dialog', { name: /get · NETCONF E2E 设备/u })).toHaveCount(0);
+        const schemaBackground = page.locator('.schema-tree-scroll');
+        await expect(page.getByText('当前设备：NETCONF E2E 设备', { exact: true })).toHaveCount(0);
+        await expect(schemaTreeItems(page)).toHaveCount(0);
+        await expect(schemaBackground.getByText('暂无 Schema 节点', { exact: true })).toBeVisible();
+        await schemaBackground.click({ button: 'right', position: { x: 12, y: 12 } });
+        await expect(page.locator('.schema-context-menu')).toHaveCount(0);
+        await expect(page.getByText('设备级操作', { exact: true })).toHaveCount(0);
     });
 
     test('closes the destructive workspace confirmation when leaving the page', async ({ page }) => {
