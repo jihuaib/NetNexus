@@ -1580,9 +1580,7 @@ class YangCompiler {
             throw error;
         }
 
-        const searchPaths = normalizeStringList(schemaCompiler.searchPaths).map(searchPath =>
-            path.resolve(searchPath)
-        );
+        const searchPaths = normalizeStringList(schemaCompiler.searchPaths).map(searchPath => path.resolve(searchPath));
         const features = normalizeStringList(schemaCompiler.features);
         const args = [];
         for (const searchPath of searchPaths) args.push('-p', searchPath);
@@ -1594,7 +1592,19 @@ class YangCompiler {
         try {
             await fs.promises.writeFile(inputPath, payload, { encoding: 'utf8', mode: 0o600 });
             const execution = await runtime.execute(
-                [...args, '-I', 'xml', '-t', target.validationType, ...schemaPaths, inputPath],
+                [
+                    ...args,
+                    /* Implement imports referenced by when/must/default expressions. Without
+                     * this, schema-file ordering can leave an already imported module in the
+                     * non-implemented state and make otherwise valid instance data fail. */
+                    '-i',
+                    '-I',
+                    'xml',
+                    '-t',
+                    target.validationType,
+                    ...schemaPaths,
+                    inputPath
+                ],
                 {
                     cwd: path.dirname(schemaPaths[0]),
                     timeoutMs: normalizePositiveInteger(

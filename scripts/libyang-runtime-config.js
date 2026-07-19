@@ -6,6 +6,25 @@ const path = require('path');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const RUNTIME_ROOT = path.join(PROJECT_ROOT, 'resources', 'libyang');
 const RELEASE_MANIFEST_PATH = path.join(RUNTIME_ROOT, 'manifest.json');
+const IANA_MODULE_DIRECTORY_RELATIVE_PATH = path.join('resources', 'libyang', 'iana');
+const IANA_MODULE_MANIFEST_RELATIVE_PATH = path.join(IANA_MODULE_DIRECTORY_RELATIVE_PATH, 'manifest.json');
+const IANA_MODULE_REGISTRY_SOURCE = 'https://www.iana.org/assignments/yang-parameters/';
+const PINNED_IANA_MODULE_FILES = Object.freeze([
+    'ietf-interfaces@2018-02-20.yang',
+    'ietf-ip@2018-02-22.yang',
+    'ietf-netconf-acm@2018-02-14.yang',
+    'ietf-network-instance@2019-01-21.yang',
+    'ietf-restconf@2017-01-26.yang',
+    'ietf-subscribed-notifications@2019-09-09.yang',
+    'ietf-yang-patch@2017-02-22.yang',
+    'ietf-yang-push@2019-09-09.yang'
+]);
+const REQUIRED_RUNTIME_IETF_MODULES = Object.freeze([
+    'ietf-datastores',
+    'ietf-inet-types',
+    'ietf-yang-schema-mount',
+    'ietf-yang-types'
+]);
 const ARCH_BY_ELECTRON_BUILDER_VALUE = Object.freeze({
     0: 'ia32',
     1: 'x64',
@@ -38,12 +57,139 @@ function getReleaseManifest(projectRoot = PROJECT_ROOT) {
     return manifest;
 }
 
+function sha256File(filePath) {
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function getPinnedIanaModuleManifest(projectRoot = PROJECT_ROOT) {
+    const manifestPath = path.join(projectRoot, IANA_MODULE_MANIFEST_RELATIVE_PATH);
+    let manifest;
+    try {
+        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch (error) {
+        throw new Error(`Pinned IANA YANG manifest is missing or invalid: ${manifestPath}: ${error.message}`);
+    }
+    if (
+        manifest.schemaVersion !== 1 ||
+        manifest.source !== IANA_MODULE_REGISTRY_SOURCE ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(manifest.retrievedAt || '') ||
+        !Array.isArray(manifest.modules)
+    ) {
+        throw new Error(`Pinned IANA YANG manifest has an invalid contract: ${manifestPath}`);
+    }
+    const moduleFiles = manifest.modules.map(module => module?.file);
+    if (JSON.stringify(moduleFiles) !== JSON.stringify(PINNED_IANA_MODULE_FILES)) {
+        throw new Error(`Pinned IANA YANG manifest must list the exact supported module set: ${manifestPath}`);
+    }
+    for (const module of manifest.modules) {
+        if (!/^[a-f0-9]{64}$/.test(module?.sha256 || '')) {
+            throw new Error(`Pinned IANA YANG module ${module?.file || 'unknown'} has an invalid SHA-256`);
+        }
+    }
+    return manifest;
+}
+
+function assertRegularNonSymlinkFile(filePath, label) {
+    let stats;
+    try {
+        stats = fs.lstatSync(filePath);
+    } catch (error) {
+        throw new Error(`${label} is missing: ${filePath}: ${error.message}`);
+    }
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new Error(`${label} must be a regular non-symlink file: ${filePath}`);
+    }
+}
+
+function assertSha256(filePath, expectedSha256, label) {
+    if (!/^[a-f0-9]{64}$/.test(expectedSha256 || '')) {
+        throw new Error(`${label} metadata has an invalid SHA-256`);
+    }
+    const actualSha256 = sha256File(filePath);
+    if (actualSha256 !== expectedSha256) {
+        throw new Error(`${label} SHA-256 mismatch: expected ${expectedSha256}, got ${actualSha256}`);
+    }
+    return actualSha256;
+}
+
+function getRuntimeYangModuleDirectory(runtimeDirectory) {
+    return path.join(path.resolve(runtimeDirectory), 'share', 'yang', 'modules', 'libyang');
+}
+
+function collectRequiredRuntimeIetfModules(runtimeDirectory) {
+    const moduleDirectory = getRuntimeYangModuleDirectory(runtimeDirectory);
+    let entries;
+    try {
+        entries = fs.readdirSync(moduleDirectory, { withFileTypes: true });
+    } catch (error) {
+        throw new Error(`Bundled libyang YANG module directory is missing: ${moduleDirectory}: ${error.message}`);
+    }
+    return REQUIRED_RUNTIME_IETF_MODULES.map(moduleName => {
+        const candidates = entries
+            .filter(entry => entry.name === `${moduleName}.yang` || entry.name.startsWith(`${moduleName}@`))
+            .filter(entry => entry.name.endsWith('.yang'))
+            .map(entry => entry.name)
+            .sort();
+        if (candidates.length !== 1) {
+            throw new Error(
+                `Bundled RFC 8639/RFC 8641 dependency ${moduleName} must resolve to exactly one YANG file in ` +
+                    `${moduleDirectory}; found ${candidates.length}`
+            );
+        }
+        const file = candidates[0];
+        const filePath = path.join(moduleDirectory, file);
+        assertRegularNonSymlinkFile(filePath, `Bundled RFC 8639/RFC 8641 dependency ${moduleName}`);
+        return { file, sha256: sha256File(filePath) };
+    });
+}
+
+function verifyPinnedIanaModules(options = {}) {
+    const projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
+    const sourceDirectory = path.join(projectRoot, IANA_MODULE_DIRECTORY_RELATIVE_PATH);
+    const manifest = getPinnedIanaModuleManifest(projectRoot);
+    const actualSourceFiles = fs
+        .readdirSync(sourceDirectory, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.yang'))
+        .map(entry => entry.name)
+        .sort();
+    if (JSON.stringify(actualSourceFiles) !== JSON.stringify([...PINNED_IANA_MODULE_FILES].sort())) {
+        throw new Error(`Pinned IANA YANG source directory contains an unexpected module set: ${sourceDirectory}`);
+    }
+
+    const modules = manifest.modules.map(module => {
+        const sourcePath = path.join(sourceDirectory, module.file);
+        assertRegularNonSymlinkFile(sourcePath, `Pinned IANA YANG module ${module.file}`);
+        const sourceSha256 = sha256File(sourcePath);
+        if (sourceSha256 !== module.sha256) {
+            throw new Error(
+                `Pinned IANA YANG module ${module.file} SHA-256 mismatch: expected ${module.sha256}, ` +
+                    `got ${sourceSha256}`
+            );
+        }
+
+        if (options.runtimeDirectory) {
+            const runtimePath = path.join(getRuntimeYangModuleDirectory(options.runtimeDirectory), module.file);
+            assertRegularNonSymlinkFile(runtimePath, `Bundled IANA YANG module ${module.file}`);
+            assertSha256(runtimePath, module.sha256, `Bundled IANA YANG module ${module.file}`);
+        }
+        return { file: module.file, sha256: module.sha256 };
+    });
+    return {
+        source: manifest.source,
+        retrievedAt: manifest.retrievedAt,
+        modules
+    };
+}
+
 function getBuildInputPaths(platform = process.platform) {
     const normalizedPlatform = normalizePlatform(platform);
     const common = [
         'resources/libyang/manifest.json',
+        IANA_MODULE_MANIFEST_RELATIVE_PATH,
+        ...PINNED_IANA_MODULE_FILES.map(file => path.join(IANA_MODULE_DIRECTORY_RELATIVE_PATH, file)),
         'scripts/libyang-runtime-config.js',
         'scripts/netnexus-libyang-schema.c',
+        'scripts/verify-libyang-iana-modules.js',
         'scripts/write-libyang-runtime-manifest.js'
     ];
     if (normalizedPlatform === 'darwin' || normalizedPlatform === 'linux') {
@@ -66,7 +212,7 @@ function computeBuildInputHash(options = {}) {
     const platform = normalizePlatform(options.platform);
     const arch = normalizeArch(options.arch);
     const digest = crypto.createHash('sha256');
-    digest.update(`netnexus-libyang-build-input-v1\0${platform}\0${arch}\0`);
+    digest.update(`netnexus-libyang-build-input-v3\0${platform}\0${arch}\0`);
     for (const relativePath of getBuildInputPaths(platform)) {
         const filePath = path.join(projectRoot, relativePath);
         digest.update(relativePath.replaceAll(path.sep, '/'));
@@ -146,7 +292,7 @@ function readRuntimeManifest(runtimeDirectory) {
 
 function verifyRuntimeBuildContract(options) {
     const { manifestPath, runtime } = readRuntimeManifest(options.runtimeDirectory);
-    if (runtime.schemaVersion !== 2) {
+    if (runtime.schemaVersion !== 3) {
         throw new Error(`Bundled libyang runtime metadata has an unsupported schema version: ${manifestPath}`);
     }
     if (runtime.version !== options.expectedVersion) {
@@ -167,6 +313,19 @@ function verifyRuntimeBuildContract(options) {
             `Bundled libyang runtime build inputs changed for ${options.platform}-${options.arch}; rebuild is required`
         );
     }
+    const ianaModules = verifyPinnedIanaModules({
+        projectRoot: options.projectRoot,
+        runtimeDirectory: options.runtimeDirectory
+    });
+    if (JSON.stringify(runtime.ianaYangModules) !== JSON.stringify(ianaModules.modules)) {
+        throw new Error(`Bundled libyang runtime metadata does not match the pinned IANA YANG module set`);
+    }
+    const requiredDependencies = collectRequiredRuntimeIetfModules(options.runtimeDirectory);
+    if (JSON.stringify(runtime.requiredIetfYangModules) !== JSON.stringify(requiredDependencies)) {
+        throw new Error(`Bundled libyang runtime metadata does not match the RFC 8639/RFC 8641 dependency closure`);
+    }
+    assertSha256(options.executable, runtime.sha256, 'Bundled yanglint');
+    assertSha256(options.schemaExecutable, runtime.schemaSha256, 'Bundled libyang Schema helper');
     return runtime;
 }
 
@@ -195,7 +354,9 @@ function verifyRuntime(options = {}) {
         platform,
         arch,
         runtimeDirectory,
-        expectedVersion
+        expectedVersion,
+        executable,
+        schemaExecutable
     });
     const execution = executeVersionProbe(executable, ['--version'], options);
     if (execution.error || execution.status !== 0) {
@@ -252,9 +413,17 @@ module.exports = {
     PROJECT_ROOT,
     RUNTIME_ROOT,
     RELEASE_MANIFEST_PATH,
+    IANA_MODULE_DIRECTORY_RELATIVE_PATH,
+    IANA_MODULE_MANIFEST_RELATIVE_PATH,
+    IANA_MODULE_REGISTRY_SOURCE,
+    PINNED_IANA_MODULE_FILES,
+    REQUIRED_RUNTIME_IETF_MODULES,
     normalizePlatform,
     normalizeArch,
     getReleaseManifest,
+    getPinnedIanaModuleManifest,
+    verifyPinnedIanaModules,
+    collectRequiredRuntimeIetfModules,
     getBuildInputPaths,
     computeBuildInputHash,
     getRuntimeDirectory,

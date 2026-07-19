@@ -58,6 +58,136 @@ async function run() {
     assert.equal(packagedStatus.schemaContractVersion, 1);
     assert(fs.statSync(packagedStatus.schemaPath).isFile());
 
+    const bundledModuleDirectory = path.join(packagedStatus.runtimeDirectory, 'share', 'yang', 'modules', 'libyang');
+    const notificationSchemaPaths = [
+        path.join(bundledModuleDirectory, 'ietf-subscribed-notifications@2019-09-09.yang'),
+        path.join(bundledModuleDirectory, 'ietf-yang-push@2019-09-09.yang')
+    ];
+    const notificationYanglint = spawnSync(
+        packagedStatus.path,
+        ['-p', bundledModuleDirectory, ...notificationSchemaPaths],
+        { cwd: bundledModuleDirectory, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
+    );
+    assert.equal(
+        notificationYanglint.status,
+        0,
+        `RFC 8639/RFC 8641 bundled schema validation failed: ${notificationYanglint.stderr}`
+    );
+    const notificationSchema = spawnSync(
+        packagedStatus.schemaPath,
+        [
+            '-p',
+            bundledModuleDirectory,
+            '-F',
+            'ietf-subscribed-notifications:encode-xml',
+            '-F',
+            'ietf-subscribed-notifications:replay',
+            '-F',
+            'ietf-subscribed-notifications:subtree',
+            '-F',
+            'ietf-subscribed-notifications:xpath',
+            '-F',
+            'ietf-yang-push:on-change',
+            ...notificationSchemaPaths
+        ],
+        { cwd: bundledModuleDirectory, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
+    );
+    assert.equal(notificationSchema.status, 0, notificationSchema.stderr);
+    const notificationTree = validateAuthoritativeSchemaTree(JSON.parse(notificationSchema.stdout));
+    const notificationNodeNames = new Set(Object.values(notificationTree.nodes).map(node => node.name));
+    for (const operation of [
+        'establish-subscription',
+        'modify-subscription',
+        'delete-subscription',
+        'resync-subscription',
+        'push-update',
+        'push-change-update'
+    ]) {
+        assert(notificationNodeNames.has(operation), `bundled notification schemas must compile ${operation}`);
+    }
+    const notificationFeatureArguments = [
+        '-F',
+        'ietf-subscribed-notifications:encode-xml,replay,subtree,xpath',
+        '-F',
+        'ietf-yang-push:on-change'
+    ];
+    const modernRpcPath = path.join(tempRoot, 'establish-subscription.xml');
+    fs.writeFileSync(
+        modernRpcPath,
+        `<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="smoke-rpc">
+  <establish-subscription xmlns="urn:ietf:params:xml:ns:yang:ietf-subscribed-notifications"
+      xmlns:yp="urn:ietf:params:xml:ns:yang:ietf-yang-push"
+      xmlns:ds="urn:ietf:params:xml:ns:yang:ietf-datastores">
+    <yp:datastore>ds:operational</yp:datastore>
+    <yp:periodic><yp:period>100</yp:period></yp:periodic>
+  </establish-subscription>
+</rpc>\n`,
+        'utf8'
+    );
+    const modernRpcValidation = spawnSync(
+        packagedStatus.path,
+        [
+            '-p',
+            bundledModuleDirectory,
+            ...notificationFeatureArguments,
+            '-i',
+            '-i',
+            '-t',
+            'nc-rpc',
+            ...notificationSchemaPaths,
+            modernRpcPath
+        ],
+        { cwd: bundledModuleDirectory, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
+    );
+    assert.equal(
+        modernRpcValidation.status,
+        0,
+        `RFC 8640 RPC instance validation failed: ${modernRpcValidation.stderr}`
+    );
+
+    const pushChangePath = path.join(tempRoot, 'push-change-update.xml');
+    fs.writeFileSync(
+        pushChangePath,
+        `<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0">
+  <eventTime>2026-07-19T00:00:00Z</eventTime>
+  <push-change-update xmlns="urn:ietf:params:xml:ns:yang:ietf-yang-push">
+    <id>0</id>
+    <datastore-changes>
+      <yang-patch>
+        <patch-id>0</patch-id>
+        <edit>
+          <edit-id>edit-1</edit-id>
+          <operation>replace</operation>
+          <target xmlns:if="urn:ietf:params:xml:ns:yang:ietf-interfaces">/if:interfaces</target>
+          <value><if:interfaces xmlns:if="urn:ietf:params:xml:ns:yang:ietf-interfaces"/></value>
+        </edit>
+      </yang-patch>
+    </datastore-changes>
+  </push-change-update>
+</notification>\n`,
+        'utf8'
+    );
+    const pushChangeValidation = spawnSync(
+        packagedStatus.path,
+        [
+            '-p',
+            bundledModuleDirectory,
+            ...notificationFeatureArguments,
+            '-i',
+            '-i',
+            '-t',
+            'nc-notif',
+            ...notificationSchemaPaths,
+            pushChangePath
+        ],
+        { cwd: bundledModuleDirectory, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
+    );
+    assert.equal(
+        pushChangeValidation.status,
+        0,
+        `RFC 8641 push-change-update instance validation failed: ${pushChangeValidation.stderr}`
+    );
+
     const registry = new YangRegistry({
         rootDir: path.join(tempRoot, 'repository'),
         resourcesPath: path.join(projectRoot, 'resources'),
@@ -165,6 +295,71 @@ async function run() {
     const missingFeatureModule = runDirectHelper(['missing-feature-module:extra']);
     assert.notEqual(missingFeatureModule.status, 0);
     assert.match(missingFeatureModule.stderr, /missing-feature-module/u);
+
+    const referencedWhenDirectory = path.join(directRoot, 'referenced-when');
+    fs.mkdirSync(referencedWhenDirectory, { recursive: true });
+    fs.writeFileSync(
+        path.join(referencedWhenDirectory, 'referenced-when-state@2026-07-19.yang'),
+        `module referenced-when-state {
+  yang-version 1.1;
+  namespace "urn:netnexus:referenced-when:state";
+  prefix rws;
+  revision 2026-07-19;
+  container state { leaf blocked { type boolean; default false; } }
+}`,
+        'utf8'
+    );
+    const referencedWhenMainPath = path.join(referencedWhenDirectory, 'referenced-when-main@2026-07-19.yang');
+    fs.writeFileSync(
+        referencedWhenMainPath,
+        `module referenced-when-main {
+  yang-version 1.1;
+  namespace "urn:netnexus:referenced-when:main";
+  prefix rwm;
+  import referenced-when-state { prefix rws; revision-date 2026-07-19; }
+  revision 2026-07-19;
+  container root {
+    container guarded {
+      when "not(/rws:state/rws:blocked)";
+      leaf value { type string; }
+    }
+  }
+}`,
+        'utf8'
+    );
+    const referencedWhenResult = spawnSync(
+        packagedStatus.schemaPath,
+        [
+            '-p',
+            path.join(packagedStatus.runtimeDirectory, 'share', 'yang', 'modules', 'libyang'),
+            '-p',
+            referencedWhenDirectory,
+            /* The imported state module is intentionally available only through the search path. */
+            referencedWhenMainPath
+        ],
+        { cwd: directRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
+    );
+    assert.equal(
+        referencedWhenResult.status,
+        0,
+        `cross-module when Schema compilation failed: ${referencedWhenResult.stderr}`
+    );
+    assert.doesNotMatch(
+        referencedWhenResult.stderr,
+        /non-implemented|not implemented|check skipped/iu,
+        'the Schema helper must implement modules referenced by when expressions'
+    );
+    const referencedWhenTree = validateAuthoritativeSchemaTree(JSON.parse(referencedWhenResult.stdout));
+    assert(
+        referencedWhenTree.roots.some(id => referencedWhenTree.nodes[id].name === 'referenced-when-main'),
+        'the explicitly requested module must remain an effective Schema root'
+    );
+    assert(
+        Object.values(referencedWhenTree.nodes).some(
+            node => node.name === 'guarded' && node.module === 'referenced-when-main'
+        ),
+        'the effective Schema must retain the node guarded by the cross-module when expression'
+    );
 
     const closureDirectory = path.join(directRoot, 'implemented-closure');
     fs.mkdirSync(closureDirectory, { recursive: true });

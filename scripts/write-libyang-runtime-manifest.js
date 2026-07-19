@@ -6,7 +6,9 @@ const {
     computeBuildInputHash,
     getReleaseManifest,
     normalizePlatform,
-    normalizeArch
+    normalizeArch,
+    verifyPinnedIanaModules,
+    collectRequiredRuntimeIetfModules
 } = require('./libyang-runtime-config');
 
 const runtimeDirectory = path.resolve(process.argv[2] || '');
@@ -28,8 +30,10 @@ const platform = normalizePlatform(process.platform);
 const arch = normalizeArch(process.arch);
 const digest = crypto.createHash('sha256').update(fs.readFileSync(executable)).digest('hex');
 const schemaDigest = crypto.createHash('sha256').update(fs.readFileSync(schemaExecutable)).digest('hex');
+const ianaModules = verifyPinnedIanaModules({ projectRoot: PROJECT_ROOT, runtimeDirectory });
+const requiredIetfYangModules = collectRequiredRuntimeIetfModules(runtimeDirectory);
 const runtime = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     engine: 'libyang',
     executable: 'yanglint',
     schemaExecutable: 'netnexus-libyang-schema',
@@ -48,6 +52,8 @@ const runtime = {
     platform,
     arch,
     buildInputHash: computeBuildInputHash({ projectRoot: PROJECT_ROOT, platform, arch }),
+    ianaYangModules: ianaModules.modules,
+    requiredIetfYangModules,
     sha256: digest,
     schemaSha256: schemaDigest,
     builtAt: new Date().toISOString()

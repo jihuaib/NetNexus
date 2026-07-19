@@ -11,6 +11,7 @@ libyang_tag="v${libyang_version}"
 libyang_commit="$(node -p "require('${project_root}/resources/libyang/manifest.json').libyangCommit")"
 pcre2_tag="$(node -p "require('${project_root}/resources/libyang/manifest.json').pcre2Tag")"
 pcre2_commit="$(node -p "require('${project_root}/resources/libyang/manifest.json').pcre2Commit")"
+iana_module_source="${project_root}/resources/libyang/iana"
 
 assert_git_commit() {
     local source_directory="$1"
@@ -33,6 +34,7 @@ for command_name in cmake git; do
         exit 1
     fi
 done
+node "${project_root}/scripts/verify-libyang-iana-modules.js"
 
 runtime_build_dir="$(mktemp -d)"
 trap 'rm -rf "${runtime_build_dir}"' EXIT
@@ -91,6 +93,7 @@ chmod 0755 "${runtime_target}/bin/netnexus-libyang-schema"
 cp "${runtime_build_dir}/source/LICENSE" "${runtime_target}/LICENSE.libyang"
 cp "${runtime_build_dir}/pcre2-source/LICENCE.md" "${runtime_target}/LICENSE.pcre2"
 find "${runtime_build_dir}/source/modules" -maxdepth 1 -type f -name '*.yang' -exec cp {} "${runtime_target}/share/yang/modules/libyang/" \;
+find "${iana_module_source}" -maxdepth 1 -type f -name '*.yang' -exec cp {} "${runtime_target}/share/yang/modules/libyang/" \;
 
 node "${project_root}/scripts/write-libyang-runtime-manifest.js" \
     "${runtime_target}" "${runtime_target}/bin/yanglint" \

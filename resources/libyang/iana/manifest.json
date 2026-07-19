@@ -1,0 +1,39 @@
+{
+    "schemaVersion": 1,
+    "source": "https://www.iana.org/assignments/yang-parameters/",
+    "retrievedAt": "2026-07-19",
+    "modules": [
+        {
+            "file": "ietf-interfaces@2018-02-20.yang",
+            "sha256": "742cf4ad04459e1018ea69015adafe0202ade27b85d8350c1845b640ee32da16"
+        },
+        {
+            "file": "ietf-ip@2018-02-22.yang",
+            "sha256": "00c87aab91d95199927ba109c572eef3bca0fb949cedb3849b883e2d969d04b7"
+        },
+        {
+            "file": "ietf-netconf-acm@2018-02-14.yang",
+            "sha256": "796951c3b64cc602d62a012312cf1a14255c97d12e99a5c5a2c932c2df4cadbf"
+        },
+        {
+            "file": "ietf-network-instance@2019-01-21.yang",
+            "sha256": "dc2b85fa0d8eefdf411b9c2fb2b032983324371ca6b277fabf939011f97bd2ea"
+        },
+        {
+            "file": "ietf-restconf@2017-01-26.yang",
+            "sha256": "e757021148926cc9b39b593598a2bd8f212423c68ea1cbb1ed1b65532d091297"
+        },
+        {
+            "file": "ietf-subscribed-notifications@2019-09-09.yang",
+            "sha256": "bccf35fad3785d25dd6ba4b1ff7e8533670d0fcf2fbe4dd5aa87682a10badced"
+        },
+        {
+            "file": "ietf-yang-patch@2017-02-22.yang",
+            "sha256": "69cb8502718e0960d068bc2a5ea03daf8b5579b4a08b80146f4c11b875e465e9"
+        },
+        {
+            "file": "ietf-yang-push@2019-09-09.yang",
+            "sha256": "7ba7d6733a10feba5bf72d0060a0f24f25212b0a3524a21d8e255b9b04f50dc1"
+        }
+    ]
+}

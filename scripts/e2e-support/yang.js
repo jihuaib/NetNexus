@@ -12,6 +12,10 @@ const {
     buildGet,
     buildGetConfig,
     buildCreateSubscription,
+    buildEstablishSubscription,
+    buildModifySubscription,
+    buildDeleteSubscription,
+    buildResyncSubscription,
     childValues,
     filterSubtreeXml,
     findRoot,
@@ -67,8 +71,21 @@ const capabilities = Object.freeze([
     'urn:ietf:params:netconf:capability:xpath:1.0',
     'urn:ietf:params:netconf:capability:yang-library:1.1?revision=2019-01-04',
     'urn:ietf:params:netconf:capability:notification:1.0',
-    'urn:ietf:params:netconf:capability:interleave:1.0'
+    'urn:ietf:params:netconf:capability:interleave:1.0',
+    'urn:ietf:params:xml:ns:yang:ietf-subscribed-notifications?module=ietf-subscribed-notifications&revision=2019-09-09&features=encode-xml,subtree,xpath,replay',
+    'urn:ietf:params:xml:ns:yang:ietf-yang-push?module=ietf-yang-push&revision=2019-09-09&features=on-change'
 ]);
+
+const modernSessionSupport = Object.freeze({
+    supportsSubscribedNotifications: true,
+    supportsYangPush: true,
+    capabilitySupport: Object.freeze({
+        subscribedNotifications: true,
+        modernNotifications: true,
+        yangPush: true
+    }),
+    notificationFeatures: Object.freeze(['encode-xml', 'subtree', 'xpath', 'replay', 'on-change'])
+});
 
 const PAGE_INTERFACES_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-interfaces';
 const PAGE_SYSTEM_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-system';
@@ -506,6 +523,7 @@ function createYangPageState() {
         subscriptions: [],
         connected: true,
         rpcSequence: 100,
+        nextPublisherSubscriptionId: 51,
         compileSequence: 0,
         modules,
         moduleSources: { ...moduleSources },
@@ -526,7 +544,8 @@ function createYangPageState() {
             version: '1.1',
             sessionId: 'e2e-session-101',
             connectedAt: new Date().toISOString(),
-            capabilities: [...capabilities]
+            capabilities: [...capabilities],
+            ...clone(modernSessionSupport)
         },
         workspace: null
     };
@@ -664,6 +683,29 @@ function emitSubscription(controller, subscription) {
     controller.emitEvent('netconf:subscriptionEvent', successResponse(clone(subscription), 'NETCONF 通知订阅状态更新'));
 }
 
+function refreshSessionSubscriptions(yang) {
+    if (!yang.session?.connected) return;
+    const live = yang.subscriptions.filter(
+        subscription =>
+            subscription.profileId === yang.session.profileId &&
+            subscription.sessionId === yang.session.sessionId &&
+            ['active', 'suspended'].includes(subscription.state)
+    );
+    const legacy = live.find(subscription => subscription.type === 'rfc5277') || null;
+    const modern = live.filter(subscription => subscription.type !== 'rfc5277');
+    Object.assign(yang.session, {
+        subscriptions: clone(live),
+        subscriptionActive: Boolean(legacy),
+        activeSubscription: clone(legacy),
+        legacySubscriptionActive: Boolean(legacy),
+        modernSubscriptionActive: modern.length > 0,
+        modernSubscriptionCount: modern.length,
+        modernSubscriptionIds: modern.map(subscription => subscription.id),
+        subscriptionMode: legacy ? 'legacy' : modern.length ? 'modern' : null
+    });
+    yang.sessions[yang.session.profileId] = yang.session;
+}
+
 function emitMockNotification(controller, yang, subscription) {
     const eventTime = new Date().toISOString();
     const xml =
@@ -680,12 +722,44 @@ function emitMockNotification(controller, yang, subscription) {
             port: yang.session.port,
             sessionId: yang.session.sessionId,
             subscriptionId: subscription.id,
-            subscriptionType: 'rfc5277',
+            deviceSubscriptionId: subscription.deviceSubscriptionId || '',
+            subscriptionType: subscription.subscriptionType || 'rfc5277',
             state: 'active',
             eventTime,
             receivedAt: new Date().toISOString(),
             eventName: 'interface-event',
             namespace: PAGE_INTERFACES_NAMESPACE,
+            xml
+        })
+    );
+}
+
+function emitMockPushUpdate(controller, yang, subscription) {
+    const eventTime = new Date().toISOString();
+    const xml =
+        '<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0">' +
+        `<eventTime>${eventTime}</eventTime>` +
+        '<push-update xmlns="urn:ietf:params:xml:ns:yang:ietf-yang-push">' +
+        `<id>${subscription.deviceSubscriptionId}</id><datastore-contents>` +
+        `<interfaces xmlns="${PAGE_INTERFACES_NAMESPACE}"><interface><name>eth0</name>` +
+        '<enabled>true</enabled><in-octets>102400</in-octets></interface></interfaces>' +
+        '</datastore-contents></push-update></notification>';
+    controller.emitEvent(
+        'netconf:notification',
+        successResponse({
+            profileId: yang.session.profileId,
+            profileName: yang.session.profileName,
+            host: yang.session.host,
+            port: yang.session.port,
+            sessionId: yang.session.sessionId,
+            subscriptionId: subscription.id,
+            deviceSubscriptionId: subscription.deviceSubscriptionId,
+            subscriptionType: subscription.subscriptionType,
+            state: subscription.state,
+            eventTime,
+            receivedAt: new Date().toISOString(),
+            eventName: 'push-update',
+            namespace: 'urn:ietf:params:xml:ns:yang:ietf-yang-push',
             xml
         })
     );
@@ -767,7 +841,8 @@ function connectSession(controller, yang, target) {
         sessionId: `e2e-session-${Date.now()}`,
         connectedAt: new Date().toISOString(),
         hostKeyFingerprint: profile.hostKeyFingerprint || 'SHA256:NetNexusE2EHostKey',
-        capabilities: [...capabilities]
+        capabilities: [...capabilities],
+        ...clone(modernSessionSupport)
     };
     yang.sessions[profile.id] = yang.session;
     yang.activeProfileId = profile.id;
@@ -824,7 +899,10 @@ function handleNetconfCall(controller, yang, method, args) {
         activateProfileWorkspace(yang, { profileId });
         const terminatedAt = new Date().toISOString();
         yang.subscriptions
-            .filter(subscription => subscription.profileId === profileId && subscription.state === 'active')
+            .filter(
+                subscription =>
+                    subscription.profileId === profileId && ['active', 'suspended'].includes(subscription.state)
+            )
             .forEach(subscription => {
                 Object.assign(subscription, { state: 'terminated', terminatedAt, reason: 'session-closed' });
                 emitSubscription(controller, subscription);
@@ -943,11 +1021,106 @@ function handleNetconfCall(controller, yang, method, args) {
                 createdAt: new Date().toISOString()
             };
             yang.subscriptions.unshift(subscription);
-            yang.session.subscriptionActive = true;
-            yang.session.activeSubscription = clone(subscription);
+            refreshSessionSubscriptions(yang);
             emitSubscription(controller, subscription);
             emitSession(controller, yang);
             emitMockNotification(controller, yang, subscription);
+        } else if (request.operation === 'establish-subscription') {
+            const live = yang.subscriptions.filter(
+                item => item.sessionId === yang.session.sessionId && ['active', 'suspended'].includes(item.state)
+            );
+            if (live.some(item => item.type === 'rfc5277')) {
+                return errorResponse('当前 NETCONF Session 已使用 RFC 5277，不能建立 RFC 8639 动态订阅');
+            }
+            const publisherId = String(yang.nextPublisherSubscriptionId++);
+            const targetType =
+                request.targetType === 'datastore' || request.subscriptionType === 'yang-push' ? 'datastore' : 'stream';
+            const subscription = {
+                id: `rfc8639-${yang.session.sessionId}-${publisherId}`,
+                subscriptionId: `rfc8639-${yang.session.sessionId}-${publisherId}`,
+                publisherSubscriptionId: publisherId,
+                deviceSubscriptionId: publisherId,
+                profileId: yang.session.profileId,
+                profileName: yang.session.profileName,
+                host: yang.session.host,
+                port: yang.session.port,
+                sessionId: yang.session.sessionId,
+                type: targetType === 'datastore' ? 'rfc8641' : 'rfc8639',
+                protocol: targetType === 'datastore' ? 'rfc8641' : 'rfc8639',
+                subscriptionType: targetType === 'datastore' ? 'yang-push' : 'rfc8639',
+                targetType,
+                state: 'active',
+                stream: targetType === 'stream' ? request.stream || 'NETCONF' : '',
+                datastore: targetType === 'datastore' ? request.datastore || 'ds:operational' : '',
+                filter: clone(
+                    targetType === 'datastore' ? request.datastoreFilter || null : request.streamFilter || null
+                ),
+                replayStartTime: request.replayStartTime || '',
+                stopTime: request.stopTime || '',
+                updateTrigger: request.updateTrigger || '',
+                period: request.period ?? '',
+                anchorTime: request.anchorTime || '',
+                dampeningPeriod: request.dampeningPeriod ?? '',
+                syncOnStart: request.syncOnStart !== false,
+                excludedChanges: clone(request.excludedChanges || []),
+                createdAt: new Date().toISOString()
+            };
+            request.publisherSubscriptionId = publisherId;
+            yang.subscriptions.unshift(subscription);
+            refreshSessionSubscriptions(yang);
+            emitSubscription(controller, subscription);
+            emitSession(controller, yang);
+            if (targetType === 'datastore' && (request.updateTrigger === 'periodic' || request.syncOnStart !== false)) {
+                emitMockPushUpdate(controller, yang, subscription);
+            } else if (targetType === 'stream') {
+                emitMockNotification(controller, yang, subscription);
+            }
+        } else if (['modify-subscription', 'delete-subscription', 'resync-subscription'].includes(request.operation)) {
+            const requestedId = String(request.id || request.deviceSubscriptionId || request.subscriptionId || '');
+            const subscription = yang.subscriptions.find(
+                item =>
+                    item.sessionId === yang.session.sessionId &&
+                    item.type !== 'rfc5277' &&
+                    [item.id, item.deviceSubscriptionId, item.publisherSubscriptionId].includes(requestedId)
+            );
+            if (!subscription || !['active', 'suspended'].includes(subscription.state)) {
+                return errorResponse(`找不到当前 Session 上的动态订阅 ${requestedId}`);
+            }
+            request.id = subscription.deviceSubscriptionId;
+            if (request.operation === 'modify-subscription') {
+                Object.assign(subscription, {
+                    state: 'active',
+                    filter: clone(
+                        subscription.targetType === 'datastore'
+                            ? (request.datastoreFilter ?? subscription.filter)
+                            : (request.streamFilter ?? subscription.filter)
+                    ),
+                    datastore: request.datastore || subscription.datastore,
+                    stopTime: request.stopTime ?? subscription.stopTime,
+                    updateTrigger: request.updateTrigger || subscription.updateTrigger,
+                    period: request.period ?? subscription.period,
+                    anchorTime: request.anchorTime ?? subscription.anchorTime,
+                    dampeningPeriod: request.dampeningPeriod ?? subscription.dampeningPeriod,
+                    updatedAt: new Date().toISOString()
+                });
+                refreshSessionSubscriptions(yang);
+                emitSubscription(controller, subscription);
+                emitSession(controller, yang);
+            } else if (request.operation === 'delete-subscription') {
+                Object.assign(subscription, {
+                    state: 'ended',
+                    terminatedAt: new Date().toISOString(),
+                    terminationReason: 'deleted'
+                });
+                refreshSessionSubscriptions(yang);
+                emitSubscription(controller, subscription);
+                emitSession(controller, yang);
+            } else {
+                if (subscription.targetType !== 'datastore' || subscription.updateTrigger !== 'on-change') {
+                    return errorResponse('只有 active on-change YANG-Push 订阅可以重同步');
+                }
+                emitMockPushUpdate(controller, yang, subscription);
+            }
         }
         return executeNetconfOperation(yang, request);
     }
@@ -1001,16 +1174,27 @@ function executeNetconfOperation(yang, request) {
     const messageId = String(++yang.rpcSequence);
     let operationXml = `<${operation}/>`;
     let replyBody = '<ok/>';
+    const operationOptions = { ...request };
+    delete operationOptions.operation;
+    delete operationOptions.profileId;
     if (operation === 'get' || operation === 'get-config') {
         const readOptions = { ...request };
         delete readOptions.messageId;
         delete readOptions.wrap;
         operationXml = operation === 'get' ? buildGet(readOptions) : buildGetConfig(readOptions);
     } else if (operation === 'create-subscription') {
-        const subscriptionOptions = { ...request };
-        delete subscriptionOptions.operation;
-        delete subscriptionOptions.profileId;
-        operationXml = buildCreateSubscription(subscriptionOptions);
+        operationXml = buildCreateSubscription(operationOptions);
+    } else if (operation === 'establish-subscription') {
+        operationXml = buildEstablishSubscription(operationOptions);
+        replyBody = `<id xmlns="urn:ietf:params:xml:ns:yang:ietf-subscribed-notifications">${
+            request.publisherSubscriptionId
+        }</id>`;
+    } else if (operation === 'modify-subscription') {
+        operationXml = buildModifySubscription(operationOptions);
+    } else if (operation === 'delete-subscription') {
+        operationXml = buildDeleteSubscription(operationOptions);
+    } else if (operation === 'resync-subscription') {
+        operationXml = buildResyncSubscription(operationOptions);
     }
     const rpc = rpcEnvelope(messageId, operationXml);
     if (operation === 'get' || operation === 'get-config') {

@@ -156,10 +156,7 @@
                         <template v-else-if="column.key === 'status'">
                             <nn-tooltip :title="record.message || record.error || ''">
                                 <nn-tag :color="getStatusMeta(record.status).color">
-                                    <LoadingOutlined
-                                        v-if="['downloading', 'compiling'].includes(record.status)"
-                                        spin
-                                    />
+                                    <LoadingOutlined v-if="['downloading', 'compiling'].includes(record.status)" spin />
                                     {{ getStatusMeta(record.status).text }}
                                 </nn-tag>
                             </nn-tooltip>
@@ -372,7 +369,9 @@
                         </template>
                         <template v-else-if="column.key === 'state'">
                             <nn-tag v-if="isDeviceModuleLocal(record)" color="cyan">本地已有</nn-tag>
-                            <nn-tag v-else-if="!isYangDeviceModule(record)" color="warning">不支持 {{ record.format }}</nn-tag>
+                            <nn-tag v-else-if="!isYangDeviceModule(record)" color="warning">
+                                不支持 {{ record.format }}
+                            </nn-tag>
                             <nn-tag v-else color="blue">待下载</nn-tag>
                         </template>
                     </template>
@@ -524,14 +523,8 @@
     let profileRequestRevision = 0;
     let profileContextReady = false;
     const { compilerAvailable, refreshCompilerStatus } = useYangCompilerStatus();
-    const {
-        profilesLoading,
-        selectedProfileId,
-        profileOptions,
-        refreshProfiles,
-        selectProfile,
-        taskMatchesProfile
-    } = useYangProfileContext();
+    const { profilesLoading, selectedProfileId, profileOptions, refreshProfiles, selectProfile, taskMatchesProfile } =
+        useYangProfileContext();
     const profileRequestMatches = (profileId, requestRevision) =>
         requestRevision === profileRequestRevision && profileId === selectedProfileId.value;
 
@@ -655,9 +648,7 @@
             )
         );
     });
-    const deviceSelectableVisibleModules = computed(() =>
-        filteredDeviceModules.value.filter(canDownloadDeviceModule)
-    );
+    const deviceSelectableVisibleModules = computed(() => filteredDeviceModules.value.filter(canDownloadDeviceModule));
     const selectedDeviceModules = computed(() =>
         deviceModules.value.filter(
             module => deviceSelectedKeys.value.includes(module._key) && canDownloadDeviceModule(module)
@@ -679,9 +670,7 @@
         if (!progress || progress.action !== 'download') return '正在准备下载';
         if (progress.phase === 'discovering') return '正在刷新设备 YANG 列表';
         if (progress.phase === 'importing') return '正在写入本地 YANG 仓库';
-        const count = Number(progress.total || 0)
-            ? `${Number(progress.completed || 0)}/${Number(progress.total)}`
-            : '';
+        const count = Number(progress.total || 0) ? `${Number(progress.completed || 0)}/${Number(progress.total)}` : '';
         return [progress.module || progress.message || '正在下载模型及其依赖', count].filter(Boolean).join(' · ');
     });
     const allVisibleSelected = computed(
@@ -691,8 +680,7 @@
     );
     const someVisibleSelected = computed(
         () =>
-            !allVisibleSelected.value &&
-            filteredModules.value.some(module => selectedKeys.value.includes(module._key))
+            !allVisibleSelected.value && filteredModules.value.some(module => selectedKeys.value.includes(module._key))
     );
     const selectedModules = computed(() => modules.value.filter(module => selectedKeys.value.includes(module._key)));
     const selectedLocalModules = computed(() => selectedModules.value.filter(module => module.isLocal && module.id));
@@ -1035,7 +1023,6 @@
         await Promise.all([loadModules(), loadCompileContext({ quiet: true })]);
         if (!profileRequestMatches(profileId, requestRevision)) return;
         if (deviceDownloadFailures.value.length) {
-            notify.warning(`已下载可用模型，但有 ${deviceDownloadFailures.value.length} 个模型或依赖失败`);
             return;
         }
         deviceModuleModalOpen.value = false;
@@ -1096,9 +1083,7 @@
                 return;
             }
             const request =
-                method === 'importFiles'
-                    ? { profileId, filePaths: target }
-                    : { profileId, directoryPath: target };
+                method === 'importFiles' ? { profileId, filePaths: target } : { profileId, directoryPath: target };
             const { data } = await invokeBridge('yangApi', method, request);
             if (!profileRequestMatches(profileId, requestRevision)) return;
             const asyncTask = handleImmediateTask('import', data, ['modules']);
@@ -1231,7 +1216,6 @@
                 downloading.value = false;
                 deviceModuleError.value =
                     data.message || data.error?.message || (taskFailed ? '模型或依赖下载失败' : '模型下载已取消');
-                if (taskFailed) notify.error(deviceModuleError.value);
                 Promise.all([loadModules(), loadCompileContext({ quiet: true })]);
             } else {
                 finishDeviceDownload(data.result || {}, selectedProfileId.value, profileRequestRevision);
@@ -1246,7 +1230,7 @@
                 }
             });
         }
-        if (action !== 'download' && (data.phase || data.status) === 'failed') {
+        if (!['download', 'compile'].includes(action) && (data.phase || data.status) === 'failed') {
             notify.error(data.message || data.error?.message || 'YANG 任务失败');
         }
         if (action !== 'download') {
@@ -1298,8 +1282,7 @@
         sourceText.value = '';
     };
 
-    const reloadCurrentProfile = () =>
-        Promise.all([loadModules(), loadSession(), loadDiagnostics({ quiet: true })]);
+    const reloadCurrentProfile = () => Promise.all([loadModules(), loadSession(), loadDiagnostics({ quiet: true })]);
 
     watch(selectedProfileId, (profileId, previousProfileId) => {
         if (profileId === previousProfileId) return;

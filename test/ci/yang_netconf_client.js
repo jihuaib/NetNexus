@@ -70,7 +70,8 @@ async function runClientTests() {
 
     const connecting = client.connect();
     assert.equal(new DelimiterFramer().push(transport.writes[0]).length, 1, 'client hello must use 1.0 delimiter');
-    const earlyNotification = '<notification><eventTime>2026-07-18T01:02:03Z</eventTime><changed/></notification>';
+    const earlyNotification =
+        '<notification><eventTime>2026-07-18T01:02:03Z</eventTime><data><value>notification-data</value></data><changed/></notification>';
     transport.receive(
         Buffer.concat([
             encodeDelimiter(serverHello([BASE_10, BASE_11])),
@@ -83,6 +84,11 @@ async function runClientTests() {
     assert.equal(client.connected, true);
     assert.equal(notifications.length, 1, 'bytes following hello must be decoded with negotiated framing');
     assert.equal(notifications[0].eventTime, '2026-07-18T01:02:03Z');
+    assert.equal(
+        notifications[0].root.data.value,
+        'notification-data',
+        'the rpc-reply data optimization must not make notification payloads opaque'
+    );
 
     const firstPromise = client.rpc('<get><filter type="subtree"><a/></filter></get>');
     const secondPromise = client.rpc('<get-config><source><running/></source></get-config>');
@@ -105,10 +111,49 @@ async function runClientTests() {
     assert.equal(secondReply.messageId, secondId);
     assert.equal(secondReply.requestXml, secondXml);
     assert.equal(extractMessageId(secondReply.requestXml), secondReply.messageId);
+    assert.deepEqual(secondReply.data, { value: 'second' }, 'ordinary rpc-reply data must retain object semantics');
     assert.equal(client.pending.size, 0);
 
+    const largePromise = client.rpc('<get><filter type="subtree"><items/></filter></get>', {
+        rejectOnRpcError: false
+    });
+    const largeRpc = decodeChunkedWrite(transport.writes[3]);
+    const largeId = extractMessageId(largeRpc);
+    const largeData = Array.from({ length: 20_000 }, (_value, index) => `<item><name>${index}</name></item>`).join(
+        ''
+    );
+    const largeReplyXml =
+        `<nc:rpc-reply xmlns:nc="${BASE_10}" message-id="${largeId}">` +
+        `<nc:data>${largeData}</nc:data>` +
+        '<nc:rpc-error><nc:error-type>application</nc:error-type><nc:error-tag>operation-failed</nc:error-tag>' +
+        '<nc:error-severity>error</nc:error-severity><nc:error-message>large reply error</nc:error-message></nc:rpc-error>' +
+        '</nc:rpc-reply>';
+    transport.receive(encodeChunked(largeReplyXml));
+    const largeReply = await largePromise;
+    assert.equal(largeReply.messageId, largeId);
+    assert.equal(largeReply.xml, largeReplyXml, 'the exact rpc-reply XML must remain available');
+    assert.equal(typeof largeReply.data, 'string', 'rpc-reply data must be retained as opaque inner XML');
+    assert.equal(largeReply.data, largeData);
+    assert.strictEqual(largeReply.root.data, largeReply.data);
+    assert.equal(largeReply.errors[0].tag, 'operation-failed', 'rpc-error fields outside opaque data must be parsed');
+    assert.equal(largeReply.errors[0].message, 'large reply error');
+
+    const largeNotificationValue = 'notification-value-'.repeat(16_384);
+    transport.receive(
+        encodeChunked(
+            `<notification><eventTime>2026-07-18T02:03:04Z</eventTime><data><value>${largeNotificationValue}</value></data></notification>`
+        )
+    );
+    assert.equal(notifications.length, 2);
+    assert.equal(notifications[1].eventTime, '2026-07-18T02:03:04Z');
+    assert.equal(
+        notifications[1].root.data.value,
+        largeNotificationValue,
+        'large notifications must retain their parsed payload semantics'
+    );
+
     const errorPromise = client.rpc('<edit-config><target><running/></target><config/></edit-config>');
-    const errorRpc = decodeChunkedWrite(transport.writes[3]);
+    const errorRpc = decodeChunkedWrite(transport.writes[4]);
     const errorId = /message-id="([^"]+)"/.exec(errorRpc)[1];
     transport.receive(
         encodeChunked(

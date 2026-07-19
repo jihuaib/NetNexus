@@ -403,6 +403,267 @@
                             />
                         </template>
 
+                        <template
+                            v-else-if="
+                                activeOperation === 'establish-subscription' ||
+                                activeOperation === 'modify-subscription'
+                            "
+                        >
+                            <nn-form-item v-if="activeOperation === 'modify-subscription'" label="订阅 ID" required>
+                                <nn-input
+                                    v-model:value="form.modernSubscriptionId"
+                                    placeholder="设备返回的 uint32 subscription id"
+                                />
+                            </nn-form-item>
+                            <nn-form-item label="订阅目标" required>
+                                <nn-select
+                                    v-model:value="form.modernSubscriptionTarget"
+                                    :options="modernTargetOptions"
+                                    :disabled="modernManagementTargetLocked"
+                                    :title="
+                                        modernManagementTargetLocked
+                                            ? '动态订阅不能跨 event stream / datastore 修改；请删除后重新建立'
+                                            : ''
+                                    "
+                                />
+                            </nn-form-item>
+                            <nn-form-item
+                                v-if="
+                                    form.modernSubscriptionTarget === 'stream' &&
+                                    activeOperation === 'establish-subscription'
+                                "
+                                label="事件流"
+                                required
+                            >
+                                <nn-input v-model:value="form.subscriptionStream" placeholder="NETCONF" />
+                            </nn-form-item>
+                            <nn-form-item
+                                v-if="form.modernSubscriptionTarget === 'datastore'"
+                                label="Datastore"
+                                required
+                            >
+                                <div style="display: grid; gap: 8px; width: 100%">
+                                    <nn-select
+                                        v-model:value="modernDatastoreSelection"
+                                        :options="modernDatastoreOptions"
+                                    />
+                                    <nn-input
+                                        v-if="modernDatastoreSelection === CUSTOM_DATASTORE_VALUE"
+                                        v-model:value="form.modernDatastore"
+                                        placeholder="自定义 identityref，例如 vd:telemetry"
+                                    />
+                                </div>
+                            </nn-form-item>
+                            <nn-form-item label="过滤类型">
+                                <nn-select v-model:value="form.filterType" :options="modernFilterTypeOptions" />
+                            </nn-form-item>
+                            <nn-form-item v-if="form.filterType === 'reference'" label="过滤器引用" required>
+                                <nn-input
+                                    v-model:value="form.modernFilterReference"
+                                    placeholder="已配置的 stream-filter-name 或 selection-filter-ref"
+                                />
+                            </nn-form-item>
+                            <nn-form-item v-if="form.filterType === 'xpath'" label="XPath" required>
+                                <nn-input
+                                    v-model:value="form.xpath"
+                                    placeholder="XPath 中使用的前缀必须在生成的 XML 中声明"
+                                />
+                            </nn-form-item>
+                            <nn-form-item
+                                v-if="
+                                    form.modernSubscriptionTarget === 'datastore' ||
+                                    form.filterType === 'xpath' ||
+                                    form.filterType === 'subtree' ||
+                                    (activeOperation === 'establish-subscription' && form.modernEncoding === 'custom')
+                                "
+                                label="XML 命名空间绑定"
+                            >
+                                <nn-input
+                                    v-model:value="form.modernXpathNamespaces"
+                                    placeholder="例如 if=urn:ietf:params:xml:ns:yang:ietf-interfaces；默认命名空间用 xmlns=URI"
+                                />
+                            </nn-form-item>
+                            <nn-form-item v-if="form.filterType === 'subtree'" label="Subtree" required>
+                                <XmlCodeEditor
+                                    v-model:value="form.subtree"
+                                    :rows="10"
+                                    placeholder='例如 <state xmlns="urn:example:device"/>'
+                                    class="xml-editor"
+                                />
+                            </nn-form-item>
+                            <nn-row
+                                v-if="
+                                    form.modernSubscriptionTarget === 'stream' ||
+                                    activeOperation === 'establish-subscription'
+                                "
+                                :gutter="12"
+                            >
+                                <nn-col
+                                    v-if="
+                                        form.modernSubscriptionTarget === 'stream' &&
+                                        activeOperation === 'establish-subscription'
+                                    "
+                                    :span="12"
+                                >
+                                    <nn-form-item label="replay-start-time">
+                                        <nn-input
+                                            v-model:value="form.subscriptionStartTime"
+                                            :disabled="!hasModernFeature('replay')"
+                                            placeholder="RFC 3339，可留空"
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                                <nn-col :span="12">
+                                    <nn-form-item label="stop-time">
+                                        <nn-input
+                                            v-model:value="form.subscriptionStopTime"
+                                            :placeholder="
+                                                activeOperation === 'modify-subscription'
+                                                    ? 'RFC 3339；留空表示保持当前值'
+                                                    : 'RFC 3339，可留空'
+                                            "
+                                        />
+                                    </nn-form-item>
+                                </nn-col>
+                            </nn-row>
+                            <template v-if="activeOperation === 'establish-subscription'">
+                                <nn-row :gutter="12">
+                                    <nn-col :span="8">
+                                        <nn-form-item label="DSCP">
+                                            <nn-input-number
+                                                v-model:value="form.modernDscp"
+                                                :min="0"
+                                                :max="63"
+                                                :disabled="!hasModernFeature('dscp')"
+                                                placeholder="可留空"
+                                                style="width: 100%"
+                                            />
+                                        </nn-form-item>
+                                    </nn-col>
+                                    <nn-col :span="8">
+                                        <nn-form-item label="weighting">
+                                            <nn-input-number
+                                                v-model:value="form.modernWeighting"
+                                                :min="0"
+                                                :max="255"
+                                                :disabled="!hasModernFeature('qos')"
+                                                placeholder="可留空"
+                                                style="width: 100%"
+                                            />
+                                        </nn-form-item>
+                                    </nn-col>
+                                    <nn-col :span="8">
+                                        <nn-form-item label="dependency">
+                                            <nn-input-number
+                                                v-model:value="form.modernDependency"
+                                                :min="0"
+                                                :max="4294967295"
+                                                :disabled="!hasModernFeature('qos')"
+                                                placeholder="订阅 ID，可留空"
+                                                style="width: 100%"
+                                            />
+                                        </nn-form-item>
+                                    </nn-col>
+                                </nn-row>
+                                <nn-form-item label="内容编码">
+                                    <nn-select v-model:value="form.modernEncoding" :options="modernEncodingOptions" />
+                                </nn-form-item>
+                                <nn-form-item
+                                    v-if="form.modernEncoding === 'custom'"
+                                    label="自定义 encoding identityref"
+                                    required
+                                >
+                                    <nn-input v-model:value="form.modernCustomEncoding" placeholder="例如 ve:cbor" />
+                                </nn-form-item>
+                            </template>
+                            <template v-if="form.modernSubscriptionTarget === 'datastore'">
+                                <nn-form-item label="更新策略">
+                                    <nn-select
+                                        v-model:value="form.modernUpdateTrigger"
+                                        :options="modernUpdateTriggerOptions"
+                                    />
+                                </nn-form-item>
+                                <template v-if="form.modernUpdateTrigger === 'periodic'">
+                                    <nn-form-item label="period" required>
+                                        <nn-input-number
+                                            v-model:value="form.modernPeriod"
+                                            :min="0"
+                                            :max="4294967295"
+                                            addon-after="× 0.01 秒"
+                                            style="width: 260px"
+                                        />
+                                    </nn-form-item>
+                                    <nn-form-item label="anchor-time">
+                                        <nn-input
+                                            v-model:value="form.modernAnchorTime"
+                                            placeholder="RFC 3339，可留空"
+                                        />
+                                    </nn-form-item>
+                                </template>
+                                <template v-else-if="form.modernUpdateTrigger === 'on-change'">
+                                    <nn-form-item label="dampening-period">
+                                        <nn-input-number
+                                            v-model:value="form.modernDampeningPeriod"
+                                            :min="0"
+                                            :max="4294967295"
+                                            addon-after="× 0.01 秒"
+                                            style="width: 260px"
+                                        />
+                                    </nn-form-item>
+                                    <nn-form-item
+                                        v-if="activeOperation === 'establish-subscription'"
+                                        label="sync-on-start"
+                                    >
+                                        <nn-checkbox v-model:checked="form.modernSyncOnStart">
+                                            建立后先发送完整 push-update
+                                        </nn-checkbox>
+                                    </nn-form-item>
+                                    <nn-form-item v-if="activeOperation === 'establish-subscription'" label="排除变化">
+                                        <nn-select
+                                            v-model:value="form.modernExcludedChanges"
+                                            mode="multiple"
+                                            allow-clear
+                                            :options="excludedChangeOptions"
+                                            placeholder="可不排除任何变化"
+                                        />
+                                    </nn-form-item>
+                                </template>
+                            </template>
+                            <nn-alert
+                                type="info"
+                                show-icon
+                                message="RFC 8639 / RFC 8640 动态订阅"
+                                description="同一 Session 可建立多个现代订阅，但不能与 RFC 5277 create-subscription 混用。"
+                            />
+                        </template>
+
+                        <template
+                            v-else-if="
+                                activeOperation === 'delete-subscription' || activeOperation === 'resync-subscription'
+                            "
+                        >
+                            <nn-form-item label="订阅 ID" required>
+                                <nn-input
+                                    v-model:value="form.modernSubscriptionId"
+                                    placeholder="设备返回的 uint32 subscription id"
+                                />
+                            </nn-form-item>
+                            <nn-alert
+                                :type="activeOperation === 'delete-subscription' ? 'warning' : 'info'"
+                                show-icon
+                                :message="
+                                    activeOperation === 'delete-subscription'
+                                        ? '删除动态订阅'
+                                        : '请求 YANG-Push 完整重同步'
+                                "
+                                :description="
+                                    activeOperation === 'delete-subscription'
+                                        ? '仅删除所选现代订阅，不会断开承载它的 NETCONF Session。'
+                                        : '仅 active on-change 订阅可重同步；成功后设备应发送完整 push-update。'
+                                "
+                            />
+                        </template>
+
                         <template v-else-if="activeOperation === 'raw-rpc'">
                             <nn-form-item label="RPC XML" required>
                                 <XmlCodeEditor
@@ -497,19 +758,35 @@
                             <span v-if="result.messageId">message-id: {{ result.messageId }}</span>
                         </div>
                         <nn-space>
-                            <nn-button class="xml-display-toggle" size="small" @click="toggleReplyDisplayMode">
+                            <nn-button
+                                v-if="!result.replyTruncated"
+                                class="xml-display-toggle"
+                                size="small"
+                                @click="toggleReplyDisplayMode"
+                            >
                                 {{ replyDisplayMode === 'formatted' ? '查看原文' : '格式化' }}
                             </nn-button>
-                            <nn-button size="small" @click="copyReplyXml">复制响应</nn-button>
+                            <nn-button v-if="result.replyFileToken" size="small" @click="saveFullReply">
+                                <template #icon><DownloadOutlined /></template>
+                                保存完整响应
+                            </nn-button>
+                            <nn-button size="small" @click="copyReplyXml">
+                                {{ result.replyTruncated ? '复制预览' : '复制响应' }}
+                            </nn-button>
                             <nn-button size="small" @click="clearResult">清空</nn-button>
                         </nn-space>
+                    </div>
+                    <div v-if="result.replyTruncated" class="large-reply-notice" role="status">
+                        完整响应 {{ formatByteSize(result.replyBytes) }}，为避免页面卡顿仅显示有界的头尾预览；可保存完整
+                        XML 后使用专用编辑器查看。
                     </div>
                     <XmlCodeEditor
                         v-if="result.reply"
                         :value="displayedReplyXml"
                         :rows="8"
                         readonly
-                        line-numbers
+                        :line-numbers="!result.replyTruncated"
+                        :lightweight="result.replyTruncated"
                         :bordered="false"
                         class="rpc-result"
                         :class="{ 'rpc-result-error': result.status === 'error' }"
@@ -702,6 +979,8 @@
                                 v-if="parameterAction.node?.editor === 'select'"
                                 :value="parameterAction.value"
                                 :options="parameterAction.node?.options || []"
+                                :mode="parameterAction.node?.multiple ? 'multiple' : undefined"
+                                :allow-clear="parameterAction.node?.multiple"
                                 aria-label="节点值"
                                 :aria-invalid="
                                     parameterAction.node?.required && !String(parameterAction.value ?? '').trim()
@@ -869,6 +1148,7 @@
         ApiOutlined,
         CodeOutlined,
         DeleteOutlined,
+        DownloadOutlined,
         EditOutlined,
         EyeOutlined,
         FileSearchOutlined,
@@ -883,7 +1163,12 @@
     } from '../../ui/icons';
     import XmlCodeEditor from './XmlCodeEditor.vue';
     import XmlHighlight from './XmlHighlight.vue';
-    import { isRfc3339DateTime, validateNetconfRpc } from './netconfRpcValidation';
+    import { isRfc3339DateTime, rfc3339Timestamp, validateNetconfRpc } from './netconfRpcValidation';
+    import {
+        SUBSCRIBED_NOTIFICATIONS_NAMESPACE,
+        YANG_PUSH_NAMESPACE,
+        resolveNetconfSubscriptionCapabilities
+    } from './netconfSubscriptionCapabilities';
     import {
         clonePlain,
         formatXmlForDisplay,
@@ -950,6 +1235,13 @@
     const labelCol = { style: { width: '132px' } };
     const NETCONF_BASE_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:base:1.0';
     const NETCONF_NOTIFICATION_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:notification:1.0';
+    const IETF_DATASTORES_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-datastores';
+    const MODERN_SUBSCRIPTION_OPERATIONS = new Set([
+        'establish-subscription',
+        'modify-subscription',
+        'delete-subscription',
+        'resync-subscription'
+    ]);
     const DEFAULT_RAW_RPC = '<get>\n  <filter type="subtree">\n    <!-- subtree filter -->\n  </filter>\n</get>';
     const PARAMETER_CONTEXT_MENU_MARGIN = 8;
     const PARAMETER_DATA_NODE_KEYWORDS = new Set(['container', 'list', 'leaf', 'leaf-list', 'anydata', 'anyxml']);
@@ -1046,6 +1338,7 @@
         engine: '',
         performed: false
     });
+    const modernManagementTargetLocked = ref(false);
     let requestValidationRevision = 0;
     const editConfigLoading = ref(false);
     const editConfigReadbackStatus = ref('idle');
@@ -1059,6 +1352,10 @@
         status: '',
         operation: '',
         reply: '',
+        replyTruncated: false,
+        replyBytes: 0,
+        replyPreviewBytes: 0,
+        replyFileToken: '',
         request: '',
         messageId: '',
         duration: null,
@@ -1084,6 +1381,22 @@
         subscriptionStream: 'NETCONF',
         subscriptionStartTime: '',
         subscriptionStopTime: '',
+        modernSubscriptionTarget: 'stream',
+        modernSubscriptionId: '',
+        modernFilterReference: '',
+        modernXpathNamespaces: '',
+        modernDatastore: 'ds:operational',
+        modernUpdateTrigger: 'periodic',
+        modernPeriod: 500,
+        modernAnchorTime: '',
+        modernDampeningPeriod: 0,
+        modernSyncOnStart: true,
+        modernExcludedChanges: [],
+        modernDscp: null,
+        modernWeighting: null,
+        modernDependency: null,
+        modernEncoding: 'unspecified',
+        modernCustomEncoding: '',
         rawRpc: DEFAULT_RAW_RPC
     });
 
@@ -1111,7 +1424,11 @@
             'commit',
             'cancel-commit',
             'discard-changes',
-            'create-subscription'
+            'create-subscription',
+            'establish-subscription',
+            'modify-subscription',
+            'delete-subscription',
+            'resync-subscription'
         ].includes(operation.key)
     );
     const advancedOperations = NETCONF_OPERATIONS.filter(operation => operation.key === 'raw-rpc');
@@ -1162,6 +1479,43 @@
     const capabilityIncludes = hint =>
         capabilities.value.some(capability => capability.toLowerCase().includes(hint.toLowerCase()));
     const hasCapability = name => capabilityIncludes(NETCONF_CAPABILITY_HINTS[name] || name);
+    const subscriptionCapabilities = computed(() =>
+        resolveNetconfSubscriptionCapabilities({ ...session.value, capabilities: capabilities.value })
+    );
+    const supportsYangPush = computed(() => subscriptionCapabilities.value.supportsYangPush);
+    const supportsRfc8640 = computed(() => subscriptionCapabilities.value.supportsRfc8640);
+    const hasModernFeature = feature =>
+        feature === 'on-change'
+            ? subscriptionCapabilities.value.hasYangPushFeature(feature)
+            : subscriptionCapabilities.value.hasSubscribedNotificationFeature(feature);
+    const sessionSubscriptions = () => {
+        const values = session.value.subscriptions || session.value.activeSubscriptions || [];
+        return Array.isArray(values) ? values : [];
+    };
+    const legacySubscriptionActive = () => {
+        const active = session.value.activeSubscription || session.value.subscription || null;
+        const type = String(active?.subscriptionType || active?.type || active?.protocol || '').toLowerCase();
+        if (['rfc5277', 'legacy'].includes(type)) return true;
+        if (session.value.legacySubscriptionActive === true || session.value.subscriptionMode === 'legacy') return true;
+        if (
+            sessionSubscriptions().some(
+                item => String(item?.subscriptionType || item?.type).toLowerCase() === 'rfc5277'
+            )
+        ) {
+            return true;
+        }
+        return session.value.subscriptionActive === true && !modernSubscriptionActive();
+    };
+    const modernSubscriptionActive = () => {
+        if (session.value.modernSubscriptionActive === true || session.value.subscriptionMode === 'modern') return true;
+        if (Number(session.value.modernSubscriptionCount) > 0) return true;
+        if (Array.isArray(session.value.modernSubscriptionIds) && session.value.modernSubscriptionIds.length)
+            return true;
+        return sessionSubscriptions().some(item => {
+            const type = String(item?.subscriptionType || item?.type || item?.protocol || '').toLowerCase();
+            return ['rfc8639', 'rfc8641', 'yang-push', 'modern'].includes(type);
+        });
+    };
     const supportsTestOption = computed(() =>
         capabilities.value.some(capability => /:validate:1\.1(?:[?&]|$)/iu.test(capability))
     );
@@ -1195,6 +1549,64 @@
             ...option,
             disabled: option.value === 'xpath' && !hasCapability('xpath')
         }))
+    );
+    const modernFilterTypeOptions = computed(() => {
+        const modifying = activeOperation.value === 'modify-subscription';
+        const datastoreTarget = form.modernSubscriptionTarget === 'datastore';
+        const options = [
+            ...(modifying && datastoreTarget ? [{ label: '保持当前过滤器（不修改）', value: 'unchanged' }] : []),
+            ...(modifying && !datastoreTarget && ['none', 'unchanged'].includes(form.filterType)
+                ? [{ label: '请选择事件流过滤器', value: form.filterType, disabled: true }]
+                : []),
+            ...NETCONF_FILTER_TYPE_OPTIONS.filter(option => !(modifying && option.value === 'none')),
+            { label: '已配置过滤器引用', value: 'reference' }
+        ];
+        return options.map(option => ({
+            ...option,
+            disabled:
+                (option.value === 'xpath' && !hasModernFeature('xpath')) ||
+                (option.value === 'subtree' && !hasModernFeature('subtree'))
+        }));
+    });
+    const modernTargetOptions = computed(() => [
+        { label: '事件流（RFC 8639）', value: 'stream' },
+        { label: 'Datastore（YANG-Push）', value: 'datastore', disabled: !supportsYangPush.value }
+    ]);
+    const CUSTOM_DATASTORE_VALUE = '__netnexus_custom_datastore__';
+    const modernDatastoreOptions = Object.freeze([
+        { label: 'operational', value: 'ds:operational' },
+        { label: 'running', value: 'ds:running' },
+        { label: 'intended', value: 'ds:intended' },
+        { label: 'candidate', value: 'ds:candidate' },
+        { label: 'startup', value: 'ds:startup' },
+        { label: '自定义 datastore identityref…', value: CUSTOM_DATASTORE_VALUE }
+    ]);
+    const modernDatastoreSelection = computed({
+        get: () =>
+            modernDatastoreOptions.some(
+                option => option.value !== CUSTOM_DATASTORE_VALUE && option.value === form.modernDatastore
+            )
+                ? form.modernDatastore
+                : CUSTOM_DATASTORE_VALUE,
+        set: value => {
+            form.modernDatastore = value === CUSTOM_DATASTORE_VALUE ? '' : value;
+        }
+    });
+    const modernUpdateTriggerOptions = computed(() => [
+        ...(activeOperation.value === 'modify-subscription'
+            ? [{ label: '保持当前策略（不修改）', value: 'unchanged' }]
+            : [{ label: '不指定（由发布者决定）', value: 'unspecified' }]),
+        { label: '周期快照（periodic）', value: 'periodic' },
+        { label: '数据变化（on-change）', value: 'on-change', disabled: !hasModernFeature('on-change') }
+    ]);
+    const modernEncodingOptions = computed(() => [
+        { label: '随 NETCONF RPC（不指定）', value: 'unspecified' },
+        { label: 'XML（encode-xml）', value: 'encode-xml', disabled: !hasModernFeature('encode-xml') },
+        { label: 'JSON（encode-json）', value: 'encode-json', disabled: !hasModernFeature('encode-json') },
+        { label: '厂商 encoding identityref…', value: 'custom' }
+    ]);
+    const excludedChangeOptions = Object.freeze(
+        ['create', 'delete', 'insert', 'move', 'replace'].map(value => ({ label: value, value }))
     );
     const errorOptionOptions = computed(() => [
         { label: 'stop-on-error', value: 'stop-on-error' },
@@ -1632,6 +2044,249 @@
                     field: 'subscriptionStopTime',
                     editor: 'text',
                     parameterPath: `${operationPath}/stopTime`
+                })
+            );
+        } else if (operation === 'establish-subscription' || operation === 'modify-subscription') {
+            if (operation === 'modify-subscription') {
+                children.push(
+                    makeParameterNode({
+                        key: 'id',
+                        title: 'id',
+                        field: 'modernSubscriptionId',
+                        editor: 'text',
+                        required: true,
+                        parameterPath: `${operationPath}/id`
+                    })
+                );
+            }
+            children.push(
+                selectNode('target', 'target', 'modernSubscriptionTarget', modernTargetOptions.value, {
+                    required: true,
+                    disabled: operation === 'modify-subscription' && modernManagementTargetLocked.value
+                })
+            );
+            if (form.modernSubscriptionTarget === 'stream' && operation === 'establish-subscription') {
+                children.push(
+                    makeParameterNode({
+                        key: 'stream',
+                        title: 'stream',
+                        field: 'subscriptionStream',
+                        editor: 'text',
+                        required: true,
+                        parameterPath: `${operationPath}/stream`
+                    })
+                );
+            }
+            if (form.modernSubscriptionTarget === 'datastore') {
+                children.push(
+                    makeParameterNode({
+                        key: 'datastore',
+                        title: 'datastore identityref',
+                        field: 'modernDatastore',
+                        editor: 'text',
+                        required: true,
+                        parameterPath: `${operationPath}/datastore`
+                    })
+                );
+            }
+            const modernFilterChildren = [];
+            if (form.filterType === 'reference') {
+                modernFilterChildren.push(
+                    makeParameterNode({
+                        key: 'filter-reference',
+                        title:
+                            form.modernSubscriptionTarget === 'datastore'
+                                ? 'selection-filter-ref'
+                                : 'stream-filter-name',
+                        field: 'modernFilterReference',
+                        editor: 'text',
+                        required: true,
+                        parameterPath: `${operationPath}/filter-reference`
+                    })
+                );
+            } else if (form.filterType === 'xpath') {
+                modernFilterChildren.push(
+                    makeParameterNode({
+                        key: 'xpath-filter',
+                        title:
+                            form.modernSubscriptionTarget === 'datastore'
+                                ? 'datastore-xpath-filter'
+                                : 'stream-xpath-filter',
+                        field: 'xpath',
+                        editor: 'text',
+                        required: true,
+                        parameterPath: `${operationPath}/xpath-filter`
+                    })
+                );
+            } else if (form.filterType === 'subtree') {
+                modernFilterChildren.push(
+                    ...makeXmlPayloadChildren('subtree', `${operationPath}/subtree-filter`, 'filter')
+                );
+            }
+            children.push(
+                selectNode('filter', 'filter', 'filterType', modernFilterTypeOptions.value, {
+                    required: operation === 'modify-subscription' && form.modernSubscriptionTarget === 'stream',
+                    ...(form.filterType === 'subtree' ? makeXmlContainerDescriptor('subtree', 'filter') : {}),
+                    children: modernFilterChildren
+                })
+            );
+            if (
+                form.modernSubscriptionTarget === 'datastore' ||
+                form.filterType === 'xpath' ||
+                form.filterType === 'subtree' ||
+                (operation === 'establish-subscription' && form.modernEncoding === 'custom')
+            ) {
+                children.push(
+                    makeParameterNode({
+                        key: 'xml-namespaces',
+                        title: 'XML namespace bindings',
+                        field: 'modernXpathNamespaces',
+                        editor: 'text',
+                        parameterPath: `${operationPath}/@xmlns:*`
+                    })
+                );
+            }
+            if (form.modernSubscriptionTarget === 'stream' && operation === 'establish-subscription') {
+                children.push(
+                    makeParameterNode({
+                        key: 'replay-start-time',
+                        title: 'replay-start-time',
+                        field: 'subscriptionStartTime',
+                        editor: 'text',
+                        disabled: !hasModernFeature('replay'),
+                        parameterPath: `${operationPath}/replay-start-time`
+                    })
+                );
+            }
+            children.push(
+                makeParameterNode({
+                    key: 'stop-time',
+                    title: 'stop-time',
+                    field: 'subscriptionStopTime',
+                    editor: 'text',
+                    parameterPath: `${operationPath}/stop-time`
+                })
+            );
+            if (operation === 'establish-subscription') {
+                children.push(
+                    makeParameterNode({
+                        key: 'dscp',
+                        title: 'dscp',
+                        field: 'modernDscp',
+                        editor: 'number',
+                        min: 0,
+                        max: 63,
+                        disabled: !hasModernFeature('dscp'),
+                        parameterPath: `${operationPath}/dscp`
+                    }),
+                    makeParameterNode({
+                        key: 'weighting',
+                        title: 'weighting',
+                        field: 'modernWeighting',
+                        editor: 'number',
+                        min: 0,
+                        max: 255,
+                        disabled: !hasModernFeature('qos'),
+                        parameterPath: `${operationPath}/weighting`
+                    }),
+                    makeParameterNode({
+                        key: 'dependency',
+                        title: 'dependency',
+                        field: 'modernDependency',
+                        editor: 'number',
+                        min: 0,
+                        max: 4_294_967_295,
+                        disabled: !hasModernFeature('qos'),
+                        parameterPath: `${operationPath}/dependency`
+                    }),
+                    selectNode('encoding', 'encoding', 'modernEncoding', modernEncodingOptions.value)
+                );
+                if (form.modernEncoding === 'custom') {
+                    children.push(
+                        makeParameterNode({
+                            key: 'custom-encoding',
+                            title: 'encoding identityref',
+                            field: 'modernCustomEncoding',
+                            editor: 'text',
+                            required: true,
+                            parameterPath: `${operationPath}/encoding`
+                        })
+                    );
+                }
+            }
+            if (form.modernSubscriptionTarget === 'datastore') {
+                children.push(
+                    selectNode(
+                        'update-trigger',
+                        'update-trigger',
+                        'modernUpdateTrigger',
+                        modernUpdateTriggerOptions.value,
+                        { required: false }
+                    )
+                );
+                if (form.modernUpdateTrigger === 'periodic') {
+                    children.push(
+                        makeParameterNode({
+                            key: 'period',
+                            title: 'period',
+                            field: 'modernPeriod',
+                            editor: 'number',
+                            min: 0,
+                            max: 4_294_967_295,
+                            required: true,
+                            parameterPath: `${operationPath}/periodic/period`
+                        }),
+                        makeParameterNode({
+                            key: 'anchor-time',
+                            title: 'anchor-time',
+                            field: 'modernAnchorTime',
+                            editor: 'text',
+                            parameterPath: `${operationPath}/periodic/anchor-time`
+                        })
+                    );
+                } else if (form.modernUpdateTrigger === 'on-change') {
+                    children.push(
+                        makeParameterNode({
+                            key: 'dampening-period',
+                            title: 'dampening-period',
+                            field: 'modernDampeningPeriod',
+                            editor: 'number',
+                            min: 0,
+                            max: 4_294_967_295,
+                            parameterPath: `${operationPath}/on-change/dampening-period`
+                        })
+                    );
+                    if (operation === 'establish-subscription') {
+                        children.push(
+                            makeParameterNode({
+                                key: 'sync-on-start',
+                                title: 'sync-on-start',
+                                field: 'modernSyncOnStart',
+                                editor: 'checkbox',
+                                parameterPath: `${operationPath}/on-change/sync-on-start`
+                            }),
+                            makeParameterNode({
+                                key: 'excluded-change',
+                                title: 'excluded-change',
+                                field: 'modernExcludedChanges',
+                                editor: 'select',
+                                multiple: true,
+                                options: excludedChangeOptions,
+                                parameterPath: `${operationPath}/on-change/excluded-change`
+                            })
+                        );
+                    }
+                }
+            }
+        } else if (operation === 'delete-subscription' || operation === 'resync-subscription') {
+            children.push(
+                makeParameterNode({
+                    key: 'id',
+                    title: 'id',
+                    field: 'modernSubscriptionId',
+                    editor: 'text',
+                    required: true,
+                    parameterPath: `${operationPath}/id`
                 })
             );
         }
@@ -2253,13 +2908,18 @@
     const operationDisabledReason = operation => {
         if (executing.value) return '操作执行中';
         if (!connected.value) return '请先建立 NETCONF 会话';
-        const subscriptionActive =
-            session.value.subscriptionActive === true ||
-            String(session.value.activeSubscription?.state || '').toLowerCase() === 'active';
-        if (operation === 'create-subscription' && subscriptionActive) {
+        const legacyActive = legacySubscriptionActive();
+        const modernActive = modernSubscriptionActive();
+        if (operation === 'create-subscription' && legacyActive) {
             return '当前 NETCONF Session 已存在 RFC 5277 订阅';
         }
-        if (subscriptionActive && !hasCapability('interleave') && operation !== 'raw-rpc') {
+        if (operation === 'create-subscription' && modernActive) {
+            return '当前 Session 已使用 RFC 8639 动态订阅，不能混用 RFC 5277';
+        }
+        if (operation === 'establish-subscription' && legacyActive) {
+            return '当前 Session 已使用 RFC 5277 订阅，不能建立现代动态订阅';
+        }
+        if (legacyActive && !hasCapability('interleave') && operation !== 'raw-rpc') {
             return '当前订阅 Session 未声明 :interleave；只能关闭 Session 或发送允许的手工 RPC';
         }
         if (operation === 'edit-config' && editDatastoreOptions.value.length === 0) {
@@ -2274,6 +2934,46 @@
         if (operation === 'validate' && !hasCapability('validate')) return '设备未声明 :validate 能力';
         if (operation === 'create-subscription' && !hasCapability('notification')) {
             return '设备未声明 :notification 能力';
+        }
+        if (
+            MODERN_SUBSCRIPTION_OPERATIONS.has(operation) &&
+            !subscriptionCapabilities.value.subscribedNotificationsModule
+        ) {
+            return 'YANG Library 未声明 ietf-subscribed-notifications';
+        }
+        if (MODERN_SUBSCRIPTION_OPERATIONS.has(operation) && !supportsRfc8640.value) {
+            return '设备未声明 RFC 8640 所需的 encode-xml feature';
+        }
+        if (
+            ['establish-subscription', 'modify-subscription'].includes(operation) &&
+            form.modernSubscriptionTarget === 'datastore' &&
+            !supportsYangPush.value
+        ) {
+            return 'YANG Library 未声明 ietf-yang-push';
+        }
+        if (
+            ['establish-subscription', 'modify-subscription'].includes(operation) &&
+            form.filterType === 'subtree' &&
+            !subscriptionCapabilities.value.hasSubscribedNotificationFeature('subtree')
+        ) {
+            return '设备未启用 ietf-subscribed-notifications subtree feature';
+        }
+        if (
+            ['establish-subscription', 'modify-subscription'].includes(operation) &&
+            form.filterType === 'xpath' &&
+            !subscriptionCapabilities.value.hasSubscribedNotificationFeature('xpath')
+        ) {
+            return '设备未启用 ietf-subscribed-notifications xpath feature';
+        }
+        if (
+            operation === 'establish-subscription' &&
+            form.subscriptionStartTime.trim() &&
+            !subscriptionCapabilities.value.hasSubscribedNotificationFeature('replay')
+        ) {
+            return '设备未启用 ietf-subscribed-notifications replay feature';
+        }
+        if (operation === 'resync-subscription' && (!supportsYangPush.value || !hasModernFeature('on-change'))) {
+            return '设备未声明 ietf-yang-push on-change feature';
         }
         if (['commit', 'cancel-commit', 'discard-changes'].includes(operation) && !hasCapability('candidate')) {
             return '设备未声明 :candidate 能力';
@@ -2318,8 +3018,125 @@
             if (stopTime && !startTime) return 'stopTime 必须与 startTime 一起使用';
             if (startTime && !isRfc3339DateTime(startTime)) return 'startTime 必须是合法 RFC 3339 时间';
             if (stopTime && !isRfc3339DateTime(stopTime)) return 'stopTime 必须是合法 RFC 3339 时间';
-            if (startTime && stopTime && Date.parse(stopTime) <= Date.parse(startTime)) {
+            if (startTime && stopTime && rfc3339Timestamp(stopTime) <= rfc3339Timestamp(startTime)) {
                 return 'stopTime 必须晚于 startTime';
+            }
+        }
+        if (MODERN_SUBSCRIPTION_OPERATIONS.has(activeOperation.value)) {
+            const managing = activeOperation.value !== 'establish-subscription';
+            const subscriptionId = form.modernSubscriptionId.trim();
+            if (managing && !/^\d{1,10}$/u.test(subscriptionId)) {
+                return '订阅 ID 必须是 0 到 4294967295 的整数';
+            }
+            if (managing && Number(subscriptionId) > 4_294_967_295) {
+                return '订阅 ID 必须是 0 到 4294967295 的整数';
+            }
+            if (['delete-subscription', 'resync-subscription'].includes(activeOperation.value)) return '';
+            if (form.modernSubscriptionTarget === 'stream') {
+                if (activeOperation.value === 'establish-subscription' && !form.subscriptionStream.trim()) {
+                    return '请输入事件流名称';
+                }
+                if (
+                    activeOperation.value === 'modify-subscription' &&
+                    ['none', 'unchanged'].includes(form.filterType)
+                ) {
+                    return 'event stream 的 modify-subscription 必须提供过滤器';
+                }
+            } else if (!String(form.modernDatastore || '').trim()) return '请输入 datastore identityref';
+            if (form.filterType === 'xpath' && !form.xpath.trim()) return '请输入 XPath 表达式';
+            if (form.filterType === 'subtree' && !form.subtree.trim()) return '请输入 subtree 过滤内容';
+            if (form.filterType === 'reference' && !form.modernFilterReference.trim()) return '请输入过滤器引用';
+            const usesNamespaceBindings =
+                form.modernSubscriptionTarget === 'datastore' ||
+                ['xpath', 'subtree'].includes(form.filterType) ||
+                (activeOperation.value === 'establish-subscription' && form.modernEncoding === 'custom');
+            if (usesNamespaceBindings && modernXpathNamespaceAttributes().invalid.length) {
+                return `XML 命名空间绑定格式不合法：${modernXpathNamespaceAttributes().invalid[0]}`;
+            }
+            if (form.modernSubscriptionTarget === 'datastore') {
+                const datastore = String(form.modernDatastore || '').trim();
+                const identity = /^([A-Za-z_][\w.-]*):([A-Za-z_][\w.-]*)$/u.exec(datastore);
+                if (!identity) return 'datastore 必须是带前缀的 identityref，例如 ds:operational 或 vd:telemetry';
+                if (['xml', 'xmlns', 'yp'].includes(identity[1])) {
+                    return `datastore 不能使用保留前缀 ${identity[1]}，请改用 vd 等设备模块前缀`;
+                }
+                const namespace = modernEffectiveNamespaceBindings()[identity[1]];
+                if (!namespace) return `请为 datastore 前缀 ${identity[1]} 配置 XML 命名空间绑定`;
+                if (identity[1] === 'ds' && namespace !== IETF_DATASTORES_NAMESPACE) {
+                    return `ds 前缀必须绑定到 ${IETF_DATASTORES_NAMESPACE}`;
+                }
+            }
+            const replayStartTime = form.subscriptionStartTime.trim();
+            const stopTime = form.subscriptionStopTime.trim();
+            if (replayStartTime && !isRfc3339DateTime(replayStartTime)) {
+                return 'replay-start-time 必须是合法 RFC 3339 时间';
+            }
+            if (replayStartTime && rfc3339Timestamp(replayStartTime) >= Date.now()) {
+                return 'replay-start-time 必须早于当前时间';
+            }
+            if (stopTime && !isRfc3339DateTime(stopTime)) return 'stop-time 必须是合法 RFC 3339 时间';
+            if (stopTime && replayStartTime && rfc3339Timestamp(stopTime) <= rfc3339Timestamp(replayStartTime)) {
+                return 'stop-time 必须晚于 replay-start-time';
+            }
+            if (stopTime && !replayStartTime && rfc3339Timestamp(stopTime) <= Date.now()) {
+                return 'stop-time 必须晚于当前时间';
+            }
+            if (activeOperation.value === 'establish-subscription') {
+                const hasValue = value => value !== undefined && value !== null && value !== '';
+                const validateInteger = (value, maximum, label) =>
+                    hasValue(value) &&
+                    (!Number.isInteger(Number(value)) || Number(value) < 0 || Number(value) > maximum)
+                        ? `${label} 必须是 0 到 ${maximum} 的整数`
+                        : '';
+                const dscpError = validateInteger(form.modernDscp, 63, 'dscp');
+                if (dscpError) return dscpError;
+                if (hasValue(form.modernDscp) && !hasModernFeature('dscp')) {
+                    return '设备未声明 ietf-subscribed-notifications dscp feature';
+                }
+                const weightingError = validateInteger(form.modernWeighting, 255, 'weighting');
+                if (weightingError) return weightingError;
+                const dependencyError = validateInteger(form.modernDependency, 4_294_967_295, 'dependency');
+                if (dependencyError) return dependencyError;
+                if ((hasValue(form.modernWeighting) || hasValue(form.modernDependency)) && !hasModernFeature('qos')) {
+                    return '设备未声明 ietf-subscribed-notifications qos feature';
+                }
+                if (['encode-xml', 'encode-json'].includes(form.modernEncoding)) {
+                    if (!hasModernFeature(form.modernEncoding)) {
+                        return `设备未声明 ietf-subscribed-notifications ${form.modernEncoding} feature`;
+                    }
+                } else if (form.modernEncoding === 'custom') {
+                    const identity = /^([A-Za-z_][\w.-]*):([A-Za-z_][\w.-]*)$/u.exec(form.modernCustomEncoding.trim());
+                    if (!identity) return '自定义 encoding 必须是带前缀的 identityref，例如 ve:cbor';
+                    if (['xml', 'xmlns', 'yp', 'ds', 'sn'].includes(identity[1])) {
+                        return `自定义 encoding 不能使用保留前缀 ${identity[1]}`;
+                    }
+                    if (!modernXpathNamespaceAttributes().namespaces[identity[1]]) {
+                        return `请为 encoding 前缀 ${identity[1]} 配置 XML 命名空间绑定`;
+                    }
+                }
+            }
+            if (form.modernSubscriptionTarget === 'datastore') {
+                if (form.modernUpdateTrigger === 'periodic') {
+                    if (
+                        !Number.isInteger(Number(form.modernPeriod)) ||
+                        Number(form.modernPeriod) < 0 ||
+                        Number(form.modernPeriod) > 4_294_967_295
+                    ) {
+                        return 'period 必须是 0 到 4294967295 的 centiseconds 整数';
+                    }
+                    if (form.modernAnchorTime && !isRfc3339DateTime(form.modernAnchorTime)) {
+                        return 'anchor-time 必须是合法 RFC 3339 时间';
+                    }
+                } else if (form.modernUpdateTrigger === 'on-change') {
+                    if (!hasModernFeature('on-change')) return '设备未声明 ietf-yang-push on-change feature';
+                    if (
+                        !Number.isInteger(Number(form.modernDampeningPeriod)) ||
+                        Number(form.modernDampeningPeriod) < 0 ||
+                        Number(form.modernDampeningPeriod) > 4_294_967_295
+                    ) {
+                        return 'dampening-period 必须是 0 到 4294967295 的 centiseconds 整数';
+                    }
+                }
             }
         }
         if (activeOperation.value === 'edit-config') {
@@ -2364,6 +3181,205 @@
     const makeConfigXml = () => {
         const config = form.config.trim();
         return /^<config[\s>]/i.test(config) ? config : `<config>\n${config}\n</config>`;
+    };
+    const modernXpathNamespaceAttributes = () => {
+        const attributes = [];
+        const invalid = [];
+        const namespaces = {};
+        String(form.modernXpathNamespaces || '')
+            .split(',')
+            .map(entry => entry.trim())
+            .filter(Boolean)
+            .forEach(entry => {
+                const separator = entry.indexOf('=');
+                const inputPrefix = separator >= 0 ? entry.slice(0, separator).trim() : '';
+                const prefix = ['default', 'xmlns'].includes(inputPrefix) ? '' : inputPrefix;
+                const namespace = separator >= 0 ? entry.slice(separator + 1).trim() : '';
+                if (
+                    (!['default', 'xmlns'].includes(inputPrefix) && !/^[A-Za-z_][\w.-]*$/u.test(prefix)) ||
+                    !namespace ||
+                    (prefix === 'xml' && namespace !== 'http://www.w3.org/XML/1998/namespace')
+                ) {
+                    invalid.push(entry);
+                } else {
+                    namespaces[prefix] = namespace;
+                    attributes.push(
+                        prefix
+                            ? `xmlns:${prefix}="${escapeXmlAttribute(namespace)}"`
+                            : `xmlns="${escapeXmlAttribute(namespace)}"`
+                    );
+                }
+            });
+        return { value: attributes.length ? ` ${attributes.join(' ')}` : '', invalid, namespaces };
+    };
+    const modernDatastoreNamespaceBindings = () => {
+        if (form.modernSubscriptionTarget !== 'datastore') return {};
+        const identity = /^([A-Za-z_][\w.-]*):[A-Za-z_][\w.-]*$/u.exec(String(form.modernDatastore || '').trim());
+        if (!identity) return {};
+        const prefix = identity[1];
+        const configured = modernXpathNamespaceAttributes().namespaces[prefix];
+        if (configured) return { [prefix]: configured };
+        return prefix === 'ds' ? { ds: IETF_DATASTORES_NAMESPACE } : {};
+    };
+    const modernEncodingValue = () =>
+        form.modernEncoding === 'custom'
+            ? form.modernCustomEncoding.trim()
+            : form.modernEncoding === 'unspecified'
+              ? ''
+              : form.modernEncoding;
+    const modernEncodingNamespaceBindings = () => {
+        if (form.modernEncoding !== 'custom') return {};
+        const identity = /^([A-Za-z_][\w.-]*):[A-Za-z_][\w.-]*$/u.exec(form.modernCustomEncoding.trim());
+        if (!identity) return {};
+        const namespace = modernXpathNamespaceAttributes().namespaces[identity[1]];
+        return namespace ? { [identity[1]]: namespace } : {};
+    };
+    const modernEffectiveNamespaceBindings = () => ({
+        ...modernDatastoreNamespaceBindings(),
+        ...modernXpathNamespaceAttributes().namespaces
+    });
+    const namespaceBindingAttributes = bindings =>
+        Object.entries(bindings || {})
+            .map(([prefix, namespace]) =>
+                prefix
+                    ? `xmlns:${prefix}="${escapeXmlAttribute(namespace)}"`
+                    : `xmlns="${escapeXmlAttribute(namespace)}"`
+            )
+            .join(' ');
+    const modernYangPushElement = (localName, content, bindings = {}) => {
+        let prefix = 'yp';
+        if (bindings.yp && bindings.yp !== YANG_PUSH_NAMESPACE) {
+            let suffix = '';
+            do {
+                prefix = `nyp${suffix}`;
+                suffix = suffix === '' ? 2 : Number(suffix) + 1;
+            } while (bindings[prefix] && bindings[prefix] !== YANG_PUSH_NAMESPACE);
+        }
+        const elementBindings = { ...bindings };
+        if (prefix !== 'yp') elementBindings[prefix] = YANG_PUSH_NAMESPACE;
+        const attributes = namespaceBindingAttributes(elementBindings);
+        return `<${prefix}:${localName}${attributes ? ` ${attributes}` : ''}>${content}</${prefix}:${localName}>`;
+    };
+    const modernStreamElement = (localName, content, bindings = {}) => {
+        let prefix = '';
+        const elementBindings = { ...bindings };
+        if (Object.hasOwn(bindings, '') && bindings[''] !== SUBSCRIBED_NOTIFICATIONS_NAMESPACE) {
+            prefix = 'sn';
+            let suffix = '';
+            while (elementBindings[prefix] && elementBindings[prefix] !== SUBSCRIBED_NOTIFICATIONS_NAMESPACE) {
+                prefix = `nsn${suffix}`;
+                suffix = suffix === '' ? 2 : Number(suffix) + 1;
+            }
+            elementBindings[prefix] = SUBSCRIBED_NOTIFICATIONS_NAMESPACE;
+        }
+        const attributes = namespaceBindingAttributes(elementBindings);
+        const name = prefix ? `${prefix}:${localName}` : localName;
+        return `<${name}${attributes ? ` ${attributes}` : ''}>${content}</${name}>`;
+    };
+    const unwrapLegacyFilter = value => {
+        const source = String(value || '').trim();
+        const match = source.match(/^<filter\b[^>]*>([\s\S]*)<\/filter\s*>$/iu);
+        return match ? match[1].trim() : source;
+    };
+    const makeModernFilterXml = () => {
+        if (form.filterType === 'none' || form.filterType === 'unchanged') return '';
+        const datastoreTarget = form.modernSubscriptionTarget === 'datastore';
+        const bindings = modernEffectiveNamespaceBindings();
+        if (form.filterType === 'reference') {
+            const name = datastoreTarget ? 'selection-filter-ref' : 'stream-filter-name';
+            return datastoreTarget
+                ? modernYangPushElement(name, escapeXmlText(form.modernFilterReference.trim()))
+                : `<${name}>${escapeXmlText(form.modernFilterReference.trim())}</${name}>`;
+        }
+        if (form.filterType === 'xpath') {
+            const name = datastoreTarget ? 'datastore-xpath-filter' : 'stream-xpath-filter';
+            const content = escapeXmlText(form.xpath.trim());
+            if (datastoreTarget) return modernYangPushElement(name, content, bindings);
+            return modernStreamElement(name, content, bindings);
+        }
+        const name = datastoreTarget ? 'datastore-subtree-filter' : 'stream-subtree-filter';
+        const content = `\n${unwrapLegacyFilter(form.subtree)}\n`;
+        if (datastoreTarget) return modernYangPushElement(name, content, bindings);
+        return modernStreamElement(name, content, bindings);
+    };
+    const makeModernDatastoreXml = () =>
+        modernYangPushElement(
+            'datastore',
+            escapeXmlText(String(form.modernDatastore || '').trim()),
+            modernEffectiveNamespaceBindings()
+        );
+    const makeModernSubscriptionOptionsXml = () => {
+        const content = [];
+        if (form.modernDscp !== undefined && form.modernDscp !== null && form.modernDscp !== '') {
+            content.push(`<dscp>${Number(form.modernDscp)}</dscp>`);
+        }
+        if (form.modernWeighting !== undefined && form.modernWeighting !== null && form.modernWeighting !== '') {
+            content.push(`<weighting>${Number(form.modernWeighting)}</weighting>`);
+        }
+        if (form.modernDependency !== undefined && form.modernDependency !== null && form.modernDependency !== '') {
+            content.push(`<dependency>${Number(form.modernDependency)}</dependency>`);
+        }
+        const encoding = modernEncodingValue();
+        if (encoding) {
+            const attributes = namespaceBindingAttributes(modernEncodingNamespaceBindings());
+            content.push(`<encoding${attributes ? ` ${attributes}` : ''}>${escapeXmlText(encoding)}</encoding>`);
+        }
+        return content;
+    };
+    const makeYangPushPolicyXml = (modifiable = false) => {
+        if (form.modernUpdateTrigger === 'unspecified' || (modifiable && form.modernUpdateTrigger === 'unchanged')) {
+            return '';
+        }
+        if (form.modernUpdateTrigger === 'periodic') {
+            const content = [`<yp:period>${Number(form.modernPeriod)}</yp:period>`];
+            if (String(form.modernAnchorTime || '').trim()) {
+                content.push(`<yp:anchor-time>${escapeXmlText(form.modernAnchorTime.trim())}</yp:anchor-time>`);
+            }
+            return `<yp:periodic>\n${content.join('\n')}\n</yp:periodic>`;
+        }
+        const content = [`<yp:dampening-period>${Number(form.modernDampeningPeriod || 0)}</yp:dampening-period>`];
+        if (!modifiable) {
+            content.push(`<yp:sync-on-start>${form.modernSyncOnStart ? 'true' : 'false'}</yp:sync-on-start>`);
+            form.modernExcludedChanges.forEach(change => {
+                content.push(`<yp:excluded-change>${escapeXmlText(change)}</yp:excluded-change>`);
+            });
+        }
+        return `<yp:on-change>\n${content.join('\n')}\n</yp:on-change>`;
+    };
+    const makeModernSubscriptionBody = operation => {
+        if (operation === 'delete-subscription') {
+            return `<delete-subscription xmlns="${SUBSCRIBED_NOTIFICATIONS_NAMESPACE}">\n<id>${escapeXmlText(
+                form.modernSubscriptionId.trim()
+            )}</id>\n</delete-subscription>`;
+        }
+        if (operation === 'resync-subscription') {
+            return `<resync-subscription xmlns="${YANG_PUSH_NAMESPACE}">\n<id>${escapeXmlText(
+                form.modernSubscriptionId.trim()
+            )}</id>\n</resync-subscription>`;
+        }
+        const modifying = operation === 'modify-subscription';
+        const content = [];
+        if (modifying) content.push(`<id>${escapeXmlText(form.modernSubscriptionId.trim())}</id>`);
+        if (form.modernSubscriptionTarget === 'datastore') {
+            content.push(makeModernDatastoreXml());
+            if (makeModernFilterXml()) content.push(makeModernFilterXml());
+        } else {
+            if (makeModernFilterXml()) content.push(makeModernFilterXml());
+            if (!modifying) content.push(`<stream>${escapeXmlText(form.subscriptionStream.trim())}</stream>`);
+        }
+        if (!modifying && form.modernSubscriptionTarget === 'stream' && form.subscriptionStartTime.trim()) {
+            content.push(`<replay-start-time>${escapeXmlText(form.subscriptionStartTime.trim())}</replay-start-time>`);
+        }
+        if (form.subscriptionStopTime.trim()) {
+            content.push(`<stop-time>${escapeXmlText(form.subscriptionStopTime.trim())}</stop-time>`);
+        }
+        if (!modifying) content.push(...makeModernSubscriptionOptionsXml());
+        if (form.modernSubscriptionTarget === 'datastore' && makeYangPushPolicyXml(modifying)) {
+            content.push(makeYangPushPolicyXml(modifying));
+        }
+        return `<${operation} xmlns="${SUBSCRIBED_NOTIFICATIONS_NAMESPACE}" xmlns:yp="${YANG_PUSH_NAMESPACE}">\n${content.join(
+            '\n'
+        )}\n</${operation}>`;
     };
     const operationBody = computed(() => {
         switch (activeOperation.value) {
@@ -2418,6 +3434,11 @@
                     content.length ? `\n${content.join('\n')}\n` : ''
                 }</create-subscription>`;
             }
+            case 'establish-subscription':
+            case 'modify-subscription':
+            case 'delete-subscription':
+            case 'resync-subscription':
+                return makeModernSubscriptionBody(activeOperation.value);
             case 'raw-rpc':
                 return form.rawRpc.trim();
             default:
@@ -2459,9 +3480,10 @@
         const requestXml = result.request || requestPreview.value;
         return formatXmlForDisplay(requestXml);
     });
-    const displayedReplyXml = computed(() =>
-        replyDisplayMode.value === 'formatted' ? formatXmlForDisplay(result.reply) : result.reply
-    );
+    const displayedReplyXml = computed(() => {
+        if (result.replyTruncated) return result.reply;
+        return replyDisplayMode.value === 'formatted' ? formatXmlForDisplay(result.reply) : result.reply;
+    });
 
     const clearRequestValidation = () => {
         requestValidationRevision += 1;
@@ -2508,7 +3530,11 @@
             else if (validation?.schemaUnavailable) notify.warning('RPC 结构合法，但当前没有已编译的 YANG Schema');
             else {
                 const engine = validation?.engine === 'libyang' ? '（libyang）' : '';
-                notify.success(`RPC 验证通过${engine}${validation?.operation ? `：${validation.operation}` : ''}`);
+                const scope =
+                    validation?.engine === 'xml+rfc8639/8641'
+                        ? '（RFC 结构与内置类型；厂商派生 identity 由设备确认）'
+                        : engine;
+                notify.success(`RPC 验证通过${scope}${validation?.operation ? `：${validation.operation}` : ''}`);
             }
         }
         return validation;
@@ -2533,15 +3559,21 @@
             requestValidating.value = false;
             return applyRequestValidation(structuralValidation, { notifyResult });
         }
-        // RFC 5277 defines create-subscription with an XML schema rather than the
-        // device's business YANG modules. Its protocol-specific checks are handled
-        // by validateNetconfRpc, so do not report a false libyang schema error here.
-        if (structuralValidation.operation === 'create-subscription') {
+        // Subscription control RPCs belong to protocol/system models rather than
+        // the device business modules selected in this workspace. The dedicated
+        // checks cover the RFC structure and built-in identities; vendor-derived
+        // identities remain publisher/schema-specific and are not claimed as a
+        // full device-schema validation.
+        if (
+            structuralValidation.operation === 'create-subscription' ||
+            MODERN_SUBSCRIPTION_OPERATIONS.has(structuralValidation.operation)
+        ) {
             return applyRequestValidation(
                 {
                     ...structuralValidation,
-                    engine: 'xml+rfc5277',
-                    authoritative: true,
+                    engine:
+                        structuralValidation.operation === 'create-subscription' ? 'xml+rfc5277' : 'xml+rfc8639/8641',
+                    authoritative: false,
                     performed: true
                 },
                 { notifyResult }
@@ -2637,7 +3669,26 @@
     };
     const copyRequestXml = () =>
         copyXmlText(props.embedded ? currentRequestXml.value : displayedRequestXml.value, 'RPC 请求');
-    const copyReplyXml = () => copyXmlText(displayedReplyXml.value, 'RPC 响应');
+    const copyReplyXml = () =>
+        copyXmlText(displayedReplyXml.value, result.replyTruncated ? 'RPC 响应预览' : 'RPC 响应');
+    const formatByteSize = value => {
+        const bytes = Math.max(0, Number(value) || 0);
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KiB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+    };
+    const saveFullReply = async () => {
+        if (!result.replyFileToken) return;
+        try {
+            const { data } = await invokeBridge('netconfApi', 'saveRpcReply', {
+                token: result.replyFileToken,
+                suggestedName: `${activeOperation.value || 'rpc'}-${result.messageId || Date.now()}.xml`
+            });
+            if (!data?.canceled) notify.success('完整 RPC 响应已保存');
+        } catch (error) {
+            notify.error(`保存完整 RPC 响应失败：${error.message}`);
+        }
+    };
 
     const buildPayload = () => {
         const payload = { operation: activeOperation.value };
@@ -2682,6 +3733,83 @@
                 startTime: form.subscriptionStartTime.trim() || undefined,
                 stopTime: form.subscriptionStopTime.trim() || undefined
             });
+        } else if (MODERN_SUBSCRIPTION_OPERATIONS.has(activeOperation.value)) {
+            const id = form.modernSubscriptionId.trim() || undefined;
+            if (['delete-subscription', 'resync-subscription'].includes(activeOperation.value)) {
+                payload.id = id;
+                return clonePlain(payload);
+            }
+            const modernFilter =
+                form.filterType === 'xpath'
+                    ? {
+                          type: 'xpath',
+                          select: form.xpath.trim(),
+                          namespaces: modernXpathNamespaceAttributes().namespaces
+                      }
+                    : form.filterType === 'subtree'
+                      ? {
+                            type: 'subtree',
+                            content: unwrapLegacyFilter(form.subtree),
+                            namespaces: modernXpathNamespaceAttributes().namespaces
+                        }
+                      : undefined;
+            const establishing = activeOperation.value === 'establish-subscription';
+            const optionalModernNumber = value =>
+                value === undefined || value === null || value === '' ? undefined : Number(value);
+            Object.assign(payload, {
+                id: establishing ? undefined : id,
+                targetType: form.modernSubscriptionTarget,
+                stopTime: form.subscriptionStopTime.trim() || undefined,
+                dscp: establishing ? optionalModernNumber(form.modernDscp) : undefined,
+                weighting: establishing ? optionalModernNumber(form.modernWeighting) : undefined,
+                dependency: establishing ? optionalModernNumber(form.modernDependency) : undefined,
+                encoding: establishing ? modernEncodingValue() || undefined : undefined,
+                encodingNamespaces: establishing ? modernEncodingNamespaceBindings() : undefined
+            });
+            if (form.modernSubscriptionTarget === 'stream') {
+                payload.stream = establishing ? form.subscriptionStream.trim() : undefined;
+                if (form.filterType === 'reference') {
+                    payload.streamFilterName = form.modernFilterReference.trim();
+                } else {
+                    payload.streamFilter = modernFilter;
+                }
+                payload.replayStartTime =
+                    establishing && form.subscriptionStartTime.trim() ? form.subscriptionStartTime.trim() : undefined;
+            } else {
+                const datastoreParameters = {
+                    subscriptionType: 'yang-push',
+                    datastore: form.modernDatastore,
+                    datastoreNamespaces: modernDatastoreNamespaceBindings()
+                };
+                if (form.filterType === 'reference') {
+                    datastoreParameters.selectionFilterRef = form.modernFilterReference.trim();
+                } else if (!['none', 'unchanged'].includes(form.filterType)) {
+                    datastoreParameters.datastoreFilter = modernFilter;
+                }
+                if (!['unchanged', 'unspecified'].includes(form.modernUpdateTrigger)) {
+                    Object.assign(datastoreParameters, {
+                        updateTrigger: form.modernUpdateTrigger,
+                        period: form.modernUpdateTrigger === 'periodic' ? Number(form.modernPeriod) : undefined,
+                        anchorTime:
+                            form.modernUpdateTrigger === 'periodic' && form.modernAnchorTime.trim()
+                                ? form.modernAnchorTime.trim()
+                                : undefined,
+                        dampeningPeriod:
+                            form.modernUpdateTrigger === 'on-change'
+                                ? Number(form.modernDampeningPeriod || 0)
+                                : undefined,
+                        syncOnStart:
+                            establishing && form.modernUpdateTrigger === 'on-change'
+                                ? Boolean(form.modernSyncOnStart)
+                                : undefined,
+                        excludedChanges:
+                            establishing && form.modernUpdateTrigger === 'on-change'
+                                ? [...form.modernExcludedChanges]
+                                : undefined
+                    });
+                }
+                Object.assign(payload, datastoreParameters);
+            }
         }
         return clonePlain(payload);
     };
@@ -2701,6 +3829,23 @@
         if (operation === 'unlock') return `将解锁 ${form.lockTarget}。`;
         if (operation === 'create-subscription') {
             return `将在当前 NETCONF Session 上订阅 ${form.subscriptionStream.trim() || 'NETCONF'} 事件流。`;
+        }
+        if (operation === 'establish-subscription') {
+            if (form.modernSubscriptionTarget === 'datastore') {
+                const trigger =
+                    form.modernUpdateTrigger === 'unspecified' ? '未指定更新策略的' : `${form.modernUpdateTrigger} `;
+                return `将在当前 Session 建立 ${form.modernDatastore} 的 YANG-Push ${trigger}订阅。`;
+            }
+            return `将在当前 Session 建立 ${form.subscriptionStream.trim() || 'NETCONF'} 事件流动态订阅。`;
+        }
+        if (operation === 'modify-subscription') {
+            return `将修改设备订阅 ${form.modernSubscriptionId}，失败时设备应保持原参数不变。`;
+        }
+        if (operation === 'delete-subscription') {
+            return `将删除设备订阅 ${form.modernSubscriptionId}，NETCONF Session 保持连接。`;
+        }
+        if (operation === 'resync-subscription') {
+            return `将请求设备订阅 ${form.modernSubscriptionId} 发送完整 push-update。`;
         }
         if (operation === 'raw-rpc') return '原始 RPC 可能读取或修改任意设备状态。';
         return `即将执行 ${activeOperationMeta.value.label}。`;
@@ -2753,6 +3898,14 @@
         if (typeof value === 'string') return value;
         return JSON.stringify(value ?? data ?? {}, null, 2);
     };
+    const responseReplyMetadata = data => ({
+        replyTruncated: Boolean(data?.replyTruncated),
+        replyBytes: Number.isFinite(Number(data?.replyBytes)) ? Math.max(0, Math.round(Number(data.replyBytes))) : 0,
+        replyPreviewBytes: Number.isFinite(Number(data?.replyPreviewBytes))
+            ? Math.max(0, Math.round(Number(data.replyPreviewBytes)))
+            : 0,
+        replyFileToken: typeof data?.replyFileToken === 'string' ? data.replyFileToken : ''
+    });
 
     const beginOperationHistory = ({ operation, operationLabel, category, origin, requestXml }) =>
         beginNetconfExecution({
@@ -2808,6 +3961,7 @@
                 status: status === 'success' ? 'success' : 'rpc-error',
                 requestXml: actualRequestXml,
                 replyXml: reply,
+                ...responseReplyMetadata(data),
                 messageId: data?.messageId || '',
                 duration,
                 errors: Array.isArray(data?.errors) ? data.errors : [],
@@ -2816,13 +3970,16 @@
             const contextUnchanged = executionContextRevision === props.contextRevision;
             if (contextUnchanged) {
                 if (manualRequest) requestDraft.value = actualRequestXml;
-                result.status = status;
-                result.operation = operationLabel;
-                result.reply = reply;
-                result.request = actualRequestXml;
-                result.messageId = data?.messageId || '';
-                result.duration = duration;
-                result.time = new Date().toLocaleString();
+                Object.assign(result, {
+                    status,
+                    operation: operationLabel,
+                    reply,
+                    request: actualRequestXml,
+                    messageId: data?.messageId || '',
+                    duration,
+                    time: new Date().toLocaleString(),
+                    ...responseReplyMetadata(data)
+                });
             }
             const contextSuffix = contextUnchanged ? '' : '（工作区上下文已切换）';
             if (status === 'success') notify.success(`${operationLabel} 执行成功${contextSuffix}`);
@@ -2836,6 +3993,7 @@
                 status: 'failed',
                 requestXml: failedRequestXml,
                 replyXml: failedReplyXml,
+                ...responseReplyMetadata(details),
                 messageId: details.messageId || '',
                 duration,
                 errors: Array.isArray(details.errors) ? details.errors : [],
@@ -2844,13 +4002,16 @@
             const contextUnchanged = executionContextRevision === props.contextRevision;
             if (contextUnchanged) {
                 if (manualRequest) requestDraft.value = failedRequestXml;
-                result.status = 'error';
-                result.operation = operationLabel;
-                result.reply = failedReplyXml;
-                result.request = failedRequestXml;
-                result.messageId = details.messageId || '';
-                result.duration = duration;
-                result.time = new Date().toLocaleString();
+                Object.assign(result, {
+                    status: 'error',
+                    operation: operationLabel,
+                    reply: failedReplyXml,
+                    request: failedRequestXml,
+                    messageId: details.messageId || '',
+                    duration,
+                    time: new Date().toLocaleString(),
+                    ...responseReplyMetadata(details)
+                });
             }
             const contextSuffix = contextUnchanged ? '' : '（工作区上下文已切换）';
             notify.error(`${operationLabel} 执行失败${contextSuffix}：${error.message}`);
@@ -2893,6 +4054,10 @@
             status: '',
             operation: '',
             reply: '',
+            replyTruncated: false,
+            replyBytes: 0,
+            replyPreviewBytes: 0,
+            replyFileToken: '',
             request: '',
             messageId: '',
             duration: null,
@@ -2937,7 +4102,8 @@
                 profileId: props.profileId,
                 operation: 'get-config',
                 source,
-                filter: { type: 'subtree', content: props.contextSubtree }
+                filter: { type: 'subtree', content: props.contextSubtree },
+                extractConfig: true
             });
             const errors = Array.isArray(data?.errors) ? data.errors : [];
             const duration = Math.max(0, Math.round(performance.now() - startedAt));
@@ -2945,6 +4111,7 @@
                 status: errors.length ? 'rpc-error' : 'success',
                 requestXml: requestEnvelopeForResult(data, requestXml),
                 replyXml: resultText(data),
+                ...responseReplyMetadata(data),
                 messageId: data?.messageId || '',
                 duration,
                 errors,
@@ -2973,6 +4140,9 @@
                 notify.info(`${source} 未返回当前节点配置，已使用 Schema 草稿`);
                 return;
             }
+            if (data?.configTruncated) {
+                throw new Error('get-config 响应过大，无法自动载入编辑器；请缩小 Schema 节点或过滤范围');
+            }
             if (!data?.configXml) throw new Error('响应中没有可编辑的 NETCONF config 数据');
 
             form.config = formatXmlForDisplay(data.configXml);
@@ -2987,6 +4157,7 @@
                     status: 'failed',
                     requestXml: requestEnvelopeForResult(details, requestXml),
                     replyXml: details.replyXml || error.message,
+                    ...responseReplyMetadata(details),
                     messageId: details.messageId || '',
                     duration: Math.max(0, Math.round(performance.now() - startedAt)),
                     errors: Array.isArray(details.errors) ? details.errors : [],
@@ -3025,21 +4196,128 @@
         if (typeof contextParams.validateSource === 'string') form.validateSource = contextParams.validateSource;
         if (typeof contextParams.confirmed === 'boolean') form.confirmed = contextParams.confirmed;
         if (Number.isFinite(contextParams.confirmTimeout)) form.confirmTimeout = contextParams.confirmTimeout;
-        if (typeof contextParams.subscriptionStream === 'string') {
-            form.subscriptionStream = contextParams.subscriptionStream;
-        } else if (activeOperation.value === 'create-subscription') {
+        if (typeof (contextParams.subscriptionStream || contextParams.stream) === 'string') {
+            form.subscriptionStream = contextParams.subscriptionStream || contextParams.stream;
+        } else if (
+            activeOperation.value === 'create-subscription' ||
+            activeOperation.value === 'establish-subscription'
+        ) {
             form.subscriptionStream = 'NETCONF';
         }
         form.subscriptionStartTime =
-            typeof contextParams.subscriptionStartTime === 'string' ? contextParams.subscriptionStartTime : '';
+            typeof (contextParams.subscriptionStartTime || contextParams.replayStartTime) === 'string'
+                ? contextParams.subscriptionStartTime || contextParams.replayStartTime
+                : '';
         form.subscriptionStopTime =
-            typeof contextParams.subscriptionStopTime === 'string' ? contextParams.subscriptionStopTime : '';
-        form.filterType =
+            typeof (contextParams.subscriptionStopTime || contextParams.stopTime) === 'string'
+                ? contextParams.subscriptionStopTime || contextParams.stopTime
+                : '';
+        form.modernSubscriptionTarget =
+            contextParams.modernSubscriptionTarget === 'datastore' || contextParams.targetType === 'datastore'
+                ? 'datastore'
+                : 'stream';
+        const contextSubscriptionId = contextParams.deviceSubscriptionId ?? contextParams.modernSubscriptionId;
+        modernManagementTargetLocked.value =
+            activeOperation.value === 'modify-subscription' &&
+            String(contextSubscriptionId ?? '') !== '' &&
+            Boolean(contextParams.targetType || contextParams.modernSubscriptionTarget);
+        form.modernSubscriptionId = String(
+            contextParams.modernSubscriptionId ??
+                contextParams.deviceSubscriptionId ??
+                contextParams.publisherSubscriptionId ??
+                ''
+        );
+        const contextNamespaceBindings = new Map();
+        const addContextNamespaceText = value => {
+            String(value || '')
+                .split(',')
+                .map(entry => entry.trim())
+                .filter(Boolean)
+                .forEach(entry => {
+                    const separator = entry.indexOf('=');
+                    if (separator > 0) {
+                        const inputPrefix = entry.slice(0, separator).trim();
+                        contextNamespaceBindings.set(
+                            ['default', 'xmlns'].includes(inputPrefix) ? '' : inputPrefix,
+                            entry.slice(separator + 1).trim()
+                        );
+                    }
+                });
+        };
+        addContextNamespaceText(contextParams.modernXpathNamespaces);
+        Object.entries(contextParams.datastoreNamespaces || {}).forEach(([prefix, namespace]) => {
+            if (prefix && namespace) contextNamespaceBindings.set(prefix, namespace);
+        });
+        Object.entries(contextParams.encodingNamespaces || {}).forEach(([prefix, namespace]) => {
+            if (prefix && namespace) contextNamespaceBindings.set(prefix, namespace);
+        });
+        Object.entries(contextParams.filter?.namespaces || {}).forEach(([prefix, namespace]) => {
+            if (prefix && namespace) contextNamespaceBindings.set(prefix, namespace);
+        });
+        form.modernXpathNamespaces = [...contextNamespaceBindings]
+            .map(([prefix, namespace]) => `${prefix || 'xmlns'}=${namespace}`)
+            .join(', ');
+        form.modernFilterReference =
+            typeof contextParams.modernFilterReference === 'string' ? contextParams.modernFilterReference : '';
+        form.modernDatastore =
+            typeof contextParams.datastore === 'string' && contextParams.datastore
+                ? contextParams.datastore.includes(':')
+                    ? contextParams.datastore
+                    : `ds:${contextParams.datastore}`
+                : 'ds:operational';
+        form.modernUpdateTrigger =
+            activeOperation.value === 'modify-subscription'
+                ? 'unchanged'
+                : contextParams.updateTrigger === 'on-change'
+                  ? 'on-change'
+                  : 'periodic';
+        form.modernPeriod = Number.isFinite(Number(contextParams.period)) ? Number(contextParams.period) : 500;
+        form.modernAnchorTime = typeof contextParams.anchorTime === 'string' ? contextParams.anchorTime : '';
+        form.modernDampeningPeriod = Number.isFinite(Number(contextParams.dampeningPeriod))
+            ? Number(contextParams.dampeningPeriod)
+            : 0;
+        form.modernSyncOnStart = contextParams.syncOnStart !== false;
+        form.modernExcludedChanges = Array.isArray(contextParams.excludedChanges)
+            ? [...contextParams.excludedChanges]
+            : [];
+        form.modernDscp =
+            contextParams.dscp !== undefined &&
+            contextParams.dscp !== null &&
+            contextParams.dscp !== '' &&
+            Number.isFinite(Number(contextParams.dscp))
+                ? Number(contextParams.dscp)
+                : null;
+        form.modernWeighting =
+            contextParams.weighting !== undefined &&
+            contextParams.weighting !== null &&
+            contextParams.weighting !== '' &&
+            Number.isFinite(Number(contextParams.weighting))
+                ? Number(contextParams.weighting)
+                : null;
+        form.modernDependency =
+            contextParams.dependency !== undefined &&
+            contextParams.dependency !== null &&
+            contextParams.dependency !== '' &&
+            Number.isFinite(Number(contextParams.dependency))
+                ? Number(contextParams.dependency)
+                : null;
+        const contextEncoding = typeof contextParams.encoding === 'string' ? contextParams.encoding.trim() : '';
+        form.modernEncoding = ['encode-xml', 'encode-json'].includes(contextEncoding)
+            ? contextEncoding
+            : contextEncoding
+              ? 'custom'
+              : 'unspecified';
+        form.modernCustomEncoding = form.modernEncoding === 'custom' ? contextEncoding : '';
+        const contextFilterType =
             typeof contextParams.filterType === 'string'
                 ? contextParams.filterType
                 : props.contextSubtree
                   ? 'subtree'
                   : 'none';
+        form.filterType =
+            activeOperation.value === 'modify-subscription' && form.modernSubscriptionTarget === 'datastore'
+                ? 'unchanged'
+                : contextFilterType;
         form.xpath = typeof contextParams.xpath === 'string' ? contextParams.xpath : '';
         form.subtree = props.contextSubtree || '';
         editConfigFallback = props.contextConfig || '';
@@ -4000,6 +5278,18 @@
 
     .result-browser-toolbar {
         margin-bottom: 8px;
+    }
+
+    .large-reply-notice {
+        flex: 0 0 auto;
+        margin-bottom: 8px;
+        padding: 7px 9px;
+        border: 1px solid var(--nn-color-warning);
+        border-radius: 5px;
+        background: var(--nn-color-bg-warning-subtle);
+        color: var(--nn-color-text-warning);
+        font-size: 11px;
+        line-height: 1.45;
     }
 
     .rpc-preview {

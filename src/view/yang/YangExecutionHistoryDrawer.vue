@@ -100,7 +100,11 @@
                                 </nn-descriptions-item>
                                 <nn-descriptions-item label="Schema 节点">
                                     <span class="execution-history-context" :title="selectedRecord.contextPath">
-                                        {{ selectedRecord.contextPath || selectedRecord.contextName || '未关联 Schema 节点' }}
+                                        {{
+                                            selectedRecord.contextPath ||
+                                            selectedRecord.contextName ||
+                                            '未关联 Schema 节点'
+                                        }}
                                     </span>
                                 </nn-descriptions-item>
                             </nn-descriptions>
@@ -125,7 +129,8 @@
                                     :value="selectedRequestXml"
                                     :rows="8"
                                     readonly
-                                    line-numbers
+                                    :line-numbers="!selectedRecord.requestTruncated"
+                                    :lightweight="selectedRecord.requestTruncated"
                                     :bordered="false"
                                     class="execution-history-xml-editor"
                                     data-testid="netconf-history-request"
@@ -138,7 +143,12 @@
                                 <header>
                                     <div class="execution-history-reply-title">
                                         <strong>RPC 响应</strong>
-                                        <nn-tag v-if="selectedRecord.replyTruncated" color="warning">内容已截断</nn-tag>
+                                        <nn-tag v-if="selectedRecord.replyTruncated" color="warning">
+                                            仅显示预览
+                                            <span v-if="selectedRecord.replyBytes">
+                                                · 完整 {{ formatByteSize(selectedRecord.replyBytes) }}
+                                            </span>
+                                        </nn-tag>
                                         <span
                                             v-if="selectedRecord.errorMessage"
                                             class="execution-history-error-message"
@@ -146,21 +156,37 @@
                                             {{ selectedRecord.errorMessage }}
                                         </span>
                                     </div>
-                                    <nn-button
-                                        size="small"
-                                        :disabled="!selectedRecord.replyXml"
-                                        @click="copyXml(selectedRecord.replyXml, 'RPC 响应')"
-                                    >
-                                        <template #icon><CopyOutlined /></template>
-                                        复制
-                                    </nn-button>
+                                    <nn-space>
+                                        <nn-button
+                                            v-if="selectedRecord.replyFileToken"
+                                            size="small"
+                                            @click="saveFullReply(selectedRecord)"
+                                        >
+                                            <template #icon><DownloadOutlined /></template>
+                                            保存完整响应
+                                        </nn-button>
+                                        <nn-button
+                                            size="small"
+                                            :disabled="!selectedRecord.replyXml"
+                                            @click="
+                                                copyXml(
+                                                    selectedRecord.replyXml,
+                                                    selectedRecord.replyTruncated ? 'RPC 响应预览' : 'RPC 响应'
+                                                )
+                                            "
+                                        >
+                                            <template #icon><CopyOutlined /></template>
+                                            {{ selectedRecord.replyTruncated ? '复制预览' : '复制' }}
+                                        </nn-button>
+                                    </nn-space>
                                 </header>
                                 <XmlCodeEditor
                                     :key="`${selectedRecord.id}-reply`"
                                     :value="selectedReplyXml"
                                     :rows="8"
                                     readonly
-                                    line-numbers
+                                    :line-numbers="!selectedRecord.replyTruncated"
+                                    :lightweight="selectedRecord.replyTruncated"
                                     :bordered="false"
                                     class="execution-history-xml-editor"
                                     data-testid="netconf-history-reply"
@@ -183,10 +209,10 @@
 
 <script setup>
     import { computed, nextTick, ref, watch } from 'vue';
-    import { CopyOutlined, DeleteOutlined } from '../../ui/icons';
+    import { CopyOutlined, DeleteOutlined, DownloadOutlined } from '../../ui/icons';
     import { notify } from '../../utils/notify';
     import XmlCodeEditor from './XmlCodeEditor.vue';
-    import { formatXmlForDisplay } from './yangUiUtils';
+    import { formatXmlForDisplay, invokeBridge } from './yangUiUtils';
     import { useNetconfExecutionHistory } from './useNetconfExecutionHistory';
 
     defineOptions({ name: 'YangExecutionHistoryDrawer' });
@@ -203,10 +229,16 @@
     const selectedId = ref('');
     const historyListRef = ref(null);
     const selectedRecord = computed(() => records.value.find(record => record.id === selectedId.value) || null);
-    const selectedRequestXml = computed(() => formatXmlForDisplay(selectedRecord.value?.requestXml || ''));
-    const selectedReplyXml = computed(() =>
-        formatXmlForDisplay(selectedRecord.value?.replyXml || selectedRecord.value?.errorMessage || '')
-    );
+    const selectedRequestXml = computed(() => {
+        const record = selectedRecord.value;
+        const value = record?.requestXml || '';
+        return record?.requestTruncated ? value : formatXmlForDisplay(value);
+    });
+    const selectedReplyXml = computed(() => {
+        const record = selectedRecord.value;
+        const value = record?.replyXml || record?.errorMessage || '';
+        return record?.replyTruncated ? value : formatXmlForDisplay(value);
+    });
 
     const statusMeta = status => {
         if (status === 'success') return { color: 'success', label: '成功' };
@@ -227,6 +259,13 @@
 
     const durationText = record => (record?.duration === null ? '执行中' : `${record.duration} ms`);
 
+    const formatByteSize = value => {
+        const bytes = Math.max(0, Number(value) || 0);
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KiB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+    };
+
     const deviceText = record => {
         const profile = record?.profileName || record?.host || 'NETCONF 设备';
         const endpoint = record?.host ? `${record.host}${record.port ? `:${record.port}` : ''}` : '';
@@ -240,6 +279,19 @@
             notify.success(`${label}已复制`);
         } catch (_error) {
             notify.warning('系统剪贴板不可用');
+        }
+    };
+
+    const saveFullReply = async record => {
+        if (!record?.replyFileToken) return;
+        try {
+            const { data } = await invokeBridge('netconfApi', 'saveRpcReply', {
+                token: record.replyFileToken,
+                suggestedName: `${record.operation || 'rpc'}-${record.messageId || Date.now()}.xml`
+            });
+            if (!data?.canceled) notify.success('完整 RPC 响应已保存');
+        } catch (error) {
+            notify.error(`保存完整 RPC 响应失败：${error.message}`);
         }
     };
 

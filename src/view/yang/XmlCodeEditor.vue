@@ -7,7 +7,8 @@
                 'xml-code-editor-disabled': disabled,
                 'xml-code-editor-readonly': readonly,
                 'xml-code-editor-borderless': !bordered,
-                'xml-code-editor-line-numbers': lineNumbers,
+                'xml-code-editor-line-numbers': effectiveLineNumbers,
+                'xml-code-editor-lightweight': !richRendering,
                 'xml-code-editor-status-error': status === 'error',
                 'xml-code-editor-status-warning': status === 'warning'
             }
@@ -15,8 +16,10 @@
         :style="[$attrs.style, editorStyle]"
         data-xml-editor
         :data-xml-viewer="readonly ? '' : undefined"
+        :data-xml-lightweight="!richRendering ? '' : undefined"
     >
         <pre
+            v-if="richRendering"
             ref="highlightRef"
             class="xml-code-editor-highlight"
             data-xml-highlight-layer
@@ -24,7 +27,7 @@
             aria-hidden="true"
         ><XmlHighlight :value="displayValue" /></pre>
         <div
-            v-if="lineNumbers"
+            v-if="effectiveLineNumbers"
             ref="gutterRef"
             class="xml-code-editor-gutter"
             data-xml-line-number-gutter
@@ -42,7 +45,7 @@
             </div>
         </div>
         <div
-            v-if="lineNumbers"
+            v-if="effectiveLineNumbers"
             ref="diagnosticsRef"
             class="xml-code-editor-diagnostics-layer"
             data-xml-diagnostics-layer
@@ -142,6 +145,10 @@
             type: Boolean,
             default: false
         },
+        lightweight: {
+            type: Boolean,
+            default: false
+        },
         diagnostics: {
             type: Array,
             default: () => []
@@ -155,9 +162,14 @@
     const gutterRef = ref(null);
     const diagnosticsRef = ref(null);
     const displayValue = computed(() => (props.value === null || props.value === undefined ? '' : String(props.value)));
+    const MAX_RICH_DISPLAY_CHARACTERS = 128 * 1024;
+    const richRendering = computed(
+        () => !props.lightweight && displayValue.value.length <= MAX_RICH_DISPLAY_CHARACTERS
+    );
+    const effectiveLineNumbers = computed(() => props.lineNumbers && richRendering.value);
     const lineCount = computed(() => Math.max(1, displayValue.value.split('\n').length));
     const editorStyle = computed(() => {
-        if (!props.lineNumbers) return undefined;
+        if (!effectiveLineNumbers.value) return undefined;
         const gutterCharacters = Math.max(3, String(lineCount.value).length) + 3;
         return { '--xml-code-gutter-width': `${gutterCharacters}ch` };
     });
@@ -449,6 +461,17 @@
         color: transparent;
         text-shadow: none;
         -webkit-text-fill-color: transparent;
+    }
+
+    .xml-code-editor-lightweight .xml-code-editor-input {
+        background: var(--nn-color-bg-code);
+        color: var(--nn-color-text);
+        -webkit-text-fill-color: var(--nn-color-text);
+    }
+
+    .xml-code-editor-lightweight .xml-code-editor-input::selection {
+        color: var(--nn-color-text);
+        -webkit-text-fill-color: var(--nn-color-text);
     }
 
     .xml-code-editor-disabled {

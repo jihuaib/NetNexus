@@ -3,6 +3,7 @@ const NETCONF_REQ_TYPES = Object.freeze({
     CONNECT: 'connect',
     DISCONNECT: 'disconnect',
     DISCONNECT_ALL: 'disconnectAll',
+    PURGE_PROFILE: 'purgeProfile',
     GET_SESSION_STATE: 'getSessionState',
     GET_SUBSCRIPTIONS: 'getSubscriptions',
     DISCOVER_MODULES: 'discoverModules',
@@ -36,7 +37,9 @@ const YANG_EVT_TYPES = Object.freeze({
 
 const NETCONF_CAPABILITIES = Object.freeze({
     NOTIFICATION: 'urn:ietf:params:netconf:capability:notification:1.0',
-    INTERLEAVE: 'urn:ietf:params:netconf:capability:interleave:1.0'
+    INTERLEAVE: 'urn:ietf:params:netconf:capability:interleave:1.0',
+    SUBSCRIBED_NOTIFICATIONS: 'urn:ietf:params:xml:ns:yang:ietf-subscribed-notifications',
+    YANG_PUSH: 'urn:ietf:params:xml:ns:yang:ietf-yang-push'
 });
 
 const DEFAULT_NETCONF_PROFILE = Object.freeze({
@@ -62,6 +65,7 @@ const NETCONF_LIMITS = Object.freeze({
     MAX_MESSAGE_BYTES: 32 * 1024 * 1024,
     MAX_SCHEMA_BYTES: 8 * 1024 * 1024,
     MAX_RAW_RPC_BYTES: 8 * 1024 * 1024,
+    MAX_INLINE_RPC_REPLY_BYTES: 256 * 1024,
     DEFAULT_RPC_TIMEOUT: 30000,
     DEFAULT_CONNECT_TIMEOUT: 15000,
     DOWNLOAD_CONCURRENCY: 3

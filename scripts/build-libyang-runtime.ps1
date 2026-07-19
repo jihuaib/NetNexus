@@ -4,6 +4,7 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Release = Get-Content (Join-Path $ProjectRoot 'resources/libyang/manifest.json') -Raw | ConvertFrom-Json
 $RuntimeKey = 'win32-x64'
 $RuntimeTarget = Join-Path $ProjectRoot "resources/libyang/$RuntimeKey"
+$IanaModuleSource = Join-Path $ProjectRoot 'resources/libyang/iana'
 $SchemaHelperSource = Join-Path $ProjectRoot 'scripts/netnexus-libyang-schema.c'
 $WindowsRuntimeManifestSource = Join-Path $ProjectRoot 'scripts/netnexus-libyang-windows.manifest.in'
 $VcpkgManifestRoot = Join-Path $ProjectRoot 'scripts/libyang-vcpkg'
@@ -17,6 +18,10 @@ if (-not (Test-Path $WindowsRuntimeManifestSource -PathType Leaf)) {
 }
 if ($VcpkgBaseline -ne $Release.windowsDependencies.vcpkgBaseline) {
     throw 'The Windows vcpkg baseline does not match the bundled runtime release manifest.'
+}
+& node (Join-Path $ProjectRoot 'scripts/verify-libyang-iana-modules.js')
+if ($LASTEXITCODE -ne 0) {
+    throw 'The pinned IANA YANG module source set did not pass verification.'
 }
 $VcpkgDependencyNames = @($VcpkgManifest.dependencies | Sort-Object)
 if (($VcpkgDependencyNames -join ',') -ne 'dirent,pthreads') {
@@ -599,6 +604,7 @@ endif()
     Copy-Item (Join-Path $VcpkgInstalled 'x64-windows-static/share/dirent/copyright') `
         (Join-Path $RuntimeTarget 'LICENSE.dirent') -Force
     Copy-Item (Join-Path $SourceDir 'modules/*.yang') $ModuleDir -Force
+    Copy-Item (Join-Path $IanaModuleSource '*.yang') $ModuleDir -Force
     & node (Join-Path $ProjectRoot 'scripts/write-libyang-runtime-manifest.js') `
         $RuntimeTarget `
         (Join-Path $BinDir 'yanglint.exe') `

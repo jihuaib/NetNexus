@@ -245,6 +245,9 @@
             :disconnecting="notificationDisconnecting"
             @export="exportNotifications"
             @disconnect-session="disconnectNotificationSession"
+            @modify-subscription="openSubscriptionManagement"
+            @delete-subscription="openSubscriptionManagement"
+            @resync-subscription="openSubscriptionManagement"
         />
     </div>
 </template>
@@ -290,6 +293,7 @@
         KeyOutlined,
         LoadingOutlined,
         ReloadOutlined,
+        SafetyOutlined,
         SendOutlined,
         UnorderedListOutlined
     } from '../../ui/icons';
@@ -297,6 +301,7 @@
     import YangNotificationDrawer from './YangNotificationDrawer.vue';
     import YangOperations from './YangOperations.vue';
     import YangProfileField from './YangProfileField.vue';
+    import { resolveNetconfSubscriptionCapabilities } from './netconfSubscriptionCapabilities';
     import {
         invokeBridge,
         isTaskTerminal,
@@ -390,14 +395,9 @@
     let schemaRestoreFailedCompileId = '';
     let clearWorkspaceConfirmHandle = null;
     let notificationDisconnectConfirmHandle = null;
-    const {
-        profilesLoading,
-        selectedProfileId,
-        profileOptions,
-        refreshProfiles,
-        selectProfile,
-        taskMatchesProfile
-    } = useYangProfileContext();
+    let pendingSubscriptionManagement = null;
+    const { profilesLoading, selectedProfileId, profileOptions, refreshProfiles, selectProfile, taskMatchesProfile } =
+        useYangProfileContext();
     const {
         unreadCount: notificationUnreadCount,
         upsertSubscription: upsertNotificationSubscription,
@@ -498,6 +498,12 @@
         const status = session.value.status || session.value.state;
         return session.value.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
     });
+    const subscriptionCapabilities = computed(() =>
+        resolveNetconfSubscriptionCapabilities({ ...session.value, capabilities: capabilities.value })
+    );
+    const supportsModernNotifications = computed(() => subscriptionCapabilities.value.supportsModernNotifications);
+    const supportsYangPush = computed(() => subscriptionCapabilities.value.supportsYangPush);
+    const supportsRfc8640 = computed(() => subscriptionCapabilities.value.supportsRfc8640);
     const workspaceLayoutStyle = computed(() =>
         schemaPaneWidth.value > 0 ? { '--schema-pane-width': `${schemaPaneWidth.value}px` } : undefined
     );
@@ -510,9 +516,11 @@
         if (!connected.value) return '设备未连接；Schema 仍可查看，设备操作需先建立连接';
         const node = contextMenu.node;
         if (isNotificationNode(node)) {
-            return '订阅绑定当前 NETCONF Session；此节点用于生成 RFC 5277 subtree filter';
+            return supportsModernNotifications.value && supportsRfc8640.value
+                ? '优先使用 RFC 8639 动态订阅；也可在独立 Session 使用 RFC 5277'
+                : '此节点可生成 RFC 5277 subtree filter；订阅绑定当前 Session';
         }
-        if (node?.config === false) return 'state 节点只允许执行 get';
+        if (node?.config === false) return 'state 节点本身只允许 get；Candidate 与配置存储菜单作用于整个 datastore';
         if (isRpcNode(node)) return `${node.keyword} 将以原始 RPC 草稿打开，请确认实例路径和参数`;
         return '节点操作会根据当前 Schema 路径自动预填 XML';
     });
@@ -779,17 +787,50 @@
     const capabilityIncludes = hint =>
         capabilities.value.some(capability => capability.toLowerCase().includes(hint.toLowerCase()));
     const hasCapability = name => capabilityIncludes(NETCONF_CAPABILITY_HINTS[name] || name);
+    const sessionSubscriptions = () => {
+        const values = session.value.subscriptions || session.value.activeSubscriptions || [];
+        return Array.isArray(values) ? values : [];
+    };
+    const modernSubscriptionActive = () => {
+        if (session.value.modernSubscriptionActive === true || session.value.subscriptionMode === 'modern') return true;
+        if (Number(session.value.modernSubscriptionCount) > 0) return true;
+        if (Array.isArray(session.value.modernSubscriptionIds) && session.value.modernSubscriptionIds.length)
+            return true;
+        return sessionSubscriptions().some(item => {
+            const type = String(item?.subscriptionType || item?.type || item?.protocol || '').toLowerCase();
+            return ['rfc8639', 'rfc8641', 'yang-push', 'modern'].includes(type);
+        });
+    };
+    const legacySubscriptionActive = () => {
+        const active = session.value.activeSubscription || session.value.subscription || null;
+        const type = String(active?.subscriptionType || active?.type || active?.protocol || '').toLowerCase();
+        if (['rfc5277', 'legacy'].includes(type)) return true;
+        if (session.value.legacySubscriptionActive === true || session.value.subscriptionMode === 'legacy') return true;
+        if (
+            sessionSubscriptions().some(
+                item => String(item?.subscriptionType || item?.type).toLowerCase() === 'rfc5277'
+            )
+        ) {
+            return true;
+        }
+        return session.value.subscriptionActive === true && !modernSubscriptionActive();
+    };
 
     const operationDisabledReason = (operation, node = null, params = {}) => {
         if (operationExecuting.value) return '设备操作执行中，请等待 rpc-reply';
         if (!connected.value) return '请先建立 NETCONF 会话';
-        const subscriptionActive =
-            session.value.subscriptionActive === true ||
-            String(session.value.activeSubscription?.state || '').toLowerCase() === 'active';
-        if (operation === 'create-subscription' && subscriptionActive) {
+        const legacyActive = legacySubscriptionActive();
+        const modernActive = modernSubscriptionActive();
+        if (operation === 'create-subscription' && legacyActive) {
             return '当前 NETCONF Session 已存在 RFC 5277 订阅';
         }
-        if (subscriptionActive && !hasCapability('interleave') && operation !== 'raw-rpc') {
+        if (operation === 'create-subscription' && modernActive) {
+            return '当前 Session 已使用 RFC 8639 动态订阅，不能混用 RFC 5277';
+        }
+        if (operation === 'establish-subscription' && legacyActive) {
+            return '当前 Session 已使用 RFC 5277 订阅，不能建立现代动态订阅';
+        }
+        if (legacyActive && !hasCapability('interleave') && operation !== 'raw-rpc') {
             return '当前订阅 Session 未声明 :interleave；普通 RPC 暂不可用';
         }
         if (operation === 'get-config' && isDataNode(node) && node?.config === false) {
@@ -810,6 +851,56 @@
         if (operation === 'validate' && !hasCapability('validate')) return '设备未声明 :validate 能力';
         if (operation === 'create-subscription' && !hasCapability('notification')) {
             return '设备未声明 :notification 能力';
+        }
+        if (
+            ['establish-subscription', 'modify-subscription', 'delete-subscription', 'resync-subscription'].includes(
+                operation
+            ) &&
+            !subscriptionCapabilities.value.subscribedNotificationsModule
+        ) {
+            return 'YANG Library 未声明 ietf-subscribed-notifications';
+        }
+        if (
+            ['establish-subscription', 'modify-subscription', 'delete-subscription', 'resync-subscription'].includes(
+                operation
+            ) &&
+            !supportsRfc8640.value
+        ) {
+            return '设备未声明 RFC 8640 所需的 encode-xml feature';
+        }
+        if (
+            ['establish-subscription', 'modify-subscription'].includes(operation) &&
+            params.modernSubscriptionTarget === 'datastore' &&
+            !supportsYangPush.value
+        ) {
+            return 'YANG Library 未声明 ietf-yang-push';
+        }
+        if (
+            ['establish-subscription', 'modify-subscription'].includes(operation) &&
+            params.filterType === 'subtree' &&
+            !subscriptionCapabilities.value.hasSubscribedNotificationFeature('subtree')
+        ) {
+            return '设备未启用 ietf-subscribed-notifications subtree feature';
+        }
+        if (
+            ['establish-subscription', 'modify-subscription'].includes(operation) &&
+            params.filterType === 'xpath' &&
+            !subscriptionCapabilities.value.hasSubscribedNotificationFeature('xpath')
+        ) {
+            return '设备未启用 ietf-subscribed-notifications xpath feature';
+        }
+        if (
+            operation === 'establish-subscription' &&
+            (params.subscriptionStartTime || params.replayStartTime) &&
+            !subscriptionCapabilities.value.hasSubscribedNotificationFeature('replay')
+        ) {
+            return '设备未启用 ietf-subscribed-notifications replay feature';
+        }
+        if (
+            (operation === 'resync-subscription' || params.updateTrigger === 'on-change') &&
+            !subscriptionCapabilities.value.hasYangPushFeature('on-change')
+        ) {
+            return '设备未启用 ietf-yang-push on-change feature';
         }
         if (['commit', 'cancel-commit', 'discard-changes'].includes(operation) && !hasCapability('candidate')) {
             return '设备未声明 :candidate 能力';
@@ -879,6 +970,18 @@
                     action: { type: 'copy-path' }
                 },
                 { type: 'divider', key: 'notification-divider-subscribe' },
+                operationMenuItem({
+                    key: 'notification:establish-subscription',
+                    label: '建立动态订阅（RFC 8639）',
+                    operation: 'establish-subscription',
+                    icon: BellOutlined,
+                    scope: 'notification',
+                    params: {
+                        modernSubscriptionTarget: 'stream',
+                        subscriptionStream: 'NETCONF',
+                        filterType: 'subtree'
+                    }
+                }),
                 operationMenuItem({
                     key: 'notification:create-subscription',
                     label: '订阅此通知（RFC 5277）',
@@ -955,6 +1058,179 @@
             );
         }
 
+        const candidateChildren = [];
+        if (hasCapability('validate')) {
+            candidateChildren.push(
+                operationMenuItem({
+                    key: 'candidate:validate',
+                    label: '校验 Candidate（validate）',
+                    operation: 'validate',
+                    icon: CodeOutlined,
+                    scope: 'datastore',
+                    params: { validateSource: 'candidate' }
+                })
+            );
+        }
+        candidateChildren.push(
+            operationMenuItem({
+                key: 'candidate:commit',
+                label: '提交整个 Candidate → Running',
+                operation: 'commit',
+                icon: SendOutlined,
+                scope: 'datastore',
+                params: { confirmed: false }
+            })
+        );
+        if (hasCapability('confirmedCommit')) {
+            candidateChildren.push(
+                operationMenuItem({
+                    key: 'candidate:confirmed-commit',
+                    label: 'Confirmed Commit → Running…',
+                    operation: 'commit',
+                    icon: SendOutlined,
+                    scope: 'datastore',
+                    params: { confirmed: true }
+                }),
+                operationMenuItem({
+                    key: 'candidate:cancel-commit',
+                    label: '取消 Confirmed Commit',
+                    operation: 'cancel-commit',
+                    icon: DeleteOutlined,
+                    scope: 'datastore'
+                })
+            );
+        }
+        candidateChildren.push(
+            operationMenuItem({
+                key: 'candidate:discard',
+                label: '放弃全部未提交修改',
+                operation: 'discard-changes',
+                icon: DeleteOutlined,
+                scope: 'datastore'
+            }),
+            { type: 'divider', key: 'candidate-divider-lock' },
+            operationMenuItem({
+                key: 'candidate:lock',
+                label: '锁定 Candidate',
+                operation: 'lock',
+                icon: SafetyOutlined,
+                scope: 'datastore',
+                params: { lockTarget: 'candidate' }
+            }),
+            operationMenuItem({
+                key: 'candidate:unlock',
+                label: '解锁 Candidate',
+                operation: 'unlock',
+                icon: SafetyOutlined,
+                scope: 'datastore',
+                params: { lockTarget: 'candidate' }
+            })
+        );
+
+        const validateChildren = [
+            operationMenuItem({
+                key: 'datastore:validate:running',
+                label: 'Running',
+                operation: 'validate',
+                icon: CodeOutlined,
+                scope: 'datastore',
+                params: { validateSource: 'running' }
+            })
+        ];
+        if (hasCapability('startup')) {
+            validateChildren.push(
+                operationMenuItem({
+                    key: 'datastore:validate:startup',
+                    label: 'Startup',
+                    operation: 'validate',
+                    icon: CodeOutlined,
+                    scope: 'datastore',
+                    params: { validateSource: 'startup' }
+                })
+            );
+        }
+        const lockChildren = ['running', ...(hasCapability('startup') ? ['startup'] : [])].map(datastore =>
+            operationMenuItem({
+                key: `datastore:lock:${datastore}`,
+                label: datastore === 'running' ? 'Running' : 'Startup',
+                operation: 'lock',
+                icon: SafetyOutlined,
+                scope: 'datastore',
+                params: { lockTarget: datastore }
+            })
+        );
+        const unlockChildren = ['running', ...(hasCapability('startup') ? ['startup'] : [])].map(datastore =>
+            operationMenuItem({
+                key: `datastore:unlock:${datastore}`,
+                label: datastore === 'running' ? 'Running' : 'Startup',
+                operation: 'unlock',
+                icon: SafetyOutlined,
+                scope: 'datastore',
+                params: { lockTarget: datastore }
+            })
+        );
+        const datastoreChildren = [
+            operationMenuItem({
+                key: 'datastore:copy-config',
+                label: '复制配置存储（copy-config）…',
+                operation: 'copy-config',
+                icon: CopyOutlined,
+                scope: 'datastore'
+            })
+        ];
+        if (hasCapability('validate')) {
+            datastoreChildren.push({
+                key: 'datastore:validate',
+                label: '校验配置（validate）',
+                icon: menuIcon(CodeOutlined),
+                disabled: allMenuActionsDisabled(validateChildren),
+                children: validateChildren
+            });
+        }
+        datastoreChildren.push(
+            {
+                key: 'datastore:lock',
+                label: '锁定配置存储（lock）',
+                icon: menuIcon(SafetyOutlined),
+                disabled: allMenuActionsDisabled(lockChildren),
+                children: lockChildren
+            },
+            {
+                key: 'datastore:unlock',
+                label: '解锁配置存储（unlock）',
+                icon: menuIcon(SafetyOutlined),
+                disabled: allMenuActionsDisabled(unlockChildren),
+                children: unlockChildren
+            }
+        );
+        if (hasCapability('startup')) {
+            const startupChildren = [
+                operationMenuItem({
+                    key: 'startup:save-running',
+                    label: '保存 Running → Startup',
+                    operation: 'copy-config',
+                    icon: CopyOutlined,
+                    scope: 'datastore',
+                    params: { copySource: 'running', copyTarget: 'startup' }
+                }),
+                operationMenuItem({
+                    key: 'startup:delete',
+                    label: '删除整个 Startup…',
+                    operation: 'delete-config',
+                    icon: DeleteOutlined,
+                    scope: 'datastore',
+                    params: { deleteTarget: 'startup' }
+                })
+            ];
+            datastoreChildren.push({
+                key: 'datastore:startup',
+                label: 'Startup',
+                icon: menuIcon(FileSearchOutlined),
+                disabled: allMenuActionsDisabled(startupChildren),
+                children: startupChildren
+            });
+        }
+
         const items = [
             {
                 key: 'node-properties',
@@ -992,6 +1268,41 @@
                 disabled: allMenuActionsDisabled(editConfigChildren),
                 children: editConfigChildren
             });
+        }
+        items.push({ type: 'divider', key: 'node-divider-datastore' });
+        if (hasCapability('candidate')) {
+            items.push({
+                key: 'candidate-workspace',
+                label: 'Candidate 工作区',
+                icon: menuIcon(EditOutlined),
+                disabled: allMenuActionsDisabled(candidateChildren),
+                children: candidateChildren
+            });
+        }
+        items.push({
+            key: 'datastore-workspace',
+            label: '配置存储',
+            icon: menuIcon(SafetyOutlined),
+            disabled: allMenuActionsDisabled(datastoreChildren),
+            children: datastoreChildren
+        });
+        if (isDataNode(node)) {
+            items.push(
+                { type: 'divider', key: 'node-divider-yang-push' },
+                operationMenuItem({
+                    key: 'yang-push:establish-subscription',
+                    label: '订阅当前节点（YANG-Push）',
+                    operation: 'establish-subscription',
+                    icon: BellOutlined,
+                    params: {
+                        modernSubscriptionTarget: 'datastore',
+                        datastore: 'ds:operational',
+                        updateTrigger: 'periodic',
+                        period: 500,
+                        filterType: 'subtree'
+                    }
+                })
+            );
         }
         items.push(
             { type: 'divider', key: 'node-divider-advanced' },
@@ -1310,14 +1621,131 @@
             subtree:
                 operation === 'create-subscription'
                     ? buildNotificationFilter(node)
-                    : ['get', 'get-config', 'edit-config'].includes(operation)
-                      ? buildNodeXml(node, 'filter')
-                      : '',
+                    : operation === 'establish-subscription'
+                      ? params.modernSubscriptionTarget === 'datastore'
+                          ? buildNodeXml(node, 'filter')
+                          : buildNotificationFilter(node)
+                      : ['get', 'get-config', 'edit-config'].includes(operation)
+                        ? buildNodeXml(node, 'filter')
+                        : '',
             config: operation === 'edit-config' ? buildNodeXml(node, 'config') : '',
             rawRpc: operation === 'raw-rpc' ? buildRawRpcDraft(node) : '',
             params: { ...params }
         });
         operationContextRevision.value += 1;
+    };
+
+    const storedSubscriptionFilter = subscription => {
+        const raw = subscription?.filter;
+        if (!raw) return { filterType: 'none', xpath: '', subtree: '' };
+        let filter = raw;
+        if (typeof raw === 'string') {
+            try {
+                filter = JSON.parse(raw);
+            } catch (_error) {
+                return { filterType: 'subtree', xpath: '', subtree: raw };
+            }
+        }
+        if (!filter || typeof filter !== 'object') return { filterType: 'none', xpath: '', subtree: '' };
+        if (filter.type === 'xpath') {
+            const namespaces = Object.entries(filter.namespaces || {})
+                .map(([prefix, namespace]) => `${prefix || 'xmlns'}=${namespace}`)
+                .join(', ');
+            return {
+                filterType: 'xpath',
+                xpath: filter.select || filter.expression || filter.value || '',
+                subtree: '',
+                modernXpathNamespaces: namespaces
+            };
+        }
+        if (filter.type === 'reference') {
+            return {
+                filterType: 'reference',
+                xpath: '',
+                subtree: '',
+                modernFilterReference: filter.name || filter.value || ''
+            };
+        }
+        return {
+            filterType: 'subtree',
+            xpath: '',
+            subtree: filter.content || filter.xml || '',
+            modernXpathNamespaces: Object.entries(filter.namespaces || {})
+                .map(([prefix, namespace]) => `${prefix || 'xmlns'}=${namespace}`)
+                .join(', ')
+        };
+    };
+
+    const activateSubscriptionManagement = subscription => {
+        const operation = String(subscription?.operation || '');
+        const storedFilter = storedSubscriptionFilter(subscription);
+        const namespaceBindings = new Map();
+        Object.entries(subscription?.datastoreNamespaces || {}).forEach(([prefix, namespace]) => {
+            if (prefix && namespace) namespaceBindings.set(prefix, namespace);
+        });
+        String(storedFilter.modernXpathNamespaces || '')
+            .split(',')
+            .map(entry => entry.trim())
+            .filter(Boolean)
+            .forEach(entry => {
+                const separator = entry.indexOf('=');
+                if (separator > 0) {
+                    const inputPrefix = entry.slice(0, separator).trim();
+                    namespaceBindings.set(
+                        ['default', 'xmlns'].includes(inputPrefix) ? '' : inputPrefix,
+                        entry.slice(separator + 1).trim()
+                    );
+                }
+            });
+        const params = {
+            ...subscription,
+            modernSubscriptionId: subscription?.deviceSubscriptionId ?? subscription?.modernSubscriptionId ?? '',
+            modernSubscriptionTarget: subscription?.targetType === 'datastore' ? 'datastore' : 'stream',
+            subscriptionStream: subscription?.stream || 'NETCONF',
+            subscriptionStartTime: subscription?.replayStartTime || '',
+            subscriptionStopTime: subscription?.stopTime || '',
+            ...storedFilter,
+            modernXpathNamespaces: [...namespaceBindings]
+                .map(([prefix, namespace]) => `${prefix || 'xmlns'}=${namespace}`)
+                .join(', ')
+        };
+        const disabledReason = operationDisabledReason(operation, null, params);
+        if (disabledReason) {
+            notify.warning(disabledReason);
+            return;
+        }
+        Object.assign(operationContext, {
+            operation,
+            node: null,
+            subtree: params.subtree || '',
+            config: '',
+            rawRpc: '',
+            params
+        });
+        operationContextRevision.value += 1;
+        notificationHistoryOpen.value = false;
+        notify.info(`已在操作区打开 ${operation}，确认参数后执行`);
+    };
+
+    const openSubscriptionManagement = subscription => {
+        const targetProfileId = String(subscription?.profileId || '');
+        if (
+            !targetProfileId ||
+            subscription?.deviceSubscriptionId === undefined ||
+            subscription?.deviceSubscriptionId === null ||
+            subscription?.deviceSubscriptionId === ''
+        ) {
+            notify.warning('订阅缺少 Profile 或设备订阅 ID，无法执行管理操作');
+            return;
+        }
+        if (targetProfileId !== selectedProfileId.value) {
+            pendingSubscriptionManagement = { ...subscription };
+            notificationHistoryOpen.value = false;
+            selectProfile(targetProfileId);
+            notify.info('正在切换到订阅所属 Profile');
+            return;
+        }
+        activateSubscriptionManagement(subscription);
     };
 
     const handleOperationExecutingChange = value => {
@@ -1532,10 +1960,15 @@
 
     const reloadCurrentProfile = options => Promise.all([loadWorkspace(options), loadSession()]);
 
-    watch(selectedProfileId, (profileId, previousProfileId) => {
+    watch(selectedProfileId, async (profileId, previousProfileId) => {
         if (profileId === previousProfileId) return;
         resetProfileWorkspace();
-        if (profileContextReady) reloadCurrentProfile();
+        if (profileContextReady) await reloadCurrentProfile();
+        if (pendingSubscriptionManagement?.profileId === profileId) {
+            const subscription = pendingSubscriptionManagement;
+            pendingSubscriptionManagement = null;
+            activateSubscriptionManagement(subscription);
+        }
     });
 
     watch(notificationHistoryOpen, open => {

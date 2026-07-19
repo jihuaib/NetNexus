@@ -12,6 +12,7 @@ application. It does not replace the license files included by each package.
 | --- | --- | --- | --- |
 | libyang / yanglint | 5.8.6 | BSD-3-Clause | https://github.com/CESNET/libyang |
 | PCRE2 | 10.47 | BSD-3-Clause WITH PCRE2-exception | https://github.com/PCRE2Project/pcre2 |
+| IETF/IANA YANG modules | RFC-pinned revisions | IETF Trust Legal Provisions | https://www.iana.org/assignments/yang-parameters/ |
 | getopt (Windows runtime) | f46459cbe64b | Unlicense | https://github.com/matveyt/getopt |
 | PThreads4W (Windows runtime) | 3.0.0#14 | Apache-2.0 | https://sourceforge.net/projects/pthreads4w/ |
 | dirent (Windows runtime) | 1.26 | MIT | https://github.com/tronkko/dirent |
@@ -20,7 +21,8 @@ The libyang and PCRE2 license texts are shipped at the root of the bundled
 runtime. The generated Windows runtime also contains `LICENSE.getopt`,
 `LICENSE.pthreads`, `NOTICE.pthreads`, and `LICENSE.dirent`. These components
 are statically linked into `yanglint.exe`; no third-party runtime DLL is
-required.
+required. The pinned IANA YANG files retain their complete IETF Trust copyright
+and legal-provisions notices in each module.
 
 ## Production npm packages
 

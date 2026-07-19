@@ -139,6 +139,7 @@ async function main() {
 
     const currentConfig = await service.executeOperation(profile.id, {
         operation: 'get-config',
+        extractConfig: true,
         source: 'candidate',
         filter: { type: 'subtree', content: '<system xmlns="urn:example:system"/>' }
     });

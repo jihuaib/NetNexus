@@ -71,7 +71,10 @@ export const fileBaseName = value => {
 };
 
 const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
-const DEFAULT_XML_DISPLAY_LIMIT = 2 * 1024 * 1024;
+// DOMParser + XMLSerializer briefly hold several copies of the document. Keep
+// formatting deliberately below the editor's rich-rendering ceiling so large
+// NETCONF replies remain a cheap, plain-text view.
+const DEFAULT_XML_DISPLAY_LIMIT = 128 * 1024;
 
 const indentXmlElement = (element, depth = 0, inheritedPreserve = false) => {
     const xmlSpace = element.getAttributeNS?.(XML_NAMESPACE, 'space') || element.getAttribute?.('xml:space') || '';

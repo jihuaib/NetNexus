@@ -11,6 +11,7 @@ const { YANG_EVT_TYPES } = require('../../electron/const/yangConst');
 const {
     MOCK_DEVICE_YANG,
     MOCK_INVALID_YANG,
+    MOCK_MODULES,
     MOCK_TYPES_YANG,
     MockNetconfServer,
     parseArgs
@@ -234,11 +235,7 @@ async function run() {
         assert.equal(pageConnection.hostKeyFingerprint, status.fingerprint);
         const pageInventory = await pageWorker.discoverModules(pageProfile.id);
         assert.equal(pageInventory.source, 'rfc8525');
-        assert.deepEqual(pageInventory.modules.map(module => module.name).sort(), [
-            'netnexus-mock-device',
-            'netnexus-mock-invalid',
-            'netnexus-mock-types'
-        ]);
+        assert.deepEqual(pageInventory.modules.map(module => module.name).sort(), Object.keys(MOCK_MODULES).sort());
         const pageSchema = await pageWorker.getSchema(pageProfile.id, {
             name: 'netnexus-mock-device',
             revision: '2026-07-18'
@@ -346,7 +343,7 @@ async function run() {
 
         const inventory = await primary.discoverSchemas(RPC_OPTIONS);
         assert.equal(inventory.source, 'rfc8525');
-        assert.equal(inventory.modules.length, 3);
+        assert.equal(inventory.modules.length, Object.keys(MOCK_MODULES).length);
         const deviceModule = inventory.modules.find(module => module.name === 'netnexus-mock-device');
         const invalidModule = inventory.modules.find(module => module.name === 'netnexus-mock-invalid');
         const typesModule = inventory.modules.find(module => module.name === 'netnexus-mock-types');

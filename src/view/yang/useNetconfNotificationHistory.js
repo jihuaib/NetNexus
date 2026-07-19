@@ -1,4 +1,5 @@
 import { computed, reactive, readonly, ref } from 'vue';
+import { XMLParser } from 'fast-xml-parser';
 
 export const NETCONF_NOTIFICATION_HISTORY_DEFAULTS = Object.freeze({
     maxRecords: 500,
@@ -12,6 +13,9 @@ const NETCONF_SUBSCRIPTION_EVENT = 'netconf:subscriptionEvent';
 const COLLECTOR_ID = 'netconf-notification-history-collector';
 const MAX_METADATA_BYTES = 16 * 1024;
 const MIN_TOTAL_BYTES = 64 * 1024;
+const NETCONF_NOTIFICATION_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:notification:1.0';
+const SUBSCRIBED_NOTIFICATIONS_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-subscribed-notifications';
+const YANG_PUSH_NAMESPACE = 'urn:ietf:params:xml:ns:yang:ietf-yang-push';
 const encoder = typeof TextEncoder === 'function' ? new TextEncoder() : null;
 
 const records = ref([]);
@@ -34,6 +38,7 @@ const normalizeSubscriptionStatus = (value, fallback = 'active') => {
     const status = textValue(value).trim().toLowerCase();
     if (['active', 'subscribed'].includes(status)) return 'active';
     if (['pending', 'creating', 'starting', 'in-progress'].includes(status)) return 'pending';
+    if (['suspended', 'paused'].includes(status)) return 'suspended';
     if (
         [
             'terminated',
@@ -89,6 +94,14 @@ const metadataJson = value => {
         return metadataText(value);
     }
 };
+const metadataNamespaces = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(
+        Object.entries(value)
+            .filter(([, namespace]) => namespace !== undefined && namespace !== null && String(namespace).trim())
+            .map(([prefix, namespace]) => [metadataText(prefix), metadataText(namespace)])
+    );
+};
 
 const recordBytes = record =>
     utf8Bytes(
@@ -105,8 +118,101 @@ const validDateText = (value, fallback = '') => {
 };
 
 const localName = value => textValue(value).split(':').pop() || '';
+const prefixOf = value => {
+    const parts = textValue(value).split(':');
+    return parts.length > 1 ? parts.slice(0, -1).join(':') : '';
+};
+const orderedElementName = entry =>
+    entry && typeof entry === 'object'
+        ? Object.keys(entry).find(key => key !== ':@' && !key.startsWith('#') && !key.startsWith('?')) || ''
+        : '';
+const orderedAttributes = entry => (entry && typeof entry === 'object' ? entry[':@'] || {} : {});
+const orderedChildren = (entry, name) => {
+    const children = entry && typeof entry === 'object' ? entry[name] : [];
+    return Array.isArray(children) ? children.filter(child => orderedElementName(child)) : [];
+};
+const orderedText = (entry, name) => {
+    const children = entry && typeof entry === 'object' ? entry[name] : [];
+    return Array.isArray(children)
+        ? children
+              .filter(child => Object.hasOwn(child || {}, '#text'))
+              .map(child => textValue(child['#text']))
+              .join('')
+              .trim()
+        : '';
+};
+const orderedNamespace = (name, entry, inherited = {}) => {
+    const prefix = prefixOf(name);
+    const attribute = prefix ? `@_xmlns:${prefix}` : '@_xmlns';
+    return orderedAttributes(entry)[attribute] || inherited[attribute] || '';
+};
+
+const MODERN_NOTIFICATION_NAMESPACES = new Map([
+    ['push-update', YANG_PUSH_NAMESPACE],
+    ['push-change-update', YANG_PUSH_NAMESPACE],
+    ['replay-completed', SUBSCRIBED_NOTIFICATIONS_NAMESPACE],
+    ['subscription-completed', SUBSCRIBED_NOTIFICATIONS_NAMESPACE],
+    ['subscription-started', SUBSCRIBED_NOTIFICATIONS_NAMESPACE],
+    ['subscription-modified', SUBSCRIBED_NOTIFICATIONS_NAMESPACE],
+    ['subscription-suspended', SUBSCRIBED_NOTIFICATIONS_NAMESPACE],
+    ['subscription-resumed', SUBSCRIBED_NOTIFICATIONS_NAMESPACE],
+    ['subscription-terminated', SUBSCRIBED_NOTIFICATIONS_NAMESPACE]
+]);
+
+const parseNotificationEnvelope = xml => {
+    try {
+        const parsed = new XMLParser({
+            ignoreAttributes: false,
+            attributeNamePrefix: '@_',
+            preserveOrder: true,
+            processEntities: false,
+            trimValues: true
+        }).parse(textValue(xml));
+        const root = Array.isArray(parsed) ? parsed.find(entry => orderedElementName(entry)) : null;
+        const rootName = orderedElementName(root);
+        const rootAttributes = orderedAttributes(root);
+        if (
+            localName(rootName) !== 'notification' ||
+            orderedNamespace(rootName, root) !== NETCONF_NOTIFICATION_NAMESPACE
+        ) {
+            return null;
+        }
+        const children = orderedChildren(root, rootName);
+        const eventEntry = children.find(entry => localName(orderedElementName(entry)) !== 'eventTime');
+        if (!eventEntry) return null;
+        const eventName = orderedElementName(eventEntry);
+        const eventAttributes = { ...rootAttributes, ...orderedAttributes(eventEntry) };
+        const namespace = orderedNamespace(eventName, eventEntry, rootAttributes);
+        const expectedNamespace = MODERN_NOTIFICATION_NAMESPACES.get(localName(eventName));
+        let deviceSubscriptionId = '';
+        if (expectedNamespace && namespace === expectedNamespace) {
+            const idEntry = orderedChildren(eventEntry, eventName).find(entry => {
+                const name = orderedElementName(entry);
+                return localName(name) === 'id' && orderedNamespace(name, entry, eventAttributes) === expectedNamespace;
+            });
+            if (idEntry) {
+                const idName = orderedElementName(idEntry);
+                const idText = orderedText(idEntry, idName);
+                if (/^\d+$/u.test(idText)) deviceSubscriptionId = idText;
+            }
+        }
+        const eventTimeEntry = children.find(entry => localName(orderedElementName(entry)) === 'eventTime');
+        const eventTimeName = orderedElementName(eventTimeEntry);
+        return {
+            name: localName(eventName),
+            qualifiedName: eventName,
+            namespace,
+            eventTime: eventTimeEntry ? orderedText(eventTimeEntry, eventTimeName) : '',
+            deviceSubscriptionId
+        };
+    } catch (_error) {
+        return null;
+    }
+};
 
 const eventDescriptorFromXml = xml => {
+    const parsed = parseNotificationEnvelope(xml);
+    if (parsed) return parsed;
     const source = textValue(xml);
     const tagPattern = /<([A-Za-z_][\w.:-]*)(\s[^<>]*?)?\s*\/?>/gu;
     for (const match of source.matchAll(tagPattern)) {
@@ -165,8 +271,21 @@ const subscriptionMatchesNotification = (subscription, notification) =>
 
 const resolveSubscription = notification => {
     if (notification.subscriptionId) {
-        return subscriptions.value.find(item => item.id === notification.subscriptionId) || null;
+        const direct = subscriptions.value.find(item => item.id === notification.subscriptionId);
+        if (direct) return direct;
+        return null;
     }
+    if (notification.deviceSubscriptionId) {
+        const deviceMatch = subscriptions.value.find(
+            item =>
+                item.deviceSubscriptionId === notification.deviceSubscriptionId &&
+                (!notification.profileId || item.profileId === notification.profileId) &&
+                (!notification.sessionId || item.sessionId === notification.sessionId)
+        );
+        if (deviceMatch) return deviceMatch;
+        return null;
+    }
+    if (MODERN_NOTIFICATION_NAMESPACES.has(notification.eventName)) return null;
     const matches = subscriptions.value.filter(item => subscriptionMatchesNotification(item, notification));
     return matches.length === 1 ? matches[0] : null;
 };
@@ -225,11 +344,14 @@ const normalizeSubscription = input => {
     const source = unwrapNetconfNotificationPayload(input) || {};
     const nested = source.subscription && typeof source.subscription === 'object' ? source.subscription : {};
     const value = { ...source, ...nested };
-    const existingId = textValue(value.id || value.subscriptionId).trim();
+    const existingId = textValue(value.id ?? value.subscriptionId).trim();
     const id = metadataText(existingId || nextSubscriptionId());
     const previous = subscriptions.value.find(item => item.id === id);
     const createdAt = validDateText(value.createdAt || value.startedAt, previous?.createdAt || nowIso());
     const rawError = value.errorMessage || value.error?.message || value.error?.msg || value.error;
+    const rawStatus = value.subscriptionStatus || value.state || value.status;
+    const status = normalizeSubscriptionStatus(rawStatus || previous?.status || 'active');
+    const explicitStatus = Boolean(rawStatus);
     return {
         ...previous,
         id,
@@ -239,17 +361,63 @@ const normalizeSubscription = input => {
         host: metadataText(value.host ?? previous?.host),
         port: value.port ?? previous?.port ?? '',
         sessionId: metadataText(value.sessionId ?? previous?.sessionId),
+        protocol: metadataText(
+            value.protocol ||
+                value.subscriptionProtocol ||
+                value.type ||
+                value.subscriptionType ||
+                previous?.protocol ||
+                (value.deviceSubscriptionId !== undefined &&
+                value.deviceSubscriptionId !== null &&
+                String(value.deviceSubscriptionId) !== ''
+                    ? 'rfc8639'
+                    : 'rfc5277')
+        ),
+        deviceSubscriptionId: metadataText(
+            value.deviceSubscriptionId ?? value.publisherSubscriptionId ?? previous?.deviceSubscriptionId
+        ),
         label: metadataText(value.label || value.name || previous?.label || value.eventName || value.stream || '订阅'),
         stream: metadataText(value.stream || previous?.stream || 'NETCONF'),
+        targetType: metadataText(value.targetType || value.subscriptionTarget || previous?.targetType || 'stream'),
+        datastore: metadataText(value.datastore || previous?.datastore),
+        datastoreNamespaces: metadataNamespaces(value.datastoreNamespaces || previous?.datastoreNamespaces),
+        dscp: value.dscp ?? previous?.dscp ?? '',
+        weighting: value.weighting ?? previous?.weighting ?? '',
+        dependency: value.dependency ?? previous?.dependency ?? '',
+        encoding: metadataText(value.encoding || previous?.encoding),
+        encodingNamespaces: metadataNamespaces(value.encodingNamespaces || previous?.encodingNamespaces),
+        updateTrigger: metadataText(value.updateTrigger || value.trigger || previous?.updateTrigger),
+        period: value.period ?? previous?.period ?? '',
+        anchorTime: metadataText(value.anchorTime || previous?.anchorTime),
+        dampeningPeriod: value.dampeningPeriod ?? previous?.dampeningPeriod ?? '',
+        syncOnStart: value.syncOnStart ?? previous?.syncOnStart ?? true,
+        excludedChanges: Array.isArray(value.excludedChanges)
+            ? value.excludedChanges.map(metadataText)
+            : previous?.excludedChanges || [],
         eventName: metadataText(value.eventName || value.notificationName || previous?.eventName),
         filter: metadataJson(value.filterXml || value.filter || previous?.filter),
-        status: normalizeSubscriptionStatus(
-            value.subscriptionStatus || value.state || value.status || previous?.status || 'active'
-        ),
+        replayStartTime: metadataText(value.replayStartTime || previous?.replayStartTime),
+        stopTime: metadataText(value.stopTime || previous?.stopTime),
+        status,
         createdAt,
         updatedAt: validDateText(value.updatedAt || value.receivedAt, nowIso()),
+        replayCompletedAt: validDateText(value.replayCompletedAt || previous?.replayCompletedAt, ''),
         terminatedAt: validDateText(value.terminatedAt || value.endedAt, previous?.terminatedAt || ''),
-        terminationReason: metadataText(value.terminationReason || value.reason || previous?.terminationReason),
+        terminationReason: metadataText(
+            value.terminationReason ||
+                (['ended', 'error'].includes(status) ? value.reason : '') ||
+                previous?.terminationReason
+        ),
+        suspensionReason: metadataText(
+            value.suspensionReason ||
+                (status === 'suspended' ? value.reason : '') ||
+                (explicitStatus && status !== 'suspended' ? '' : previous?.suspensionReason)
+        ),
+        desynchronized: value.desynchronized ?? previous?.desynchronized ?? false,
+        desynchronizedAt: validDateText(value.desynchronizedAt || previous?.desynchronizedAt, ''),
+        desynchronizationReason: metadataText(
+            value.desynchronizationReason || value.desyncReason || previous?.desynchronizationReason
+        ),
         errorMessage: metadataJson(rawError || previous?.errorMessage)
     };
 };
@@ -305,21 +473,32 @@ const normalizeNotification = input => {
     const descriptor = eventDescriptorFromXml(xml.value);
     const receivedAt = validDateText(value.receivedAt || value.receivedTime, nowIso());
     const rawSubscriptionStatus = value.subscriptionStatus || value.subscriptionState || value.state;
+    const suppliedDeviceSubscriptionId = value.deviceSubscriptionId ?? value.publisherSubscriptionId;
     const notification = {
-        id: metadataText(value.id || value.eventId || nextNotificationId()),
+        id: metadataText(value.id ?? value.eventId ?? nextNotificationId()),
         profileId: metadataText(value.profileId),
         profileName: metadataText(value.profileName),
         host: metadataText(value.host),
         port: value.port ?? '',
         sessionId: metadataText(value.sessionId),
         subscriptionId: metadataText(value.subscriptionId),
+        deviceSubscriptionId: metadataText(
+            suppliedDeviceSubscriptionId === undefined ||
+                suppliedDeviceSubscriptionId === null ||
+                suppliedDeviceSubscriptionId === ''
+                ? descriptor.deviceSubscriptionId
+                : suppliedDeviceSubscriptionId
+        ),
         subscriptionName: metadataText(value.subscriptionName || value.subscriptionLabel),
         subscriptionStatus: normalizeSubscriptionStatus(rawSubscriptionStatus, ''),
         stream: metadataText(value.stream),
         eventName: metadataText(value.eventName || value.notificationName || descriptor.name),
         qualifiedName: metadataText(value.qualifiedName || descriptor.qualifiedName),
         namespace: metadataText(value.namespace || descriptor.namespace),
-        generatedAt: validDateText(value.generatedAt || value.eventTime || eventTimeFromXml(xml.value), ''),
+        generatedAt: validDateText(
+            value.generatedAt || value.eventTime || descriptor.eventTime || eventTimeFromXml(xml.value),
+            ''
+        ),
         receivedAt,
         xml: xml.value,
         xmlTruncated: xml.truncated || Boolean(value.xmlTruncated),
@@ -329,6 +508,8 @@ const normalizeNotification = input => {
     const matchedSubscription = resolveSubscription(notification);
     if (matchedSubscription) {
         notification.subscriptionId = matchedSubscription.id;
+        notification.deviceSubscriptionId =
+            notification.deviceSubscriptionId || matchedSubscription.deviceSubscriptionId;
         notification.subscriptionName = notification.subscriptionName || matchedSubscription.label;
         notification.stream = notification.stream || matchedSubscription.stream;
         notification.profileId = notification.profileId || matchedSubscription.profileId;
@@ -362,7 +543,7 @@ export const ingestNetconfNotificationEvent = payload => {
         return { kind: 'notification', value: addNetconfNotification(source) };
     }
     const kind = textValue(source.kind || source.type || source.event).toLowerCase();
-    if (source.subscription || source.subscriptionId || kind.includes('subscription')) {
+    if (source.subscription || Object.hasOwn(source, 'subscriptionId') || kind.includes('subscription')) {
         return { kind: 'subscription', value: upsertNetconfNotificationSubscription(source) };
     }
     return null;
@@ -465,14 +646,38 @@ export const notificationGroups = computed(() => {
                 profileId: session.profileId,
                 sessionId: session.sessionId,
                 subscriptionId,
+                protocol: value.protocol || '',
+                deviceSubscriptionId: value.deviceSubscriptionId || '',
+                targetType: value.targetType || '',
+                datastore: value.datastore || '',
+                datastoreNamespaces: metadataNamespaces(value.datastoreNamespaces),
+                dscp: value.dscp ?? '',
+                weighting: value.weighting ?? '',
+                dependency: value.dependency ?? '',
+                encoding: value.encoding || '',
+                encodingNamespaces: metadataNamespaces(value.encodingNamespaces),
+                updateTrigger: value.updateTrigger || '',
+                period: value.period ?? '',
+                anchorTime: value.anchorTime || '',
+                dampeningPeriod: value.dampeningPeriod ?? '',
+                syncOnStart: value.syncOnStart,
+                excludedChanges: value.excludedChanges || [],
+                filter: value.filter || '',
+                replayStartTime: value.replayStartTime || '',
+                stopTime: value.stopTime || '',
                 label: value.subscriptionName || value.label || value.eventName || value.stream || '未关联订阅',
                 status:
                     value.status ||
                     value.subscriptionStatus ||
                     (registered ? 'active' : subscriptionId ? 'unknown' : 'unassigned'),
                 updatedAt: value.updatedAt || '',
+                replayCompletedAt: value.replayCompletedAt || '',
                 terminatedAt: value.terminatedAt || '',
                 terminationReason: value.terminationReason || '',
+                suspensionReason: value.suspensionReason || '',
+                desynchronized: Boolean(value.desynchronized),
+                desynchronizedAt: value.desynchronizedAt || '',
+                desynchronizationReason: value.desynchronizationReason || '',
                 errorMessage: value.errorMessage || '',
                 count: 0,
                 unread: 0,

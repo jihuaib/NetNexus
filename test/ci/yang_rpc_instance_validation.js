@@ -18,6 +18,61 @@ const TYPEDEF_BOOLEAN_MODULE = `module netnexus-validation-demo {
   container flags { leaf active { type switch-value; } }
 }`;
 
+const CROSS_MODULE_IFM = `module netnexus-validation-ifm {
+  yang-version 1.1;
+  namespace "urn:netnexus:validation:ifm";
+  prefix ifm;
+  revision 2026-07-19;
+
+  container ifm {
+    container interfaces {
+      list interface {
+        key "name";
+        leaf name { type string; }
+      }
+    }
+  }
+}`;
+
+const CROSS_MODULE_ETHERNET = `module netnexus-validation-ethernet {
+  yang-version 1.1;
+  namespace "urn:netnexus:validation:ethernet";
+  prefix ethernet;
+  import netnexus-validation-ifm { prefix ifm; }
+  import netnexus-validation-ifm-trunk { prefix ifm-trunk; }
+  revision 2026-07-19;
+
+  augment "/ifm:ifm/ifm:interfaces/ifm:interface" {
+    container ethernet {
+      container main-interface {
+        leaf l2-attribute {
+          when "not(/ifm:ifm/ifm:interfaces/ifm:interface/ifm-trunk:trunk/ifm-trunk:members/ifm-trunk:member[ifm-trunk:name=current()/../../../ifm:name])";
+          type boolean;
+        }
+      }
+    }
+  }
+}`;
+
+const CROSS_MODULE_IFM_TRUNK = `module netnexus-validation-ifm-trunk {
+  yang-version 1.1;
+  namespace "urn:netnexus:validation:ifm-trunk";
+  prefix ifm-trunk;
+  import netnexus-validation-ifm { prefix ifm; }
+  revision 2026-07-19;
+
+  augment "/ifm:ifm/ifm:interfaces/ifm:interface" {
+    container trunk {
+      container members {
+        list member {
+          key "name";
+          leaf name { type string; }
+        }
+      }
+    }
+  }
+}`;
+
 function editConfigRpc(body) {
     return [
         '<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="validation-1">',
@@ -39,6 +94,96 @@ function interfaceBody(fields, attributes = '') {
         '        </interface>',
         '      </interfaces>'
     ].join('\n');
+}
+
+async function assertReferencedImportValidation() {
+    const registry = new YangRegistry({
+        rootDir: path.join(temporaryRoot, 'referenced-import-repository'),
+        resourcesPath: path.join(projectRoot, 'resources'),
+        isPackaged: false
+    });
+    registry.importContents([
+        {
+            content: CROSS_MODULE_IFM,
+            expectedName: 'netnexus-validation-ifm',
+            revision: '2026-07-19',
+            source: 'test'
+        },
+        {
+            content: CROSS_MODULE_ETHERNET,
+            expectedName: 'netnexus-validation-ethernet',
+            revision: '2026-07-19',
+            source: 'test'
+        },
+        {
+            content: CROSS_MODULE_IFM_TRUNK,
+            expectedName: 'netnexus-validation-ifm-trunk',
+            revision: '2026-07-19',
+            source: 'test'
+        }
+    ]);
+
+    const compiled = await registry.compile({ force: true });
+    assert.equal(compiled.success, true, JSON.stringify(compiled.diagnostics, null, 2));
+    assert.equal(
+        compiled.diagnostics.some(diagnostic =>
+            /unknown\/non-implemented|referenced module .* is not implemented|check skipped/iu.test(
+                String(diagnostic.message || '')
+            )
+        ),
+        false,
+        JSON.stringify(compiled.diagnostics, null, 2)
+    );
+
+    const rpc = editConfigRpc(
+        [
+            '      <ifm xmlns="urn:netnexus:validation:ifm">',
+            '        <interfaces>',
+            '          <interface>',
+            '            <name>GE0/0/0</name>',
+            '            <ethernet xmlns="urn:netnexus:validation:ethernet">',
+            '              <main-interface><l2-attribute>true</l2-attribute></main-interface>',
+            '            </ethernet>',
+            '          </interface>',
+            '        </interfaces>',
+            '      </ifm>'
+        ].join('\n')
+    );
+    const runtime = registry.compiler.createRuntime();
+    let validationArgs = null;
+    const capturingRuntime = {
+        getStatus: options => runtime.getStatus(options),
+        execute: (args, options) => {
+            validationArgs = [...args];
+            return runtime.execute(args, options);
+        }
+    };
+    const validation = await registry.validateRpc({
+        compileId: compiled.compileId,
+        rpc,
+        runtime: capturingRuntime
+    });
+    assert.equal(validation.valid, true, JSON.stringify(validation.diagnostics, null, 2));
+    assert(validationArgs, 'RPC validation must invoke yanglint');
+    assert.equal(
+        validationArgs.filter(argument => argument === '-i').length,
+        1,
+        `referenced imports require exactly one yanglint -i option: ${JSON.stringify(validationArgs)}`
+    );
+    const ethernetIndex = validationArgs.findIndex(argument =>
+        path.basename(argument).startsWith('netnexus-validation-ethernet@')
+    );
+    const ifmTrunkIndex = validationArgs.findIndex(argument =>
+        path.basename(argument).startsWith('netnexus-validation-ifm-trunk@')
+    );
+    assert(
+        ethernetIndex >= 0 && ifmTrunkIndex > ethernetIndex,
+        `the regression requires the importing module to load before its referenced dependency: ${JSON.stringify(validationArgs)}`
+    );
+    assert(
+        validationArgs.indexOf('-i') < validationArgs.indexOf('-I'),
+        `yanglint -i must configure the Schema context before XML input parsing: ${JSON.stringify(validationArgs)}`
+    );
 }
 
 async function run() {
@@ -162,6 +307,8 @@ async function run() {
             invalidBooleanRpc.slice(colonLineDiagnostic.index, colonLineDiagnostic.index + colonLineDiagnostic.length),
             'wrong'
         );
+
+        await assertReferencedImportValidation();
 
         console.log('YANG RPC libyang instance validation tests passed');
     } finally {

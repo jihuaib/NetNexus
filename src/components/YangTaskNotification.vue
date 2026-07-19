@@ -83,7 +83,9 @@
         return names[action.value] || progress.value.title || 'YANG 任务';
     });
     const notificationTitle = computed(() => {
-        if (phase.value === 'completed') return `${actionName.value}完成`;
+        if (phase.value === 'completed') {
+            return failedCount.value > 0 ? `${actionName.value}部分完成` : `${actionName.value}完成`;
+        }
         if (phase.value === 'failed') return `${actionName.value}失败`;
         if (phase.value === 'cancelled') return `${actionName.value}已取消`;
         const phaseNames = {
@@ -158,7 +160,8 @@
         if (!taskId || dismissedTaskIds.has(taskId)) return;
 
         const currentTaskId = getTaskId(progress.value);
-        if (currentTaskId && currentTaskId !== taskId && !terminal.value) {
+        const sameTask = !currentTaskId || currentTaskId === taskId;
+        if (!sameTask && !terminal.value) {
             const incomingPhase = data.phase || data.status;
             if (
                 !['preparing', 'queued', 'discovering', 'downloading', 'importing', 'compiling'].includes(incomingPhase)
@@ -168,11 +171,12 @@
         }
 
         clearCloseTimer();
+        const previous = sameTask ? progress.value : {};
         progress.value = {
-            ...progress.value,
+            ...previous,
             ...data,
             taskId,
-            counts: data.counts || progress.value.counts || {}
+            counts: data.counts || previous.counts || {}
         };
         visible.value = true;
         if (isTaskTerminal(data.phase || data.status)) scheduleClose();

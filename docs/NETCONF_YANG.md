@@ -21,7 +21,9 @@ NETCONF / YANG 工作台用于连接支持 NETCONF over SSH 的网络设备，�
 - 启动时检查 libyang 运行时和版本；运行时缺失、损坏或不兼容时阻止编译，绝不回退到简化解析器并报告成功。
 - 执行读取、配置、锁、校验、提交等结构化 NETCONF RPC，或直接发送原始 RPC XML。
 - 展示 `rpc-reply`、`rpc-error`、message-id、耗时和原始请求。
-- 使用当前 NETCONF Session 建立 RFC 5277 订阅，独立采集、筛选、查看和导出异步 Notification。
+- 支持 RFC 5277 旧订阅，以及 RFC 8639/8640 动态订阅的建立、修改和删除；同一 Session 可承载多个现代订阅。
+- 支持 RFC 8641 YANG-Push periodic/on-change、完整 `push-update`、YANG Patch `push-change-update` 和重同步。
+- 独立采集、筛选、分组、查看和导出异步 Notification，并按现代通知内的订阅 ID 精确关联。
 
 ## 页面
 
@@ -84,12 +86,14 @@ Mock 启动后会打印监听地址、SSH Host Key 指纹和 Profile 参数。�
 ```
 
 6. 对 `candidate` 执行 `validate`，再执行 `commit`。最后对 `running` 执行 `get-config`，确认 hostname、location、接口描述和 MTU 已更新。
-7. 展开 Schema 中的 `mock-event` notification，右键选择“订阅此通知（RFC 5277）”并执行 `create-subscription`。随后在 Mock 终端输入 `/notify hello`，工作区“通知记录”会显示完整 `<notification>`、Generated/Received 时间和所属 Session；活动订阅可从通知抽屉结束，结束时会明确断开它绑定的 NETCONF Session。
-8. 还可以继续验证 `copy-config`、`delete-config`、`lock`、`unlock`、`discard-changes`、原始 RPC 和 Mock 模型中定义的 `reboot` RPC。服务端收到的 RPC 及 datastore revision 会实时输出到启动 Mock 的终端。
+7. 展开 Schema 中的 `mock-event` notification，右键选择“建立动态订阅（RFC 8639）”并执行 `establish-subscription`。随后在 Mock 终端输入 `/notify hello`，通知抽屉会显示完整 `<notification>`、Generated/Received 时间和订阅 ID；可直接从抽屉打开修改或删除操作，删除不会断开 Session。
+8. 右键 `state` 等数据节点选择“订阅当前节点（YANG-Push）”，可验证 periodic 快照；在右侧参数树将更新策略改为 on-change 后，修改 Mock datastore 会收到 `push-change-update`，通知抽屉还可执行完整重同步。
+9. 需要验证旧设备时，可在独立 Session 上选择“订阅此通知（RFC 5277）”。旧订阅没有单独删除 RPC，结束时会明确提示并断开它绑定的 Session。RFC 5277 与现代订阅不会在同一 Session 混用。
+10. 还可以继续验证 `copy-config`、`delete-config`、`lock`、`unlock`、`discard-changes`、原始 RPC 和 Mock 模型中定义的 `reboot` RPC。服务端收到的 RPC 及 datastore revision 会实时输出到启动 Mock 的终端。
 
 要验证失败流程，可下载 `netnexus-mock-invalid`，并与两个有效模型一起执行编译。该文件的元数据和下载流程均有效，但故意引用了不存在的 YANG 类型，因此编译日志会分别显示 `netnexus-mock-device`、`netnexus-mock-types` 成功，只有 `netnexus-mock-invalid` 失败，同时保留具体 libyang 诊断。整批结果会标记为“部分编译成功”，Schema 工作区仍会载入两个有效模型，并明确提示当前 Schema 仅部分可用。
 
-Mock datastore 只保存在当前进程内存中，重启服务会恢复初始配置。在 Mock 终端中可使用 `/status`、`/show running`、`/show candidate`、`/reset`、`/notify <message>` 和 `/quit` 辅助观察或重置状态。查看完整启动参数：
+Mock datastore 只保存在当前进程内存中，重启服务会恢复初始配置。在 Mock 终端中可使用 `/status`、`/show running`、`/show candidate`、`/reset`、`/notify <message>`、`/subscriptions`、`/lifecycle started|modified|terminated <id> [reason]`、`/terminate <id> [reason]` 和 `/quit` 辅助观察或注入状态。查看完整启动参数：
 
 ```bash
 npm run mock:netconf -- --help
@@ -127,6 +131,8 @@ Mock 默认只监听 `127.0.0.1`。默认账号、密码以及仓库中的固定
 4. 从服务端 `hello` Capability 中提取 `module`、`revision`、`features` 和 `deviations`。
 
 选择模型后点击“下载所选”。下载通过设备的 `get-schema` RPC 完成，成功内容会直接导入本地 YANG 仓库。设备必须声明并实际实现 `ietf-netconf-monitoring:get-schema`；仅在 Capability 中列出模块但不支持 `get-schema` 时，需要从厂商软件包手工导入文件。
+
+部分华为设备允许初始密码账号建立 SSH/NETCONF 会话和读取模型清单，但会拒绝 `get-schema`，返回 `No permission ... due to the initial password`。遇到该错误时，应先通过 STelnet 或 Console 完成首次密码修改，再更新连接 Profile 中的密码并重试。下载器会把它视为会话级错误并立即停止后续请求；此前已经成功获取的源码仍会写入本地仓库并显示为“部分完成”，如果错误发生在第一个模型，则设备实际没有返回任何可保存的 YANG 内容。
 
 YANG 的 import/include 依赖必须同时存在于本地仓库。建议下载同一个 module-set 中的依赖模块和 submodule；编译诊断出现 `missing import` 或 `missing include` 时，补充下载或导入对应文件后重新编译。
 
@@ -206,21 +212,35 @@ npm run dev
 
 设备会话状态和完整 Capability 列表统一在“连接设置”中查看；Schema 工作区不再重复显示设备状态条或 Capability 入口。
 
-Schema 数据节点的右键操作会预填 subtree/config XML 草稿。工作区不提供与节点无关的 Candidate、Startup、锁定或整库复制/删除菜单，避免从任意节点误触设备级操作：
+Schema 数据节点的右键操作会预填 subtree/config XML 草稿。树顶部不再放置虚拟的“设备级操作”节点；Candidate 和配置存储操作保留在普通 Schema 节点的右键菜单中，并明确标注它们作用于整个 datastore：
 
 | 操作 | 说明 | 典型 Capability |
 | --- | --- | --- |
 | `get` | 读取配置和状态数据，支持 subtree 或 XPath filter。 | XPath filter 需要 `:xpath`。 |
 | `get-config` | 从 running、candidate 或 startup 读取配置。 | datastore 必须由服务端声明。 |
 | `edit-config` | 发送配置 XML，支持 default/test/error-option；自动草稿必须补全 list key 和必填值后才能执行。 | candidate、writable-running、validate 等。 |
+| `validate` | 校验 running、candidate 或 startup 配置。 | `:validate` 及对应 datastore。 |
+| `commit` / `discard-changes` | 提交 Candidate、执行 confirmed commit/取消，或放弃全部未提交修改。 | `:candidate`；confirmed 操作还需 `:confirmed-commit`。 |
+| `copy-config` / `delete-config` | 复制整个配置存储、保存 Running 到 Startup，或删除整个 Startup。 | 目标 datastore 必须由服务端声明。 |
+| `lock` / `unlock` | 锁定或解锁 running、candidate、startup。 | 对应 datastore 必须可用。 |
 | `create-subscription` | 在当前 Session 上建立 RFC 5277 订阅，可配置 stream、subtree/XPath filter 和 replay 时间。 | `:notification`；并发执行其他 RPC 通常需要 `:interleave`。 |
+| `establish-subscription` | 建立 RFC 8639 event-stream 动态订阅，或 RFC 8641 periodic/on-change YANG-Push；支持过滤器引用、replay/stop-time、DSCP/QoS、encoding 和单 Session 多订阅。 | YANG Library 中的 `ietf-subscribed-notifications`；可选参数按 `replay`、`dscp`、`qos`、`encode-*` feature 门禁；YANG-Push 还需 `ietf-yang-push`。 |
+| `modify-subscription` | 按设备订阅 ID 修改过滤器、stop-time 或允许变化的 YANG-Push 策略。 | 必须在建立订阅的同一 Session 执行。 |
+| `delete-subscription` | 删除一个动态订阅但保持 NETCONF Session。 | RFC 8639 动态订阅。 |
+| `resync-subscription` | 请求 active on-change 订阅发送完整 `push-update`。 | `ietf-yang-push` 的 `on-change` feature。 |
 | 原始 RPC | 发送完整 `<rpc>` XML，用于厂商 RPC、action 或尚未做成表单的操作。 | 由 RPC 本身决定。 |
+
+`kill-subscription` 属于跨 Session 的 operator 管理操作，标准 NACM 默认会拒绝普通用户。底层 builder、Worker 和 Mock 已支持，但普通订阅抽屉只提供当前 Session 所属订阅的 `delete-subscription`；需要管理员强制终止其他订阅时，可在原始 RPC 中明确发送 `kill-subscription`。设备若声明 RFC 8639 `configured` feature，配置型订阅仍可通过对应 Schema 节点的标准 `edit-config` 管理；Mock 默认不声明该可选 feature。
+
+YANG-Push 修改默认使用“保持当前过滤器/策略”，对应 RFC 8641 的 omission 语义：未出现在 `modify-subscription` 中的参数必须保持不变。标准没有用 omission 清除既有过滤器或 stop-time 的语义，需要清除时应删除并重新建立订阅；event-stream 修改受 mandatory target choice 约束，必须显式提供一种 stream filter。结构化操作支持内联 subtree/XPath、已配置过滤器引用、默认 XML 命名空间以及厂商派生 datastore identityref；厂商 identityref 的前缀必须同时提供对应 XML namespace binding。
 
 页面会依据节点的 `config` 属性和服务端 Capability 禁用明显不可用的结构化操作。Schema 工作区右侧采用 NETCONF Browser 风格布局：上方是 Request 区，可在操作参数与 RPC XML 之间切换；下方是 RPC Reply 响应区，状态、耗时和 message-id 与响应一起显示。请求和响应 XML 默认以格式化后的缩进结构展示，并可切换到“原文”查看设备实际收发内容；格式化只影响显示，不改变实际发送的 XML。
 
 RPC 等待回复期间会锁定操作切换和工作区清空，避免重复下发或丢失结果。高风险操作二次确认仍使用弹窗。原始 RPC 不做 Capability 推断，执行前需要自行确认命名空间、目标 datastore 和操作风险。旧的 `/yang/yang-operations` 地址会自动跳转到 Schema 工作区。
 
-`create-subscription` 的 `<rpc-reply>` 仍保留在当前响应区和执行记录中，之后到达的异步 `<notification>` 不会混入响应。全局通知采集器按 Profile → Session → Subscription 分组，通知抽屉支持未读状态、全文筛选、完整 XML 行号/高亮、复制、删除和 JSON/XML 导出。RFC 5277 没有按订阅 ID 取消订阅的 RPC，因此结束活动订阅会断开它所属的 NETCONF Session；页面会在执行前明确确认这一点。
+订阅控制 RPC 的 `<rpc-reply>` 仍保留在当前响应区和执行记录中，之后到达的异步 `<notification>` 不会混入响应。全局通知采集器按 Profile → Session → Subscription 分组，通知抽屉支持未读状态、全文筛选、完整 XML 行号/高亮、复制、删除和 JSON/XML 导出。现代动态订阅可从抽屉打开修改、删除和 on-change 重同步；RFC 5277 没有按订阅 ID 取消订阅的 RPC，因此结束旧订阅仍会断开其 Session。
+
+现代订阅能力由 YANG Library 中的 `ietf-subscribed-notifications@2019-09-09`、`ietf-yang-push@2019-09-09` 及 feature 发现，不使用虚构的 NETCONF capability URI。软件随内置 libyang runtime 固定打包这两个模型及完整 IANA 依赖闭包，并在构建、安装验证和 smoke test 中校验 SHA-256 与实际编译结果。
 
 ## 安全设计
 

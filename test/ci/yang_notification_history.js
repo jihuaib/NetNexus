@@ -75,6 +75,116 @@ assert.equal(history.useNetconfNotificationHistory().subscriptions.value[0].erro
 history.removeNetconfNotificationSubscription('error-probe');
 
 history.upsertNetconfNotificationSubscription({
+    id: 'modern-probe',
+    profileId: 'profile-modern',
+    sessionId: 'modern-session',
+    type: 'rfc8641',
+    deviceSubscriptionId: '52',
+    targetType: 'datastore',
+    datastore: 'ds:operational',
+    datastoreNamespaces: { vd: 'urn:example:vendor-datastore' },
+    dscp: 10,
+    weighting: 20,
+    dependency: 0,
+    encoding: 've:cbor',
+    encodingNamespaces: { ve: 'urn:example:encoding' },
+    updateTrigger: 'on-change',
+    state: 'SUSPENDED',
+    reason: 'yp:insufficient-resources'
+});
+const pushUpdateXml = `
+<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0">
+  <eventTime>2026-07-19T00:30:00Z</eventTime>
+  <push-update xmlns="urn:ietf:params:xml:ns:yang:ietf-yang-push">
+    <id>52</id>
+    <datastore-contents><state xmlns="urn:netnexus:mock"/></datastore-contents>
+  </push-update>
+</notification>`;
+const modernNotification = history.addNetconfNotification({
+    id: 'modern-push-update',
+    profileId: 'profile-modern',
+    sessionId: 'modern-session',
+    xml: pushUpdateXml
+});
+assert.equal(modernNotification.deviceSubscriptionId, '52');
+assert.equal(modernNotification.subscriptionId, 'modern-probe');
+const modernSubscription = history.useNetconfNotificationHistory().subscriptions.value[0];
+assert.equal(modernSubscription.protocol, 'rfc8641');
+assert.equal(modernSubscription.status, 'suspended');
+assert.equal(modernSubscription.updateTrigger, 'on-change');
+assert.deepEqual(modernSubscription.datastoreNamespaces, { vd: 'urn:example:vendor-datastore' });
+assert.equal(modernSubscription.dscp, 10);
+assert.equal(modernSubscription.weighting, 20);
+assert.equal(modernSubscription.dependency, 0);
+assert.equal(modernSubscription.encoding, 've:cbor');
+assert.deepEqual(modernSubscription.encodingNamespaces, { ve: 'urn:example:encoding' });
+assert.equal(modernSubscription.suspensionReason, 'yp:insufficient-resources');
+history.upsertNetconfNotificationSubscription({
+    id: 'modern-probe',
+    state: 'ACTIVE',
+    replayCompletedAt: '2026-07-19T00:31:00Z'
+});
+assert.equal(history.useNetconfNotificationHistory().subscriptions.value[0].suspensionReason, '');
+assert.equal(
+    history.useNetconfNotificationHistory().subscriptions.value[0].replayCompletedAt,
+    '2026-07-19T00:31:00.000Z'
+);
+for (const [id, xml] of [
+    [
+        'unknown-device-id',
+        `<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2026-07-19T00:31:10Z</eventTime><push-update xmlns="urn:ietf:params:xml:ns:yang:ietf-yang-push"><id>999</id></push-update></notification>`
+    ],
+    [
+        'vendor-lookalike',
+        `<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2026-07-19T00:31:20Z</eventTime><push-update xmlns="urn:example:vendor"><id>52</id></push-update></notification>`
+    ],
+    [
+        'nested-device-id',
+        `<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2026-07-19T00:31:30Z</eventTime><push-update xmlns="urn:ietf:params:xml:ns:yang:ietf-yang-push"><datastore-contents><id xmlns="urn:example:data">52</id></datastore-contents></push-update></notification>`
+    ]
+]) {
+    const unmatched = history.addNetconfNotification({
+        id,
+        profileId: 'profile-modern',
+        sessionId: 'modern-session',
+        xml
+    });
+    assert.equal(unmatched.subscriptionId, '', `${id} must not fall back to the only active subscription`);
+}
+const started = history.addNetconfNotification({
+    id: 'subscription-started',
+    profileId: 'profile-modern',
+    sessionId: 'modern-session',
+    xml: `<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2026-07-19T00:31:40Z</eventTime><sn:subscription-started xmlns:sn="urn:ietf:params:xml:ns:yang:ietf-subscribed-notifications"><sn:id>52</sn:id><sn:stream>NETCONF</sn:stream></sn:subscription-started></notification>`
+});
+assert.equal(started.subscriptionId, 'modern-probe');
+history.upsertNetconfNotificationSubscription({
+    id: 'modern-probe',
+    state: 'UNKNOWN',
+    desynchronized: true,
+    desynchronizedAt: '2026-07-19T00:32:00Z',
+    desynchronizationReason: 'modify-subscription timed out'
+});
+assert.equal(history.useNetconfNotificationHistory().subscriptions.value[0].status, 'unknown');
+assert.equal(history.useNetconfNotificationHistory().subscriptions.value[0].desynchronized, true);
+assert.equal(
+    history.useNetconfNotificationHistory().subscriptions.value[0].desynchronizationReason,
+    'modify-subscription timed out'
+);
+history.clearNetconfNotifications({ kind: 'profile', profileId: 'profile-modern' });
+history.removeNetconfNotificationSubscription('modern-probe');
+
+history.upsertNetconfNotificationSubscription({
+    id: 'zero-device-id',
+    profileId: 'profile-modern',
+    sessionId: 'modern-session',
+    deviceSubscriptionId: 0
+});
+assert.equal(history.useNetconfNotificationHistory().subscriptions.value[0].deviceSubscriptionId, '0');
+assert.equal(history.useNetconfNotificationHistory().subscriptions.value[0].protocol, 'rfc8639');
+history.removeNetconfNotificationSubscription('zero-device-id');
+
+history.upsertNetconfNotificationSubscription({
     id: 'empty-subscription',
     profileId: 'profile-empty',
     sessionId: 'empty-session',

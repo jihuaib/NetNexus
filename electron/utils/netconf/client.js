@@ -1,6 +1,7 @@
 'use strict';
 
 const { EventEmitter } = require('events');
+const { NETCONF_LIMITS } = require('../../const/yangConst');
 const { DelimiterFramer, createFramer, encodeMessage } = require('./framing');
 const {
     DEFAULT_CLIENT_CAPABILITIES,
@@ -19,7 +20,12 @@ const {
     buildCancelCommit,
     buildDiscardChanges,
     buildKillSession,
-    buildCreateSubscription
+    buildCreateSubscription,
+    buildEstablishSubscription,
+    buildModifySubscription,
+    buildDeleteSubscription,
+    buildKillSubscription,
+    buildResyncSubscription
 } = require('./builders');
 const { assertSafeXml, parseXml, parseNetconfMessage, decodeXmlText, NetconfRpcError } = require('./xml');
 const { createSshTransport } = require('./sshTransport');
@@ -159,6 +165,7 @@ class NetconfClient extends EventEmitter {
         this._connectPromise = null;
         this._transportListeners = null;
         this._closeEmitted = false;
+        this._inboundMessageSequence = 0;
     }
 
     get connected() {
@@ -216,6 +223,7 @@ class NetconfClient extends EventEmitter {
             }
 
             this.transport = transport;
+            this._inboundMessageSequence = 0;
             this._bindTransport(transport);
             this._helloFramer = new DelimiterFramer(this._framerOptions());
             this._framer = null;
@@ -392,7 +400,13 @@ class NetconfClient extends EventEmitter {
     }
 
     _handleMessage(xml) {
-        const message = parseNetconfMessage(xml, { maxXmlSize: this.maxMessageSize });
+        const message = parseNetconfMessage(xml, {
+            maxXmlSize: this.maxMessageSize,
+            // Preserve the long-standing object form for ordinary replies, but
+            // avoid expanding a large <data> payload into a huge object graph.
+            opaqueRpcReplyData: Buffer.byteLength(xml, 'utf8') > NETCONF_LIMITS.MAX_INLINE_RPC_REPLY_BYTES
+        });
+        message.transportSequence = ++this._inboundMessageSequence;
         if (message.type === 'rpc-reply') {
             if (!message.messageId || !this.pending.has(message.messageId)) {
                 this.emit('orphan-reply', message);
@@ -547,6 +561,26 @@ class NetconfClient extends EventEmitter {
 
     createSubscription(options = {}, rpcOptions = {}) {
         return this.rpc(buildCreateSubscription(options), rpcOptions);
+    }
+
+    establishSubscription(options = {}, rpcOptions = {}) {
+        return this.rpc(buildEstablishSubscription(options), rpcOptions);
+    }
+
+    modifySubscription(options = {}, rpcOptions = {}) {
+        return this.rpc(buildModifySubscription(options), rpcOptions);
+    }
+
+    deleteSubscription(idOrOptions, rpcOptions = {}) {
+        return this.rpc(buildDeleteSubscription(idOrOptions), rpcOptions);
+    }
+
+    killSubscription(idOrOptions, rpcOptions = {}) {
+        return this.rpc(buildKillSubscription(idOrOptions), rpcOptions);
+    }
+
+    resyncSubscription(idOrOptions, rpcOptions = {}) {
+        return this.rpc(buildResyncSubscription(idOrOptions), rpcOptions);
     }
 
     discoverSchemas(options = {}) {

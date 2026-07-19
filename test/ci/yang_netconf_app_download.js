@@ -31,8 +31,10 @@ class MemoryStore {
 async function main() {
     const importedBatches = [];
     const deletedWorkspaces = [];
+    const purgedProfiles = [];
     let blockedImport = null;
     let signalImportStarted = null;
+    const schemaFailures = new Map();
     const app = new NetconfApp(new FakeIpcMain(), new MemoryStore(), {
         yangApp: {
             setActiveProfileId() {},
@@ -71,6 +73,10 @@ async function main() {
             if (operation === NETCONF_REQ_TYPES.DISCONNECT) {
                 return { status: 'success', data: { profileId: data.profileId, status: 'disconnected' } };
             }
+            if (operation === NETCONF_REQ_TYPES.PURGE_PROFILE) {
+                purgedProfiles.push(data.profileId);
+                return { status: 'success', data: { profileId: data.profileId, removedSubscriptions: 0 } };
+            }
             assert.equal(operation, NETCONF_REQ_TYPES.GET_SCHEMA);
             const name = data.module.name;
             requested.push({
@@ -104,6 +110,10 @@ async function main() {
                 }
             };
             assert(fixtures[name], `unexpected get-schema request for ${name}`);
+            if (schemaFailures.has(name)) {
+                const failure = schemaFailures.get(name);
+                throw typeof failure === 'function' ? failure() : failure;
+            }
             return { status: 'success', data: fixtures[name] };
         },
         async terminate() {}
@@ -114,6 +124,18 @@ async function main() {
             send() {}
         }
     };
+
+    for (let index = 0; index < 300; index += 1) {
+        app.rememberSubscriptionSnapshot({
+            id: `snapshot-history-${index}`,
+            profileId: 'snapshot-history-router',
+            state: 'TERMINATED',
+            createdAt: new Date(index * 1000).toISOString(),
+            terminatedAt: new Date(index * 1000 + 1).toISOString(),
+            requestXml: '<rpc/>'
+        });
+    }
+    assert(app.subscriptionSnapshot('snapshot-history-router').total <= 256);
 
     const response = await app.handleDownloadModules(event, {
         modules: [{ name: 'example-system', revision: '2026-02-01' }],
@@ -168,12 +190,87 @@ async function main() {
     assert.equal(deleteResponse.status, 'success');
     assert.equal(secondTask.status, 'cancelled');
     assert.deepEqual(deletedWorkspaces, [secondProfileId]);
+    assert.deepEqual(purgedProfiles, [secondProfileId]);
     assert.equal(app.inventories.has(secondProfileId), false);
     assert.deepEqual(
         app.getStoredProfiles().map(profile => profile.id),
         [profileId]
     );
     assert.equal(importedBatches[1].options.profileId, secondProfileId);
+
+    blockedImport = null;
+    signalImportStarted = null;
+    requested.length = 0;
+    const partialImportIndex = importedBatches.length;
+    schemaFailures.set('example-types', () => {
+        const error = new Error(
+            'NETCONF RPC failed: No permission to do the operation due to the initial password, please change it.'
+        );
+        error.code = 'NETCONF_RPC_ERROR';
+        error.data = {
+            errors: [
+                {
+                    type: 'application',
+                    tag: 'access-denied',
+                    severity: 'error',
+                    message: 'No permission to do the operation due to the initial password, please change it.'
+                }
+            ]
+        };
+        return error;
+    });
+    const partialResponse = await app.handleDownloadModules(event, {
+        profileId,
+        modules: [{ name: 'example-system', revision: '2026-02-01' }],
+        includeDependencies: true
+    });
+    const partialTask = app.taskManager.tasks.get(partialResponse.data.taskId);
+    await partialTask.promise;
+    assert.equal(partialTask.status, 'completed', partialTask.error?.message);
+    assert.equal(partialTask.result.partial, true);
+    assert.equal(partialTask.result.stoppedEarly, true);
+    assert.equal(partialTask.result.downloaded, 2);
+    assert.equal(partialTask.result.persisted, 2);
+    assert.equal(partialTask.result.attempted, 3);
+    assert.equal(partialTask.result.unattempted, 1);
+    assert.equal(partialTask.result.failed.length, 1);
+    assert.equal(partialTask.result.failed[0].name, 'example-types');
+    assert.equal(partialTask.result.failed[0].code, 'NETCONF_INITIAL_PASSWORD_CHANGE_REQUIRED');
+    assert.equal(partialTask.result.stopReason.code, 'NETCONF_INITIAL_PASSWORD_CHANGE_REQUIRED');
+    assert.deepEqual(
+        requested.map(item => item.name),
+        ['example-system', 'example-system-part', 'example-types'],
+        'a session-wide initial-password error must stop before later dependencies are attempted'
+    );
+    assert.equal(importedBatches.length, partialImportIndex + 1);
+    assert.deepEqual(
+        importedBatches[partialImportIndex].contents.map(item => item.expectedName),
+        ['example-system', 'example-system-part']
+    );
+
+    schemaFailures.clear();
+    requested.length = 0;
+    const importsBeforeRejectedBatch = importedBatches.length;
+    schemaFailures.set('example-system', () => {
+        const error = new Error(
+            'NETCONF RPC failed: No permission to do the operation due to the initial password, please change it.'
+        );
+        error.code = 'NETCONF_RPC_ERROR';
+        return error;
+    });
+    const rejectedResponse = await app.handleDownloadModules(event, {
+        profileId,
+        modules: [{ name: 'example-system', revision: '2026-02-01' }],
+        includeDependencies: true
+    });
+    const rejectedTask = app.taskManager.tasks.get(rejectedResponse.data.taskId);
+    await rejectedTask.promise;
+    assert.equal(rejectedTask.status, 'failed');
+    assert.equal(rejectedTask.error.code, 'NETCONF_INITIAL_PASSWORD_CHANGE_REQUIRED');
+    assert.match(rejectedTask.error.message, /设备要求先修改初始密码/u);
+    assert.deepEqual(requested.map(item => item.name), ['example-system']);
+    assert.equal(importedBatches.length, importsBeforeRejectedBatch, 'a fully rejected batch has no source to import');
+    schemaFailures.clear();
 
     await app.closeAll();
 
@@ -233,6 +330,9 @@ async function main() {
             operationCounts.set(operation, (operationCounts.get(operation) || 0) + 1);
             if (operation === NETCONF_REQ_TYPES.DISCONNECT) {
                 return { data: { profileId: data.profileId, status: 'disconnected' } };
+            }
+            if (operation === NETCONF_REQ_TYPES.PURGE_PROFILE) {
+                return { data: { profileId: data.profileId, removedSubscriptions: 0 } };
             }
             if (operation === NETCONF_REQ_TYPES.DISCONNECT_ALL) return { data: [] };
             const deferred = deferredOperations.get(operation);

@@ -279,7 +279,8 @@ contextBridge.exposeInMainWorld('netconfApi', {
     discoverModules: profileId => ipcRenderer.invoke('netconf:discoverModules', profileId),
     downloadModules: request => ipcRenderer.invoke('netconf:downloadModules', request),
     executeOperation: request => ipcRenderer.invoke('netconf:executeOperation', request),
-    sendRpc: request => ipcRenderer.invoke('netconf:sendRpc', request)
+    sendRpc: request => ipcRenderer.invoke('netconf:sendRpc', request),
+    saveRpcReply: request => ipcRenderer.invoke('netconf:saveRpcReply', request)
 });
 
 // YANG 本地仓库与编译

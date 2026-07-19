@@ -157,6 +157,10 @@ export const NETCONF_OPERATIONS = Object.freeze([
     { key: 'cancel-commit', label: 'cancel-commit', category: 'danger', capability: 'confirmedCommit' },
     { key: 'discard-changes', label: 'discard-changes', category: 'danger', capability: 'candidate' },
     { key: 'create-subscription', label: 'create-subscription', category: 'write', capability: 'notification' },
+    { key: 'establish-subscription', label: 'establish-subscription', category: 'write' },
+    { key: 'modify-subscription', label: 'modify-subscription', category: 'write' },
+    { key: 'delete-subscription', label: 'delete-subscription', category: 'danger' },
+    { key: 'resync-subscription', label: 'resync-subscription', category: 'write' },
     { key: 'raw-rpc', label: '原始 RPC', category: 'danger' }
 ]);
 

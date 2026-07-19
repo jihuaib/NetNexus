@@ -1311,8 +1311,11 @@ main(int argc, char **argv)
         goto cleanup;
     }
 
+    /* Keep the effective-schema context consistent with yanglint's single --make-implemented
+     * mode. Modules referenced from when/must/default expressions must be implemented even
+     * when they were first encountered as imports before their explicit schema input. */
     context_options = LY_CTX_EXPLICIT_COMPILE | LY_CTX_DISABLE_SEARCHDIR_CWD | LY_CTX_STATIC_PLUGINS_ONLY |
-            LY_CTX_SET_PRIV_PARSED;
+            LY_CTX_SET_PRIV_PARSED | LY_CTX_REF_IMPLEMENTED;
     if (!feature_specs.count) {
         context_options |= LY_CTX_ENABLE_IMP_FEATURES;
     }

@@ -287,17 +287,51 @@
                         <span :title="subscriptionLifecycleDetail">{{ subscriptionLifecycleDetail }}</span>
                     </span>
                 </div>
-                <nn-button
-                    danger
-                    class="notification-disconnect-session"
-                    :loading="disconnecting"
-                    :disabled="!canDisconnectSelectedSubscription"
-                    :title="disconnectButtonTitle"
-                    data-testid="netconf-notification-disconnect-session"
-                    @click="requestDisconnectSession"
-                >
-                    断开 Session 并结束订阅
-                </nn-button>
+                <div class="notification-subscription-actions">
+                    <template v-if="selectedSubscriptionIsModern">
+                        <nn-button
+                            class="notification-subscription-action"
+                            :disabled="!canManageSelectedSubscription"
+                            title="在工作区中修改此动态订阅"
+                            data-testid="netconf-notification-modify-subscription"
+                            @click="requestModernAction('modify-subscription')"
+                        >
+                            修改订阅
+                        </nn-button>
+                        <nn-button
+                            v-if="selectedSubscriptionIsOnChange"
+                            class="notification-subscription-action"
+                            :disabled="!canResyncSelectedSubscription"
+                            title="请求完整 push-update"
+                            data-testid="netconf-notification-resync-subscription"
+                            @click="requestModernAction('resync-subscription')"
+                        >
+                            完整重同步
+                        </nn-button>
+                        <nn-button
+                            danger
+                            class="notification-subscription-action"
+                            :disabled="!canManageSelectedSubscription"
+                            title="删除此订阅但保持 NETCONF Session"
+                            data-testid="netconf-notification-delete-subscription"
+                            @click="requestModernAction('delete-subscription')"
+                        >
+                            删除订阅
+                        </nn-button>
+                    </template>
+                    <nn-button
+                        v-else
+                        danger
+                        class="notification-disconnect-session"
+                        :loading="disconnecting"
+                        :disabled="!canDisconnectSelectedSubscription"
+                        :title="disconnectButtonTitle"
+                        data-testid="netconf-notification-disconnect-session"
+                        @click="requestDisconnectSession"
+                    >
+                        断开 Session 并结束订阅
+                    </nn-button>
+                </div>
             </div>
         </template>
     </nn-drawer>
@@ -343,7 +377,14 @@
         }
     });
 
-    const emit = defineEmits(['update:open', 'export', 'disconnect-session']);
+    const emit = defineEmits([
+        'update:open',
+        'export',
+        'disconnect-session',
+        'modify-subscription',
+        'delete-subscription',
+        'resync-subscription'
+    ]);
     const {
         records,
         groups,
@@ -395,7 +436,36 @@
     const selectedSubscription = computed(() =>
         activeGroup.value.kind === 'subscription' && activeGroup.value.subscriptionId ? activeGroup.value : null
     );
+    const hasDeviceSubscriptionId = subscription =>
+        subscription?.deviceSubscriptionId !== undefined &&
+        subscription?.deviceSubscriptionId !== null &&
+        String(subscription.deviceSubscriptionId) !== '';
     const selectedSubscriptionStatus = computed(() => selectedSubscription.value?.status || 'none');
+    const selectedSubscriptionIsModern = computed(() => {
+        const subscription = selectedSubscription.value;
+        if (!subscription) return false;
+        const protocol = String(subscription.protocol || '').toLowerCase();
+        return (
+            hasDeviceSubscriptionId(subscription) ||
+            ['rfc8639', 'rfc8640', 'rfc8641', 'yang-push', 'modern'].some(value => protocol.includes(value))
+        );
+    });
+    const selectedSubscriptionIsOnChange = computed(
+        () => selectedSubscriptionIsModern.value && selectedSubscription.value?.updateTrigger === 'on-change'
+    );
+    const canManageSelectedSubscription = computed(
+        () =>
+            selectedSubscriptionIsModern.value &&
+            ['active', 'suspended'].includes(selectedSubscriptionStatus.value) &&
+            Boolean(selectedSubscription.value?.profileId) &&
+            hasDeviceSubscriptionId(selectedSubscription.value)
+    );
+    const canResyncSelectedSubscription = computed(
+        () =>
+            canManageSelectedSubscription.value &&
+            selectedSubscriptionIsOnChange.value &&
+            selectedSubscriptionStatus.value === 'active'
+    );
     const canDisconnectSelectedSubscription = computed(
         () => selectedSubscriptionStatus.value === 'active' && Boolean(selectedSubscription.value?.profileId)
     );
@@ -403,6 +473,7 @@
     const subscriptionStatusLabel = status => {
         if (status === 'active') return '活动';
         if (status === 'pending') return '建立中';
+        if (status === 'suspended') return '已暂停';
         if (status === 'ended') return '已结束';
         if (status === 'error') return '错误';
         if (status === 'unassigned') return '未关联';
@@ -412,20 +483,57 @@
 
     const subscriptionTitle = subscription => {
         const parts = [subscription.label, `状态：${subscriptionStatusLabel(subscription.status)}`];
-        if (subscription.errorMessage) parts.push(`错误：${subscription.errorMessage}`);
+        if (subscription.desynchronized) {
+            parts.push(`状态失同步：${subscription.desynchronizationReason || '请重新连接后再管理订阅'}`);
+        } else if (subscription.suspensionReason) parts.push(`暂停原因：${subscription.suspensionReason}`);
+        else if (subscription.errorMessage) parts.push(`错误：${subscription.errorMessage}`);
         else if (subscription.terminationReason) parts.push(`结束原因：${subscription.terminationReason}`);
+        if (subscription.replayCompletedAt)
+            parts.push(`Replay 完成：${formatDateTime(subscription.replayCompletedAt)}`);
         return parts.filter(Boolean).join('\n');
     };
 
     const subscriptionLifecycleTitle = computed(() => {
-        if (!selectedSubscription.value) return 'RFC 5277 订阅生命周期';
+        if (!selectedSubscription.value) return '订阅生命周期';
+        if (selectedSubscriptionIsModern.value) {
+            const standard = selectedSubscription.value.targetType === 'datastore' ? 'YANG-Push' : 'RFC 8639';
+            return `${subscriptionStatusLabel(selectedSubscriptionStatus.value)}订阅 · ${standard}`;
+        }
         return `${subscriptionStatusLabel(selectedSubscriptionStatus.value)}订阅 · ${selectedSubscription.value.label}`;
     });
     const subscriptionLifecycleDetail = computed(() => {
-        if (!selectedSubscription.value) return '选择左侧活动订阅后，可通过断开其所属 Session 结束订阅';
+        if (!selectedSubscription.value) return '选择左侧订阅后查看状态并执行适用的管理操作';
         const sessionLabel = selectedSubscription.value.sessionId
             ? `Session ${selectedSubscription.value.sessionId}`
             : '所属 Session';
+        if (selectedSubscriptionIsModern.value) {
+            const id = hasDeviceSubscriptionId(selectedSubscription.value)
+                ? selectedSubscription.value.deviceSubscriptionId
+                : '-';
+            const target =
+                selectedSubscription.value.targetType === 'datastore'
+                    ? `${selectedSubscription.value.datastore || 'datastore'} · ${
+                          selectedSubscription.value.updateTrigger || 'YANG-Push'
+                      }`
+                    : selectedSubscription.value.stream || 'NETCONF';
+            if (selectedSubscriptionStatus.value === 'suspended') {
+                const reason = selectedSubscription.value.suspensionReason
+                    ? ` · 暂停原因：${selectedSubscription.value.suspensionReason}`
+                    : '';
+                return `${sessionLabel} · ID ${id} · ${target}${reason} · 可修改或删除`;
+            }
+            if (selectedSubscriptionStatus.value === 'active') {
+                const replay = selectedSubscription.value.replayCompletedAt
+                    ? ` · Replay 已于 ${formatDateTime(selectedSubscription.value.replayCompletedAt)} 完成`
+                    : '';
+                return `${sessionLabel} · ID ${id} · ${target}${replay}`;
+            }
+            if (selectedSubscriptionStatus.value === 'unknown' || selectedSubscription.value.desynchronized) {
+                return `${sessionLabel} · ID ${id} · 状态失同步：${
+                    selectedSubscription.value.desynchronizationReason || '请重新连接后再继续管理'
+                }`;
+            }
+        }
         if (selectedSubscriptionStatus.value === 'active') {
             return `RFC 5277 没有单独取消入口；需要断开 ${sessionLabel}`;
         }
@@ -529,6 +637,16 @@
             sessionId: selectedSubscription.value.sessionId,
             subscriptionId: selectedSubscription.value.subscriptionId,
             label: selectedSubscription.value.label
+        });
+    };
+
+    const requestModernAction = operation => {
+        if (!canManageSelectedSubscription.value) return;
+        if (operation === 'resync-subscription' && !canResyncSelectedSubscription.value) return;
+        emit(operation, {
+            ...selectedSubscription.value,
+            operation,
+            modernSubscriptionId: selectedSubscription.value.deviceSubscriptionId
         });
     };
 
@@ -1007,6 +1125,10 @@
         background: var(--nn-color-warning);
     }
 
+    .notification-session-lifecycle-state-suspended {
+        background: var(--nn-color-warning);
+    }
+
     .notification-session-lifecycle-copy {
         display: flex;
         min-width: 0;
@@ -1034,6 +1156,20 @@
     .notification-disconnect-session {
         width: 196px;
         flex: 0 0 196px;
+    }
+
+    .notification-subscription-actions {
+        display: flex;
+        min-width: 0;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+    }
+
+    .notification-subscription-action {
+        width: 104px;
+        flex: 0 0 104px;
     }
 
     @media (max-width: 900px) {
@@ -1069,6 +1205,24 @@
 
         .notification-xml-summary span:last-child {
             display: none;
+        }
+
+        .notification-session-footer {
+            gap: 8px;
+        }
+
+        .notification-session-lifecycle-copy span {
+            display: none;
+        }
+
+        .notification-subscription-actions {
+            gap: 4px;
+        }
+
+        .notification-subscription-action {
+            width: 88px;
+            flex-basis: 88px;
+            padding-inline: 6px;
         }
     }
 </style>

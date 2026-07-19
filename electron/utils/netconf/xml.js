@@ -44,7 +44,7 @@ class NetconfRpcError extends Error {
     }
 }
 
-const parser = new XMLParser({
+const XML_PARSER_OPTIONS = Object.freeze({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
     textNodeName: '#text',
@@ -54,6 +54,14 @@ const parser = new XMLParser({
     parseAttributeValue: false,
     allowBooleanAttributes: false,
     processEntities: true
+});
+const parser = new XMLParser(XML_PARSER_OPTIONS);
+const opaqueRpcReplyDataParser = new XMLParser({
+    ...XML_PARSER_OPTIONS,
+    // NETCONF operational replies can contain hundreds of thousands of data
+    // nodes. Keep their inner XML opaque so the client does not materialize a
+    // much larger JavaScript object graph merely to return reply.xml.
+    stopNodes: ['rpc-reply.data']
 });
 
 function assertSafeXml(xml, options = {}) {
@@ -75,8 +83,7 @@ function assertSafeXml(xml, options = {}) {
     return value;
 }
 
-function parseXml(xml, options = {}) {
-    const value = assertSafeXml(xml, options);
+function parseValidatedXml(value, selectedParser) {
     const validation = XMLValidator.validate(value, {
         allowBooleanAttributes: false,
         unpairedTags: []
@@ -89,10 +96,18 @@ function parseXml(xml, options = {}) {
     }
 
     try {
-        return parser.parse(value);
+        return selectedParser.parse(value);
     } catch (error) {
         throw new NetconfXmlError(`Unable to parse NETCONF XML: ${error.message}`, 'NETCONF_INVALID_XML', error);
     }
+}
+
+function parseXmlWithParser(xml, options, selectedParser) {
+    return parseValidatedXml(assertSafeXml(xml, options), selectedParser);
+}
+
+function parseXml(xml, options = {}) {
+    return parseXmlWithParser(xml, options, parser);
 }
 
 function localName(name) {
@@ -224,7 +239,7 @@ function normalizeRpcError(node) {
 
 function parseNetconfMessage(xml, options = {}) {
     const value = assertSafeXml(xml, options);
-    const document = parseXml(value, options);
+    const document = parseValidatedXml(value, options.opaqueRpcReplyData === true ? opaqueRpcReplyDataParser : parser);
     const root = findRoot(document);
     if (!root) {
         throw new NetconfXmlError('NETCONF XML has no document element');

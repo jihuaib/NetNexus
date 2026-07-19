@@ -1,8 +1,10 @@
 import { readonly, ref } from 'vue';
 
 const MAX_HISTORY_RECORDS = 100;
-const MAX_HISTORY_PAYLOAD_BYTES = 16 * 1024 * 1024;
-const MAX_XML_PAYLOAD_BYTES = 4 * 1024 * 1024;
+const MAX_HISTORY_PAYLOAD_BYTES = 8 * 1024 * 1024;
+// truncateText uses a conservative two-bytes-per-character estimate. This
+// limits each request/reply preview to at most 256K characters.
+const MAX_XML_PAYLOAD_BYTES = 512 * 1024;
 const MAX_ERROR_MESSAGE_BYTES = 256 * 1024;
 const MAX_ERRORS_BYTES = 1024 * 1024;
 const MAX_METADATA_FIELD_BYTES = 32 * 1024;
@@ -74,7 +76,30 @@ const normalizeErrors = errors => {
 };
 
 const estimateRecordBytes = record => {
-    return serializedValue(record).length * 2 + ESTIMATED_RECORD_OVERHEAD_BYTES;
+    const textFields = [
+        record.id,
+        record.operation,
+        record.operationLabel,
+        record.category,
+        record.origin,
+        record.status,
+        record.startedAt,
+        record.finishedAt,
+        record.profileId,
+        record.profileName,
+        record.host,
+        record.sessionId,
+        record.contextPath,
+        record.contextName,
+        record.messageId,
+        record.requestXml,
+        record.replyXml,
+        record.replyFileToken,
+        record.errorMessage
+    ];
+    const textBytes = textFields.reduce((total, value) => total + textValue(value).length * 2, 0);
+    const errorsBytes = serializedValue(record.errors || []).length * 2;
+    return textBytes + errorsBytes + ESTIMATED_RECORD_OVERHEAD_BYTES;
 };
 
 const metadataOnlyRecord = record => ({
@@ -133,6 +158,9 @@ export const beginNetconfExecution = (record = {}) => {
         requestTruncated: request.truncated || Boolean(record.requestTruncated),
         replyXml: '',
         replyTruncated: false,
+        replyBytes: 0,
+        replyPreviewBytes: 0,
+        replyFileToken: '',
         errors: [],
         errorsTruncated: false,
         errorMessage: ''
@@ -170,6 +198,13 @@ export const completeNetconfExecution = (id, patch = {}) => {
         requestTruncated: request.truncated || Boolean(hasRequest && patch.requestTruncated),
         replyXml: reply.value,
         replyTruncated: reply.truncated || Boolean(hasReply && patch.replyTruncated),
+        replyBytes: Number.isFinite(Number(patch.replyBytes))
+            ? Math.max(0, Math.round(Number(patch.replyBytes)))
+            : current.replyBytes,
+        replyPreviewBytes: Number.isFinite(Number(patch.replyPreviewBytes))
+            ? Math.max(0, Math.round(Number(patch.replyPreviewBytes)))
+            : current.replyPreviewBytes,
+        replyFileToken: metadataValue(patch.replyFileToken ?? current.replyFileToken),
         errors: normalizedErrors.value,
         errorsTruncated: normalizedErrors.truncated || Boolean(patch.errorsTruncated),
         errorMessage: errorMessage.value

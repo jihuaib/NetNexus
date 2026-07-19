@@ -4,7 +4,12 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const {
+    PINNED_IANA_MODULE_FILES,
+    REQUIRED_RUNTIME_IETF_MODULES,
+    collectRequiredRuntimeIetfModules,
     computeBuildInputHash,
+    getBuildInputPaths,
+    getPinnedIanaModuleManifest,
     getReleaseManifest,
     getRuntimeDirectory,
     getRuntimeExecutable,
@@ -13,13 +18,10 @@ const {
     normalizePlatform,
     parseSchemaHelperVersion,
     parseYanglintVersion,
+    verifyPinnedIanaModules,
     verifyRuntime
 } = require('../../scripts/libyang-runtime-config');
-const {
-    ensureLibyangRuntime,
-    isTruthyEnv,
-    resolveBuildCommand
-} = require('../../scripts/ensure-libyang-runtime');
+const { ensureLibyangRuntime, isTruthyEnv, resolveBuildCommand } = require('../../scripts/ensure-libyang-runtime');
 const beforePack = require('../../scripts/verify-libyang-runtime');
 
 const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.resolve(__dirname, '..', '..'));
@@ -139,9 +141,7 @@ function assertUserInstalledVcpkgContract(powershellSource) {
         'the project must not download, bootstrap, cache, or publish its own vcpkg installation'
     );
 
-    const resolveIndex = powershellSource.lastIndexOf(
-        'Resolve-VcpkgLocation -VisualStudioRoot $VisualStudioRoot'
-    );
+    const resolveIndex = powershellSource.lastIndexOf('Resolve-VcpkgLocation -VisualStudioRoot $VisualStudioRoot');
     const gitCheckoutGuardIndex = powershellSource.lastIndexOf('if ($VcpkgLocation.IsGitCheckout) {');
     const ensureBaselineIndex = powershellSource.lastIndexOf(
         'Ensure-VcpkgBaseline -Path $VcpkgRoot -Baseline $VcpkgBaseline'
@@ -160,6 +160,7 @@ function verifyScriptSyntax() {
     const javascriptScripts = [
         'scripts/ensure-libyang-runtime.js',
         'scripts/libyang-runtime-config.js',
+        'scripts/verify-libyang-iana-modules.js',
         'scripts/verify-libyang-runtime.js',
         'scripts/write-libyang-runtime-manifest.js',
         'scripts/smoke-libyang-runtime.js'
@@ -179,6 +180,8 @@ function verifyScriptSyntax() {
     assert.match(unixBuildSource, /pcre2Commit/);
     assert.match(unixBuildSource, /assert_git_commit/);
     assert.match(unixBuildSource, /expected_runtime_target=/);
+    assert.match(unixBuildSource, /verify-libyang-iana-modules\.js/);
+    assert.match(unixBuildSource, /find "\$\{iana_module_source\}"[^\r\n]+-name '\*\.yang'[^\r\n]+-exec cp/);
     assert.match(
         unixBuildSource,
         /pcre2-source\/LICENCE\.md[^\r\n]+LICENSE\.pcre2/,
@@ -241,6 +244,8 @@ function verifyScriptSyntax() {
         'Windows yanglint must enable the UTF-8 C runtime locale before invoking libyang'
     );
     assert.match(powershellSource, /Assert-GitCommit/);
+    assert.match(powershellSource, /verify-libyang-iana-modules\.js/);
+    assert.match(powershellSource, /Copy-Item \(Join-Path \$IanaModuleSource '\*\.yang'\) \$ModuleDir -Force/);
     assert.match(powershellSource, /netnexus_getopt/);
     assert.match(powershellSource, /Assert-WindowsSystemDependencies/);
     assert.match(powershellSource, /netnexus-libyang-schema\.exe/);
@@ -325,15 +330,10 @@ function verifyScriptSyntax() {
     );
     assert.match(schemaExporterSource, /#include <locale\.h>/, 'schema helper must include the C locale API');
     const schemaMainIndex = schemaExporterSource.indexOf('main(int argc, char **argv)');
-    const schemaLocaleIndex = schemaExporterSource.indexOf(
-        'setlocale(LC_CTYPE, ".UTF8")',
-        schemaMainIndex
-    );
+    const schemaLocaleIndex = schemaExporterSource.indexOf('setlocale(LC_CTYPE, ".UTF8")', schemaMainIndex);
     const schemaArgumentLoopIndex = schemaExporterSource.indexOf('for (argument = 1;', schemaMainIndex);
     assert(
-        schemaMainIndex >= 0 &&
-            schemaLocaleIndex > schemaMainIndex &&
-            schemaLocaleIndex < schemaArgumentLoopIndex,
+        schemaMainIndex >= 0 && schemaLocaleIndex > schemaMainIndex && schemaLocaleIndex < schemaArgumentLoopIndex,
         'schema helper must enable the UTF-8 C runtime locale before processing arguments'
     );
     for (const limitName of ['MAX_EXPORT_NODES', 'MAX_EXPORT_DEPTH', 'MAX_JSON_ALLOCATION_BYTES', 'MAX_JSON_BYTES']) {
@@ -383,6 +383,58 @@ function testPinnedReleaseAndPackageContract() {
         }
     });
 
+    const ianaManifest = getPinnedIanaModuleManifest(projectRoot);
+    assert.deepEqual(ianaManifest, {
+        schemaVersion: 1,
+        source: 'https://www.iana.org/assignments/yang-parameters/',
+        retrievedAt: '2026-07-19',
+        modules: [
+            {
+                file: 'ietf-interfaces@2018-02-20.yang',
+                sha256: '742cf4ad04459e1018ea69015adafe0202ade27b85d8350c1845b640ee32da16'
+            },
+            {
+                file: 'ietf-ip@2018-02-22.yang',
+                sha256: '00c87aab91d95199927ba109c572eef3bca0fb949cedb3849b883e2d969d04b7'
+            },
+            {
+                file: 'ietf-netconf-acm@2018-02-14.yang',
+                sha256: '796951c3b64cc602d62a012312cf1a14255c97d12e99a5c5a2c932c2df4cadbf'
+            },
+            {
+                file: 'ietf-network-instance@2019-01-21.yang',
+                sha256: 'dc2b85fa0d8eefdf411b9c2fb2b032983324371ca6b277fabf939011f97bd2ea'
+            },
+            {
+                file: 'ietf-restconf@2017-01-26.yang',
+                sha256: 'e757021148926cc9b39b593598a2bd8f212423c68ea1cbb1ed1b65532d091297'
+            },
+            {
+                file: 'ietf-subscribed-notifications@2019-09-09.yang',
+                sha256: 'bccf35fad3785d25dd6ba4b1ff7e8533670d0fcf2fbe4dd5aa87682a10badced'
+            },
+            {
+                file: 'ietf-yang-patch@2017-02-22.yang',
+                sha256: '69cb8502718e0960d068bc2a5ea03daf8b5579b4a08b80146f4c11b875e465e9'
+            },
+            {
+                file: 'ietf-yang-push@2019-09-09.yang',
+                sha256: '7ba7d6733a10feba5bf72d0060a0f24f25212b0a3524a21d8e255b9b04f50dc1'
+            }
+        ]
+    });
+    assert.deepEqual(
+        verifyPinnedIanaModules({ projectRoot }).modules,
+        ianaManifest.modules,
+        'source-controlled IANA modules must match their pinned SHA-256 digests'
+    );
+    const buildInputs = getBuildInputPaths(process.platform);
+    for (const file of PINNED_IANA_MODULE_FILES) {
+        assert(
+            buildInputs.includes(path.join('resources', 'libyang', 'iana', file)),
+            `${file} must participate in the runtime build-input fingerprint`
+        );
+    }
     const vcpkgManifest = JSON.parse(
         fs.readFileSync(path.join(projectRoot, 'scripts', 'libyang-vcpkg', 'vcpkg.json'), 'utf8')
     );
@@ -466,9 +518,7 @@ async function testInstallRuntimeEnsureContract() {
             write() {}
         }
     );
-    assert.deepEqual(verifyOptions, [
-        { projectRoot: fixtureProjectRoot, platform: 'darwin', arch: 'arm64' }
-    ]);
+    assert.deepEqual(verifyOptions, [{ projectRoot: fixtureProjectRoot, platform: 'darwin', arch: 'arm64' }]);
 
     let verifyAttempt = 0;
     const buildCalls = [];
@@ -651,6 +701,22 @@ function testRuntimeVerifierWithoutNativeRuntime() {
         fs.chmodSync(executable, 0o755);
         fs.chmodSync(schemaExecutable, 0o755);
     }
+    const runtimeModuleDirectory = path.join(runtimeDirectory, 'share', 'yang', 'modules', 'libyang');
+    fs.mkdirSync(runtimeModuleDirectory, { recursive: true });
+    for (const file of PINNED_IANA_MODULE_FILES) {
+        fs.copyFileSync(
+            path.join(projectRoot, 'resources', 'libyang', 'iana', file),
+            path.join(runtimeModuleDirectory, file)
+        );
+    }
+    for (const [index, moduleName] of REQUIRED_RUNTIME_IETF_MODULES.entries()) {
+        const file = `${moduleName}@2000-01-${String(index + 1).padStart(2, '0')}.yang`;
+        fs.writeFileSync(
+            path.join(runtimeModuleDirectory, file),
+            `module ${moduleName} { namespace "urn:netnexus:test:${moduleName}"; prefix test; }\n`,
+            'utf8'
+        );
+    }
 
     assertCommandSucceeds(
         process.execPath,
@@ -659,7 +725,7 @@ function testRuntimeVerifierWithoutNativeRuntime() {
     );
     const runtimeManifestPath = path.join(runtimeDirectory, 'runtime.json');
     const generatedManifest = JSON.parse(fs.readFileSync(runtimeManifestPath, 'utf8'));
-    assert.equal(generatedManifest.schemaVersion, 2);
+    assert.equal(generatedManifest.schemaVersion, 3);
     assert.equal(generatedManifest.executable, 'yanglint');
     assert.equal(generatedManifest.schemaExecutable, 'netnexus-libyang-schema');
     assert.equal(generatedManifest.schemaContractVersion, 1);
@@ -671,6 +737,8 @@ function testRuntimeVerifierWithoutNativeRuntime() {
     assert.match(generatedManifest.sha256, /^[a-f0-9]{64}$/);
     assert.match(generatedManifest.schemaSha256, /^[a-f0-9]{64}$/);
     assert.notEqual(generatedManifest.sha256, generatedManifest.schemaSha256);
+    assert.deepEqual(generatedManifest.ianaYangModules, getPinnedIanaModuleManifest(projectRoot).modules);
+    assert.deepEqual(generatedManifest.requiredIetfYangModules, collectRequiredRuntimeIetfModules(runtimeDirectory));
 
     const status = verifyRuntime({
         projectRoot,
@@ -699,6 +767,74 @@ function testRuntimeVerifierWithoutNativeRuntime() {
     assert.equal(status.source, 'bundled');
     assert.equal(status.schemaPath, schemaExecutable);
     assert.equal(status.schemaContractVersion, 1);
+
+    const firstIanaRuntimeModule = path.join(runtimeModuleDirectory, PINNED_IANA_MODULE_FILES[0]);
+    fs.appendFileSync(firstIanaRuntimeModule, '\n// corrupted test fixture\n', 'utf8');
+    assert.throws(
+        () =>
+            verifyRuntime({
+                projectRoot,
+                platform: verifierPlatform,
+                arch: verifierArch,
+                runtimeDirectory,
+                executable,
+                schemaExecutable
+            }),
+        /Bundled IANA YANG module .* SHA-256 mismatch/
+    );
+    fs.copyFileSync(
+        path.join(projectRoot, 'resources', 'libyang', 'iana', PINNED_IANA_MODULE_FILES[0]),
+        firstIanaRuntimeModule
+    );
+
+    const firstDependencyModule = path.join(runtimeModuleDirectory, generatedManifest.requiredIetfYangModules[0].file);
+    const firstDependencySource = fs.readFileSync(firstDependencyModule);
+    fs.appendFileSync(firstDependencyModule, '\n// corrupted dependency fixture\n', 'utf8');
+    assert.throws(
+        () =>
+            verifyRuntime({
+                projectRoot,
+                platform: verifierPlatform,
+                arch: verifierArch,
+                runtimeDirectory,
+                executable,
+                schemaExecutable
+            }),
+        /dependency closure/
+    );
+    fs.writeFileSync(firstDependencyModule, firstDependencySource);
+
+    const executableSource = fs.readFileSync(executable);
+    fs.appendFileSync(executable, '\ncorrupted executable fixture\n', 'utf8');
+    assert.throws(
+        () =>
+            verifyRuntime({
+                projectRoot,
+                platform: verifierPlatform,
+                arch: verifierArch,
+                runtimeDirectory,
+                executable,
+                schemaExecutable
+            }),
+        /Bundled yanglint SHA-256 mismatch/
+    );
+    fs.writeFileSync(executable, executableSource);
+
+    const schemaExecutableSource = fs.readFileSync(schemaExecutable);
+    fs.appendFileSync(schemaExecutable, '\ncorrupted schema helper fixture\n', 'utf8');
+    assert.throws(
+        () =>
+            verifyRuntime({
+                projectRoot,
+                platform: verifierPlatform,
+                arch: verifierArch,
+                runtimeDirectory,
+                executable,
+                schemaExecutable
+            }),
+        /Bundled libyang Schema helper SHA-256 mismatch/
+    );
+    fs.writeFileSync(schemaExecutable, schemaExecutableSource);
 
     fs.writeFileSync(
         runtimeManifestPath,

@@ -11,6 +11,11 @@ Expected layout:
 
 ```text
 resources/libyang/
+  iana/
+    manifest.json
+    ietf-subscribed-notifications@2019-09-09.yang
+    ietf-yang-push@2019-09-09.yang
+    ... pinned RFC dependencies
   darwin-arm64/
     bin/yanglint
     bin/netnexus-libyang-schema
@@ -86,6 +91,11 @@ bypasses the automatic build and is not suitable for packaging or YANG tests.
 
 Electron packaging fails if either executable is absent, cannot execute, uses
 the wrong libyang version, or if the Schema helper contract is incompatible.
+It also fails when a source or packaged IANA module is missing, is a symlink,
+or differs from the SHA-256 pinned in `iana/manifest.json`. Runtime verification
+checks the SHA-256 of both executables and the complete twelve-module RFC 8639 /
+RFC 8641 dependency closure. The models are installed into the normal libyang
+module search directory.
 
 The Windows build uses a pinned vcpkg manifest for PThreads4W and dirent, and
 a pinned permissively licensed getopt compatibility source. It statically
