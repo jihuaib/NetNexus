@@ -85,6 +85,7 @@
                         <nn-spin :spinning="treeLoading">
                             <nn-tree
                                 v-if="displayTree.length"
+                                ref="schemaTreeRef"
                                 v-model:expanded-keys="expandedKeys"
                                 v-model:selected-keys="selectedKeys"
                                 :tree-data="displayTree"
@@ -390,6 +391,7 @@
         activeWhen: () => window.matchMedia('(min-width: 981px)').matches
     });
     const schemaTreeScrollRef = ref(null);
+    const schemaTreeRef = ref(null);
     const schemaTreeViewportHeight = ref(480);
     let schemaTreeResizeObserver = null;
     let contextMenuOpenRequest = 0;
@@ -2019,6 +2021,12 @@
         schemaTreeResizeObserver.observe(schemaTreeScrollRef.value);
     };
 
+    const refreshSchemaTreeLayout = async () => {
+        await nextTick();
+        observeSchemaTreeViewport();
+        await schemaTreeRef.value?.refreshVirtualLayout?.();
+    };
+
     const handleWorkspaceDeactivated = () => {
         stopSchemaPaneResize();
         hideContextMenu();
@@ -2028,6 +2036,8 @@
         nodePropertyOpen.value = false;
         executionHistoryOpen.value = false;
         notificationHistoryOpen.value = false;
+        schemaTreeResizeObserver?.disconnect();
+        schemaTreeResizeObserver = null;
     };
 
     onMounted(async () => {
@@ -2055,9 +2065,11 @@
 
     onActivated(async () => {
         if (!initialWorkspaceLoadSettled) return;
+        await refreshSchemaTreeLayout();
         await refreshProfiles();
         profileContextReady = true;
         await reloadCurrentProfile({ preserveTree: true });
+        await refreshSchemaTreeLayout();
     });
 
     onDeactivated(handleWorkspaceDeactivated);

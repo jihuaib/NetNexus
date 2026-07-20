@@ -284,7 +284,7 @@
         </nn-drawer>
 
         <nn-modal
-            :open="profileDataLoad.visible"
+            :open="connectionPageActive && profileDataLoad.visible"
             title="切换 Profile"
             width="500px"
             :footer="null"
@@ -357,7 +357,7 @@
 </template>
 
 <script setup>
-    import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+    import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
     import {
         DEFAULT_NETCONF_PROFILE,
         NETCONF_AUTH_OPTIONS,
@@ -413,6 +413,7 @@
     const capabilityQuery = ref('');
     const testResultOpen = ref(false);
     const testResult = ref({ success: false, message: '' });
+    const connectionPageActive = ref(true);
     const profileDataLoad = ref({
         visible: false,
         status: 'idle',
@@ -436,6 +437,7 @@
     let profileDataLoadRevision = 0;
     let profileDataLoadOperationSequence = 0;
     let dismissedProfileDataLoadOperationId = '';
+    let initialConnectionLoadSettled = false;
     const profileConnectionStatuses = new Map();
     const processedProfileConnections = new Map();
     const pendingProfileSwitches = new Map();
@@ -560,7 +562,7 @@
         const operationId = createProfileDataLoadOperation(profileId);
         profileDataLoadRevision += 1;
         profileDataLoad.value = {
-            visible: true,
+            visible: connectionPageActive.value,
             status: 'connecting',
             phase: 'connect',
             percent: 10,
@@ -581,7 +583,7 @@
             currentProfileDataLoadOperation(normalizedProfileId) || createProfileDataLoadOperation(normalizedProfileId);
         profileDataLoadRevision += 1;
         profileDataLoad.value = {
-            visible: dismissedProfileDataLoadOperationId !== operationId,
+            visible: connectionPageActive.value && dismissedProfileDataLoadOperationId !== operationId,
             status: 'failed',
             phase: 'connect',
             percent: 100,
@@ -620,7 +622,7 @@
         let compileId = '';
 
         profileDataLoad.value = {
-            visible: dismissedProfileDataLoadOperationId !== operationId,
+            visible: connectionPageActive.value && dismissedProfileDataLoadOperationId !== operationId,
             status: 'loading',
             phase: 'data',
             percent: 35,
@@ -703,7 +705,8 @@
             Boolean(connectionKey) && processedProfileConnections.get(profileId) === connectionKey;
         if (
             !connected ||
-            (!options.force && (previousStatus === NETCONF_SESSION_STATUS.CONNECTED || connectionAlreadyProcessed))
+            connectionAlreadyProcessed ||
+            (!options.force && previousStatus === NETCONF_SESSION_STATUS.CONNECTED)
         ) {
             return false;
         }
@@ -962,6 +965,7 @@
     };
 
     const connectProfile = async () => {
+        if (connecting.value) return;
         if (!validateDraft()) return;
         const actionRevision = ++connectRequestRevision;
         const initialProfileId = String(selectedProfileId.value || '');
@@ -1099,16 +1103,33 @@
 
     onMounted(async () => {
         EventBus.on(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.CONNECTION, handleSessionEvent);
-        await loadProfiles();
-        await loadSessionState({ activateSharedProfile: true });
+        try {
+            await loadProfiles();
+            await loadSessionState({ activateSharedProfile: true });
+        } finally {
+            initialConnectionLoadSettled = true;
+        }
     });
 
     onActivated(async () => {
+        connectionPageActive.value = true;
+        if (!initialConnectionLoadSettled) return;
         await loadProfiles();
         await loadSessionState({ activateSharedProfile: true });
     });
 
+    onDeactivated(() => {
+        connectionPageActive.value = false;
+        if (profileDataLoad.value.visible) {
+            dismissedProfileDataLoadOperationId = profileDataLoad.value.operationId;
+            profileDataLoad.value = { ...profileDataLoad.value, visible: false };
+        }
+        capabilityDrawerOpen.value = false;
+        testResultOpen.value = false;
+    });
+
     onBeforeUnmount(() => {
+        connectionPageActive.value = false;
         EventBus.off(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.CONNECTION);
         profileDataLoadRevision += 1;
     });

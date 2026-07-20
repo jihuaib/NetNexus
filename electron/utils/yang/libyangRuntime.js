@@ -9,8 +9,9 @@ const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const MAX_EXECUTION_TIMEOUT_MS = 10 * 60_000;
 const MAX_ALLOWED_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_ARGUMENT_BYTES = 4 * 1024 * 1024;
+const MAX_DISCOVERY_FAILURE_DETAIL_CHARS = 4_096;
 const MINIMUM_LIBYANG_MAJOR = 2;
-const SCHEMA_HELPER_CONTRACT_VERSION = 1;
+const SCHEMA_HELPER_CONTRACT_VERSION = 2;
 
 function createRuntimeError(message, code, details = {}) {
     const error = new Error(message);
@@ -523,6 +524,16 @@ function parseSchemaHelperVersion(output) {
     };
 }
 
+function probeFailureReason(result, fallback) {
+    if (result?.error?.message) return result.error.message;
+    const detail = [result?.stderr, result?.stdout]
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+        .join('\n')
+        .slice(0, MAX_DISCOVERY_FAILURE_DETAIL_CHARS);
+    return detail ? `${fallback}: ${detail}` : fallback;
+}
+
 function installHintForPlatform(platform = process.platform) {
     if (platform === 'win32') return 'Repair or reinstall NetNexus to restore the bundled Windows libyang runtime.';
     if (platform === 'darwin') {
@@ -602,7 +613,10 @@ async function discoverLibyangRuntime(options = {}) {
         }
         const version = parseYanglintVersion(`${versionResult.stdout}\n${versionResult.stderr}`);
         if (versionResult.error || versionResult.exitCode !== 0 || !version) {
-            const reason = versionResult.error?.message || `unexpected version output (exit ${versionResult.exitCode})`;
+            const reason = probeFailureReason(
+                versionResult,
+                `unexpected version output (exit ${versionResult.exitCode})`
+            );
             failures.push(`${candidate.path}: ${reason}`);
             continue;
         }
@@ -648,9 +662,10 @@ async function discoverLibyangRuntime(options = {}) {
                 `${schemaVersionResult.stdout}\n${schemaVersionResult.stderr}`
             );
             if (schemaVersionResult.error || schemaVersionResult.exitCode !== 0 || !schemaVersion) {
-                const reason =
-                    schemaVersionResult.error?.message ||
-                    `unexpected schema helper version output (exit ${schemaVersionResult.exitCode})`;
+                const reason = probeFailureReason(
+                    schemaVersionResult,
+                    `unexpected schema helper version output (exit ${schemaVersionResult.exitCode})`
+                );
                 failures.push(`${schemaCandidate.path}: ${reason}`);
                 continue;
             }

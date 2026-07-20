@@ -611,6 +611,7 @@ async function main() {
         await failedTask.promise;
         assert.equal(failedTask.status, 'failed');
         assert.match(failedTask.error.code, /^LIBYANG/);
+        assert.match(failedTask.error.message, /does-not-exist|Referenced type/u);
         const failedWorkspace = await app.handleGetWorkspace(event, { profileId: PROFILE_A });
         assert.equal(failedWorkspace.data.success, false);
         assert.equal(failedWorkspace.data.schemaAvailable, true);
@@ -637,12 +638,22 @@ async function main() {
                 'example-types': 'compiled'
             }
         );
+        const invalidFileResult = failedWorkspace.data.fileResults.find(result => result.name === 'example-invalid');
+        assert.match(
+            invalidFileResult.diagnostic?.message || '',
+            /does-not-exist|Referenced type/u,
+            JSON.stringify(invalidFileResult, null, 2)
+        );
         const failedModuleList = await app.handleListModules(event, { profileId: PROFILE_A });
         assert.deepEqual(Object.fromEntries(failedModuleList.data.map(module => [module.name, module.compileStatus])), {
             'example-invalid': 'failed',
             'example-system': 'compiled',
             'example-types': 'compiled'
         });
+        assert.match(
+            failedModuleList.data.find(module => module.name === 'example-invalid')?.compileMessage || '',
+            /does-not-exist|Referenced type/u
+        );
         assert.deepEqual(
             (
                 await app.handleGetSchemaRoots(event, {
@@ -677,6 +688,13 @@ async function main() {
         assert.equal(restartedFailedWorkspace.data.schemaAvailable, true);
         assert.equal(restartedFailedWorkspace.data.partialSchema, true);
         assert.equal(restartedFailedWorkspace.data.schemaTree.partial, true);
+        assert(
+            restartedFailedWorkspace.data.diagnostics.some(
+                diagnostic =>
+                    diagnostic.severity === 'error' && /does-not-exist|Referenced type/u.test(diagnostic.message)
+            ),
+            'persisted compile diagnostics must remain available immediately after restart'
+        );
         assert.deepEqual(
             Object.fromEntries(
                 restartedFailedWorkspace.data.modules.map(module => [module.name, module.compileStatus])
@@ -739,6 +757,18 @@ async function main() {
         assert.equal(liveCompileFileEvent.data.data.action, 'compile');
         assert.equal(liveCompileFileEvent.data.data.profileId, PROFILE_A);
         assert.equal(liveCompileFileEvent.data.data.workspaceId, profileWorkspaceId(PROFILE_A));
+        const failedCompileFileEvent = events.find(
+            item =>
+                item.type === 'yang:taskProgress' &&
+                item.data?.data?.phase === 'file-result' &&
+                item.data.data.profileId === PROFILE_A &&
+                item.data.data.fileStatus === 'failed'
+        );
+        assert.match(
+            failedCompileFileEvent?.data?.data?.diagnostic?.message || '',
+            /does-not-exist|Referenced type/u,
+            JSON.stringify(failedCompileFileEvent, null, 2)
+        );
         assert(
             events.some(
                 item =>

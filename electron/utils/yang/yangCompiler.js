@@ -1065,23 +1065,37 @@ class YangCompiler {
         }
         if ((result.error || exitCode !== 0) && !diagnostics.some(diagnostic => diagnostic.severity === 'error')) {
             const outputLimit = result.outputLimitExceeded || result.error?.code === 'LIBYANG_SCHEMA_OUTPUT_LIMIT';
-            diagnostics.push({
-                severity: 'error',
-                code: outputLimit
-                    ? 'LIBYANG_SCHEMA_OUTPUT_LIMIT'
-                    : result.timedOut
-                      ? 'LIBYANG_SCHEMA_TIMEOUT'
-                      : result.error
-                        ? 'LIBYANG_SCHEMA_EXECUTION_FAILED'
-                        : 'LIBYANG_SCHEMA_FAILED',
-                message:
-                    result.error?.message ||
-                    `libyang schema helper exited with code ${exitCode} without an error diagnostic`,
-                source: compilerStatus.schemaPath,
-                line: null,
-                column: null,
-                authoritative: true
-            });
+            const primaryOutputDiagnostic = !result.error
+                ? diagnostics.find(diagnostic =>
+                      /error|invalid|fail|unknown\s+option|unable\s+to|cannot|not\s+found|missing|required/iu.test(
+                          String(diagnostic.message || '')
+                      )
+                  ) || diagnostics[0]
+                : null;
+            if (primaryOutputDiagnostic) {
+                primaryOutputDiagnostic.severity = 'error';
+                if (primaryOutputDiagnostic.code === 'LIBYANG_OUTPUT') {
+                    primaryOutputDiagnostic.code = 'LIBYANG_SCHEMA_FAILED';
+                }
+            } else {
+                diagnostics.push({
+                    severity: 'error',
+                    code: outputLimit
+                        ? 'LIBYANG_SCHEMA_OUTPUT_LIMIT'
+                        : result.timedOut
+                          ? 'LIBYANG_SCHEMA_TIMEOUT'
+                          : result.error
+                            ? 'LIBYANG_SCHEMA_EXECUTION_FAILED'
+                            : 'LIBYANG_SCHEMA_FAILED',
+                    message:
+                        result.error?.message ||
+                        `libyang schema helper exited with code ${exitCode} without an error diagnostic`,
+                    source: compilerStatus.schemaPath,
+                    line: null,
+                    column: null,
+                    authoritative: true
+                });
+            }
         }
         return {
             invoked: true,
@@ -1115,9 +1129,36 @@ class YangCompiler {
         compilerStatus,
         compileId,
         options,
-        progress
+        progress,
+        compileDiagnostics = []
     }) {
-        const createResult = (entry, module, status, diagnosticCount = 0) => ({
+        const compactDiagnostic = (diagnostic, fallbackSource = null) => {
+            if (!diagnostic?.message) return null;
+            const line = Number(diagnostic.line);
+            const column = Number(diagnostic.column);
+            return {
+                severity: String(diagnostic.severity || 'error').toLowerCase(),
+                code: diagnostic.code || 'YANG_COMPILE_FAILED',
+                message: String(diagnostic.message),
+                source: diagnostic.source || fallbackSource,
+                line:
+                    diagnostic.line !== null &&
+                    diagnostic.line !== undefined &&
+                    diagnostic.line !== '' &&
+                    Number.isFinite(line)
+                        ? line
+                        : null,
+                column:
+                    diagnostic.column !== null &&
+                    diagnostic.column !== undefined &&
+                    diagnostic.column !== '' &&
+                    Number.isFinite(column)
+                        ? column
+                        : null,
+                authoritative: diagnostic.authoritative !== false
+            };
+        };
+        const createResult = (entry, module, status, diagnosticCount = 0, diagnostic = null) => ({
             hash: entry.hash,
             moduleId: module?.id || entry.hash,
             name: module?.metadata?.name || entry.metadata?.name || entry.fileName,
@@ -1127,7 +1168,8 @@ class YangCompiler {
             status,
             compileStatus: status,
             compiled: status === 'compiled',
-            diagnosticCount
+            diagnosticCount,
+            ...(diagnostic ? { diagnostic } : {})
         });
         const modulesByHash = new Map(modules.map(module => [module.hash, module]));
         if (succeeded) {
@@ -1137,6 +1179,7 @@ class YangCompiler {
         const topLevelModules = modules.filter(module => module.metadata?.kind === 'module');
         const statusByModuleId = new Map();
         const diagnosticsByModuleId = new Map();
+        const primaryDiagnosticByModuleId = new Map();
         let nextIndex = 0;
         let completed = 0;
         const validateNext = async () => {
@@ -1156,8 +1199,15 @@ class YangCompiler {
                 } else {
                     validation = { succeeded: false, diagnostics: [] };
                 }
+                const validationDiagnostics = Array.isArray(validation.diagnostics) ? validation.diagnostics : [];
+                const primaryDiagnostic = compactDiagnostic(
+                    validationDiagnostics.find(diagnostic => diagnostic.severity === 'error') ||
+                        validationDiagnostics[0],
+                    module.fileName
+                );
                 statusByModuleId.set(module.id, validation.succeeded ? 'compiled' : 'failed');
-                diagnosticsByModuleId.set(module.id, validation.diagnostics?.length || 0);
+                diagnosticsByModuleId.set(module.id, validationDiagnostics.length);
+                if (primaryDiagnostic) primaryDiagnosticByModuleId.set(module.id, primaryDiagnostic);
                 completed += 1;
                 progress('file-validation', {
                     completed,
@@ -1168,7 +1218,8 @@ class YangCompiler {
                     currentName: module.metadata?.name || module.fileName,
                     currentRevision: module.metadata?.revision || null,
                     fileStatus: validation.succeeded ? 'compiled' : 'failed',
-                    message: `${module.fileName} ${validation.succeeded ? 'compiled successfully' : 'failed compilation'}`
+                    message: `${module.fileName} ${validation.succeeded ? 'compiled successfully' : 'failed compilation'}`,
+                    diagnostic: primaryDiagnostic || undefined
                 });
             }
         };
@@ -1212,7 +1263,23 @@ class YangCompiler {
             const diagnosticCount = module
                 ? diagnosticsByModuleId.get(module.id) || module.diagnostics?.length || 0
                 : 1;
-            return createResult(entry, module, status, diagnosticCount);
+            const entryName = module?.metadata?.name || entry.metadata?.name || '';
+            const matchingCompileDiagnostic = compileDiagnostics.find(diagnostic => {
+                if (diagnostic.severity !== 'error') return false;
+                const sourceName = String(diagnostic.source || '')
+                    .split(/[\\/]/u)
+                    .pop();
+                return sourceName === entry.fileName || (entryName && diagnostic.module === entryName);
+            });
+            const diagnostic =
+                (module && primaryDiagnosticByModuleId.get(module.id)) ||
+                compactDiagnostic(
+                    matchingCompileDiagnostic ||
+                        module?.diagnostics?.find(item => item.severity === 'error') ||
+                        (entries.length === 1 ? compileDiagnostics.find(item => item.severity === 'error') : null),
+                    entry.fileName
+                );
+            return createResult(entry, module, status, diagnosticCount, status === 'failed' ? diagnostic : null);
         });
     }
 
@@ -1431,7 +1498,8 @@ class YangCompiler {
             compilerStatus,
             compileId,
             options,
-            progress
+            progress,
+            compileDiagnostics: finalDiagnostics
         });
         fileResults.forEach((fileResult, index) => {
             const completed = index + 1;
@@ -1444,6 +1512,7 @@ class YangCompiler {
                 currentName: fileResult.name,
                 currentRevision: fileResult.revision,
                 fileStatus: fileResult.status,
+                diagnostic: fileResult.diagnostic || undefined,
                 message: `${fileResult.fileName} ${
                     fileResult.status === 'compiled' ? 'compiled successfully' : 'failed compilation'
                 }`

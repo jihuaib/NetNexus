@@ -69,7 +69,7 @@
 </template>
 
 <script setup>
-    import { computed, nextTick, onBeforeUpdate, ref, watch } from 'vue';
+    import { computed, nextTick, onActivated, onBeforeUnmount, onBeforeUpdate, onDeactivated, ref, watch } from 'vue';
     import { resolveTreeVirtualScrollTop, resolveTreeVirtualWindow } from '../treeVirtualization';
 
     defineOptions({ name: 'NnTree' });
@@ -119,6 +119,10 @@
     const nodeRefs = new Map();
     const focusedKey = ref(undefined);
     const virtualScrollTop = ref(0);
+    let retainedVirtualScrollTop = 0;
+    let activationFrameId = 0;
+    let activationSettleFrameId = 0;
+    let componentActive = true;
 
     const virtualViewportHeight = computed(() =>
         Number.isFinite(props.height) && props.height > 0 ? props.height : 0
@@ -238,8 +242,10 @@
     const getNodeStyle = record => ({ paddingInlineStart: `${record.level * 18}px` });
 
     const handleVirtualScroll = event => {
-        if (!virtualEnabled.value) return;
-        virtualScrollTop.value = event.currentTarget?.scrollTop || 0;
+        if (!componentActive || !virtualEnabled.value) return;
+        const nextScrollTop = event.currentTarget?.scrollTop || 0;
+        retainedVirtualScrollTop = nextScrollTop;
+        virtualScrollTop.value = nextScrollTop;
     };
 
     const isSelected = key => includesKey(props.selectedKeys, key);
@@ -329,10 +335,54 @@
 
     const setVirtualScrollTop = value => {
         const nextScrollTop = Number(value) || 0;
+        retainedVirtualScrollTop = nextScrollTop;
         virtualScrollTop.value = nextScrollTop;
         if (treeRootRef.value && treeRootRef.value.scrollTop !== nextScrollTop) {
             treeRootRef.value.scrollTop = nextScrollTop;
         }
+    };
+
+    const refreshVirtualLayout = async () => {
+        await nextTick();
+        if (!virtualEnabled.value || !treeRootRef.value) return false;
+        const restoredWindow = resolveTreeVirtualWindow({
+            itemCount: visibleNodes.value.length,
+            itemHeight: virtualItemHeight.value,
+            viewportHeight: virtualViewportHeight.value,
+            scrollTop: retainedVirtualScrollTop,
+            overscan: virtualOverscan.value
+        });
+        setVirtualScrollTop(restoredWindow.scrollTop);
+        await nextTick();
+        if (treeRootRef.value && treeRootRef.value.scrollTop !== restoredWindow.scrollTop) {
+            treeRootRef.value.scrollTop = restoredWindow.scrollTop;
+        }
+        return true;
+    };
+
+    const cancelActivationRefresh = () => {
+        if (typeof window === 'undefined') return;
+        if (activationFrameId) window.cancelAnimationFrame(activationFrameId);
+        if (activationSettleFrameId) window.cancelAnimationFrame(activationSettleFrameId);
+        activationFrameId = 0;
+        activationSettleFrameId = 0;
+    };
+
+    const scheduleActivationRefresh = () => {
+        cancelActivationRefresh();
+        if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+            void refreshVirtualLayout();
+            return;
+        }
+        nextTick(() => {
+            activationFrameId = window.requestAnimationFrame(() => {
+                activationFrameId = 0;
+                activationSettleFrameId = window.requestAnimationFrame(() => {
+                    activationSettleFrameId = 0;
+                    void refreshVirtualLayout();
+                });
+            });
+        });
     };
 
     const scrollVirtualIndexIntoView = (index, align = 'auto', offset = 0) => {
@@ -463,10 +513,12 @@
         [virtualEnabled, () => visibleNodes.value.length, virtualViewportHeight, virtualItemHeight],
         () => {
             if (!virtualEnabled.value) {
+                retainedVirtualScrollTop = 0;
                 virtualScrollTop.value = 0;
                 return;
             }
             const nextScrollTop = virtualWindow.value.scrollTop;
+            retainedVirtualScrollTop = nextScrollTop;
             if (nextScrollTop !== virtualScrollTop.value) virtualScrollTop.value = nextScrollTop;
             nextTick(() => {
                 if (treeRootRef.value && treeRootRef.value.scrollTop !== nextScrollTop) {
@@ -481,8 +533,24 @@
         nodeRefs.clear();
     });
 
+    onActivated(() => {
+        componentActive = true;
+        scheduleActivationRefresh();
+    });
+
+    onDeactivated(() => {
+        componentActive = false;
+        cancelActivationRefresh();
+    });
+
+    onBeforeUnmount(() => {
+        componentActive = false;
+        cancelActivationRefresh();
+    });
+
     defineExpose({
         scrollTo,
+        refreshVirtualLayout,
         focus: () => treeRootRef.value?.querySelector('[tabindex="0"]')?.focus()
     });
 </script>
@@ -502,7 +570,7 @@
         width: 100%;
         overflow: auto;
         overflow-anchor: none;
-        contain: layout paint;
+        contain: layout;
     }
 
     .nn-tree-virtual-spacer {

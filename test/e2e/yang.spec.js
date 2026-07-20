@@ -412,6 +412,7 @@ test.describe('NETCONF/YANG workbench', () => {
                 }
             };
         };
+        await harness.controller.call('yang.netconf.disconnect', 'e2e-netconf-profile');
 
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.goto('/#/yang/yang-workspace');
@@ -432,6 +433,67 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(treeItems.filter({ hasText: 'scale-schema-0999' })).toBeVisible();
         await expect(treeItems.filter({ hasText: 'scale-schema-0000' })).toHaveCount(0);
         await expect.poll(() => treeItems.count()).toBeLessThan(100);
+
+        const retainedPosition = await treeScroll.evaluate(element => {
+            window.__retainedSchemaTreeForActivationTest = element;
+            const viewport = element.getBoundingClientRect();
+            const rendered = [...element.querySelectorAll('[data-nn-tree-virtual-index]')];
+            const intersecting = rendered.find(node => {
+                const bounds = node.getBoundingClientRect();
+                return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+            });
+            return {
+                scrollTop: element.scrollTop,
+                firstIntersectingIndex: Number(intersecting?.dataset.nnTreeVirtualIndex)
+            };
+        });
+        expect(retainedPosition.scrollTop).toBeGreaterThan(0);
+
+        await treeItems.filter({ hasText: 'scale-schema-0999' }).dispatchEvent('contextmenu', {
+            button: 2,
+            clientX: 320,
+            clientY: 760
+        });
+        const contextMenu = page.locator('.schema-context-menu');
+        await expect(contextMenu).toBeVisible();
+        await contextMenu.getByRole('menuitem', { name: '前往连接设置', exact: true }).click();
+        await expect(page.locator('.yang-connection-page:visible')).toBeVisible();
+        await page.evaluate(() => {
+            window.__retainedSchemaTreeForActivationTest.scrollTop = 0;
+        });
+
+        await page.getByRole('tab', { name: 'Schema 工作区', exact: true }).click();
+        await expect(page.locator('.yang-workspace-page:visible')).toBeVisible();
+        await expect
+            .poll(() =>
+                page.evaluate(() => {
+                    const element = document.querySelector('.yang-workspace-page .schema-tree-scroll .nn-tree');
+                    if (!element) return false;
+                    const viewport = element.getBoundingClientRect();
+                    return (
+                        element.scrollTop > 0 &&
+                        [...element.querySelectorAll('[data-nn-tree-virtual-index]')].some(node => {
+                            const bounds = node.getBoundingClientRect();
+                            return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+                        })
+                    );
+                })
+            )
+            .toBe(true);
+        const restoredPosition = await treeScroll.evaluate(element => {
+            const viewport = element.getBoundingClientRect();
+            const intersecting = [...element.querySelectorAll('[data-nn-tree-virtual-index]')].find(node => {
+                const bounds = node.getBoundingClientRect();
+                return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+            });
+            delete window.__retainedSchemaTreeForActivationTest;
+            return {
+                scrollTop: element.scrollTop,
+                firstIntersectingIndex: Number(intersecting?.dataset.nnTreeVirtualIndex)
+            };
+        });
+        expect(Math.abs(restoredPosition.scrollTop - retainedPosition.scrollTop)).toBeLessThanOrEqual(1);
+        expect(restoredPosition.firstIntersectingIndex).toBe(retainedPosition.firstIntersectingIndex);
     });
 
     test('follows the connected Profile without page-level Profile switches', async ({ page }) => {
@@ -553,6 +615,54 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(moduleCurrentProfile).toContainText('NETCONF E2E 备用设备');
         await expect(page.getByText('vendor-system', { exact: true })).toBeVisible();
         await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeDisabled();
+    });
+
+    test('keeps inactive Profile progress overlays out of the active YANG page', async ({ page }) => {
+        await page.goto('/#/yang/yang-connection');
+        await expect(page.locator('.yang-connection-page:visible')).toBeVisible();
+        await page.goto('/#/yang/yang-modules');
+
+        await page.getByRole('button', { name: '获取设备列表', exact: true }).click();
+        const deviceDialog = page.getByRole('dialog', { name: '设备 YANG 模型' });
+        await expect(deviceDialog).toBeVisible();
+        await expect(page.locator('.nn-modal-root:visible')).toHaveCount(1);
+        await expect(page.locator('.nn-modal-mask:visible')).toHaveCount(1);
+
+        harness.controller.emitEvent('netconf:sessionEvent', {
+            status: 'success',
+            data: {
+                profileId: 'e2e-netconf-profile',
+                profileName: 'NETCONF E2E 设备',
+                status: 'reconnecting',
+                state: 'reconnecting',
+                connected: false,
+                message: '模拟后台重连'
+            }
+        });
+        await page.waitForTimeout(100);
+
+        await expect(page.getByRole('dialog', { name: '切换 Profile' })).toHaveCount(0);
+        await expect(page.locator('.nn-modal-root:visible')).toHaveCount(1);
+        await expect(page.locator('.nn-modal-mask:visible')).toHaveCount(1);
+        expect(
+            await page.evaluate(() => ({
+                stack: globalThis.__NETNEXUS_UI_OVERLAY_STATE__?.stack?.length || 0,
+                lockCount: globalThis.__NETNEXUS_UI_OVERLAY_STATE__?.lockCount || 0
+            }))
+        ).toEqual({ stack: 1, lockCount: 1 });
+
+        await deviceDialog.getByRole('button', { name: '取消', exact: true }).click();
+        await expect(deviceDialog).toBeHidden();
+        await expect(page.locator('.nn-modal-root:visible')).toHaveCount(0);
+        await expect(page.locator('.nn-modal-mask:visible')).toHaveCount(0);
+        await expect
+            .poll(() =>
+                page.evaluate(() => ({
+                    stack: globalThis.__NETNEXUS_UI_OVERLAY_STATE__?.stack?.length || 0,
+                    lockCount: globalThis.__NETNEXUS_UI_OVERLAY_STATE__?.lockCount || 0
+                }))
+            )
+            .toEqual({ stack: 0, lockCount: 0 });
     });
 
     test('keeps the current Profile when a replacement connection fails', async ({ page }) => {
@@ -1393,6 +1503,87 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(
             await compileLog.locator('.compile-log-list').evaluate(element => getComputedStyle(element).overflowY)
         ).toBe('auto');
+    });
+
+    test('keeps a Windows compiler failure reason on the first log page', async ({ page }) => {
+        const windowsDiagnostic = {
+            severity: 'error',
+            code: 'LIBYANG_SCHEMA_FAILED',
+            message: "Unknown option '--schema-list' from the bundled Windows schema helper",
+            source: 'C:\\NetNexus\\workspace\\broken-module.yang',
+            line: 12,
+            column: 7,
+            authoritative: true
+        };
+        const failedModules = Array.from({ length: 1000 }, (_value, index) => {
+            const suffix = String(index + 1).padStart(4, '0');
+            return {
+                id: `windows-failed-${suffix}`,
+                hash: `windows-failed-${suffix}`,
+                name: `windows-failed-${suffix}`,
+                revision: '2026-07-20',
+                fileName: `windows-failed-${suffix}.yang`,
+                filePath: `C:\\NetNexus\\workspace\\windows-failed-${suffix}.yang`,
+                isLocal: true,
+                compiled: false,
+                compileStatus: 'failed',
+                status: 'failed'
+            };
+        });
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.registry.getDiagnostics') {
+                return { status: 'error', msg: '模拟 Windows Worker 已退出，独立诊断查询不可用' };
+            }
+            const response = await originalControllerCall(method, ...args);
+            if (method !== 'yang.registry.getWorkspace' || response?.status !== 'success') return response;
+            return {
+                ...response,
+                data: {
+                    ...response.data,
+                    compileId: 'windows-failed-compile',
+                    compiledAt: '2026-07-20T12:00:00.000Z',
+                    success: false,
+                    diagnostics: [windowsDiagnostic],
+                    modules: failedModules,
+                    summary: {
+                        ...(response.data.summary || {}),
+                        moduleCount: failedModules.length,
+                        compiledFiles: 0,
+                        failedFiles: failedModules.length,
+                        errors: 1,
+                        warnings: 0
+                    }
+                }
+            };
+        };
+
+        await page.goto('/#/yang/yang-modules');
+
+        const compileLog = page.getByTestId('yang-compile-log-panel');
+        const firstLogRow = compileLog.locator('.compile-log-row').first();
+        await expect(firstLogRow).toContainText("Unknown option '--schema-list'");
+        await expect(firstLogRow).toContainText('broken-module.yang:12:7');
+        await expect(compileLog.getByTestId('yang-compile-log-pagination')).toContainText('第 1 / 11 页');
+        await expect(compileLog.getByText('windows-failed-0001.yang 编译失败', { exact: true })).toBeVisible();
+
+        harness.controller.emitEvent('yang:taskProgress', {
+            status: 'success',
+            data: {
+                taskId: 'windows-failed-task',
+                action: 'compile',
+                phase: 'failed',
+                percent: 100,
+                profileId: 'e2e-netconf-profile',
+                message: 'YANG 编译失败',
+                error: {
+                    code: 'LIBYANG_SCHEMA_EXECUTION_FAILED',
+                    message: 'Cannot load libyang.dll required by the bundled Windows schema helper'
+                }
+            }
+        });
+        await expect(firstLogRow).toContainText('Cannot load libyang.dll');
+        await expect(firstLogRow).not.toContainText('YANG 编译失败');
     });
 
     test('batches 1000 live compile logs and keeps height dragging bounded', async ({ page }) => {

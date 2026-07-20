@@ -53,6 +53,7 @@
         "libyang:smoke": "node scripts/smoke-libyang-runtime.js",
         "libyang:verify": "node scripts/verify-libyang-runtime.js",
         "start": "vite",
+        "predev": "npm run libyang:ensure",
         "dev": "concurrently -k \"cross-env BROWSER=none npm start\" \"wait-port 3000 && electron .\"",
         "pack": "electron-builder --win --x64 --dir",
         "pack:mac": "electron-builder --mac --x64 --dir",

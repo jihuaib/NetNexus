@@ -55,7 +55,7 @@ async function run() {
     const packagedStatus = verifyRuntime({ projectRoot });
     const release = getReleaseManifest(projectRoot);
     assert.equal(packagedStatus.version, release.libyangVersion);
-    assert.equal(packagedStatus.schemaContractVersion, 1);
+    assert.equal(packagedStatus.schemaContractVersion, 2);
     assert(fs.statSync(packagedStatus.schemaPath).isFile());
 
     const bundledModuleDirectory = path.join(packagedStatus.runtimeDirectory, 'share', 'yang', 'modules', 'libyang');

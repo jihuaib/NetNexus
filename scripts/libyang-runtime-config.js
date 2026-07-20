@@ -382,9 +382,9 @@ function verifyRuntime(options = {}) {
             `Unable to read bundled libyang Schema helper version from: ${String(schemaExecution.stdout || '').trim()}`
         );
     }
-    if (schemaVersion.contractVersion !== 1) {
+    if (schemaVersion.contractVersion !== 2) {
         throw new Error(
-            `Bundled libyang Schema helper contract ${schemaVersion.contractVersion} does not match required contract 1`
+            `Bundled libyang Schema helper contract ${schemaVersion.contractVersion} does not match required contract 2`
         );
     }
     if (schemaVersion.libyangVersion !== expectedVersion) {

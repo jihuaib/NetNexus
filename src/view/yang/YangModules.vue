@@ -793,6 +793,10 @@
                 const fileName =
                     module.fileName || `${module.name}${module.revision ? `@${module.revision}` : ''}.yang`;
                 const compiled = module.compileStatus === 'compiled';
+                const compileDiagnostic = module.compileDiagnostic
+                    ? normalizeDiagnostic(module.compileDiagnostic)
+                    : null;
+                const failureReason = String(compileDiagnostic?.message || module.compileMessage || '').trim();
                 return {
                     id: `compile-file:${module.id || module._key}:${module.compileStatus}`,
                     severity: compiled ? 'success' : 'error',
@@ -802,7 +806,10 @@
                     revision: module.revision,
                     file: module.filePath || module.localPath || fileName,
                     fileName,
-                    message: `${fileName} 编译${compiled ? '成功' : '失败'}`
+                    code: compileDiagnostic?.code,
+                    line: compileDiagnostic?.line,
+                    column: compileDiagnostic?.column,
+                    message: `${fileName} 编译${compiled ? '成功' : `失败${failureReason ? `：${failureReason}` : ''}`}`
                 };
             })
     );
@@ -827,7 +834,7 @@
         compileLogHeight.value > 0 ? { '--compile-log-height': `${compileLogHeight.value}px` } : undefined
     );
     const filteredDiagnostics = computed(() => {
-        const compileLogs = [...liveCompileLogs.value, ...compileFileLogs.value, ...diagnostics.value];
+        const compileLogs = [...liveCompileLogs.value, ...diagnostics.value, ...compileFileLogs.value];
         if (diagnosticFilter.value === 'all') return compileLogs;
         if (diagnosticFilter.value === 'error') {
             return compileLogs.filter(item => ['error', 'fatal'].includes(item.severity));
@@ -956,16 +963,21 @@
             success: workspace.success ?? null,
             compiledAt: workspace.compiledAt || null,
             summary: workspace.summary || {},
-            modules: Array.isArray(workspace.modules) ? workspace.modules.map(normalizeModule) : []
+            modules: Array.isArray(workspace.modules) ? workspace.modules.map(normalizeModule) : [],
+            diagnostics: Array.isArray(workspace.diagnostics) ? workspace.diagnostics.map(normalizeDiagnostic) : null,
+            diagnosticsTruncated: workspace.diagnosticsTruncated === true,
+            restoreError: workspace.restoreError || ''
         };
     };
 
     const applyCompileContext = context => {
-        if (!context.compileId || context.compileId !== compileContext.value.compileId) {
+        const compileChanged = !context.compileId || context.compileId !== compileContext.value.compileId;
+        if (compileChanged) {
             diagnostics.value = [];
             diagnosticFilter.value = 'all';
         }
         compileContext.value = context;
+        if (context.diagnostics?.length) diagnostics.value = context.diagnostics;
     };
 
     const fetchCompileContext = async (profileId = selectedProfileId.value) => {
@@ -1004,6 +1016,7 @@
         const profileRevision = profileRequestRevision;
         const profileId = selectedProfileId.value;
         let requestedCompileId = '';
+        let restoreError = '';
         diagnosticLoading.value = true;
         try {
             const context = await fetchCompileContext(profileId);
@@ -1013,10 +1026,11 @@
                 profileRevision !== profileRequestRevision ||
                 profileId !== selectedProfileId.value
             ) {
-                return;
+                return { loaded: false, stale: true, count: diagnostics.value.length };
             }
             applyCompileContext(context);
-            if (!context.compileId) return;
+            restoreError = context.restoreError;
+            if (!context.compileId) return { loaded: true, count: diagnostics.value.length };
             requestedCompileId = context.compileId;
             const { data } = await invokeBridge('yangApi', 'getDiagnostics', {
                 profileId,
@@ -1027,24 +1041,26 @@
                 contextRequestRevision !== compileContextRequestRevision ||
                 compileContext.value.compileId !== context.compileId
             ) {
-                return;
+                return { loaded: false, stale: true, count: diagnostics.value.length };
             }
             const confirmedContext = await fetchCompileContext(profileId);
             if (
                 requestRevision !== diagnosticRequestRevision ||
                 contextRequestRevision !== compileContextRequestRevision
             ) {
-                return;
+                return { loaded: false, stale: true, count: diagnostics.value.length };
             }
             applyCompileContext(confirmedContext);
-            if (confirmedContext.compileId !== context.compileId) return;
+            if (confirmedContext.compileId !== context.compileId) {
+                return { loaded: false, stale: true, count: diagnostics.value.length };
+            }
             diagnostics.value = unwrapArray(data, ['diagnostics', 'items']).map(normalizeDiagnostic);
+            return { loaded: true, count: diagnostics.value.length };
         } catch (error) {
             const requestIsCurrent =
                 requestRevision === diagnosticRequestRevision &&
                 contextRequestRevision === compileContextRequestRevision;
             if (requestIsCurrent && requestedCompileId) {
-                diagnostics.value = [];
                 try {
                     const latestContext = await fetchCompileContext(profileId);
                     if (
@@ -1054,8 +1070,17 @@
                         applyCompileContext(latestContext);
                     }
                 } catch (_contextError) {
-                    // Keep the last known compile context while ensuring stale diagnostic rows are not displayed.
+                    // Keep the last known diagnostic rows when the persisted compile context is also unavailable.
                 }
+            }
+            if (requestIsCurrent && diagnostics.value.length === 0) {
+                diagnostics.value = [
+                    normalizeDiagnostic({
+                        severity: 'error',
+                        code: error.code || 'YANG_DIAGNOSTICS_UNAVAILABLE',
+                        message: restoreError || `无法读取详细编译诊断：${error.message}`
+                    })
+                ];
             }
             if (
                 requestRevision === diagnosticRequestRevision &&
@@ -1064,6 +1089,7 @@
             ) {
                 notify.error(`加载编译诊断失败：${error.message}`);
             }
+            return { loaded: false, count: diagnostics.value.length };
         } finally {
             if (requestRevision === diagnosticRequestRevision) diagnosticLoading.value = false;
         }
@@ -1362,6 +1388,28 @@
         return Number.isFinite(percent) ? `${Math.round(percent)}%` : '';
     };
 
+    const compileProgressDiagnostic = data => {
+        const candidates = [
+            data?.diagnostic,
+            ...(Array.isArray(data?.diagnostics) ? data.diagnostics : []),
+            ...(Array.isArray(data?.error?.details?.diagnostics) ? data.error.details.diagnostics : [])
+        ].filter(Boolean);
+        return (
+            candidates.find(diagnostic => ['error', 'fatal'].includes(String(diagnostic.severity).toLowerCase())) ||
+            candidates[0] ||
+            null
+        );
+    };
+
+    const compileFailureMessage = (data, { includeMessage = true } = {}) =>
+        String(
+            compileProgressDiagnostic(data)?.message ||
+                data?.reason ||
+                data?.error?.message ||
+                (includeMessage ? data?.message : '') ||
+                ''
+        ).trim();
+
     const queueCompileProgressLog = data => {
         const taskId = getTaskId(data);
         if (taskId && liveCompileTaskId && taskId !== liveCompileTaskId) clearLiveCompileLogs();
@@ -1370,7 +1418,10 @@
         const phase = String(data?.phase || data?.status || 'preparing');
         const countText = compileProgressCountText(data);
         const percentText = compileProgressPercentText(data);
-        const phaseLabel = COMPILE_PHASE_LABELS[phase] || data?.message || '正在编译 YANG';
+        const phaseLabel =
+            phase === 'failed'
+                ? compileFailureMessage(data) || COMPILE_PHASE_LABELS.failed
+                : COMPILE_PHASE_LABELS[phase] || data?.message || '正在编译 YANG';
         const phaseSeverity = phase === 'failed' ? 'error' : phase === 'completed' ? 'success' : 'info';
         const phaseKey = `phase:${phase}`;
         pendingLiveCompileLogs.delete(phaseKey);
@@ -1394,6 +1445,8 @@
             const failed = fileStatus === 'failed';
             const compiled = fileStatus === 'compiled';
             const actionLabel = compiled ? '编译成功' : failed ? '编译失败' : '解析完成';
+            const fileDiagnostic = failed ? compileProgressDiagnostic(data) : null;
+            const failureReason = failed ? compileFailureMessage(data, { includeMessage: false }) : '';
             pendingLiveCompileLogs.delete(fileKey);
             pendingLiveCompileLogs.set(fileKey, {
                 id: `compile-progress:${taskId || 'pending'}:${fileKey}`,
@@ -1401,8 +1454,11 @@
                 fileStatus,
                 file: currentFile,
                 fileName,
+                code: fileDiagnostic?.code,
+                line: fileDiagnostic?.line,
+                column: fileDiagnostic?.column,
                 progressKind: 'file',
-                message: `${fileName} ${actionLabel}${countText ? ` · ${countText}` : ''}`
+                message: `${fileName} ${actionLabel}${failureReason ? `：${failureReason}` : ''}${countText ? ` · ${countText}` : ''}`
             });
         }
         scheduleLiveCompileLogFlush();
@@ -1455,10 +1511,11 @@
         }
         if (action === 'compile' && taskFailed) {
             refreshCompilerStatus({ force: true });
+            const failureMessage = compileFailureMessage(data) || '编译失败';
             modules.value.forEach(module => {
                 if (module.compileStatus === 'compiling') {
                     module.compileStatus = 'failed';
-                    module.compileMessage = data.message || data.error?.message || '编译失败';
+                    module.compileMessage = failureMessage;
                 }
             });
         }
@@ -1472,8 +1529,12 @@
             ]);
             if (action === 'compile') {
                 const completedTaskId = taskId;
-                refresh.then(() => {
-                    if (!completedTaskId || liveCompileTaskId === completedTaskId) clearLiveCompileLogs();
+                refresh.then(([_modulesResult, diagnosticResult]) => {
+                    const hasReplacementDiagnostics =
+                        diagnosticResult?.loaded === true && (!taskFailed || diagnosticResult.count > 0);
+                    if (hasReplacementDiagnostics && (!completedTaskId || liveCompileTaskId === completedTaskId)) {
+                        clearLiveCompileLogs();
+                    }
                 });
             }
         }

@@ -15,6 +15,7 @@ const STATE_STORE_KEY = 'yang-profile-workspace-states';
 const STATE_SCHEMA_VERSION = 1;
 const DEFAULT_REQUEST_TIMEOUT = 120000;
 const MAX_PROFILE_ID_BYTES = 1024;
+const MAX_PERSISTED_DIAGNOSTICS = 5_000;
 const PROFILE_WORKSPACE_ID_RE = /^profile-[a-f0-9]{64}$/u;
 const LIFECYCLE_ERROR_CODES = new Set([
     'WORKER_CANCELLED',
@@ -147,6 +148,20 @@ class YangApp {
                   fileResults: Array.isArray(result.fileResults)
                       ? result.fileResults.map(fileResult => ({ ...fileResult }))
                       : undefined,
+                  diagnostics: Array.isArray(result.diagnostics)
+                      ? result.diagnostics.slice(0, MAX_PERSISTED_DIAGNOSTICS).map(diagnostic => ({
+                            severity: diagnostic.severity || 'error',
+                            code: diagnostic.code || 'YANG_COMPILE_FAILED',
+                            message: String(diagnostic.message || ''),
+                            source: diagnostic.source || null,
+                            line: diagnostic.line ?? null,
+                            column: diagnostic.column ?? null,
+                            authoritative: diagnostic.authoritative !== false,
+                            origin: diagnostic.origin || null
+                        }))
+                      : [],
+                  diagnosticsTruncated:
+                      Array.isArray(result.diagnostics) && result.diagnostics.length > MAX_PERSISTED_DIAGNOSTICS,
                   restoreOptions: result.restoreOptions || {},
                   workspaceContentHash: workspace?.contentHash || null
               }
@@ -300,11 +315,12 @@ class YangApp {
         }
     }
 
-    normalizeModule(entry, compiledHashes = new Set(), failedHashes = new Set()) {
+    normalizeModule(entry, compiledHashes = new Set(), failedHashes = new Set(), fileResultsByHash = new Map()) {
         const metadata = entry?.metadata || {};
         const hash = entry?.hash || entry?.contentHash || entry?.id || '';
         const diagnostics = Array.isArray(entry?.diagnostics) ? entry.diagnostics : [];
         const hasErrors = diagnostics.some(item => item.severity === 'error');
+        const compileDiagnostic = fileResultsByHash.get(hash)?.diagnostic || null;
         return {
             ...entry,
             id: hash,
@@ -331,7 +347,9 @@ class YangApp {
                   ? 'failed'
                   : 'pending',
             compiled: compiledHashes.has(hash),
-            diagnosticCount: diagnostics.length
+            diagnosticCount: diagnostics.length,
+            compileDiagnostic,
+            compileMessage: compileDiagnostic?.message || ''
         };
     }
 
@@ -378,9 +396,13 @@ class YangApp {
             });
             this.reconcileCompilationFreshness(context.workspaceId, workspace);
             const modules = await this.listRawModules(event, { ...payload, workspaceId: context.workspaceId });
+            const fileResults = this.compilationFileResults(context.workspaceId);
             const compiled = this.compiledHashes(context.workspaceId);
             const failed = this.failedCompileHashes(context.workspaceId);
-            return successResponse(modules.map(module => this.normalizeModule(module, compiled, failed)));
+            const fileResultsByHash = new Map(fileResults.map(fileResult => [fileResult.hash, fileResult]));
+            return successResponse(
+                modules.map(module => this.normalizeModule(module, compiled, failed, fileResultsByHash))
+            );
         } catch (error) {
             return errorResponse('获取YANG模型失败: ' + error.message);
         }
@@ -761,7 +783,8 @@ class YangApp {
             fileResults.filter(fileResult => fileResult.status === 'failed').map(fileResult => fileResult.hash)
         );
         const rawModules = await this.listRawModules(event, { workspaceId: context.workspaceId });
-        const modules = rawModules.map(module => this.normalizeModule(module, compiled, failed));
+        const fileResultsByHash = new Map(fileResults.map(fileResult => [fileResult.hash, fileResult]));
+        const modules = rawModules.map(module => this.normalizeModule(module, compiled, failed, fileResultsByHash));
         const compiler = await this.send(event, WORKER_REQ_TYPES.GET_COMPILER_STATUS);
         const schemaAvailable = Boolean(
             result?.schemaTree?.authoritative === true || current?.schemaAvailable === true
@@ -784,7 +807,8 @@ class YangApp {
             compiler,
             modules,
             fileResults,
-            diagnostics: result?.diagnostics || [],
+            diagnostics: result?.diagnostics || current?.diagnostics || [],
+            diagnosticsTruncated: Boolean(current?.diagnosticsTruncated),
             summary: {
                 moduleCount: modules.length,
                 nodeCount: result?.schemaTree?.nodeCount || current?.summary?.schemaNodes || 0,

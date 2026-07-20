@@ -17,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define EXPORT_SCHEMA_VERSION 1
+#define EXPORT_SCHEMA_VERSION 2
 #define ROOT_NODE_ID "yang-schema-root"
 #define MAX_EXPORT_NODES ((size_t)100000)
 #define MAX_EXPORT_DEPTH ((size_t)256)

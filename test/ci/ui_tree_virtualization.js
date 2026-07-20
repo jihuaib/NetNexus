@@ -164,5 +164,14 @@ assert.match(
 );
 assert.match(parsed.descriptor.template.content, /v-for="\(record, index\) in renderedNodes"/u);
 assert.match(parsed.descriptor.template.content, /data-nn-tree-virtual-index/u);
+assert.match(parsed.descriptor.scriptSetup.content, /onActivated\(\(\) =>[\s\S]*?scheduleActivationRefresh\(\)/u);
+assert.match(parsed.descriptor.scriptSetup.content, /if \(!componentActive \|\| !virtualEnabled\.value\) return;/u);
+assert.match(parsed.descriptor.scriptSetup.content, /onDeactivated\(\(\) =>/u);
+assert.match(parsed.descriptor.scriptSetup.content, /refreshVirtualLayout/u);
+assert.doesNotMatch(
+    parsed.descriptor.styles[0].content,
+    /contain:\s*[^;]*\bpaint\b/u,
+    'virtual trees must not retain a stale Chromium paint layer across keep-alive activation'
+);
 
 console.log('NnTree virtual windowing tests passed');

@@ -553,7 +553,12 @@ async function run() {
         registry.importContents([{ content: invalidType, expectedName: 'invalid-type' }], {
             workspaceId: 'semantic-error'
         });
-        const semanticFailure = await registry.compile({ workspaceId: 'semantic-error', force: true });
+        const semanticProgress = [];
+        const semanticFailure = await registry.compile({
+            workspaceId: 'semantic-error',
+            force: true,
+            onProgress: event => semanticProgress.push(event)
+        });
         assert.equal(semanticFailure.success, false);
         assert.equal(semanticFailure.schemaAvailable, false);
         assert.equal(semanticFailure.schemaTree, null);
@@ -563,6 +568,20 @@ async function run() {
         );
         assert.equal(semanticFailure.summary.compiledFiles, 0);
         assert.equal(semanticFailure.summary.failedFiles, 1);
+        assert.match(
+            semanticFailure.fileResults[0].diagnostic?.message || '',
+            /does-not-exist|Referenced type/iu,
+            JSON.stringify(semanticFailure.fileResults[0], null, 2)
+        );
+        const semanticFileProgress = semanticProgress.find(
+            event => event.phase === 'file-result' && event.fileStatus === 'failed'
+        );
+        assert(semanticFileProgress, 'failed file-result progress must be emitted');
+        assert.match(
+            semanticFileProgress.diagnostic?.message || '',
+            /does-not-exist|Referenced type/iu,
+            JSON.stringify(semanticFileProgress, null, 2)
+        );
         assert(
             semanticFailure.diagnostics.some(
                 item =>
@@ -576,6 +595,58 @@ async function run() {
         assert.equal(
             registry.getSchemaRoots({ workspaceId: 'semantic-error', compileId: semanticFailure.compileId }).length,
             0
+        );
+
+        const oldHelperRuntime = {
+            getStatus: async () => ({
+                available: true,
+                required: true,
+                engine: 'libyang',
+                executable: 'yanglint',
+                version: '5.8.6',
+                path: path.join(tempDir, 'fake-yanglint.exe'),
+                schemaExecutable: 'netnexus-libyang-schema.exe',
+                schemaPath: path.join(tempDir, 'fake-schema-helper.exe'),
+                schemaVersion: '5.8.6',
+                schemaContractVersion: 2,
+                source: 'test',
+                runtimeRoot: null,
+                moduleSearchPath: null,
+                capabilities: { schemaExport: true }
+            }),
+            executeSchema: async () => ({
+                stdout: '',
+                stderr: "Unknown option '--schema-list'.\nUsage: netnexus-libyang-schema MODULE.yang\n",
+                exitCode: 1,
+                signal: null,
+                timedOut: false,
+                outputLimitExceeded: false,
+                durationMs: 1,
+                error: null
+            })
+        };
+        const oldHelperRegistry = createRegistry(path.join(tempDir, 'old-helper-repository'), {
+            runtime: oldHelperRuntime
+        });
+        oldHelperRegistry.importContents([
+            {
+                content:
+                    'module old-helper-fixture { yang-version 1.1; namespace "urn:old-helper"; prefix oh; revision 2026-07-20; }',
+                expectedName: 'old-helper-fixture'
+            }
+        ]);
+        const oldHelperProgress = [];
+        const oldHelperFailure = await oldHelperRegistry.compile({
+            force: true,
+            runtime: oldHelperRuntime,
+            onProgress: event => oldHelperProgress.push(event)
+        });
+        const oldHelperDiagnostic = oldHelperFailure.diagnostics.find(item => item.severity === 'error');
+        assert.match(oldHelperDiagnostic?.message || '', /Unknown option '--schema-list'/u);
+        assert.match(oldHelperFailure.fileResults[0].diagnostic?.message || '', /Unknown option '--schema-list'/u);
+        assert.match(
+            oldHelperProgress.find(event => event.phase === 'file-result')?.diagnostic?.message || '',
+            /Unknown option '--schema-list'/u
         );
 
         const unavailableRegistry = new YangRegistry({
