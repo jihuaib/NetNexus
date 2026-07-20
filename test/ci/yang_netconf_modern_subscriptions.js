@@ -16,6 +16,7 @@ const { YANG_EVT_TYPES } = require('../../electron/const/yangConst');
 
 const BASE_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:base:1.0';
 const NOTIFICATION_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:notification:1.0';
+const DAY_MS = 24 * 60 * 60 * 1_000;
 
 class FakePort extends EventEmitter {
     constructor() {
@@ -242,11 +243,14 @@ async function main() {
     });
     assert.equal(push.subscription.publisherSubscriptionId, '43');
     assert.equal(push.subscription.subscriptionType, 'yang-push');
+    const activeStopTime = new Date(Date.now() + DAY_MS).toISOString();
     const partialPushModify = await service.executeOperation(profile.id, {
         operation: 'modify-subscription',
         subscriptionId: push.subscription.id,
-        stopTime: '2026-07-20T00:00:00Z'
+        stopTime: activeStopTime
     });
+    assert.equal(partialPushModify.subscription.state, 'ACTIVE');
+    assert.equal(partialPushModify.subscription.stopTime, activeStopTime);
     assert.equal(partialPushModify.subscription.updateTrigger, 'on-change');
     assert.doesNotMatch(client.requests.at(-1).fragment, /<yp:(?:periodic|on-change)>/u);
     const pushModified = await service.executeOperation(profile.id, {
@@ -257,6 +261,7 @@ async function main() {
     });
     assert.equal(pushModified.subscription.updateTrigger, 'periodic');
     assert.equal(pushModified.subscription.period, 250);
+    assert.equal(pushModified.subscription.stopTime, activeStopTime);
     assert.equal(pushModified.subscription.syncOnStart, true);
     assert.deepEqual(pushModified.subscription.excludedChanges, ['move']);
     assert.match(client.requests.at(-1).fragment, /<yp:datastore>ds:operational<\/yp:datastore>/u);

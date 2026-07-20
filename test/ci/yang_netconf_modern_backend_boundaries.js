@@ -21,6 +21,8 @@ const NOTIFICATION_NAMESPACE = 'urn:ietf:params:xml:ns:netconf:notification:1.0'
 const VENDOR_NAMESPACE = 'urn:netnexus:test:modern-boundaries';
 const FILTER_NAMESPACE = 'urn:netnexus:test:filter-content';
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+const DAY_MS = 24 * 60 * 60 * 1_000;
+const futureStopTime = (days = 1) => new Date(Date.now() + days * DAY_MS).toISOString();
 
 const FULL_CAPABILITIES = [
     'urn:ietf:params:netconf:base:1.1',
@@ -320,11 +322,12 @@ function builderAndSchemaTests() {
 
 async function rawRoundTripAndOmissionTests() {
     const { client, service, connection } = await createService('raw-boundary-router');
+    const activeStopTime = futureStopTime();
     const rawOnChange = `<rpc xmlns="${BASE_NAMESPACE}" message-id="raw-on-change">
   <establish-subscription xmlns="${SUBSCRIBED_NOTIFICATIONS_NAMESPACE}" xmlns:yp="${YANG_PUSH_NAMESPACE}" xmlns:store="${VENDOR_NAMESPACE}">
     <yp:datastore>store:archive-store</yp:datastore>
     <yp:datastore-xpath-filter xmlns:flt="${FILTER_NAMESPACE}">/flt:root</yp:datastore-xpath-filter>
-    <stop-time>2026-07-21T00:00:00Z</stop-time>
+    <stop-time>${activeStopTime}</stop-time>
     <dscp>0</dscp>
     <weighting>0</weighting>
     <dependency>0</dependency>
@@ -383,8 +386,10 @@ async function rawRoundTripAndOmissionTests() {
     assert.equal(stream.subscription.publisherSubscriptionId, '99');
 
     const beforeOmission = service.subscriptions.get(onChange.subscription.id);
+    assert.equal(beforeOmission.state, 'ACTIVE');
     const originalFilter = JSON.parse(JSON.stringify(beforeOmission.filter));
     const originalStopTime = beforeOmission.stopTime;
+    assert.equal(originalStopTime, activeStopTime);
     const originalUpdateTrigger = beforeOmission.updateTrigger;
     const omitted = await service.executeOperation(connection.id, {
         operation: 'modify-subscription',
@@ -552,6 +557,9 @@ async function modifiedSnapshotTests() {
     const { client, service, connection, port } = await createService('snapshot-router', {
         subscriptionIds: [70]
     });
+    const initialStopTime = futureStopTime();
+    const snapshotStopTime = futureStopTime(2);
+    const malformedSnapshotStopTime = futureStopTime(3);
     const established = await service.executeOperation(connection.id, {
         operation: 'establish-subscription',
         targetType: 'datastore',
@@ -561,7 +569,7 @@ async function modifiedSnapshotTests() {
             select: '/old:root',
             namespaces: { old: 'urn:netnexus:test:old-filter' }
         },
-        stopTime: '2026-07-20T00:00:00Z',
+        stopTime: initialStopTime,
         dscp: 12,
         weighting: 7,
         dependency: 4,
@@ -577,7 +585,7 @@ async function modifiedSnapshotTests() {
   <id>70</id>
   <yp:datastore>store:archive-store</yp:datastore>
   <yp:datastore-subtree-filter xmlns:flt="${FILTER_NAMESPACE}"><flt:root><flt:value>snapshot</flt:value></flt:root></yp:datastore-subtree-filter>
-  <stop-time>2026-07-22T00:00:00Z</stop-time>
+  <stop-time>${snapshotStopTime}</stop-time>
   <dscp>0</dscp>
   <weighting>0</weighting>
   <dependency>0</dependency>
@@ -599,7 +607,7 @@ async function modifiedSnapshotTests() {
     assert.equal(snapshot.filter.type, 'subtree');
     assert.equal(snapshot.filter.namespaces.flt, FILTER_NAMESPACE);
     assert.match(snapshot.filter.content, /<flt:value>snapshot<\/flt:value>/u);
-    assert.equal(snapshot.stopTime, '2026-07-22T00:00:00Z');
+    assert.equal(snapshot.stopTime, snapshotStopTime);
     assert.equal(snapshot.dscp, 0);
     assert.equal(snapshot.weighting, 0);
     assert.equal(snapshot.dependency, 0);
@@ -667,7 +675,7 @@ async function modifiedSnapshotTests() {
 
     emitNotification(
         client,
-        `<subscription-modified xmlns="${SUBSCRIBED_NOTIFICATIONS_NAMESPACE}"><id>70</id><stop-time>2026-07-23T00:00:00Z</stop-time></subscription-modified>`
+        `<subscription-modified xmlns="${SUBSCRIBED_NOTIFICATIONS_NAMESPACE}"><id>70</id><stop-time>${malformedSnapshotStopTime}</stop-time></subscription-modified>`
     );
     const malformedSnapshot = service.subscriptions.get(established.subscription.id);
     assert.equal(malformedSnapshot.state, 'UNKNOWN');
