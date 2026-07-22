@@ -962,10 +962,6 @@ class BmpSession {
         if (Array.isArray(options.peerUpTlvs)) {
             bgpInstance.peerUpTlvs = options.peerUpTlvs;
         }
-        if (Array.isArray(options.routeTlvs)) {
-            bgpInstance.lastRouteMonitoringTlvs = options.routeTlvs;
-        }
-
         const vrfTableNames = [
             ...this.decodeVrfTableNameTlvs(options.peerUpTlvs),
             ...this.decodeVrfTableNameTlvs(options.routeTlvs)
@@ -1341,7 +1337,6 @@ class BmpSession {
                 version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
                     ? getEffectivePeerFlags(sessionFlags, routePayload.routeTlvs)
                     : sessionFlags;
-            bgpSession.lastRouteMonitoringTlvs = routePayload.routeTlvs || [];
             const routeVrfTableNames = this.decodeVrfTableNameTlvs(routePayload.routeTlvs);
             if (this.mergeVrfTableNames(bgpSession, routeVrfTableNames)) {
                 this.invalidateRouteAssurance('session-vrf-metadata-change');

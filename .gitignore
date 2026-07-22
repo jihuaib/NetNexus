@@ -31,6 +31,7 @@ build
 playwright-report
 test-results
 blob-report
+.huawei-bmp-e2e/
 
 # Platform-specific libyang runtimes are produced by CI/local build scripts.
 resources/libyang/*/

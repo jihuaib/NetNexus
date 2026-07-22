@@ -24,7 +24,6 @@ class BmpBgpInstance {
         this.remotePort = null;
         this.instanceState = null;
         this.peerUpTlvs = [];
-        this.lastRouteMonitoringTlvs = [];
         this.vrfTableNames = [];
 
         this.recvAddressFamilies = [];
@@ -183,7 +182,6 @@ class BmpBgpInstance {
             addPathSendMap: Object.fromEntries(this.addPathSendMap),
             isAddPath: this.isAddPath,
             peerUpTlvs: toSerializableTlvs(this.peerUpTlvs),
-            lastRouteMonitoringTlvs: toSerializableTlvs(this.lastRouteMonitoringTlvs),
             vrfTableNames: this.vrfTableNames,
             ribEpoch: this.ribEpoch,
             routeSummary: this.getRouteSummary()

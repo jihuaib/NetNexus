@@ -340,7 +340,7 @@
     };
 
     const getInstanceTlvCount = record => {
-        return (record.peerUpTlvs || []).length + (record.lastRouteMonitoringTlvs || []).length;
+        return (record.peerUpTlvs || []).length;
     };
 
     const bgpInstanceColumns = [

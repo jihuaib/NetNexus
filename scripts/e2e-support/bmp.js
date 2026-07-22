@@ -860,7 +860,7 @@ const BmpE2eController = (() => {
     }
 
     class BmpE2eController {
-        constructor() {
+        constructor(options = {}) {
             this.savedConfig = null;
             this.server = null;
             this.mockClient = null;
@@ -870,11 +870,21 @@ const BmpE2eController = (() => {
             this.timeline = [];
             this.lastRouteQuerySnapshot = null;
             this.eventListeners = new Set();
-            this.persistenceTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-e2e-'));
+            this.preserveArtifacts = options.preserveArtifacts === true;
+            this.captureRawBmp = options.captureRawBmp === true;
+            this.rawCaptureStreams = new Map();
+            this.rawCaptureSequence = 0;
+            const persistenceParent = options.artifactDirectory ? path.resolve(options.artifactDirectory) : os.tmpdir();
+            fs.mkdirSync(persistenceParent, { recursive: true });
+            this.persistenceTempDir = fs.mkdtempSync(path.join(persistenceParent, 'netnexus-bmp-e2e-'));
             this.persistenceDbPath = path.join(this.persistenceTempDir, 'bmp.sqlite3');
             this.cleanedUp = false;
             this.worker = this.createWorker();
-            this.record('controller initialized', { persistenceDbPath: this.persistenceDbPath });
+            this.record('controller initialized', {
+                persistenceDbPath: this.persistenceDbPath,
+                captureRawBmp: this.captureRawBmp,
+                preserveArtifacts: this.preserveArtifacts
+            });
         }
 
         static async getFreePort() {
@@ -1270,6 +1280,7 @@ const BmpE2eController = (() => {
             return {
                 ...config,
                 port: Number(config.port),
+                listenHost: config.listenHost || process.env.NETNEXUS_BMP_E2E_LISTEN_HOST || '127.0.0.1',
                 enableAuth: false,
                 bmpV4TlvDraft: draft,
                 logLevel: config.logLevel || 'off',
@@ -1399,7 +1410,21 @@ const BmpE2eController = (() => {
                 });
                 this.worker.createBmpSession(socket, socket.remoteAddress, socket.remotePort);
 
+                let rawCapture = null;
+                if (this.captureRawBmp) {
+                    this.rawCaptureSequence += 1;
+                    const remotePart = String(socket.remoteAddress || 'unknown').replace(/[^0-9a-z._-]/giu, '-');
+                    const capturePath = path.join(
+                        this.persistenceTempDir,
+                        `bmp-connection-${String(this.rawCaptureSequence).padStart(3, '0')}-${remotePart}.bin`
+                    );
+                    rawCapture = fs.createWriteStream(capturePath, { flags: 'wx', mode: 0o600 });
+                    this.rawCaptureStreams.set(socket, rawCapture);
+                    this.record('BMP raw capture started', { capturePath, remoteAddress: socket.remoteAddress });
+                }
+
                 socket.on('data', data => {
+                    rawCapture?.write(data);
                     this.record('BMP TCP data received', {
                         bytes: data.length
                     });
@@ -1408,9 +1433,24 @@ const BmpE2eController = (() => {
                         session.recvMsg(data);
                     }
                 });
-                socket.on('end', () => this.worker.removeBmpSessionByKey(sessionKey));
-                socket.on('close', () => this.worker.removeBmpSessionByKey(sessionKey));
-                socket.on('error', () => this.worker.removeBmpSessionByKey(sessionKey));
+                const closeCapture = () => {
+                    const stream = this.rawCaptureStreams.get(socket);
+                    if (!stream) return;
+                    this.rawCaptureStreams.delete(socket);
+                    stream.end();
+                };
+                socket.on('end', () => {
+                    closeCapture();
+                    this.worker.removeBmpSessionByKey(sessionKey);
+                });
+                socket.on('close', () => {
+                    closeCapture();
+                    this.worker.removeBmpSessionByKey(sessionKey);
+                });
+                socket.on('error', () => {
+                    closeCapture();
+                    this.worker.removeBmpSessionByKey(sessionKey);
+                });
             });
             this.server = server;
             this.worker.server = server;
@@ -1426,10 +1466,11 @@ const BmpE2eController = (() => {
             try {
                 await new Promise((resolve, reject) => {
                     server.once('error', reject);
-                    server.listen(this.savedConfig.port, '127.0.0.1', resolve);
+                    server.listen(this.savedConfig.port, this.savedConfig.listenHost, resolve);
                 });
                 this.record('BMP TCP server started', {
-                    port: this.savedConfig.port
+                    port: this.savedConfig.port,
+                    listenHost: this.savedConfig.listenHost
                 });
                 return successResponse(null, 'bmp协议启动成功');
             } catch (error) {
@@ -1889,7 +1930,13 @@ const BmpE2eController = (() => {
                     try {
                         await this.closePersistence({ suppressErrors: true });
                     } finally {
-                        fs.rmSync(this.persistenceTempDir, { recursive: true, force: true });
+                        for (const stream of this.rawCaptureStreams.values()) {
+                            stream.end();
+                        }
+                        this.rawCaptureStreams.clear();
+                        if (!this.preserveArtifacts) {
+                            fs.rmSync(this.persistenceTempDir, { recursive: true, force: true });
+                        }
                     }
                 }
             }

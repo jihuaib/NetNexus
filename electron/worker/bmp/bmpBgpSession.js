@@ -23,7 +23,6 @@ class BmpBgpSession {
         this.sessionState = null;
         this.peerUpTlvs = [];
         this.peerDownTlvs = [];
-        this.lastRouteMonitoringTlvs = [];
         this.vrfTableNames = [];
         this.peerDownReason = null;
         this.peerDownFsmEventCode = null;
@@ -281,7 +280,6 @@ class BmpBgpSession {
             addPathMap: Object.fromEntries(addPaths),
             peerUpTlvs: toSerializableTlvs(this.peerUpTlvs),
             peerDownTlvs: toSerializableTlvs(this.peerDownTlvs),
-            lastRouteMonitoringTlvs: toSerializableTlvs(this.lastRouteMonitoringTlvs),
             vrfTableNames: this.vrfTableNames,
             peerDownReason: this.peerDownReason,
             peerDownFsmEventCode: this.peerDownFsmEventCode,

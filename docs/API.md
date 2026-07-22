@@ -400,7 +400,6 @@ curl http://127.0.0.1:18080/api/v1/bmp/clients
 | `addPathMap` | object | 地址族维度 ADD-PATH 是否启用 |
 | `peerUpTlvs` | TLV Item[] | Peer Up TLV |
 | `peerDownTlvs` | TLV Item[] | Peer Down TLV |
-| `lastRouteMonitoringTlvs` | TLV Item[] | 最近 Route Monitoring TLV |
 | `peerDownReason` | integer/null | Peer Down reason |
 | `peerDownFsmEventCode` | integer/null | FSM event code |
 | `ribEpochMap` | object | RIB epoch |
@@ -461,7 +460,6 @@ curl http://127.0.0.1:18080/api/v1/bmp/clients
 | `addPathSendMap` | object | Router send ADD-PATH 状态 |
 | `isAddPath` | boolean | 是否启用 ADD-PATH |
 | `peerUpTlvs` | TLV Item[] | Peer Up TLV |
-| `lastRouteMonitoringTlvs` | TLV Item[] | 最近 Route Monitoring TLV |
 | `vrfTableNames` | string[] | VRF table name |
 | `ribEpoch` | integer | RIB epoch |
 | `routeSummary` | object | `{ active, stale, total }` |

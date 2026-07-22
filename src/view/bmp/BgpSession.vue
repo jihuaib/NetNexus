@@ -648,11 +648,7 @@
     const getRouteRowKey = record => `${record.addrFamilyType}|${getRouteKey(record)}`;
 
     const getSessionTlvCount = record => {
-        return (
-            (record.peerUpTlvs || []).length +
-            (record.peerDownTlvs || []).length +
-            (record.lastRouteMonitoringTlvs || []).length
-        );
+        return (record.peerUpTlvs || []).length + (record.peerDownTlvs || []).length;
     };
 
     const formatClientTab = client => {

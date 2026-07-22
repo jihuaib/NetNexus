@@ -64,6 +64,19 @@ assert.equal(bottomWindow.start, 987);
 assert.equal(bottomWindow.end, 1000);
 assert.equal(bottomWindow.afterHeight, 0);
 
+const windowsScrollbarWindow = resolveTreeVirtualWindow({
+    itemCount: 1000,
+    itemHeight: 24,
+    viewportHeight: 240 - 17,
+    scrollTop: Number.MAX_SAFE_INTEGER,
+    overscan: 3
+});
+assert.equal(
+    windowsScrollbarWindow.maximumScrollTop - bottomWindow.maximumScrollTop,
+    17,
+    'virtual scrolling must use clientHeight so a consuming horizontal scrollbar does not shift restoration'
+);
+
 const contractedWindow = resolveTreeVirtualWindow({
     itemCount: 8,
     itemHeight: 24,
@@ -168,6 +181,11 @@ assert.match(parsed.descriptor.scriptSetup.content, /onActivated\(\(\) =>[\s\S]*
 assert.match(parsed.descriptor.scriptSetup.content, /if \(!componentActive \|\| !virtualEnabled\.value\) return;/u);
 assert.match(parsed.descriptor.scriptSetup.content, /onDeactivated\(\(\) =>/u);
 assert.match(parsed.descriptor.scriptSetup.content, /refreshVirtualLayout/u);
+assert.match(
+    parsed.descriptor.scriptSetup.content,
+    /effectiveVirtualViewportHeight[\s\S]*?treeRootRef\.value\.clientHeight/u,
+    'virtual window calculations must account for scrollbars that reduce the real client height'
+);
 assert.doesNotMatch(
     parsed.descriptor.styles[0].content,
     /contain:\s*[^;]*\bpaint\b/u,

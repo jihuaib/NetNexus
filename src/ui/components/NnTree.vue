@@ -69,7 +69,17 @@
 </template>
 
 <script setup>
-    import { computed, nextTick, onActivated, onBeforeUnmount, onBeforeUpdate, onDeactivated, ref, watch } from 'vue';
+    import {
+        computed,
+        nextTick,
+        onActivated,
+        onBeforeUnmount,
+        onBeforeUpdate,
+        onDeactivated,
+        onMounted,
+        ref,
+        watch
+    } from 'vue';
     import { resolveTreeVirtualScrollTop, resolveTreeVirtualWindow } from '../treeVirtualization';
 
     defineOptions({ name: 'NnTree' });
@@ -119,9 +129,11 @@
     const nodeRefs = new Map();
     const focusedKey = ref(undefined);
     const virtualScrollTop = ref(0);
+    const measuredVirtualViewportHeight = ref(0);
     let retainedVirtualScrollTop = 0;
     let activationFrameId = 0;
     let activationSettleFrameId = 0;
+    let virtualViewportResizeObserver = null;
     let componentActive = true;
 
     const virtualViewportHeight = computed(() =>
@@ -134,6 +146,9 @@
         Number.isFinite(props.overscan) && props.overscan > 0 ? Math.floor(props.overscan) : 0
     );
     const virtualEnabled = computed(() => props.virtual === true && virtualViewportHeight.value > 0);
+    const effectiveVirtualViewportHeight = computed(
+        () => measuredVirtualViewportHeight.value || virtualViewportHeight.value
+    );
     const treeStyle = computed(() =>
         virtualEnabled.value
             ? {
@@ -217,7 +232,7 @@
         resolveTreeVirtualWindow({
             itemCount: visibleNodes.value.length,
             itemHeight: virtualItemHeight.value,
-            viewportHeight: virtualViewportHeight.value,
+            viewportHeight: effectiveVirtualViewportHeight.value,
             scrollTop: virtualScrollTop.value,
             overscan: virtualOverscan.value
         })
@@ -241,8 +256,30 @@
 
     const getNodeStyle = record => ({ paddingInlineStart: `${record.level * 18}px` });
 
+    const syncVirtualViewportHeight = () => {
+        if (!virtualEnabled.value || !treeRootRef.value) return;
+        const nextHeight = treeRootRef.value.clientHeight;
+        if (nextHeight > 0 && nextHeight !== measuredVirtualViewportHeight.value) {
+            measuredVirtualViewportHeight.value = nextHeight;
+        }
+    };
+
+    const stopObservingVirtualViewport = () => {
+        virtualViewportResizeObserver?.disconnect();
+        virtualViewportResizeObserver = null;
+    };
+
+    const observeVirtualViewport = () => {
+        stopObservingVirtualViewport();
+        syncVirtualViewportHeight();
+        if (!virtualEnabled.value || !treeRootRef.value || typeof ResizeObserver === 'undefined') return;
+        virtualViewportResizeObserver = new ResizeObserver(syncVirtualViewportHeight);
+        virtualViewportResizeObserver.observe(treeRootRef.value);
+    };
+
     const handleVirtualScroll = event => {
         if (!componentActive || !virtualEnabled.value) return;
+        syncVirtualViewportHeight();
         const nextScrollTop = event.currentTarget?.scrollTop || 0;
         retainedVirtualScrollTop = nextScrollTop;
         virtualScrollTop.value = nextScrollTop;
@@ -345,10 +382,11 @@
     const refreshVirtualLayout = async () => {
         await nextTick();
         if (!virtualEnabled.value || !treeRootRef.value) return false;
+        syncVirtualViewportHeight();
         const restoredWindow = resolveTreeVirtualWindow({
             itemCount: visibleNodes.value.length,
             itemHeight: virtualItemHeight.value,
-            viewportHeight: virtualViewportHeight.value,
+            viewportHeight: effectiveVirtualViewportHeight.value,
             scrollTop: retainedVirtualScrollTop,
             overscan: virtualOverscan.value
         });
@@ -387,12 +425,13 @@
 
     const scrollVirtualIndexIntoView = (index, align = 'auto', offset = 0) => {
         if (!virtualEnabled.value || index < 0) return;
+        syncVirtualViewportHeight();
         setVirtualScrollTop(
             resolveTreeVirtualScrollTop({
                 index,
                 itemCount: visibleNodes.value.length,
                 itemHeight: virtualItemHeight.value,
-                viewportHeight: virtualViewportHeight.value,
+                viewportHeight: effectiveVirtualViewportHeight.value,
                 currentScrollTop: virtualScrollTop.value,
                 align,
                 offset
@@ -510,9 +549,17 @@
     };
 
     watch(
-        [virtualEnabled, () => visibleNodes.value.length, virtualViewportHeight, virtualItemHeight],
+        [
+            virtualEnabled,
+            () => visibleNodes.value.length,
+            virtualViewportHeight,
+            effectiveVirtualViewportHeight,
+            virtualItemHeight
+        ],
         () => {
             if (!virtualEnabled.value) {
+                stopObservingVirtualViewport();
+                measuredVirtualViewportHeight.value = 0;
                 retainedVirtualScrollTop = 0;
                 virtualScrollTop.value = 0;
                 return;
@@ -533,18 +580,25 @@
         nodeRefs.clear();
     });
 
+    onMounted(() => {
+        observeVirtualViewport();
+    });
+
     onActivated(() => {
         componentActive = true;
+        nextTick(observeVirtualViewport);
         scheduleActivationRefresh();
     });
 
     onDeactivated(() => {
         componentActive = false;
+        stopObservingVirtualViewport();
         cancelActivationRefresh();
     });
 
     onBeforeUnmount(() => {
         componentActive = false;
+        stopObservingVirtualViewport();
         cancelActivationRefresh();
     });
 
