@@ -367,6 +367,7 @@ test.describe('Custom UI component interactions', () => {
             'FTP服务器',
             '外部API',
             '服务器部署',
+            '数据管理',
             '运行时诊断',
             '应用更新'
         ]);
@@ -811,6 +812,126 @@ test.describe('Custom UI component interactions', () => {
         expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
         await expect(settingsDialog).toBeHidden();
         await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe(initialBodyOverflow);
+    });
+
+    test('deletes the stopped BMP database from data management after confirmation', async ({ page }) => {
+        await installLayoutApiFallbacks(page);
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            const state = {
+                deleteCalls: 0,
+                statusCalls: 0,
+                finishDelete: null,
+                info: {
+                    dbPath: '/tmp/netnexus/bmp/bmp.sqlite3',
+                    exists: true,
+                    running: false,
+                    starting: false,
+                    deleting: false,
+                    busy: false,
+                    canDelete: true,
+                    totalSize: 1536,
+                    fileCount: 2
+                }
+            };
+            window.__bmpDataSettingsE2e = state;
+            window.bmpApi = {
+                getPersistenceDatabaseInfo: async () => {
+                    state.statusCalls += 1;
+                    return {
+                        status: 'success',
+                        msg: 'ok',
+                        data: { ...state.info }
+                    };
+                },
+                deletePersistenceDatabase: () => {
+                    state.deleteCalls += 1;
+                    return new Promise(resolve => {
+                        state.finishDelete = () => {
+                            state.info = {
+                                ...state.info,
+                                exists: false,
+                                canDelete: false,
+                                totalSize: 0,
+                                fileCount: 0
+                            };
+                            resolve({
+                                status: 'success',
+                                msg: 'BMP数据库删除成功',
+                                data: { ...state.info, deleted: true }
+                            });
+                        };
+                    });
+                }
+            };
+        });
+
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('menuitem', { name: '数据管理', exact: true }).click();
+        await expect(settingsDialog.getByText('/tmp/netnexus/bmp/bmp.sqlite3', { exact: true })).toBeVisible();
+        await expect(settingsDialog.getByText('1.50 KB', { exact: true })).toBeVisible();
+        expect(await page.evaluate(() => window.__bmpDataSettingsE2e.statusCalls)).toBe(1);
+        const baselineOverlayState = await page.evaluate(() => ({
+            stackSize: window.__NETNEXUS_UI_OVERLAY_STATE__.stack.length,
+            lockCount: window.__NETNEXUS_UI_OVERLAY_STATE__.lockCount
+        }));
+
+        const deleteButton = settingsDialog.getByTestId('bmp-database-delete-button');
+        await expect(deleteButton).toBeEnabled();
+        await deleteButton.click();
+        let confirmDialog = page.getByRole('dialog', { name: '确认删除 BMP 数据库' });
+        await expect(confirmDialog).toBeVisible();
+        await expect
+            .poll(() =>
+                page.evaluate(() => ({
+                    stackSize: window.__NETNEXUS_UI_OVERLAY_STATE__.stack.length,
+                    lockCount: window.__NETNEXUS_UI_OVERLAY_STATE__.lockCount
+                }))
+            )
+            .toEqual({
+                stackSize: baselineOverlayState.stackSize + 1,
+                lockCount: baselineOverlayState.lockCount + 1
+            });
+
+        await expect(confirmDialog.getByRole('button', { name: '关闭', exact: true })).toBeFocused();
+        await page.keyboard.press('Shift+Tab');
+        await expect(confirmDialog.getByRole('button', { name: '永久删除', exact: true })).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(confirmDialog.getByRole('button', { name: '关闭', exact: true })).toBeFocused();
+        await page.keyboard.press('Escape');
+        await expect(confirmDialog).toBeHidden();
+        await expect(settingsDialog).toBeVisible();
+        await expect(deleteButton).toBeFocused();
+        await expect
+            .poll(() =>
+                page.evaluate(() => ({
+                    stackSize: window.__NETNEXUS_UI_OVERLAY_STATE__.stack.length,
+                    lockCount: window.__NETNEXUS_UI_OVERLAY_STATE__.lockCount
+                }))
+            )
+            .toEqual(baselineOverlayState);
+        expect(await page.evaluate(() => window.__bmpDataSettingsE2e.deleteCalls)).toBe(0);
+
+        await deleteButton.click();
+        confirmDialog = page.getByRole('dialog', { name: '确认删除 BMP 数据库' });
+        await confirmDialog.getByRole('button', { name: '永久删除', exact: true }).click();
+        await expect(confirmDialog.getByRole('button', { name: '处理中...', exact: true })).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(confirmDialog).toBeVisible();
+        await expect(settingsDialog).toBeVisible();
+        await page.evaluate(() => window.__bmpDataSettingsE2e.finishDelete());
+        await expect(confirmDialog).toBeHidden();
+        await expect(settingsDialog.getByText('不存在', { exact: true })).toBeVisible();
+        await expect(deleteButton).toBeDisabled();
+        expect(await page.evaluate(() => window.__bmpDataSettingsE2e.deleteCalls)).toBe(1);
+        await expect
+            .poll(() =>
+                page.evaluate(() => ({
+                    stackSize: window.__NETNEXUS_UI_OVERLAY_STATE__.stack.length,
+                    lockCount: window.__NETNEXUS_UI_OVERLAY_STATE__.lockCount
+                }))
+            )
+            .toEqual(baselineOverlayState);
     });
 
     test('drags the settings modal within viewport bounds and resets its position after reopening', async ({

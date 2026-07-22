@@ -9,6 +9,7 @@ import {
     CloudDownload,
     Code,
     Copy,
+    Database,
     Download,
     Edit,
     Eye,
@@ -76,6 +77,7 @@ export const CloudUploadOutlined = createIcon(UploadCloud);
 export const ClusterOutlined = createIcon(ChartNetwork);
 export const CodeOutlined = createIcon(Code);
 export const CopyOutlined = createIcon(Copy);
+export const DatabaseOutlined = createIcon(Database);
 export const DeleteOutlined = createIcon(Trash2);
 export const DownloadOutlined = createIcon(Download);
 export const EditOutlined = createIcon(Edit);

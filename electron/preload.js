@@ -169,6 +169,8 @@ contextBridge.exposeInMainWorld('bmpApi', {
     getBgpStatisticsReports: client => ipcRenderer.invoke('bmp:getBgpStatisticsReports', client),
     getBgpInstanceStatisticsReports: client => ipcRenderer.invoke('bmp:getBgpInstanceStatisticsReports', client),
     getPersistenceStatus: () => ipcRenderer.invoke('bmp:getPersistenceStatus'),
+    getPersistenceDatabaseInfo: () => ipcRenderer.invoke('bmp:getPersistenceDatabaseInfo'),
+    deletePersistenceDatabase: () => ipcRenderer.invoke('bmp:deletePersistenceDatabase'),
     getPersistedRoutes: (query = {}) => ipcRenderer.invoke('bmp:getPersistedRoutes', query),
     getPersistedRouteEvents: (query = {}) => ipcRenderer.invoke('bmp:getPersistedRouteEvents', query)
 });

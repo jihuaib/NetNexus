@@ -2,6 +2,7 @@ import { createApp, h, nextTick, ref } from 'vue';
 
 const activeDialogs = new Set();
 let dialogId = 0;
+const overlayStateKey = '__NETNEXUS_UI_OVERLAY_STATE__';
 
 function canUseDom() {
     return typeof document !== 'undefined';
@@ -21,6 +22,43 @@ function createDialogRoot() {
     return root;
 }
 
+function getOverlayState() {
+    if (!globalThis[overlayStateKey]) {
+        globalThis[overlayStateKey] = {
+            stack: [],
+            lockCount: 0,
+            bodyOverflow: '',
+            bodyPaddingRight: ''
+        };
+    }
+    return globalThis[overlayStateKey];
+}
+
+function lockBodyScroll(state) {
+    if (state.lockCount === 0) {
+        const body = document.body;
+        const scrollbarWidth = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
+        state.bodyOverflow = body.style.overflow;
+        state.bodyPaddingRight = body.style.paddingRight;
+        body.style.overflow = 'hidden';
+        if (scrollbarWidth > 0) {
+            const currentPadding = Number.parseFloat(window.getComputedStyle(body).paddingRight) || 0;
+            body.style.paddingRight = `${currentPadding + scrollbarWidth}px`;
+        }
+    }
+    state.lockCount += 1;
+}
+
+function unlockBodyScroll(state) {
+    if (state.lockCount <= 0) return;
+
+    state.lockCount -= 1;
+    if (state.lockCount === 0) {
+        document.body.style.overflow = state.bodyOverflow;
+        document.body.style.paddingRight = state.bodyPaddingRight;
+    }
+}
+
 function createConfirmDialog(options = {}) {
     if (!canUseDom()) {
         return {
@@ -33,11 +71,30 @@ function createConfirmDialog(options = {}) {
     const loading = ref(false);
     const dialogRef = ref(null);
     const titleId = `nn-confirm-title-${++dialogId}`;
+    const bodyId = `nn-confirm-body-${dialogId}`;
     const previousFocus = document.activeElement;
+    const overlayToken = Symbol('nn-confirm');
+    const overlayState = getOverlayState();
     let settling = false;
     let app = null;
+    let overlayActive = true;
 
-    const isTopDialog = () => Array.from(activeDialogs).at(-1) === destroy;
+    overlayState.stack.push(overlayToken);
+    lockBodyScroll(overlayState);
+
+    const isTopOverlay = () => overlayState.stack[overlayState.stack.length - 1] === overlayToken;
+    const isTopDialog = () => Array.from(activeDialogs).at(-1) === destroy && isTopOverlay();
+
+    const deactivateOverlay = () => {
+        if (!overlayActive) return false;
+
+        const wasTop = isTopOverlay();
+        const index = overlayState.stack.lastIndexOf(overlayToken);
+        if (index >= 0) overlayState.stack.splice(index, 1);
+        overlayActive = false;
+        unlockBodyScroll(overlayState);
+        return wasTop;
+    };
 
     const focusableSelector = [
         'button:not([disabled])',
@@ -64,9 +121,10 @@ function createConfirmDialog(options = {}) {
         document.removeEventListener('keydown', handleDocumentKeydown);
         window.setTimeout(() => {
             activeDialogs.delete(destroy);
+            const shouldRestoreFocus = deactivateOverlay();
             app?.unmount();
             root.remove();
-            restoreFocus();
+            if (shouldRestoreFocus) restoreFocus();
         }, 160);
     };
 
@@ -132,8 +190,10 @@ function createConfirmDialog(options = {}) {
 
         if (event.key === 'Escape') {
             event.preventDefault();
+            event.stopImmediatePropagation();
             handleCancel();
         } else if (event.key === 'Tab') {
+            event.stopImmediatePropagation();
             trapFocus(event);
         }
     };
@@ -161,6 +221,7 @@ function createConfirmDialog(options = {}) {
                                   role: 'dialog',
                                   'aria-modal': 'true',
                                   'aria-labelledby': titleId,
+                                  'aria-describedby': bodyId,
                                   tabindex: -1
                               },
                               [
@@ -178,7 +239,7 @@ function createConfirmDialog(options = {}) {
                                           '×'
                                       )
                                   ]),
-                                  h('div', { class: 'nn-confirm-body' }, [renderContent(options.content)]),
+                                  h('div', { id: bodyId, class: 'nn-confirm-body' }, [renderContent(options.content)]),
                                   h('footer', { class: 'nn-confirm-footer' }, [
                                       h(
                                           'button',

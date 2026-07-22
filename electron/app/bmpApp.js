@@ -8,6 +8,13 @@ const BmpConst = require('../const/bmpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 const BmpPersistenceClient = require('../worker/bmp/bmpPersistenceClient');
 
+const BMP_PERSISTENCE_ARTIFACTS = Object.freeze([
+    { kind: 'database', suffix: '' },
+    { kind: 'wal', suffix: '-wal' },
+    { kind: 'shm', suffix: '-shm' },
+    { kind: 'journal', suffix: '-journal' }
+]);
+
 class BmpApp {
     constructor(ipcMain, store) {
         this.ipcMain = ipcMain;
@@ -19,11 +26,14 @@ class BmpApp {
             'bmp.sqlite3'
         );
         this.worker = null;
+        this.bmpStarting = false;
+        this.persistenceDatabaseDeleting = false;
         this.eventDispatcher = null;
         this.runningPersistenceEnabled = false;
         this.offlinePersistenceReader = null;
         this.offlinePersistenceOpenPromise = null;
         this.offlinePersistenceLock = Promise.resolve();
+        this.offlinePersistenceClosePromises = new Set();
 
         this.bmpInitiationHandler = null;
         this.bmpSessionUpdateHandler = null;
@@ -62,6 +72,8 @@ class BmpApp {
             this.handleGetBgpInstanceStatisticsReports.bind(this)
         );
         this.ipcMain.handle('bmp:getPersistenceStatus', this.handleGetPersistenceStatus.bind(this));
+        this.ipcMain.handle('bmp:getPersistenceDatabaseInfo', this.handleGetPersistenceDatabaseInfo.bind(this));
+        this.ipcMain.handle('bmp:deletePersistenceDatabase', this.handleDeletePersistenceDatabase.bind(this));
         this.ipcMain.handle('bmp:getPersistedRoutes', this.handleGetPersistedRoutes.bind(this));
         this.ipcMain.handle('bmp:getPersistedRouteEvents', this.handleGetPersistedRouteEvents.bind(this));
     }
@@ -176,7 +188,7 @@ class BmpApp {
             this.offlinePersistenceReader = null;
             this.offlinePersistenceOpenPromise = null;
         }
-        client.close({ suppressErrors: true }).catch(() => {});
+        this.trackOfflinePersistenceClose(client);
     }
 
     createPersistenceClient(options) {
@@ -248,13 +260,156 @@ class BmpApp {
         const client = this.offlinePersistenceReader;
         this.offlinePersistenceReader = null;
         this.offlinePersistenceOpenPromise = null;
-        if (!client) {
+        if (client) {
+            await this.trackOfflinePersistenceClose(client);
+        }
+        await this.waitForOfflinePersistenceCloses();
+    }
+
+    trackOfflinePersistenceClose(client) {
+        if (!(this.offlinePersistenceClosePromises instanceof Set)) {
+            this.offlinePersistenceClosePromises = new Set();
+        }
+
+        let trackedPromise;
+        trackedPromise = Promise.resolve()
+            .then(() => client.close({ suppressErrors: true }))
+            .catch(() => {})
+            .finally(() => this.offlinePersistenceClosePromises.delete(trackedPromise));
+        this.offlinePersistenceClosePromises.add(trackedPromise);
+        return trackedPromise;
+    }
+
+    async waitForOfflinePersistenceCloses() {
+        if (!(this.offlinePersistenceClosePromises instanceof Set)) {
             return;
         }
+        while (this.offlinePersistenceClosePromises.size > 0) {
+            await Promise.all(this.offlinePersistenceClosePromises);
+        }
+    }
+
+    getPersistenceArtifactDescriptors() {
+        return BMP_PERSISTENCE_ARTIFACTS.map(artifact => ({
+            ...artifact,
+            path: `${this.persistenceDbPath}${artifact.suffix}`
+        }));
+    }
+
+    getPersistenceDatabaseInfo() {
+        const artifacts = [];
+        let totalSize = 0;
+
+        for (const artifact of this.getPersistenceArtifactDescriptors()) {
+            try {
+                const stats = fs.statSync(artifact.path);
+                if (!stats.isFile()) {
+                    continue;
+                }
+                artifacts.push({
+                    kind: artifact.kind,
+                    size: stats.size
+                });
+                totalSize += stats.size;
+            } catch (error) {
+                if (error.code !== 'ENOENT') {
+                    throw error;
+                }
+            }
+        }
+
+        const running = Boolean(this.worker);
+        const starting = Boolean(this.bmpStarting);
+        const deleting = Boolean(this.persistenceDatabaseDeleting);
+        return {
+            dbPath: this.persistenceDbPath,
+            exists: artifacts.length > 0,
+            running,
+            starting,
+            deleting,
+            busy: running || starting || deleting,
+            canDelete: artifacts.length > 0 && !running && !starting && !deleting,
+            totalSize,
+            fileCount: artifacts.length,
+            artifacts
+        };
+    }
+
+    async deletePersistenceDatabase() {
+        if (this.worker) {
+            throw new Error('请先停止 BMP 服务后再删除数据库');
+        }
+        if (this.bmpStarting) {
+            throw new Error('BMP 服务正在启动，请稍后重试');
+        }
+        if (this.persistenceDatabaseDeleting) {
+            throw new Error('BMP 数据库正在删除，请勿重复操作');
+        }
+
+        this.persistenceDatabaseDeleting = true;
         try {
-            await client.close({ suppressErrors: true });
-        } catch (_error) {
-            // Best-effort cleanup; a fresh reader will be opened on the next offline query.
+            const result = await this.serializeOfflinePersistence(async () => {
+                if (this.worker || this.bmpStarting) {
+                    throw new Error('请先停止 BMP 服务后再删除数据库');
+                }
+
+                await this.closeOfflinePersistenceReaderUnlocked();
+                const beforeDelete = this.getPersistenceDatabaseInfo();
+                const deletedArtifacts = [];
+
+                const artifacts = this.getPersistenceArtifactDescriptors();
+                const databaseArtifact = artifacts.find(artifact => artifact.kind === 'database');
+                const sidecarArtifacts = artifacts.filter(artifact => artifact.kind !== 'database');
+                const deletionErrors = [];
+
+                for (const artifact of sidecarArtifacts) {
+                    try {
+                        await fs.promises.unlink(artifact.path);
+                        deletedArtifacts.push(artifact.kind);
+                    } catch (error) {
+                        if (error.code !== 'ENOENT') {
+                            deletionErrors.push({ artifact, error });
+                        }
+                    }
+                }
+
+                if (deletionErrors.length === 0 && databaseArtifact) {
+                    try {
+                        await fs.promises.unlink(databaseArtifact.path);
+                        deletedArtifacts.unshift(databaseArtifact.kind);
+                    } catch (error) {
+                        if (error.code !== 'ENOENT') {
+                            deletionErrors.push({ artifact: databaseArtifact, error });
+                        }
+                    }
+                }
+
+                if (deletionErrors.length > 0) {
+                    const failedKinds = deletionErrors.map(item => item.artifact.kind).join(', ');
+                    throw new Error(`BMP 数据库文件删除失败（${failedKinds}）：${deletionErrors[0].error.message}`);
+                }
+
+                const afterDelete = this.getPersistenceDatabaseInfo();
+                if (afterDelete.exists) {
+                    throw new Error('BMP 数据库文件未能全部删除');
+                }
+
+                return {
+                    ...afterDelete,
+                    deleted: deletedArtifacts.length > 0,
+                    deletedArtifacts,
+                    deletedFileCount: deletedArtifacts.length,
+                    reclaimedBytes: beforeDelete.totalSize
+                };
+            });
+            return {
+                ...result,
+                deleting: false,
+                busy: false,
+                canDelete: false
+            };
+        } finally {
+            this.persistenceDatabaseDeleting = false;
         }
     }
 
@@ -364,12 +519,19 @@ class BmpApp {
 
     async handleStartBmp(event, bmpConfigData) {
         const webContents = event.sender;
-        try {
-            if (null !== this.worker) {
-                logger.error(`bmp协议已经启动`);
-                return errorResponse('bmp协议已经启动');
-            }
+        if (null !== this.worker) {
+            logger.error(`bmp协议已经启动`);
+            return errorResponse('bmp协议已经启动');
+        }
+        if (this.bmpStarting) {
+            return errorResponse('bmp协议正在启动');
+        }
+        if (this.persistenceDatabaseDeleting) {
+            return errorResponse('BMP数据库正在删除，请稍后重试');
+        }
 
+        this.bmpStarting = true;
+        try {
             bmpConfigData = {
                 ...bmpConfigData,
                 // SQLite now is the BMP RIB rather than an optional history sink.
@@ -482,6 +644,8 @@ class BmpApp {
             }
             logger.error('Error starting BMP:', error.message);
             return errorResponse(error.message);
+        } finally {
+            this.bmpStarting = false;
         }
     }
 
@@ -528,6 +692,25 @@ class BmpApp {
             return await this.queryPersistenceStatus();
         } catch (error) {
             logger.error('Error getting BMP persistence status:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetPersistenceDatabaseInfo() {
+        try {
+            return successResponse(this.getPersistenceDatabaseInfo(), '获取BMP数据库状态成功');
+        } catch (error) {
+            logger.error('Error getting BMP database info:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleDeletePersistenceDatabase() {
+        try {
+            const result = await this.deletePersistenceDatabase();
+            return successResponse(result, result.deleted ? 'BMP数据库删除成功' : 'BMP数据库不存在，无需删除');
+        } catch (error) {
+            logger.error('Error deleting BMP persistence database:', error.message);
             return errorResponse(error.message);
         }
     }

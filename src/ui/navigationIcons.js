@@ -6,6 +6,7 @@ import {
     CloudServerOutlined,
     ClusterOutlined,
     CodeOutlined,
+    DatabaseOutlined,
     FileSearchOutlined,
     FileTextOutlined,
     FolderOutlined,
@@ -39,6 +40,7 @@ export const settingsNavigationIcons = Object.freeze({
     ftp: moduleNavigationIcons.ftp,
     externalApi: ApiOutlined,
     serverDeployment: CloudServerOutlined,
+    dataManagement: DatabaseOutlined,
     runtime: ToolOutlined,
     update: CloudDownloadOutlined
 });
