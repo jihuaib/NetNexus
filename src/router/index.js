@@ -37,7 +37,8 @@ const FtpMain = () => import('../view/ftp/FtpMain.vue');
 const FtpConfig = () => import('../view/ftp/FtpConfig.vue');
 const SnmpMain = () => import('../view/snmp/SnmpMain.vue');
 const SnmpConfig = () => import('../view/snmp/SnmpConfig.vue');
-const SnmpMib = () => import('../view/snmp/SnmpMib.vue');
+const SnmpMibCompiler = () => import('../view/snmp/SnmpMib.vue');
+const SnmpMibWorkspace = () => import('../view/snmp/SnmpMibWorkspace.vue');
 const SnmpTrap = () => import('../view/snmp/SnmpTrap.vue');
 const YangMain = () => import('../view/yang/YangMain.vue');
 const YangConnection = () => import('../view/yang/YangConnection.vue');
@@ -295,9 +296,15 @@ const routes = [
                         meta: { keepAlive: true }
                     },
                     {
+                        path: 'snmp-mib-compile',
+                        name: 'SnmpMibCompiler',
+                        component: SnmpMibCompiler,
+                        meta: { keepAlive: true }
+                    },
+                    {
                         path: 'snmp-mib',
-                        name: 'SnmpMib',
-                        component: SnmpMib,
+                        name: 'SnmpMibWorkspace',
+                        component: SnmpMibWorkspace,
                         meta: { keepAlive: true }
                     },
                     {

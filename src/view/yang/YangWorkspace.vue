@@ -395,6 +395,7 @@
     const schemaTreeViewportHeight = ref(480);
     let schemaTreeResizeObserver = null;
     let contextMenuOpenRequest = 0;
+    let contextMenuScrollSession = null;
     let detailRequestRevision = 0;
     let workspaceRequestRevision = 0;
     let profileRequestRevision = 0;
@@ -1440,13 +1441,62 @@
         };
     };
 
+    const normalizeScrollTarget = target => {
+        if (target === window || target === document) {
+            return document.scrollingElement || document.documentElement;
+        }
+        return target instanceof Element ? target : null;
+    };
+
+    const readScrollOffset = target => {
+        const element = normalizeScrollTarget(target);
+        if (!element) return null;
+        return { element, top: element.scrollTop, left: element.scrollLeft };
+    };
+
+    const contextMenuEventPath = event => {
+        const composedPath = event?.composedPath?.();
+        if (composedPath?.length) return composedPath;
+
+        const path = [];
+        let current = event?.target;
+        while (current) {
+            path.push(current);
+            current = current.parentNode;
+        }
+        path.push(document, window);
+        return path;
+    };
+
+    const captureContextMenuScrollSession = (event, request) => {
+        const offsets = new Map();
+        contextMenuEventPath(event).forEach(target => {
+            const offset = readScrollOffset(target);
+            if (offset && !offsets.has(offset.element)) {
+                offsets.set(offset.element, { top: offset.top, left: offset.left });
+            }
+        });
+        return { request, offsets };
+    };
+
+    const contextMenuOpeningGeometryUnchanged = event => {
+        // Native scroll notifications can arrive after the offset changed and the menu opened.
+        if (!contextMenuScrollSession || contextMenuScrollSession.request !== contextMenuOpenRequest) return false;
+        const current = readScrollOffset(event.target);
+        if (!current) return false;
+        if (!contextMenuScrollSession.offsets.has(current.element)) return false;
+        const opening = contextMenuScrollSession.offsets.get(current.element);
+        return Object.is(current.top, opening.top) && Object.is(current.left, opening.left);
+    };
+
     const handleTreeRightClick = async ({ event, node }) => {
         event?.preventDefault?.();
         event?.stopPropagation?.();
-        const openRequest = ++contextMenuOpenRequest;
         const key = node?.key || node?.eventKey || node?.dataRef?.key;
         const matchedNode = findNode(treeData.value, key) || node?.dataRef || node;
         if (!matchedNode?.key) return;
+        const openRequest = ++contextMenuOpenRequest;
+        contextMenuScrollSession = captureContextMenuScrollSession(event, openRequest);
 
         selectedKeys.value = [matchedNode.key];
         nodePropertyOpen.value = false;
@@ -1469,6 +1519,7 @@
 
     const hideContextMenu = () => {
         contextMenuOpenRequest += 1;
+        contextMenuScrollSession = null;
         contextMenu.visible = false;
     };
 
@@ -1996,7 +2047,9 @@
     };
 
     const handleWorkspaceScroll = event => {
+        if (!contextMenu.visible) return;
         if (event.target instanceof Node && contextMenuRef.value?.contains(event.target)) return;
+        if (contextMenuOpeningGeometryUnchanged(event)) return;
         hideContextMenu();
     };
 

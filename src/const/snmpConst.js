@@ -67,7 +67,24 @@ export const SNMP_PRIV_PROTOCOL = {
 export const SNMP_EVENT_PAGE_ID = {
     PAGE_ID_SNMP_CONFIG: 1,
     PAGE_ID_SNMP_TRAP: 2,
-    PAGE_ID_SNMP_MIB: 3
+    PAGE_ID_SNMP_MIB: 3,
+    PAGE_ID_SNMP_MIB_COMPILER: 3,
+    PAGE_ID_SNMP_MIB_WORKSPACE: 4
 };
 
 export const MIB_COMPILE_PROGRESS_EVENT = 'snmp:mibCompileProgress';
+
+export const SNMP_ROUTE = Object.freeze({
+    BASE: '/snmp',
+    CONFIG: '/snmp/snmp-config',
+    MIB_COMPILER: '/snmp/snmp-mib-compile',
+    MIB_WORKSPACE: '/snmp/snmp-mib',
+    TRAP: '/snmp/snmp-trap'
+});
+
+export const SNMP_TABS = Object.freeze([
+    { key: 'snmp-config', label: 'SNMP配置', route: SNMP_ROUTE.CONFIG },
+    { key: 'snmp-mib-compile', label: 'MIB编译', route: SNMP_ROUTE.MIB_COMPILER },
+    { key: 'snmp-mib', label: 'MIB工作区', route: SNMP_ROUTE.MIB_WORKSPACE },
+    { key: 'snmp-trap', label: 'Trap监控', route: SNMP_ROUTE.TRAP }
+]);

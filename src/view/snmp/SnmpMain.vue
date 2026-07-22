@@ -1,15 +1,11 @@
 <template>
-    <div class="nn-main-container">
-        <!-- 固定 Tabs -->
+    <div class="nn-main-container snmp-main">
         <div class="fixed-tabs">
             <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <nn-tab-pane key="snmp-config" tab="SNMP配置" />
-                <nn-tab-pane key="snmp-mib" tab="MIB管理" />
-                <nn-tab-pane key="snmp-trap" tab="Trap监控" />
+                <nn-tab-pane v-for="tab in SNMP_TABS" :key="tab.key" :tab="tab.label" />
             </nn-tabs>
         </div>
 
-        <!-- 可滚动内容区域 -->
         <div class="content-container">
             <router-view v-slot="{ Component }">
                 <keep-alive :include="$store.state.cachedViews">
@@ -21,16 +17,16 @@
 </template>
 
 <script setup>
-    import { ref, onActivated, watch } from 'vue';
+    import { onActivated, ref, watch } from 'vue';
     import { useRoute, useRouter } from 'vue-router';
+    import { SNMP_ROUTE, SNMP_TABS } from '../../const/snmpConst';
 
     defineOptions({ name: 'SnmpMain' });
 
     const route = useRoute();
     const router = useRouter();
-    const activeTabKey = ref('snmp-config');
+    const activeTabKey = ref(SNMP_TABS[0].key);
     const currentTab = ref(null);
-    const defaultTabKey = 'snmp-config';
 
     defineExpose({
         clearValidationErrors: () => {
@@ -41,20 +37,21 @@
     });
 
     const handleTabChange = key => {
-        router.push(`/snmp/${key}`);
+        const tab = SNMP_TABS.find(item => item.key === key);
+        if (tab) router.push(tab.route);
     };
 
     const syncActiveTab = () => {
         const childPath = route.path.split('/').filter(Boolean)[1];
-        activeTabKey.value = childPath || defaultTabKey;
+        activeTabKey.value = SNMP_TABS.some(tab => tab.key === childPath) ? childPath : SNMP_TABS[0].key;
     };
 
     watch(() => route.path, syncActiveTab, { immediate: true });
 
     onActivated(() => {
         syncActiveTab();
-        if (route.path === '/snmp' || route.path === '/snmp/') {
-            router.replace('/snmp/snmp-config');
+        if (route.path === SNMP_ROUTE.BASE || route.path === `${SNMP_ROUTE.BASE}/`) {
+            router.replace(SNMP_ROUTE.CONFIG);
         }
     });
 </script>

@@ -10,6 +10,9 @@ const SnmpConst = require('../const/snmpConst');
 const { LOG_REQ_TYPES } = require('../const/toolsConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 const { formatSnmpValue } = require('../utils/snmpValueFormatter');
+
+const MAX_MIB_SOURCE_PREVIEW_BYTES = 16 * 1024 * 1024;
+
 class SnmpApp {
     constructor(ipcMain, store) {
         this.ipcMain = ipcMain;
@@ -42,6 +45,7 @@ class SnmpApp {
         this.ipcMain.handle('snmp:selectMibDirectory', this.handleSelectMibDirectory.bind(this));
         this.ipcMain.handle('snmp:compileMibs', this.handleCompileMibs.bind(this));
         this.ipcMain.handle('snmp:getMibStatus', this.handleGetMibStatus.bind(this));
+        this.ipcMain.handle('snmp:getMibSource', this.handleGetMibSource.bind(this));
         this.ipcMain.handle('snmp:getMibTreeChildren', this.handleGetMibTreeChildren.bind(this));
         this.ipcMain.handle('snmp:saveMibProject', this.handleSaveMibProject.bind(this));
         this.ipcMain.handle('snmp:listMibProjects', this.handleListMibProjects.bind(this));
@@ -344,6 +348,29 @@ class SnmpApp {
         } catch (error) {
             logger.error('获取MIB状态失败:', error);
             return errorResponse('获取MIB状态失败: ' + error.message);
+        }
+    }
+
+    async handleGetMibSource(_event, request = {}) {
+        try {
+            const requestedPath = typeof request === 'string' ? request : request?.filePath;
+            const filePath = await this.resolveAllowedMibSourcePath(requestedPath);
+            const stat = await fs.promises.stat(filePath);
+            if (stat.size > MAX_MIB_SOURCE_PREVIEW_BYTES) {
+                throw new Error('MIB源码文件超过16MB，无法在界面中预览');
+            }
+
+            return successResponse(
+                {
+                    filePath,
+                    fileName: path.basename(filePath),
+                    source: await fs.promises.readFile(filePath, 'utf8')
+                },
+                '获取MIB源码成功'
+            );
+        } catch (error) {
+            logger.error('获取MIB源码失败:', error);
+            return errorResponse('获取MIB源码失败: ' + error.message);
         }
     }
 
@@ -1446,6 +1473,55 @@ class SnmpApp {
 
     isMibCandidateFile(filePath) {
         return ['.mib', '.txt', '.my', ''].includes(path.extname(filePath).toLowerCase());
+    }
+
+    isPathInsideDirectory(directoryPath, filePath) {
+        const relativePath = path.relative(directoryPath, filePath);
+        return (
+            relativePath === '' ||
+            (relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath))
+        );
+    }
+
+    async resolveAllowedMibSourcePath(filePath) {
+        const requestedPath = typeof filePath === 'string' ? filePath.trim() : '';
+        if (!requestedPath) {
+            throw new Error('缺少MIB文件路径');
+        }
+
+        const resolvedPath = path.resolve(requestedPath);
+        if (!this.isMibCandidateFile(resolvedPath)) {
+            throw new Error('该文件不是支持的MIB源码类型');
+        }
+
+        let sourceStat;
+        let sourceRealPath;
+        try {
+            sourceStat = await fs.promises.stat(resolvedPath);
+            sourceRealPath = await fs.promises.realpath(resolvedPath);
+        } catch (_error) {
+            throw new Error('MIB源码文件不存在或无法读取');
+        }
+        if (!sourceStat.isFile()) {
+            throw new Error('MIB源码路径不是普通文件');
+        }
+
+        for (const storedPath of this.getStoredMibFilePaths()) {
+            try {
+                const storedStat = await fs.promises.stat(storedPath);
+                const storedRealPath = await fs.promises.realpath(storedPath);
+                if (storedStat.isFile() && storedRealPath === sourceRealPath) {
+                    return sourceRealPath;
+                }
+                if (storedStat.isDirectory() && this.isPathInsideDirectory(storedRealPath, sourceRealPath)) {
+                    return sourceRealPath;
+                }
+            } catch (_error) {
+                // Ignore stale workspace entries and continue checking the remaining paths.
+            }
+        }
+
+        throw new Error('当前MIB编译工作区中不存在该文件');
     }
 
     getStoredMibFilePaths() {

@@ -252,6 +252,7 @@ contextBridge.exposeInMainWorld('snmpApi', {
             force: Boolean(options.force)
         }),
     getMibStatus: () => ipcRenderer.invoke('snmp:getMibStatus'),
+    getMibSource: request => ipcRenderer.invoke('snmp:getMibSource', request),
     getMibTreeChildren: parentOid => ipcRenderer.invoke('snmp:getMibTreeChildren', parentOid),
     saveMibProject: payload => ipcRenderer.invoke('snmp:saveMibProject', payload),
     listMibProjects: () => ipcRenderer.invoke('snmp:listMibProjects'),

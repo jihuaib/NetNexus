@@ -426,13 +426,57 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect.poll(() => treeItems.count()).toBeLessThan(100);
         expect(await treeScroll.evaluate(element => element.scrollHeight > element.clientHeight * 10)).toBe(true);
 
-        await treeScroll.evaluate(element => {
-            element.scrollTop = element.scrollHeight;
-            element.dispatchEvent(new Event('scroll'));
-        });
+        await treeScroll.evaluate(
+            element =>
+                new Promise(resolve => {
+                    element.addEventListener(
+                        'scroll',
+                        () => requestAnimationFrame(() => requestAnimationFrame(resolve)),
+                        { once: true }
+                    );
+                    element.scrollTop = element.scrollHeight;
+                })
+        );
         await expect(treeItems.filter({ hasText: 'scale-schema-0999' })).toBeVisible();
         await expect(treeItems.filter({ hasText: 'scale-schema-0000' })).toHaveCount(0);
         await expect.poll(() => treeItems.count()).toBeLessThan(100);
+
+        const lastSchemaRoot = treeItems.filter({
+            has: page.getByText('scale-schema-0999', { exact: true })
+        });
+        await lastSchemaRoot.click({ button: 'right' });
+        const contextMenu = page.locator('.schema-context-menu');
+        await expect(contextMenu).toBeVisible();
+        // A delayed notification for the already-settled tree offset must not dismiss the new menu.
+        await treeScroll.evaluate(
+            element =>
+                new Promise(resolve => {
+                    element.dispatchEvent(new Event('scroll'));
+                    requestAnimationFrame(() => requestAnimationFrame(resolve));
+                })
+        );
+        await expect(contextMenu).toBeVisible();
+
+        const settledScrollTop = await treeScroll.evaluate(element => element.scrollTop);
+        await treeScroll.evaluate(element => {
+            element.scrollTop -= 1;
+        });
+        await expect(contextMenu).toHaveCount(0);
+        await treeScroll.evaluate(
+            (element, scrollTop) =>
+                new Promise(resolve => {
+                    element.addEventListener(
+                        'scroll',
+                        () => requestAnimationFrame(() => requestAnimationFrame(resolve)),
+                        { once: true }
+                    );
+                    element.scrollTop = scrollTop;
+                }),
+            settledScrollTop
+        );
+        await expect.poll(() => treeScroll.evaluate(element => element.scrollTop)).toBe(settledScrollTop);
+        await lastSchemaRoot.click({ button: 'right' });
+        await expect(contextMenu).toBeVisible();
 
         const retainedPosition = await treeScroll.evaluate(element => {
             window.__retainedSchemaTreeForActivationTest = element;
@@ -449,13 +493,6 @@ test.describe('NETCONF/YANG workbench', () => {
         });
         expect(retainedPosition.scrollTop).toBeGreaterThan(0);
 
-        await treeItems.filter({ hasText: 'scale-schema-0999' }).dispatchEvent('contextmenu', {
-            button: 2,
-            clientX: 320,
-            clientY: 760
-        });
-        const contextMenu = page.locator('.schema-context-menu');
-        await expect(contextMenu).toBeVisible();
         await contextMenu.getByRole('menuitem', { name: '前往连接设置', exact: true }).click();
         await expect(page.locator('.yang-connection-page:visible')).toBeVisible();
         await page.evaluate(() => {

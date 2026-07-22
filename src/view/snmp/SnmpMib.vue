@@ -1,49 +1,46 @@
 <template>
-    <div class="nn-container snmp-mib-page" @click="hideContextMenu">
-        <nn-card title="MIB 管理" class="mib-card">
-            <div class="mib-workspace">
-                <div class="mib-toolbar">
-                    <div class="mib-action-group">
-                        <nn-button type="primary" :loading="mibCompileLoading" @click="selectMibFiles">
-                            <template #icon><FileSearchOutlined /></template>
-                            导入文件
-                        </nn-button>
-                        <nn-button :loading="mibCompileLoading" @click="selectMibDirectory">
-                            <template #icon><FolderOpenOutlined /></template>
-                            导入目录
-                        </nn-button>
-                        <nn-button
-                            :disabled="mibFiles.length === 0"
-                            :loading="mibCompileLoading"
-                            @click="compileStoredMibs"
-                        >
-                            <template #icon><ReloadOutlined /></template>
-                            重新编译
-                        </nn-button>
-                        <nn-button :disabled="mibFiles.length === 0" :loading="projectSaving" @click="showSaveProject">
-                            <template #icon><SaveOutlined /></template>
-                            保存工程
-                        </nn-button>
-                        <nn-button :loading="projectLoading || projectImporting" @click="showImportProject">
-                            <template #icon><ImportOutlined /></template>
-                            导入工程
-                        </nn-button>
-                        <nn-button danger :disabled="mibFiles.length === 0" @click="clearMibs">
-                            <template #icon><DeleteOutlined /></template>
-                            清空
-                        </nn-button>
-                    </div>
+    <div class="nn-container snmp-mib-page">
+        <nn-card title="MIB 编译" class="mib-card">
+            <template #extra>
+                <nn-space wrap class="mib-status-group">
+                    <nn-tag v-if="mibCompileLoading || showMibCompileProgress" color="processing">
+                        {{ mibCompileProgressTag }}
+                    </nn-tag>
+                    <nn-tag v-else-if="statusLoading" color="processing">正在读取状态</nn-tag>
+                    <nn-tag v-else-if="mibStatus.cacheHit" color="success">缓存命中</nn-tag>
+                    <nn-tag color="blue">用户模块 {{ mibStatus.modules.length }}</nn-tag>
+                    <nn-tag color="cyan">基础模块 {{ mibStatus.baseModules.length }}</nn-tag>
+                    <nn-tag color="green">OID {{ mibStatus.totalObjects }}</nn-tag>
+                    <nn-tag color="default">文件 {{ mibStatus.expandedFileCount }}</nn-tag>
+                </nn-space>
+            </template>
 
-                    <div class="mib-status-group">
-                        <nn-tag v-if="mibCompileLoading || showMibCompileProgress" color="processing">
-                            {{ mibCompileProgressTag }}
-                        </nn-tag>
-                        <nn-tag v-else-if="mibStatus.cacheHit" color="success">缓存命中</nn-tag>
-                        <nn-tag color="blue">用户 {{ mibStatus.modules.length }}</nn-tag>
-                        <nn-tag color="cyan">基础 {{ mibStatus.baseModules.length }}</nn-tag>
-                        <nn-tag color="green">OID {{ mibStatus.totalObjects }}</nn-tag>
-                        <nn-tag color="default">文件 {{ mibStatus.expandedFileCount }}</nn-tag>
-                    </div>
+            <div class="mib-compiler">
+                <div class="mib-toolbar">
+                    <nn-button type="primary" :loading="mibCompileLoading" @click="selectMibFiles">
+                        <template #icon><FileSearchOutlined /></template>
+                        导入文件
+                    </nn-button>
+                    <nn-button :loading="mibCompileLoading" @click="selectMibDirectory">
+                        <template #icon><FolderOpenOutlined /></template>
+                        导入目录
+                    </nn-button>
+                    <nn-button :disabled="!hasMibSources" :loading="mibCompileLoading" @click="compileStoredMibs">
+                        <template #icon><ReloadOutlined /></template>
+                        重新编译
+                    </nn-button>
+                    <nn-button :disabled="!hasMibSources" :loading="projectSaving" @click="showSaveProject">
+                        <template #icon><SaveOutlined /></template>
+                        保存工程
+                    </nn-button>
+                    <nn-button :loading="projectLoading || projectImporting" @click="showImportProject">
+                        <template #icon><ImportOutlined /></template>
+                        导入工程
+                    </nn-button>
+                    <nn-button danger :disabled="!hasMibSources || mibCompileLoading" @click="clearMibs">
+                        <template #icon><DeleteOutlined /></template>
+                        清空
+                    </nn-button>
                 </div>
 
                 <div v-if="showMibCompileProgress" class="mib-compile-progress" role="status" aria-live="polite">
@@ -65,204 +62,88 @@
                         aria-valuemax="100"
                         :aria-valuenow="mibCompilePercent"
                     >
-                        <div class="mib-compile-progress-fill" :style="{ width: `${mibCompilePercent}%` }" />
+                        <div class="mib-compile-progress-fill" :style="{ width: mibCompilePercent + '%' }" />
                     </div>
                 </div>
 
-                <div class="mib-query-row">
-                    <nn-input
-                        v-model:value="oidQuery"
-                        placeholder="输入OID，例如 1.3.6.1.2.1.1.3.0"
-                        allow-clear
-                        @press-enter="translateOid"
-                    />
-                    <nn-button :loading="oidTranslateLoading" @click="translateOid">解析OID</nn-button>
-                </div>
-
-                <div class="mib-main">
-                    <section class="mib-tree-panel">
+                <div class="mib-results">
+                    <section class="mib-file-block">
                         <div class="mib-panel-header">
-                            <span class="mib-panel-title">OID树</span>
-                            <span class="mib-panel-meta">{{ mibStatus.totalObjects }} 个对象</span>
+                            <div class="mib-panel-heading">
+                                <span class="mib-panel-title">文件状态</span>
+                                <span class="mib-panel-description">逐文件展示最近一次编译结果</span>
+                                <nn-select
+                                    v-model:value="mibFileStatusFilter"
+                                    :options="MIB_FILE_STATUS_OPTIONS"
+                                    aria-label="文件状态筛选"
+                                    class="mib-file-status-filter"
+                                    data-testid="mib-file-status-filter"
+                                />
+                            </div>
+                            <span class="mib-panel-meta">
+                                已编译 {{ compiledFileCount }} / 跳过 {{ skippedFileCount }} / 失败
+                                {{ failedFileCount }}
+                            </span>
                         </div>
-                        <div ref="treeScrollRef" class="mib-tree-scroll">
-                            <nn-tree
-                                v-if="mibStatus.oidTree.length > 0"
-                                ref="treeRef"
-                                v-model:expanded-keys="treeExpandedKeys"
-                                :selected-keys="treeSelectedKeys"
-                                :tree-data="mibStatus.oidTree"
-                                block-node
-                                @expand="handleTreeExpand"
-                                @right-click="handleTreeRightClick"
-                                @select="handleTreeSelect"
-                            >
-                                <template
-                                    #title="{ title, oid, moduleName, macro, canGet, canSet, notifyOnly, nodeRole }"
-                                >
-                                    <span class="mib-node-title" :data-tree-oid="oid">
-                                        <span class="mib-node-name">{{ title }}</span>
-                                        <span class="mib-node-oid">{{ oid }}</span>
-                                        <span v-if="macro" class="mib-node-macro">{{ macro }}</span>
+
+                        <nn-table
+                            :columns="mibFileColumns"
+                            :data-source="filteredMibFiles"
+                            :pagination="mibFilePagination"
+                            :row-key="getFileKey"
+                            :scroll="MIB_FILE_TABLE_SCROLL"
+                            aria-label="MIB 文件状态表"
+                            class="mib-file-table"
+                            size="small"
+                            @change="handleMibFileTableChange"
+                        >
+                            <template #bodyCell="{ column, record }">
+                                <template v-if="column.key === 'status'">
+                                    <span class="mib-file-status">
                                         <span
-                                            v-if="getNodeRoleText({ canGet, canSet, notifyOnly, nodeRole })"
-                                            :class="[
-                                                'mib-node-role',
-                                                getNodeRoleClass({ canGet, canSet, notifyOnly, nodeRole })
-                                            ]"
+                                            class="mib-file-status-icon"
+                                            :class="'is-' + getFileStatusMeta(record.status).tone"
+                                            aria-hidden="true"
                                         >
-                                            {{ getNodeRoleText({ canGet, canSet, notifyOnly, nodeRole }) }}
+                                            <component
+                                                :is="getFileStatusMeta(record.status).icon"
+                                                :stroke-width="1.9"
+                                            />
                                         </span>
-                                        <span v-if="moduleName" class="mib-node-module">{{ moduleName }}</span>
+                                        <nn-tag :color="getFileStatusMeta(record.status).color" class="mib-file-tag">
+                                            {{ getFileStatusMeta(record.status).text }}
+                                        </nn-tag>
                                     </span>
                                 </template>
-                            </nn-tree>
-                            <nn-empty v-else description="暂无MIB树" />
-                        </div>
+                                <template v-else-if="column.key === 'fileName'">
+                                    <span class="mib-file-name">
+                                        {{ record.fileName || '未命名 MIB 文件' }}
+                                    </span>
+                                </template>
+                                <template v-else-if="column.key === 'filePath'">
+                                    <span class="mib-file-path">{{ record.filePath || '-' }}</span>
+                                </template>
+                                <template v-else-if="column.key === 'msg'">
+                                    <span v-if="record.msg" class="mib-file-message">
+                                        <InfoCircleOutlined />
+                                        <span>{{ record.msg }}</span>
+                                    </span>
+                                    <span v-else class="mib-file-placeholder">-</span>
+                                </template>
+                                <template v-else-if="column.key === 'action'">
+                                    <nn-button size="small" :disabled="!record.filePath" @click="openMibSource(record)">
+                                        源码
+                                    </nn-button>
+                                </template>
+                            </template>
+                            <template #emptyText>
+                                <nn-empty :description="mibFileEmptyDescription" />
+                            </template>
+                        </nn-table>
                     </section>
-
-                    <aside class="mib-side-panel">
-                        <section class="mib-detail-block">
-                            <div class="mib-panel-header">
-                                <span class="mib-panel-title">节点详情</span>
-                            </div>
-                            <div class="mib-detail-scroll">
-                                <nn-descriptions
-                                    v-if="selectedOidNode"
-                                    :column="1"
-                                    bordered
-                                    size="small"
-                                    class="mib-node-detail"
-                                >
-                                    <nn-descriptions-item label="名称">
-                                        {{ selectedOidNode.moduleQualifiedName || selectedOidNode.objectName }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="OID">
-                                        <nn-typography-text copyable>
-                                            {{ selectedOidNode.oid }}
-                                        </nn-typography-text>
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="路径">
-                                        {{ selectedOidNode.pathName || '-' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="类型">
-                                        {{ selectedOidNode.macro || '-' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="语法">
-                                        {{ selectedOidNode.syntax || '-' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="访问">
-                                        {{ selectedOidNode.maxAccess || '-' }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item
-                                        v-if="selectedOidNode.canGet || selectedOidNode.canSet"
-                                        label="查询OID"
-                                    >
-                                        <nn-typography-text copyable>
-                                            {{ selectedOidNode.queryOid || selectedOidNode.oid }}
-                                        </nn-typography-text>
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="能力">
-                                        {{ getNodeAbilityText(selectedOidNode) }}
-                                    </nn-descriptions-item>
-                                    <nn-descriptions-item label="状态">
-                                        {{ selectedOidNode.status || '-' }}
-                                    </nn-descriptions-item>
-                                </nn-descriptions>
-                                <nn-empty v-else description="请选择OID节点" />
-                            </div>
-                        </section>
-
-                        <section class="mib-file-block">
-                            <div class="mib-panel-header">
-                                <span class="mib-panel-title">文件状态</span>
-                                <span class="mib-panel-meta">
-                                    已编译 {{ compiledFileCount }} / 跳过 {{ skippedFileCount }} / 失败
-                                    {{ failedFileCount }}
-                                </span>
-                            </div>
-                            <div class="mib-file-list">
-                                <div v-for="record in mibFiles" :key="record.filePath" class="mib-file-row">
-                                    <nn-tag
-                                        :color="
-                                            record.status === 'compiled'
-                                                ? 'green'
-                                                : record.status === 'skipped'
-                                                  ? 'gold'
-                                                  : 'red'
-                                        "
-                                        class="mib-file-tag"
-                                    >
-                                        {{
-                                            record.status === 'compiled'
-                                                ? '已编译'
-                                                : record.status === 'skipped'
-                                                  ? '已跳过'
-                                                  : '失败'
-                                        }}
-                                    </nn-tag>
-                                    <nn-tooltip :title="record.filePath">
-                                        <span class="mib-file-name">{{ record.fileName }}</span>
-                                    </nn-tooltip>
-                                    <nn-tooltip v-if="record.msg" :title="record.msg">
-                                        <InfoCircleOutlined class="mib-file-info" />
-                                    </nn-tooltip>
-                                </div>
-                                <nn-empty v-if="mibFiles.length === 0" description="暂无文件" />
-                            </div>
-                        </section>
-                    </aside>
                 </div>
             </div>
         </nn-card>
-
-        <nn-modal v-model:open="oidResultModalOpen" title="OID解析结果" :footer="null" width="640px">
-            <nn-alert
-                v-if="oidResult"
-                :type="oidResult.matched ? 'success' : 'warning'"
-                show-icon
-                :message="oidResult.matched ? oidResult.moduleQualifiedName : '未匹配到MIB对象'"
-                :description="oidResult.matched ? oidResult.pathName || oidResult.oid : oidResult.oid"
-            />
-
-            <nn-descriptions v-if="oidResult" :column="1" bordered size="small" class="oid-result-detail">
-                <nn-descriptions-item label="查询OID">
-                    <nn-typography-text copyable>
-                        {{ oidResult.oid || '-' }}
-                    </nn-typography-text>
-                </nn-descriptions-item>
-                <nn-descriptions-item label="匹配OID">
-                    <nn-typography-text v-if="oidResult.matchedOid" copyable>
-                        {{ oidResult.matchedOid }}
-                    </nn-typography-text>
-                    <span v-else>-</span>
-                </nn-descriptions-item>
-                <nn-descriptions-item label="对象名称">
-                    {{ oidResult.moduleQualifiedName || oidResult.objectName || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="模块">
-                    {{ oidResult.moduleName || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="路径">
-                    {{ oidResult.pathName || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="实例后缀">
-                    {{ oidResult.instanceSuffix || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="类型">
-                    {{ oidResult.macro || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="语法">
-                    {{ oidResult.syntax || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="访问">
-                    {{ oidResult.maxAccess || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="状态">
-                    {{ oidResult.status || '-' }}
-                </nn-descriptions-item>
-            </nn-descriptions>
-        </nn-modal>
 
         <nn-modal
             v-model:open="projectSaveOpen"
@@ -310,7 +191,7 @@
                 <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'name'">
                         <nn-tooltip :title="record.directory">
-                            <span class="mib-project-name">{{ record.name }}</span>
+                            <span class="mib-project-name">{{ record.name || record.projectName }}</span>
                         </nn-tooltip>
                     </template>
                     <template v-else-if="column.key === 'updatedAt'">
@@ -320,7 +201,10 @@
                         <nn-button
                             type="link"
                             size="small"
-                            :loading="projectImporting && importingProjectName === record.name"
+                            :loading="
+                                projectImporting &&
+                                importingProjectName === String(record.name || record.projectName || '')
+                            "
                             @click="importMibProject(record)"
                         >
                             导入
@@ -330,412 +214,34 @@
             </nn-table>
         </nn-modal>
 
-        <nn-modal
-            v-model:open="getModalOpen"
-            :title="getModalTitle"
-            :ok-text="getModalOkText"
-            cancel-text="取消"
-            :confirm-loading="getSending"
-            :z-index="REQUEST_MODAL_Z_INDEX"
-            width="680px"
-            @ok="sendGetRequest"
-        >
-            <nn-form :model="getForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
-                <nn-form-item label="目标">
-                    <div class="mib-request-readonly">{{ getRequestTargetText(getForm) }}</div>
-                </nn-form-item>
-                <nn-form-item label="版本">
-                    <div class="mib-request-readonly">{{ getRequestAuthText(getForm) }}</div>
-                </nn-form-item>
-                <nn-form-item label="对象">
-                    <div class="mib-request-object">
-                        <div class="mib-request-object-title">
-                            {{ getRequestObjectName(getTargetNode, getForm.oid) }}
-                        </div>
-                        <div class="mib-request-object-meta">
-                            {{ getRequestObjectPath(getTargetNode, getForm.oid) }}
-                        </div>
-                    </div>
-                </nn-form-item>
-                <nn-form-item label="实际OID">
-                    <div class="mib-oid-input-row">
-                        <nn-input v-model:value="getForm.oid" />
-                        <nn-button
-                            v-if="getTargetNode?.isTableColumn && !isGetNextMode"
-                            :loading="instanceLoading && instanceTargetForm === 'get'"
-                            @click="showInstanceSelector('get')"
-                        >
-                            选择实例
-                        </nn-button>
-                    </div>
-                </nn-form-item>
-            </nn-form>
-
-            <nn-descriptions v-if="getResult" :column="1" bordered size="small" class="mib-request-result">
-                <nn-descriptions-item label="对象">
-                    <div class="mib-request-object">
-                        <div class="mib-request-object-title">
-                            {{ getVarbindObjectName(getResult) }}
-                        </div>
-                        <div class="mib-request-object-meta">
-                            {{ getVarbindObjectPath(getResult) }}
-                        </div>
-                        <nn-typography-text copyable class="mib-request-object-oid">
-                            {{ getResult.oid }}
-                        </nn-typography-text>
-                    </div>
-                </nn-descriptions-item>
-                <nn-descriptions-item label="类型">
-                    {{ getResult.type || '-' }}
-                </nn-descriptions-item>
-                <nn-descriptions-item label="值">
-                    <nn-typography-text copyable>
-                        {{ getResult.displayValue ?? getResult.value }}
-                    </nn-typography-text>
-                </nn-descriptions-item>
-            </nn-descriptions>
-        </nn-modal>
-
-        <nn-modal
-            v-model:open="setModalOpen"
-            title="SNMP SET"
-            ok-text="发送 SET"
-            cancel-text="取消"
-            :confirm-loading="setSending"
-            :z-index="REQUEST_MODAL_Z_INDEX"
-            width="680px"
-            @ok="sendSetRequest"
-        >
-            <nn-form :model="setForm" :label-col="{ style: { width: '86px' } }" class="mib-request-form">
-                <nn-form-item label="目标">
-                    <div class="mib-request-readonly">{{ getRequestTargetText(setForm) }}</div>
-                </nn-form-item>
-                <nn-form-item label="版本">
-                    <div class="mib-request-readonly">{{ getRequestAuthText(setForm) }}</div>
-                </nn-form-item>
-                <nn-form-item label="对象">
-                    <div class="mib-request-object">
-                        <div class="mib-request-object-title">
-                            {{ getRequestObjectName(setTargetNode, setForm.oid) }}
-                        </div>
-                        <div class="mib-request-object-meta">
-                            {{ getRequestObjectPath(setTargetNode, setForm.oid) }}
-                        </div>
-                    </div>
-                </nn-form-item>
-                <nn-form-item label="实际OID">
-                    <div class="mib-oid-input-row">
-                        <nn-input v-model:value="setForm.oid" />
-                        <nn-button
-                            v-if="setTargetNode?.isTableColumn"
-                            :loading="instanceLoading && instanceTargetForm === 'set'"
-                            @click="showInstanceSelector('set')"
-                        >
-                            选择实例
-                        </nn-button>
-                    </div>
-                </nn-form-item>
-                <nn-row :gutter="12">
-                    <nn-col :span="12">
-                        <nn-form-item label="类型">
-                            <nn-select v-model:value="setForm.type">
-                                <nn-select-option
-                                    v-for="option in setTypeOptions"
-                                    :key="option.value"
-                                    :value="option.value"
-                                >
-                                    {{ option.label }}
-                                </nn-select-option>
-                            </nn-select>
-                        </nn-form-item>
-                    </nn-col>
-                    <nn-col :span="12">
-                        <nn-form-item label="值">
-                            <nn-input v-model:value="setForm.value" placeholder="请输入SET值" />
-                        </nn-form-item>
-                    </nn-col>
-                </nn-row>
-            </nn-form>
-        </nn-modal>
-
-        <nn-modal
-            v-model:open="instanceModalOpen"
-            title="选择实例"
-            :footer="null"
-            :z-index="INSTANCE_MODAL_Z_INDEX"
-            width="760px"
-        >
-            <nn-alert
-                v-if="instanceMeta?.limitReached"
-                type="warning"
-                show-icon
-                message="实例数量达到上限"
-                description="仅显示前100条实例，可手动填写实例后缀或提高后台限制后重试。"
-                class="mib-request-alert"
-            />
-            <nn-alert
-                v-else-if="instanceMeta?.rows?.length === 0"
-                type="info"
-                show-icon
-                message="未发现实例"
-                description="设备未返回当前字段前缀下的实例，或当前字段没有可访问行。"
-                class="mib-request-alert"
-            />
-            <nn-table
-                :columns="instanceColumns"
-                :data-source="instanceRows"
-                :loading="instanceLoading"
-                :pagination="{ pageSize: 8, size: 'small' }"
-                size="small"
-                row-key="oid"
-                class="instance-table"
-            >
-                <template #bodyCell="{ column, record }">
-                    <template v-if="column.key === 'object'">
-                        <div class="instance-object">
-                            <div class="instance-object-title">
-                                {{ getInstanceObjectName(record) }}
-                            </div>
-                            <nn-typography-text copyable class="instance-object-oid">
-                                {{ record.oid }}
-                            </nn-typography-text>
-                        </div>
-                    </template>
-                    <template v-else-if="column.key === 'value'">
-                        <nn-tooltip :title="getVarbindDisplayValue(record)">
-                            <span class="instance-value">{{ getVarbindDisplayValue(record) }}</span>
-                        </nn-tooltip>
-                    </template>
-                    <template v-else-if="column.key === 'action'">
-                        <nn-button type="link" size="small" @click="selectInstance(record)">选择</nn-button>
-                    </template>
-                </template>
-            </nn-table>
-        </nn-modal>
-
-        <nn-modal
-            v-model:open="walkModalOpen"
-            title="SNMP WALK"
-            ok-text="开始 WALK"
-            cancel-text="关闭"
-            :confirm-loading="walkLoading"
-            :z-index="REQUEST_MODAL_Z_INDEX"
-            :width="WALK_MODAL_WIDTH"
-            :body-style="WALK_MODAL_BODY_STYLE"
-            wrap-class-name="walk-modal-wrap"
-            @ok="sendWalkRequest"
-        >
-            <div class="walk-modal-body">
-                <nn-form :model="walkForm" :label-col="{ style: { width: '92px' } }" class="mib-request-form walk-form">
-                    <nn-row :gutter="12">
-                        <nn-col :xs="24" :sm="12">
-                            <nn-form-item label="目标">
-                                <div class="mib-request-readonly">{{ getRequestTargetText(walkForm) }}</div>
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :sm="12">
-                            <nn-form-item label="版本">
-                                <div class="mib-request-readonly">{{ getRequestAuthText(walkForm) }}</div>
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-                    <nn-form-item label="起始对象">
-                        <div class="mib-request-object">
-                            <div class="mib-request-object-title">
-                                {{ getRequestObjectName(walkTargetNode, walkForm.oid) }}
-                            </div>
-                            <div class="mib-request-object-meta">
-                                {{ getRequestObjectPath(walkTargetNode, walkForm.oid) }}
-                            </div>
-                        </div>
-                    </nn-form-item>
-                    <nn-row :gutter="12">
-                        <nn-col :xs="24" :md="12">
-                            <nn-form-item label="起始OID">
-                                <nn-input v-model:value="walkForm.oid" />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="12" :md="6">
-                            <nn-form-item label="上限">
-                                <nn-input-number
-                                    v-model:value="walkForm.limit"
-                                    :min="1"
-                                    :max="1000"
-                                    style="width: 100%"
-                                />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="12" :md="6">
-                            <nn-form-item label="批量数">
-                                <nn-input-number
-                                    v-model:value="walkForm.maxRepetitions"
-                                    :min="1"
-                                    :max="50"
-                                    style="width: 100%"
-                                    :disabled="walkForm.version !== 'v2c'"
-                                />
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-                </nn-form>
-
-                <div v-if="walkMeta" class="walk-summary">
-                    <nn-space>
-                        <nn-tag color="blue">{{ walkRows.length }} 条</nn-tag>
-                        <nn-tag v-if="walkMeta.limitReached" color="orange">达到上限</nn-tag>
-                        <nn-tag v-else color="green">已停止: {{ walkMeta.stoppedBy || '-' }}</nn-tag>
-                    </nn-space>
-                </div>
-                <div class="walk-output-shell">
-                    <textarea
-                        class="walk-output-textarea"
-                        readonly
-                        spellcheck="false"
-                        :value="walkOutputText || '暂无 WALK 结果'"
-                    />
-                    <div v-if="walkLoading" class="walk-output-loading">WALK 查询中...</div>
-                </div>
-            </div>
-        </nn-modal>
-
-        <div
-            v-if="contextMenu.visible"
-            ref="contextMenuRef"
-            class="mib-context-menu"
-            :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
-            @click.stop
-        >
-            <div class="mib-context-menu-title">
-                {{ contextMenu.node?.moduleQualifiedName || contextMenu.node?.objectName || 'OID节点' }}
-            </div>
-            <nn-menu class="mib-context-menu-list" :selectable="false" @click="handleContextMenuClick">
-                <nn-menu-item key="copy">
-                    <template #icon><CopyOutlined /></template>
-                    复制OID
-                </nn-menu-item>
-                <nn-menu-item key="parse">
-                    <template #icon><SearchOutlined /></template>
-                    解析OID
-                </nn-menu-item>
-                <nn-menu-divider />
-                <nn-menu-item key="get" :disabled="!canGetNode(contextMenu.node)">
-                    <template #icon><ApiOutlined /></template>
-                    GET 查询
-                </nn-menu-item>
-                <nn-menu-item key="getNext" :disabled="!contextMenu.node?.oid">
-                    <template #icon><StepForwardOutlined /></template>
-                    GET-NEXT 查询
-                </nn-menu-item>
-                <nn-menu-item key="walk" :disabled="!contextMenu.node?.oid">
-                    <template #icon><FileSearchOutlined /></template>
-                    WALK 查询
-                </nn-menu-item>
-                <nn-menu-item key="set" :disabled="!canSetNode(contextMenu.node)">
-                    <template #icon><EditOutlined /></template>
-                    SET 设置
-                </nn-menu-item>
-                <nn-menu-item key="notify" :disabled="!isNotifyNode(contextMenu.node)">
-                    <template #icon><BellOutlined /></template>
-                    Trap变量
-                </nn-menu-item>
-            </nn-menu>
-            <div class="mib-context-menu-hint">
-                {{ getNodeAbilityText(contextMenu.node) }}
-            </div>
-        </div>
+        <nn-drawer v-model:open="mibSourceDrawerOpen" :title="mibSourceDrawerTitle" width="720px" :z-index="1200">
+            <nn-spin :spinning="mibSourceLoading">
+                <pre class="mib-source-preview">{{ mibSourceText || '暂无源码' }}</pre>
+            </nn-spin>
+        </nn-drawer>
     </div>
 </template>
 
 <script setup>
-    import { computed, reactive, ref, nextTick, onActivated, onBeforeUnmount, onMounted } from 'vue';
-    import { notify } from '../../utils/notify';
-    import EventBus from '../../utils/eventBus';
-    import { DEFAULT_VALUES, MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
+    import { computed, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+    import { MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
     import {
-        ApiOutlined,
-        BellOutlined,
-        CopyOutlined,
+        CheckCircleOutlined,
         DeleteOutlined,
-        EditOutlined,
+        ExclamationCircleOutlined,
         FileSearchOutlined,
         FolderOpenOutlined,
         ImportOutlined,
         InfoCircleOutlined,
         ReloadOutlined,
-        SaveOutlined,
-        SearchOutlined,
-        StepForwardOutlined
+        SaveOutlined
     } from '../../ui/icons';
+    import EventBus from '../../utils/eventBus';
+    import { notify } from '../../utils/notify';
 
-    defineOptions({ name: 'SnmpMib' });
+    defineOptions({ name: 'SnmpMibCompiler' });
 
-    const mibCompileLoading = ref(false);
-    const mibCompileProgress = ref(null);
-    const oidTranslateLoading = ref(false);
-    const oidQuery = ref('');
-    const oidResult = ref(null);
-    const oidResultModalOpen = ref(false);
-    const getModalOpen = ref(false);
-    const getSending = ref(false);
-    const getRequestMode = ref('get');
-    const getTargetNode = ref(null);
-    const getResult = ref(null);
-    const setModalOpen = ref(false);
-    const setSending = ref(false);
-    const setTargetNode = ref(null);
-    const walkModalOpen = ref(false);
-    const walkLoading = ref(false);
-    const walkTargetNode = ref(null);
-    const walkRows = ref([]);
-    const walkMeta = ref(null);
-    const instanceModalOpen = ref(false);
-    const instanceLoading = ref(false);
-    const instanceTargetForm = ref('get');
-    const instanceRows = ref([]);
-    const instanceMeta = ref(null);
-    const projectSaveOpen = ref(false);
-    const projectSaving = ref(false);
-    const projectImportOpen = ref(false);
-    const projectLoading = ref(false);
-    const projectImporting = ref(false);
-    const importingProjectName = ref('');
-    const projectRootDir = ref('');
-    const mibProjects = ref([]);
-    const mibFiles = ref([]);
-    const treeRef = ref(null);
-    const treeScrollRef = ref(null);
-    const contextMenuRef = ref(null);
-    const treeExpandedKeys = ref([]);
-    const treeSelectedKeys = ref([]);
-    const selectedOidNode = ref(null);
-    const treeLoadingPromises = new Map();
-    const pendingTreeReleaseTimers = new Map();
-    let mibStatusLoaded = false;
-    let mibStatusLoadPromise = null;
-    let contextMenuOpenRequest = 0;
-    const contextMenu = reactive({
-        visible: false,
-        x: 0,
-        y: 0,
-        node: null
-    });
-    const projectForm = reactive({
-        name: ''
-    });
-    const CONTEXT_MENU_MARGIN = 8;
-    const TREE_RELEASE_DELAY_MS = 300;
-    const REQUEST_MODAL_Z_INDEX = 1000;
-    const INSTANCE_MODAL_Z_INDEX = 1100;
-    const WALK_MODAL_WIDTH = 'min(920px, calc(100vw - 32px))';
-    const WALK_MODAL_BODY_STYLE = {
-        display: 'flex',
-        flexDirection: 'column',
-        height: 'min(620px, calc(100vh - 170px))',
-        maxWidth: '100%',
-        maxHeight: 'calc(100vh - 170px)',
-        overflow: 'hidden'
-    };
-    const mibStatus = ref({
+    const createEmptyMibStatus = () => ({
         loadedFiles: [],
         failedFiles: [],
         skippedFiles: [],
@@ -744,74 +250,77 @@
         baseModules: [],
         totalObjects: 0,
         expandedFileCount: 0,
-        cacheHit: false,
-        oidTree: []
+        cacheHit: false
     });
-    const getForm = reactive({
-        targetHost: DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST,
-        targetPort: DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT,
-        version: 'v2c',
-        community: DEFAULT_VALUES.DEFAULT_COMMUNITY,
-        oid: ''
+
+    const FILE_STATUS_META = Object.freeze({
+        compiled: {
+            text: '已编译',
+            color: 'green',
+            tone: 'success',
+            icon: CheckCircleOutlined
+        },
+        skipped: {
+            text: '已跳过',
+            color: 'gold',
+            tone: 'warning',
+            icon: InfoCircleOutlined
+        },
+        failed: {
+            text: '失败',
+            color: 'red',
+            tone: 'error',
+            icon: ExclamationCircleOutlined
+        },
+        pending: {
+            text: '待编译',
+            color: 'default',
+            tone: 'muted',
+            icon: FileSearchOutlined
+        }
     });
-    const setForm = reactive({
-        targetHost: DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST,
-        targetPort: DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT,
-        version: 'v2c',
-        community: DEFAULT_VALUES.DEFAULT_COMMUNITY,
-        oid: '',
-        type: 'OctetString',
-        value: ''
-    });
-    const walkForm = reactive({
-        targetHost: DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST,
-        targetPort: DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT,
-        version: 'v2c',
-        community: DEFAULT_VALUES.DEFAULT_COMMUNITY,
-        oid: '',
-        limit: 100,
-        maxRepetitions: 20
-    });
-    const setTypeOptions = [
-        { label: 'Integer', value: 'Integer' },
-        { label: 'OctetString', value: 'OctetString' },
-        { label: 'OID', value: 'OID' },
-        { label: 'IpAddress', value: 'IpAddress' },
-        { label: 'Counter32', value: 'Counter32' },
-        { label: 'Gauge32 / Unsigned32', value: 'Gauge32' },
-        { label: 'TimeTicks', value: 'TimeTicks' },
-        { label: 'Counter64', value: 'Counter64' }
-    ];
-    const instanceColumns = [
+
+    const MIB_FILE_TABLE_PAGE_SIZE = 50;
+    const MIB_FILE_TABLE_SCROLL = Object.freeze({ x: 1112, y: '100%' });
+    const MIB_FILE_STATUS_OPTIONS = Object.freeze([
+        { label: '全部状态', value: 'all' },
+        { label: '已编译', value: 'compiled' },
+        { label: '已跳过', value: 'skipped' },
+        { label: '失败', value: 'failed' }
+    ]);
+    const mibFileColumns = [
         {
-            title: '实例',
-            dataIndex: 'instance',
-            key: 'instance',
-            width: 120
+            title: '状态',
+            dataIndex: 'status',
+            key: 'status',
+            width: 112
         },
         {
-            title: '对象',
-            dataIndex: 'oid',
-            key: 'object',
-            width: 300
+            title: '文件名',
+            dataIndex: 'fileName',
+            key: 'fileName',
+            width: 260
         },
         {
-            title: '类型',
-            dataIndex: 'type',
-            key: 'type',
-            width: 110
+            title: '文件路径',
+            dataIndex: 'filePath',
+            key: 'filePath',
+            width: 400
         },
         {
-            title: '值',
-            dataIndex: 'value',
-            key: 'value'
+            title: '编译信息',
+            dataIndex: 'msg',
+            key: 'msg',
+            width: 268
         },
         {
             title: '操作',
             key: 'action',
-            width: 80
+            width: 72,
+            fixed: 'right'
         }
     ];
+
     const projectColumns = [
         {
             title: '工程名',
@@ -849,31 +358,164 @@
         }
     ];
 
+    const mibCompileLoading = ref(false);
+    const statusLoading = ref(false);
+    const mibCompileProgress = ref(null);
+    const mibStatus = ref(createEmptyMibStatus());
+    const mibFiles = ref([]);
+    const mibFileStatusFilter = ref('all');
+    const mibFilePage = ref(1);
+    const mibFilePageSize = ref(MIB_FILE_TABLE_PAGE_SIZE);
+    const mibSourceDrawerOpen = ref(false);
+    const mibSourceLoading = ref(false);
+    const mibSourceText = ref('');
+    const mibSourceFile = ref(null);
+    const projectSaveOpen = ref(false);
+    const projectSaving = ref(false);
+    const projectImportOpen = ref(false);
+    const projectLoading = ref(false);
+    const projectImporting = ref(false);
+    const importingProjectName = ref('');
+    const projectRootDir = ref('');
+    const mibProjects = ref([]);
+    const projectForm = reactive({
+        name: ''
+    });
+    let mibStatusLoaded = false;
+    let mibStatusLoadPromise = null;
+    let mibSourceRequestRevision = 0;
+
+    const normalizeSelectionPaths = payload => {
+        const candidates = [];
+
+        if (Array.isArray(payload)) {
+            candidates.push(...payload);
+        } else if (payload && typeof payload === 'object') {
+            if (Array.isArray(payload.filePaths)) {
+                candidates.push(...payload.filePaths);
+            } else if (payload.filePaths) {
+                candidates.push(payload.filePaths);
+            }
+            candidates.push(payload.directoryPath, payload.path, payload.filePath);
+        } else if (payload) {
+            candidates.push(payload);
+        }
+
+        return Array.from(
+            new Set(
+                candidates
+                    .filter(candidate => typeof candidate === 'string')
+                    .map(candidate => candidate.trim())
+                    .filter(Boolean)
+            )
+        );
+    };
+
+    const getPathBaseName = filePath => {
+        const parts = String(filePath || '').split(/[\\/]/u);
+        return parts[parts.length - 1] || '';
+    };
+
+    const normalizeFileRecord = (file, status) => {
+        const source = typeof file === 'string' ? { filePath: file } : file || {};
+        const filePath = source.filePath || source.path || '';
+        return {
+            ...source,
+            filePath,
+            fileName: source.fileName || getPathBaseName(filePath),
+            status: source.status || status || 'pending',
+            msg: source.msg || source.message || ''
+        };
+    };
+
+    const normalizeMibStatus = payload => {
+        const source = payload && typeof payload === 'object' ? payload : {};
+        const loadedFiles = Array.isArray(source.loadedFiles) ? source.loadedFiles : [];
+        const failedFiles = Array.isArray(source.failedFiles) ? source.failedFiles : [];
+        const skippedFiles = Array.isArray(source.skippedFiles) ? source.skippedFiles : [];
+        const fallbackFileCount = loadedFiles.length + failedFiles.length + skippedFiles.length;
+
+        return {
+            loadedFiles,
+            failedFiles,
+            skippedFiles,
+            requestedFiles: normalizeSelectionPaths(source.requestedFiles),
+            modules: Array.isArray(source.modules) ? source.modules : [],
+            baseModules: Array.isArray(source.baseModules) ? source.baseModules : [],
+            totalObjects: Number(source.totalObjects) || 0,
+            expandedFileCount:
+                source.expandedFileCount === undefined ? fallbackFileCount : Number(source.expandedFileCount) || 0,
+            cacheHit: Boolean(source.cacheHit)
+        };
+    };
+
+    const setMibStatus = payload => {
+        mibStatus.value = normalizeMibStatus(payload);
+        mibFiles.value = [
+            ...mibStatus.value.loadedFiles.map(file => normalizeFileRecord(file, 'compiled')),
+            ...mibStatus.value.skippedFiles.map(file => normalizeFileRecord(file, 'skipped')),
+            ...mibStatus.value.failedFiles.map(file => normalizeFileRecord(file, 'failed'))
+        ];
+        mibFilePage.value = 1;
+        mibStatusLoaded = true;
+    };
+
+    const getCurrentMibPaths = () => {
+        const requestedFiles = normalizeSelectionPaths(mibStatus.value.requestedFiles);
+        if (requestedFiles.length) {
+            return requestedFiles;
+        }
+        return normalizeSelectionPaths(mibFiles.value.map(file => file.filePath));
+    };
+
     const compiledFileCount = computed(() => mibStatus.value.loadedFiles.length);
     const failedFileCount = computed(() => mibStatus.value.failedFiles.length);
     const skippedFileCount = computed(() => mibStatus.value.skippedFiles.length);
+    const hasMibSources = computed(() => getCurrentMibPaths().length > 0 || mibFiles.value.length > 0);
+    const filteredMibFiles = computed(() =>
+        mibFileStatusFilter.value === 'all'
+            ? mibFiles.value
+            : mibFiles.value.filter(file => file.status === mibFileStatusFilter.value)
+    );
+    const mibFileEmptyDescription = computed(() =>
+        mibFiles.value.length ? '当前筛选条件下暂无 MIB 文件' : '暂无 MIB 文件，请导入文件或目录后开始编译'
+    );
+    const mibSourceDrawerTitle = computed(() => mibSourceFile.value?.fileName || 'MIB 源码');
+    const mibFilePagination = computed(() =>
+        filteredMibFiles.value.length > mibFilePageSize.value
+            ? {
+                  current: mibFilePage.value,
+                  pageSize: mibFilePageSize.value,
+                  showSizeChanger: true,
+                  pageSizeOptions: [25, 50, 100],
+                  showQuickJumper: true,
+                  position: ['bottomCenter'],
+                  showTotal: total => `共 ${total} 个文件`
+              }
+            : false
+    );
     const showMibCompileProgress = computed(
         () => mibCompileProgress.value && !['completed', 'failed'].includes(mibCompileProgress.value.phase)
     );
     const mibCompileCounts = computed(() => ({
-        compiled: mibCompileProgress.value?.counts?.compiled || 0,
-        skipped: mibCompileProgress.value?.counts?.skipped || 0,
-        failed: mibCompileProgress.value?.counts?.failed || 0
+        compiled: Number(mibCompileProgress.value?.counts?.compiled) || 0,
+        skipped: Number(mibCompileProgress.value?.counts?.skipped) || 0,
+        failed: Number(mibCompileProgress.value?.counts?.failed) || 0
     }));
     const mibCompilePercent = computed(() =>
-        Math.max(0, Math.min(100, Math.round(mibCompileProgress.value?.percent || 0)))
+        Math.max(0, Math.min(100, Math.round(Number(mibCompileProgress.value?.percent) || 0)))
     );
     const mibCompileProgressTitle = computed(() => {
         const progress = mibCompileProgress.value || {};
         switch (progress.phase) {
             case 'scanning':
-                return `扫描 ${progress.scanned || 0}/${progress.scanTotal || 0}`;
+                return '扫描 ' + (progress.scanned || 0) + '/' + (progress.scanTotal || 0);
             case 'compiling':
-                return `编译 ${progress.completed || 0}/${progress.total || 0}`;
+                return '编译 ' + (progress.completed || 0) + '/' + (progress.total || 0);
             case 'planning':
                 return '分析依赖关系';
             case 'serializing':
-                return `解析批次 ${progress.completed || 0}/${progress.total || 0}`;
+                return '解析批次 ' + (progress.completed || 0) + '/' + (progress.total || 0);
             case 'indexing':
                 return '生成 OID 索引';
             case 'caching':
@@ -888,494 +530,69 @@
         () => mibCompileProgress.value?.fileName || mibCompileProgress.value?.message || '请稍候'
     );
     const mibCompileProgressTag = computed(() =>
-        showMibCompileProgress.value ? mibCompileProgressTitle.value : '后台编译中'
+        showMibCompileProgress.value ? mibCompileProgressTitle.value : '编译处理中'
     );
-    const isGetNextMode = computed(() => getRequestMode.value === 'getNext');
-    const getModalTitle = computed(() => (isGetNextMode.value ? 'SNMP GET-NEXT' : 'SNMP GET'));
-    const getModalOkText = computed(() => (isGetNextMode.value ? '发送 GET-NEXT' : '发送 GET'));
 
-    const normalizeTreeNodes = nodes =>
-        (Array.isArray(nodes) ? nodes : []).map(node => ({
-            ...node,
-            children: normalizeTreeNodes(node.children),
-            isLeaf: Boolean(node.isLeaf)
-        }));
-
-    const normalizeMibStatus = payload => ({
-        loadedFiles: Array.isArray(payload?.loadedFiles) ? payload.loadedFiles : [],
-        failedFiles: Array.isArray(payload?.failedFiles) ? payload.failedFiles : [],
-        skippedFiles: Array.isArray(payload?.skippedFiles) ? payload.skippedFiles : [],
-        requestedFiles: Array.isArray(payload?.requestedFiles) ? payload.requestedFiles : [],
-        modules: Array.isArray(payload?.modules) ? payload.modules : [],
-        baseModules: Array.isArray(payload?.baseModules) ? payload.baseModules : [],
-        totalObjects: Number(payload?.totalObjects) || 0,
-        expandedFileCount: Number(payload?.expandedFileCount) || 0,
-        cacheHit: Boolean(payload?.cacheHit),
-        oidTree: normalizeTreeNodes(payload?.oidTree)
-    });
-
-    const refreshTreeData = () => {
-        mibStatus.value.oidTree = [...mibStatus.value.oidTree];
+    const getFileStatusMeta = status => FILE_STATUS_META[status] || FILE_STATUS_META.pending;
+    const getFileKey = (record, index) =>
+        String(record.filePath || record.fileName || 'mib-file') + ':' + record.status + ':' + index;
+    const handleMibFileTableChange = pagination => {
+        mibFilePage.value = Number(pagination?.current) || 1;
+        mibFilePageSize.value = Number(pagination?.pageSize) || MIB_FILE_TABLE_PAGE_SIZE;
     };
 
-    const findTreeNode = (nodes, key) => {
-        for (const node of nodes) {
-            if (node.key === key) {
-                return node;
-            }
+    const openMibSource = async record => {
+        const requestRevision = ++mibSourceRequestRevision;
+        mibSourceFile.value = record;
+        mibSourceDrawerOpen.value = true;
+        mibSourceLoading.value = true;
+        mibSourceText.value = '';
 
-            const matched = findTreeNode(node.children || [], key);
-            if (matched) {
-                return matched;
-            }
-        }
-
-        return null;
-    };
-
-    const findAncestorKeys = (nodes, key, parents = []) => {
-        for (const node of nodes) {
-            if (node.key === key) {
-                return parents;
-            }
-
-            const matched = findAncestorKeys(node.children || [], key, [...parents, node.key]);
-            if (matched) {
-                return matched;
-            }
-        }
-
-        return null;
-    };
-
-    const collectDescendantKeys = node => {
-        const keys = [];
-        (node?.children || []).forEach(child => {
-            keys.push(child.key, ...collectDescendantKeys(child));
-        });
-        return keys;
-    };
-
-    const loadTreeNodeChildren = async node => {
-        const key = node?.key || node?.eventKey || node?.dataRef?.key;
-        if (!key) {
-            return [];
-        }
-
-        const targetNode = findTreeNode(mibStatus.value.oidTree, key);
-        if (!targetNode || targetNode.isLeaf) {
-            return [];
-        }
-
-        if (targetNode.children?.length > 0) {
-            return targetNode.children;
-        }
-
-        if (treeLoadingPromises.has(key)) {
-            return treeLoadingPromises.get(key);
-        }
-
-        const loadPromise = (async () => {
-            const result = await window.snmpApi.getMibTreeChildren(key);
-            if (result.status !== 'success') {
-                notify.error(result.msg || '获取MIB树节点失败');
-                return [];
-            }
-
-            const children = normalizeTreeNodes(result.data);
-            if (!treeExpandedKeys.value.includes(key)) {
-                return [];
-            }
-
-            targetNode.children = children;
-            refreshTreeData();
-            return children;
-        })();
-
-        treeLoadingPromises.set(key, loadPromise);
         try {
-            return await loadPromise;
+            const result = await window.snmpApi.getMibSource({ filePath: record.filePath });
+            if (result?.status !== 'success') {
+                throw new Error(result?.msg || 'MIB 源码读取失败');
+            }
+            if (requestRevision === mibSourceRequestRevision) {
+                const data = result.data;
+                mibSourceText.value = typeof data === 'string' ? data : data?.source || data?.content || '';
+            }
         } catch (error) {
-            notify.error('获取MIB树节点失败: ' + error.message);
-            return [];
+            if (requestRevision === mibSourceRequestRevision) {
+                mibSourceText.value = `-- 读取源码失败：${error.message}`;
+            }
         } finally {
-            treeLoadingPromises.delete(key);
-        }
-    };
-
-    const releaseTreeNodeChildren = node => {
-        if (!node) {
-            return new Set();
-        }
-
-        const descendantKeys = new Set(collectDescendantKeys(node));
-        node.children = [];
-        refreshTreeData();
-
-        return descendantKeys;
-    };
-
-    const cancelPendingTreeRelease = key => {
-        const timer = pendingTreeReleaseTimers.get(key);
-        if (!timer) {
-            return;
-        }
-
-        clearTimeout(timer);
-        pendingTreeReleaseTimers.delete(key);
-    };
-
-    const clearPendingTreeReleases = () => {
-        pendingTreeReleaseTimers.forEach(timer => clearTimeout(timer));
-        pendingTreeReleaseTimers.clear();
-    };
-
-    const scheduleTreeNodeChildrenRelease = key => {
-        cancelPendingTreeRelease(key);
-
-        const timer = setTimeout(() => {
-            pendingTreeReleaseTimers.delete(key);
-            nextTick(() => {
-                if (treeExpandedKeys.value.includes(key)) {
-                    return;
-                }
-
-                const node = findTreeNode(mibStatus.value.oidTree, key);
-                if (node) {
-                    releaseTreeNodeChildren(node);
-                }
-            });
-        }, TREE_RELEASE_DELAY_MS);
-
-        pendingTreeReleaseTimers.set(key, timer);
-    };
-
-    const loadTreePath = async treePath => {
-        const pathParts = Array.isArray(treePath) ? treePath.filter(Boolean) : [];
-        for (let index = 0; index < pathParts.length - 1; index++) {
-            const node = findTreeNode(mibStatus.value.oidTree, pathParts[index]);
-            if (!node) {
-                return false;
+            if (requestRevision === mibSourceRequestRevision) {
+                mibSourceLoading.value = false;
             }
-
-            treeExpandedKeys.value = Array.from(new Set([...treeExpandedKeys.value, pathParts[index]]));
-            await loadTreeNodeChildren(node);
-        }
-
-        return true;
-    };
-
-    const findRenderedTreeOidElement = oid => {
-        const scrollContainer = treeScrollRef.value;
-        if (!scrollContainer || !oid) {
-            return null;
-        }
-
-        return (
-            Array.from(scrollContainer.querySelectorAll('.mib-node-title')).find(
-                element => element.dataset.treeOid === oid
-            ) || null
-        );
-    };
-
-    const scrollToOidNode = async oid => {
-        if (!oid) {
-            return;
-        }
-
-        await nextTick();
-        treeRef.value?.scrollTo?.({
-            key: oid,
-            align: 'auto',
-            offset: 24
-        });
-        await nextTick();
-
-        const targetElement = findRenderedTreeOidElement(oid);
-        targetElement?.scrollIntoView({
-            block: 'center',
-            inline: 'nearest',
-            behavior: 'smooth'
-        });
-    };
-
-    const canGetNode = node => Boolean(node?.canGet);
-    const canSetNode = node => Boolean(node?.canSet);
-    const isNotifyNode = node => Boolean(node?.notifyOnly);
-
-    const getNodeRoleText = node => {
-        if (!node) return '';
-        if (node.canSet) return 'GET/SET';
-        if (node.canGet) return 'GET';
-        if (node.notifyOnly) return 'Trap';
-        if (node.nodeRole === 'not-accessible') return '不可访问';
-        return '';
-    };
-
-    const getNodeRoleClass = node => {
-        if (!node) return '';
-        if (node.canSet) return 'is-write';
-        if (node.canGet) return 'is-read';
-        if (node.notifyOnly) return 'is-notify';
-        if (node.nodeRole === 'not-accessible') return 'is-disabled';
-        return '';
-    };
-
-    const getNodeAbilityText = node => {
-        if (!node) return '-';
-        if (node.canSet && node.isTableColumn) return '表字段可GET/SET，需要指定表行索引';
-        if (node.canSet && node.isScalar) return '标量可GET/SET，查询时自动追加 .0';
-        if (node.canSet) return '允许GET查询和SET设置';
-        if (node.canGet && node.isTableColumn) return '表字段可GET，需要指定表行索引';
-        if (node.canGet && node.isScalar) return '标量可GET，查询时自动追加 .0';
-        if (node.canGet) return '允许GET查询，不允许SET';
-        if (node.notifyOnly) return '仅用于Trap/Inform通知变量';
-        if (node.nodeRole === 'not-accessible') return '不可直接GET/SET，多为表、行或分组节点';
-        return '分组或标识节点，不直接承载查询值';
-    };
-
-    const getEffectiveQueryOid = node => {
-        if (!node?.oid) {
-            return '';
-        }
-        return node.queryOid || (node.isScalar ? `${node.oid}.0` : node.oid);
-    };
-
-    const normalizeOidText = oid =>
-        String(oid || '')
-            .trim()
-            .replace(/\.$/, '');
-
-    const getOidInstanceSuffix = (baseOid, oid) => {
-        const normalizedBaseOid = normalizeOidText(baseOid);
-        const normalizedOid = normalizeOidText(oid);
-        if (!normalizedBaseOid || !normalizedOid || normalizedOid === normalizedBaseOid) {
-            return '';
-        }
-        return normalizedOid.startsWith(`${normalizedBaseOid}.`)
-            ? normalizedOid.slice(normalizedBaseOid.length + 1)
-            : '';
-    };
-
-    const appendInstanceSuffix = (text, suffix) => {
-        const displayText = String(text || '').trim();
-        if (!displayText) {
-            return '-';
-        }
-        return suffix ? `${displayText}.${suffix}` : displayText;
-    };
-
-    const getNodeDisplayName = node => node?.moduleQualifiedName || node?.objectName || node?.title || node?.oid || '-';
-
-    const getNodeDisplayPath = node => node?.pathName || node?.oid || '-';
-
-    const getRequestObjectName = (node, oid) =>
-        appendInstanceSuffix(getNodeDisplayName(node), getOidInstanceSuffix(node?.oid, oid));
-
-    const getRequestObjectPath = (node, oid) =>
-        appendInstanceSuffix(getNodeDisplayPath(node), getOidInstanceSuffix(node?.oid, oid));
-
-    const getVarbindObjectName = varbind =>
-        appendInstanceSuffix(varbind?.oidName || varbind?.oidObject || varbind?.oid, varbind?.oidInstance);
-
-    const getVarbindObjectPath = varbind =>
-        appendInstanceSuffix(varbind?.oidPath || varbind?.oid, varbind?.oidInstance);
-
-    const getInstanceObjectName = record => {
-        const node = instanceTargetForm.value === 'set' ? setTargetNode.value : getTargetNode.value;
-        const suffix = record?.instance || getOidInstanceSuffix(node?.oid, record?.oid);
-        return appendInstanceSuffix(getNodeDisplayName(node), suffix);
-    };
-
-    const getVarbindDisplayValue = varbind => {
-        const value = varbind?.displayValue ?? varbind?.value;
-        return value === undefined || value === null || value === '' ? '-' : value;
-    };
-
-    const getEnumerationPresentation = (value, enumValues = {}) => {
-        if (value === undefined || value === null || !enumValues || typeof enumValues !== 'object') {
-            return {};
-        }
-
-        const rawValue = String(value).trim();
-        const enumName = Object.prototype.hasOwnProperty.call(enumValues, rawValue) ? enumValues[rawValue] : '';
-        return enumName
-            ? {
-                  enumName,
-                  displayValue: `${enumName} (${rawValue})`
-              }
-            : {};
-    };
-
-    const getWalkRowObjectName = record => getVarbindObjectName(record);
-
-    const formatWalkTextValue = value => {
-        if (value === undefined || value === null || value === '') {
-            return '-';
-        }
-        return String(value);
-    };
-
-    const walkOutputText = computed(() =>
-        walkRows.value
-            .map((row, index) =>
-                [
-                    `#${row.index || index + 1} ${getWalkRowObjectName(row)}`,
-                    `OID   : ${row.oid || '-'}`,
-                    `TYPE  : ${row.type || '-'}`,
-                    `VALUE : ${formatWalkTextValue(row.displayValue ?? row.value)}`
-                ].join('\n')
-            )
-            .join('\n\n')
-    );
-
-    const enrichResultVarbind = async varbind => {
-        if (!varbind?.oid) {
-            return varbind;
-        }
-
-        try {
-            const result = await window.snmpApi.translateOid(varbind.oid);
-            if (result.status !== 'success' || !result.data) {
-                return varbind;
-            }
-
-            const info = result.data;
-            return {
-                ...varbind,
-                oidName: info.moduleQualifiedName || info.objectName || '',
-                oidObject: info.objectName || '',
-                oidPath: info.pathName || '',
-                oidInstance: info.instanceSuffix || '',
-                oidMatched: Boolean(info.matched),
-                ...getEnumerationPresentation(varbind.value, info.enumValues)
-            };
-        } catch (error) {
-            return varbind;
         }
     };
 
-    const enrichResultRows = async rows => Promise.all((Array.isArray(rows) ? rows : []).map(enrichResultVarbind));
-
-    const getRequestTargetText = form => `${form.targetHost || '-'}:${form.targetPort || '-'}`;
-
-    const getRequestAuthText = form => {
-        const version = form.version ? String(form.version).toUpperCase() : '-';
-        return `${version} / ${form.community || '-'}`;
-    };
-
-    const getConfiguredSessionVersion = versions => {
-        if (!Array.isArray(versions) || versions.length === 0 || !versions[0]) {
-            return 'v2c';
-        }
-        return ['v1', 'v2c'].includes(versions[0]) ? versions[0] : '';
-    };
-
-    const inferSetType = syntax => {
-        const normalized = String(syntax || '')
-            .replace(/[\s_-]+/g, '')
-            .toLowerCase();
-        if (!normalized) return 'OctetString';
-        if (
-            normalized.includes('displaystring') ||
-            normalized.includes('octetstring') ||
-            normalized.includes('physaddress')
-        ) {
-            return 'OctetString';
-        }
-        if (normalized.includes('objectidentifier') || normalized === 'oid') {
-            return 'OID';
-        }
-        if (normalized.includes('ipaddress')) {
-            return 'IpAddress';
-        }
-        if (normalized.includes('counter64')) {
-            return 'Counter64';
-        }
-        if (normalized.includes('counter32') || normalized === 'counter') {
-            return 'Counter32';
-        }
-        if (normalized.includes('gauge') || normalized.includes('unsigned32')) {
-            return 'Gauge32';
-        }
-        if (normalized.includes('timeticks')) {
-            return 'TimeTicks';
-        }
-        if (
-            normalized.includes('integer') ||
-            normalized.includes('truthvalue') ||
-            normalized.includes('rowstatus') ||
-            normalized.includes('enumeration')
-        ) {
-            return 'Integer';
-        }
-        return 'OctetString';
-    };
-
-    const selectOidNode = async (oid, treePath = []) => {
-        if (treePath.length > 0) {
-            await loadTreePath(treePath);
-        }
-
-        const node = findTreeNode(mibStatus.value.oidTree, oid);
-        if (!node) {
-            return;
-        }
-
-        const ancestors = findAncestorKeys(mibStatus.value.oidTree, oid) || [];
-        treeSelectedKeys.value = [oid];
-        treeExpandedKeys.value = Array.from(new Set([...treeExpandedKeys.value, ...ancestors]));
-        selectedOidNode.value = node;
-        await scrollToOidNode(oid);
-    };
-
-    const setMibStatus = payload => {
-        treeLoadingPromises.clear();
-        clearPendingTreeReleases();
-        mibStatus.value = normalizeMibStatus(payload);
-        mibFiles.value = [
-            ...mibStatus.value.loadedFiles.map(file => ({
-                ...file,
-                status: file.status || 'compiled',
-                msg: file.msg || ''
-            })),
-            ...mibStatus.value.skippedFiles.map(file => ({
-                ...file,
-                status: 'skipped'
-            })),
-            ...mibStatus.value.failedFiles.map(file => ({
-                ...file,
-                status: 'failed'
-            }))
-        ];
-
-        treeExpandedKeys.value = [];
-        treeSelectedKeys.value = [];
-        selectedOidNode.value = null;
-        contextMenu.visible = false;
-        mibStatusLoaded = true;
-    };
+    watch(mibFileStatusFilter, () => {
+        mibFilePage.value = 1;
+    });
 
     const loadMibStatus = async ({ force = false } = {}) => {
         if (!force && mibStatusLoaded) {
             return;
         }
-
         if (mibStatusLoadPromise) {
             return mibStatusLoadPromise;
         }
 
         mibStatusLoadPromise = (async () => {
             try {
-                mibCompileLoading.value = true;
+                statusLoading.value = true;
                 const result = await window.snmpApi.getMibStatus();
                 if (result.status === 'success') {
-                    setMibStatus(result.data);
+                    setMibStatus(result.data?.summary || result.data);
+                } else {
+                    notify.error(result.msg || '获取MIB状态失败');
                 }
             } catch (error) {
-                console.error(error);
+                notify.error('获取MIB状态失败: ' + error.message);
             } finally {
-                mibCompileLoading.value = false;
+                statusLoading.value = false;
                 mibStatusLoadPromise = null;
             }
         })();
@@ -1384,13 +601,18 @@
     };
 
     const compileMibFiles = async (filePaths, { force = false } = {}) => {
+        const plainFilePaths = normalizeSelectionPaths(filePaths);
+        if (plainFilePaths.length === 0) {
+            notify.warning('请先导入 MIB 文件或目录');
+            return;
+        }
+
         try {
             mibCompileLoading.value = true;
-            // Electron IPC cannot structured-clone Vue's reactive array Proxy.
-            const plainFilePaths = [...filePaths];
-            const result = await window.snmpApi.compileMibs(plainFilePaths, { force });
+            mibCompileProgress.value = null;
+            const result = await window.snmpApi.compileMibs([...plainFilePaths], { force });
             if (result.status === 'success') {
-                setMibStatus(result.data);
+                setMibStatus(result.data?.summary || result.data);
             } else {
                 notify.error(result.msg || 'MIB编译失败');
             }
@@ -1409,16 +631,12 @@
                 return;
             }
 
-            const selectedFiles = Array.isArray(result.data) ? result.data : [];
+            const selectedFiles = normalizeSelectionPaths(result.data);
             if (selectedFiles.length === 0) {
                 return;
             }
 
-            const currentFiles = mibStatus.value.requestedFiles.length
-                ? mibStatus.value.requestedFiles
-                : mibFiles.value.map(file => file.filePath);
-            const allFiles = Array.from(new Set([...currentFiles, ...selectedFiles]));
-            await compileMibFiles(allFiles);
+            await compileMibFiles([...getCurrentMibPaths(), ...selectedFiles]);
         } catch (error) {
             notify.error('选择MIB文件失败: ' + error.message);
         }
@@ -1432,25 +650,19 @@
                 return;
             }
 
-            if (!result.data) {
+            const selectedDirectories = normalizeSelectionPaths(result.data);
+            if (selectedDirectories.length === 0) {
                 return;
             }
 
-            const currentFiles = mibStatus.value.requestedFiles.length
-                ? mibStatus.value.requestedFiles
-                : mibFiles.value.map(file => file.filePath);
-            const allPaths = Array.from(new Set([...currentFiles, result.data]));
-            await compileMibFiles(allPaths);
+            await compileMibFiles([...getCurrentMibPaths(), ...selectedDirectories]);
         } catch (error) {
             notify.error('选择MIB目录失败: ' + error.message);
         }
     };
 
     const compileStoredMibs = async () => {
-        const currentFiles = mibStatus.value.requestedFiles.length
-            ? mibStatus.value.requestedFiles
-            : mibFiles.value.map(file => file.filePath);
-        await compileMibFiles(currentFiles, { force: true });
+        await compileMibFiles(getCurrentMibPaths(), { force: true });
     };
 
     const padTime = value => String(value).padStart(2, '0');
@@ -1461,12 +673,12 @@
         const day = padTime(date.getDate());
         const hour = padTime(date.getHours());
         const minute = padTime(date.getMinutes());
-        return `${year}${month}${day}-${hour}${minute}`;
+        return String(year) + month + day + '-' + hour + minute;
     };
 
     const getDefaultProjectName = () => {
         const moduleName = mibStatus.value.modules[0] || 'mib-project';
-        return `${moduleName}-${formatProjectTimestamp(new Date())}`;
+        return moduleName + '-' + formatProjectTimestamp(new Date());
     };
 
     const formatProjectTime = value => {
@@ -1479,9 +691,17 @@
             return value;
         }
 
-        return `${date.getFullYear()}-${padTime(date.getMonth() + 1)}-${padTime(date.getDate())} ${padTime(
-            date.getHours()
-        )}:${padTime(date.getMinutes())}`;
+        return (
+            date.getFullYear() +
+            '-' +
+            padTime(date.getMonth() + 1) +
+            '-' +
+            padTime(date.getDate()) +
+            ' ' +
+            padTime(date.getHours()) +
+            ':' +
+            padTime(date.getMinutes())
+        );
     };
 
     const showSaveProject = () => {
@@ -1504,6 +724,9 @@
                 return;
             }
 
+            if (result.data?.summary) {
+                setMibStatus(result.data.summary);
+            }
             projectSaveOpen.value = false;
             notify.success(result.msg || 'MIB工程保存成功');
             if (projectImportOpen.value) {
@@ -1525,8 +748,9 @@
                 return;
             }
 
-            projectRootDir.value = result.data?.rootDir || '';
-            mibProjects.value = Array.isArray(result.data?.projects) ? result.data.projects : [];
+            const data = result.data;
+            projectRootDir.value = data?.rootDir || '';
+            mibProjects.value = Array.isArray(data) ? data : Array.isArray(data?.projects) ? data.projects : [];
         } catch (error) {
             notify.error('获取MIB工程列表失败: ' + error.message);
         } finally {
@@ -1540,15 +764,16 @@
     };
 
     const importMibProject = async record => {
-        if (!record?.name || projectImporting.value) {
+        const projectName = String(record?.name || record?.projectName || '');
+        if (!projectName || projectImporting.value) {
             return;
         }
 
         try {
             projectImporting.value = true;
             mibCompileLoading.value = true;
-            importingProjectName.value = record.name;
-            const result = await window.snmpApi.importMibProject({ name: record.name });
+            importingProjectName.value = projectName;
+            const result = await window.snmpApi.importMibProject({ name: projectName });
             if (result.status !== 'success') {
                 notify.error(result.msg || '导入MIB工程失败');
                 return;
@@ -1571,8 +796,7 @@
             const result = await window.snmpApi.clearMibs();
             if (result.status === 'success') {
                 setMibStatus(result.data);
-                oidResult.value = null;
-                oidResultModalOpen.value = false;
+                mibCompileProgress.value = null;
                 notify.success(result.msg || 'MIB配置已清空');
             } else {
                 notify.error(result.msg || '清空MIB配置失败');
@@ -1581,414 +805,6 @@
             notify.error('清空MIB配置失败: ' + error.message);
         }
     };
-
-    const handleTreeExpand = async (expandedKeys, { expanded, node }) => {
-        const key = node?.key || node?.eventKey || node?.dataRef?.key;
-        const matchedNode = findTreeNode(mibStatus.value.oidTree, key);
-        if (!matchedNode) {
-            treeExpandedKeys.value = expandedKeys;
-            return;
-        }
-
-        if (expanded) {
-            cancelPendingTreeRelease(matchedNode.key);
-            treeExpandedKeys.value = expandedKeys;
-            await loadTreeNodeChildren(matchedNode);
-            return;
-        }
-
-        const descendantKeys = new Set(collectDescendantKeys(matchedNode));
-        treeExpandedKeys.value = expandedKeys.filter(expandedKey => !descendantKeys.has(expandedKey));
-        if (descendantKeys.has(treeSelectedKeys.value[0])) {
-            treeSelectedKeys.value = [matchedNode.key];
-            selectedOidNode.value = matchedNode;
-        }
-        scheduleTreeNodeChildrenRelease(matchedNode.key);
-        hideContextMenu();
-    };
-
-    const handleTreeSelect = selectedKeys => {
-        treeSelectedKeys.value = selectedKeys;
-        selectedOidNode.value = selectedKeys.length > 0 ? findTreeNode(mibStatus.value.oidTree, selectedKeys[0]) : null;
-    };
-
-    const getContextMenuPosition = (anchor, menuRect) => {
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-        const maxX = Math.max(CONTEXT_MENU_MARGIN, viewportWidth - menuRect.width - CONTEXT_MENU_MARGIN);
-        const maxY = Math.max(CONTEXT_MENU_MARGIN, viewportHeight - menuRect.height - CONTEXT_MENU_MARGIN);
-
-        return {
-            x: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientX), maxX),
-            y: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientY), maxY)
-        };
-    };
-
-    const handleTreeRightClick = async ({ event, node }) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const openRequest = ++contextMenuOpenRequest;
-        const key = node?.key || node?.eventKey || node?.dataRef?.key;
-        const matchedNode = findTreeNode(mibStatus.value.oidTree, key) || node?.dataRef || node;
-        if (!matchedNode?.key) {
-            return;
-        }
-
-        treeSelectedKeys.value = [matchedNode.key];
-        selectedOidNode.value = matchedNode;
-        contextMenu.node = matchedNode;
-        const anchor = {
-            clientX: Number.isFinite(event.clientX) ? event.clientX : CONTEXT_MENU_MARGIN,
-            clientY: Number.isFinite(event.clientY) ? event.clientY : CONTEXT_MENU_MARGIN
-        };
-        contextMenu.x = Math.max(CONTEXT_MENU_MARGIN, anchor.clientX);
-        contextMenu.y = Math.max(CONTEXT_MENU_MARGIN, anchor.clientY);
-        contextMenu.visible = true;
-
-        await nextTick();
-        if (!contextMenuRef.value) {
-            await new Promise(resolve => window.requestAnimationFrame(resolve));
-        }
-        if (!contextMenu.visible || openRequest !== contextMenuOpenRequest || !contextMenuRef.value) {
-            return;
-        }
-
-        const menuRect = contextMenuRef.value.getBoundingClientRect();
-        const measuredPosition = getContextMenuPosition(anchor, menuRect);
-        contextMenu.x = measuredPosition.x;
-        contextMenu.y = measuredPosition.y;
-    };
-
-    const hideContextMenu = () => {
-        contextMenuOpenRequest += 1;
-        contextMenu.visible = false;
-    };
-
-    const handleContextMenuClick = ({ key }) => {
-        const actions = {
-            copy: copyContextOid,
-            parse: parseContextOid,
-            get: showGetCapability,
-            getNext: () => showGetCapability('getNext'),
-            walk: showWalkCapability,
-            set: showSetCapability,
-            notify: showNotifyCapability
-        };
-        actions[key]?.();
-    };
-
-    const copyContextOid = async () => {
-        const oid = contextMenu.node?.oid;
-        if (!oid) {
-            return;
-        }
-
-        try {
-            await navigator.clipboard.writeText(oid);
-            notify.success('OID已复制');
-        } catch (error) {
-            oidQuery.value = oid;
-            notify.warning('复制失败，已填入OID输入框');
-        } finally {
-            hideContextMenu();
-        }
-    };
-
-    const parseContextOid = async () => {
-        if (!contextMenu.node?.oid) {
-            return;
-        }
-
-        oidQuery.value = contextMenu.node.oid;
-        hideContextMenu();
-        await translateOid();
-    };
-
-    const showGetCapability = async (mode = 'get') => {
-        const node = contextMenu.node;
-        if (!node?.oid) {
-            return;
-        }
-
-        hideContextMenu();
-        await loadRequestDefaults(getForm);
-        getRequestMode.value = mode;
-        getTargetNode.value = node;
-        getForm.oid = mode === 'getNext' ? node.oid : getEffectiveQueryOid(node);
-        getResult.value = null;
-        getModalOpen.value = true;
-    };
-
-    const showSetCapability = async () => {
-        const node = contextMenu.node;
-        hideContextMenu();
-        if (!node?.canSet) {
-            return;
-        }
-
-        await loadRequestDefaults(setForm);
-        setTargetNode.value = node;
-        setForm.oid = getEffectiveQueryOid(node);
-        setForm.type = inferSetType(node.syntax);
-        setForm.value = '';
-        setModalOpen.value = true;
-    };
-
-    const showWalkCapability = async () => {
-        const node = contextMenu.node;
-        hideContextMenu();
-        if (!node?.oid) {
-            return;
-        }
-
-        await loadRequestDefaults(walkForm);
-        walkTargetNode.value = node;
-        walkForm.oid = node.oid;
-        walkForm.limit = 100;
-        walkForm.maxRepetitions = 20;
-        walkRows.value = [];
-        walkMeta.value = null;
-        walkModalOpen.value = true;
-    };
-
-    const showNotifyCapability = () => {
-        hideContextMenu();
-        notify.info('该节点用于Trap/Inform变量绑定，不用于普通GET/SET');
-    };
-
-    const loadRequestDefaults = async form => {
-        try {
-            const result = await window.snmpApi.getSnmpConfig();
-            const config = result.status === 'success' && result.data ? result.data : {};
-            const versions = Array.isArray(config.supportedVersions) ? config.supportedVersions : [];
-            form.targetHost = config.targetHost || DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST;
-            form.targetPort = config.queryPort || DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT;
-            form.community = config.community || DEFAULT_VALUES.DEFAULT_COMMUNITY;
-            form.version = getConfiguredSessionVersion(versions);
-        } catch (error) {
-            form.targetHost = DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST;
-            form.targetPort = DEFAULT_VALUES.DEFAULT_SNMP_QUERY_PORT;
-            form.community = DEFAULT_VALUES.DEFAULT_COMMUNITY;
-            form.version = 'v2c';
-        }
-    };
-
-    const showInstanceSelector = async (targetForm = 'get') => {
-        const node = targetForm === 'set' ? setTargetNode.value : getTargetNode.value;
-        const form = targetForm === 'set' ? setForm : getForm;
-        if (!node?.oid) {
-            notify.warning('请选择表字段节点');
-            return;
-        }
-
-        try {
-            instanceTargetForm.value = targetForm;
-            instanceModalOpen.value = true;
-            instanceLoading.value = true;
-            instanceRows.value = [];
-            instanceMeta.value = null;
-            await loadRequestDefaults(form);
-
-            const result = await window.snmpApi.listOidInstances({
-                oid: node.oid,
-                limit: 100,
-                maxRepetitions: 20
-            });
-
-            if (result.status !== 'success') {
-                notify.error(result.msg || '实例枚举失败');
-                return;
-            }
-
-            const rows = Array.isArray(result.data?.rows) ? result.data.rows : [];
-            const enrichedRows = await enrichResultRows(rows);
-            instanceRows.value = enrichedRows.map(row => ({
-                ...row,
-                value: row.value === undefined || row.value === null ? '' : String(row.value)
-            }));
-            instanceMeta.value = {
-                ...result.data,
-                rows: instanceRows.value
-            };
-
-            if (instanceRows.value.length === 0) {
-                notify.info('未发现当前字段下的实例');
-            }
-        } catch (error) {
-            notify.error('实例枚举失败: ' + error.message);
-        } finally {
-            instanceLoading.value = false;
-        }
-    };
-
-    const selectInstance = record => {
-        if (!record?.oid) {
-            return;
-        }
-
-        if (instanceTargetForm.value === 'set') {
-            setForm.oid = record.oid;
-        } else {
-            getForm.oid = record.oid;
-        }
-
-        instanceModalOpen.value = false;
-    };
-
-    const sendGetRequest = async () => {
-        await loadRequestDefaults(getForm);
-        const actionText = isGetNextMode.value ? 'GET-NEXT' : 'GET';
-        if (!getForm.targetHost || !getForm.targetPort || !getForm.version) {
-            notify.warning(`请在SNMP配置中填写${actionText}目标并启用SNMPv1/v2c`);
-            return;
-        }
-
-        if (!getForm.oid) {
-            notify.warning('请填写OID');
-            return;
-        }
-
-        try {
-            getSending.value = true;
-            const request = { oid: getForm.oid };
-            const result = isGetNextMode.value
-                ? await window.snmpApi.sendGetNextRequest(request)
-                : await window.snmpApi.sendGetRequest(request);
-            if (result.status === 'success') {
-                const varbind = result.data?.varbinds?.[0] || null;
-                getResult.value = await enrichResultVarbind(varbind);
-                notify.success(`${actionText}查询成功`);
-                return;
-            }
-
-            notify.error(result.msg || `${actionText}查询失败`);
-        } catch (error) {
-            notify.error(`${actionText}查询失败: ` + error.message);
-        } finally {
-            getSending.value = false;
-        }
-    };
-
-    const sendWalkRequest = async () => {
-        await loadRequestDefaults(walkForm);
-        if (!walkForm.targetHost || !walkForm.targetPort || !walkForm.version) {
-            notify.warning('请在SNMP配置中填写WALK目标并启用SNMPv1/v2c');
-            return;
-        }
-
-        if (!walkForm.oid) {
-            notify.warning('请填写起始OID');
-            return;
-        }
-
-        try {
-            walkLoading.value = true;
-            walkRows.value = [];
-            walkMeta.value = null;
-
-            const result = await window.snmpApi.sendWalkRequest({
-                oid: walkForm.oid,
-                limit: walkForm.limit,
-                maxRepetitions: walkForm.maxRepetitions
-            });
-
-            if (result.status !== 'success') {
-                notify.error(result.msg || 'WALK查询失败');
-                return;
-            }
-
-            const rows = Array.isArray(result.data?.rows) ? result.data.rows : [];
-            const enrichedRows = await enrichResultRows(
-                rows.map((row, index) => ({
-                    ...row,
-                    index: index + 1,
-                    value: row.value === undefined || row.value === null ? '' : String(row.value)
-                }))
-            );
-            walkRows.value = enrichedRows;
-            walkMeta.value = {
-                ...result.data,
-                rows: enrichedRows
-            };
-
-            if (enrichedRows.length === 0) {
-                notify.info('WALK未返回当前OID子树下的数据');
-            } else {
-                notify.success(`WALK完成，共 ${enrichedRows.length} 条`);
-            }
-        } catch (error) {
-            notify.error('WALK查询失败: ' + error.message);
-        } finally {
-            walkLoading.value = false;
-        }
-    };
-
-    const sendSetRequest = async () => {
-        await loadRequestDefaults(setForm);
-        if (!setForm.targetHost || !setForm.targetPort || !setForm.version) {
-            notify.warning('请在SNMP配置中填写SET目标并启用SNMPv1/v2c');
-            return;
-        }
-
-        if (!setForm.oid || !setForm.value) {
-            notify.warning('请填写OID和值');
-            return;
-        }
-
-        try {
-            setSending.value = true;
-            const result = await window.snmpApi.sendSetRequest({
-                oid: setForm.oid,
-                type: setForm.type,
-                value: setForm.value
-            });
-            if (result.status === 'success') {
-                setModalOpen.value = false;
-                const varbind = result.data?.varbinds?.[0];
-                const enrichedVarbind = await enrichResultVarbind(varbind);
-                const objectText = getRequestObjectName(setTargetNode.value, setForm.oid);
-                const value = enrichedVarbind?.displayValue ?? enrichedVarbind?.value;
-                notify.success(`SET成功: ${objectText}${value !== undefined ? ` = ${value}` : ''}`);
-                return;
-            }
-
-            notify.error(result.msg || 'SET发送失败');
-        } catch (error) {
-            notify.error('SET发送失败: ' + error.message);
-        } finally {
-            setSending.value = false;
-        }
-    };
-
-    const translateOid = async () => {
-        const oid = oidQuery.value.trim();
-        if (!oid) {
-            notify.warning('请输入OID');
-            return;
-        }
-
-        try {
-            oidTranslateLoading.value = true;
-            const result = await window.snmpApi.translateOid(oid);
-            if (result.status === 'success') {
-                oidResult.value = result.data;
-                oidResultModalOpen.value = true;
-                if (result.data?.matchedOid) {
-                    await selectOidNode(result.data.matchedOid, result.data.treePath || []);
-                }
-            } else {
-                notify.error(result.msg || 'OID解析失败');
-            }
-        } catch (error) {
-            notify.error('OID解析失败: ' + error.message);
-        } finally {
-            oidTranslateLoading.value = false;
-        }
-    };
-
-    defineExpose({
-        clearValidationErrors: () => {}
-    });
 
     const handleMibCompileProgress = response => {
         if (response?.status !== 'success' || !response.data?.progressId) {
@@ -2011,6 +827,7 @@
         ) {
             return;
         }
+
         mibCompileProgress.value = {
             ...mibCompileProgress.value,
             ...next,
@@ -2018,18 +835,24 @@
         };
     };
 
-    onActivated(() => {
-        loadMibStatus();
+    defineExpose({
+        clearValidationErrors: () => {}
     });
 
     onMounted(() => {
-        EventBus.on(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB, handleMibCompileProgress);
+        EventBus.on(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB_COMPILER, handleMibCompileProgress);
         loadMibStatus();
     });
 
     onBeforeUnmount(() => {
-        EventBus.off(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB);
-        clearPendingTreeReleases();
+        mibSourceRequestRevision += 1;
+        EventBus.off(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB_COMPILER);
+    });
+
+    onDeactivated(() => {
+        mibSourceRequestRevision += 1;
+        mibSourceDrawerOpen.value = false;
+        mibSourceLoading.value = false;
     });
 </script>
 
@@ -2052,10 +875,14 @@
         overflow: hidden;
     }
 
-    .mib-workspace {
+    .mib-status-group {
+        justify-content: flex-end;
+    }
+
+    .mib-compiler {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 10px;
         height: 100%;
         min-height: 0;
         overflow: hidden;
@@ -2067,25 +894,6 @@
         flex-wrap: wrap;
         gap: 8px;
         align-items: center;
-        justify-content: space-between;
-        min-width: 0;
-    }
-
-    .mib-action-group,
-    .mib-status-group {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        align-items: center;
-        min-width: 0;
-    }
-
-    .mib-query-row {
-        display: grid;
-        flex-shrink: 0;
-        grid-template-columns: minmax(0, 1fr) 96px;
-        gap: 8px;
-        min-width: 0;
     }
 
     .mib-compile-progress {
@@ -2142,20 +950,18 @@
         transition: width 0.2s ease;
     }
 
-    .mib-main {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(280px, 34%);
+    .mib-results {
+        display: flex;
         flex: 1;
+        flex-direction: column;
         gap: 10px;
         min-height: 0;
         overflow: hidden;
     }
 
-    .mib-tree-panel,
-    .mib-side-panel,
-    .mib-detail-block,
     .mib-file-block {
         display: flex;
+        flex: 1 1 auto;
         flex-direction: column;
         min-width: 0;
         min-height: 0;
@@ -2165,180 +971,191 @@
         border-radius: 6px;
     }
 
-    .mib-side-panel {
-        gap: 8px;
-        border: 0;
-        border-radius: 0;
-        background: transparent;
-    }
-
-    .mib-detail-block {
-        flex: 0 0 52%;
-    }
-
-    .mib-file-block {
-        flex: 1;
-    }
-
     .mib-panel-header {
         display: flex;
         flex-shrink: 0;
+        gap: 12px;
         align-items: center;
         justify-content: space-between;
-        height: 34px;
-        padding: 0 10px;
+        min-height: 42px;
+        padding: 6px 12px;
         border-bottom: 1px solid var(--nn-color-border-light);
     }
 
-    .mib-panel-title {
-        overflow: hidden;
-        font-weight: 600;
-        color: var(--nn-color-text-strong);
-        text-overflow: ellipsis;
-        white-space: nowrap;
+    .mib-panel-heading {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        min-width: 0;
     }
 
-    .mib-file-block .mib-panel-title {
+    .mib-file-status-filter {
+        flex: 0 0 116px;
+        width: 116px;
+    }
+
+    .mib-panel-title {
+        flex-shrink: 0;
+        color: var(--nn-color-text-strong);
+        font-weight: 600;
         font-size: 13px;
         line-height: 1.4;
+    }
+
+    .mib-panel-description,
+    .mib-panel-meta {
+        overflow: hidden;
+        color: var(--nn-color-text-muted);
+        font-size: 12px;
+        line-height: 18px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .mib-panel-meta {
         flex-shrink: 0;
-        margin-left: 8px;
-        color: var(--nn-color-text-muted);
-        font-size: 12px;
-        white-space: nowrap;
     }
 
-    .mib-tree-scroll,
-    .mib-detail-scroll,
-    .mib-file-list {
+    .mib-file-table {
         flex: 1;
         min-height: 0;
+        overflow: hidden;
+    }
+
+    .mib-file-table :deep(.nn-spin-nested-loading),
+    .mib-file-table :deep(.nn-spin-container) {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .mib-file-table :deep(.nn-spin-container),
+    .mib-file-table :deep(.nn-table),
+    .mib-file-table :deep(.nn-table-container) {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    .mib-file-table :deep(.nn-table),
+    .mib-file-table :deep(.nn-table-container),
+    .mib-file-table :deep(.nn-table-content) {
+        flex: 1 1 0;
+        min-height: 0;
+    }
+
+    .mib-file-table :deep(.nn-table-content) {
+        max-height: none !important;
         overflow: auto;
     }
 
-    .mib-tree-scroll {
-        overflow-x: auto;
-        padding: 6px 4px 6px 0;
-    }
-
-    .mib-tree-scroll :deep(.nn-tree) {
-        display: inline-block;
-        min-width: 100%;
-    }
-
-    .mib-tree-scroll :deep(.nn-tree-node-content-wrapper) {
+    .mib-file-table :deep(.nn-table-cell) {
         min-width: 0;
     }
 
-    .mib-node-title {
+    .mib-file-status {
         display: inline-flex;
         gap: 6px;
         align-items: center;
-        min-width: max-content;
-        vertical-align: middle;
-    }
-
-    .mib-node-name {
-        color: var(--nn-color-text-strong);
         white-space: nowrap;
     }
 
-    .mib-node-oid,
-    .mib-node-module,
-    .mib-node-macro {
-        flex-shrink: 0;
-        color: var(--nn-color-text-muted);
-        font-size: 12px;
-        white-space: nowrap;
+    .mib-file-status-icon {
+        display: inline-flex;
+        flex: 0 0 20px;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        font-size: 13px;
+        background: var(--nn-color-bg-muted);
+        border-radius: 5px;
     }
 
-    .mib-node-macro {
-        color: var(--nn-color-primary);
-    }
-
-    .mib-node-role {
-        flex-shrink: 0;
-        padding: 0 5px;
-        border-radius: 4px;
-        font-size: 12px;
-        line-height: 18px;
-        white-space: nowrap;
-    }
-
-    .mib-node-role.is-read {
-        color: var(--nn-color-text-info);
-        background: var(--nn-color-bg-info-subtle);
-    }
-
-    .mib-node-role.is-write {
-        color: var(--nn-color-text-success);
+    .mib-file-status-icon.is-success {
+        color: var(--nn-color-success);
         background: var(--nn-color-bg-success-subtle);
     }
 
-    .mib-node-role.is-notify {
-        color: var(--nn-color-text-warning);
+    .mib-file-status-icon.is-warning {
+        color: var(--nn-color-warning);
         background: var(--nn-color-bg-warning-subtle);
     }
 
-    .mib-node-role.is-disabled {
+    .mib-file-status-icon.is-error {
+        color: var(--nn-color-error);
+        background: var(--nn-color-bg-danger-subtle);
+    }
+
+    .mib-file-status-icon.is-muted {
         color: var(--nn-color-text-muted);
-        background: var(--nn-color-bg-muted);
-    }
-
-    .mib-detail-scroll {
-        padding: 8px;
-    }
-
-    .mib-node-detail :deep(.nn-descriptions-item-label) {
-        width: 72px;
-    }
-
-    .mib-file-list {
-        padding: 6px 8px;
-    }
-
-    .mib-file-row {
-        display: flex;
-        gap: 6px;
-        align-items: center;
-        min-width: 0;
-        height: 28px;
-        border-bottom: 1px solid var(--nn-color-border-light);
-    }
-
-    .mib-file-row:last-child {
-        border-bottom: 0;
-    }
-
-    .mib-file-tag {
-        flex-shrink: 0;
-        margin-inline-end: 0;
     }
 
     .mib-file-name {
-        flex: 1;
+        display: block;
         min-width: 0;
         overflow: hidden;
+        color: var(--nn-color-text-strong);
+        font-weight: 500;
         font-size: 13px;
         line-height: 1.4;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    .mib-file-info {
+    .mib-file-tag {
+        margin-inline-end: 0;
+    }
+
+    .mib-file-path {
+        display: block;
+        overflow: hidden;
+        color: var(--nn-color-text-muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+        font-size: 11px;
+        line-height: 17px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .mib-file-message {
+        display: flex;
+        gap: 5px;
+        align-items: center;
+        min-width: 0;
+        overflow: hidden;
+        color: var(--nn-color-text-warning);
+        font-size: 12px;
+        line-height: 18px;
+    }
+
+    .mib-file-message :deep(.nn-icon) {
         flex-shrink: 0;
-        color: var(--nn-color-warning);
     }
 
-    .oid-result-detail {
-        margin-top: 10px;
+    .mib-file-message span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
-    .oid-result-detail :deep(.nn-descriptions-item-label) {
-        width: 92px;
+    .mib-file-placeholder {
+        color: var(--nn-color-text-muted);
+    }
+
+    .mib-source-preview {
+        min-height: calc(100vh - 160px);
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        color: var(--nn-color-text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.6;
+        white-space: pre;
+        background: var(--nn-color-bg-code);
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
     }
 
     .mib-project-meta {
@@ -2380,315 +1197,51 @@
         min-width: 0;
     }
 
-    .mib-request-alert {
-        margin-bottom: 10px;
-    }
-
-    .mib-request-readonly {
-        min-height: 32px;
-        overflow: hidden;
-        padding: 0 11px;
-        color: var(--nn-color-text-strong);
-        line-height: 30px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        background: var(--nn-color-bg-subtle);
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
-    }
-
-    .mib-request-object {
-        max-width: 100%;
-        min-width: 0;
-        overflow: hidden;
-        padding: 7px 11px;
-        background: var(--nn-color-bg-subtle);
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
-    }
-
-    .mib-request-object-title {
-        overflow: hidden;
-        color: var(--nn-color-text-strong);
-        font-weight: 600;
-        line-height: 20px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .mib-request-object-meta,
-    .mib-request-object-oid {
-        display: block;
-        max-width: 100%;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-        color: var(--nn-color-text-muted);
-        font-size: 12px;
-        line-height: 18px;
-        white-space: normal;
-    }
-
-    .mib-request-object-oid :deep(.nn-typography-copy) {
-        margin-inline-start: 4px;
-    }
-
-    .mib-oid-input-row {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        min-width: 0;
-    }
-
-    .mib-oid-input-row :deep(.nn-input) {
-        min-width: 0;
-    }
-
-    .mib-oid-input-row :deep(.nn-button) {
-        flex-shrink: 0;
-    }
-
-    .mib-request-form :deep(.nn-form-item) {
-        margin-bottom: 10px;
-    }
-
-    .mib-request-form :deep(.nn-form-item-control),
-    .mib-request-form :deep(.nn-form-item-control-input),
-    .mib-request-form :deep(.nn-form-item-control-input-content) {
-        min-width: 0;
-    }
-
-    .mib-request-result {
-        margin-top: 10px;
-    }
-
-    .mib-request-result :deep(.nn-descriptions-item-label) {
-        width: 86px;
-    }
-
-    .mib-request-result :deep(.nn-descriptions-item-content) {
-        min-width: 0;
-        overflow: hidden;
-    }
-
-    .instance-table {
-        margin-top: 10px;
-    }
-
-    .walk-summary {
-        flex-shrink: 0;
-        margin: 2px 0 8px;
-    }
-
-    .walk-modal-body {
-        display: flex;
-        flex: 1;
-        flex-direction: column;
-        height: 100%;
-        max-height: 100%;
-        min-height: 0;
-        overflow: hidden;
-    }
-
-    .walk-form {
-        flex-shrink: 0;
-    }
-
-    .walk-form :deep(.nn-form-item) {
-        margin-bottom: 8px;
-    }
-
-    .walk-output-shell {
-        position: relative;
-        flex: 1;
-        min-height: 0;
-        overflow: hidden;
-    }
-
-    .walk-output-textarea {
-        width: 100%;
-        height: 100%;
-        min-height: 180px;
-        overflow: auto;
-        resize: none;
-        padding: 10px 12px;
-        color: var(--nn-color-text-strong);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-        font-size: 12px;
-        line-height: 18px;
-        white-space: pre-wrap;
-        word-break: break-word;
-        background: var(--nn-color-bg-subtle);
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
-        outline: none;
-    }
-
-    .walk-output-loading {
-        position: absolute;
-        top: 8px;
-        right: 10px;
-        padding: 2px 8px;
-        color: var(--nn-color-primary);
-        font-size: 12px;
-        line-height: 20px;
-        background: var(--nn-color-bg-info-subtle);
-        border: 1px solid var(--nn-color-border-info);
-        border-radius: 4px;
-    }
-
-    :global(.walk-modal-wrap) {
-        overflow: hidden;
-    }
-
-    :global(.walk-modal-wrap .nn-modal) {
-        max-width: calc(100vw - 32px);
-        padding-bottom: 0;
-    }
-
-    :global(.walk-modal-wrap .nn-modal-content) {
-        display: flex;
-        flex-direction: column;
-        max-height: calc(100vh - 48px);
-        overflow: hidden;
-    }
-
-    :global(.walk-modal-wrap .nn-modal-body) {
-        display: flex;
-        flex: 1;
-        flex-direction: column;
-        min-height: 0;
-        overflow: hidden;
-    }
-
-    :global(.walk-modal-wrap .nn-modal-footer) {
-        flex-shrink: 0;
-    }
-
-    .instance-value {
-        display: inline-block;
-        max-width: 220px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        vertical-align: bottom;
-    }
-
-    .instance-object {
-        min-width: 0;
-        overflow: hidden;
-    }
-
-    .instance-object-title {
-        overflow: hidden;
-        color: var(--nn-color-text-strong);
-        line-height: 20px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .instance-object-oid {
-        display: block;
-        overflow: hidden;
-        color: var(--nn-color-text-muted);
-        font-size: 12px;
-        line-height: 18px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .mib-context-menu {
-        position: fixed;
-        z-index: 1200;
-        width: 196px;
-        max-width: calc(100vw - 16px);
-        max-height: calc(100vh - 16px);
-        padding: 4px 0;
-        overflow-y: auto;
-        background: var(--nn-color-bg-elevated);
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
-        box-shadow: var(--nn-shadow-elevated);
-    }
-
-    .mib-context-menu-title {
-        overflow: hidden;
-        padding: 5px 12px 6px;
-        color: var(--nn-color-text-strong);
-        font-weight: 600;
-        font-size: 13px;
-        line-height: 20px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        border-bottom: 1px solid var(--nn-color-border-light);
-    }
-
-    .mib-context-menu-list {
-        border-inline-end: 0;
-    }
-
-    .mib-context-menu-list :deep(.nn-menu-item) {
-        height: 30px;
-        min-height: 30px;
-        margin: 2px 4px;
-        padding-block: 3px;
-        line-height: 24px;
-        border-radius: 4px;
-    }
-
-    .mib-context-menu-list :deep(.nn-menu-divider) {
-        margin: 4px 0;
-    }
-
-    .mib-context-menu-hint {
-        padding: 6px 12px 4px;
-        color: var(--nn-color-text-muted);
-        font-size: 12px;
-        line-height: 18px;
-        border-top: 1px solid var(--nn-color-border-light);
-    }
-
-    @media (max-width: 900px) {
-        .mib-main {
-            grid-template-rows: minmax(0, 1fr) minmax(180px, 38%);
-            grid-template-columns: minmax(0, 1fr);
+    @media (max-width: 760px) {
+        .mib-card :deep(.nn-card-head) {
+            align-items: flex-start;
         }
 
-        .mib-side-panel {
-            flex-direction: row;
+        .mib-panel-header,
+        .mib-panel-heading {
+            align-items: flex-start;
         }
 
-        .mib-detail-block,
-        .mib-file-block {
-            flex: 1;
-        }
-    }
-
-    @media (max-width: 640px) {
-        .mib-query-row {
-            grid-template-columns: minmax(0, 1fr);
-        }
-
-        .mib-side-panel {
-            flex-direction: column;
-        }
-
-        .mib-detail-block {
-            flex: 0 0 50%;
-        }
-    }
-
-    @media (max-height: 620px) {
         .mib-panel-header {
-            height: 30px;
+            flex-direction: column;
+            gap: 2px;
         }
 
-        .mib-detail-block {
-            flex-basis: 46%;
+        .mib-panel-heading {
+            flex-direction: column;
+            gap: 0;
         }
 
-        .mib-detail-scroll,
-        .mib-file-list {
-            padding: 6px;
+        .mib-file-status-filter {
+            width: 100%;
+        }
+
+        .mib-panel-meta {
+            white-space: normal;
+        }
+
+        .mib-compile-progress-info {
+            flex-wrap: wrap;
+            gap: 2px 10px;
+        }
+
+        .mib-compile-progress-file {
+            flex-basis: calc(100% - 90px);
+        }
+
+        .mib-compile-progress-counts {
+            width: 100%;
+        }
+    }
+
+    @media (max-height: 660px) {
+        .mib-panel-description {
+            display: none;
         }
     }
 </style>

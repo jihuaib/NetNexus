@@ -28,6 +28,7 @@ const fullHeightPageRoutes = [
     '/#/rpki/rpki-aspa-config',
     '/#/ftp/ftp-config',
     '/#/snmp/snmp-config',
+    '/#/snmp/snmp-mib-compile',
     '/#/snmp/snmp-mib',
     '/#/snmp/snmp-trap',
     '/#/dhcp/dhcp-config',
@@ -486,9 +487,9 @@ test.describe('Custom UI component interactions', () => {
         expect(routerWarnings).toEqual([]);
     });
 
-    test('keeps the SNMP MIB workspace aligned in expanded and collapsed layouts', async ({ page }) => {
+    test('keeps the SNMP MIB compiler aligned in expanded and collapsed layouts', async ({ page }) => {
         await page.setViewportSize({ width: 2056, height: 1209 });
-        await page.goto('/#/snmp/snmp-mib');
+        await page.goto('/#/snmp/snmp-mib-compile');
 
         const sidebar = page.locator('.main-layout > .sider');
         const toggleButton = sidebar.locator('.toggle-btn .nn-button');
@@ -525,7 +526,7 @@ test.describe('Custom UI component interactions', () => {
         await expect.soft(apiListItem).toHaveCSS('font-size', '13px');
         await expect.soft(apiListItem).toHaveCSS('line-height', '18.2px');
 
-        await page.goto('/#/snmp/snmp-mib');
+        await page.goto('/#/snmp/snmp-mib-compile');
 
         const mibFilePanelTitle = page.locator('.mib-file-block .mib-panel-title');
         const mibFileName = page.locator('.mib-file-name').first();
