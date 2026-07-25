@@ -965,7 +965,10 @@ explicit_state = 'stale'
 - `active`：`explicit_state <> 'stale'`、属于当前 connection 且 epoch 不旧的 counter 总和，并受 scope state 约束。
 - `stale`：`total - active`。
 
-Peer Down 或新 epoch 开始时仍只需更新 scope，不需要逐条改写 route。
+普通 Peer Down 或新 epoch 开始时仍只需更新 scope，不需要逐条改写 route。只有 reason 1/3
+且携带结构完整 BGP Notification 的普通 peer Peer Down 会在推进 scope epoch 后立即清理该 peer
+全部 AFI/SAFI/RIB scope 的 current route；它不会触碰 Loc-RIB。Loc-RIB 自己的 Peer Down 以及
+普通 peer 不携带有效 Notification 的 Peer Down 继续保留 stale projection。
 
 ## 10. Route events 和批次
 
@@ -1124,7 +1127,7 @@ SQLite Writer transaction
 
 ### 13.3 EOR 和旧 epoch
 
-同一 BMP 连接内，重复上报某 AF 的 Peer Up（该 AF 的新一轮刷新）会推进该 AF scope 的 `current_epoch` 并进入 `syncing`；分批 Peer Up 中首次出现的新 AF 只打开自身 scope，不影响已经存在的其他 AF。Peer Down 已推进全部已跟踪 scope 的 epoch，因此其后的首个 Peer Up 复用该 epoch，不重复推进。EOR 将精确的 AF/RIB scope 设为 `ready`，记录 `eor_epoch` 并设置 `cleanup_pending_epoch`。
+同一 BMP 连接内，重复上报某 AF 的 Peer Up（该 AF 的新一轮刷新）会推进该 AF scope 的 `current_epoch` 并进入 `syncing`；分批 Peer Up 中首次出现的新 AF 只打开自身 scope，不影响已经存在的其他 AF。Peer Down 已推进全部已跟踪 scope 的 epoch，因此其后的首个 Peer Up 复用该 epoch，不重复推进。若普通 peer 的 Peer Down reason 1/3 携带结构完整的 BGP Notification，旧 epoch 路由会立即以 `peer-down-notification:<reason>` 原因写入 `purge` 历史并从 current projection 删除；其他 Peer Down 仍保留 stale 路由等待刷新、撤销或 sweep。EOR 将精确的 AF/RIB scope 设为 `ready`，记录 `eor_epoch` 并设置 `cleanup_pending_epoch`。
 
 旧 connection/epoch 路径在删除前通过有效状态公式显示为 stale。Sweep 从 scope 对应的单一分区中分批删除旧路径，避免全库大事务。
 

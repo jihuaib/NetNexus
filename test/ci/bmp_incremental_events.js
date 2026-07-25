@@ -231,4 +231,149 @@ assert.deepEqual(flushedEvents[1].payload, {
     data: { batch: true, updates: instanceFlushUpdates }
 });
 
-console.log('BMP incremental event tests passed');
+(async () => {
+    const purgeQueries = [];
+    const committedResults = [];
+    const purgeUpdates = [];
+    const purgeResults = [
+        {
+            purged: 2,
+            hasMore: true,
+            deltas: [
+                {
+                    sourceId: 'source-a',
+                    ownerKey: 'peer-a',
+                    scopeId: 'scope-a',
+                    scopeKind: 'peer',
+                    afi: 1,
+                    safi: 1,
+                    ribType: 'pre-adj-rib-in'
+                },
+                {
+                    sourceId: 'source-a',
+                    ownerKey: 'peer-a',
+                    scopeId: 'scope-a',
+                    scopeKind: 'peer',
+                    afi: 1,
+                    safi: 1,
+                    ribType: 'pre-adj-rib-in'
+                }
+            ]
+        },
+        {
+            purged: 1,
+            hasMore: false,
+            deltas: [
+                {
+                    sourceId: 'source-a',
+                    ownerKey: 'peer-a',
+                    scopeId: 'scope-a',
+                    scopeKind: 'peer',
+                    afi: 1,
+                    safi: 1,
+                    ribType: 'pre-adj-rib-in'
+                }
+            ]
+        },
+        {
+            purged: 1,
+            hasMore: false,
+            deltas: [
+                {
+                    sourceId: 'source-a',
+                    ownerKey: 'peer-a',
+                    scopeId: 'scope-b',
+                    scopeKind: 'peer',
+                    afi: 2,
+                    safi: 1,
+                    ribType: 'pre-adj-rib-in'
+                }
+            ]
+        }
+    ];
+    const purgeWorker = Object.create(BmpWorker.prototype);
+    purgeWorker.persistence = {
+        async purgeStaleRoutes(query) {
+            purgeQueries.push(query);
+            return purgeResults.shift();
+        }
+    };
+    purgeWorker.handleCommittedPersistenceResult = result => committedResults.push(result);
+    purgeWorker.emitPersistenceSweepRouteUpdates = scopes => purgeUpdates.push(scopes);
+
+    const notificationPurge = await purgeWorker.purgeNotificationPeerRoutes({
+        sourceId: 'source-a',
+        ownerKey: 'peer-a',
+        scopeKind: 'peer',
+        scopes: [
+            {
+                scopeId: 'scope-a',
+                afi: 1,
+                safi: 1,
+                ribType: 'pre-adj-rib-in',
+                ribEpochBefore: 3
+            },
+            {
+                scopeId: 'scope-b',
+                afi: 2,
+                safi: 1,
+                ribType: 'pre-adj-rib-in',
+                ribEpochBefore: 7
+            }
+        ],
+        reason: 'peer-down-notification:1'
+    });
+    assert.equal(notificationPurge.purged, 4);
+    assert.deepEqual(purgeQueries, [
+        {
+            sourceId: 'source-a',
+            ownerKey: 'peer-a',
+            scopeKind: 'peer',
+            scopeId: 'scope-a',
+            afi: 1,
+            safi: 1,
+            ribType: 'pre-adj-rib-in',
+            ribEpochBefore: 3,
+            routeLimit: 20000,
+            reason: 'peer-down-notification:1'
+        },
+        {
+            sourceId: 'source-a',
+            ownerKey: 'peer-a',
+            scopeKind: 'peer',
+            scopeId: 'scope-a',
+            afi: 1,
+            safi: 1,
+            ribType: 'pre-adj-rib-in',
+            ribEpochBefore: 3,
+            routeLimit: 20000,
+            reason: 'peer-down-notification:1'
+        },
+        {
+            sourceId: 'source-a',
+            ownerKey: 'peer-a',
+            scopeKind: 'peer',
+            scopeId: 'scope-b',
+            afi: 2,
+            safi: 1,
+            ribType: 'pre-adj-rib-in',
+            ribEpochBefore: 7,
+            routeLimit: 20000,
+            reason: 'peer-down-notification:1'
+        }
+    ]);
+    assert.equal(committedResults.length, 3);
+    assert.equal(purgeUpdates.length, 1);
+    assert.deepEqual(
+        purgeUpdates[0].map(scope => [scope.scopeId, scope.deletedRoutes]),
+        [
+            ['scope-a', 3],
+            ['scope-b', 1]
+        ]
+    );
+
+    console.log('BMP incremental event tests passed');
+})().catch(error => {
+    console.error(error);
+    process.exitCode = 1;
+});

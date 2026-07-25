@@ -2712,6 +2712,7 @@ class BmpPersistenceStore {
         addFilter('r.afi = @afi', 'afi', finiteNumber(query.afi));
         addFilter('r.safi = @safi', 'safi', finiteNumber(query.safi));
         addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
+        addFilter('r.rib_epoch < @ribEpochBefore', 'ribEpochBefore', finiteNumber(query.ribEpochBefore));
         addFilter('r.prefix = @prefixExact', 'prefixExact', query.prefixExact);
         addFilter('r.prefix_length = @prefixLength', 'prefixLength', finiteNumber(query.prefixLength));
         const whereSql = `WHERE ${where.join(' AND ')}`;

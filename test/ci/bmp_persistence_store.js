@@ -1142,6 +1142,46 @@ try {
     assert.equal(directPurgeEvents.list[0].reason, 'ci-direct-purge');
     directPurgeStore.close();
 
+    const epochCutoffDbPath = path.join(tempDir, 'notification-purge-epoch-cutoff.sqlite3');
+    const epochCutoffContext = makeContext();
+    const epochCutoffStore = new BmpPersistenceStore({ dbPath: epochCutoffDbPath }).open();
+    const preNotificationRoute = makeRoute(epochCutoffContext.owner, '198.22.0.0', 1, '192.0.2.13');
+    const preNotificationUpsert = buildRouteUpsertMutation(
+        epochCutoffContext.bmpSession,
+        epochCutoffContext.owner,
+        preNotificationRoute,
+        1,
+        1,
+        2,
+        { kind: 'peer', state: 'ready', scopeState: 'ready' }
+    );
+    epochCutoffStore.applyBatch(batch('notification-cutoff-old', [preNotificationUpsert]));
+    const notificationEpoch = epochCutoffContext.owner.advanceRibEpoch(1, 1, 2);
+    const postNotificationRoute = makeRoute(epochCutoffContext.owner, '198.23.0.0', 2, '192.0.2.14');
+    const postNotificationUpsert = buildRouteUpsertMutation(
+        epochCutoffContext.bmpSession,
+        epochCutoffContext.owner,
+        postNotificationRoute,
+        1,
+        1,
+        2,
+        { kind: 'peer', state: 'stale', scopeState: 'stale' }
+    );
+    epochCutoffStore.applyBatch(batch('notification-cutoff-new', [postNotificationUpsert]));
+    assert.equal(epochCutoffStore.queryRoutes({ routeState: 'stale' }).total, 2);
+    const cutoffPurge = epochCutoffStore.purgeStaleRoutes({
+        scopeId: preNotificationUpsert.scope.id,
+        ribEpochBefore: notificationEpoch,
+        reason: 'peer-down-notification:1'
+    });
+    assert.equal(cutoffPurge.purged, 1);
+    assert.equal(cutoffPurge.routes[0].ip, '198.22.0.0');
+    const routesAfterCutoffPurge = epochCutoffStore.queryRoutes({ routeState: 'all' });
+    assert.equal(routesAfterCutoffPurge.total, 1);
+    assert.equal(routesAfterCutoffPurge.list[0].ip, '198.23.0.0');
+    assert.equal(routesAfterCutoffPurge.list[0].ribEpoch, notificationEpoch);
+    epochCutoffStore.close();
+
     const legacyDbPath = path.join(tempDir, 'legacy-v8.sqlite3');
     const legacyDb = new Database(legacyDbPath);
     legacyDb.exec(`

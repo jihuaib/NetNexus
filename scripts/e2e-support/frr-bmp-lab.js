@@ -631,6 +631,30 @@ class FrrBmpLab {
         await docker(['stop', '--time', '1', this.peerName], { allowFailure: true, timeout: 30000 });
     }
 
+    async shutdownPeerBgp() {
+        if (!this.peerName) {
+            throw new Error('FRR BMP lab peer is not ready for BGP shutdown');
+        }
+        const result = await docker(
+            [
+                'exec',
+                this.peerName,
+                'vtysh',
+                '-c',
+                'configure terminal',
+                '-c',
+                `router bgp ${PEER_AS}`,
+                '-c',
+                'bgp shutdown'
+            ],
+            { timeout: 30000 }
+        );
+        const output = `${String(result.stdout || '')}\n${String(result.stderr || '')}`;
+        if (/% (Unknown command|Ambiguous command|Command incomplete)/.test(output)) {
+            throw new Error(`FRR rejected peer BGP shutdown command:\n${output.trim()}`);
+        }
+    }
+
     releaseTempDir() {
         if (!this.tempDir) {
             return;

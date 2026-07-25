@@ -1867,6 +1867,95 @@ class BmpWorker {
         return deleted;
     }
 
+    requestNotificationPeerRoutePurge(query = {}) {
+        if (!this.persistence) {
+            return false;
+        }
+        const task = this.purgeNotificationPeerRoutes(query);
+        task.catch(error => {
+            logger.error(`BMP Notification peer route purge failed: ${error.message}`);
+            this.handlePersistenceFailure(error);
+        });
+        return task;
+    }
+
+    async purgeNotificationPeerRoutes(query = {}) {
+        const sourceId = typeof query.sourceId === 'string' ? query.sourceId.trim() : '';
+        const ownerKey = typeof query.ownerKey === 'string' ? query.ownerKey : '';
+        const targetScopes = Array.isArray(query.scopes)
+            ? query.scopes.filter(
+                  scope =>
+                      scope?.scopeId &&
+                      Number.isFinite(Number(scope.ribEpochBefore)) &&
+                      Number(scope.ribEpochBefore) > 0
+              )
+            : [];
+        if (!sourceId || !ownerKey || query.scopeKind !== 'peer' || targetScopes.length === 0) {
+            throw new Error('BMP Notification peer route purge requires sourceId, ownerKey, and peer scope epochs');
+        }
+
+        const reason = query.reason || 'peer-down-notification';
+        const affectedScopes = new Map();
+        let purged = 0;
+        for (const target of targetScopes) {
+            let hasMore = true;
+            while (hasMore) {
+                // BmpPersistenceClient fences the mutations already queued by
+                // Peer Down before evaluating this purge. The epoch cutoff also
+                // protects routes announced by a later Peer Up, even if this
+                // scope needs several purge batches.
+                const result = await this.persistence.purgeStaleRoutes({
+                    sourceId,
+                    ownerKey,
+                    scopeKind: 'peer',
+                    scopeId: target.scopeId,
+                    afi: target.afi,
+                    safi: target.safi,
+                    ribType: String(target.ribType),
+                    ribEpochBefore: Number(target.ribEpochBefore),
+                    routeLimit: 20000,
+                    reason
+                });
+                this.handleCommittedPersistenceResult(result);
+                purged += Number(result?.purged || 0);
+
+                const deltas = Array.isArray(result?.deltas) ? result.deltas : [];
+                const deletedRows = deltas.length > 0 ? deltas : Array.isArray(result?.routes) ? result.routes : [];
+                deletedRows.forEach(item => {
+                    const scope = item.scope || {};
+                    const scopeId = item.scopeId || item.persistentScopeId || scope.id || scope.scopeId;
+                    if (!scopeId) {
+                        return;
+                    }
+                    const existing = affectedScopes.get(scopeId);
+                    if (existing) {
+                        existing.deletedRoutes += 1;
+                        return;
+                    }
+                    affectedScopes.set(scopeId, {
+                        scopeId,
+                        sourceId: item.sourceId || item.persistentSourceId || scope.sourceId || sourceId,
+                        ownerKey: item.ownerKey || scope.ownerKey || ownerKey,
+                        scopeKind: item.scopeKind || scope.kind || 'peer',
+                        afi: item.afi ?? scope.afi,
+                        safi: item.safi ?? scope.safi,
+                        ribType: item.ribType ?? scope.ribType,
+                        deletedRoutes: 1,
+                        reason
+                    });
+                });
+
+                hasMore = result?.hasMore === true && Number(result?.purged || 0) > 0;
+            }
+        }
+
+        const affectedScopeList = Array.from(affectedScopes.values());
+        if (affectedScopeList.length > 0) {
+            this.emitPersistenceSweepRouteUpdates(affectedScopeList);
+        }
+        return { purged, affectedScopes: affectedScopeList };
+    }
+
     async purgeStaleBgpInstanceRoutes(messageId, data) {
         try {
             const lookup = this.getBgpInstanceRouteScope(data.client, data.instance);

@@ -1102,6 +1102,7 @@ class BmpSession {
     parsePeerDownPayload(message, position, reason, version) {
         const result = {
             parsedBgpNotification: null,
+            hasValidBgpNotification: false,
             fsmEventCode: null,
             tlvs: []
         };
@@ -1113,6 +1114,16 @@ class BmpSession {
             const embedded = this.parseEmbeddedBgpPacket(message, position, null, 'BGP Notification message');
             if (!embedded.error) {
                 result.parsedBgpNotification = embedded.parsed;
+                result.hasValidBgpNotification =
+                    embedded.type === BgpConst.BGP_PACKET_TYPE.NOTIFICATION &&
+                    embedded.length >= BgpConst.BGP_HEAD_LEN + 2 &&
+                    embedded.parsed?.valid === true &&
+                    embedded.parsed.type === BgpConst.BGP_PACKET_TYPE.NOTIFICATION &&
+                    Number.isInteger(embedded.parsed.errorCode) &&
+                    Number.isInteger(embedded.parsed.errorSubcode);
+                if (!result.hasValidBgpNotification) {
+                    logger.warn('Peer Down: embedded BGP message is not a valid Notification');
+                }
                 position += embedded.length;
             } else {
                 logger.warn(`Peer Down: ${embedded.error}`);
@@ -1886,6 +1897,44 @@ class BmpSession {
         });
     }
 
+    requestNotificationPeerRoutePurge(bgpSession, reason, staleUpdates) {
+        if (!bgpSession || !this.bmpWorker || typeof this.bmpWorker.requestNotificationPeerRoutePurge !== 'function') {
+            return false;
+        }
+
+        const sourceId = this.getPersistentSourceId();
+        const ownerKey = this.getSessionOwnerKey(bgpSession);
+        if (!sourceId || !ownerKey) {
+            return false;
+        }
+
+        const scopes = (Array.isArray(staleUpdates) ? staleUpdates : []).map(update => ({
+            scopeId: this.getPersistenceScopeId(
+                bgpSession,
+                Number(update.afi),
+                Number(update.safi),
+                update.ribType,
+                'peer'
+            ),
+            afi: Number(update.afi),
+            safi: Number(update.safi),
+            ribType: update.ribType,
+            ribEpochBefore: Number(update.staleEpoch)
+        }));
+        if (scopes.length === 0) {
+            return true;
+        }
+
+        const requested = this.bmpWorker.requestNotificationPeerRoutePurge({
+            sourceId,
+            ownerKey,
+            scopeKind: 'peer',
+            scopes,
+            reason: `peer-down-notification:${reason}`
+        });
+        return requested !== false;
+    }
+
     markInstanceRoutesStale(bgpInstance, reason) {
         if (!bgpInstance) {
             return { changed: 0 };
@@ -2344,15 +2393,24 @@ class BmpSession {
                 null,
                 `peer-down:${reason}`
             );
-            this.sendSessionStaleEvents(bgpSession, staleUpdates);
-            this.bmpWorker?.requestPersistenceSweep?.();
             bgpSession.sessionState = BmpConst.BMP_SESSION_STATE.PEER_DOWN;
             bgpSession.peerUpAddressFamilyKeys.clear();
 
-            if (addressFamilyKeys.length > 1) {
+            const purgeRequested =
+                peerDownPayload.hasValidBgpNotification &&
+                this.requestNotificationPeerRoutePurge(bgpSession, reason, staleUpdates);
+            if (purgeRequested) {
                 logger.info(
-                    `Peer Down marked ${addressFamilyKeys.length} address families stale for ${sessKey}; keeping routes until refresh, withdraw, purge, or BMP close`
+                    `Peer Down with a valid BGP Notification is deleting routes from ${staleUpdates.length} peer scopes for ${sessKey}`
                 );
+            } else {
+                this.sendSessionStaleEvents(bgpSession, staleUpdates);
+                this.bmpWorker?.requestPersistenceSweep?.();
+                if (addressFamilyKeys.length > 1) {
+                    logger.info(
+                        `Peer Down marked ${addressFamilyKeys.length} address families stale for ${sessKey}; keeping routes until refresh, withdraw, purge, or BMP close`
+                    );
+                }
             }
 
             this.sendSessionUpdateEvent(bgpSession);
@@ -2627,8 +2685,9 @@ class BmpSession {
 
             // Some routers split one logical Peer Up across multiple messages, often
             // one AFI/SAFI at a time. Treat omitted families as unchanged on the same
-            // BMP connection; Peer Down or connection close remains authoritative for
-            // removing the complete peer. A repeated family is still a fresh epoch.
+            // BMP connection. Peer Down or connection close ends the current peer
+            // generation; only a validated Peer Down Notification hard-deletes its
+            // old routes. A repeated family is still a fresh epoch.
             if (!mergePeerUpCapabilities) {
                 bgpSession.enabledAddressFamilies = [];
                 bgpSession.recvAddressFamilies = [];

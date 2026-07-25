@@ -137,6 +137,16 @@ async function queryPersistedRoutes(request, query = {}) {
     return response.data;
 }
 
+async function queryPersistedRouteEvents(request, query = {}) {
+    const response = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTE_EVENTS, {
+        page: 1,
+        pageSize: 1,
+        includeTotal: true,
+        ...query
+    });
+    return response.data;
+}
+
 async function waitForPersistedTotal(request, routeState, expected) {
     let observed = null;
     return waitFor(`${expected} ${routeState} persisted routes`, async () => {
@@ -147,6 +157,20 @@ async function waitForPersistedTotal(request, routeState, expected) {
         return null;
     }).catch(error => {
         error.message = `${error.message}; last observed total=${observed?.total ?? 'unavailable'}`;
+        throw error;
+    });
+}
+
+async function waitForPersistedEventTotal(request, query, expected) {
+    let observed = null;
+    return waitFor(`${expected} persisted ${query.eventType || 'route'} events`, async () => {
+        observed = await queryPersistedRouteEvents(request, query);
+        if (Number(observed.total) === expected) {
+            return observed;
+        }
+        return null;
+    }).catch(error => {
+        error.message = `${error.message}; last observed event total=${observed?.total ?? 'unavailable'}`;
         throw error;
     });
 }
@@ -519,14 +543,36 @@ async function main() {
         await waitForPersistedTotal(request, BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE, lab.expectedPersistedRouteCount);
         await assertLiveSentinelProjection(request, contexts, BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE, 3);
 
-        await lab.stopPeer();
+        const peerPurgeEventQuery = {
+            sourceId: peerSnapshot.client.persistentSourceId || peerSnapshot.client.sourceId,
+            scopeKind: 'peer',
+            eventType: 'purge'
+        };
+        const locRibPurgeEventQuery = {
+            sourceId: peerSnapshot.client.persistentSourceId || peerSnapshot.client.sourceId,
+            scopeKind: 'loc-rib',
+            eventType: 'purge'
+        };
+        const peerPurgeEventsBeforeDown = await queryPersistedRouteEvents(request, peerPurgeEventQuery);
+        const locRibPurgeEventsBeforeDown = await queryPersistedRouteEvents(request, locRibPurgeEventQuery);
+        assert.equal(Number(peerPurgeEventsBeforeDown.total), 0, 'FRR peer purge history must start empty');
+        assert.equal(Number(locRibPurgeEventsBeforeDown.total), 0, 'FRR Loc-RIB purge history must start empty');
+        await lab.shutdownPeerBgp();
         const peerDownSessions = await waitForPeerDown(request, peerSnapshot.client, lab);
-        peerDownSessions.forEach(session => assert.notEqual(session.peerDownReason, null));
-        // RFC 7854 Peer Down implicitly withdraws every view associated with
-        // that peer. Loc-RIB is an independent RFC 9069 instance, so FRR keeps
-        // its current snapshot active until a Loc-RIB update or lifecycle event.
+        peerDownSessions.forEach(session => {
+            assert.equal(
+                session.peerDownReason,
+                BmpConst.BMP_PEER_DOWN_REASON.REMOTE_SYSTEM_CLOSED_WITH_NOTIFICATION,
+                `FRR peer ${session.sessionIp} must carry a remote BGP Notification in its Peer Down`
+            );
+        });
+
+        // A valid Notification proves that both real FRR BGP neighbors are
+        // down, so every peer RIB view is purged. RFC 9069 Loc-RIB instances
+        // are independent and must remain online with their routes active.
         await waitForPersistedTotal(request, BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE, lab.expectedSourceRouteCount);
-        await waitForPersistedTotal(request, BmpConst.BMP_ROUTE_STATE_FILTER.STALE, lab.expectedSourceRouteCount * 2);
+        await waitForPersistedTotal(request, BmpConst.BMP_ROUTE_STATE_FILTER.STALE, 0);
+        await waitForPersistedTotal(request, BmpConst.BMP_ROUTE_STATE_FILTER.ALL, lab.expectedSourceRouteCount);
         await assertFamilyViewMatrix(
             request,
             peerSnapshot.client,
@@ -541,16 +587,68 @@ async function main() {
             request,
             peerSnapshot.client,
             contexts,
-            family => {
-                const expected = lab.getFamilyPlan(family.key).routes.length;
-                return { prePolicy: expected, postPolicy: expected, locRib: 0 };
-            },
+            () => ({ prePolicy: 0, postPolicy: 0, locRib: 0 }),
             BmpConst.BMP_ROUTE_STATE_FILTER.STALE
         );
-        const retainedRoutes = await queryPersistedRoutes(request, {
-            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
+        await assertFamilyViewMatrix(
+            request,
+            peerSnapshot.client,
+            contexts,
+            family => {
+                const expected = lab.getFamilyPlan(family.key).routes.length;
+                return { prePolicy: 0, postPolicy: 0, locRib: expected };
+            },
+            BmpConst.BMP_ROUTE_STATE_FILTER.ALL
+        );
+
+        const instancesAfterPeerDown = await request(BmpConst.BMP_REQ_TYPES.GET_BGP_INSTANCES, peerSnapshot.client);
+        contexts.forEach(context => {
+            const instance = instancesAfterPeerDown.data.find(
+                item =>
+                    (item.persistentOwnerKey || item.ownerKey) ===
+                    (context.instance.persistentOwnerKey || context.instance.ownerKey)
+            );
+            assert.ok(instance, `${context.family.name} Loc-RIB instance must remain present`);
+            assert.equal(
+                instance.instanceState,
+                BmpConst.BMP_SESSION_STATE.PEER_UP,
+                `${context.family.name} Loc-RIB instance must remain up`
+            );
+            assert.equal(instance.isOnline, true, `${context.family.name} Loc-RIB instance must remain online`);
+            const expected = lab.getFamilyPlan(context.family.key).routes.length;
+            assert.deepEqual(
+                instance.routeSummary,
+                { active: expected, stale: 0, total: expected },
+                `${context.family.name} Loc-RIB route summary must remain active`
+            );
+            assert.ok(
+                (instance.routeScopes || []).length > 0,
+                `${context.family.name} Loc-RIB must retain its persisted route scope`
+            );
+            assert.equal(
+                (instance.routeScopes || []).every(scope => scope.scopeState === 'ready'),
+                true,
+                `${context.family.name} Loc-RIB scopes must remain ready`
+            );
         });
-        assert.equal(retainedRoutes.total, lab.expectedPersistedRouteCount);
+
+        const expectedPeerPurgeEvents = lab.expectedSourceRouteCount * 2;
+        const peerPurgeEventsAfterDown = await waitForPersistedEventTotal(
+            request,
+            peerPurgeEventQuery,
+            expectedPeerPurgeEvents
+        );
+        assert.equal(
+            peerPurgeEventsAfterDown.list[0].reason,
+            `peer-down-notification:${BmpConst.BMP_PEER_DOWN_REASON.REMOTE_SYSTEM_CLOSED_WITH_NOTIFICATION}`,
+            'FRR peer route purge history must identify the Notification Peer Down reason'
+        );
+        const locRibPurgeEventsAfterDown = await queryPersistedRouteEvents(request, locRibPurgeEventQuery);
+        assert.equal(
+            Number(locRibPurgeEventsAfterDown.total),
+            0,
+            'FRR Notification Peer Down must not add Loc-RIB purge events'
+        );
 
         const persistenceStatus = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTENCE_STATUS);
         assert.equal(persistenceStatus.data.ready, true);
