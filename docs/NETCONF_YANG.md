@@ -153,6 +153,8 @@ libyang 是唯一权威编译引擎：
 - 编译缓存同时绑定模型内容、feature/deviation 选项、libyang 版本、helper 合同和可执行文件身份；使用外部 deviation 文件或搜索目录时禁用结果缓存，避免外部依赖变化后复用旧树。
 
 Schema 工作区中的树直接来自 libyang 编译后的 effective schema。`uses`、`augment`、`deviation`、feature 选择以及继承后的 `config`、`mandatory`、`type`、`default` 等语义均由 libyang 解析；JavaScript 不再生成或回退到另一棵 Schema 树。运行时缺失、编译失败或导出结果无效时不会显示非权威预览。
+Terminal leaf and leaf-list nodes expose libyang-derived type, enumeration, and `acceptsEmptyString` metadata. Lists expose the same capability for each key, so configuration drafts can require the key element without incorrectly requiring non-empty text or adding a `NETNEXUS_REQUIRED` placeholder.
+
 
 当前导出合同的范围是 core effective schema：datastore 数据节点，以及 RPC、action、notification、input 和 output。libyang 仍会编译并校验内置扩展插件，但由 `yang-data`、`structure`、schema-mount 等扩展产生的独立扩展树暂不并入普通 Schema 树；运行时能力中会明确返回 `extensionSchemaExport: false`。
 
@@ -189,7 +191,7 @@ npm run libyang:build:windows
 
 应用打包前会强制验证平台、架构、执行权限和版本，验证失败则终止打包，避免生成不带权威编译器的安装包。
 
-源码开发或运行时联调可以同时覆盖内置 `yanglint` 和 Schema helper；两者的 libyang 版本必须完全一致，helper 合同必须为版本 1：
+源码开发或运行时联调可以同时覆盖内置 `yanglint` 和 Schema helper；两者的 libyang 版本必须完全一致，helper 合同必须为版本 4：
 
 ```bash
 NETNEXUS_YANGLINT_PATH=/absolute/path/to/yanglint \
@@ -270,7 +272,7 @@ YANG 仓库位于 Electron `userData/yang` 下，主要包含：
 - 模块、工作区和可选设备下载快照的 manifest。
 - 编译输入和 Schema/诊断缓存。
 
-“清空 Schema 工作区”用于清除当前编译上下文和 Schema 结果，不等同于删除设备上的配置。单纯新增导入或下载的模型不会使旧上下文失效；只有清空工作区，或原编译上下文依赖的模型内容已不在当前工作区时，旧上下文才会失效。
+“清空 YANG 工作区”会永久删除当前 Profile 中由 NetNexus 管理的已下载、已导入 YANG 副本，并清除编译上下文、Schema 索引和诊断；不会删除外部导入位置的原始文件、其他 Profile、Snapshot 或设备上的配置。单纯新增导入或下载的模型不会使旧上下文失效；只有清空工作区，或原编译上下文依赖的模型内容已不在当前工作区时，旧上下文才会失效。
 
 ## 常见问题
 

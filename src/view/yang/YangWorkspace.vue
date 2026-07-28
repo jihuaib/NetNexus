@@ -435,6 +435,20 @@
         const values = Array.isArray(value) ? value : String(value || '').split(/\s+/u);
         return [...new Set(values.map(schemaLocalName).filter(name => /^[A-Za-z_][\w.-]*$/u.test(name)))];
     };
+    const normalizeSchemaKeyDetails = node => {
+        const details = new Map(
+            (Array.isArray(node?.schemaKeyDetails) ? node.schemaKeyDetails : [])
+                .map(detail => {
+                    const name = schemaLocalName(typeof detail === 'string' ? detail : detail?.name);
+                    return name ? [name, detail] : null;
+                })
+                .filter(Boolean)
+        );
+        return normalizeSchemaKeys(node?.schemaKey).map(name => ({
+            name,
+            acceptsEmptyString: details.get(name)?.acceptsEmptyString === true
+        }));
+    };
     const schemaChildContext = node => ({
         parentKeyword: schemaNodeKeyword(node),
         listKeys: schemaNodeKeyword(node) === 'list' ? normalizeSchemaKeys(node?.schemaKey) : []
@@ -1382,6 +1396,11 @@
 
             const body = [];
             if (mode === 'config' && keyword === 'list') {
+                const emptyKeyNames = new Set(
+                    normalizeSchemaKeyDetails(current)
+                        .filter(key => key.acceptsEmptyString)
+                        .map(key => key.name)
+                );
                 const rawKeys = Array.isArray(current?.schemaKey)
                     ? current.schemaKey
                     : String(current?.schemaKey || '').split(/\s+/u);
@@ -1391,6 +1410,10 @@
                 const nextName = chain[index + 1]?.name;
                 if (keys.length) {
                     keys.filter(key => key !== nextName).forEach(key => {
+                        if (emptyKeyNames.has(key)) {
+                            body.push(`${'  '.repeat(depth + 1)}<${key}/>`);
+                            return;
+                        }
                         body.push(
                             `${'  '.repeat(depth + 1)}<${key}><!-- NETNEXUS_REQUIRED: 输入 list key 值 --></${key}>`
                         );
@@ -1401,6 +1424,12 @@
             }
             if (!isLast) {
                 body.push(render(index + 1, depth + 1));
+            } else if (
+                mode === 'config' &&
+                ['leaf', 'leaf-list'].includes(keyword) &&
+                current?.acceptsEmptyString === true
+            ) {
+                return `${indentation}<${name}${namespaceAttribute}/>`;
             } else if (mode === 'config' && ['leaf', 'leaf-list'].includes(keyword)) {
                 const valueHint = typeof current?.type === 'string' && current.type ? `${current.type} 值` : '值';
                 return `${indentation}<${name}${namespaceAttribute}><!-- NETNEXUS_REQUIRED: 输入${valueHint} --></${name}>`;
@@ -1921,8 +1950,9 @@
         closeClearWorkspaceConfirm();
         let confirmHandle = null;
         confirmHandle = dialog.confirm({
-            title: '清空 Schema 工作区',
-            content: '将清除当前编译上下文、Schema 索引和编译诊断；本地 YANG 源文件仍保留在模型库中。',
+            title: '清空 YANG 工作区',
+            content:
+                '将永久删除当前 Profile 工作区内已下载和已导入的 YANG 托管副本，并清除编译上下文、Schema 索引和编译诊断。外部导入目录中的原始文件不会被删除。此操作不可恢复。',
             okText: '清空',
             okType: 'danger',
             onCancel: () => {
@@ -1955,9 +1985,10 @@
                     EventBus.emit(YANG_EVENT.PROFILE_DATA_REFRESH, {
                         profileId,
                         reason: 'workspace-cleared',
+                        sourcePageId: YANG_EVENT_PAGE_ID.WORKSPACE,
                         profileChanged: false
                     });
-                    notify.success('Schema 工作区已清空');
+                    notify.success('YANG 工作区已清空，本地托管副本已删除');
                 } catch (error) {
                     if (requestRevision === profileRequestRevision && profileId === selectedProfileId.value) {
                         notify.error(`清空失败：${error.message}`);
@@ -1983,7 +2014,12 @@
     const handleProfileDataRefresh = payload => {
         const profileId = String(payload?.profileId || '');
         if (!profileId) return;
-        if (payload?.reason === 'workspace-cleared' && profileId === selectedProfileId.value) return;
+        if (
+            payload?.reason === 'workspace-cleared' &&
+            payload?.sourcePageId === YANG_EVENT_PAGE_ID.WORKSPACE &&
+            profileId === selectedProfileId.value
+        )
+            return;
         if (profileId !== selectedProfileId.value) return;
         if (profileContextReady) void reloadCurrentProfile({ preserveTree: true });
     };

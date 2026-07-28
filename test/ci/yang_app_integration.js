@@ -737,12 +737,66 @@ async function main() {
             ['example-system', 'example-types']
         );
 
+        const profileBReimportResponse = await app.handleImportFiles(event, {
+            profileId: PROFILE_B,
+            filePaths: [otherPath]
+        });
+        assert.equal(profileBReimportResponse.status, 'success');
+        await waitForTask(app, profileBReimportResponse.data.taskId);
+        const profileBBeforeClear = await app.handleListModules(event, { profileId: PROFILE_B });
+        assert.deepEqual(
+            profileBBeforeClear.data.map(module => module.name),
+            ['example-other']
+        );
+        const profileBManagedPaths = profileBBeforeClear.data.map(module => module.filePath);
+        assert(profileBManagedPaths.every(filePath => filePath && fs.existsSync(filePath)));
+
+        const profileABeforeClear = await app.handleListModules(event, { profileId: PROFILE_A });
+        assert.equal(profileABeforeClear.data.length, 3);
+        const profileAManagedPaths = profileABeforeClear.data.map(module => module.filePath);
+        assert(profileAManagedPaths.every(filePath => filePath && fs.existsSync(filePath)));
+        const generationBeforeClear = app.getWorkspaceGeneration({ profileId: PROFILE_A });
+
         const clearResponse = await app.handleClearWorkspace(event, { profileId: PROFILE_A });
         assert.equal(clearResponse.status, 'success');
+        assert.deepEqual(clearResponse.data.modules, []);
+        assert.equal(app.getWorkspaceGeneration({ profileId: PROFILE_A }), generationBeforeClear + 1);
         const clearedWorkspace = await app.handleGetWorkspace(event, { profileId: PROFILE_A });
         assert.equal(clearedWorkspace.data.compileId, '');
-        const retainedModules = await app.handleListModules(event, { profileId: PROFILE_A });
-        assert.equal(retainedModules.data.length, 3, 'clearing schema context must retain local source modules');
+        assert.deepEqual(clearedWorkspace.data.modules, []);
+        const clearedModules = await app.handleListModules(event, { profileId: PROFILE_A });
+        assert.deepEqual(clearedModules.data, []);
+        assert(
+            profileAManagedPaths.every(filePath => !fs.existsSync(filePath)),
+            'clearing a Profile workspace must physically remove every managed YANG copy'
+        );
+        assert(
+            [typesPath, systemPath, invalidPath].every(filePath => fs.existsSync(filePath)),
+            'clearing managed copies must retain files in the original external import location'
+        );
+        const profileBAfterClear = await app.handleListModules(event, { profileId: PROFILE_B });
+        assert.deepEqual(
+            profileBAfterClear.data.map(module => module.name),
+            ['example-other'],
+            'clearing one Profile must not modify another Profile workspace'
+        );
+        assert(profileBManagedPaths.every(filePath => fs.existsSync(filePath)));
+        await assert.rejects(
+            app.importDownloadedContents(
+                [
+                    {
+                        content: fs.readFileSync(typesPath, 'utf8'),
+                        expectedName: 'example-types',
+                        revision: '2026-01-01',
+                        source: 'netconf://stale-download/get-schema'
+                    }
+                ],
+                { profileId: PROFILE_A, workspaceGeneration: generationBeforeClear },
+                event
+            ),
+            error => error?.code === 'YANG_WORKSPACE_CHANGED'
+        );
+        assert.deepEqual((await app.handleListModules(event, { profileId: PROFILE_A })).data, []);
         assert(events.some(item => item.type === 'yang:taskProgress'));
         const liveCompileFileEvent = events.find(
             item =>
@@ -804,7 +858,7 @@ async function main() {
         fs.rmSync(temporaryRoot, { recursive: true, force: true });
     }
 
-    console.log('YANG Electron app real libyang Schema, dependency compilation, and clear-context tests passed');
+    console.log('YANG Electron app real libyang Schema, dependency compilation, and workspace cleanup tests passed');
 }
 
 main().catch(error => {

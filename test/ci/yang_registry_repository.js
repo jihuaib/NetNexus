@@ -161,9 +161,20 @@ try {
     assert.equal(source.hash, lexicalEntry.hash);
     assert(source.source.includes('quoted // comment'));
 
+    const defaultWorkspaceModulePaths = registry.listModules().map(entry => entry.filePath);
+    assert.equal(defaultWorkspaceModulePaths.length, 2);
+    defaultWorkspaceModulePaths.forEach(filePath => assert(fs.existsSync(filePath)));
     const cleared = registry.clearWorkspace();
     assert.equal(cleared.modules.length, 0);
     assert.equal(registry.listModules().length, 0);
+    defaultWorkspaceModulePaths.forEach(filePath =>
+        assert.equal(fs.existsSync(filePath), false, 'clearing a workspace must delete its managed YANG copy')
+    );
+    assert(fs.existsSync(lexicalPath), 'clearing a workspace must retain the user-selected source file');
+    assert(
+        fs.existsSync(extraPath),
+        'clearing a workspace must retain source files discovered under an imported directory'
+    );
     assert.equal(
         registry.listModules({ workspaceId: 'router-two' }).length,
         1,
@@ -172,6 +183,7 @@ try {
     assert(fs.existsSync(isolatedEntry.filePath));
     assert.equal(registry.repository.resolveEntries({ snapshotId: snapshot.id }).length, 2);
 
+    assert(fs.existsSync(snapshotEntry.filePath), 'clearing a workspace must retain immutable snapshot copies');
     assert.equal(registry.deleteWorkspace(), true);
     assert.equal(registry.getWorkspace(), null);
     assert.equal(registry.listModules({ workspaceId: 'router-two' }).length, 1);

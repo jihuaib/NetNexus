@@ -1142,6 +1142,7 @@ class NetconfApp {
             this.setWebContents(event);
             const profileId = this.resolveProfileId(request);
             const profileGeneration = this.assertProfileAvailable(profileId);
+            const workspaceGeneration = this.yangApp?.getWorkspaceGeneration?.({ profileId });
             const task = this.taskManager.start(
                 'download',
                 async ({ signal, report }) => {
@@ -1229,7 +1230,8 @@ class NetconfApp {
                               downloaded,
                               {
                                   profileId,
-                                  inventory
+                                  inventory,
+                                  workspaceGeneration
                               },
                               event
                           )

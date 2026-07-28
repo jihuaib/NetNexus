@@ -17,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define EXPORT_SCHEMA_VERSION 2
+#define EXPORT_SCHEMA_VERSION 4
 #define ROOT_NODE_ID "yang-schema-root"
 #define MAX_EXPORT_NODES ((size_t)100000)
 #define MAX_EXPORT_DEPTH ((size_t)256)
@@ -965,9 +965,9 @@ json_size(struct json_buffer *buffer, size_t value)
 }
 
 static const char *
-schema_status(const struct lysc_node *node)
+schema_flags_status(uint16_t flags)
 {
-    switch (node->flags & LYS_STATUS_MASK) {
+    switch (flags & LYS_STATUS_MASK) {
     case LYS_STATUS_DEPRC:
         return "deprecated";
     case LYS_STATUS_OBSLT:
@@ -975,6 +975,12 @@ schema_status(const struct lysc_node *node)
     default:
         return "current";
     }
+}
+
+static const char *
+schema_status(const struct lysc_node *node)
+{
+    return schema_flags_status(node->flags);
 }
 
 static int
@@ -1018,6 +1024,118 @@ schema_type(const struct lysc_node *node)
     return NULL;
 }
 
+static int
+schema_accepts_empty_string(const struct lysc_node *node, int *accepts)
+{
+    LY_ERR result;
+    uint32_t quiet_log_options = 0;
+    uint32_t *previous_log_options;
+
+    if (!node || !accepts || !(node->nodetype & (LYS_LEAF | LYS_LEAFLIST))) {
+        return -1;
+    }
+
+    previous_log_options = ly_temp_log_options(&quiet_log_options);
+    result = lyd_value_validate(node, "", 0, NULL, NULL, NULL);
+    ly_temp_log_options(previous_log_options);
+
+    if ((result == LY_SUCCESS) || (result == LY_EINCOMPLETE)) {
+        *accepts = 1;
+        return 0;
+    }
+    if (result == LY_EVALID) {
+        *accepts = 0;
+        return 0;
+    }
+
+    fprintf(stderr,
+            "Unable to determine whether schema node '%s:%s' accepts an empty string: %s (%d).\n",
+            node->module && node->module->name ? node->module->name : "<unknown>",
+            node->name ? node->name : "<unknown>", ly_strerr(result), (int)result);
+    return -1;
+}
+
+static const char *
+schema_base_type(const struct lysc_type *type)
+{
+    if (!type) {
+        return NULL;
+    }
+    switch (type->basetype) {
+    case LY_TYPE_BINARY:
+        return "binary";
+    case LY_TYPE_BITS:
+        return "bits";
+    case LY_TYPE_BOOL:
+        return "boolean";
+    case LY_TYPE_DEC64:
+        return "decimal64";
+    case LY_TYPE_EMPTY:
+        return "empty";
+    case LY_TYPE_ENUM:
+        return "enumeration";
+    case LY_TYPE_IDENT:
+        return "identityref";
+    case LY_TYPE_INST:
+        return "instance-identifier";
+    case LY_TYPE_INT8:
+        return "int8";
+    case LY_TYPE_INT16:
+        return "int16";
+    case LY_TYPE_INT32:
+        return "int32";
+    case LY_TYPE_INT64:
+        return "int64";
+    case LY_TYPE_LEAFREF:
+        return "leafref";
+    case LY_TYPE_STRING:
+        return "string";
+    case LY_TYPE_UINT8:
+        return "uint8";
+    case LY_TYPE_UINT16:
+        return "uint16";
+    case LY_TYPE_UINT32:
+        return "uint32";
+    case LY_TYPE_UINT64:
+        return "uint64";
+    case LY_TYPE_UNION:
+        return "union";
+    default:
+        return NULL;
+    }
+}
+
+static void
+json_enum_values(struct json_buffer *buffer, const struct lysc_type *type)
+{
+    const struct lysc_type_enum *enum_type;
+    const struct lysc_type_bitenum_item *item;
+    LY_ARRAY_COUNT_TYPE index;
+    char value[32];
+
+    json_raw(buffer, "[");
+    if (type && (type->basetype == LY_TYPE_ENUM)) {
+        enum_type = (const struct lysc_type_enum *)type;
+        LY_ARRAY_FOR(enum_type->enums, index) {
+            item = &enum_type->enums[index];
+            if (index) {
+                json_raw(buffer, ",");
+            }
+            json_raw(buffer, "{");
+            json_key(buffer, "name"); json_string(buffer, item->name);
+            json_raw(buffer, ",\"value\":");
+            snprintf(value, sizeof value, "%" PRId32, item->value);
+            json_raw(buffer, value);
+            json_raw(buffer, ","); json_key(buffer, "description"); json_string(buffer, item->dsc);
+            json_raw(buffer, ","); json_key(buffer, "reference"); json_string(buffer, item->ref);
+            json_raw(buffer, ","); json_key(buffer, "status");
+            json_string(buffer, schema_flags_status(item->flags));
+            json_raw(buffer, "}");
+        }
+    }
+    json_raw(buffer, "]");
+}
+
 static void
 json_schema_key(struct json_buffer *buffer, const struct lysc_node *node)
 {
@@ -1034,6 +1152,36 @@ json_schema_key(struct json_buffer *buffer, const struct lysc_node *node)
                 json_string(buffer, child->name);
                 first = 0;
             }
+        }
+    }
+    json_raw(buffer, "]");
+}
+
+static void
+json_schema_key_details(struct json_buffer *buffer, const struct lysc_node *node)
+{
+    const struct lysc_node *child;
+    int accepts_empty_string, first = 1;
+
+    json_raw(buffer, "[");
+    if (node->nodetype == LYS_LIST) {
+        for (child = lysc_node_child(node); child && (child->parent == node); child = child->next) {
+            if ((child->nodetype != LYS_LEAF) || !(child->flags & LYS_KEY)) {
+                continue;
+            }
+            if (schema_accepts_empty_string(child, &accepts_empty_string)) {
+                buffer->failed = 1;
+                return;
+            }
+            if (!first) {
+                json_raw(buffer, ",");
+            }
+            json_raw(buffer, "{");
+            json_key(buffer, "name"); json_string(buffer, child->name);
+            json_raw(buffer, ",\"acceptsEmptyString\":");
+            json_raw(buffer, accepts_empty_string ? "true" : "false");
+            json_raw(buffer, "}");
+            first = 0;
         }
     }
     json_raw(buffer, "]");
@@ -1127,8 +1275,9 @@ json_common_null_fields(struct json_buffer *buffer, const char *reference)
     json_raw(buffer, ",\"reference\":");
     json_string(buffer, reference);
     json_raw(buffer,
-            ",\"config\":null,\"mandatory\":null,\"type\":null,\"units\":null,"
-            "\"default\":null,\"schemaKey\":[],\"minElements\":null,\"maxElements\":null,"
+            ",\"config\":null,\"mandatory\":null,\"type\":null,\"baseType\":null,\"acceptsEmptyString\":null,"
+            "\"enumValues\":[],\"units\":null,\"default\":null,\"schemaKey\":[],\"schemaKeyDetails\":[],"
+            "\"minElements\":null,\"maxElements\":null,"
             "\"presence\":null,\"ifFeatures\":[]");
 }
 
@@ -1188,6 +1337,21 @@ json_schema_node(struct json_buffer *buffer, const struct export_node *record)
         json_raw(buffer, "null");
     }
     json_raw(buffer, ","); json_key(buffer, "type"); json_string(buffer, type_name);
+    json_raw(buffer, ","); json_key(buffer, "baseType");
+    json_string(buffer, schema_base_type(type));
+    json_raw(buffer, ",\"enumValues\":"); json_enum_values(buffer, type);
+    json_raw(buffer, ",\"acceptsEmptyString\":");
+    if (type) {
+        int accepts_empty_string;
+
+        if (schema_accepts_empty_string(node, &accepts_empty_string)) {
+            buffer->failed = 1;
+            return;
+        }
+        json_raw(buffer, accepts_empty_string ? "true" : "false");
+    } else {
+        json_raw(buffer, "null");
+    }
     json_raw(buffer, ","); json_key(buffer, "units");
     if (node->nodetype == LYS_LEAF) {
         json_string(buffer, ((const struct lysc_node_leaf *)node)->units);
@@ -1198,6 +1362,7 @@ json_schema_node(struct json_buffer *buffer, const struct export_node *record)
     }
     json_raw(buffer, ",\"default\":"); json_default(buffer, node);
     json_raw(buffer, ",\"schemaKey\":"); json_schema_key(buffer, node);
+    json_raw(buffer, ",\"schemaKeyDetails\":"); json_schema_key_details(buffer, node);
     json_raw(buffer, ",\"minElements\":"); json_min_elements(buffer, node);
     json_raw(buffer, ",\"maxElements\":"); json_max_elements(buffer, node);
     json_raw(buffer, ",\"presence\":");
@@ -1219,7 +1384,7 @@ serialize_tree(struct json_buffer *buffer, const struct export_tree *tree)
     size_t index, child;
 
     json_raw(buffer,
-            "{\"schemaVersion\":1,\"authoritative\":true,\"source\":\"libyang-effective\","
+            "{\"schemaVersion\":3,\"authoritative\":true,\"source\":\"libyang-effective\","
             "\"scope\":\"core-effective-schema\","
             "\"rootId\":\"yang-schema-root\",\"roots\":[");
     for (index = 0; index < tree->root_count; ++index) {

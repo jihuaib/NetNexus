@@ -25,6 +25,26 @@ const commonTypes = `module common-types {
   prefix ct;
   revision 2025-01-02;
   typedef label { type string; }
+  typedef empty-string { type string { pattern ""; } }
+  typedef optional-key {
+    type union {
+      type empty-string;
+      type string { length "1..31"; }
+    }
+  }
+  typedef enable-state {
+    type enumeration {
+      enum disabled {
+        value 10;
+        description "Administrative state is disabled.";
+      }
+      enum enabled {
+        value 20;
+        description "Administrative state is enabled.";
+      }
+    }
+  }
+  typedef inherited-enable-state { type enable-state; }
   feature extended-identity;
   grouping refined-presence {
     container refined-container { leaf refined-value { type string; } }
@@ -57,11 +77,19 @@ const demo = `module demo {
       refine refined-container { presence "created by an effective refine"; }
     }
     leaf hostname { type ct:label; mandatory true; }
+    leaf administrative-state { type ct:inherited-enable-state; default enabled; }
+    leaf inline-state {
+      type enumeration {
+        enum automatic;
+        enum manual { value 9; }
+      }
+    }
+    leaf-list supported-state { type ct:enable-state; }
     leaf-list address { type string; }
     leaf turbo-mode { if-feature turbo; type boolean; }
     list interface {
       key "name";
-      leaf name { type string; }
+      leaf name { type string { length "1..64"; } }
       choice mode {
         default routed;
         case routed { leaf address-family { type string; } }
@@ -71,6 +99,12 @@ const demo = `module demo {
         input { leaf force { type boolean; default "false"; } }
         output { leaf accepted { type boolean; } }
       }
+    }
+    list vrf {
+      key "name vrf-name";
+      leaf name { type ct:optional-key; }
+      leaf vrf-name { type ct:optional-key; }
+      leaf bandwidth-compaction { type ct:inherited-enable-state; }
     }
     notification state-change { leaf reason { type string; } }
   }
@@ -232,7 +266,88 @@ async function run() {
         const hostname = allNodes.find(node => node.name === 'hostname');
         assert(hostname);
         assert.equal(hostname.type, 'label');
+        assert.equal(hostname.baseType, 'string');
+        assert.deepEqual(hostname.enumValues, []);
+        assert.equal(hostname.acceptsEmptyString, true);
         assert.equal(hostname.mandatory, true);
+        const administrativeState = allNodes.find(node => node.name === 'administrative-state');
+        assert(administrativeState);
+        assert.equal(administrativeState.type, 'enable-state');
+        assert.equal(administrativeState.baseType, 'enumeration');
+        assert.equal(administrativeState.default, 'enabled');
+        assert.equal(administrativeState.acceptsEmptyString, false);
+        assert.deepEqual(
+            administrativeState.enumValues.map(item => ({
+                name: item.name,
+                value: item.value,
+                description: item.description
+            })),
+            [
+                {
+                    name: 'disabled',
+                    value: 10,
+                    description: 'Administrative state is disabled.'
+                },
+                {
+                    name: 'enabled',
+                    value: 20,
+                    description: 'Administrative state is enabled.'
+                }
+            ]
+        );
+        assert(
+            administrativeState.enumValues.every(
+                item =>
+                    Object.prototype.hasOwnProperty.call(item, 'reference') &&
+                    Object.prototype.hasOwnProperty.call(item, 'status')
+            )
+        );
+        const inlineState = allNodes.find(node => node.name === 'inline-state');
+        assert.equal(inlineState.type, 'enumeration');
+        assert.equal(inlineState.baseType, 'enumeration');
+        assert.deepEqual(
+            inlineState.enumValues.map(item => [item.name, item.value]),
+            [
+                ['automatic', 0],
+                ['manual', 9]
+            ]
+        );
+        const supportedState = allNodes.find(node => node.name === 'supported-state');
+        assert.equal(supportedState.keyword, 'leaf-list');
+        assert.equal(supportedState.baseType, 'enumeration');
+        assert.deepEqual(
+            supportedState.enumValues.map(item => item.name),
+            ['disabled', 'enabled']
+        );
+        const vlan = allNodes.find(node => node.name === 'vlan');
+        assert(vlan);
+        assert.equal(vlan.type, '16bit unsigned integer');
+        assert.equal(vlan.baseType, 'uint16');
+        assert.equal(vlan.acceptsEmptyString, false);
+        const interfaceList = allNodes.find(node => node.name === 'interface' && node.keyword === 'list');
+        assert.deepEqual(interfaceList.schemaKey, ['name']);
+        assert.deepEqual(interfaceList.schemaKeyDetails, [{ name: 'name', acceptsEmptyString: false }]);
+        const interfaceName = allNodes.find(
+            node => node.name === 'name' && node.parentId === interfaceList.id && node.keyword === 'leaf'
+        );
+        assert.equal(interfaceName.acceptsEmptyString, false);
+        const vrfList = allNodes.find(node => node.name === 'vrf' && node.keyword === 'list');
+        assert(vrfList);
+        assert.deepEqual(vrfList.schemaKey, ['name', 'vrf-name']);
+        assert.deepEqual(vrfList.schemaKeyDetails, [
+            { name: 'name', acceptsEmptyString: true },
+            { name: 'vrf-name', acceptsEmptyString: true }
+        ]);
+        const vrfKeyLeaves = allNodes.filter(
+            node => node.parentId === vrfList.id && ['name', 'vrf-name'].includes(node.name)
+        );
+        assert.equal(vrfKeyLeaves.length, 2);
+        assert(vrfKeyLeaves.every(node => node.acceptsEmptyString === true));
+        assert.equal(
+            allNodes.find(node => node.parentId === vrfList.id && node.name === 'bandwidth-compaction')
+                .acceptsEmptyString,
+            false
+        );
         assert.equal(allNodes.find(node => node.name === 'refined-container').presence, true);
         assert.equal(allNodes.find(node => node.name === 'mode' && node.keyword === 'choice').default, 'routed');
         assert.equal(registry.getSchemaNode(hostname.id).path, hostname.path);

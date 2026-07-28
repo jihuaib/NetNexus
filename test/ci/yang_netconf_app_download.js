@@ -32,12 +32,16 @@ async function main() {
     const importedBatches = [];
     const deletedWorkspaces = [];
     const purgedProfiles = [];
+    const workspaceGenerations = new Map();
     let blockedImport = null;
     let signalImportStarted = null;
     const schemaFailures = new Map();
     const app = new NetconfApp(new FakeIpcMain(), new MemoryStore(), {
         yangApp: {
             setActiveProfileId() {},
+            getWorkspaceGeneration({ profileId } = {}) {
+                return workspaceGenerations.get(profileId) || 0;
+            },
             async importDownloadedContents(contents, options) {
                 importedBatches.push({ contents, options });
                 if (blockedImport) {
@@ -66,6 +70,7 @@ async function main() {
     };
     const requested = [];
     app.activeProfileId = profileId;
+    workspaceGenerations.set(profileId, 7);
     app.inventories.set(profileId, inventory);
     app.workerClient = {
         async sendRequest(operation, data) {
@@ -161,8 +166,10 @@ async function main() {
     assert.match(importedBatches[0].contents[2].content, /^module example-types/u);
     assert.match(importedBatches[0].contents[3].content, /^module example-common/u);
     assert.equal(importedBatches[0].options.profileId, profileId);
+    assert.equal(importedBatches[0].options.workspaceGeneration, 7);
 
     const secondProfileId = 'download-router-b';
+    workspaceGenerations.set(secondProfileId, 11);
     app.saveStoredProfiles([
         { id: profileId, name: 'Router A' },
         { id: secondProfileId, name: 'Router B' }
@@ -197,7 +204,7 @@ async function main() {
         [profileId]
     );
     assert.equal(importedBatches[1].options.profileId, secondProfileId);
-
+    assert.equal(importedBatches[1].options.workspaceGeneration, 11);
     blockedImport = null;
     signalImportStarted = null;
     requested.length = 0;

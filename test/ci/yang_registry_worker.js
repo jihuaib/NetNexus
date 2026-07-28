@@ -54,6 +54,8 @@ async function run() {
             ]
         });
         assert.equal(imported.data.summary.imported, 1);
+        const defaultModulePath = imported.data.imported[0].filePath;
+        assert(fs.existsSync(defaultModulePath));
 
         const response = await worker.sendRequest(YANG_REQ_TYPES.COMPILE, { progressId, force: true });
         assert.equal(response.status, 'success');
@@ -143,6 +145,12 @@ async function run() {
 
         const cleared = await worker.sendRequest(YANG_REQ_TYPES.CLEAR_WORKSPACE, {});
         assert.equal(cleared.data.modules.length, 0);
+        assert.equal(
+            fs.existsSync(defaultModulePath),
+            false,
+            'the worker must physically delete the cleared workspace YANG copy'
+        );
+        assert.deepEqual((await worker.sendRequest(YANG_REQ_TYPES.LIST_MODULES, {})).data, []);
         await assert.rejects(
             worker.sendRequest(YANG_REQ_TYPES.GET_SCHEMA_ROOTS, { workspaceId: 'default' }),
             /No YANG compilation is loaded for workspace:default/u

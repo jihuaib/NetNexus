@@ -12,8 +12,8 @@ const {
     resolveRpcValidationTarget
 } = require('./yangRpcInstanceValidation');
 
-const COMPILE_CACHE_SCHEMA_VERSION = 5;
-const LIBYANG_SCHEMA_OUTPUT_VERSION = 1;
+const COMPILE_CACHE_SCHEMA_VERSION = 7;
+const LIBYANG_SCHEMA_OUTPUT_VERSION = 3;
 const DEFAULT_COMPILER_EXECUTABLE = 'yanglint';
 const DEFAULT_EXTERNAL_TIMEOUT = 60_000;
 const DEFAULT_EXTERNAL_MAX_BUFFER = 64 * 1024 * 1024;
@@ -21,6 +21,27 @@ const DEFAULT_VERSION_TIMEOUT = 5_000;
 const MAX_RPC_VALIDATION_BYTES = 8 * 1024 * 1024;
 const ROOT_NODE_ID = 'yang-schema-root';
 const FILE_VALIDATION_CONCURRENCY = 3;
+const LIBYANG_BASE_TYPES = new Set([
+    'binary',
+    'bits',
+    'boolean',
+    'decimal64',
+    'empty',
+    'enumeration',
+    'identityref',
+    'instance-identifier',
+    'int8',
+    'int16',
+    'int32',
+    'int64',
+    'leafref',
+    'string',
+    'uint8',
+    'uint16',
+    'uint32',
+    'uint64',
+    'union'
+]);
 
 function diagnosticKey(diagnostic) {
     return [
@@ -232,11 +253,111 @@ function validateAuthoritativeSchemaTree(value) {
         for (const field of ['name', 'keyword', 'path']) {
             if (typeof node[field] !== 'string' || !node[field]) fail(`node ${nodeId} has no ${field}`);
         }
+        const typedNode = node.keyword === 'leaf' || node.keyword === 'leaf-list';
+        if (node.baseType !== null && (typeof node.baseType !== 'string' || !node.baseType)) {
+            fail(`node ${nodeId} baseType must be a non-empty string or null`);
+        }
+        if (typedNode && node.baseType === null) {
+            fail(`typed node ${nodeId} must declare its baseType`);
+        }
+        if (typedNode && !LIBYANG_BASE_TYPES.has(node.baseType)) {
+            fail(`typed node ${nodeId} has unknown baseType ${node.baseType}`);
+        }
+        if (!typedNode && node.baseType !== null) {
+            fail(`non-typed node ${nodeId} baseType must be null`);
+        }
+        if (typedNode && typeof node.acceptsEmptyString !== 'boolean') {
+            fail(`typed node ${nodeId} acceptsEmptyString must be boolean`);
+        }
+        if (!typedNode && node.acceptsEmptyString !== null) {
+            fail(`non-typed node ${nodeId} acceptsEmptyString must be null`);
+        }
+        if (!Array.isArray(node.enumValues)) {
+            fail(`node ${nodeId} enumValues must be an array`);
+        }
+        if (node.baseType !== 'enumeration' && node.enumValues.length > 0) {
+            fail(`non-enumeration node ${nodeId} must not declare enumValues`);
+        }
+        if (node.baseType === 'enumeration' && node.enumValues.length === 0) {
+            fail(`enumeration node ${nodeId} must declare at least one enum value`);
+        }
+        const enumNames = new Set();
+        const enumNumbers = new Set();
+        for (const [enumIndex, enumValue] of node.enumValues.entries()) {
+            if (!isObject(enumValue)) fail(`node ${nodeId} enumValues[${enumIndex}] must be an object`);
+            if (typeof enumValue.name !== 'string' || !enumValue.name) {
+                fail(`node ${nodeId} enumValues[${enumIndex}] has no name`);
+            }
+            if (
+                !Number.isSafeInteger(enumValue.value) ||
+                enumValue.value < -2_147_483_648 ||
+                enumValue.value > 2_147_483_647
+            ) {
+                fail(`node ${nodeId} enumValues[${enumIndex}] value must be a signed 32-bit integer`);
+            }
+            for (const field of ['description', 'reference']) {
+                if (enumValue[field] !== null && typeof enumValue[field] !== 'string') {
+                    fail(`node ${nodeId} enumValues[${enumIndex}] ${field} must be a string or null`);
+                }
+            }
+            if (!['current', 'deprecated', 'obsolete'].includes(enumValue.status)) {
+                fail(`node ${nodeId} enumValues[${enumIndex}] has an invalid status`);
+            }
+            if (enumNames.has(enumValue.name)) fail(`node ${nodeId} has duplicate enum name ${enumValue.name}`);
+            if (enumNumbers.has(enumValue.value)) fail(`node ${nodeId} has duplicate enum value ${enumValue.value}`);
+            enumNames.add(enumValue.name);
+            enumNumbers.add(enumValue.value);
+        }
+        if (!Array.isArray(node.schemaKey) || node.schemaKey.some(name => typeof name !== 'string' || !name)) {
+            fail(`node ${nodeId} schemaKey must be an array of non-empty strings`);
+        }
+        if (new Set(node.schemaKey).size !== node.schemaKey.length) {
+            fail(`node ${nodeId} schemaKey contains duplicates`);
+        }
+        if (!Array.isArray(node.schemaKeyDetails)) {
+            fail(`node ${nodeId} schemaKeyDetails must be an array`);
+        }
+        if (node.keyword !== 'list' && (node.schemaKey.length || node.schemaKeyDetails.length)) {
+            fail(`non-list node ${nodeId} must not declare schema keys`);
+        }
+        if (node.schemaKeyDetails.length !== node.schemaKey.length) {
+            fail(`list node ${nodeId} schemaKeyDetails must match schemaKey`);
+        }
+        const detailedKeyNames = new Set();
+        node.schemaKeyDetails.forEach((detail, keyIndex) => {
+            if (!isObject(detail)) fail(`node ${nodeId} schemaKeyDetails[${keyIndex}] must be an object`);
+            if (typeof detail.name !== 'string' || !detail.name) {
+                fail(`node ${nodeId} schemaKeyDetails[${keyIndex}] has no name`);
+            }
+            if (typeof detail.acceptsEmptyString !== 'boolean') {
+                fail(`node ${nodeId} schemaKeyDetails[${keyIndex}] acceptsEmptyString must be boolean`);
+            }
+            if (detail.name !== node.schemaKey[keyIndex]) {
+                fail(`node ${nodeId} schemaKeyDetails must use schemaKey order`);
+            }
+            if (detailedKeyNames.has(detail.name)) {
+                fail(`node ${nodeId} schemaKeyDetails contains duplicate ${detail.name}`);
+            }
+            detailedKeyNames.add(detail.name);
+        });
         if (node.presence !== null && typeof node.presence !== 'boolean') {
             fail(`node ${nodeId} presence must be boolean or null`);
         }
         const children = value.childIndex[nodeId];
         if (!Array.isArray(children)) fail(`node ${nodeId} has no childIndex entry`);
+        if (node.keyword === 'list') {
+            node.schemaKeyDetails.forEach(detail => {
+                const keyNode = children
+                    .map(childId => value.nodes[childId])
+                    .find(child => child?.keyword === 'leaf' && child.name === detail.name);
+                if (!keyNode) {
+                    fail(`list node ${nodeId} schema key ${detail.name} has no direct leaf`);
+                }
+                if (keyNode.acceptsEmptyString !== detail.acceptsEmptyString) {
+                    fail(`list node ${nodeId} schema key ${detail.name} empty-string metadata does not match its leaf`);
+                }
+            });
+        }
         if (!Number.isSafeInteger(node.childCount) || node.childCount !== children.length) {
             fail(`node ${nodeId} childCount does not match childIndex`);
         }

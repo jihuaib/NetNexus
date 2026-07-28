@@ -124,7 +124,7 @@ async function verifyControllerFlow() {
     assert.equal(response.data.available, true);
     assert.equal(response.data.engine, 'libyang');
     assert.equal(response.data.version, getReleaseManifest().libyangVersion);
-    assert.equal(response.data.schemaContractVersion, 2);
+    assert.equal(response.data.schemaContractVersion, 4);
     assert.equal(response.data.source, 'bundled');
 
     response = await controller.call('yang.registry.compile', {});
@@ -225,7 +225,7 @@ async function verifyControllerFlow() {
 
     const validInterfaceSource = controller.state.yang.moduleSources['ietf-interfaces'];
     controller.state.yang.moduleSources['ietf-interfaces'] = validInterfaceSource.replace(
-        'leaf name { type string; }',
+        'leaf name { type string { length "1..64"; } }',
         'leaf name { type netnexus-missing-type; }'
     );
     const successfulCompileId = controller.state.yang.workspace.compileId;
@@ -237,10 +237,21 @@ async function verifyControllerFlow() {
     assert.equal(controller.state.yang.workspace.compileId, successfulCompileId);
     controller.state.yang.moduleSources['ietf-interfaces'] = validInterfaceSource;
 
-    response = await controller.call('yang.registry.clearWorkspace');
+    response = await controller.call('yang.registry.clearWorkspace', { profileId: 'e2e-netconf-profile' });
     assert.equal(response.status, 'success');
-    response = await controller.call('yang.registry.getWorkspace');
+    response = await controller.call('yang.registry.getWorkspace', { profileId: 'e2e-netconf-profile' });
     assert.equal(response.data.summary.nodeCount, 0);
+    assert.equal(response.data.summary.moduleCount, 0);
+    response = await controller.call('yang.registry.listModules', { profileId: 'e2e-netconf-profile' });
+    assert.deepEqual(response.data.modules, [], 'clearing one Profile must remove all of its managed YANG copies');
+    response = await controller.call('yang.registry.listModules', { profileId: 'e2e-netconf-profile-2' });
+    assert.deepEqual(
+        response.data.modules.map(module => module.name),
+        ['vendor-system'],
+        'clearing one Profile must retain another Profile workspace'
+    );
+    response = await controller.call('yang.registry.listModules', { profileId: 'e2e-netconf-profile' });
+    assert.deepEqual(response.data.modules, []);
 
     controller.state.yang.compiler = {
         ...controller.state.yang.compiler,

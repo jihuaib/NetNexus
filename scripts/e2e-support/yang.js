@@ -112,12 +112,44 @@ const moduleSources = Object.freeze({
   prefix if;
   import ietf-yang-types { prefix yang; }
   revision 2018-02-20;
+  typedef interface-mode {
+    type enumeration {
+      enum disabled { value 10; }
+      enum enabled { value 20; }
+    }
+  }
+  typedef empty-string { type string { pattern ""; } }
+  typedef optional-key {
+    type union {
+      type empty-string;
+      type string { length "1..31"; }
+    }
+  }
+  typedef h3c-enable-state {
+    type enumeration {
+      enum enable;
+      enum disable;
+    }
+  }
   container interfaces {
     list interface {
       key "name";
-      leaf name { type string; }
+      leaf name { type string { length "1..64"; } }
       leaf enabled { type boolean; default true; }
+      container config {
+        leaf mode { type interface-mode; default enabled; }
+      }
       leaf in-octets { config false; type yang:counter32; }
+    }
+  }
+  container BGP {
+    container VRFs {
+      list VRF {
+        key "Name VRF";
+        leaf Name { type optional-key; }
+        leaf VRF { type optional-key; }
+        leaf BandwidthCompaction { type h3c-enable-state; }
+      }
     }
   }
   notification interface-event {
@@ -611,8 +643,7 @@ function schemaNodeSummary(yang, nodeId) {
 
 function buildWorkspace(yang, { cacheHit = false } = {}) {
     const tree = yang.schemaTree;
-    const compiledIds = new Set(yang.compiledModuleIds);
-    const compiledModules = yang.modules.filter(module => compiledIds.has(module.id));
+    const localModules = yang.modules.filter(module => module.isLocal);
     const roots = (tree?.roots || []).map(nodeId => schemaNodeSummary(yang, nodeId)).filter(Boolean);
     const errors = yang.diagnostics.filter(diagnostic => ['error', 'fatal'].includes(diagnostic.severity)).length;
     const warnings = yang.diagnostics.filter(diagnostic => ['warning', 'warn'].includes(diagnostic.severity)).length;
@@ -626,14 +657,14 @@ function buildWorkspace(yang, { cacheHit = false } = {}) {
         cacheHit,
         compiler: clone(yang.compiler),
         summary: {
-            moduleCount: compiledModules.length,
+            moduleCount: localModules.length,
             nodeCount: tree?.nodeCount || 0,
             diagnosticCount: yang.diagnostics.length,
             errors,
             warnings,
             cacheHit
         },
-        modules: compiledModules.map(publicModule),
+        modules: localModules.map(publicModule),
         diagnostics: clone(yang.diagnostics),
         schemaTree: tree
             ? {
@@ -1158,7 +1189,7 @@ function pageDatastoreXml(includeOperational) {
     return (
         `<system xmlns="${PAGE_SYSTEM_NAMESPACE}"><hostname>netnexus-e2e</hostname></system>` +
         `<interfaces xmlns="${PAGE_INTERFACES_NAMESPACE}">` +
-        `<interface><name>eth0</name><enabled>true</enabled>${operationalState}</interface>` +
+        `<interface><name>eth0</name><enabled>true</enabled><config><mode>disabled</mode></config>${operationalState}</interface>` +
         '</interfaces>'
     );
 }
@@ -1260,15 +1291,16 @@ function handleRegistryCall(controller, yang, method, args) {
     if (method === 'yang.registry.listModules') {
         const query = typeof args[0] === 'string' ? args[0] : args[0]?.query || args[0]?.search || '';
         const normalizedQuery = String(query).trim().toLowerCase();
+        const localModules = yang.modules.filter(module => module.isLocal);
         const modules = normalizedQuery
-            ? yang.modules.filter(module =>
+            ? localModules.filter(module =>
                   [module.name, module.namespace, module.revision].some(value =>
                       String(value || '')
                           .toLowerCase()
                           .includes(normalizedQuery)
                   )
               )
-            : yang.modules;
+            : localModules;
         return successResponse({ modules: modules.map(publicModule) });
     }
     if (method === 'yang.registry.selectFiles') {
@@ -1318,13 +1350,32 @@ function handleRegistryCall(controller, yang, method, args) {
         yang.compiledModuleIds = [];
         yang.compiledAt = '';
         yang.diagnostics = [];
-        yang.modules.forEach(module => {
-            module.compiled = false;
-            module.compileStatus = 'pending';
-            if (module.isLocal) module.status = 'downloaded';
-        });
+        yang.modules = yang.modules
+            .filter(module => !module.isLocal || module.deviceAdvertised)
+            .map(module => ({
+                ...module,
+                ...(module.isLocal
+                    ? {
+                          isLocal: false,
+                          imported: false,
+                          source: 'netconf',
+                          status: 'discovered',
+                          downloadStatus: 'remote',
+                          fileName: '',
+                          filePath: '',
+                          contentHash: ''
+                      }
+                    : {}),
+                compiled: false,
+                compileStatus: 'pending',
+                compileMessage: '',
+                compileError: null,
+                diagnostic: null,
+                diagnostics: []
+            }));
         yang.workspace = buildWorkspace(yang);
-        return successResponse(null, 'Schema 工作区已清空');
+        saveActiveProfileWorkspace(yang);
+        return successResponse(null, 'YANG 工作区及本地模型已清空');
     }
     if (method === 'yang.registry.getWorkspace') return successResponse(currentWorkspace(yang));
     if (method === 'yang.registry.getSchemaRoots') {

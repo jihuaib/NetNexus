@@ -57,6 +57,8 @@ class YangApp {
         this.compileResult = new Map();
         this.compilationRestorePromises = new Map();
         this.deletingWorkspaces = new Set();
+        this.workspaceGenerations = new Map();
+        this.activeWorkspaceImports = new Map();
         this.closing = false;
         this.closed = false;
         this.closePromise = null;
@@ -198,7 +200,28 @@ class YangApp {
     }
 
     assertWorkspaceAvailable(workspaceId) {
-        if (this.deletingWorkspaces.has(workspaceId)) throw new Error('该 Profile 工作区正在删除');
+        if (this.deletingWorkspaces.has(workspaceId)) throw new Error('该 Profile 工作区正在清理');
+    }
+
+    getWorkspaceGeneration(request = {}) {
+        const payload = request && typeof request === 'object' && !Array.isArray(request) ? request : {};
+        const workspaceId =
+            typeof payload.workspaceId === 'string' && payload.workspaceId
+                ? payload.workspaceId
+                : this.resolveProfileContext(payload).workspaceId;
+        return this.workspaceGenerations.get(workspaceId) || 0;
+    }
+
+    advanceWorkspaceGeneration(workspaceId) {
+        const generation = this.getWorkspaceGeneration({ workspaceId }) + 1;
+        this.workspaceGenerations.set(workspaceId, generation);
+        return generation;
+    }
+
+    assertWorkspaceGeneration(workspaceId, expectedGeneration) {
+        if (expectedGeneration === undefined || expectedGeneration === null) return;
+        if (Number(expectedGeneration) === this.getWorkspaceGeneration({ workspaceId })) return;
+        throw this.lifecycleError('YANG_WORKSPACE_CHANGED', '该 Profile 工作区已清空，本次下载结果不会写入模型库');
     }
 
     lifecycleError(code, message) {
@@ -484,7 +507,8 @@ class YangApp {
     async importDownloadedContents(contents, options = {}, event = null) {
         const context = this.resolveProfileContext(options);
         this.assertWorkspaceAvailable(context.workspaceId);
-        const result = await this.send(event, WORKER_REQ_TYPES.IMPORT_CONTENTS, {
+        this.assertWorkspaceGeneration(context.workspaceId, options.workspaceGeneration);
+        const pendingImport = this.send(event, WORKER_REQ_TYPES.IMPORT_CONTENTS, {
             contents,
             workspaceId: context.workspaceId,
             workspaceMetadata: {
@@ -492,8 +516,20 @@ class YangApp {
                 discoveredAt: options.inventory?.discoveredAt || new Date().toISOString()
             }
         });
-        this.reconcileCompilationFreshness(context.workspaceId, result?.workspace);
-        return result;
+        let activeImports = this.activeWorkspaceImports.get(context.workspaceId);
+        if (!activeImports) {
+            activeImports = new Set();
+            this.activeWorkspaceImports.set(context.workspaceId, activeImports);
+        }
+        activeImports.add(pendingImport);
+        try {
+            const result = await pendingImport;
+            this.reconcileCompilationFreshness(context.workspaceId, result?.workspace);
+            return result;
+        } finally {
+            activeImports.delete(pendingImport);
+            if (activeImports.size === 0) this.activeWorkspaceImports.delete(context.workspaceId);
+        }
     }
 
     resolveCompileHashes(requested, modules) {
@@ -663,6 +699,7 @@ class YangApp {
     }
 
     async restoreStoredCompilation(event, context, workspace, requestedCompileId, options = {}) {
+        this.assertWorkspaceAvailable(context.workspaceId);
         const stored = this.lastCompile.get(context.workspaceId);
         if (!this.isStoredCompilationCurrent(context.workspaceId, workspace)) {
             throw new Error('当前工作区尚未编译');
@@ -902,13 +939,43 @@ class YangApp {
     }
 
     async handleClearWorkspace(event, request = {}) {
+        let context = null;
+        let workspaceLocked = false;
         try {
             this.setWebContents(event);
-            const context = this.resolveProfileContext(request);
+            context = this.resolveProfileContext(request);
+            if (this.deletingWorkspaces.has(context.workspaceId)) throw new Error('该 Profile 工作区正在清理');
+            this.deletingWorkspaces.add(context.workspaceId);
+            workspaceLocked = true;
+            const runningWorkspaceTask = [...this.taskManager.tasks.values()].some(
+                task =>
+                    task.status === 'running' &&
+                    (task.metadata?.profileId === context.profileId ||
+                        task.metadata?.workspaceId === context.workspaceId)
+            );
+            if (runningWorkspaceTask) {
+                throw new Error('模型任务执行中，请等待任务结束后再清空工作区');
+            }
+            const restorePrefix = `${context.workspaceId}\u0000`;
+            if ([...this.compilationRestorePromises.keys()].some(key => key.startsWith(restorePrefix))) {
+                throw new Error('编译上下文正在恢复，请等待恢复结束后再清空工作区');
+            }
+            if (this.activeWorkspaceImports.get(context.workspaceId)?.size) {
+                throw new Error('下载模型正在写入本地仓库，请等待任务结束后再清空工作区');
+            }
+            const workspace = await this.send(event, WORKER_REQ_TYPES.CLEAR_WORKSPACE, {
+                workspaceId: context.workspaceId
+            });
+            this.advanceWorkspaceGeneration(context.workspaceId);
             this.invalidateCompilation(context.workspaceId);
-            return successResponse(null, 'YANG编译工作区已清空');
+            for (const key of this.compilationRestorePromises.keys()) {
+                if (key.startsWith(`${context.workspaceId}\u0000`)) this.compilationRestorePromises.delete(key);
+            }
+            return successResponse(workspace, 'YANG工作区及本地模型已清空');
         } catch (error) {
             return errorResponse('清空YANG工作区失败: ' + error.message);
+        } finally {
+            if (workspaceLocked) this.deletingWorkspaces.delete(context.workspaceId);
         }
     }
 
@@ -1013,6 +1080,7 @@ class YangApp {
             for (const key of this.compilationRestorePromises.keys()) {
                 if (key.startsWith(`${context.workspaceId}\u0000`)) this.compilationRestorePromises.delete(key);
             }
+            this.advanceWorkspaceGeneration(context.workspaceId);
             return Boolean(deleted);
         } finally {
             this.deletingWorkspaces.delete(context.workspaceId);
@@ -1058,6 +1126,8 @@ class YangApp {
             }
             this.compilationRestorePromises.clear();
             this.deletingWorkspaces.clear();
+            this.workspaceGenerations.clear();
+            this.activeWorkspaceImports.clear();
             this.activeProfileId = null;
             this.closed = true;
         })();

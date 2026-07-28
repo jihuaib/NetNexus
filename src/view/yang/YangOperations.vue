@@ -921,7 +921,7 @@
                                     class="schema-node-title operation-schema-node-title"
                                     :data-parameter-path="node.parameterPath"
                                     :data-parameter-invalid="
-                                        node.required && !String(parameterNodeValue(node) ?? '').trim()
+                                        node.required && String(parameterNodeValue(node) ?? '') === ''
                                             ? 'true'
                                             : undefined
                                     "
@@ -1002,31 +1002,31 @@
             <nn-spin :spinning="parameterActionLoading">
                 <nn-form layout="vertical" class="operation-parameter-action-form">
                     <template v-if="parameterAction.mode === 'edit-value'">
-                        <nn-form-item label="节点值" required>
+                        <nn-form-item label="节点值" :required="Boolean(parameterAction.node?.required)">
                             <nn-select
-                                v-if="parameterAction.node?.editor === 'select'"
+                                v-if="parameterActionValueDescriptor.editor === 'select'"
                                 :value="parameterAction.value"
-                                :options="parameterAction.node?.options || []"
-                                :mode="parameterAction.node?.multiple ? 'multiple' : undefined"
-                                :allow-clear="parameterAction.node?.multiple"
+                                :options="parameterActionValueDescriptor.options"
+                                :mode="parameterActionValueDescriptor.multiple ? 'multiple' : undefined"
+                                :allow-clear="parameterActionValueDescriptor.multiple"
                                 aria-label="节点值"
                                 :aria-invalid="
-                                    parameterAction.node?.required && !String(parameterAction.value ?? '').trim()
+                                    parameterAction.node?.required && String(parameterAction.value ?? '') === ''
                                         ? 'true'
                                         : undefined
                                 "
                                 @update:value="value => (parameterAction.value = value)"
                             />
                             <nn-input-number
-                                v-else-if="parameterAction.node?.editor === 'number'"
+                                v-else-if="parameterActionValueDescriptor.editor === 'number'"
                                 :value="parameterAction.value"
-                                :min="parameterAction.node?.min"
-                                :max="parameterAction.node?.max"
+                                :min="parameterActionValueDescriptor.min"
+                                :max="parameterActionValueDescriptor.max"
                                 aria-label="节点值"
                                 @update:value="value => (parameterAction.value = value)"
                             />
                             <nn-checkbox
-                                v-else-if="parameterAction.node?.editor === 'checkbox'"
+                                v-else-if="parameterActionValueDescriptor.editor === 'checkbox'"
                                 :checked="Boolean(parameterAction.value)"
                                 aria-label="节点值"
                                 @update:checked="value => (parameterAction.value = value)"
@@ -1034,7 +1034,7 @@
                                 {{ parameterAction.value ? '启用' : '未启用' }}
                             </nn-checkbox>
                             <XmlCodeEditor
-                                v-else-if="parameterAction.node?.editor === 'textarea'"
+                                v-else-if="parameterActionValueDescriptor.editor === 'textarea'"
                                 :value="String(parameterAction.value ?? '')"
                                 :rows="10"
                                 aria-label="节点值"
@@ -1046,7 +1046,7 @@
                                 :placeholder="parameterAction.node?.placeholder || '输入节点值'"
                                 aria-label="节点值"
                                 :aria-invalid="
-                                    parameterAction.node?.required && !String(parameterAction.value ?? '').trim()
+                                    parameterAction.node?.required && String(parameterAction.value ?? '') === ''
                                         ? 'true'
                                         : undefined
                                 "
@@ -1091,7 +1091,18 @@
                             />
                         </nn-form-item>
                         <nn-form-item v-if="parameterActionAcceptsValue" label="初始值">
+                            <nn-select
+                                v-if="parameterActionValueDescriptor.editor === 'select'"
+                                :value="parameterAction.value"
+                                :options="parameterActionValueDescriptor.options"
+                                :mode="parameterActionValueDescriptor.multiple ? 'multiple' : undefined"
+                                :allow-clear="true"
+                                :placeholder="parameterActionValueDescriptor.placeholder"
+                                :aria-label="'\u8282\u70b9\u521d\u59cb\u503c'"
+                                @update:value="value => (parameterAction.value = value)"
+                            />
                             <nn-input
+                                v-else
                                 :value="String(parameterAction.value ?? '')"
                                 placeholder="可留空"
                                 aria-label="节点初始值"
@@ -1768,14 +1779,15 @@
         parameterPath,
         { deletable = true, requiredMetadata = new Map(), metadataPath = [] } = {}
     ) => {
-        const directText = Array.from(element.childNodes || [])
+        const valueSchemaMetadata = parameterSchemaValueMetadata(parameterPath, String(element.namespaceURI || ''));
+        const directTextValue = Array.from(element.childNodes || [])
             .filter(node => node.nodeType === 3 || node.nodeType === 4)
             .map(node => node.nodeValue || '')
-            .join('')
-            .trim();
+            .join('');
         const requiredComment = Array.from(element.childNodes || []).find(
             node => node.nodeType === 8 && String(node.nodeValue || '').includes('NETNEXUS_REQUIRED')
         );
+        const directText = requiredComment ? directTextValue.trim() : directTextValue;
         const schemaMetadata = requiredMetadata.get(metadataPath.join('/')) || {};
         const requiredPlaceholder = String(requiredComment?.nodeValue || schemaMetadata.placeholder || '').trim();
         const elementChildren = Array.from(element.children || []);
@@ -1807,10 +1819,17 @@
                 { requiredMetadata, metadataPath: [...metadataPath, xmlMetadataSegment(child)] }
             );
         });
-        const required = Boolean(requiredComment || schemaMetadata.placeholder);
+        const presenceRequired = Boolean(
+            requiredComment ||
+                schemaMetadata.placeholder ||
+                valueSchemaMetadata.isListKey ||
+                valueSchemaMetadata.schemaNode?.mandatory === true
+        );
+        const required = presenceRequired && !valueSchemaMetadata.acceptsEmptyString;
         const hasRequiredDescendant = childNodes.some(child => child.required || child.hasRequiredDescendant);
         const isListNode = childNodes.some(child => child.kind === 'key');
-        const hasEditableValue = elementChildren.length === 0 && Boolean(directText || required);
+        const hasEditableValue =
+            elementChildren.length === 0 && Boolean(directText || presenceRequired || valueSchemaMetadata.isTerminal);
         const booleanValue =
             /^(?:true|false)$/iu.test(directText) || schemaMetadata.boolean || /boolean/iu.test(requiredPlaceholder);
         const children = [...attributes, ...childNodes];
@@ -1818,7 +1837,7 @@
             key: `parameter:xml:${xmlField}:${elementPath.join('.') || 'root'}`,
             title: element.nodeName,
             kind:
-                schemaMetadata.isKey || /list key/iu.test(requiredPlaceholder)
+                valueSchemaMetadata.isListKey || schemaMetadata.isKey || /list key/iu.test(requiredPlaceholder)
                     ? 'key'
                     : isListNode
                       ? 'list'
@@ -1827,8 +1846,10 @@
             options: booleanValue ? booleanValueOptions : undefined,
             value: directText,
             placeholder: requiredPlaceholder,
+            presenceRequired,
+            acceptsEmptyString: valueSchemaMetadata.acceptsEmptyString,
             required,
-            deletable: deletable && !required,
+            deletable: deletable && !presenceRequired,
             hasRequiredDescendant,
             xmlField,
             xmlPath: elementPath,
@@ -1906,6 +1927,7 @@
         field = '',
         editor = '',
         options,
+        multiple = false,
         disabled = false,
         min,
         max,
@@ -1921,6 +1943,7 @@
         field,
         editor,
         options,
+        multiple,
         disabled,
         min,
         max,
@@ -2401,7 +2424,16 @@
         const parts = String(node?.parameterPath || '')
             .split('/')
             .filter(Boolean);
-        const markerIndex = Math.max(parts.lastIndexOf('filter'), parts.lastIndexOf('config'));
+        const operationName = parameterLocalName(parts[1]);
+        const envelopeName =
+            operationName === 'edit-config' ? 'config' : ['get', 'get-config'].includes(operationName) ? 'filter' : '';
+        const markerIndex =
+            envelopeName &&
+            parts.length > 2 &&
+            parameterLocalName(parts[0]) === 'rpc' &&
+            parameterLocalName(parts[2]) === envelopeName
+                ? 2
+                : -1;
         if (markerIndex < 0) return [];
         return parts
             .slice(markerIndex + 1)
@@ -2417,10 +2449,11 @@
         );
         return moduleNode?.namespace || props.contextNode?.namespace || '';
     };
-    const findSchemaNodeBySegments = segments => {
+    const findSchemaNodeBySegments = (segments, namespace = '') => {
         if (!segments.length) return null;
         const matches = flatParameterSchemaNodes.value.filter(node => {
             if (!PARAMETER_DATA_NODE_KEYWORDS.has(parameterSchemaKeyword(node))) return false;
+            if (namespace && parameterSchemaNamespace(node) !== namespace) return false;
             const candidateSegments = parameterSchemaPathSegments(node);
             if (candidateSegments.length < segments.length) return false;
             return segments.every(
@@ -2429,7 +2462,91 @@
         });
         return matches.find(node => parameterSchemaPathSegments(node).length === segments.length) || matches[0] || null;
     };
-    const findParameterSchemaNode = node => findSchemaNodeBySegments(parameterDataPathSegments(node));
+    const findParameterSchemaNode = node =>
+        findSchemaNodeBySegments(parameterDataPathSegments(node), String(node?.xmlNamespace || ''));
+    const normalizeParameterSchemaKeyDetails = schemaNode => {
+        const details = (Array.isArray(schemaNode?.schemaKeyDetails) ? schemaNode.schemaKeyDetails : [])
+            .map(detail => {
+                const name = parameterLocalName(typeof detail === 'string' ? detail : detail?.name);
+                if (!/^[A-Za-z_][\w.-]*$/u.test(name)) return null;
+                return {
+                    name,
+                    acceptsEmptyString: typeof detail === 'object' && detail?.acceptsEmptyString === true
+                };
+            })
+            .filter(Boolean);
+        const detailsByName = new Map(details.map(detail => [detail.name, detail]));
+        const rawKeys = normalizeSchemaKeyNames(schemaNode);
+        const keyNames = [
+            ...new Set([
+                ...rawKeys.map(parameterLocalName).filter(name => /^[A-Za-z_][\w.-]*$/u.test(name)),
+                ...details.map(detail => detail.name)
+            ])
+        ];
+        return keyNames.map(name => detailsByName.get(name) || { name, acceptsEmptyString: false });
+    };
+    const parameterSchemaValueMetadata = (parameterPath, namespace = '') => {
+        const parameterNode = { parameterPath, xmlNamespace: namespace };
+        const segments = parameterDataPathSegments(parameterNode);
+        const schemaNode = findParameterSchemaNode(parameterNode);
+        const parentSchemaNode =
+            flatParameterSchemaNodes.value.find(candidate => candidate?.id === schemaNode?.parentId) ||
+            (segments.length > 1 ? findSchemaNodeBySegments(segments.slice(0, -1), namespace) : null);
+        const keyDetail = normalizeParameterSchemaKeyDetails(parentSchemaNode).find(
+            detail => detail.name === segments.at(-1)
+        );
+        const keyword = parameterSchemaKeyword(schemaNode);
+        return {
+            schemaNode,
+            isListKey: schemaNode?.isListKey === true || Boolean(keyDetail),
+            acceptsEmptyString: schemaNode?.acceptsEmptyString === true || keyDetail?.acceptsEmptyString === true,
+            isTerminal: ['leaf', 'leaf-list', 'anydata', 'anyxml'].includes(keyword)
+        };
+    };
+    const parameterSchemaEnumerationOptions = schemaNode => {
+        const seenNames = new Set();
+        return (Array.isArray(schemaNode?.enumValues) ? schemaNode.enumValues : []).reduce((options, enumValue) => {
+            const rawName = typeof enumValue === 'string' ? enumValue : enumValue?.name;
+            if (rawName === undefined || rawName === null) return options;
+            const name = String(rawName);
+            if (!name.trim() || seenNames.has(name)) return options;
+            seenNames.add(name);
+            options.push({ label: name, value: name });
+            return options;
+        }, []);
+    };
+    const resolveParameterValueDescriptor = (schemaNode, fallback = {}) => {
+        const descriptor = {
+            editor: fallback?.editor || 'text',
+            options: Array.isArray(fallback?.options) ? fallback.options : [],
+            multiple: Boolean(fallback?.multiple),
+            min: fallback?.min,
+            max: fallback?.max,
+            placeholder: fallback?.placeholder || '\u8f93\u5165\u8282\u70b9\u503c'
+        };
+        const baseType = String(schemaNode?.baseType || '')
+            .trim()
+            .toLowerCase();
+        if (baseType === 'enumeration') {
+            const options = parameterSchemaEnumerationOptions(schemaNode);
+            if (options.length) return { ...descriptor, editor: 'select', options, multiple: false };
+        }
+        if (baseType === 'boolean') {
+            return { ...descriptor, editor: 'select', options: booleanValueOptions, multiple: false };
+        }
+        return descriptor;
+    };
+    const parameterActionValueDescriptor = computed(() => {
+        const editing = parameterAction.mode === 'edit-value';
+        const schemaNode = parameterAction.schemaNode;
+        const fallback = editing
+            ? parameterAction.node
+            : {
+                  editor: 'text',
+                  placeholder: '\u53ef\u7559\u7a7a'
+              };
+        return resolveParameterValueDescriptor(schemaNode, fallback);
+    });
     const findContextRootSchemaNode = () => {
         const contextSegments = parameterSchemaPathSegments(props.contextNode);
         if (!contextSegments.length) return null;
@@ -2512,10 +2629,12 @@
             }
         } else {
             const nextValue = String(value ?? '');
-            if (node.required && !nextValue.trim()) {
+            if (node.required && nextValue === '') {
                 element.replaceChildren(
                     parsed.documentNode.createComment(` ${node.placeholder || 'NETNEXUS_REQUIRED: 输入必填值'} `)
                 );
+            } else if (nextValue === '') {
+                element.replaceChildren();
             } else {
                 element.replaceChildren(parsed.documentNode.createTextNode(nextValue));
             }
@@ -2682,6 +2801,8 @@
         if (executing.value || editConfigLoading.value) return '操作执行或设备回读期间不能修改参数树';
         if (node?.disabled) return '该协议或命名空间节点为只读';
         if (requestOverrideActive.value) return '确认参数树修改后，将退出手工编辑并重新生成 RPC';
+        if (node?.presenceRequired && node?.acceptsEmptyString)
+            return '\u8be5 list key \u8282\u70b9\u5fc5\u987b\u4fdd\u7559\uff0c\u4f46\u5176 YANG \u7c7b\u578b\u5141\u8bb8\u7a7a\u5b57\u7b26\u4e32';
         if (node?.required) return '必填值或 list key 不能单独移除；可移除其上层可选分支';
         return '添加动作优先使用当前 libyang Schema；确认后 RPC 请求会立即同步';
     });
@@ -2752,6 +2873,79 @@
         String(node?.id || node?.path || `${node?.module || 'schema'}:${node?.name || node?.title || index}`);
     const schemaCandidateName = node => String(node?.name || node?.title || '').trim();
     const schemaCandidateIsRepeatable = node => ['list', 'leaf-list'].includes(parameterSchemaKeyword(node));
+    const parameterXmlSchemaPath = node => {
+        if (!node?.xmlField || node.attributeName || !Array.isArray(node.xmlPath)) return [];
+        const dataNames = parameterDataPathSegments(node);
+        if (!dataNames.length) return [];
+        const parsed = parseXmlFragment(form[node.xmlField]);
+        if (!parsed.wrapper || parsed.error) return [];
+
+        let element = xmlElementAtPath(parsed.wrapper, node.xmlPath);
+        const elements = [];
+        while (element && element !== parsed.wrapper) {
+            elements.unshift(element);
+            element = element.parentElement;
+        }
+        const aligned = elements.slice(-dataNames.length);
+        if (
+            aligned.length !== dataNames.length ||
+            aligned.some(
+                (candidate, index) => parameterLocalName(candidate.localName || candidate.nodeName) !== dataNames[index]
+            )
+        ) {
+            return [];
+        }
+        return aligned.map(candidate => ({
+            localName: parameterLocalName(candidate.localName || candidate.nodeName),
+            namespace: String(candidate.namespaceURI || '')
+        }));
+    };
+    const uniqueParameterSchemaNodes = nodes => {
+        const seen = new Set();
+        return (Array.isArray(nodes) ? nodes : []).filter(node => {
+            const key = node?.id || node?.path || node;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    };
+    const findParameterSchemaChildrenForSegment = async (parents, segment) => {
+        const children = [];
+        for (const parent of uniqueParameterSchemaNodes(parents)) {
+            children.push(
+                ...(await flattenAddableParameterSchemaChildren(await loadDirectParameterSchemaChildren(parent)))
+            );
+        }
+        const named = uniqueParameterSchemaNodes(children).filter(
+            candidate => parameterLocalName(schemaCandidateName(candidate)) === segment.localName
+        );
+        if (segment.namespace) {
+            return named.filter(candidate => parameterSchemaNamespace(candidate) === segment.namespace);
+        }
+        return named.length === 1 ? named : [];
+    };
+    const resolveParameterSchemaNode = async node => {
+        const segments = parameterXmlSchemaPath(node);
+        if (!segments.length) return findParameterSchemaNode(node);
+
+        const moduleRoots = uniqueParameterSchemaNodes(flatParameterSchemaNodes.value).filter(candidate =>
+            ['module', 'submodule'].includes(parameterSchemaKeyword(candidate))
+        );
+        const rootNamespace = segments[0].namespace || parameterSchemaNamespace(props.contextNode);
+        const matchingModules = rootNamespace
+            ? moduleRoots.filter(candidate => parameterSchemaNamespace(candidate) === rootNamespace)
+            : moduleRoots.length === 1
+              ? moduleRoots
+              : [];
+        if (!matchingModules.length) return null;
+
+        let matches = await findParameterSchemaChildrenForSegment(matchingModules, segments[0]);
+        for (const segment of segments.slice(1)) {
+            if (!matches.length) return null;
+            matches = await findParameterSchemaChildrenForSegment(matches, segment);
+        }
+        return matches.length === 1 ? matches[0] : null;
+    };
     const selectParameterSchemaCandidate = key => {
         const index = parameterAction.schemaCandidates.findIndex(
             (candidate, candidateIndex) => parameterSchemaCandidateKey(candidate, candidateIndex) === key
@@ -2839,11 +3033,39 @@
             if (actionRequest === parameterActionOpenRequest) parameterActionLoading.value = false;
         }
     };
-    const openParameterEditAction = node => {
-        parameterActionOpenRequest += 1;
+    const openParameterEditAction = async node => {
+        const actionRequest = ++parameterActionOpenRequest;
+        const profileId = props.profileId;
+        const compileId = props.compileId;
+        const contextRevision = props.contextRevision;
+        const operation = activeOperation.value;
+        const actionIsCurrent = () =>
+            actionRequest === parameterActionOpenRequest &&
+            parameterActionOpen.value &&
+            profileId === props.profileId &&
+            compileId === props.compileId &&
+            contextRevision === props.contextRevision &&
+            operation === activeOperation.value;
         parameterActionLoading.value = false;
         resetParameterAction('edit-value', node);
         parameterActionOpen.value = true;
+
+        if (!compileId || !node?.xmlField || node.attributeName) {
+            parameterAction.schemaNode = findParameterSchemaNode(node);
+            return;
+        }
+
+        parameterActionLoading.value = true;
+        try {
+            const schemaNode = await resolveParameterSchemaNode(node);
+            if (!actionIsCurrent()) return;
+            parameterAction.schemaNode = schemaNode;
+        } catch (error) {
+            if (!actionIsCurrent()) return;
+            notify.warning(`\u52a0\u8f7d\u8282\u70b9 Schema \u5931\u8d25\uff1a${error.message}`);
+        } finally {
+            if (actionRequest === parameterActionOpenRequest) parameterActionLoading.value = false;
+        }
     };
     const closeParameterAction = () => {
         parameterActionOpenRequest += 1;
@@ -2914,16 +3136,20 @@
             const schemaNode = parameterAction.schemaNode;
             const schemaKeyword = parameterSchemaKeyword(schemaNode);
             if (activeOperation.value === 'edit-config' && schemaKeyword === 'list') {
-                normalizeSchemaKeyNames(schemaNode).forEach(keyName => {
-                    const keyElement = createParameterXmlElement(parsed.documentNode, keyName, namespace);
-                    keyElement.appendChild(parsed.documentNode.createComment(' NETNEXUS_REQUIRED: 输入 list key 值 '));
+                normalizeParameterSchemaKeyDetails(schemaNode).forEach(keyDetail => {
+                    const keyElement = createParameterXmlElement(parsed.documentNode, keyDetail.name, namespace);
+                    if (!keyDetail.acceptsEmptyString) {
+                        keyElement.appendChild(
+                            parsed.documentNode.createComment(' NETNEXUS_REQUIRED: 输入 list key 值 ')
+                        );
+                    }
                     element.appendChild(keyElement);
                 });
             } else if (parameterActionAcceptsValue.value) {
                 const value = String(parameterAction.value ?? '');
-                if (!value.trim() && schemaNode?.mandatory) {
+                if (value === '' && schemaNode?.mandatory && schemaNode?.acceptsEmptyString !== true) {
                     element.appendChild(parsed.documentNode.createComment(' NETNEXUS_REQUIRED: 输入必填值 '));
-                } else if (value) {
+                } else if (value !== '') {
                     element.appendChild(parsed.documentNode.createTextNode(value));
                 }
             }
@@ -2961,7 +3187,7 @@
         const node = parameterContextMenu.node;
         const parent = parameterContextMenu.parent;
         hideParameterContextMenu();
-        if (key === 'edit-value') openParameterEditAction(node);
+        if (key === 'edit-value') await openParameterEditAction(node);
         else if (key === 'remove-node') removeParameterXmlNode(node);
         else if (['add-child', 'add-sibling', 'add-attribute'].includes(key)) {
             await openParameterAddAction(key, node, parent);
@@ -3054,7 +3280,7 @@
     const hasMissingRequiredParameter = nodes =>
         nodes.some(
             node =>
-                (node.required && node.editor && !String(parameterNodeValue(node) ?? '').trim()) ||
+                (node.required && node.editor && String(parameterNodeValue(node) ?? '') === '') ||
                 (node.children?.length && hasMissingRequiredParameter(node.children))
         );
 

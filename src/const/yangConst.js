@@ -32,7 +32,8 @@
  *     available, required, engine, executable, version?, path?, source?, error?, installHint?, capabilities?
  *   }
  * - compile({ profileId, moduleIds? }) -> data: CompileResult | { taskId }
- * - clearWorkspace({ profileId })
+ * - clearWorkspace({ profileId }) -> permanently removes that Profile workspace's managed YANG copies and
+ *   compilation state; files in the original external import location are retained
  * - getWorkspace({ profileId }) -> data: { compileId?, summary?, modules?, diagnostics?, schemaTree? }
  * - getSchemaRoots({ profileId, compileId? }) -> data: SchemaNode[] | { nodes: SchemaNode[] }
  * - getSchemaChildren({ profileId, compileId?, parentId, nodeId? }) -> data: SchemaNode[] | { nodes: SchemaNode[] }

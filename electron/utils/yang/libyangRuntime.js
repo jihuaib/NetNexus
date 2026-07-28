@@ -11,7 +11,7 @@ const MAX_ALLOWED_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_ARGUMENT_BYTES = 4 * 1024 * 1024;
 const MAX_DISCOVERY_FAILURE_DETAIL_CHARS = 4_096;
 const MINIMUM_LIBYANG_MAJOR = 2;
-const SCHEMA_HELPER_CONTRACT_VERSION = 2;
+const SCHEMA_HELPER_CONTRACT_VERSION = 4;
 
 function createRuntimeError(message, code, details = {}) {
     const error = new Error(message);

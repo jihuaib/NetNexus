@@ -38,7 +38,7 @@ const runtime = {
     engine: 'libyang',
     executable: 'yanglint',
     schemaExecutable: 'netnexus-libyang-schema',
-    schemaContractVersion: 2,
+    schemaContractVersion: 4,
     version: release.libyangVersion,
     tag: release.tag,
     libyangCommit: release.libyangCommit,

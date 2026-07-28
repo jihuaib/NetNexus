@@ -1850,7 +1850,7 @@ test.describe('NETCONF/YANG workbench', () => {
             expect(bounds.x).toBeGreaterThanOrEqual(wideBefore.body.x - 1);
             expect(bounds.right).toBeLessThanOrEqual(wideBefore.body.right + 1);
         });
-        for (const action of ['获取设备列表', '导入文件', '导入目录', '编译所选', '刷新']) {
+        for (const action of ['获取设备列表', '导入文件', '导入目录', '编译所选', '清空工作区', '刷新']) {
             await expect(
                 page.getByTestId('yang-modules-actions').getByRole('button', { name: action, exact: true })
             ).toBeVisible();
@@ -1908,6 +1908,120 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(compileRequest.moduleIds).toHaveLength(1);
         expect(compileRequest.moduleIds[0].name).toBe('ietf-interfaces');
         await expect(localModuleRow.getByRole('button', { name: '源码', exact: true })).toBeVisible();
+    });
+
+    test('clears only the active Profile local models and keeps device inventory available', async ({ page }) => {
+        const primaryProfileId = 'e2e-netconf-profile';
+        const backupProfileId = 'e2e-netconf-profile-2';
+        const backupCompile = await harness.controller.call('yang.registry.compile', {
+            profileId: backupProfileId
+        });
+        expect(backupCompile.status).toBe('success');
+        await harness.controller.call('yang.registry.importFiles', { profileId: primaryProfileId });
+
+        const seededDiagnostic = {
+            id: 'clear-workspace-warning',
+            severity: 'warning',
+            module: 'ietf-interfaces',
+            message: '清空工作区隔离测试诊断'
+        };
+        harness.controller.state.yang.diagnostics = [seededDiagnostic];
+        harness.controller.state.yang.workspace = null;
+        await harness.controller.call('yang.registry.getWorkspace', { profileId: primaryProfileId });
+        const backupWorkspaceBefore = JSON.parse(
+            JSON.stringify(harness.controller.state.yang.profileWorkspaces[backupProfileId])
+        );
+        let clearRequest = null;
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.registry.clearWorkspace') {
+                clearRequest = JSON.parse(JSON.stringify(args[0] || {}));
+            }
+            return originalControllerCall(method, ...args);
+        };
+
+        await page.goto('/#/yang/yang-modules');
+        const modulesPage = page.locator('.yang-modules-page:visible');
+        const moduleTable = modulesPage.locator('.module-table');
+        const compileLog = modulesPage.getByTestId('yang-compile-log-panel');
+        const clearButton = modulesPage
+            .getByTestId('yang-modules-actions')
+            .getByRole('button', { name: '清空工作区', exact: true });
+        const interfacesRow = moduleTable.getByRole('row').filter({ hasText: 'ietf-interfaces' });
+
+        await expect(clearButton).toBeEnabled();
+        await expect(interfacesRow.getByText('已编译', { exact: true })).toHaveCount(2);
+        await expect(moduleTable.getByText('netnexus-demo', { exact: true })).toBeVisible();
+        await expect(compileLog.getByText('清空工作区隔离测试诊断', { exact: true })).toBeVisible();
+        await clearButton.click();
+
+        const confirmationDialog = page.getByRole('dialog', { name: '清空 YANG 工作区' });
+        await expect(confirmationDialog).toBeVisible();
+        await expect(confirmationDialog).toContainText('永久删除');
+        await expect(confirmationDialog).toContainText('外部导入目录中的原始文件不会被删除');
+        await expect(confirmationDialog).toContainText('不可恢复');
+        await confirmationDialog.getByRole('button', { name: '清空', exact: true }).click();
+
+        await expect.poll(() => clearRequest).toEqual({ profileId: primaryProfileId });
+        await expect(confirmationDialog).toBeHidden();
+        await expect(moduleTable.getByText('ietf-interfaces', { exact: true })).toHaveCount(0);
+        await expect(moduleTable.getByText('ietf-yang-types', { exact: true })).toHaveCount(0);
+        await expect(moduleTable.getByText('netnexus-demo', { exact: true })).toHaveCount(0);
+        await expect(compileLog.getByText('尚未编译', { exact: true })).toBeVisible();
+        await expect(compileLog.getByText('执行“编译所选”后在这里查看编译日志', { exact: true })).toBeVisible();
+        await expect(compileLog.getByText('清空工作区隔离测试诊断', { exact: true })).toHaveCount(0);
+        await expect(compileLog.locator('.compile-log-row')).toHaveCount(0);
+        await expect(clearButton).toBeDisabled();
+        await expect(
+            page.getByRole('status').filter({ hasText: 'YANG 工作区已清空，本地托管副本已删除' })
+        ).toBeVisible();
+        await expect.poll(() => harness.controller.state.yang.workspace?.compileId || '').toBe('');
+        expect(harness.controller.state.yang.compiledModuleIds).toEqual([]);
+        expect(harness.controller.state.yang.schemaTree).toBeNull();
+        expect(harness.controller.state.yang.diagnostics).toEqual([]);
+        expect(harness.controller.state.yang.modules.filter(module => module.isLocal)).toEqual([]);
+        expect(harness.controller.state.yang.profileWorkspaces[backupProfileId]).toEqual(backupWorkspaceBefore);
+
+        const advertisedModules = harness.controller.state.yang.modules.filter(module => module.deviceAdvertised);
+        expect(advertisedModules.map(module => module.name)).toEqual(
+            expect.arrayContaining(['ietf-interfaces', 'ietf-yang-types'])
+        );
+        expect(advertisedModules.every(module => module.isLocal === false)).toBe(true);
+
+        await modulesPage.getByRole('button', { name: '获取设备列表', exact: true }).click();
+        const deviceDialog = page.getByRole('dialog', { name: '设备 YANG 模型' });
+        const advertisedInterfacesRow = deviceDialog
+            .getByRole('row')
+            .filter({ hasText: 'ietf-interfaces@2018-02-20.yang' });
+        await expect(advertisedInterfacesRow.getByRole('checkbox')).toBeEnabled();
+        await advertisedInterfacesRow.getByRole('checkbox').evaluate(element => element.click());
+        await deviceDialog.getByRole('button', { name: '下载所选 (1)', exact: true }).click();
+        await expect(deviceDialog).toBeHidden();
+        await expect(moduleTable.getByText('ietf-interfaces', { exact: true })).toBeVisible();
+        await expect(moduleTable.getByText('ietf-yang-types', { exact: true })).toBeVisible();
+        await expect(moduleTable.getByText('netnexus-demo', { exact: true })).toHaveCount(0);
+
+        await page.goto('/#/yang/yang-workspace');
+        const workspaceClearButton = page
+            .locator('.yang-workspace-page:visible')
+            .getByRole('button', { name: '清空', exact: true });
+        await expect(workspaceClearButton).toBeEnabled();
+        await expect(schemaTreeItems(page)).toHaveCount(0);
+        await expect(page.getByText('暂无 Schema 节点', { exact: true })).toBeVisible();
+
+        const backupWorkspaceAfter = await originalControllerCall('yang.registry.getWorkspace', {
+            profileId: backupProfileId
+        });
+        expect(backupWorkspaceAfter.status).toBe('success');
+        expect(backupWorkspaceAfter.data.compileId).toBe(backupWorkspaceBefore.workspace.compileId);
+        expect(backupWorkspaceAfter.data.schemaTree).toEqual(backupWorkspaceBefore.workspace.schemaTree);
+        const backupModulesAfter = await originalControllerCall('yang.registry.listModules', {
+            profileId: backupProfileId
+        });
+        expect(backupModulesAfter.data.modules).toEqual(backupWorkspaceBefore.modules);
+        expect(backupModulesAfter.data.modules).toEqual(
+            expect.arrayContaining([expect.objectContaining({ name: 'vendor-system', isLocal: true, compiled: true })])
+        );
     });
 
     test('selects device models in a dialog and downloads their dependency closure', async ({ page }) => {
@@ -3267,6 +3381,145 @@ test.describe('NETCONF/YANG workbench', () => {
         await executionHistoryDrawer.getByRole('button', { name: '关闭', exact: true }).click();
     });
 
+    test('uses compiled enumeration metadata for YANG leaf value editing', async ({ page }) => {
+        const capturedRequests = [];
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.netconf.executeOperation') {
+                capturedRequests.push(JSON.parse(JSON.stringify(args[0])));
+            }
+            return originalControllerCall(method, ...args);
+        };
+
+        await page.goto('/#/yang/yang-workspace');
+        await expandSchemaModule(page, 'ietf-interfaces');
+        const interfacesNode = schemaTreeItems(page)
+            .filter({ has: page.getByText('interfaces', { exact: true }) })
+            .first();
+        await interfacesNode.click({ button: 'right' });
+        const contextMenu = page.locator('.schema-context-menu');
+        await selectSchemaMenuPath(contextMenu, ['编辑当前节点（edit-config）'], 'Candidate');
+
+        const operationPanel = page.locator('.workspace-operation-panel');
+        await expect(operationPanel.getByText('已载入', { exact: true })).toBeVisible();
+        const editParameters = operationPanel.getByRole('complementary', { name: '操作参数' });
+        const modePath = '/rpc/edit-config/config/interfaces[1]/interface[1]/config[1]/mode[1]';
+        const modeParameter = parameterNode(editParameters, modePath);
+        await expect(modeParameter).toContainText('disabled');
+
+        const parameterMenu = (await openParameterContextMenu(page, editParameters, modePath)).menu;
+        await parameterMenu.getByRole('menuitem', { name: '修改值', exact: true }).click();
+        const modeDialog = page.getByRole('dialog', { name: '修改值 · mode' });
+        const modeEditor = modeDialog.getByRole('combobox', { name: '节点值' });
+        await expect(modeEditor).toBeVisible();
+        await expect(modeDialog).toContainText('disabled');
+        await modeEditor.click();
+        await page.getByRole('option', { name: 'enabled', exact: true }).click();
+        await modeDialog.getByRole('button', { name: '确认', exact: true }).click();
+
+        const requestPreview = operationPanel.locator('.rpc-request-preview');
+        await expect(requestPreview).toContainText('<mode>enabled</mode>');
+        const requestXml = await requestPreview.locator('textarea[aria-label="RPC 请求 XML"]').inputValue();
+        expect(requestXml).not.toContain('<mode>20</mode>');
+        await operationPanel.getByRole('button', { name: '执行 edit-config', exact: true }).click();
+        const executionConfirmation = page.getByRole('dialog').filter({ hasText: 'edit-config' });
+        await expect(executionConfirmation).toBeVisible();
+        await executionConfirmation.locator('.operation-confirmation-footer button').last().click();
+        await expect.poll(() => capturedRequests.some(request => request.operation === 'edit-config')).toBe(true);
+        const editRequest = capturedRequests.find(request => request.operation === 'edit-config');
+        expect(editRequest.config).toContain('<mode>enabled</mode>');
+        await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
+    });
+    test('keeps empty-capable composite list keys present without requiring non-empty text', async ({ page }) => {
+        const capturedRequests = [];
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.netconf.executeOperation') {
+                const request = JSON.parse(JSON.stringify(args[0]));
+                capturedRequests.push(request);
+                if (request.operation === 'get-config')
+                    return { status: 'error', msg: 'mock BGP readback unavailable' };
+            }
+            return originalControllerCall(method, ...args);
+        };
+
+        await page.goto('/#/yang/yang-workspace');
+        await expandSchemaModule(page, 'ietf-interfaces');
+        const bgpNode = schemaTreeItems(page)
+            .filter({ has: page.getByText('BGP', { exact: true }) })
+            .first();
+        await bgpNode.getByRole('button', { name: '\u5c55\u5f00\u8282\u70b9' }).click();
+        const vrfsNode = schemaTreeItems(page)
+            .filter({ has: page.getByText('VRFs', { exact: true }) })
+            .first();
+        await vrfsNode.getByRole('button', { name: '\u5c55\u5f00\u8282\u70b9' }).click();
+        const vrfList = schemaTreeItems(page)
+            .filter({ has: page.getByText('VRF', { exact: true }) })
+            .first();
+        await vrfList.getByRole('button', { name: '\u5c55\u5f00\u8282\u70b9' }).click();
+        const bandwidthNode = schemaTreeItems(page)
+            .filter({ has: page.getByText('BandwidthCompaction', { exact: true }) })
+            .first();
+        await bandwidthNode.click({ button: 'right' });
+        const schemaMenu = page.locator('.schema-context-menu');
+        await selectSchemaMenuPath(
+            schemaMenu,
+            ['\u7f16\u8f91\u5f53\u524d\u8282\u70b9\uff08edit-config\uff09'],
+            'Candidate'
+        );
+
+        const operationPanel = page.locator('.workspace-operation-panel');
+        await expect(operationPanel.getByText('\u8bfb\u53d6\u5931\u8d25', { exact: true })).toBeVisible();
+        const editParameters = operationPanel.getByRole('complementary', { name: '\u64cd\u4f5c\u53c2\u6570' });
+        const namePath = '/rpc/edit-config/config/BGP[1]/VRFs[1]/VRF[1]/Name[1]';
+        const vrfPath = '/rpc/edit-config/config/BGP[1]/VRFs[1]/VRF[1]/VRF[1]';
+        const bandwidthPath = '/rpc/edit-config/config/BGP[1]/VRFs[1]/VRF[1]/BandwidthCompaction[1]';
+        const nameParameter = parameterNode(editParameters, namePath);
+        const vrfParameter = parameterNode(editParameters, vrfPath);
+        await expect(nameParameter).toContainText('key');
+        await expect(vrfParameter).toContainText('key');
+        await expect(nameParameter).not.toHaveAttribute('data-parameter-invalid', 'true');
+        await expect(vrfParameter).not.toHaveAttribute('data-parameter-invalid', 'true');
+        await expect(nameParameter.getByText('\u5fc5\u586b', { exact: true })).toHaveCount(0);
+        await expect(vrfParameter.getByText('\u5fc5\u586b', { exact: true })).toHaveCount(0);
+
+        let parameterMenu = (await openParameterContextMenu(page, editParameters, namePath)).menu;
+        await expect(
+            parameterMenu.getByRole('menuitem', { name: '\u79fb\u9664\u8282\u70b9', exact: true })
+        ).toBeDisabled();
+        await parameterMenu.getByRole('menuitem', { name: '\u4fee\u6539\u503c', exact: true }).click();
+        const nameDialog = page.getByRole('dialog', { name: '\u4fee\u6539\u503c \u00b7 Name' });
+        const nameEditor = nameDialog.getByRole('textbox', { name: '\u8282\u70b9\u503c' });
+        await expect(nameEditor).toHaveValue('');
+        await expect(nameEditor).not.toHaveAttribute('aria-invalid', 'true');
+        await expect(nameDialog.locator('.nn-form-item-required')).toHaveCount(0);
+        await nameDialog.getByRole('button', { name: '\u786e\u8ba4', exact: true }).click();
+
+        parameterMenu = (await openParameterContextMenu(page, editParameters, bandwidthPath)).menu;
+        await parameterMenu.getByRole('menuitem', { name: '\u4fee\u6539\u503c', exact: true }).click();
+        const bandwidthDialog = page.getByRole('dialog', { name: '\u4fee\u6539\u503c \u00b7 BandwidthCompaction' });
+        const bandwidthEditor = bandwidthDialog.getByRole('combobox', { name: '\u8282\u70b9\u503c' });
+        await bandwidthEditor.click();
+        await page.getByRole('option', { name: 'enable', exact: true }).click();
+        await bandwidthDialog.getByRole('button', { name: '\u786e\u8ba4', exact: true }).click();
+
+        const requestEditor = operationPanel.getByRole('textbox', { name: 'RPC \u8bf7\u6c42 XML' });
+        await expect.poll(() => requestEditor.inputValue()).not.toContain('NETNEXUS_REQUIRED');
+        const requestXml = await requestEditor.inputValue();
+        expect(requestXml).toMatch(/<Name\s*\/>|<Name><\/Name>/u);
+        expect(requestXml).toMatch(/<VRF\s*\/>|<VRF><\/VRF>/u);
+        expect(requestXml).toContain('<BandwidthCompaction>enable</BandwidthCompaction>');
+
+        await operationPanel.getByRole('button', { name: '\u6267\u884c edit-config', exact: true }).click();
+        const confirmation = page.getByRole('dialog', { name: '\u786e\u8ba4\u6267\u884c edit-config' });
+        await confirmation.getByRole('button', { name: '\u786e\u8ba4\u6267\u884c', exact: true }).click();
+        await expect.poll(() => capturedRequests.some(request => request.operation === 'edit-config')).toBe(true);
+        const editRequest = capturedRequests.find(request => request.operation === 'edit-config');
+        expect(editRequest.config).toMatch(/<Name\s*\/>|<Name><\/Name>/u);
+        expect(editRequest.config).toMatch(/<VRF\s*\/>|<VRF><\/VRF>/u);
+        await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
+    });
+
     test('keeps node and datastore workflows in the Schema context menu', async ({ page }) => {
         const capturedRequests = [];
         const originalControllerCall = harness.controller.call.bind(harness.controller);
@@ -3511,7 +3764,7 @@ test.describe('NETCONF/YANG workbench', () => {
         });
         await expect(clearButton).toBeEnabled();
         await clearButton.click();
-        const confirmationDialog = page.getByRole('dialog', { name: '清空 Schema 工作区' });
+        const confirmationDialog = page.getByRole('dialog', { name: '清空 YANG 工作区' });
         await expect(confirmationDialog).toBeVisible();
 
         await page.goto('/#/yang/yang-modules');

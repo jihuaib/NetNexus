@@ -25,7 +25,7 @@
                                 <nn-button
                                     class="module-action-button module-action-device"
                                     :loading="discovering"
-                                    :disabled="!connected"
+                                    :disabled="!connected || clearingWorkspace"
                                     @click="openDeviceModules"
                                 >
                                     <template #icon><SearchOutlined /></template>
@@ -36,7 +36,7 @@
                         <nn-button
                             class="module-action-button"
                             :loading="importing"
-                            :disabled="!selectedProfileId"
+                            :disabled="!selectedProfileId || clearingWorkspace"
                             @click="importFiles"
                         >
                             <template #icon><FileSearchOutlined /></template>
@@ -45,7 +45,7 @@
                         <nn-button
                             class="module-action-button"
                             :loading="importing"
-                            :disabled="!selectedProfileId"
+                            :disabled="!selectedProfileId || clearingWorkspace"
                             @click="importDirectory"
                         >
                             <template #icon><FolderOpenOutlined /></template>
@@ -64,9 +64,24 @@
                                 </nn-button>
                             </span>
                         </nn-tooltip>
+                        <nn-tooltip :title="clearWorkspaceDisabledReason">
+                            <span class="disabled-action-wrap module-action-clear-wrap">
+                                <nn-button
+                                    danger
+                                    class="module-action-button module-action-clear"
+                                    :loading="clearingWorkspace"
+                                    :disabled="Boolean(clearWorkspaceDisabledReason)"
+                                    @click="clearWorkspace"
+                                >
+                                    <template #icon><DeleteOutlined /></template>
+                                    清空工作区
+                                </nn-button>
+                            </span>
+                        </nn-tooltip>
                         <nn-button
                             class="module-action-button module-refresh-action"
                             :loading="loading"
+                            :disabled="clearingWorkspace"
                             @click="loadModules"
                         >
                             <template #icon><ReloadOutlined /></template>
@@ -445,10 +460,12 @@
         YANG_MODULE_STATUS_META
     } from '../../const/yangConst';
     import EventBus from '../../utils/eventBus';
+    import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
     import {
         CloudDownloadOutlined,
         CodeOutlined,
+        DeleteOutlined,
         FileSearchOutlined,
         FolderOpenOutlined,
         LoadingOutlined,
@@ -519,6 +536,7 @@
     const query = ref('');
     const statusFilter = ref('all');
     const modulePage = ref(1);
+    const clearingWorkspace = ref(false);
     const modulePageSize = ref(MODULE_TABLE_PAGE_SIZE);
     const deviceModuleModalOpen = ref(false);
     const deviceModules = ref([]);
@@ -572,10 +590,12 @@
     let compileContextRequestRevision = 0;
     let sourceRequestRevision = 0;
     let profileRequestRevision = 0;
+    let clearWorkspaceRequestRevision = 0;
     let profileContextReady = false;
     let liveCompileLogFrame = 0;
     let liveCompileTaskId = '';
     let pendingCompileProgress = null;
+    let clearWorkspaceConfirmHandle = null;
     const pendingLiveCompileLogs = new Map();
     const { compilerAvailable, refreshCompilerStatus } = useYangCompilerStatus();
     const { profilesLoading, selectedProfileId, selectedProfile, refreshProfiles, taskMatchesProfile } =
@@ -862,9 +882,27 @@
         Math.min(filteredDiagnostics.value.length, compileLogPage.value * COMPILE_LOG_PAGE_SIZE)
     );
     const compileDisabledReason = computed(() => {
+        if (clearingWorkspace.value) return '正在清空 YANG 工作区';
         if (!selectedProfileId.value) return '请先选择连接 Profile';
         if (!compilerAvailable.value) return 'YANG 编译暂不可用，请在“设置 → 运行时诊断”中检查';
         if (selectedLocalModules.value.length === 0) return '请先选择已下载或已导入的本地模块';
+        return '';
+    });
+    const workspaceTaskInProgress = computed(
+        () =>
+            discovering.value ||
+            downloading.value ||
+            importing.value ||
+            compiling.value ||
+            Object.values(activeTasks.value).some(Boolean)
+    );
+    const clearWorkspaceDisabledReason = computed(() => {
+        if (!selectedProfileId.value) return '请先选择连接 Profile';
+        if (clearingWorkspace.value) return '正在清空 YANG 工作区';
+        if (workspaceTaskInProgress.value) return '模型任务执行中，请等待任务结束后再清空工作区';
+        if (modules.value.length === 0 && !hasCompileLogContent.value && diagnostics.value.length === 0) {
+            return '当前 YANG 工作区为空';
+        }
         return '';
     });
     const sourceDrawerTitle = computed(() => {
@@ -1302,6 +1340,84 @@
         }
     };
 
+    const closeClearWorkspaceConfirm = () => {
+        clearWorkspaceConfirmHandle?.destroy?.();
+        clearWorkspaceConfirmHandle = null;
+    };
+
+    const resetClearedWorkspaceState = () => {
+        diagnosticRequestRevision += 1;
+        compileContextRequestRevision += 1;
+        sourceRequestRevision += 1;
+        modules.value = [];
+        selectedKeys.value = [];
+        modulePage.value = 1;
+        diagnostics.value = [];
+        diagnosticFilter.value = 'all';
+        clearLiveCompileLogs();
+        compileContext.value = { compileId: '', success: null, compiledAt: null, summary: {}, modules: [] };
+        taskProgress.value = null;
+        sourceDrawerOpen.value = false;
+        sourceLoading.value = false;
+        sourceModule.value = null;
+        sourceText.value = '';
+    };
+
+    const clearWorkspace = () => {
+        const disabledReason = clearWorkspaceDisabledReason.value;
+        if (disabledReason) {
+            notify.warning(disabledReason);
+            return;
+        }
+        closeClearWorkspaceConfirm();
+        let confirmHandle = null;
+        confirmHandle = dialog.confirm({
+            title: '清空 YANG 工作区',
+            content:
+                '将永久删除当前 Profile 工作区内已下载和已导入的 YANG 托管副本，并清除编译上下文、Schema 索引和编译诊断。外部导入目录中的原始文件不会被删除。此操作不可恢复。',
+            okText: '清空',
+            okType: 'danger',
+            onCancel: () => {
+                if (clearWorkspaceConfirmHandle === confirmHandle) clearWorkspaceConfirmHandle = null;
+            },
+            onOk: async () => {
+                const disabledReason = clearWorkspaceDisabledReason.value;
+                if (disabledReason) {
+                    notify.warning(disabledReason);
+                    return;
+                }
+                const profileId = selectedProfileId.value;
+                const requestRevision = profileRequestRevision;
+                const clearRequestRevision = ++clearWorkspaceRequestRevision;
+                clearingWorkspace.value = true;
+                try {
+                    await invokeBridge('yangApi', 'clearWorkspace', { profileId });
+                    if (!profileRequestMatches(profileId, requestRevision)) return;
+                    profileRequestRevision += 1;
+                    const refreshedRequestRevision = profileRequestRevision;
+                    resetClearedWorkspaceState();
+                    await loadModules();
+                    if (!profileRequestMatches(profileId, refreshedRequestRevision)) return;
+                    EventBus.emit(YANG_EVENT.PROFILE_DATA_REFRESH, {
+                        profileId,
+                        reason: 'workspace-cleared',
+                        sourcePageId: YANG_EVENT_PAGE_ID.MODULES,
+                        profileChanged: false
+                    });
+                    notify.success('YANG 工作区已清空，本地托管副本已删除');
+                } catch (error) {
+                    if (profileRequestMatches(profileId, requestRevision)) {
+                        notify.error(`清空失败：${error.message}`);
+                    }
+                } finally {
+                    if (clearRequestRevision === clearWorkspaceRequestRevision) clearingWorkspace.value = false;
+                    if (clearWorkspaceConfirmHandle === confirmHandle) clearWorkspaceConfirmHandle = null;
+                }
+            }
+        });
+        clearWorkspaceConfirmHandle = confirmHandle;
+    };
+
     const openSource = async module => {
         const requestRevision = ++sourceRequestRevision;
         sourceModule.value = module;
@@ -1555,13 +1671,16 @@
         const profileId = String(payload?.profileId || '');
         if (!profileId) return;
         if (profileId !== selectedProfileId.value) return;
+        if (payload?.reason === 'workspace-cleared' && payload?.sourcePageId === YANG_EVENT_PAGE_ID.MODULES) return;
         if (profileContextReady) void reloadCurrentProfile();
     };
 
     const resetProfileState = () => {
+        closeClearWorkspaceConfirm();
         profileRequestRevision += 1;
         diagnosticRequestRevision += 1;
         compileContextRequestRevision += 1;
+        clearWorkspaceRequestRevision += 1;
         sourceRequestRevision += 1;
         modules.value = [];
         selectedKeys.value = [];
@@ -1585,6 +1704,7 @@
         importing.value = false;
         compiling.value = false;
         diagnosticLoading.value = false;
+        clearingWorkspace.value = false;
         sourceLoading.value = false;
         deviceModuleModalOpen.value = false;
         sourceDrawerOpen.value = false;
@@ -1634,6 +1754,7 @@
     });
 
     onDeactivated(() => {
+        closeClearWorkspaceConfirm();
         stopCompileLogResize();
         diagnosticRequestRevision += 1;
         compileContextRequestRevision += 1;
@@ -1645,6 +1766,7 @@
     });
 
     onBeforeUnmount(() => {
+        closeClearWorkspaceConfirm();
         clearLiveCompileLogs();
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.MODULES);
         EventBus.off(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.MODULES}-session`);
@@ -1697,6 +1819,7 @@
 
     .module-actions {
         flex: none;
+        min-width: 0;
         min-height: 32px;
         flex-wrap: wrap;
         justify-content: flex-end;
@@ -1709,6 +1832,12 @@
 
     .module-action-device,
     .module-action-device-wrap {
+        width: 136px;
+        flex-basis: 136px;
+    }
+
+    .module-action-clear,
+    .module-action-clear-wrap {
         width: 136px;
         flex-basis: 136px;
     }
@@ -2105,18 +2234,6 @@
     }
 
     @media (max-width: 1100px) {
-        .compile-log-id {
-            display: none;
-        }
-
-        .device-module-selection-row,
-        .device-module-footer {
-            align-items: flex-start;
-            flex-direction: column;
-        }
-    }
-
-    @media (max-width: 720px) {
         .module-toolbar-row {
             align-items: flex-start;
             flex-direction: column;
@@ -2131,6 +2248,18 @@
             justify-content: flex-start;
         }
 
+        .compile-log-id {
+            display: none;
+        }
+
+        .device-module-selection-row,
+        .device-module-footer {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+    }
+
+    @media (max-width: 720px) {
         .compile-log-time {
             display: none;
         }

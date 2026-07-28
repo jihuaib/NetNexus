@@ -40,11 +40,11 @@ if (command === 'echo') {
             output: 'yanglint 5.8.6'
         });
         assert.equal(parseYanglintVersion('unrelated tool 5.8.6'), null);
-        assert.deepEqual(parseSchemaHelperVersion('netnexus-libyang-schema 2 (libyang 5.8.6)'), {
-            contractVersion: 2,
+        assert.deepEqual(parseSchemaHelperVersion('netnexus-libyang-schema 4 (libyang 5.8.6)'), {
+            contractVersion: 4,
             version: '5.8.6',
             major: 5,
-            output: 'netnexus-libyang-schema 2 (libyang 5.8.6)'
+            output: 'netnexus-libyang-schema 4 (libyang 5.8.6)'
         });
         assert.equal(parseSchemaHelperVersion('yanglint 5.8.6'), null);
 
@@ -146,7 +146,7 @@ else console.log(JSON.stringify(args));
                 ? 'test schema executable'
                 : `#!/usr/bin/env node
 const args = process.argv.slice(2);
-if (args.includes('--version')) console.log('netnexus-libyang-schema 2 (libyang 5.8.6)');
+if (args.includes('--version')) console.log('netnexus-libyang-schema 4 (libyang 5.8.6)');
 else console.log(JSON.stringify(args));
 `,
             'utf8'
@@ -175,7 +175,7 @@ else console.log(JSON.stringify(args));
             executeSchema: async () => {
                 probeCount += 1;
                 return {
-                    stdout: 'netnexus-libyang-schema 2 (libyang 5.8.6)\n',
+                    stdout: 'netnexus-libyang-schema 4 (libyang 5.8.6)\n',
                     stderr: '',
                     exitCode: 0,
                     error: null
@@ -191,7 +191,7 @@ else console.log(JSON.stringify(args));
         assert.equal(discovered.path, await fs.promises.realpath(bundledExecutable));
         assert.equal(discovered.schemaPath, await fs.promises.realpath(bundledSchemaExecutable));
         assert.equal(discovered.schemaVersion, '5.8.6');
-        assert.equal(discovered.schemaContractVersion, 2);
+        assert.equal(discovered.schemaContractVersion, 4);
         assert.equal(discovered.source, 'bundled');
         assert.equal(discovered.moduleSearchPath, moduleSearchPath);
         assert.equal(discovered.capabilities.schemaValidation, true);
@@ -216,7 +216,7 @@ else console.log(JSON.stringify(args));
             })
         });
         assert.equal(incompatibleSchemaContract.available, false);
-        assert.match(incompatibleSchemaContract.error, /contract 1 does not match required contract 2/u);
+        assert.match(incompatibleSchemaContract.error, /contract 1 does not match required contract 4/u);
 
         const failedWindowsStyleSchemaProbe = await discoverLibyangRuntime({
             ...discoveryOptions,
