@@ -166,16 +166,16 @@
     }
 
     .nn-card-extra :deep(.nn-card-head-pill .nn-switch .nn-switch-handle) {
-        background: var(--nn-color-text-card-head-control);
+        background: var(--nn-color-text-card-head-ghost);
     }
 
     .nn-card-extra :deep(.nn-card-head-pill .nn-switch-checked) {
-        background: var(--nn-color-bg-card-head-control) !important;
+        background: var(--nn-color-primary-active) !important;
         box-shadow: inset 0 0 0 1px var(--nn-color-primary-hover) !important;
     }
 
     .nn-card-extra :deep(.nn-card-head-pill .nn-switch-checked .nn-switch-handle) {
-        background: var(--nn-color-primary-active);
+        background: var(--nn-color-text-inverse);
     }
 
     .nn-card-extra :deep(.nn-card-head-pill .nn-switch:focus-visible) {

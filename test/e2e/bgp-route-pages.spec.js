@@ -88,6 +88,19 @@ test.describe('BGP route pages', () => {
 
             const importButton = page.getByRole('button', { name: '从 RouteViews 导入', exact: true });
             await expect(importButton).toBeVisible();
+            await expect
+                .poll(() =>
+                    importButton.evaluate(button => {
+                        const probe = document.createElement('span');
+                        probe.style.backgroundColor = 'var(--nn-color-bg-card-head-ghost)';
+                        document.body.appendChild(probe);
+                        const matches =
+                            getComputedStyle(button).backgroundColor === getComputedStyle(probe).backgroundColor;
+                        probe.remove();
+                        return matches;
+                    })
+                )
+                .toBe(true);
 
             const appearance = await importButton.evaluate(button => {
                 const header = button.closest('.nn-card-head');

@@ -9,6 +9,7 @@
             </template>
             <template #extra>
                 <div class="analysis-controls">
+                    <span v-if="generatedAt" class="generated-at nn-card-head-pill">更新于 {{ generatedAt }}</span>
                     <div class="analysis-toggle nn-card-head-pill">
                         <span>{{ analysisEnabled ? '分析已开启' : '分析已关闭' }}</span>
                         <nn-switch
@@ -19,7 +20,6 @@
                             @change="handleAnalysisToggle"
                         />
                     </div>
-                    <span v-if="generatedAt" class="generated-at nn-card-head-pill">更新于 {{ generatedAt }}</span>
                 </div>
             </template>
 
@@ -846,12 +846,22 @@
     }
 
     .analysis-controls {
+        min-width: 0;
+        justify-content: flex-end;
         gap: 10px;
     }
 
     .analysis-toggle {
+        flex: 0 0 auto;
         gap: 7px;
         cursor: pointer;
+    }
+
+    .generated-at {
+        min-width: 0;
+        flex: 0 1 auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     .filter-panel {

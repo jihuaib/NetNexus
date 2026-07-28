@@ -289,6 +289,30 @@ async function installLayoutApiFallbacks(page) {
     });
 }
 
+async function expectHeaderSwitchTokens(toggle, trackToken, handleToken) {
+    await expect
+        .poll(() =>
+            toggle.evaluate(
+                (element, tokens) => {
+                    const handle = element.querySelector('.nn-switch-handle');
+                    const probe = document.createElement('span');
+                    document.body.appendChild(probe);
+                    probe.style.backgroundColor = `var(${tokens.track})`;
+                    const expectedTrack = getComputedStyle(probe).backgroundColor;
+                    probe.style.backgroundColor = `var(${tokens.handle})`;
+                    const expectedHandle = getComputedStyle(probe).backgroundColor;
+                    const matches =
+                        getComputedStyle(element).backgroundColor === expectedTrack &&
+                        getComputedStyle(handle).backgroundColor === expectedHandle;
+                    probe.remove();
+                    return matches;
+                },
+                { track: trackToken, handle: handleToken }
+            )
+        )
+        .toBe(true);
+}
+
 test.describe('Custom UI component interactions', () => {
     let harness;
 
@@ -779,6 +803,11 @@ test.describe('Custom UI component interactions', () => {
         const analysisToggle = page.getByTestId('route-assurance-toggle');
         await expect(analysisPill).toBeVisible();
         await expect(analysisToggle).toHaveAttribute('aria-checked', 'false');
+        await expectHeaderSwitchTokens(
+            analysisToggle,
+            '--nn-color-bg-card-head-ghost-hover',
+            '--nn-color-text-card-head-ghost'
+        );
 
         const readHeaderAppearance = async () =>
             analysisPill.evaluate(element => {
@@ -830,9 +859,8 @@ test.describe('Custom UI component interactions', () => {
                     ghostHoverBackground: readToken('backgroundColor', '--nn-color-bg-card-head-ghost-hover'),
                     ghostText: readToken('color', '--nn-color-text-card-head-ghost'),
                     ghostBorder: readToken('borderColor', '--nn-color-border-card-head-ghost'),
-                    controlBackground: readToken('backgroundColor', '--nn-color-bg-card-head-control'),
-                    controlText: readToken('color', '--nn-color-text-card-head-control'),
-                    primaryActive: readToken('backgroundColor', '--nn-color-primary-active')
+                    primaryActive: readToken('backgroundColor', '--nn-color-primary-active'),
+                    inverseText: readToken('color', '--nn-color-text-inverse')
                 };
                 probe.remove();
                 return snapshot;
@@ -847,26 +875,18 @@ test.describe('Custom UI component interactions', () => {
         expect(offAppearance.toggleBackground).toBe(offAppearance.ghostHoverBackground);
         expect(offAppearance.toggleShadow).not.toBe('none');
         expect(offAppearance.toggleHeight).toBe('18px');
-        expect(offAppearance.handleBackground).toBe(offAppearance.controlText);
+        expect(offAppearance.handleBackground).toBe(offAppearance.ghostText);
 
         await analysisToggle.click();
         await expect(analysisToggle).toHaveAttribute('aria-checked', 'true');
-        await expect
-            .poll(() =>
-                analysisToggle.evaluate(element => {
-                    return element
-                        .getAnimations({ subtree: true })
-                        .filter(animation => animation.pending || animation.playState === 'running').length;
-                })
-            )
-            .toBe(0);
+        await expectHeaderSwitchTokens(analysisToggle, '--nn-color-primary-active', '--nn-color-text-inverse');
         const generatedAt = assurancePage.locator('.generated-at');
         await expect(generatedAt).toHaveText('更新于 E2E-TIME');
 
         const onAppearance = await readHeaderAppearance();
-        expect(onAppearance.toggleBackground).toBe(onAppearance.controlBackground);
+        expect(onAppearance.toggleBackground).toBe(onAppearance.primaryActive);
         expect(onAppearance.toggleBackground).not.toBe(onAppearance.headerBackground);
-        expect(onAppearance.handleBackground).toBe(onAppearance.primaryActive);
+        expect(onAppearance.handleBackground).toBe(onAppearance.inverseText);
         expect(onAppearance.handleBackground).not.toBe(onAppearance.toggleBackground);
         expect(onAppearance.generatedBackground).toBe(onAppearance.ghostBackground);
         expect(onAppearance.generatedColor).toBe(onAppearance.ghostText);
@@ -878,6 +898,53 @@ test.describe('Custom UI component interactions', () => {
         await page.keyboard.press('Shift+Tab');
         await expect(analysisToggle).toBeFocused();
         await expect(analysisToggle).toHaveCSS('outline-style', 'solid');
+    });
+
+    test('keeps the default blue route matrix analysis control trailing when the timestamp appears', async ({
+        page
+    }) => {
+        await installLayoutApiFallbacks(page);
+        await page.goto('/#/bmp/route-assurance');
+        await page.evaluate(() => {
+            document.documentElement.dataset.theme = 'light';
+            document.documentElement.dataset.themePreset = 'blue';
+            document.documentElement.style.colorScheme = 'light';
+        });
+
+        const assurancePage = page.getByTestId('bmp-route-assurance-page');
+        const controls = assurancePage.locator('.analysis-controls');
+        const analysisPill = controls.locator('.analysis-toggle');
+        const analysisToggle = page.getByTestId('route-assurance-toggle');
+        await expect(analysisPill).toBeVisible();
+        await expect(assurancePage.locator('.generated-at')).toHaveCount(0);
+        await expectHeaderSwitchTokens(
+            analysisToggle,
+            '--nn-color-bg-card-head-ghost-hover',
+            '--nn-color-text-card-head-ghost'
+        );
+
+        const trailingEdgeBefore = await analysisPill.evaluate(element => element.getBoundingClientRect().right);
+        await analysisToggle.click();
+        await expect(analysisToggle).toHaveAttribute('aria-checked', 'true');
+        await expectHeaderSwitchTokens(analysisToggle, '--nn-color-primary-active', '--nn-color-text-inverse');
+
+        const generatedAt = assurancePage.locator('.generated-at');
+        await expect(generatedAt).toHaveText('更新于 E2E-TIME');
+        const geometry = await controls.evaluate(element => {
+            const generated = element.querySelector('.generated-at').getBoundingClientRect();
+            const analysis = element.querySelector('.analysis-toggle').getBoundingClientRect();
+            const container = element.getBoundingClientRect();
+            return {
+                generatedRight: generated.right,
+                analysisLeft: analysis.left,
+                analysisRight: analysis.right,
+                containerRight: container.right
+            };
+        });
+
+        expect(geometry.generatedRight).toBeLessThanOrEqual(geometry.analysisLeft);
+        expect(Math.abs(geometry.analysisRight - geometry.containerRight)).toBeLessThanOrEqual(1);
+        expect(Math.abs(geometry.analysisRight - trailingEdgeBefore)).toBeLessThanOrEqual(1);
     });
 
     test('uses blue as the default theme when no preset is stored', async ({ page }) => {
