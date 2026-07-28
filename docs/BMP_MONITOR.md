@@ -53,7 +53,7 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 
 ### BMP 配置和客户端
 
-配置 BMP 监听端口、BMPv4 TLV draft、Path Marking TLV 类型以及可选 MD5 认证参数。页面下方展示当前 BMP 客户端。
+配置 BMP 监听端口、BMPv4 TLV draft 和 Path Marking TLV 类型。页面下方展示当前 BMP 客户端。
 
 ![BMP 配置和客户端信息](images/bmp/bmp-config-and-client-info.png)
 
@@ -61,7 +61,7 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 
 | 按钮 | 功能 |
 | --- | --- |
-| 启动BMP / BMP已启动 | 按监听端口、TLV draft 和 MD5 参数启动 BMP 服务；启动后显示运行状态。 |
+| 启动BMP / BMP已启动 | 按监听端口和 TLV draft 启动 BMP 服务；启动后显示运行状态。 |
 | 停止BMP | 停止 BMP 服务并断开当前客户端连接。 |
 | 详情 | 打开当前 BMP 客户端的连接、Initiation TLV 和 Termination 信息。 |
 
@@ -350,4 +350,3 @@ BMP 查询接口由外部 HTTP API 提供。API 是只读的，不负责启动 B
 - 路由矩阵和路由追踪基于 current/stale 快照，不等价于设备内部策略执行日志；缺少 Path Marking 时尤其不能把推测关联当成设备上报原因。
 - 路由轨迹受事件保留窗口约束；同一 NLRI 必须按 Scope 隔离理解。
 - 打开 debug/info 日志时，高频 BMP Route Monitoring 会产生大量日志，可能影响 CPU 和磁盘 IO。
-- MD5 认证依赖服务器部署页面中的 TCP MD5 代理能力。

@@ -41,8 +41,6 @@ class BmpApp {
         this.bmpTerminationHandler = null;
         this.bmpStatisticsReportHandler = null;
 
-        this.serverDeploymentConfig = null;
-
         this.logLevel = null;
 
         this.registerHandlers();
@@ -86,10 +84,6 @@ class BmpApp {
             logger.error('Error saving BMP config:', error.message);
             return errorResponse(error.message);
         }
-    }
-
-    setServerDeploymentConfig(config) {
-        this.serverDeploymentConfig = config;
     }
 
     async handleLogLevelChange(logLevel) {
@@ -606,13 +600,6 @@ class BmpApp {
             );
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
-
-            if (bmpConfigData.enableAuth) {
-                // 设置 SSH 部署配置
-                bmpConfigData.serverAddress = this.serverDeploymentConfig.serverAddress;
-                bmpConfigData.sshUsername = this.serverDeploymentConfig.sshUsername;
-                bmpConfigData.sshPassword = this.serverDeploymentConfig.sshPassword;
-            }
 
             const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.START_BMP, bmpConfigData);
 

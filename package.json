@@ -112,9 +112,6 @@
             "package.json",
             "LICENSE",
             "THIRD_PARTY_NOTICES.md",
-            "scripts/tcp-md5-helper.c",
-            "scripts/tcp-md5-proxy.sh",
-            "scripts/tcp-md5-diagnose.sh",
             "scripts/test-data/test_routes_100.mrt"
         ],
         "extraResources": [

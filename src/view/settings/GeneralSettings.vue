@@ -120,6 +120,7 @@
     .theme-preset-options {
         display: grid;
         width: 100%;
+        max-width: 720px;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 10px;
     }

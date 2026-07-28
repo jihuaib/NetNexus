@@ -48,7 +48,6 @@ class SystemApp {
         this.ftpSettingsFileKey = 'FtpSettings';
         this.apiSettingsFileKey = 'ApiSettings';
         this.updateSettingsFileKey = 'UpdateSettings';
-        this.deploymentConfigFileKey = 'DeploymentConfig';
         this.appVersionFileKey = 'appVersion';
         this.currentLogLevel = DEFAULT_LOG_SETTINGS.logLevel;
 
@@ -253,91 +252,6 @@ class SystemApp {
         ipc.handle('common:installWiresharkBmpPlugin', () => this.handleInstallWiresharkBmpPlugin());
         ipc.handle('common:uninstallWiresharkBmpPlugin', () => this.handleUninstallWiresharkBmpPlugin());
         ipc.handle('common:openWiresharkPluginDirectory', () => this.handleOpenWiresharkPluginDirectory());
-
-        // 服务器部署
-        ipc.handle('common:deployServer', (event, deployConfig) => this.handleDeployServer(deployConfig));
-        ipc.handle('common:saveDeploymentConfig', (event, config) => this.handleSaveDeploymentConfig(config));
-        ipc.handle('common:loadDeploymentConfig', () => this.handleLoadDeploymentConfig());
-        ipc.handle('common:testSSHConnection', (event, config) => this.handleTestSSHConnection(config));
-        ipc.handle('common:getServerDeploymentStatus', () => this.handleGetServerDeploymentStatus());
-    }
-
-    async handleDeployServer(deployConfig) {
-        const SshDeployer = require('./sshDeployer');
-        const deployer = new SshDeployer();
-
-        try {
-            logger.info(`Starting proxy deployment to ${deployConfig.serverAddress}...`);
-
-            // Connect to SSH server
-            await deployer.connect(deployConfig.serverAddress, deployConfig.sshUsername, deployConfig.sshPassword);
-
-            // Deploy proxy
-            const result = await deployer.deploy();
-
-            logger.info('Proxy deployment completed successfully');
-            return successResponse(result, '代理部署成功');
-        } catch (error) {
-            logger.error(`Proxy deployment failed: ${error.message}`);
-            return errorResponse(`部署失败: ${error.message}`);
-        } finally {
-            deployer.disconnect();
-        }
-    }
-
-    async handleSaveDeploymentConfig(config) {
-        try {
-            this.store.set(this.deploymentConfigFileKey, config);
-            this.bmpApp.setServerDeploymentConfig(config);
-            this.rpkiApp.setServerDeploymentConfig(config);
-            return successResponse(null, '部署配置保存成功');
-        } catch (error) {
-            logger.error('Error saving deployment config:', error.message);
-            return errorResponse(error.message);
-        }
-    }
-
-    async handleLoadDeploymentConfig() {
-        try {
-            const config = this.store.get(this.deploymentConfigFileKey);
-            return successResponse(config || {});
-        } catch (error) {
-            logger.error('Error loading deployment config:', error.message);
-            return errorResponse(error.message);
-        }
-    }
-
-    async handleTestSSHConnection(sshConfig) {
-        const SshDeployer = require('./sshDeployer');
-        const deployer = new SshDeployer();
-
-        try {
-            logger.info(`Testing SSH connection to ${sshConfig.serverAddress}...`);
-            await deployer.connect(sshConfig.serverAddress, sshConfig.sshUsername, sshConfig.sshPassword);
-            deployer.disconnect();
-            return successResponse(null, 'SSH连接测试成功');
-        } catch (error) {
-            logger.error(`SSH connection test failed: ${error.message}`);
-            return errorResponse(`连接失败: ${error.message}`);
-        }
-    }
-
-    // 获取服务部署状态
-    async handleGetServerDeploymentStatus() {
-        try {
-            const config = this.store.get(this.deploymentConfigFileKey);
-            if (config && config.deploymentStatus) {
-                if (config.deploymentStatus.success) {
-                    return successResponse({ success: true }, '');
-                } else {
-                    return successResponse({ success: false }, '');
-                }
-            }
-            return successResponse({ success: false }, '');
-        } catch (error) {
-            logger.error('Error getting server deployment status:', error.message);
-            return successResponse({ success: false }, '');
-        }
     }
 
     async handleGetWiresharkBmpPluginStatus() {
@@ -779,13 +693,6 @@ class SystemApp {
             this.updateStartupProgress(74, `外部接入启动失败: ${error.message}`);
         }
 
-        // 加载部署配置
-        this.updateStartupProgress(76, '正在加载部署配置...');
-        const deploymentConfig = this.store.get(this.deploymentConfigFileKey);
-        if (deploymentConfig) {
-            this.bmpApp.setServerDeploymentConfig(deploymentConfig);
-            this.rpkiApp.setServerDeploymentConfig(deploymentConfig);
-        }
         this.updateStartupProgress(80, '设置加载完成');
     }
 

@@ -7,7 +7,6 @@ const RpkiRoa = require('./rpkiRoa');
 const RpkiRouterKey = require('./rpkiRouterKey');
 const RpkiAspa = require('./rpkiAspa');
 const RpkiConst = require('../../const/rpkiConst');
-const SshTunnel = require('../shared/sshTunnel');
 
 class RpkiWorker {
     constructor() {
@@ -445,116 +444,10 @@ class RpkiWorker {
             logger.setLevel(this.rpkiConfigData.logLevel);
             logger.info(`Worker log level set to: ${this.rpkiConfigData.logLevel}`);
         }
-        // 如果启用了 MD5 认证，使用 SSH 隧道启动远端代理。
-        if (rpkiConfigData.enableAuth && rpkiConfigData.md5Password) {
-            try {
-                logger.info('TCP MD5 authentication enabled, creating SSH tunnel...');
-
-                // 提取SSH服务器地址
-                const sshHost = rpkiConfigData.serverAddress;
-
-                // 创建SSH隧道
-                this.sshTunnel = new SshTunnel();
-                await this.sshTunnel.connect({
-                    host: sshHost,
-                    username: rpkiConfigData.sshUsername,
-                    password: rpkiConfigData.sshPassword
-                });
-
-                logger.info('Using TCP MD5 proxy');
-                const proxyConfig = rpkiConfigData.md5Password;
-
-                // 启动远程代理
-                // 代理监听 rpkiConfigData.port (路由器连接这个端口)
-                // 然后转发到 Windows RPKI 服务器
-                const localPort = parseInt(rpkiConfigData.localPort);
-
-                // 获取 Windows 客户端 IP（从 SSH 连接）
-                let windowsIp = 'localhost';
-                try {
-                    const whoamiOutput = await this.sshTunnel.execCommand('echo $SSH_CLIENT');
-                    const sshClientInfo = whoamiOutput.trim().split(' ');
-                    if (sshClientInfo.length > 0) {
-                        windowsIp = sshClientInfo[0]; // SSH 客户端 IP
-                        logger.info(`Detected Windows client IP: ${windowsIp}`);
-                    }
-                } catch (error) {
-                    logger.warn(`Could not detect Windows IP, using localhost: ${error.message}`);
-                }
-
-                await this.sshTunnel.startProxy(
-                    'rpki', // 协议类型
-                    rpkiConfigData.peerIP, // BMP路由器IP（peer IP）
-                    proxyConfig, // MD5密码
-                    rpkiConfigData.port, // Linux监听端口（路由器连接）
-                    `${windowsIp}:${localPort}` // 转发到 Windows 的 localPort
-                );
-
-                logger.info('SSH tunnel and proxy started successfully');
-                logger.info(`RPKI router should connect to: ${sshHost}:${rpkiConfigData.port}`);
-                logger.info(`Proxy will forward to localhost:${localPort}`);
-
-                // 启动本地TCP服务器 - 直接监听 localPort
-                const originalPort = this.rpkiConfigData.port;
-                this.rpkiConfigData.port = localPort;
-
-                // 启动本地TCP服务器
-                await this.startTcpServer(messageId);
-
-                // 恢复原始端口配置
-                this.rpkiConfigData.port = originalPort;
-
-                logger.info('Local RPKI server started, waiting for connections from proxy');
-            } catch (error) {
-                logger.error(`Failed to setup SSH tunnel: ${error.message}`);
-                this.closeRpkiStore();
-                this.messageHandler.sendErrorResponse(messageId, `SSH隧道连接失败: ${error.message}`);
-                return;
-            }
-        } else {
-            // 启动tcp服务器
-            await this.startTcpServer(messageId);
-        }
+        await this.startTcpServer(messageId);
     }
 
     async stopRpki(messageId) {
-        // 停止SSH隧道和代理
-        if (this.sshTunnel) {
-            try {
-                // 停止远程代理
-                if (this.rpkiConfigData) {
-                    const localPort = this.rpkiConfigData.localPort;
-                    const _sshHost = this.rpkiConfigData.serverAddress;
-
-                    const proxyConfig = this.rpkiConfigData.md5Password;
-
-                    // 获取 Windows 客户端 IP（与 startProxy 保持一致）
-                    let windowsIp = 'localhost';
-                    try {
-                        const whoamiOutput = await this.sshTunnel.execCommand('echo $SSH_CLIENT');
-                        const sshClientInfo = whoamiOutput.trim().split(' ');
-                        if (sshClientInfo.length > 0) {
-                            windowsIp = sshClientInfo[0];
-                        }
-                    } catch (error) {
-                        // Ignore error, use localhost as fallback
-                    }
-
-                    await this.sshTunnel.stopProxy(
-                        'rpki',
-                        this.rpkiConfigData.peerIP,
-                        proxyConfig,
-                        this.rpkiConfigData.port,
-                        `${windowsIp}:${localPort}`
-                    );
-                }
-                // 断开SSH连接
-                await this.sshTunnel.disconnect();
-            } catch (error) {
-                logger.error(`Error stopping SSH tunnel: ${error.message}`);
-            }
-            this.sshTunnel = null;
-        }
         if (this.server) {
             this.server.close();
             this.server = null;

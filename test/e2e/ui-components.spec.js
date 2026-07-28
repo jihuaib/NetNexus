@@ -274,7 +274,17 @@ async function installLayoutApiFallbacks(page) {
             getBgpRoutes: { list: [], total: 0 },
             getBgpSessions: [],
             getBgpStatisticsReports: [],
-            getClientList: []
+            getClientList: [],
+            getRouteAssurance: {
+                filters: {},
+                funnel: {},
+                summary: {},
+                facets: {},
+                issues: [],
+                pagination: { page: 1, pageSize: 25, total: 0, totalPages: 0 },
+                generatedAt: 'E2E-TIME'
+            },
+            setRouteAssuranceEnabled: true
         });
     });
 }
@@ -366,7 +376,6 @@ test.describe('Custom UI component interactions', () => {
             '工具集合',
             'FTP服务器',
             '外部API',
-            '服务器部署',
             '数据管理',
             '运行时诊断',
             '应用更新'
@@ -382,10 +391,10 @@ test.describe('Custom UI component interactions', () => {
         await installLayoutApiFallbacks(page);
         await page.goto('/#/bmp/bmp-config');
 
-        const localPortLabel = page.locator('.nn-form-item-label > label').filter({ hasText: '本地监听端口' });
-        await expect(localPortLabel).toHaveCSS('font-size', '13px');
-        await expect(localPortLabel).toHaveCSS('white-space', 'nowrap');
-        expect(await localPortLabel.evaluate(label => label.scrollWidth <= label.parentElement.clientWidth)).toBe(true);
+        const pathTlvLabel = page.locator('.nn-form-item-label > label').filter({ hasText: 'Path TLV类型' });
+        await expect(pathTlvLabel).toHaveCSS('font-size', '13px');
+        await expect(pathTlvLabel).toHaveCSS('white-space', 'nowrap');
+        expect(await pathTlvLabel.evaluate(label => label.scrollWidth <= label.parentElement.clientWidth)).toBe(true);
 
         const draft20Button = page.getByRole('radio', { name: 'draft-20', exact: true });
         const draft19Button = page.getByRole('radio', { name: 'draft-19', exact: true });
@@ -699,6 +708,50 @@ test.describe('Custom UI component interactions', () => {
             expect(maxColorChannelDifference(contrastStyle.border, contrastStyle.controlBorder)).toBeLessThanOrEqual(2);
             expect(contrastStyle.shadow).not.toBe('none');
             expect(contrastStyle.controlTextContrast).toBeGreaterThanOrEqual(4.5);
+
+            if (preset === 'orange') {
+                const ghostStyle = await headerButtons.nth(1).evaluate(button => {
+                    const header = button.closest('.nn-card-head');
+                    const probe = document.createElement('span');
+                    document.body.appendChild(probe);
+                    const readToken = (property, token) => {
+                        probe.style[property] = `var(${token})`;
+                        return getComputedStyle(probe)[property];
+                    };
+                    const parseRgb = color => (color.match(/[\d.]+/gu) || []).slice(0, 3).map(Number);
+                    const luminance = color => {
+                        const channels = parseRgb(color).map(value => {
+                            const normalized = value / 255;
+                            return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+                        });
+                        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+                    };
+                    const contrast = (foreground, background) => {
+                        const first = luminance(foreground);
+                        const second = luminance(background);
+                        return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+                    };
+                    const style = getComputedStyle(button);
+                    const snapshot = {
+                        background: style.backgroundColor,
+                        color: style.color,
+                        border: style.borderColor,
+                        headerBackground: getComputedStyle(header).backgroundColor,
+                        ghostBackground: readToken('backgroundColor', '--nn-color-bg-card-head-ghost'),
+                        ghostText: readToken('color', '--nn-color-text-card-head-ghost'),
+                        ghostBorder: readToken('borderColor', '--nn-color-border-card-head-ghost'),
+                        textContrast: contrast(style.color, style.backgroundColor)
+                    };
+                    probe.remove();
+                    return snapshot;
+                });
+
+                expect(ghostStyle.background).toBe(ghostStyle.ghostBackground);
+                expect(ghostStyle.background).not.toBe(ghostStyle.headerBackground);
+                expect(ghostStyle.color).toBe(ghostStyle.ghostText);
+                expect(ghostStyle.border).toBe(ghostStyle.ghostBorder);
+                expect(ghostStyle.textContrast).toBeGreaterThanOrEqual(4.5);
+            }
         }
 
         await page.goto('/#/tools/tcp-tool');
@@ -710,6 +763,121 @@ test.describe('Custom UI component interactions', () => {
 
         await page.goto('/#/ntp/ntp-config');
         await expect(page.locator('.nn-card-extra .nn-button').first()).toHaveCSS('height', '24px');
+    });
+
+    test('keeps orange route matrix header status controls distinct', async ({ page }) => {
+        await installLayoutApiFallbacks(page);
+        await page.goto('/#/bmp/route-assurance');
+        await page.evaluate(() => {
+            document.documentElement.dataset.theme = 'light';
+            document.documentElement.dataset.themePreset = 'orange';
+            document.documentElement.style.colorScheme = 'light';
+        });
+
+        const assurancePage = page.getByTestId('bmp-route-assurance-page');
+        const analysisPill = assurancePage.locator('.analysis-toggle');
+        const analysisToggle = page.getByTestId('route-assurance-toggle');
+        await expect(analysisPill).toBeVisible();
+        await expect(analysisToggle).toHaveAttribute('aria-checked', 'false');
+
+        const readHeaderAppearance = async () =>
+            analysisPill.evaluate(element => {
+                const header = element.closest('.nn-card-head');
+                const toggle = element.querySelector('.nn-switch');
+                const handle = toggle.querySelector('.nn-switch-handle');
+                const generatedAt = header.querySelector('.generated-at');
+                const probe = document.createElement('span');
+                document.body.appendChild(probe);
+                const readToken = (property, token) => {
+                    probe.style[property] = `var(${token})`;
+                    return getComputedStyle(probe)[property];
+                };
+                const parseRgb = color => (color.match(/[\d.]+/gu) || []).slice(0, 3).map(Number);
+                const luminance = color => {
+                    const channels = parseRgb(color).map(value => {
+                        const normalized = value / 255;
+                        return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+                    });
+                    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+                };
+                const contrast = (foreground, background) => {
+                    const first = luminance(foreground);
+                    const second = luminance(background);
+                    return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+                };
+                const pillStyle = getComputedStyle(element);
+                const toggleStyle = getComputedStyle(toggle);
+                const handleStyle = getComputedStyle(handle);
+                const generatedStyle = generatedAt ? getComputedStyle(generatedAt) : null;
+                const snapshot = {
+                    headerBackground: getComputedStyle(header).backgroundColor,
+                    pillBackground: pillStyle.backgroundColor,
+                    pillColor: pillStyle.color,
+                    pillBorder: pillStyle.borderColor,
+                    pillHeight: pillStyle.height,
+                    pillTextContrast: contrast(pillStyle.color, pillStyle.backgroundColor),
+                    toggleBackground: toggleStyle.backgroundColor,
+                    toggleShadow: toggleStyle.boxShadow,
+                    toggleHeight: toggleStyle.height,
+                    handleBackground: handleStyle.backgroundColor,
+                    generatedBackground: generatedStyle?.backgroundColor || '',
+                    generatedColor: generatedStyle?.color || '',
+                    generatedBorder: generatedStyle?.borderColor || '',
+                    generatedTextContrast: generatedStyle
+                        ? contrast(generatedStyle.color, generatedStyle.backgroundColor)
+                        : 0,
+                    ghostBackground: readToken('backgroundColor', '--nn-color-bg-card-head-ghost'),
+                    ghostHoverBackground: readToken('backgroundColor', '--nn-color-bg-card-head-ghost-hover'),
+                    ghostText: readToken('color', '--nn-color-text-card-head-ghost'),
+                    ghostBorder: readToken('borderColor', '--nn-color-border-card-head-ghost'),
+                    controlBackground: readToken('backgroundColor', '--nn-color-bg-card-head-control'),
+                    controlText: readToken('color', '--nn-color-text-card-head-control'),
+                    primaryActive: readToken('backgroundColor', '--nn-color-primary-active')
+                };
+                probe.remove();
+                return snapshot;
+            });
+
+        const offAppearance = await readHeaderAppearance();
+        expect(offAppearance.pillBackground).toBe(offAppearance.ghostBackground);
+        expect(offAppearance.pillColor).toBe(offAppearance.ghostText);
+        expect(offAppearance.pillBorder).toBe(offAppearance.ghostBorder);
+        expect(offAppearance.pillHeight).toBe('24px');
+        expect(offAppearance.pillTextContrast).toBeGreaterThanOrEqual(4.5);
+        expect(offAppearance.toggleBackground).toBe(offAppearance.ghostHoverBackground);
+        expect(offAppearance.toggleShadow).not.toBe('none');
+        expect(offAppearance.toggleHeight).toBe('18px');
+        expect(offAppearance.handleBackground).toBe(offAppearance.controlText);
+
+        await analysisToggle.click();
+        await expect(analysisToggle).toHaveAttribute('aria-checked', 'true');
+        await expect
+            .poll(() =>
+                analysisToggle.evaluate(element => {
+                    return element
+                        .getAnimations({ subtree: true })
+                        .filter(animation => animation.pending || animation.playState === 'running').length;
+                })
+            )
+            .toBe(0);
+        const generatedAt = assurancePage.locator('.generated-at');
+        await expect(generatedAt).toHaveText('更新于 E2E-TIME');
+
+        const onAppearance = await readHeaderAppearance();
+        expect(onAppearance.toggleBackground).toBe(onAppearance.controlBackground);
+        expect(onAppearance.toggleBackground).not.toBe(onAppearance.headerBackground);
+        expect(onAppearance.handleBackground).toBe(onAppearance.primaryActive);
+        expect(onAppearance.handleBackground).not.toBe(onAppearance.toggleBackground);
+        expect(onAppearance.generatedBackground).toBe(onAppearance.ghostBackground);
+        expect(onAppearance.generatedColor).toBe(onAppearance.ghostText);
+        expect(onAppearance.generatedBorder).toBe(onAppearance.ghostBorder);
+        expect(onAppearance.generatedTextContrast).toBeGreaterThanOrEqual(4.5);
+
+        await analysisToggle.focus();
+        await page.keyboard.press('Tab');
+        await page.keyboard.press('Shift+Tab');
+        await expect(analysisToggle).toBeFocused();
+        await expect(analysisToggle).toHaveCSS('outline-style', 'solid');
     });
 
     test('uses blue as the default theme when no preset is stored', async ({ page }) => {
@@ -762,6 +930,7 @@ test.describe('Custom UI component interactions', () => {
     });
 
     test('opens settings from the dropdown and operates its menu, modal and select', async ({ page }) => {
+        await page.setViewportSize({ width: 2056, height: 1209 });
         await page.goto('/#/tools/packet-parser');
         const initialTheme = await page.evaluate(() => ({
             theme: document.documentElement.dataset.theme,
@@ -788,6 +957,19 @@ test.describe('Custom UI component interactions', () => {
         for (let index = 0; index < 3; index += 1) {
             await expect(themeCards.nth(index)).toBeVisible();
         }
+        const themePresetGeometry = await themeGroup.evaluate(group => {
+            const groupBox = group.getBoundingClientRect();
+            const cardWidths = Array.from(group.querySelectorAll('.theme-preset-option')).map(
+                card => card.getBoundingClientRect().width
+            );
+
+            return {
+                groupWidth: groupBox.width,
+                widestCard: Math.max(...cardWidths)
+            };
+        });
+        expect(themePresetGeometry.groupWidth).toBeLessThanOrEqual(720);
+        expect(themePresetGeometry.widestCard).toBeLessThanOrEqual(240);
         await expect(settingsDialog.getByRole('combobox')).toHaveCount(1);
 
         const previewColors = await themeGroup

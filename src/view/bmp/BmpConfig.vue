@@ -44,65 +44,12 @@
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <nn-row :gutter="12">
-                            <nn-col :span="12">
+                        <nn-row>
+                            <nn-col :span="24">
                                 <nn-form-item label="持久化路由" name="persistenceEnabled">
                                     <nn-checkbox v-model:checked="bmpConfig.persistenceEnabled" disabled>
                                         SQLite RIB
                                     </nn-checkbox>
-                                </nn-form-item>
-                            </nn-col>
-                            <nn-col :span="12">
-                                <nn-form-item label="启用认证" name="enableAuth">
-                                    <nn-checkbox v-model:checked="bmpConfig.enableAuth" />
-                                </nn-form-item>
-                            </nn-col>
-                        </nn-row>
-
-                        <!-- 认证配置 -->
-                        <nn-row :gutter="12">
-                            <nn-col :span="8">
-                                <nn-form-item label="本地监听端口" name="localPort">
-                                    <nn-tooltip
-                                        :title="validationErrors.localPort"
-                                        :open="bmpConfig.enableAuth && !!validationErrors.localPort"
-                                    >
-                                        <nn-input
-                                            v-model:value="bmpConfig.localPort"
-                                            :disabled="!bmpConfig.enableAuth"
-                                            :status="bmpConfig.enableAuth && validationErrors.localPort ? 'error' : ''"
-                                        />
-                                    </nn-tooltip>
-                                </nn-form-item>
-                            </nn-col>
-                            <nn-col :span="8">
-                                <nn-form-item label="路由器IP" name="peerIP">
-                                    <nn-tooltip
-                                        :title="validationErrors.peerIP"
-                                        :open="bmpConfig.enableAuth && !!validationErrors.peerIP"
-                                    >
-                                        <nn-input
-                                            v-model:value="bmpConfig.peerIP"
-                                            :disabled="!bmpConfig.enableAuth"
-                                            :status="bmpConfig.enableAuth && validationErrors.peerIP ? 'error' : ''"
-                                        />
-                                    </nn-tooltip>
-                                </nn-form-item>
-                            </nn-col>
-                            <nn-col :span="8">
-                                <nn-form-item label="MD5密钥" name="md5Password">
-                                    <nn-tooltip
-                                        :title="validationErrors.md5Password"
-                                        :open="bmpConfig.enableAuth && !!validationErrors.md5Password"
-                                    >
-                                        <nn-input-password
-                                            v-model:value="bmpConfig.md5Password"
-                                            :disabled="!bmpConfig.enableAuth"
-                                            :status="
-                                                bmpConfig.enableAuth && validationErrors.md5Password ? 'error' : ''
-                                            "
-                                        />
-                                    </nn-tooltip>
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
@@ -250,11 +197,7 @@
         port: DEFAULT_VALUES.DEFAULT_BMP_PORT,
         bmpV4TlvDraft: DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT,
         pathMarkingTlvType: getDefaultPathMarkingTlvType(DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT),
-        persistenceEnabled: true,
-        localPort: '11019',
-        enableAuth: false,
-        peerIP: '',
-        md5Password: ''
+        persistenceEnabled: true
     });
 
     const serverLoading = ref(false);
@@ -352,10 +295,7 @@
 
     const validationErrors = ref({
         port: '',
-        pathMarkingTlvType: '',
-        localPort: '',
-        peerIP: '',
-        md5Password: ''
+        pathMarkingTlvType: ''
     });
 
     let validator = new FormValidator(validationErrors);
@@ -375,20 +315,10 @@
     const detailsDrawerTitle = ref('');
     const currentDetails = ref(null);
 
-    const isServerDeployed = async () => {
-        const deploymentStatus = await window.commonApi.getServerDeploymentStatus();
-        return deploymentStatus.status === 'success' && deploymentStatus.data.success;
-    };
-
     const startBmp = async () => {
         const hasErrors = validator.validate(bmpConfig.value);
         if (hasErrors) {
             notify.error('请检查配置信息是否正确');
-            return;
-        }
-
-        if (bmpConfig.value.enableAuth && !(await isServerDeployed())) {
-            notify.error('请先部署服务器');
             return;
         }
 
@@ -591,11 +521,7 @@
                     savedConfig.data.pathMarkingTlvType,
                     savedDraft
                 );
-                bmpConfig.value.enableAuth = savedConfig.data.enableAuth || false;
                 bmpConfig.value.persistenceEnabled = true;
-                bmpConfig.value.localPort = savedConfig.data.localPort;
-                bmpConfig.value.peerIP = savedConfig.data.peerIP || '';
-                bmpConfig.value.md5Password = savedConfig.data.md5Password || '';
             }
         } else {
             console.error('配置文件加载失败', savedConfig.msg);

@@ -2370,6 +2370,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await getItem.click();
 
         const operationPanel = page.locator('.workspace-operation-panel');
+        await expect(operationPanel.locator('.rpc-result')).toContainText('<rpc-reply');
         const operationParameters = operationPanel.getByRole('complementary', { name: '操作参数' });
         let parameterMenu = (await openParameterContextMenu(page, operationParameters, '/rpc/get/filter/interfaces[1]'))
             .menu;
@@ -2543,7 +2544,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(requestEditor.locator('[data-xml-diagnostics-content]')).toHaveCount(0);
     });
 
-    test('validates, marks, confirms, and sends an edited complete RPC', async ({ page }) => {
+    test('validates, marks, and sends an edited complete RPC', async ({ page }) => {
         const rawRequests = [];
         let forcedValidationError = '';
         const originalControllerCall = harness.controller.call.bind(harness.controller);
@@ -2673,6 +2674,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(overrideCheckbox).not.toBeChecked();
         await expect(overrideButton).toBeDisabled();
         await overrideConfirmation.getByRole('button', { name: '取消', exact: true }).click();
+        await expect(overrideConfirmation).toBeHidden();
         expect(rawRequests).toHaveLength(0);
 
         await operationPanel.getByRole('button', { name: '发送手工 RPC', exact: true }).click();
@@ -2740,11 +2742,8 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(Math.abs(validatedCardBox.height - initialCardBox.height)).toBeLessThanOrEqual(1);
 
         await operationPanel.getByRole('button', { name: '发送手工 RPC', exact: true }).click();
-        const confirmation = page.getByRole('dialog', { name: '确认发送手工 RPC' });
-        await expect(confirmation).toBeVisible();
-        await expect(confirmation).toContainText('完整 RPC 原文发送');
-        expect(rawRequests).toHaveLength(0);
-        await confirmation.getByRole('button', { name: '确认执行', exact: true }).click();
+        await expect(page.getByRole('dialog', { name: '确认发送手工 RPC' })).toHaveCount(0);
+        await expect(page.getByRole('dialog', { name: '确认仍然下发 RPC' })).toHaveCount(0);
         await expect.poll(() => rawRequests.length).toBe(1);
         expect(rawRequests[0]).toMatchObject({ rpc: validRpc });
         await expect(operationPanel.locator('.rpc-result')).toContainText('<data>');
@@ -3007,15 +3006,24 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(contextMenu.getByRole('menuitem', { name: '查看 Capability', exact: true })).toHaveCount(0);
         await expect(contextMenu.getByRole('menuitem', { name: 'Candidate 工作区', exact: true })).toBeVisible();
         await expect(contextMenu.getByRole('menuitem', { name: '配置存储', exact: true })).toBeVisible();
-        await contextMenu.getByRole('menuitem', { name: '读取当前节点（get）', exact: true }).click();
-
         const operationPanel = page.locator('.workspace-operation-panel');
+        await contextMenu.getByRole('menuitem', { name: '读取当前节点（get）', exact: true }).click();
+        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get').length).toBe(1);
+        expect(capturedRequests.at(-1).filter).toEqual({
+            type: 'subtree',
+            content: '<interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"/>'
+        });
+        await expect(operationPanel.getByRole('button', { name: '执行 get', exact: true })).toBeEnabled();
+
         await expect(operationPanel).toBeVisible();
         await expect(page.getByRole('dialog', { name: 'get · interfaces' })).toHaveCount(0);
 
         const requestCard = operationPanel.locator('.operation-form-card');
         const responseCard = operationPanel.locator('.operation-result-card');
         const operationParameters = operationPanel.getByRole('complementary', { name: '操作参数' });
+        await operationParameters.getByRole('button', { name: '重置', exact: true }).click();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(capturedRequests.filter(request => request.operation === 'get')).toHaveLength(1);
         const operationBox = await operationPanel.boundingBox();
         const requestBox = await requestCard.boundingBox();
         const responseBox = await responseCard.boundingBox();
@@ -3273,6 +3281,8 @@ test.describe('NETCONF/YANG workbench', () => {
             contextMenu.getByRole('menuitem', { name: '编辑当前节点（edit-config）', exact: true })
         ).toBeDisabled();
         await contextMenu.getByRole('menuitem', { name: '读取当前节点（get）', exact: true }).click();
+        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get').length).toBe(3);
+        await expect(operationPanel.getByRole('button', { name: '执行 get', exact: true })).toBeEnabled();
         const stateParameter = parameterNode(
             operationParameters,
             '/rpc/get/filter/interfaces[1]/interface[1]/in-octets[1]'
@@ -3373,7 +3383,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await page.getByRole('button', { name: '执行记录', exact: true }).click();
         const executionHistoryDrawer = page.getByRole('dialog', { name: 'NETCONF 执行记录' });
         const executionHistoryItems = executionHistoryDrawer.getByTestId('netconf-history-item');
-        await expect(executionHistoryItems).toHaveCount(3);
+        await expect(executionHistoryItems).toHaveCount(5);
         await expect(executionHistoryItems.nth(0)).toContainText('edit-config');
         await expect(executionHistoryItems.nth(1)).toContainText('edit-config 自动回读');
         await executionHistoryItems.nth(1).click();
@@ -3422,9 +3432,7 @@ test.describe('NETCONF/YANG workbench', () => {
         const requestXml = await requestPreview.locator('textarea[aria-label="RPC 请求 XML"]').inputValue();
         expect(requestXml).not.toContain('<mode>20</mode>');
         await operationPanel.getByRole('button', { name: '执行 edit-config', exact: true }).click();
-        const executionConfirmation = page.getByRole('dialog').filter({ hasText: 'edit-config' });
-        await expect(executionConfirmation).toBeVisible();
-        await executionConfirmation.locator('.operation-confirmation-footer button').last().click();
+        await expect(page.getByRole('dialog', { name: '确认仍然下发 RPC' })).toHaveCount(0);
         await expect.poll(() => capturedRequests.some(request => request.operation === 'edit-config')).toBe(true);
         const editRequest = capturedRequests.find(request => request.operation === 'edit-config');
         expect(editRequest.config).toContain('<mode>enabled</mode>');
@@ -3511,8 +3519,7 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(requestXml).toContain('<BandwidthCompaction>enable</BandwidthCompaction>');
 
         await operationPanel.getByRole('button', { name: '\u6267\u884c edit-config', exact: true }).click();
-        const confirmation = page.getByRole('dialog', { name: '\u786e\u8ba4\u6267\u884c edit-config' });
-        await confirmation.getByRole('button', { name: '\u786e\u8ba4\u6267\u884c', exact: true }).click();
+        await expect(page.getByRole('dialog', { name: '\u786e\u8ba4\u4ecd\u7136\u4e0b\u53d1 RPC' })).toHaveCount(0);
         await expect.poll(() => capturedRequests.some(request => request.operation === 'edit-config')).toBe(true);
         const editRequest = capturedRequests.find(request => request.operation === 'edit-config');
         expect(editRequest.config).toMatch(/<Name\s*\/>|<Name><\/Name>/u);
@@ -3520,7 +3527,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
     });
 
-    test('keeps node and datastore workflows in the Schema context menu', async ({ page }) => {
+    test('executes fixed node and datastore workflows directly from the Schema context menu', async ({ page }) => {
         const capturedRequests = [];
         const originalControllerCall = harness.controller.call.bind(harness.controller);
         harness.controller.call = async (method, ...args) => {
@@ -3549,14 +3556,35 @@ test.describe('NETCONF/YANG workbench', () => {
             await expect(contextMenu).toBeVisible();
         };
         const requestXml = async () => requestPreview.textContent();
+        const waitForImmediateOperation = async (operation, previousRequestCount) => {
+            await expect.poll(() => capturedRequests.length).toBe(previousRequestCount + 1);
+            const request = capturedRequests.at(-1);
+            expect(request.operation).toBe(operation);
+            await expect(operationPanel.getByRole('button', { name: `执行 ${operation}`, exact: true })).toBeEnabled();
+            return request;
+        };
+        const executeImmediateMenuOperation = async (submenuLabels, itemLabel, operation) => {
+            const previousRequestCount = capturedRequests.length;
+            await openInterfacesContextMenu();
+            await selectSchemaMenuPath(contextMenu, submenuLabels, itemLabel);
+            return waitForImmediateOperation(operation, previousRequestCount);
+        };
 
         await openInterfacesContextMenu();
         const getConfigMenu = await openSchemaSubmenu(contextMenu, ['读取节点配置（get-config）']);
         await expect(getConfigMenu.getByRole('menuitem', { name: 'Running', exact: true })).toBeVisible();
         await expect(getConfigMenu.getByRole('menuitem', { name: 'Candidate', exact: true })).toBeVisible();
         await expect(getConfigMenu.getByRole('menuitem', { name: 'Startup', exact: true })).toBeVisible();
+        const requestsBeforeGetConfig = capturedRequests.length;
         await getConfigMenu.getByRole('menuitem', { name: 'Startup', exact: true }).click();
-        await expect(operationPanel.getByRole('button', { name: '执行 get-config', exact: true })).toBeVisible();
+        const startupGetConfig = await waitForImmediateOperation('get-config', requestsBeforeGetConfig);
+        expect(startupGetConfig).toMatchObject({
+            source: 'startup',
+            filter: {
+                type: 'subtree',
+                content: '<interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"/>'
+            }
+        });
         expect(await requestXml()).toMatch(/<source>\s*<startup\/>\s*<\/source>/u);
 
         await openInterfacesContextMenu();
@@ -3564,18 +3592,20 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(editConfigMenu.getByRole('menuitem', { name: 'Candidate', exact: true })).toBeVisible();
         await expect(editConfigMenu.getByRole('menuitem', { name: 'Running', exact: true })).toBeVisible();
         await editConfigMenu.getByRole('menuitem', { name: 'Candidate', exact: true }).click();
-        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get-config').length).toBe(1);
+        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get-config').length).toBe(2);
         await expect(operationPanel.getByText('已载入', { exact: true })).toBeVisible();
         expect(
             capturedRequests.filter(request => request.operation === 'get-config').map(request => request.source)
-        ).toEqual(['candidate']);
+        ).toEqual(['startup', 'candidate']);
         expect(await requestXml()).toMatch(/<target>\s*<candidate\/>\s*<\/target>/u);
 
         await openInterfacesContextMenu();
         await selectSchemaMenuPath(contextMenu, ['编辑当前节点（edit-config）'], 'Running');
-        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get-config').length).toBe(2);
+        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get-config').length).toBe(3);
         await expect(operationPanel.getByText('已载入', { exact: true })).toBeVisible();
-        const editReadbacks = capturedRequests.filter(request => request.operation === 'get-config');
+        const editReadbacks = capturedRequests.filter(
+            request => request.operation === 'get-config' && ['candidate', 'running'].includes(request.source)
+        );
         expect(editReadbacks.map(request => request.source)).toEqual(['candidate', 'running']);
         expect(editReadbacks.filter(request => request.source === 'candidate')).toHaveLength(1);
         expect(editReadbacks.filter(request => request.source === 'running')).toHaveLength(1);
@@ -3588,19 +3618,52 @@ test.describe('NETCONF/YANG workbench', () => {
         ).toBeVisible();
         await expect(candidateMenu.getByRole('menuitem', { name: '放弃全部未提交修改', exact: true })).toBeVisible();
         await expect(candidateMenu.getByRole('menuitem', { name: '锁定 Candidate', exact: true })).toBeVisible();
+        await expect(candidateMenu.getByRole('menuitem', { name: '解锁 Candidate', exact: true })).toBeVisible();
+        await expect(candidateMenu.getByRole('menuitem', { name: '取消 Confirmed Commit', exact: true })).toBeVisible();
+        const requestsBeforeCommit = capturedRequests.length;
         await candidateMenu.getByRole('menuitem', { name: '提交整个 Candidate → Running', exact: true }).click();
-        await expect(operationPanel.getByRole('button', { name: '执行 commit', exact: true })).toBeVisible();
+        const commitRequest = await waitForImmediateOperation('commit', requestsBeforeCommit);
+        expect(commitRequest).toMatchObject({ confirmed: false });
         expect(await requestXml()).toMatch(/<commit\/>/u);
 
-        await openInterfacesContextMenu();
-        await selectSchemaMenuPath(contextMenu, ['配置存储', '锁定配置存储（lock）'], 'Running');
-        await expect(operationPanel.getByRole('button', { name: '执行 lock', exact: true })).toBeVisible();
-        expect(await requestXml()).toMatch(/<lock>\s*<target>\s*<running\/>\s*<\/target>\s*<\/lock>/u);
+        const validateRequest = await executeImmediateMenuOperation(
+            ['Candidate 工作区'],
+            '校验 Candidate（validate）',
+            'validate'
+        );
+        expect(validateRequest.source).toBe('candidate');
+        await executeImmediateMenuOperation(['Candidate 工作区'], '取消 Confirmed Commit', 'cancel-commit');
+        await executeImmediateMenuOperation(['Candidate 工作区'], '放弃全部未提交修改', 'discard-changes');
+
+        const lockRequest = await executeImmediateMenuOperation(
+            ['配置存储', '锁定配置存储（lock）'],
+            'Running',
+            'lock'
+        );
+        expect(lockRequest.target).toBe('running');
+        const unlockRequest = await executeImmediateMenuOperation(
+            ['配置存储', '解锁配置存储（unlock）'],
+            'Running',
+            'unlock'
+        );
+        expect(unlockRequest.target).toBe('running');
 
         await openInterfacesContextMenu();
         const startupMenu = await openSchemaSubmenu(contextMenu, ['配置存储', 'Startup']);
         await expect(startupMenu.getByRole('menuitem', { name: '保存 Running → Startup', exact: true })).toBeVisible();
-        await expect(startupMenu.getByRole('menuitem', { name: '删除整个 Startup…', exact: true })).toBeVisible();
+        await expect(startupMenu.getByRole('menuitem', { name: '删除整个 Startup', exact: true })).toBeVisible();
+        const requestsBeforeStartupCopy = capturedRequests.length;
+        await startupMenu.getByRole('menuitem', { name: '保存 Running → Startup', exact: true }).click();
+        const startupCopyRequest = await waitForImmediateOperation('copy-config', requestsBeforeStartupCopy);
+        expect(startupCopyRequest).toMatchObject({ source: 'running', target: 'startup' });
+
+        const startupDeleteRequest = await executeImmediateMenuOperation(
+            ['配置存储', 'Startup'],
+            '删除整个 Startup',
+            'delete-config'
+        );
+        expect(startupDeleteRequest.target).toBe('startup');
+        await expect(page.getByRole('dialog', { name: '确认仍然下发 RPC' })).toHaveCount(0);
     });
 
     test('keeps the Schema edit draft when reading current device config fails', async ({ page }) => {
@@ -3685,6 +3748,7 @@ test.describe('NETCONF/YANG workbench', () => {
             if (method !== 'yang.netconf.executeOperation') return originalControllerCall(method, ...args);
             executeCount += 1;
             const response = await originalControllerCall(method, ...args);
+            if (executeCount > 1) return response;
             return new Promise(resolve => {
                 releaseRpc = () => resolve(response);
             });
@@ -3713,7 +3777,6 @@ test.describe('NETCONF/YANG workbench', () => {
 
         await openInterfacesContextMenu();
         await contextMenu.getByRole('menuitem', { name: '读取当前节点（get）', exact: true }).click();
-        await operationPanel.getByRole('button', { name: '执行 get', exact: true }).click();
         await expect.poll(() => Boolean(releaseRpc)).toBe(true);
 
         await openInterfacesContextMenu();
@@ -3736,6 +3799,8 @@ test.describe('NETCONF/YANG workbench', () => {
 
         await openInterfacesContextMenu();
         await selectSchemaMenuPath(contextMenu, ['读取节点配置（get-config）'], 'Running');
+        await expect.poll(() => executeCount).toBe(2);
+        await expect(operationPanel.locator('.result-summary span').first()).toHaveText('get-config');
         await expect(operationPanel.getByRole('button', { name: '执行 get-config', exact: true })).toBeEnabled();
         expect(sessionReadCount).toBe(sessionReadsAfterMount);
     });
@@ -3798,8 +3863,6 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(await requestEditor.inputValue()).toContain('<stream>NETCONF</stream>');
 
         await operationPanel.getByRole('button', { name: '执行 establish-subscription', exact: true }).click();
-        const establishConfirmation = page.getByRole('dialog', { name: '确认执行 establish-subscription' });
-        await establishConfirmation.getByRole('button', { name: '确认执行', exact: true }).click();
         await expect(operationPanel.locator('.rpc-result')).toContainText(
             'urn:ietf:params:xml:ns:yang:ietf-subscribed-notifications'
         );
@@ -3824,8 +3887,6 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(await requestEditor.inputValue()).toContain('<id>51</id>');
         expect(await requestEditor.inputValue()).not.toContain('<stream>NETCONF</stream>');
         await operationPanel.getByRole('button', { name: '执行 modify-subscription', exact: true }).click();
-        const modifyConfirmation = page.getByRole('dialog', { name: '确认执行 modify-subscription' });
-        await modifyConfirmation.getByRole('button', { name: '确认执行', exact: true }).click();
         await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
 
         await notificationButton.click();
@@ -3835,8 +3896,6 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect.poll(() => requestEditor.inputValue()).toContain('<delete-subscription');
         expect(await requestEditor.inputValue()).toContain('<id>51</id>');
         await operationPanel.getByRole('button', { name: '执行 delete-subscription', exact: true }).click();
-        const deleteConfirmation = page.getByRole('dialog', { name: '确认执行 delete-subscription' });
-        await deleteConfirmation.getByRole('button', { name: '确认执行', exact: true }).click();
         await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
 
         await notificationButton.click();
@@ -3874,8 +3933,6 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(requestXml).toContain('<yp:period>500</yp:period>');
 
         await operationPanel.getByRole('button', { name: '执行 establish-subscription', exact: true }).click();
-        const confirmation = page.getByRole('dialog', { name: '确认执行 establish-subscription' });
-        await confirmation.getByRole('button', { name: '确认执行', exact: true }).click();
         await expect(operationPanel.locator('.rpc-result')).toContainText('>51</id>');
 
         const notificationButton = page.locator('.notification-history-trigger');
@@ -3924,10 +3981,6 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(await requestEditor.inputValue()).toContain('<yp:sync-on-start>true</yp:sync-on-start>');
 
         await operationPanel.getByRole('button', { name: '执行 establish-subscription', exact: true }).click();
-        await page
-            .getByRole('dialog', { name: '确认执行 establish-subscription' })
-            .getByRole('button', { name: '确认执行', exact: true })
-            .click();
         await expect(operationPanel.locator('.rpc-result')).toContainText('>51</id>');
 
         const notificationButton = page.locator('.notification-history-trigger');
@@ -3942,10 +3995,6 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect.poll(() => requestEditor.inputValue()).toContain('<resync-subscription');
         expect(await requestEditor.inputValue()).toContain('<id>51</id>');
         await operationPanel.getByRole('button', { name: '执行 resync-subscription', exact: true }).click();
-        await page
-            .getByRole('dialog', { name: '确认执行 resync-subscription' })
-            .getByRole('button', { name: '确认执行', exact: true })
-            .click();
         await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
         await expect(notificationButton.locator('.notification-history-badge')).toHaveText('2');
     });
@@ -3981,9 +4030,6 @@ test.describe('NETCONF/YANG workbench', () => {
         );
 
         await operationPanel.getByRole('button', { name: '执行 create-subscription', exact: true }).click();
-        const confirmation = page.getByRole('dialog', { name: '确认执行 create-subscription' });
-        await expect(confirmation).toBeVisible();
-        await confirmation.getByRole('button', { name: '确认执行', exact: true }).click();
         await expect(operationPanel.locator('.rpc-result')).toContainText('<rpc-reply');
         await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
 

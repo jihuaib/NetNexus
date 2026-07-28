@@ -72,7 +72,6 @@ async function startWorker(dbPath, port, name) {
             port,
             bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20,
             pathMarkingTlvType: BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.PATH_MARKING,
-            enableAuth: false,
             persistenceEnabled: true,
             persistenceDbPath: dbPath,
             persistenceBatchSize: 64,

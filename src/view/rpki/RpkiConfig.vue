@@ -19,13 +19,6 @@
                         </nn-row>
                         <nn-row>
                             <nn-col :span="24">
-                                <nn-form-item label="启用认证" name="enableAuth">
-                                    <nn-checkbox v-model:checked="rpkiConfig.enableAuth" />
-                                </nn-form-item>
-                            </nn-col>
-                        </nn-row>
-                        <nn-row>
-                            <nn-col :span="24">
                                 <nn-form-item label="最高协议版本" name="maxProtocolVersion">
                                     <nn-radio-group v-model:value="rpkiConfig.maxProtocolVersion">
                                         <nn-radio :value="RPKI_PROTOCOL_VERSION.V2">v2 - 支持 ASPA</nn-radio>
@@ -36,53 +29,6 @@
                                         用于模拟不同能力的 RPKI-RTR cache。客户端请求高于该版本时，服务端返回
                                         Unsupported Protocol Version 并断开连接，客户端应按错误 PDU 版本重试。
                                     </div>
-                                </nn-form-item>
-                            </nn-col>
-                        </nn-row>
-                        <!-- 认证配置 -->
-                        <nn-row :gutter="12">
-                            <nn-col :span="8">
-                                <nn-form-item label="本地监听端口" name="localPort">
-                                    <nn-tooltip
-                                        :title="validationErrors.localPort"
-                                        :open="rpkiConfig.enableAuth && !!validationErrors.localPort"
-                                    >
-                                        <nn-input
-                                            v-model:value="rpkiConfig.localPort"
-                                            :disabled="!rpkiConfig.enableAuth"
-                                            :status="rpkiConfig.enableAuth && validationErrors.localPort ? 'error' : ''"
-                                        />
-                                    </nn-tooltip>
-                                </nn-form-item>
-                            </nn-col>
-                            <nn-col :span="8">
-                                <nn-form-item label="路由器IP" name="peerIP">
-                                    <nn-tooltip
-                                        :title="validationErrors.peerIP"
-                                        :open="rpkiConfig.enableAuth && !!validationErrors.peerIP"
-                                    >
-                                        <nn-input
-                                            v-model:value="rpkiConfig.peerIP"
-                                            :disabled="!rpkiConfig.enableAuth"
-                                            :status="rpkiConfig.enableAuth && validationErrors.peerIP ? 'error' : ''"
-                                        />
-                                    </nn-tooltip>
-                                </nn-form-item>
-                            </nn-col>
-                            <nn-col :span="8">
-                                <nn-form-item label="MD5密钥" name="md5Password">
-                                    <nn-tooltip
-                                        :title="validationErrors.md5Password"
-                                        :open="rpkiConfig.enableAuth && !!validationErrors.md5Password"
-                                    >
-                                        <nn-input-password
-                                            v-model:value="rpkiConfig.md5Password"
-                                            :disabled="!rpkiConfig.enableAuth"
-                                            :status="
-                                                rpkiConfig.enableAuth && validationErrors.md5Password ? 'error' : ''
-                                            "
-                                        />
-                                    </nn-tooltip>
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
@@ -193,10 +139,6 @@
 
     const rpkiConfig = ref({
         port: DEFAULT_VALUES.DEFAULT_RPKI_PORT,
-        localPort: '11019',
-        enableAuth: false,
-        peerIP: '',
-        md5Password: '',
         maxProtocolVersion: DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION,
         aspaFormat: RPKI_ASPA_FORMAT.LATEST
     });
@@ -253,12 +195,7 @@
         }
     ];
 
-    const validationErrors = ref({
-        port: '',
-        localPort: '',
-        peerIP: '',
-        md5Password: ''
-    });
+    const validationErrors = ref({ port: '' });
 
     let validator = new FormValidator(validationErrors);
     validator.addRules(createRpkiConfigValidationRules());
@@ -272,11 +209,6 @@
         }
     });
 
-    const isServerDeployed = async () => {
-        const deploymentStatus = await window.commonApi.getServerDeploymentStatus();
-        return deploymentStatus.status === 'success' && deploymentStatus.data.success;
-    };
-
     // Details drawer
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
@@ -286,11 +218,6 @@
         const hasErrors = validator.validate(rpkiConfig.value);
         if (hasErrors) {
             notify.error('请检查配置信息是否正确');
-            return;
-        }
-
-        if (rpkiConfig.value.enableAuth && !(await isServerDeployed())) {
-            notify.error('请先部署服务器');
             return;
         }
 
@@ -402,10 +329,6 @@
             if (result.status === 'success') {
                 if (result.data) {
                     rpkiConfig.value.port = result.data.port;
-                    rpkiConfig.value.enableAuth = result.data.enableAuth || false;
-                    rpkiConfig.value.localPort = result.data.localPort;
-                    rpkiConfig.value.peerIP = result.data.peerIP || '';
-                    rpkiConfig.value.md5Password = result.data.md5Password || '';
                     rpkiConfig.value.maxProtocolVersion = normalizeMaxProtocolVersion(
                         result.data.maxProtocolVersion ?? DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION
                     );

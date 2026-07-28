@@ -3,7 +3,6 @@ import {
     AppstoreOutlined,
     ClockCircleOutlined,
     CloudDownloadOutlined,
-    CloudServerOutlined,
     ClusterOutlined,
     CodeOutlined,
     DatabaseOutlined,
@@ -39,7 +38,6 @@ export const settingsNavigationIcons = Object.freeze({
     tools: moduleNavigationIcons.tools,
     ftp: moduleNavigationIcons.ftp,
     externalApi: ApiOutlined,
-    serverDeployment: CloudServerOutlined,
     dataManagement: DatabaseOutlined,
     runtime: ToolOutlined,
     update: CloudDownloadOutlined

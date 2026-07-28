@@ -58,10 +58,8 @@ function createWorker(port) {
     worker.server = null;
     worker.ipv6Server = null;
     worker.socket = null;
-    worker.sshTunnel = null;
     worker.rpkiConfigData = {
         port,
-        enableAuth: false,
         maxProtocolVersion: RpkiConst.RPKI_PROTOCOL_VERSION.V2
     };
     worker.rpkiSessionMap = new Map();

@@ -3,7 +3,6 @@ const util = require('util');
 const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
 const BmpSession = require('./bmpSession');
-const SshTunnel = require('../shared/sshTunnel');
 const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgpUtils');
 const BmpBgpSession = require('./bmpBgpSession');
 const BmpBgpInstance = require('./bmpBgpInstance');
@@ -30,8 +29,6 @@ class BmpWorker {
         this.socket = null;
 
         this.bmpConfigData = null; // bmp配置数据
-        this.sshTunnel = null; // SSH隧道（用于MD5认证）
-
         this.bmpSessionMap = new Map(); // bmp会话map
         this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
         this.routeAssuranceFilters = {};
@@ -852,75 +849,7 @@ class BmpWorker {
             return;
         }
 
-        // 如果启用了 MD5 认证，使用 SSH 隧道启动远端代理。
-        if (bmpConfigData.enableAuth && bmpConfigData.md5Password) {
-            try {
-                logger.info('TCP MD5 authentication enabled, creating SSH tunnel...');
-
-                // 提取SSH服务器地址
-                const sshHost = bmpConfigData.serverAddress;
-
-                // 创建SSH隧道
-                this.sshTunnel = new SshTunnel();
-                await this.sshTunnel.connect({
-                    host: sshHost,
-                    username: bmpConfigData.sshUsername,
-                    password: bmpConfigData.sshPassword
-                });
-
-                logger.info('Using TCP MD5 proxy');
-                const proxyConfig = bmpConfigData.md5Password;
-
-                // 启动远程代理
-                // 代理监听 bmpConfigData.port (路由器连接这个端口)
-                // 然后转发到 Windows BMP 服务器
-                const localPort = parseInt(bmpConfigData.localPort);
-
-                // 获取 Windows 客户端 IP（从 SSH 连接）
-                let windowsIp = 'localhost';
-                try {
-                    const whoamiOutput = await this.sshTunnel.execCommand('echo $SSH_CLIENT');
-                    const sshClientInfo = whoamiOutput.trim().split(' ');
-                    if (sshClientInfo.length > 0) {
-                        windowsIp = sshClientInfo[0]; // SSH 客户端 IP
-                        logger.info(`Detected Windows client IP: ${windowsIp}`);
-                    }
-                } catch (error) {
-                    logger.warn(`Could not detect Windows IP, using localhost: ${error.message}`);
-                }
-
-                await this.sshTunnel.startProxy(
-                    'bmp', // 协议类型
-                    bmpConfigData.peerIP, // BMP路由器IP（peer IP）
-                    proxyConfig, // MD5密码
-                    bmpConfigData.port, // Linux监听端口（路由器连接）
-                    `${windowsIp}:${localPort}` // 转发到 Windows 的 localPort
-                );
-
-                logger.info('SSH tunnel and proxy started successfully');
-                logger.info(`BMP router should connect to: ${sshHost}:${bmpConfigData.port}`);
-                logger.info(`Proxy will forward to localhost:${localPort}`);
-
-                // 启动本地TCP服务器 - 直接监听 localPort
-                const originalPort = this.bmpConfigData.port;
-                this.bmpConfigData.port = localPort;
-
-                // 启动本地TCP服务器
-                await this.startTcpServer(messageId);
-
-                // 恢复原始端口配置
-                this.bmpConfigData.port = originalPort;
-
-                logger.info('Local BMP server started, waiting for connections from proxy');
-            } catch (error) {
-                logger.error(`Failed to setup SSH tunnel: ${error.message}`);
-                this.messageHandler.sendErrorResponse(messageId, `SSH隧道连接失败: ${error.message}`);
-                return;
-            }
-        } else {
-            // 直接TCP模式
-            await this.startTcpServer(messageId);
-        }
+        await this.startTcpServer(messageId);
     }
 
     async stopBmp(messageId) {
@@ -928,44 +857,6 @@ class BmpWorker {
         this.clearRouteUpdateAggregation();
         this.clearPersistenceSweepTimer();
         this.pauseBmpSockets();
-
-        // 停止SSH隧道和代理
-        if (this.sshTunnel) {
-            try {
-                // 停止远程代理
-                if (this.bmpConfigData) {
-                    const localPort = this.bmpConfigData.localPort;
-                    const _sshHost = this.bmpConfigData.serverAddress;
-
-                    const proxyConfig = this.bmpConfigData.md5Password;
-
-                    // 获取 Windows 客户端 IP（与 startProxy 保持一致）
-                    let windowsIp = 'localhost';
-                    try {
-                        const whoamiOutput = await this.sshTunnel.execCommand('echo $SSH_CLIENT');
-                        const sshClientInfo = whoamiOutput.trim().split(' ');
-                        if (sshClientInfo.length > 0) {
-                            windowsIp = sshClientInfo[0];
-                        }
-                    } catch (error) {
-                        // Ignore error, use localhost as fallback
-                    }
-
-                    await this.sshTunnel.stopProxy(
-                        'bmp',
-                        this.bmpConfigData.peerIP,
-                        proxyConfig,
-                        this.bmpConfigData.port,
-                        `${windowsIp}:${localPort}`
-                    );
-                }
-                // 断开SSH连接
-                await this.sshTunnel.disconnect();
-            } catch (error) {
-                logger.error(`Error stopping SSH tunnel: ${error.message}`);
-            }
-            this.sshTunnel = null;
-        }
 
         // Stop accepting new connections immediately, but do not wait for the
         // listeners to close until the existing long-lived BMP sockets have

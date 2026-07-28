@@ -91,6 +91,18 @@ html[data-theme='light'] {
     --nn-gradient-progress: linear-gradient(90deg, #f97316, #fb923c);
 }
 
+html[data-theme-preset='orange'] {
+    --nn-color-bg-card-head-control: var(--nn-color-bg-surface);
+    --nn-color-bg-card-head-control-hover: var(--nn-color-bg-hover);
+    --nn-color-text-card-head-control: var(--nn-color-text-info);
+    --nn-color-border-card-head-control: var(--nn-color-border-info);
+    --nn-color-bg-card-head-ghost: var(--nn-color-bg-info-subtle);
+    --nn-color-bg-card-head-ghost-hover: var(--nn-color-bg-selected);
+    --nn-color-text-card-head-ghost: var(--nn-color-text-info);
+    --nn-color-border-card-head-ghost: var(--nn-color-border-info);
+    --nn-shadow-card-head-control: 0 1px 2px rgba(124, 45, 18, 0.2);
+}
+
 html[data-theme-preset='blue'] {
     --nn-color-primary: #1677ff;
     --nn-color-primary-hover: #4096ff;

@@ -17,10 +17,6 @@ const bmpBrowserMockScript = `
             };
         },
         notifyRendererReady: () => {},
-        getServerDeploymentStatus: async () => ({
-            status: 'success',
-            data: { success: true }
-        }),
         openDeveloperOptions: () => {},
         openSoftwareInfo: () => {}
     };
@@ -907,7 +903,6 @@ const BmpE2eController = (() => {
             worker.ipv6Server = null;
             worker.socket = null;
             worker.bmpConfigData = null;
-            worker.sshTunnel = null;
             worker.bmpSessionMap = new Map();
             worker.clientDataDeleteInProgress = new Set();
             worker.clientDeleteRemoteIpGates = new Map();
@@ -1281,7 +1276,6 @@ const BmpE2eController = (() => {
                 ...config,
                 port: Number(config.port),
                 listenHost: config.listenHost || process.env.NETNEXUS_BMP_E2E_LISTEN_HOST || '127.0.0.1',
-                enableAuth: false,
                 bmpV4TlvDraft: draft,
                 logLevel: config.logLevel || 'off',
                 persistenceEnabled: true,

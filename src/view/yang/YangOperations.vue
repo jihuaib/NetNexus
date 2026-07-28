@@ -123,7 +123,7 @@
                                         ? '手工编辑'
                                         : activeOperationMeta.category === 'read'
                                           ? '只读'
-                                          : '需要确认'
+                                          : '写操作'
                                 }}
                             </nn-tag>
                         </span>
@@ -680,7 +680,7 @@
                                 :description="
                                     form.rawRpc.includes('NETNEXUS_REQUIRED')
                                         ? '请先补全或移除 NETNEXUS_REQUIRED 参数占位，再检查命名空间和操作影响。'
-                                        : '请检查命名空间、目标 datastore 与操作影响；发送前会再次确认。'
+                                        : '请检查命名空间、目标 datastore 与操作影响；校验通过后将直接发送。'
                                 "
                             />
                         </template>
@@ -725,10 +725,8 @@
                                           ? '操作执行中；可只终止本地等待，连接保持不变'
                                           : '操作执行中；终止等待不代表设备撤销写操作'
                                     : requestOverrideActive
-                                      ? '手工报文发送前需要二次确认'
-                                      : activeOperationMeta.category === 'read'
-                                        ? '只读操作将直接发送'
-                                        : '发送前需要二次确认'
+                                      ? '合法手工报文将直接发送'
+                                      : '参数校验通过后将直接发送'
                             }}
                         </span>
                     </div>
@@ -1120,34 +1118,15 @@
             </div>
         </nn-modal>
 
-        <nn-modal
-            v-model:open="confirmationOpen"
-            :title="
-                confirmationOverrideRequired
-                    ? '确认仍然下发 RPC'
-                    : requestOverrideActive
-                      ? '确认发送手工 RPC'
-                      : `确认执行 ${activeOperationMeta.label}`
-            "
-            :footer="null"
-            width="520px"
-            :z-index="1300"
-        >
+        <nn-modal v-model:open="confirmationOpen" title="确认仍然下发 RPC" :footer="null" width="520px" :z-index="1300">
             <nn-alert
-                :type="requestOverrideActive || activeOperationMeta.category === 'danger' ? 'warning' : 'info'"
-                show-icon
-                :message="confirmationDescription"
-                description="请再次确认目标设备、datastore 和参数无误。"
-            />
-            <nn-alert
-                v-if="confirmationOverrideRequired"
                 class="operation-confirmation-yang-warning"
                 type="warning"
                 show-icon
                 :message="confirmationYangWarningMessage"
                 :description="confirmationYangWarningDescription"
             />
-            <div v-if="confirmationOverrideRequired" class="operation-confirmation-override">
+            <div class="operation-confirmation-override">
                 <nn-checkbox v-model:checked="confirmationOverrideAccepted">
                     我已了解本地 YANG 校验未通过，仍要下发该 RPC
                 </nn-checkbox>
@@ -1156,16 +1135,12 @@
                 <nn-button @click="closeConfirmation">取消</nn-button>
                 <nn-button
                     type="primary"
-                    :danger="
-                        confirmationOverrideRequired ||
-                        requestOverrideActive ||
-                        activeOperationMeta.category === 'danger'
-                    "
+                    danger
                     :loading="executing || requestValidating"
-                    :disabled="requestValidating || (confirmationOverrideRequired && !confirmationOverrideAccepted)"
+                    :disabled="requestValidating || !confirmationOverrideAccepted"
                     @click="confirmAndExecute"
                 >
-                    {{ confirmationOverrideRequired ? '仍然下发' : '确认执行' }}
+                    仍然下发
                 </nn-button>
             </div>
         </nn-modal>
@@ -1258,6 +1233,10 @@
         operation: {
             type: String,
             default: 'get'
+        },
+        autoExecute: {
+            type: Boolean,
+            default: false
         },
         compileId: {
             type: String,
@@ -1421,6 +1400,7 @@
     let editConfigBaseline = '';
     let editConfigLoadRevision = 0;
     let applyingOperationContext = false;
+    let autoExecutedContextRevision = -1;
     let operationRequestSequence = 0;
     const result = reactive({
         status: '',
@@ -4134,9 +4114,6 @@
         return clonePlain(payload);
     };
 
-    const confirmationOverrideRequired = computed(
-        () => confirmationValidation.value?.valid === false && confirmationValidation.value?.canOverride === true
-    );
     const confirmationYangWarningMessage = computed(() => {
         const diagnosticCount = confirmationValidation.value?.diagnostics?.length || 0;
         if (diagnosticCount) return `本地 YANG 校验发现 ${diagnosticCount} 处问题`;
@@ -4194,43 +4171,6 @@
         if (!open) resetConfirmation();
     });
 
-    const confirmationDescription = computed(() => {
-        if (requestOverrideActive.value) {
-            return '将按编辑器中的完整 RPC 原文发送；它可能读取或修改任意设备状态。';
-        }
-        const operation = activeOperation.value;
-        if (operation === 'edit-config') return `将修改 ${form.target} datastore。`;
-        if (operation === 'copy-config') return `将 ${form.copySource} 覆盖复制到 ${form.copyTarget}。`;
-        if (operation === 'delete-config') return `将删除整个 ${form.deleteTarget} datastore。`;
-        if (operation === 'commit') return '将 candidate 修改提交至 running。';
-        if (operation === 'cancel-commit') return '将取消当前会话尚未确认的 confirmed commit。';
-        if (operation === 'discard-changes') return '将永久放弃 candidate 中尚未提交的修改。';
-        if (operation === 'lock') return `将锁定 ${form.lockTarget}。`;
-        if (operation === 'unlock') return `将解锁 ${form.lockTarget}。`;
-        if (operation === 'create-subscription') {
-            return `将在当前 NETCONF Session 上订阅 ${form.subscriptionStream.trim() || 'NETCONF'} 事件流。`;
-        }
-        if (operation === 'establish-subscription') {
-            if (form.modernSubscriptionTarget === 'datastore') {
-                const trigger =
-                    form.modernUpdateTrigger === 'unspecified' ? '未指定更新策略的' : `${form.modernUpdateTrigger} `;
-                return `将在当前 Session 建立 ${form.modernDatastore} 的 YANG-Push ${trigger}订阅。`;
-            }
-            return `将在当前 Session 建立 ${form.subscriptionStream.trim() || 'NETCONF'} 事件流动态订阅。`;
-        }
-        if (operation === 'modify-subscription') {
-            return `将修改设备订阅 ${form.modernSubscriptionId}，失败时设备应保持原参数不变。`;
-        }
-        if (operation === 'delete-subscription') {
-            return `将删除设备订阅 ${form.modernSubscriptionId}，NETCONF Session 保持连接。`;
-        }
-        if (operation === 'resync-subscription') {
-            return `将请求设备订阅 ${form.modernSubscriptionId} 发送完整 push-update。`;
-        }
-        if (operation === 'raw-rpc') return '原始 RPC 可能读取或修改任意设备状态。';
-        return `即将执行 ${activeOperationMeta.value.label}。`;
-    });
-
     const requestExecute = async () => {
         const error = validateOperation();
         if (error) {
@@ -4247,7 +4187,7 @@
             }
             return;
         }
-        if (validation.valid && !requestOverrideActive.value && activeOperationMeta.value.category === 'read') {
+        if (validation.valid) {
             void executeOperation();
             return;
         }
@@ -4270,7 +4210,7 @@
             notify.warning('RPC、设备会话或 YANG 编译上下文已变化，请重新验证后再发送');
             return;
         }
-        if (confirmationOverrideRequired.value && !confirmationOverrideAccepted.value) return;
+        if (!confirmationOverrideAccepted.value) return;
         closeConfirmation();
         void executeOperation();
     };
@@ -4606,6 +4546,8 @@
 
     const applyOperationContext = () => {
         if (!props.embedded) return;
+        const requestedContextRevision = props.contextRevision;
+        const executeAfterApply = props.autoExecute;
         parameterSchemaRequestRevision += 1;
         applyingOperationContext = true;
         restoreGeneratedRequest({ silent: true });
@@ -4761,6 +4703,15 @@
             applyingOperationContext = false;
             expandOperationParameterTree();
             if (activeOperation.value === 'edit-config' && props.contextSubtree) void prefillEditConfig();
+            if (
+                executeAfterApply &&
+                requestedContextRevision === props.contextRevision &&
+                requestedContextRevision !== autoExecutedContextRevision &&
+                activeOperation.value !== 'edit-config'
+            ) {
+                autoExecutedContextRevision = requestedContextRevision;
+                void requestExecute();
+            }
         });
     };
 
@@ -4877,6 +4828,7 @@
             props.embedded,
             props.profileId,
             props.operation,
+            props.autoExecute,
             props.contextNode?.id,
             props.contextNode?.path,
             props.contextSubtree,
@@ -5663,7 +5615,6 @@
         margin-top: 16px;
     }
 
-    .operation-confirmation-yang-warning,
     .operation-confirmation-override {
         margin-top: 12px;
     }

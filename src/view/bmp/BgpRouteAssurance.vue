@@ -9,16 +9,17 @@
             </template>
             <template #extra>
                 <div class="analysis-controls">
-                    <div class="analysis-toggle">
+                    <div class="analysis-toggle nn-card-head-pill">
                         <span>{{ analysisEnabled ? '分析已开启' : '分析已关闭' }}</span>
                         <nn-switch
                             v-model:checked="analysisEnabled"
                             data-testid="route-assurance-toggle"
                             aria-label="路由矩阵分析"
+                            size="small"
                             @change="handleAnalysisToggle"
                         />
                     </div>
-                    <span v-if="generatedAt" class="generated-at">更新于 {{ generatedAt }}</span>
+                    <span v-if="generatedAt" class="generated-at nn-card-head-pill">更新于 {{ generatedAt }}</span>
                 </div>
             </template>
 
@@ -850,23 +851,7 @@
 
     .analysis-toggle {
         gap: 7px;
-        color: var(--nn-color-text-card-head-ghost);
         cursor: pointer;
-        font-size: 12px;
-        white-space: nowrap;
-    }
-
-    .generated-at {
-        display: inline-flex;
-        align-items: center;
-        min-height: 24px;
-        padding: 2px 9px;
-        border: 1px solid var(--nn-color-border-card-head-ghost);
-        border-radius: 999px;
-        background: var(--nn-color-bg-card-head-ghost);
-        color: var(--nn-color-text-card-head-ghost);
-        font-size: 12px;
-        white-space: nowrap;
     }
 
     .filter-panel {

@@ -25,7 +25,6 @@ class RpkiApp {
         this.rpkiRouterKeyFileKey = 'rpki-router-key';
         this.worker = null;
         this.eventDispatcher = null;
-        this.serverDeploymentConfig = null;
         this.logLevel = null;
         this.rpkiClientConnectionHandler = null;
         this.rpkiSqliteStore = null;
@@ -84,10 +83,6 @@ class RpkiApp {
             logger.error('Error loading RPKI config:', error.message);
             return errorResponse(error.message);
         }
-    }
-
-    setServerDeploymentConfig(config) {
-        this.serverDeploymentConfig = config;
     }
 
     getRpkiDatabasePath() {
@@ -188,12 +183,6 @@ class RpkiApp {
             if (this.logLevel) {
                 rpkiConfigData.logLevel = this.logLevel;
             }
-            if (rpkiConfigData.enableAuth) {
-                rpkiConfigData.serverAddress = this.serverDeploymentConfig.serverAddress;
-                rpkiConfigData.sshUsername = this.serverDeploymentConfig.sshUsername;
-                rpkiConfigData.sshPassword = this.serverDeploymentConfig.sshPassword;
-            }
-
             logger.info(`${JSON.stringify({ ...rpkiConfigData, initialRouterKeys: undefined })}`);
             const workerPath = resolveWorkerPath('rpki/rpkiWorker.js');
             worker = new WorkerWithPromise(workerPath).createLongRunningWorker();

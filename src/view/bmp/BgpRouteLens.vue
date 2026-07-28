@@ -8,7 +8,7 @@
                 </span>
             </template>
             <template #extra>
-                <span v-if="generatedAt" class="generated-at">更新于 {{ generatedAt }}</span>
+                <span v-if="generatedAt" class="generated-at nn-card-head-pill">更新于 {{ generatedAt }}</span>
             </template>
 
             <div class="query-panel">
@@ -1065,11 +1065,6 @@
 
     .page-title {
         gap: 7px;
-    }
-
-    .generated-at {
-        font-size: 12px;
-        opacity: 0.86;
     }
 
     .query-panel {

@@ -103,7 +103,6 @@ npm run release:mac:universal # 构建并发布 macOS universal 版本
 - `snmpApp.js`: SNMP 管理器
 - `toolsApp.js`: 开发工具协调
 - `nativeApp.js`: 原生功能（端口监听、进程终止、网络信息和网络地址管理）
-- `sshDeployer.js`: 通过 SSH 将 BMP MD5 代理部署到 Linux 服务器
 - `updater.js`: 自动更新功能
 
 **工作进程** (`electron/worker/`):
@@ -111,7 +110,7 @@ npm run release:mac:universal # 构建并发布 macOS universal 版本
 - Workers 在主线程侧使用 `core/workerWithPromise.js` 进行管理，在 worker 侧使用 `core/workerMessageHandler.js` 注册处理器
 - 长期运行模式（`createLongRunningWorker()`）：用于协议 worker（BGP、BMP、RPKI、FTP、SNMP、DHCP、NTP、TFTP、Syslog），支持请求-响应和事件推送
 - 一次性模式（`runWorkerWithPromise()`）：用于单次任务，执行完毕后自动终止
-- 示例：`bgp/bgpSession.js`、`bmp/bmpSession.js`、`rpki/rpkiSession.js`、`transfer/ftpSession.js`、`shared/sshTunnel.js`、`tools/stringGeneratorWorker.js`
+- 示例：`bgp/bgpSession.js`、`bmp/bmpSession.js`、`rpki/rpkiSession.js`、`transfer/ftpSession.js`、`tools/stringGeneratorWorker.js`
 
 **报文解析器** (`electron/pktParser/`):
 - 协议特定的解析器：`bgpPacketParser.js`、`tcpPacketParser.js`、`udpPacketParser.js`、`ipPacketParser.js`、`ethernetPacketParser.js`、`arpPacketParser.js`
@@ -140,7 +139,7 @@ npm run release:mac:universal # 构建并发布 macOS universal 版本
 - `dhcp/`: DHCP 服务器视图（配置、租约）
 - `ntp/`: NTP 服务器视图（配置、请求日志）
 - `tftp/`: TFTP 服务器视图（配置、传输日志）
-- `settings/`: 应用设置（通用、工具、FTP、HTTP API、服务器部署、更新）
+- `settings/`: 应用设置（通用、工具、FTP、HTTP API、数据管理、运行时诊断、更新）
 
 **组件** (`src/components/`):
 - `SettingsDialog.vue`: 全局设置对话框

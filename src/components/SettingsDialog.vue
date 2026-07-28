@@ -28,10 +28,6 @@
                         <template #icon><component :is="settingsNavigationIcons.externalApi" /></template>
                         <span>外部API</span>
                     </nn-menu-item>
-                    <nn-menu-item key="server-deployment">
-                        <template #icon><component :is="settingsNavigationIcons.serverDeployment" /></template>
-                        <span>服务器部署</span>
-                    </nn-menu-item>
                     <nn-menu-item key="data-management">
                         <template #icon><component :is="settingsNavigationIcons.dataManagement" /></template>
                         <span>数据管理</span>
@@ -65,7 +61,6 @@
     import ToolsSettings from '../view/settings/ToolsSettings.vue';
     import UpdateSettings from '../view/settings/UpdateSettings.vue';
     import FtpSettings from '../view/settings/FtpSettings.vue';
-    import ServerDeployment from '../view/settings/ServerDeployment.vue';
     import ApiSettings from '../view/settings/ApiSettings.vue';
     import BmpDataSettings from '../view/settings/BmpDataSettings.vue';
     import RuntimeSettings from '../view/settings/RuntimeSettings.vue';
@@ -111,8 +106,6 @@
                 return FtpSettings;
             case 'api':
                 return ApiSettings;
-            case 'server-deployment':
-                return ServerDeployment;
             case 'data-management':
                 return BmpDataSettings;
             case 'runtime':
@@ -202,7 +195,6 @@
     .settings-content :deep(.tools-settings),
     .settings-content :deep(.ftp-settings),
     .settings-content :deep(.api-settings),
-    .settings-content :deep(.server-deployment-container),
     .settings-content :deep(.bmp-data-settings),
     .settings-content :deep(.runtime-settings),
     .settings-content :deep(.update-settings) {

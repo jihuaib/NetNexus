@@ -14,13 +14,12 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
   - `legacy`：兼容 draft-10 风格，含 AFI Flags 和 Provider AS Count。
 - Serial Query / Reset Query 响应。
 - 运行时 client 列表。
-- 可选 TCP MD5 代理配置。
 
 ## 页面
 
 ### RPKI 配置
 
-配置 RPKI-RTR 服务端口、最高协议版本、ASPA 编码格式和可选 MD5 认证参数。
+配置 RPKI-RTR 服务端口、最高协议版本和 ASPA 编码格式。
 
 ![RPKI 配置和客户端](images/rpki/rpki-config-and-client.png)
 
@@ -28,7 +27,7 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
 
 | 按钮 | 功能 |
 | --- | --- |
-| 启动服务 / 已启动 | 按端口、协议版本、ASPA 编码和 MD5 参数启动 RPKI-RTR 服务。 |
+| 启动服务 / 已启动 | 按端口、协议版本和 ASPA 编码启动 RPKI-RTR 服务。 |
 | 停止服务 | 停止 RPKI-RTR 服务并断开客户端连接。 |
 
 说明：
@@ -36,7 +35,6 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
 - v0 只发送 ROA。
 - v1 支持 Router Key。
 - v2 支持 ASPA。
-- MD5 认证依赖服务器部署页面中的 TCP MD5 代理能力。
 
 ### ROA
 

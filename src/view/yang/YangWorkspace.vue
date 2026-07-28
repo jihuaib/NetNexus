@@ -149,6 +149,7 @@
                         embedded
                         :profile-id="selectedProfileId"
                         :operation="operationContext.operation"
+                        :auto-execute="operationContext.autoExecute"
                         :compile-id="compileId"
                         :schema-tree="treeData"
                         :context-revision="operationContextRevision"
@@ -357,6 +358,7 @@
     const contextMenu = reactive({ visible: false, x: 0, y: 0, node: null });
     const operationContext = reactive({
         operation: 'get',
+        autoExecute: false,
         node: null,
         subtree: '',
         config: '',
@@ -546,7 +548,7 @@
         }
         if (node?.config === false) return 'state 节点本身只允许 get；Candidate 与配置存储菜单作用于整个 datastore';
         if (isRpcNode(node)) return `${node.keyword} 将以原始 RPC 草稿打开，请确认实例路径和参数`;
-        return '节点操作会根据当前 Schema 路径自动预填 XML';
+        return '参数已确定的操作会直接下发；需要编辑的操作会根据当前 Schema 路径预填 XML';
     });
     const displayTree = computed(() => {
         const query = treeQuery.value.trim().toLowerCase();
@@ -563,6 +565,7 @@
     const resetOperationContext = () => {
         Object.assign(operationContext, {
             operation: 'get',
+            autoExecute: false,
             node: null,
             subtree: '',
             config: '',
@@ -949,7 +952,15 @@
     };
 
     const menuIcon = component => () => h(component, { strokeWidth: 1.8 });
-    const operationMenuItem = ({ key, label, operation, icon, scope = 'node', params = {} }) => {
+    const operationMenuItem = ({
+        key,
+        label,
+        operation,
+        icon,
+        scope = 'node',
+        params = {},
+        executeImmediately = false
+    }) => {
         const node = ['node', 'notification'].includes(scope) ? contextMenu.node : null;
         const disabledReason = operationDisabledReason(operation, node, params);
         return {
@@ -958,7 +969,7 @@
             icon: menuIcon(icon),
             disabled: Boolean(disabledReason),
             title: disabledReason || label,
-            action: { type: 'operation', operation, scope, params }
+            action: { type: 'operation', operation, scope, params, executeImmediately }
         };
     };
     const allMenuActionsDisabled = items =>
@@ -1024,7 +1035,8 @@
                 label: 'Running',
                 operation: 'get-config',
                 icon: FileSearchOutlined,
-                params: { source: 'running' }
+                params: { source: 'running' },
+                executeImmediately: true
             })
         ];
         if (hasCapability('candidate')) {
@@ -1034,7 +1046,8 @@
                     label: 'Candidate',
                     operation: 'get-config',
                     icon: FileSearchOutlined,
-                    params: { source: 'candidate' }
+                    params: { source: 'candidate' },
+                    executeImmediately: true
                 })
             );
         }
@@ -1045,7 +1058,8 @@
                     label: 'Startup',
                     operation: 'get-config',
                     icon: FileSearchOutlined,
-                    params: { source: 'startup' }
+                    params: { source: 'startup' },
+                    executeImmediately: true
                 })
             );
         }
@@ -1083,7 +1097,8 @@
                     operation: 'validate',
                     icon: CodeOutlined,
                     scope: 'datastore',
-                    params: { validateSource: 'candidate' }
+                    params: { validateSource: 'candidate' },
+                    executeImmediately: true
                 })
             );
         }
@@ -1094,7 +1109,8 @@
                 operation: 'commit',
                 icon: SendOutlined,
                 scope: 'datastore',
-                params: { confirmed: false }
+                params: { confirmed: false },
+                executeImmediately: true
             })
         );
         if (hasCapability('confirmedCommit')) {
@@ -1112,7 +1128,8 @@
                     label: '取消 Confirmed Commit',
                     operation: 'cancel-commit',
                     icon: DeleteOutlined,
-                    scope: 'datastore'
+                    scope: 'datastore',
+                    executeImmediately: true
                 })
             );
         }
@@ -1122,7 +1139,8 @@
                 label: '放弃全部未提交修改',
                 operation: 'discard-changes',
                 icon: DeleteOutlined,
-                scope: 'datastore'
+                scope: 'datastore',
+                executeImmediately: true
             }),
             { type: 'divider', key: 'candidate-divider-lock' },
             operationMenuItem({
@@ -1131,7 +1149,8 @@
                 operation: 'lock',
                 icon: SafetyOutlined,
                 scope: 'datastore',
-                params: { lockTarget: 'candidate' }
+                params: { lockTarget: 'candidate' },
+                executeImmediately: true
             }),
             operationMenuItem({
                 key: 'candidate:unlock',
@@ -1139,7 +1158,8 @@
                 operation: 'unlock',
                 icon: SafetyOutlined,
                 scope: 'datastore',
-                params: { lockTarget: 'candidate' }
+                params: { lockTarget: 'candidate' },
+                executeImmediately: true
             })
         );
 
@@ -1150,7 +1170,8 @@
                 operation: 'validate',
                 icon: CodeOutlined,
                 scope: 'datastore',
-                params: { validateSource: 'running' }
+                params: { validateSource: 'running' },
+                executeImmediately: true
             })
         ];
         if (hasCapability('startup')) {
@@ -1161,7 +1182,8 @@
                     operation: 'validate',
                     icon: CodeOutlined,
                     scope: 'datastore',
-                    params: { validateSource: 'startup' }
+                    params: { validateSource: 'startup' },
+                    executeImmediately: true
                 })
             );
         }
@@ -1172,7 +1194,8 @@
                 operation: 'lock',
                 icon: SafetyOutlined,
                 scope: 'datastore',
-                params: { lockTarget: datastore }
+                params: { lockTarget: datastore },
+                executeImmediately: true
             })
         );
         const unlockChildren = ['running', ...(hasCapability('startup') ? ['startup'] : [])].map(datastore =>
@@ -1182,7 +1205,8 @@
                 operation: 'unlock',
                 icon: SafetyOutlined,
                 scope: 'datastore',
-                params: { lockTarget: datastore }
+                params: { lockTarget: datastore },
+                executeImmediately: true
             })
         );
         const datastoreChildren = [
@@ -1227,15 +1251,17 @@
                     operation: 'copy-config',
                     icon: CopyOutlined,
                     scope: 'datastore',
-                    params: { copySource: 'running', copyTarget: 'startup' }
+                    params: { copySource: 'running', copyTarget: 'startup' },
+                    executeImmediately: true
                 }),
                 operationMenuItem({
                     key: 'startup:delete',
-                    label: '删除整个 Startup…',
+                    label: '删除整个 Startup',
                     operation: 'delete-config',
                     icon: DeleteOutlined,
                     scope: 'datastore',
-                    params: { deleteTarget: 'startup' }
+                    params: { deleteTarget: 'startup' },
+                    executeImmediately: true
                 })
             ];
             datastoreChildren.push({
@@ -1266,7 +1292,8 @@
                 key: 'get',
                 label: isDataNode(node) ? '读取当前节点（get）' : '读取全部数据（get）',
                 operation: 'get',
-                icon: ApiOutlined
+                icon: ApiOutlined,
+                executeImmediately: true
             }),
             {
                 key: 'get-config',
@@ -1688,7 +1715,7 @@
         }
     };
 
-    const openOperation = (operation, { scope = 'node', params = {} } = {}) => {
+    const openOperation = (operation, { scope = 'node', params = {}, executeImmediately = false } = {}) => {
         const contextNode = contextMenu.node;
         const node = ['node', 'notification'].includes(scope) ? contextNode : null;
         const disabledReason = operationDisabledReason(operation, node, params);
@@ -1698,6 +1725,7 @@
         }
         Object.assign(operationContext, {
             operation,
+            autoExecute: executeImmediately,
             node,
             subtree:
                 operation === 'create-subscription'
@@ -1797,6 +1825,7 @@
         }
         Object.assign(operationContext, {
             operation,
+            autoExecute: false,
             node: null,
             subtree: params.subtree || '',
             config: '',
@@ -1805,7 +1834,7 @@
         });
         operationContextRevision.value += 1;
         notificationHistoryOpen.value = false;
-        notify.info(`已在操作区打开 ${operation}，确认参数后执行`);
+        notify.info(`已在操作区打开 ${operation}，检查参数后即可执行`);
     };
 
     const openSubscriptionManagement = subscription => {

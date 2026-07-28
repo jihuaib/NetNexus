@@ -1,16 +1,17 @@
 <template>
-    <div class="config-section">
+    <div class="advanced-section">
         <div class="section-title">AS Path</div>
-        <nn-row :gutter="[16, 0]">
-            <nn-col :xs="24" :md="8">
+        <nn-row :gutter="[12, 0]">
+            <nn-col :xs="24" :sm="12" :lg="8">
                 <nn-form-item label="随机生成">
                     <nn-switch
                         :checked="config.randomAsPathEnabled"
+                        size="small"
                         @update:checked="value => emit('change', 'randomAsPathEnabled', value)"
                     />
                 </nn-form-item>
             </nn-col>
-            <nn-col :xs="24" :md="8">
+            <nn-col :xs="24" :sm="12" :lg="8">
                 <nn-form-item label="起始 AS">
                     <nn-input
                         :value="config.asMin"
@@ -19,7 +20,7 @@
                     />
                 </nn-form-item>
             </nn-col>
-            <nn-col :xs="24" :md="8">
+            <nn-col :xs="24" :sm="12" :lg="8">
                 <nn-form-item label="结束 AS">
                     <nn-input
                         :value="config.asMax"
@@ -28,7 +29,7 @@
                     />
                 </nn-form-item>
             </nn-col>
-            <nn-col :xs="24" :md="12">
+            <nn-col :xs="24" :sm="12">
                 <nn-form-item label="最少 AS 数">
                     <nn-input
                         :value="config.asPathMinLength"
@@ -37,7 +38,7 @@
                     />
                 </nn-form-item>
             </nn-col>
-            <nn-col :xs="24" :md="12">
+            <nn-col :xs="24" :sm="12">
                 <nn-form-item label="最多 AS 数">
                     <nn-input
                         :value="config.asPathMaxLength"

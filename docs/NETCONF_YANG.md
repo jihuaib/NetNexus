@@ -214,7 +214,7 @@ npm run dev
 
 设备会话状态和完整 Capability 列表统一在“连接设置”中查看；Schema 工作区不再重复显示设备状态条或 Capability 入口。
 
-Schema 数据节点的右键操作会预填 subtree/config XML 草稿。树顶部不再放置虚拟的“设备级操作”节点；Candidate 和配置存储操作保留在普通 Schema 节点的右键菜单中，并明确标注它们作用于整个 datastore：
+Schema 数据节点的右键操作会预填 subtree/config XML 草稿。`get`、已选定 datastore 的 `get-config`、普通 `commit` 等不需要继续编辑参数的菜单动作会立即下发；`edit-config`、confirmed commit、通用 copy-config、订阅和原始 RPC 等仍先在右侧打开以便补全或调整参数。树顶部不再放置虚拟的“设备级操作”节点；Candidate 和配置存储操作保留在普通 Schema 节点的右键菜单中，并明确标注它们作用于整个 datastore：
 
 | 操作 | 说明 | 典型 Capability |
 | --- | --- | --- |
@@ -238,7 +238,7 @@ YANG-Push 修改默认使用“保持当前过滤器/策略”，对应 RFC 8641
 
 页面会依据节点的 `config` 属性和服务端 Capability 禁用明显不可用的结构化操作。Schema 工作区右侧采用 NETCONF Browser 风格布局：上方是 Request 区，可在操作参数与 RPC XML 之间切换；下方是 RPC Reply 响应区，状态、耗时和 message-id 与响应一起显示。请求和响应 XML 默认以格式化后的缩进结构展示，并可切换到“原文”查看设备实际收发内容；格式化只影响显示，不改变实际发送的 XML。
 
-RPC 等待回复期间会锁定操作切换和工作区清空，避免重复下发或丢失结果。高风险操作二次确认仍使用弹窗。原始 RPC 不做 Capability 推断，执行前需要自行确认命名空间、目标 datastore 和操作风险。旧的 `/yang/yang-operations` 地址会自动跳转到 Schema 工作区。
+RPC 等待回复期间会锁定操作切换和工作区清空，避免重复下发或丢失结果。合法 RPC 点击执行后直接下发，不再弹出通用二次确认；只有本地 YANG 校验失败而用户选择强制下发时，才要求单独确认。原始 RPC 不做 Capability 推断，执行前需要自行检查命名空间、目标 datastore 和操作风险。旧的 `/yang/yang-operations` 地址会自动跳转到 Schema 工作区。
 
 订阅控制 RPC 的 `<rpc-reply>` 仍保留在当前响应区和执行记录中，之后到达的异步 `<notification>` 不会混入响应。全局通知采集器按 Profile → Session → Subscription 分组，通知抽屉支持未读状态、全文筛选、完整 XML 行号/高亮、复制、删除和 JSON/XML 导出。现代动态订阅可从抽屉打开修改、删除和 on-change 重同步；RFC 5277 没有按订阅 ID 取消订阅的 RPC，因此结束旧订阅仍会断开其 Session。
 

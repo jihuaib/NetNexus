@@ -99,7 +99,7 @@
     }
 
     .nn-card-extra :deep(.nn-button:focus-visible) {
-        outline: 2px solid currentcolor !important;
+        outline: 2px solid var(--nn-color-text-inverse) !important;
         outline-offset: 1px;
         box-shadow: var(--nn-shadow-card-head-control) !important;
     }
@@ -144,6 +144,43 @@
 
     .nn-card-extra :deep(.nn-button-icon + .nn-button-content) {
         margin-left: 5px;
+    }
+
+    .nn-card-extra :deep(.nn-card-head-pill) {
+        display: inline-flex;
+        min-height: 24px;
+        align-items: center;
+        padding: 2px 8px;
+        border: 1px solid var(--nn-color-border-card-head-ghost);
+        border-radius: 999px;
+        background: var(--nn-color-bg-card-head-ghost);
+        color: var(--nn-color-text-card-head-ghost);
+        font-size: 12px;
+        line-height: 18px;
+        white-space: nowrap;
+    }
+
+    .nn-card-extra :deep(.nn-card-head-pill .nn-switch) {
+        background: var(--nn-color-bg-card-head-ghost-hover) !important;
+        box-shadow: inset 0 0 0 1px var(--nn-color-border-card-head-ghost) !important;
+    }
+
+    .nn-card-extra :deep(.nn-card-head-pill .nn-switch .nn-switch-handle) {
+        background: var(--nn-color-text-card-head-control);
+    }
+
+    .nn-card-extra :deep(.nn-card-head-pill .nn-switch-checked) {
+        background: var(--nn-color-bg-card-head-control) !important;
+        box-shadow: inset 0 0 0 1px var(--nn-color-primary-hover) !important;
+    }
+
+    .nn-card-extra :deep(.nn-card-head-pill .nn-switch-checked .nn-switch-handle) {
+        background: var(--nn-color-primary-active);
+    }
+
+    .nn-card-extra :deep(.nn-card-head-pill .nn-switch:focus-visible) {
+        outline: 2px solid var(--nn-color-text-inverse);
+        outline-offset: 1px;
     }
 
     .nn-card-extra :deep(.nn-tag) {

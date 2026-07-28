@@ -56,7 +56,6 @@ function buildFeaturePageBrowserMockScript(featureApiScripts) {
         '            };',
         '        },',
         '        notifyRendererReady: () => {},',
-        "        getServerDeploymentStatus: async () => ({ status: 'success', data: { success: true } }),",
         "        getGeneralSettings: async () => ({ status: 'success', data: null }),",
         "        saveGeneralSettings: async data => ({ status: 'success', data }),",
         "        getToolsSettings: async () => ({ status: 'success', data: null }),",

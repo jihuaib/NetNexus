@@ -1267,8 +1267,6 @@ async function captureSettingsScreenshots(win) {
     await capturePage(win, 'settings/ftp', 'docs/images/setting/setting-ftp.png');
     await selectSettingsCategory(win, '外部API');
     await capturePage(win, 'settings/api', 'docs/images/setting/setting-api.png');
-    await selectSettingsCategory(win, '服务器部署');
-    await capturePage(win, 'settings/server-deployment', 'docs/images/setting/setting-server-deployment.png');
     await selectSettingsCategory(win, '应用更新');
     await capturePage(win, 'settings/update', 'docs/images/setting/setting-updater.png');
     await closeSettingsDialog(win);
@@ -1406,11 +1404,7 @@ async function startBmpForDocs(win) {
     const config = {
         port: `${BMP_DOCS_PORT}`,
         bmpV4TlvDraft: BMP_DRAFT_20,
-        pathMarkingTlvType: BMP_PATH_MARKING_TLV_DRAFT_20,
-        enableAuth: false,
-        localPort: '',
-        peerIP: '',
-        md5Password: ''
+        pathMarkingTlvType: BMP_PATH_MARKING_TLV_DRAFT_20
     };
 
     const result = await win.webContents.executeJavaScript(`
@@ -1904,10 +1898,6 @@ async function setupRpkiDemo(win) {
         (async () => {
             const config = ${JSON.stringify({
                 port: String(RPKI_DOCS_PORT),
-                localPort: '',
-                enableAuth: false,
-                peerIP: '',
-                md5Password: '',
                 maxProtocolVersion: 2,
                 aspaFormat: 'latest'
             })};
