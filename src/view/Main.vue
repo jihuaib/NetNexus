@@ -1,29 +1,44 @@
 <template>
     <div class="main-layout">
         <!-- 侧边菜单导航 -->
-        <div class="sider" :class="{ collapsed: isCollapsed }">
-            <div class="toggle-btn" @click="toggleCollapse">
-                <nn-button type="text">
+        <aside class="sider" :class="{ collapsed: isCollapsed }" aria-label="主导航">
+            <div class="sidebar-header">
+                <div v-if="!isCollapsed" class="sidebar-brand" aria-label="NetNexus 网络工具套件">
+                    <img class="sidebar-brand-logo" :src="appLogoUrl" alt="" aria-hidden="true" />
+                    <span class="sidebar-brand-copy">
+                        <strong>NetNexus</strong>
+                        <small>网络工具套件</small>
+                    </span>
+                </div>
+                <nn-button
+                    type="text"
+                    class="toggle-btn"
+                    :aria-label="isCollapsed ? '展开侧边栏' : '收起侧边栏'"
+                    :title="isCollapsed ? '展开侧边栏' : '收起侧边栏'"
+                    @click="toggleCollapse"
+                >
                     <template #icon>
                         <MenuFoldOutlined v-if="!isCollapsed" />
                         <MenuUnfoldOutlined v-else />
                     </template>
                 </nn-button>
             </div>
-            <nn-menu
-                v-model:selected-keys="current"
-                mode="inline"
-                :items="items"
-                class="main-menu"
-                :inline-collapsed="isCollapsed"
-                :open-keys="!isCollapsed ? openKeys : []"
-                @select="handleSelect"
-                @open-change="onOpenChange"
-            />
+            <nav class="sidebar-nav" aria-label="功能模块">
+                <nn-menu
+                    v-model:selected-keys="current"
+                    mode="inline"
+                    :items="items"
+                    class="main-menu"
+                    :inline-collapsed="isCollapsed"
+                    :open-keys="!isCollapsed ? openKeys : []"
+                    @select="handleSelect"
+                    @open-change="onOpenChange"
+                />
+            </nav>
             <!-- 底部菜单按钮 -->
             <div class="bottom-menu-btn">
                 <nn-dropdown :trigger="['click']" placement="topRight">
-                    <nn-button type="text" aria-label="更多选项">
+                    <nn-button type="text" aria-label="更多选项" title="更多选项">
                         <template #icon><SettingOutlined /></template>
                         <span v-if="!isCollapsed">更多选项</span>
                     </nn-button>
@@ -51,7 +66,7 @@
                     </template>
                 </nn-dropdown>
             </div>
-        </div>
+        </aside>
         <!-- 内容区域 -->
         <div class="content-container" :class="{ 'content-expanded': isCollapsed }">
             <div class="content-area">
@@ -87,6 +102,7 @@
     import SettingsDialog from '../components/SettingsDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
     import modalResizeHandler from '../utils/modalResizeHandler';
+    import appLogoUrl from '../../electron/assets/logo.png';
 
     const router = useRouter();
     const route = useRoute();
@@ -286,6 +302,9 @@
 
 <style scoped>
     .main-layout {
+        --sidebar-width: 184px;
+        --sidebar-collapsed-width: 64px;
+
         width: 100%;
         min-height: 100vh;
         display: flex;
@@ -300,46 +319,159 @@
         left: 0;
         top: 0;
         z-index: 1000;
-        background-color: var(--nn-color-bg-sider);
+        border-right: 1px solid var(--nn-color-border-sider);
+        background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 28%),
+            var(--nn-color-bg-sider);
         box-shadow: var(--nn-shadow-sider);
-        transition: all 0.2s;
-        width: 160px;
+        transition: width 0.2s ease;
+        width: var(--sidebar-width);
         overflow: hidden;
         display: flex;
         flex-direction: column;
     }
 
     .sider.collapsed {
-        width: 60px;
+        width: var(--sidebar-collapsed-width);
+    }
+
+    .sidebar-header {
+        height: 66px;
+        padding: 0 12px 0 14px;
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        border-bottom: 1px solid var(--nn-color-border-sider);
+    }
+
+    .sidebar-brand {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+    }
+
+    .sidebar-brand-logo {
+        width: 30px;
+        height: 30px;
+        display: block;
+        flex: 0 0 auto;
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 9px;
+        box-shadow: 0 5px 14px rgba(15, 23, 42, 0.24);
+        object-fit: cover;
+    }
+
+    .sidebar-brand-copy {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        line-height: 1.15;
+    }
+
+    .sidebar-brand-copy strong {
+        overflow: hidden;
+        color: var(--nn-color-text-inverse);
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .sidebar-brand-copy small {
+        margin-top: 4px;
+        overflow: hidden;
+        color: var(--nn-color-text-sider);
+        font-size: 10px;
+        letter-spacing: 0.8px;
+        opacity: 0.72;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .toggle-btn {
-        padding: 16px 0;
-        text-align: right;
-        padding-right: 16px;
+        flex: 0 0 auto;
+    }
+
+    .sider.collapsed .sidebar-header {
+        padding-inline: 0;
+        justify-content: center;
+    }
+
+    .sidebar-nav {
+        min-height: 0;
+        padding: 8px 6px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        flex: 1 1 auto;
+        scrollbar-color: var(--nn-color-border-sider) transparent;
+        scrollbar-width: thin;
+    }
+
+    .sidebar-nav::-webkit-scrollbar {
+        width: 4px;
+    }
+
+    .sidebar-nav::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: var(--nn-color-border-sider);
     }
 
     .main-menu {
         border-right: none;
-        flex: 1;
+        padding: 0;
     }
 
     .bottom-menu-btn {
         border-top: 1px solid var(--nn-color-border-sider);
-        padding: 16px;
-        text-align: center;
+        padding: 10px 12px 12px;
+        flex: 0 0 auto;
+    }
+
+    .bottom-menu-btn :deep(.nn-dropdown),
+    .bottom-menu-btn :deep(.nn-dropdown-trigger),
+    .bottom-menu-btn :deep(.nn-button) {
+        width: 100%;
+    }
+
+    .bottom-menu-btn :deep(.nn-button) {
+        height: 36px;
+        justify-content: flex-start;
+        gap: 9px;
+        padding-inline: 10px;
+        border-radius: 8px;
+        font-size: 13px;
+    }
+
+    .sider.collapsed .bottom-menu-btn {
+        padding-inline: 8px;
+    }
+
+    .sider.collapsed .bottom-menu-btn :deep(.nn-button) {
+        justify-content: center;
+        gap: 0;
+        padding-inline: 0;
+    }
+
+    .sider.collapsed .bottom-menu-btn :deep(.nn-button-content) {
+        display: none;
     }
 
     .content-container {
-        margin-left: 160px;
-        transition: all 0.2s;
-        width: calc(100% - 160px);
+        margin-left: var(--sidebar-width);
+        transition:
+            margin-left 0.2s ease,
+            width 0.2s ease;
+        width: calc(100% - var(--sidebar-width));
         display: flex;
     }
 
     .content-container.content-expanded {
-        margin-left: 60px;
-        width: calc(100% - 60px);
+        margin-left: var(--sidebar-collapsed-width);
+        width: calc(100% - var(--sidebar-collapsed-width));
     }
 
     .content-area {
@@ -358,6 +490,13 @@
 
     :deep(.nn-menu-inline-collapsed .nn-menu-item),
     :deep(.nn-menu-inline-collapsed .nn-menu-submenu-title) {
-        padding: 0 calc(30% - 16px / 2) !important;
+        padding-inline: 0 !important;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .sider,
+        .content-container {
+            transition: none;
+        }
     }
 </style>

@@ -5,6 +5,11 @@
 }
 
 .main-menu .nn-menu-item {
+    min-height: 40px !important;
+    margin: 2px 0 !important;
+    padding: 7px 10px !important;
+    border: 1px solid transparent;
+    border-radius: 8px !important;
     color: var(--nn-color-text-sider) !important;
     font-weight: 400 !important;
 }
@@ -12,17 +17,24 @@
 .main-menu .nn-menu-item-selected {
     background: var(--nn-color-bg-sider-active) !important;
     color: var(--nn-color-text-inverse) !important;
-}
-
-.main-menu .nn-menu-item:hover {
-    background: var(--nn-color-bg-sider-hover) !important;
-    color: var(--nn-color-text-inverse) !important;
+    border-color: var(--nn-color-border-sider-active);
+    box-shadow: inset 3px 0 0 var(--nn-color-primary);
+    font-weight: 500 !important;
 }
 
 /* 选中状态的菜单项 hover 时保持不变 */
 .main-menu .nn-menu-item-selected:hover {
     background: var(--nn-color-bg-sider-active) !important;
     color: var(--nn-color-text-inverse) !important;
+}
+
+.main-menu .nn-menu-item:hover:not(.nn-menu-item-selected) {
+    background: var(--nn-color-bg-sider-hover) !important;
+    color: var(--nn-color-text-inverse) !important;
+}
+
+.main-menu .nn-menu-item:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--nn-color-primary-hover) !important;
 }
 
 .nn-icon {
@@ -47,10 +59,10 @@
 }
 
 .main-menu .nn-menu-item-selected .nn-icon {
-    color: var(--nn-color-text-inverse) !important;
+    color: var(--nn-color-primary-hover) !important;
 }
 
-.main-menu .nn-menu-item:hover .nn-icon {
+.main-menu .nn-menu-item:hover:not(.nn-menu-item-selected) .nn-icon {
     color: var(--nn-color-text-inverse) !important;
 }
 
@@ -77,21 +89,21 @@
 }
 
 /* 折叠按钮样式 */
-.toggle-btn .nn-button {
+.toggle-btn.nn-button {
     color: var(--nn-color-text-sider) !important;
 }
 
-.toggle-btn .nn-button:hover {
-    color: var(--nn-color-text-inverse) !important;
-    background: var(--nn-color-bg-sider-hover) !important;
+.toggle-btn.nn-button:hover {
+    color: var(--nn-color-primary-hover) !important;
+    background: var(--nn-color-bg-sider-active) !important;
 }
 
-.toggle-btn .nn-icon {
+.toggle-btn.nn-button .nn-icon {
     color: var(--nn-color-text-sider) !important;
 }
 
-.toggle-btn .nn-button:hover .nn-icon {
-    color: var(--nn-color-text-inverse) !important;
+.toggle-btn.nn-button:hover .nn-icon {
+    color: var(--nn-color-primary-hover) !important;
 }
 
 /* 主页面样式 */

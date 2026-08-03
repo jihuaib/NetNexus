@@ -1,16 +1,19 @@
 const { app, BrowserWindow, ipcMain, Tray } = require('electron');
 const path = require('path');
-const SystemApp = require('./app/systemApp');
 const logger = require('./log/logger');
 const { getIconPath, getTrayIconPath } = require('./utils/iconUtils');
 
 const isDev = !app.isPackaged;
 const isPackagedE2e = app.isPackaged && process.env.NETNEXUS_E2E === '1';
+const RENDERER_READY_TIMEOUT_MS = 15000;
+const MIN_SPLASH_VISIBLE_MS = 900;
 let mainWindow = null;
 let splashWindow = null;
 let systemApp = null;
 let tray = null;
 let splashProgress = 0;
+let splashShownAt = 0;
+let startupComplete = false;
 let allowQuitAfterStorageClose = false;
 let storageCloseForQuitPromise = null;
 
@@ -23,15 +26,24 @@ if (isPackagedE2e) {
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (hasSingleInstanceLock) {
     app.on('second-instance', () => {
-        if (!mainWindow) {
-            return;
-        }
-        if (mainWindow.isMinimized()) {
-            mainWindow.restore();
-        }
-        mainWindow.show();
-        mainWindow.focus();
+        focusAvailableWindow();
     });
+}
+
+function focusAvailableWindow() {
+    if (!startupComplete && splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.show();
+        splashWindow.focus();
+        return;
+    }
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+    }
+    if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
 }
 
 async function createSplashWindow() {
@@ -55,6 +67,7 @@ async function createSplashWindow() {
         alwaysOnTop: true,
         skipTaskbar: true,
         hasShadow: false,
+        show: true,
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -63,7 +76,15 @@ async function createSplashWindow() {
     });
 
     splashWindow = splash;
+    splashShownAt = Date.now();
+    splash.once('closed', () => {
+        if (splashWindow === splash) {
+            splashWindow = null;
+        }
+    });
     await splash.loadFile(path.join(__dirname, 'splash.html'));
+    splash.show();
+    splash.focus();
     return splash;
 }
 
@@ -144,22 +165,27 @@ function createTray() {
     tray.setToolTip('NetNexus');
 }
 
-function waitForRendererReady(win) {
+function waitForRendererReady(win, timeoutMs = RENDERER_READY_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
         let settled = false;
+        let timeoutId = null;
         const channel = 'app:renderer-ready';
         const cleanup = () => {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+            }
             ipcMain.removeListener(channel, onReady);
             win.removeListener('closed', onClosed);
             win.webContents.removeListener('render-process-gone', onRenderProcessGone);
         };
-        const finish = () => {
+        const finish = result => {
             if (settled) {
                 return;
             }
             settled = true;
             cleanup();
-            resolve();
+            resolve(result);
         };
         const fail = error => {
             if (settled) {
@@ -171,7 +197,7 @@ function waitForRendererReady(win) {
         };
         const onReady = event => {
             if (event.sender === win.webContents) {
-                finish();
+                finish({ source: 'renderer', timedOut: false });
             }
         };
         const onClosed = () => fail(new Error('主窗口已关闭'));
@@ -182,24 +208,37 @@ function waitForRendererReady(win) {
         ipcMain.on(channel, onReady);
         win.once('closed', onClosed);
         win.webContents.once('render-process-gone', onRenderProcessGone);
+        timeoutId = setTimeout(() => {
+            finish({ source: 'timeout', timedOut: true });
+        }, timeoutMs);
     });
 }
 
 // 更新启动进度
-function updateSplashProgress(progress, text) {
+function updateSplashProgress(progress, text, state = 'active') {
     if (splashWindow && !splashWindow.isDestroyed()) {
         const normalizedProgress = Math.max(splashProgress, Math.min(100, Math.max(0, Number(progress) || 0)));
         splashProgress = normalizedProgress;
         splashWindow.webContents.send('startup-progress', {
             progress: normalizedProgress,
-            text: text || ''
+            text: text || '',
+            state
         });
     }
+}
+
+function waitForMinimumSplashDuration() {
+    const remaining = MIN_SPLASH_VISIBLE_MS - (Date.now() - splashShownAt);
+    if (remaining <= 0) {
+        return Promise.resolve();
+    }
+    return new Promise(resolve => setTimeout(resolve, remaining));
 }
 
 // 完成启动，显示主窗口
 function finishStartup() {
     if (mainWindow && !mainWindow.isDestroyed()) {
+        startupComplete = true;
         // macOS 上使用工作区域大小，Windows/Linux 上直接最大化
         if (process.platform === 'darwin') {
             // macOS: 设置窗口大小为屏幕工作区域大小（排除菜单栏和 Dock）
@@ -238,53 +277,67 @@ async function startApplication() {
 
     // 创建启动窗口
     await createSplashWindow();
-    updateSplashProgress(10, '正在初始化应用...');
+    updateSplashProgress(5, '启动界面已显示');
 
+    // SystemApp 会加载所有协议模块，必须放到 splash 首帧之后，避免点击应用后长时间没有任何反馈。
+    updateSplashProgress(10, '正在加载核心组件...');
+    const SystemApp = require('./app/systemApp');
+    updateSplashProgress(18, '核心组件加载完成');
+
+    updateSplashProgress(20, '正在初始化系统托盘...');
     createTray();
-    updateSplashProgress(15, '正在初始化托盘...');
+    updateSplashProgress(24, '系统托盘初始化完成');
 
+    updateSplashProgress(26, '正在创建主窗口...');
     createWindow();
-    updateSplashProgress(25, '正在创建主窗口...');
+    updateSplashProgress(32, '主窗口创建完成');
 
     app.on('activate', () => {
+        if (!startupComplete && splashWindow && !splashWindow.isDestroyed()) {
+            focusAvailableWindow();
+            return;
+        }
         // macOS: 点击 dock 图标时，如果没有窗口则重新创建
         if (BrowserWindow.getAllWindows().length === 0) {
             createWindow();
-            if (mainWindow) {
-                mainWindow.show();
-                mainWindow.focus();
-            }
-        } else if (mainWindow) {
-            // 窗口存在但可能被隐藏，重新显示
-            mainWindow.show();
-            mainWindow.focus();
+            focusAvailableWindow();
+        } else {
+            focusAvailableWindow();
         }
     });
 
     // 启动应用
+    updateSplashProgress(34, '正在注册主进程服务...');
     systemApp = new SystemApp(ipcMain, mainWindow, updateSplashProgress);
-    updateSplashProgress(35, '正在初始化主进程服务...');
+    updateSplashProgress(40, '主进程服务注册完成');
 
     // 兼容性检查
-    updateSplashProgress(40, '正在检查版本兼容性...');
+    updateSplashProgress(42, '正在检查版本兼容性...');
     const checkVersionOk = systemApp.checkVersionCompatibility(splashWindow);
     if (!checkVersionOk) {
         if (splashWindow) splashWindow.close();
         app.quit();
         return;
     }
-    updateSplashProgress(45, '版本兼容性检查完成');
+    updateSplashProgress(48, '版本兼容性检查完成');
 
     // 加载设置
     await systemApp.loadSettings();
 
-    updateSplashProgress(82, '正在加载主窗口资源...');
+    updateSplashProgress(84, '正在加载主窗口资源...');
     await mainWindow.startupLoadPromise;
+    updateSplashProgress(90, '主窗口资源加载完成');
 
     updateSplashProgress(92, '正在等待页面渲染...');
-    await mainWindow.startupRendererReadyPromise;
+    const rendererReady = await mainWindow.startupRendererReadyPromise;
+    if (rendererReady?.timedOut) {
+        updateSplashProgress(98, '页面就绪检查超时，使用已加载页面继续', 'warning');
+    } else {
+        updateSplashProgress(98, '页面渲染完成');
+    }
 
     updateSplashProgress(100, '启动完成');
+    await waitForMinimumSplashDuration();
 
     // 完成启动
     finishStartup();
@@ -297,7 +350,7 @@ if (!hasSingleInstanceLock) {
         .then(startApplication)
         .catch(error => {
             logger.error(`应用启动失败: ${error.message}`);
-            updateSplashProgress(splashProgress, `启动失败: ${error.message}`);
+            updateSplashProgress(splashProgress, `启动失败: ${error.message}`, 'error');
         });
 }
 

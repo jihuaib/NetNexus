@@ -26,22 +26,22 @@
 
             .splash-container {
                 text-align: center;
-                padding: 40px;
-                max-width: 500px;
-                width: 90%;
+                padding: 28px 36px;
+                max-width: 520px;
+                width: 100%;
             }
 
             .logo-container {
-                margin-bottom: 30px;
-                animation: fadeInDown 0.8s ease-out;
+                margin-bottom: 18px;
+                animation: fadeInDown 0.45s ease-out;
             }
 
             .logo {
-                width: 120px;
-                height: 120px;
-                margin: 0 auto 20px;
+                width: 82px;
+                height: 82px;
+                margin: 0 auto 12px;
                 background: rgba(255, 255, 255, 0.1);
-                border-radius: 30px;
+                border-radius: 22px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
@@ -51,7 +51,7 @@
             }
 
             .logo {
-                padding: 20px;
+                padding: 12px;
             }
 
             .logo img {
@@ -61,33 +61,22 @@
             }
 
             .app-name {
-                font-size: 36px;
+                font-size: 28px;
                 font-weight: 700;
-                margin-bottom: 10px;
+                margin-bottom: 6px;
                 letter-spacing: 2px;
                 text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
             }
 
             .app-subtitle {
-                font-size: 14px;
-                opacity: 0.9;
+                font-size: 12px;
+                opacity: 0.82;
                 letter-spacing: 1px;
-                margin-bottom: 40px;
             }
 
             .loading-container {
-                margin-top: 40px;
-                animation: fadeInUp 0.8s ease-out 0.2s both;
-            }
-
-            @keyframes spin {
-                0% {
-                    transform: rotate(0deg);
-                }
-
-                100% {
-                    transform: rotate(360deg);
-                }
+                margin-top: 18px;
+                animation: fadeInUp 0.45s ease-out 0.08s both;
             }
 
             .progress-bar-container {
@@ -96,7 +85,7 @@
                 background: rgba(255, 255, 255, 0.2);
                 border-radius: 2px;
                 overflow: hidden;
-                margin-bottom: 20px;
+                margin-bottom: 10px;
                 box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
             }
 
@@ -110,15 +99,128 @@
             }
 
             .loading-text {
-                font-size: 14px;
-                opacity: 0.9;
-                margin-bottom: 5px;
+                min-width: 0;
+                overflow: hidden;
+                font-size: 13px;
+                font-weight: 500;
+                opacity: 0.94;
+                text-align: left;
+                text-overflow: ellipsis;
+                white-space: nowrap;
             }
 
             .loading-percentage {
                 font-size: 12px;
-                opacity: 0.7;
-                font-weight: 500;
+                opacity: 0.78;
+                font-weight: 600;
+            }
+
+            .loading-summary {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
+            }
+
+            .startup-steps {
+                height: 158px;
+                margin-top: 16px;
+                padding: 11px 12px;
+                overflow: hidden;
+                border: 1px solid rgba(255, 255, 255, 0.16);
+                border-radius: 13px;
+                background: rgba(22, 29, 67, 0.2);
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+                text-align: left;
+                backdrop-filter: blur(8px);
+            }
+
+            .startup-steps-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 9px;
+                color: rgba(255, 255, 255, 0.72);
+                font-size: 11px;
+                letter-spacing: 0.4px;
+            }
+
+            .startup-step-list {
+                display: flex;
+                flex-direction: column;
+                gap: 7px;
+                list-style: none;
+            }
+
+            .startup-step {
+                display: grid;
+                min-width: 0;
+                align-items: center;
+                grid-template-columns: 17px minmax(0, 1fr) auto;
+                gap: 8px;
+                color: rgba(255, 255, 255, 0.68);
+                font-size: 12px;
+                line-height: 17px;
+            }
+
+            .startup-step-current {
+                color: #ffffff;
+            }
+
+            .startup-step-warning {
+                color: #fde68a;
+            }
+
+            .startup-step-error {
+                color: #fecaca;
+            }
+
+            .startup-step-status {
+                width: 15px;
+                height: 15px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+                border-radius: 50%;
+                color: rgba(255, 255, 255, 0.8);
+                font-size: 9px;
+                font-weight: 700;
+            }
+
+            .startup-step-current .startup-step-status {
+                border-color: rgba(255, 255, 255, 0.92);
+                border-right-color: transparent;
+                animation: statusSpin 0.8s linear infinite;
+            }
+
+            .startup-step-warning .startup-step-status {
+                border-color: rgba(253, 230, 138, 0.62);
+                color: #fde68a;
+            }
+
+            .startup-step-error .startup-step-status {
+                border-color: rgba(254, 202, 202, 0.62);
+                color: #fecaca;
+            }
+
+            .startup-step-text {
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .startup-step-progress {
+                color: rgba(255, 255, 255, 0.5);
+                font-size: 10px;
+                font-variant-numeric: tabular-nums;
+            }
+
+            @keyframes statusSpin {
+                to {
+                    transform: rotate(360deg);
+                }
             }
 
             @keyframes fadeInDown {
@@ -145,24 +247,11 @@
                 }
             }
 
-            @keyframes float {
-                0%,
-                100% {
-                    transform: translateY(0) translateX(0);
-                    opacity: 0;
-                }
-
-                10% {
-                    opacity: 0.3;
-                }
-
-                90% {
-                    opacity: 0.3;
-                }
-
-                100% {
-                    transform: translateY(-100vh) translateX(100px);
-                    opacity: 0;
+            @media (prefers-reduced-motion: reduce) {
+                .logo-container,
+                .loading-container,
+                .startup-step-current .startup-step-status {
+                    animation: none;
                 }
             }
         </style>
@@ -182,33 +271,129 @@
                 <div class="progress-bar-container">
                     <div class="progress-bar" id="progressBar"></div>
                 </div>
-                <div class="loading-text" id="loadingText">正在初始化...</div>
-                <div class="loading-percentage" id="loadingPercentage">0%</div>
+                <div class="loading-summary">
+                    <div class="loading-text" id="loadingText">启动界面已显示</div>
+                    <div class="loading-percentage" id="loadingPercentage">0%</div>
+                </div>
+                <section class="startup-steps" aria-label="启动检查进度">
+                    <div class="startup-steps-header">
+                        <span>启动检查</span>
+                        <span id="stepsSummary">0 项完成</span>
+                    </div>
+                    <ol class="startup-step-list" id="startupStepList" aria-live="polite"></ol>
+                </section>
             </div>
         </div>
 
         <script>
+            const startupSteps = [];
+            const visibleStepCount = 5;
+
+            function normalizeStepState(state, progress, text) {
+                if (state === 'error' || /失败|错误/.test(text)) return 'error';
+                if (state === 'warning' || /超时/.test(text)) return 'warning';
+                if (state === 'done' || progress >= 100) return 'done';
+                return 'active';
+            }
+
+            function resolveStepKey(text) {
+                const stageMatchers = [
+                    [/启动界面/, 'splash'],
+                    [/核心组件/, 'core'],
+                    [/系统托盘|初始化托盘/, 'tray'],
+                    [/主窗口创建|创建主窗口/, 'main-window'],
+                    [/主进程服务/, 'main-services'],
+                    [/版本兼容性/, 'compatibility'],
+                    [/基础设置/, 'base-settings'],
+                    [/工具设置/, 'tools-settings'],
+                    [/更新设置/, 'update-settings'],
+                    [/外部接入|HTTP API|Telnet CLI/, 'external-access'],
+                    [/设置加载完成/, 'settings-complete'],
+                    [/主窗口资源/, 'window-resources'],
+                    [/页面渲染|页面就绪|等待页面渲染/, 'renderer'],
+                    [/启动完成/, 'complete'],
+                    [/启动失败/, 'startup-error']
+                ];
+                return stageMatchers.find(([pattern]) => pattern.test(text))?.[1] || `step-${startupSteps.length}`;
+            }
+
+            function renderStartupSteps() {
+                const stepList = document.getElementById('startupStepList');
+                const stepsSummary = document.getElementById('stepsSummary');
+                if (!stepList || !stepsSummary) return;
+
+                stepList.replaceChildren();
+                const completedCount = startupSteps.filter(step => step.state === 'done').length;
+                stepsSummary.textContent = `${completedCount}/${startupSteps.length} 项完成`;
+
+                startupSteps.slice(-visibleStepCount).forEach(step => {
+                    const item = document.createElement('li');
+                    item.className = `startup-step startup-step-${step.state === 'active' ? 'current' : step.state}`;
+
+                    const status = document.createElement('span');
+                    status.className = 'startup-step-status';
+                    status.setAttribute('aria-hidden', 'true');
+                    if (step.state === 'done') status.textContent = '✓';
+                    if (step.state === 'warning') status.textContent = '!';
+                    if (step.state === 'error') status.textContent = '×';
+
+                    const label = document.createElement('span');
+                    label.className = 'startup-step-text';
+                    label.textContent = step.text;
+
+                    const percentage = document.createElement('span');
+                    percentage.className = 'startup-step-progress';
+                    percentage.textContent = `${Math.round(step.progress)}%`;
+
+                    item.append(status, label, percentage);
+                    stepList.append(item);
+                });
+            }
+
+            function updateStartupSteps(progress, text, state) {
+                if (!text) return;
+                const normalizedState = normalizeStepState(state, progress, text);
+                const stepKey = resolveStepKey(text);
+                const previousStep = startupSteps[startupSteps.length - 1];
+
+                if (previousStep?.key === stepKey) {
+                    previousStep.text = text;
+                    previousStep.progress = progress;
+                    previousStep.state = normalizedState;
+                    renderStartupSteps();
+                    return;
+                }
+
+                if (previousStep?.state === 'active') {
+                    previousStep.state = 'done';
+                }
+                startupSteps.push({ key: stepKey, text, progress, state: normalizedState });
+                renderStartupSteps();
+            }
+
             // 更新加载进度
-            window.updateProgress = function (progress, text) {
+            window.updateProgress = function (progress, text, state = 'active') {
                 const progressBar = document.getElementById('progressBar');
                 const loadingText = document.getElementById('loadingText');
                 const loadingPercentage = document.getElementById('loadingPercentage');
+                const normalizedProgress = Math.min(100, Math.max(0, Number(progress) || 0));
 
                 if (progressBar) {
-                    progressBar.style.width = progress + '%';
+                    progressBar.style.width = normalizedProgress + '%';
                 }
                 if (loadingText && text) {
                     loadingText.textContent = text;
                 }
                 if (loadingPercentage) {
-                    loadingPercentage.textContent = Math.round(progress) + '%';
+                    loadingPercentage.textContent = Math.round(normalizedProgress) + '%';
                 }
+                updateStartupSteps(normalizedProgress, text, state);
             };
 
             // 初始进度
-            updateProgress(0, '正在初始化...');
-            window.startupProgress?.onUpdate?.(({ progress, text }) => {
-                updateProgress(progress, text);
+            updateProgress(0, '启动界面已显示');
+            window.startupProgress?.onUpdate?.(({ progress, text, state }) => {
+                updateProgress(progress, text, state);
             });
         </script>
     </body>
