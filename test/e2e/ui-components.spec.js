@@ -410,7 +410,9 @@ test.describe('Custom UI component interactions', () => {
         expect(settingsIconShapes['FTP服务器']).toBe(mainIconShapes['FTP服务器']);
     });
 
-    test('keeps configuration labels compact, radio buttons joined and sidebar text regular', async ({ page }) => {
+    test('keeps configuration labels compact, radio buttons joined and selected sidebar text emphasized', async ({
+        page
+    }) => {
         await page.setViewportSize({ width: 1440, height: 900 });
         await installLayoutApiFallbacks(page);
         await page.goto('/#/bmp/bmp-config');
@@ -439,7 +441,7 @@ test.describe('Custom UI component interactions', () => {
         const selectedMenuItem = mainMenu.getByRole('menuitem', { name: 'BMP服务器', exact: true });
         const regularMenuItem = mainMenu.getByRole('menuitem', { name: 'BGP模拟器', exact: true });
         await expect(selectedMenuItem).toHaveCSS('font-size', '13px');
-        await expect(selectedMenuItem).toHaveCSS('font-weight', '400');
+        await expect(selectedMenuItem).toHaveCSS('font-weight', '500');
         await expect(regularMenuItem).toHaveCSS('font-size', '13px');
         await expect(regularMenuItem).toHaveCSS('font-weight', '400');
     });
@@ -526,7 +528,7 @@ test.describe('Custom UI component interactions', () => {
         await page.goto('/#/snmp/snmp-mib-compile');
 
         const sidebar = page.locator('.main-layout > .sider');
-        const toggleButton = sidebar.locator('.toggle-btn .nn-button');
+        const toggleButton = sidebar.locator('.toggle-btn.nn-button');
         const mibCard = page.locator('.snmp-mib-page .mib-card');
         await expect(mibCard).toBeVisible();
 
@@ -534,10 +536,10 @@ test.describe('Custom UI component interactions', () => {
             await toggleButton.click();
         }
         await expect(sidebar).not.toHaveClass(/collapsed/u);
-        await expectSnmpMibLayout(page, 160);
+        await expectSnmpMibLayout(page, 184);
         await toggleButton.click();
         await expect(sidebar).toHaveClass(/collapsed/u);
-        await expectSnmpMibLayout(page, 60);
+        await expectSnmpMibLayout(page, 64);
     });
 
     test('keeps every routed workspace aligned with equal top and bottom spacing', async ({ page }) => {
