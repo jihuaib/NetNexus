@@ -36,6 +36,12 @@ initializeTheme();
 const app = createApp(App);
 registerUiComponents(app);
 
+function waitForPaint() {
+    return new Promise(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
+}
+
 async function mountApp() {
     await syncThemeFromGeneralSettings();
     app.use(router).use(store);
@@ -47,6 +53,10 @@ async function mountApp() {
 
     app.mount('#app');
     await nextTick();
+    // Vue's nextTick only guarantees that the DOM patch has completed. Keep the splash visible
+    // until Chromium has submitted the mounted UI, otherwise Windows can flash a black surface
+    // while the hidden main window is maximized and shown.
+    await waitForPaint();
     window.commonApi?.notifyRendererReady?.();
 }
 

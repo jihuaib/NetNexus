@@ -8,6 +8,7 @@ const isDev = !app.isPackaged;
 const isPackagedE2e = app.isPackaged && process.env.NETNEXUS_E2E === '1';
 const RENDERER_READY_TIMEOUT_MS = 15000;
 const MIN_SPLASH_VISIBLE_MS = 900;
+const SPLASH_VISIBLE_FRAME_TIMEOUT_MS = 1000;
 const SPLASH_BACKGROUND_COLOR = '#667eea';
 let mainWindow = null;
 let splashWindow = null;
@@ -15,6 +16,7 @@ let systemApp = null;
 let tray = null;
 let splashProgress = 0;
 let splashShownAt = 0;
+let splashReadyToShow = false;
 let startupComplete = false;
 let allowQuitAfterStorageClose = false;
 let storageCloseForQuitPromise = null;
@@ -35,8 +37,12 @@ if (hasSingleInstanceLock) {
 
 function focusAvailableWindow() {
     if (!startupComplete && splashWindow && !splashWindow.isDestroyed()) {
-        splashWindow.show();
-        splashWindow.focus();
+        // A second launch can arrive while the splash is still loading. Showing it here would
+        // bypass the ready-to-show guard and expose an unpainted (black) native surface on Windows.
+        if (splashReadyToShow) {
+            splashWindow.show();
+            splashWindow.focus();
+        }
         return;
     }
     if (!mainWindow || mainWindow.isDestroyed()) {
@@ -58,6 +64,10 @@ async function createSplashWindow() {
     const splashHeight = 500;
     const x = Math.round(workArea.x + (workArea.width - splashWidth) / 2);
     const y = Math.round(workArea.y + (workArea.height - splashHeight) / 2);
+    // On Windows, showing the native background immediately gives DWM a non-black surface while
+    // Chromium prepares the page. A hidden frameless window can otherwise expose one black frame
+    // when it is first attached to the desktop compositor.
+    const showImmediately = process.platform === 'win32';
 
     const splash = new BrowserWindow({
         width: splashWidth,
@@ -73,7 +83,7 @@ async function createSplashWindow() {
         alwaysOnTop: true,
         skipTaskbar: true,
         hasShadow: false,
-        show: false,
+        show: showImmediately,
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -81,21 +91,60 @@ async function createSplashWindow() {
         }
     });
 
-    const readyToShow = new Promise(resolve => splash.once('ready-to-show', resolve));
+    const readyToShow = showImmediately
+        ? Promise.resolve()
+        : new Promise(resolve => splash.once('ready-to-show', resolve));
+    splashReadyToShow = false;
     splashWindow = splash;
+    if (showImmediately) {
+        splashShownAt = Date.now();
+    }
     splash.once('closed', () => {
         if (splashWindow === splash) {
             splashWindow = null;
+            splashReadyToShow = false;
         }
     });
     await splash.loadFile(path.join(__dirname, 'splash.html'));
     await readyToShow;
     if (!splash.isDestroyed()) {
-        splashShownAt = Date.now();
-        splash.show();
+        if (!showImmediately) {
+            splashShownAt = Date.now();
+            splash.show();
+        }
         splash.focus();
+        await waitForVisibleWindowFrame(splash);
+        splashReadyToShow = !splash.isDestroyed();
     }
     return splash;
+}
+
+async function waitForVisibleWindowFrame(win) {
+    let timeoutId = null;
+
+    try {
+        const frameReady = win.webContents
+            .executeJavaScript(
+                'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+                true
+            )
+            .then(() => true);
+        const timedOut = new Promise(resolve => {
+            timeoutId = setTimeout(() => resolve(false), SPLASH_VISIBLE_FRAME_TIMEOUT_MS);
+        });
+        const painted = await Promise.race([frameReady, timedOut]);
+        if (!painted) {
+            logger.warn('启动窗口可见帧等待超时，继续启动');
+        }
+    } catch (error) {
+        if (!win.isDestroyed()) {
+            logger.warn(`启动窗口可见帧等待失败: ${error.message}`);
+        }
+    } finally {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
+    }
 }
 
 function getRendererUrl() {
@@ -287,14 +336,16 @@ function finishStartup() {
             mainWindow.maximize();
         }
 
+        // 先显示已绘制的主窗口；always-on-top splash 会遮住交接过程，避免 Windows 暴露黑帧。
+        mainWindow.show();
+
         // 关闭 splash 窗口（使用 destroy 同步关闭）
         if (splashWindow && !splashWindow.isDestroyed()) {
             splashWindow.destroy();
             splashWindow = null;
+            splashReadyToShow = false;
         }
 
-        // 显示主窗口
-        mainWindow.show();
         mainWindow.focus();
     }
 }
@@ -314,8 +365,6 @@ async function startApplication() {
 
     // SystemApp 会加载所有协议模块，必须放到 splash 首帧之后，避免点击应用后长时间没有任何反馈。
     updateSplashProgress(10, '正在加载核心组件...');
-    // 先让首帧和 10% 状态提交给原生窗口；Windows 首次检查原生模块时可能耗时较长。
-    await new Promise(resolve => setImmediate(resolve));
     const SystemApp = require('./app/systemApp');
     updateSplashProgress(18, '核心组件加载完成');
 
