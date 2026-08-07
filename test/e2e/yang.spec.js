@@ -23,6 +23,99 @@ const schemaTreeItems = page => page.locator('.schema-panel').getByRole('treeite
 const parameterContextMenu = page => page.locator('.operation-parameter-context-menu');
 const parameterNode = (parameterPanel, path) => parameterPanel.locator(`[data-parameter-path="${path}"]`);
 
+function netconfEditContext(harness, nodePath, target = 'candidate') {
+    const yang = harness.controller.state.yang;
+    const node = Object.values(yang.schemaTree?.nodes || {}).find(item => item.path === nodePath);
+    expect(node, `missing mock Schema node ${nodePath}`).toBeTruthy();
+    return {
+        profileId: yang.session.profileId,
+        compileId: yang.workspace.compileId,
+        nodeId: node.id,
+        target
+    };
+}
+
+async function latestMonitorRequest(page) {
+    return page.evaluate(() => window.__featureMonitorRequestDetails?.at(-1) || null);
+}
+
+async function expectNetconfEditMonitorRequest(page, expectedContext) {
+    await expect
+        .poll(() => latestMonitorRequest(page))
+        .toEqual({
+            monitorId: 'netconf-edit-config',
+            options: expectedContext
+        });
+    return latestMonitorRequest(page);
+}
+
+async function gotoNetconfEditMonitor(page, context) {
+    const query = new URLSearchParams(context).toString();
+    await page.goto('about:blank');
+    await page.goto(`/#/monitor/netconf-edit-config?${query}`);
+    const monitorPage = page.getByTestId('netconf-edit-config-monitor-page');
+    await expect(monitorPage).toBeVisible();
+    await expect(page.locator('.sider')).toHaveCount(0);
+    await expect(page.locator('.monitor-window-header')).toHaveCount(0);
+
+    const operationPanel = monitorPage.locator('.yang-operations-page');
+    await expect(operationPanel).toBeVisible();
+    await expect(operationPanel).toHaveClass(/yang-operations-embedded/u);
+    await expect(operationPanel.locator('.operation-nav-card')).toHaveCount(0);
+    await expect(operationPanel.locator('.operation-session-bar')).toHaveCount(0);
+    await expect(operationPanel.locator('.operation-form-card')).toBeVisible();
+    await expect(operationPanel.locator('.operation-result-card')).toBeVisible();
+    await expect(operationPanel.getByRole('complementary', { name: '操作参数' })).toBeVisible();
+    await expect(operationPanel.getByRole('separator', { name: '调整 RPC 请求和响应高度' })).toBeVisible();
+    await expect(operationPanel.getByRole('separator', { name: '调整操作参数宽度' })).toBeVisible();
+    return { monitorPage, operationPanel };
+}
+
+async function gotoNetconfNotificationMonitor(page) {
+    await page.goto('/#/monitor/netconf-notifications');
+    const monitorPage = page.getByTestId('netconf-notification-monitor-page');
+    await expect(monitorPage).toBeVisible();
+    await expect(page.locator('.sider')).toHaveCount(0);
+    await expect(page.locator('.monitor-window-header')).toHaveCount(0);
+    const browser = page.getByTestId('netconf-notification-drawer');
+    await expect(browser).toBeVisible();
+    const drawer = page.locator('.netconf-notification-standalone-drawer .nn-drawer-content');
+    await expect(drawer).toBeVisible();
+    return { monitorPage, browser, drawer };
+}
+
+async function openNetconfNotificationMonitor(page) {
+    const button = page.locator('.notification-history-trigger');
+    await button.click();
+    await expect.poll(() => latestMonitorRequest(page)).toEqual({ monitorId: 'netconf-notifications', options: null });
+    return gotoNetconfNotificationMonitor(page);
+}
+
+async function deliverLatestNotificationAction(page, harness) {
+    const action = harness.controller.state.yang.notificationActionRequests.at(-1);
+    expect(action).toBeTruthy();
+    await page.goto('/#/yang/yang-workspace');
+    const operationPanel = page.locator('.workspace-operation-panel');
+    await expect(operationPanel).toBeVisible();
+    await expect(operationPanel.getByRole('button', { name: '执行 get', exact: true })).toBeEnabled();
+    // Browser-mode E2E reuses one renderer to represent the native notification
+    // window. Replay the cross-window action only after the workspace Session is
+    // ready, then await the mock delivery itself.
+    await page.evaluate(
+        payload =>
+            new Promise(resolve => {
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        window.__featureE2eEmit?.('netconf:notificationAction', payload);
+                        resolve();
+                    });
+                });
+            }),
+        { status: 'success', data: action }
+    );
+    return action;
+}
+
 async function openParameterContextMenu(page, parameterPanel, path) {
     const node = parameterNode(parameterPanel, path);
     await expect(node).toBeVisible();
@@ -3299,8 +3392,22 @@ test.describe('NETCONF/YANG workbench', () => {
         );
         expect(keyColor).not.toBe(leafColor);
         expect(containerColor).not.toBe(leafColor);
+        const editMonitorContext = netconfEditContext(
+            harness,
+            '/ietf-interfaces:interfaces/interface/enabled',
+            'candidate'
+        );
         await enabledNode.click({ button: 'right' });
         await selectSchemaMenuPath(contextMenu, ['编辑当前节点（edit-config）'], 'Candidate');
+        await expectNetconfEditMonitorRequest(page, editMonitorContext);
+        await expect(operationPanel.getByRole('button', { name: '执行 get', exact: true })).toBeEnabled();
+        await expect(operationPanel.getByRole('button', { name: '执行 edit-config', exact: true })).toHaveCount(0);
+        expect(capturedRequests.filter(request => request.operation === 'get-config')).toHaveLength(0);
+
+        const { monitorPage, operationPanel: editOperationPanel } = await gotoNetconfEditMonitor(
+            page,
+            editMonitorContext
+        );
         await expect.poll(() => capturedRequests.filter(request => request.operation === 'get-config').length).toBe(1);
         const configReadRequest = capturedRequests.find(request => request.operation === 'get-config');
         expect(configReadRequest.source).toBe('candidate');
@@ -3313,8 +3420,8 @@ test.describe('NETCONF/YANG workbench', () => {
                 '  </interface>\n' +
                 '</interfaces>'
         });
-        await expect(operationPanel.getByText('已载入', { exact: true })).toBeVisible();
-        const editParameters = operationPanel.getByRole('complementary', { name: '操作参数' });
+        await expect(editOperationPanel.getByText('已载入', { exact: true })).toBeVisible();
+        const editParameters = editOperationPanel.getByRole('complementary', { name: '操作参数' });
         const configTree = editParameters.locator('[data-parameter-path="/rpc/edit-config/config"]');
         const nameParameter = editParameters.locator(
             '[data-parameter-path="/rpc/edit-config/config/interfaces[1]/interface[1]/name[1]"]'
@@ -3332,7 +3439,11 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(editParameters.getByRole('combobox')).toHaveCount(0);
         await expect(editParameters).not.toContainText('NETNEXUS_REQUIRED');
 
-        const executeEditButton = operationPanel.getByRole('button', { name: '执行 edit-config', exact: true });
+        const editRequestPreview = editOperationPanel.locator('.rpc-request-preview');
+        const executeEditButton = editOperationPanel.getByRole('button', {
+            name: '执行 edit-config',
+            exact: true
+        });
         await expect(executeEditButton).toBeEnabled();
         parameterMenu = (
             await openParameterContextMenu(
@@ -3347,7 +3458,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await enabledEditor.click();
         await page.getByRole('option', { name: 'false', exact: true }).click();
         await enabledDialog.getByRole('button', { name: '取消', exact: true }).click();
-        await expect(requestPreview).toContainText('<enabled>true</enabled>');
+        await expect(editRequestPreview).toContainText('<enabled>true</enabled>');
         parameterMenu = (
             await openParameterContextMenu(
                 page,
@@ -3361,7 +3472,7 @@ test.describe('NETCONF/YANG workbench', () => {
         await enabledEditor.click();
         await page.getByRole('option', { name: 'false', exact: true }).click();
         await enabledDialog.getByRole('button', { name: '确认', exact: true }).click();
-        await expect(requestPreview).toContainText('<enabled>false</enabled>');
+        await expect(editRequestPreview).toContainText('<enabled>false</enabled>');
         forceGeneratedYangFailure = true;
         await executeEditButton.click();
         const editConfirmation = page.getByRole('dialog', { name: '确认仍然下发 RPC' });
@@ -3375,17 +3486,21 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(generatedOverrideButton).toBeDisabled();
         await editConfirmation.getByText('我已了解本地 YANG 校验未通过，仍要下发该 RPC', { exact: true }).click();
         await generatedOverrideButton.click();
-        await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
+        await expect(editOperationPanel.locator('.rpc-result')).toContainText('<ok/>');
         forceGeneratedYangFailure = false;
         expect(capturedRequests.slice(-2).map(request => request.operation)).toEqual(['get-config', 'edit-config']);
         expect(capturedRequests.at(-1).config).toContain('<enabled>false</enabled>');
 
-        await page.getByRole('button', { name: '执行记录', exact: true }).click();
+        await monitorPage.getByRole('button', { name: '执行记录', exact: true }).click();
         const executionHistoryDrawer = page.getByRole('dialog', { name: 'NETCONF 执行记录' });
         const executionHistoryItems = executionHistoryDrawer.getByTestId('netconf-history-item');
-        await expect(executionHistoryItems).toHaveCount(5);
+        await expect(executionHistoryItems).toHaveCount(2);
         await expect(executionHistoryItems.nth(0)).toContainText('edit-config');
         await expect(executionHistoryItems.nth(1)).toContainText('edit-config 自动回读');
+        await executionHistoryItems.nth(0).click();
+        await expect(executionHistoryDrawer.getByTestId('netconf-history-request')).toHaveValue(
+            /<edit-config>[\s\S]*<enabled>false<\/enabled>/u
+        );
         await executionHistoryItems.nth(1).click();
         await expect(executionHistoryDrawer.getByTestId('netconf-history-request')).toHaveValue(/<get-config>/u);
         await executionHistoryDrawer.getByRole('button', { name: '关闭', exact: true }).click();
@@ -3406,11 +3521,13 @@ test.describe('NETCONF/YANG workbench', () => {
         const interfacesNode = schemaTreeItems(page)
             .filter({ has: page.getByText('interfaces', { exact: true }) })
             .first();
+        const editMonitorContext = netconfEditContext(harness, '/ietf-interfaces:interfaces', 'candidate');
         await interfacesNode.click({ button: 'right' });
         const contextMenu = page.locator('.schema-context-menu');
         await selectSchemaMenuPath(contextMenu, ['编辑当前节点（edit-config）'], 'Candidate');
+        await expectNetconfEditMonitorRequest(page, editMonitorContext);
 
-        const operationPanel = page.locator('.workspace-operation-panel');
+        const { operationPanel } = await gotoNetconfEditMonitor(page, editMonitorContext);
         await expect(operationPanel.getByText('已载入', { exact: true })).toBeVisible();
         const editParameters = operationPanel.getByRole('complementary', { name: '操作参数' });
         const modePath = '/rpc/edit-config/config/interfaces[1]/interface[1]/config[1]/mode[1]';
@@ -3468,6 +3585,11 @@ test.describe('NETCONF/YANG workbench', () => {
         const bandwidthNode = schemaTreeItems(page)
             .filter({ has: page.getByText('BandwidthCompaction', { exact: true }) })
             .first();
+        const editMonitorContext = netconfEditContext(
+            harness,
+            '/ietf-interfaces:BGP/VRFs/VRF/BandwidthCompaction',
+            'candidate'
+        );
         await bandwidthNode.click({ button: 'right' });
         const schemaMenu = page.locator('.schema-context-menu');
         await selectSchemaMenuPath(
@@ -3475,8 +3597,9 @@ test.describe('NETCONF/YANG workbench', () => {
             ['\u7f16\u8f91\u5f53\u524d\u8282\u70b9\uff08edit-config\uff09'],
             'Candidate'
         );
+        await expectNetconfEditMonitorRequest(page, editMonitorContext);
 
-        const operationPanel = page.locator('.workspace-operation-panel');
+        const { operationPanel } = await gotoNetconfEditMonitor(page, editMonitorContext);
         await expect(operationPanel.getByText('\u8bfb\u53d6\u5931\u8d25', { exact: true })).toBeVisible();
         const editParameters = operationPanel.getByRole('complementary', { name: '\u64cd\u4f5c\u53c2\u6570' });
         const namePath = '/rpc/edit-config/config/BGP[1]/VRFs[1]/VRF[1]/Name[1]';
@@ -3542,6 +3665,8 @@ test.describe('NETCONF/YANG workbench', () => {
         const interfacesNode = schemaTreeItems(page)
             .filter({ has: page.getByText('interfaces', { exact: true }) })
             .first();
+        const candidateEditContext = netconfEditContext(harness, '/ietf-interfaces:interfaces', 'candidate');
+        const runningEditContext = netconfEditContext(harness, '/ietf-interfaces:interfaces', 'running');
         const contextMenu = page.locator('.schema-context-menu');
         const operationPanel = page.locator('.workspace-operation-panel');
         const requestPreview = operationPanel.locator('.rpc-request-preview');
@@ -3592,24 +3717,22 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(editConfigMenu.getByRole('menuitem', { name: 'Candidate', exact: true })).toBeVisible();
         await expect(editConfigMenu.getByRole('menuitem', { name: 'Running', exact: true })).toBeVisible();
         await editConfigMenu.getByRole('menuitem', { name: 'Candidate', exact: true }).click();
-        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get-config').length).toBe(2);
-        await expect(operationPanel.getByText('已载入', { exact: true })).toBeVisible();
-        expect(
-            capturedRequests.filter(request => request.operation === 'get-config').map(request => request.source)
-        ).toEqual(['startup', 'candidate']);
-        expect(await requestXml()).toMatch(/<target>\s*<candidate\/>\s*<\/target>/u);
+        await expectNetconfEditMonitorRequest(page, candidateEditContext);
+        expect(capturedRequests.filter(request => request.operation === 'get-config')).toHaveLength(1);
+        expect(await requestXml()).toMatch(/<source>\s*<startup\/>\s*<\/source>/u);
+        await expect(operationPanel.getByRole('button', { name: '执行 get-config', exact: true })).toBeEnabled();
 
         await openInterfacesContextMenu();
         await selectSchemaMenuPath(contextMenu, ['编辑当前节点（edit-config）'], 'Running');
-        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get-config').length).toBe(3);
-        await expect(operationPanel.getByText('已载入', { exact: true })).toBeVisible();
-        const editReadbacks = capturedRequests.filter(
-            request => request.operation === 'get-config' && ['candidate', 'running'].includes(request.source)
-        );
-        expect(editReadbacks.map(request => request.source)).toEqual(['candidate', 'running']);
-        expect(editReadbacks.filter(request => request.source === 'candidate')).toHaveLength(1);
-        expect(editReadbacks.filter(request => request.source === 'running')).toHaveLength(1);
-        expect(await requestXml()).toMatch(/<target>\s*<running\/>\s*<\/target>/u);
+        await expectNetconfEditMonitorRequest(page, runningEditContext);
+        await expect
+            .poll(() => page.evaluate(() => window.__featureMonitorRequestDetails || []))
+            .toEqual([
+                { monitorId: 'netconf-edit-config', options: candidateEditContext },
+                { monitorId: 'netconf-edit-config', options: runningEditContext }
+            ]);
+        expect(capturedRequests.filter(request => request.operation === 'get-config')).toHaveLength(1);
+        expect(await requestXml()).toMatch(/<source>\s*<startup\/>\s*<\/source>/u);
 
         await openInterfacesContextMenu();
         const candidateMenu = await openSchemaSubmenu(contextMenu, ['Candidate 工作区']);
@@ -3664,6 +3787,20 @@ test.describe('NETCONF/YANG workbench', () => {
         );
         expect(startupDeleteRequest.target).toBe('startup');
         await expect(page.getByRole('dialog', { name: '确认仍然下发 RPC' })).toHaveCount(0);
+
+        const { operationPanel: candidateEditPanel } = await gotoNetconfEditMonitor(page, candidateEditContext);
+        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get-config').length).toBe(2);
+        await expect(candidateEditPanel.getByText('已载入', { exact: true })).toBeVisible();
+        await expect(candidateEditPanel.locator('.rpc-request-preview')).toContainText('<candidate/>');
+
+        const { operationPanel: runningEditPanel } = await gotoNetconfEditMonitor(page, runningEditContext);
+        await expect.poll(() => capturedRequests.filter(request => request.operation === 'get-config').length).toBe(3);
+        await expect(runningEditPanel.getByText('已载入', { exact: true })).toBeVisible();
+        await expect(runningEditPanel.locator('.rpc-request-preview')).toContainText('<running/>');
+        const editReadbacks = capturedRequests.filter(
+            request => request.operation === 'get-config' && ['candidate', 'running'].includes(request.source)
+        );
+        expect(editReadbacks.map(request => request.source)).toEqual(['candidate', 'running']);
     });
 
     test('keeps the Schema edit draft when reading current device config fails', async ({ page }) => {
@@ -3689,6 +3826,11 @@ test.describe('NETCONF/YANG workbench', () => {
         const enabledNode = schemaTreeItems(page)
             .filter({ has: page.getByText('enabled', { exact: true }) })
             .first();
+        const editMonitorContext = netconfEditContext(
+            harness,
+            '/ietf-interfaces:interfaces/interface/enabled',
+            'candidate'
+        );
         await enabledNode.dispatchEvent('contextmenu', {
             bubbles: true,
             cancelable: true,
@@ -3699,8 +3841,9 @@ test.describe('NETCONF/YANG workbench', () => {
         const contextMenu = page.locator('.schema-context-menu');
         await expect(contextMenu).toBeVisible();
         await selectSchemaMenuPath(contextMenu, ['编辑当前节点（edit-config）'], 'Candidate');
+        await expectNetconfEditMonitorRequest(page, editMonitorContext);
 
-        const operationPanel = page.locator('.workspace-operation-panel');
+        const { operationPanel } = await gotoNetconfEditMonitor(page, editMonitorContext);
         await expect(operationPanel.getByText('读取失败', { exact: true })).toBeVisible();
         const editParameters = operationPanel.getByRole('complementary', { name: '操作参数' });
         const nameParameter = editParameters.locator(
@@ -3736,6 +3879,42 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(enabledDialog.getByRole('combobox', { name: '节点值' })).toHaveAttribute('aria-invalid', 'true');
         await enabledDialog.getByRole('button', { name: '取消', exact: true }).click();
         await expect(operationPanel.getByRole('button', { name: '执行 edit-config', exact: true })).toBeDisabled();
+    });
+
+    test('blocks a loaded edit-config draft after its Schema compile context becomes stale', async ({ page }) => {
+        await page.goto('/#/yang/yang-workspace');
+        const editMonitorContext = netconfEditContext(
+            harness,
+            '/ietf-interfaces:interfaces/interface/enabled',
+            'candidate'
+        );
+        const { monitorPage, operationPanel } = await gotoNetconfEditMonitor(page, editMonitorContext);
+        await expect(operationPanel.getByText('已载入', { exact: true })).toBeVisible();
+
+        const requestEditor = operationPanel
+            .locator('.rpc-request-preview')
+            .locator('textarea[aria-label="RPC 请求 XML"]');
+        const executeButton = operationPanel.getByRole('button', { name: '执行 edit-config', exact: true });
+        const draftXml = await requestEditor.inputValue();
+        const originalCompileId = harness.controller.state.yang.workspace.compileId;
+        const staleWarning = monitorPage.getByText('当前草稿已保留，但不能继续下发', { exact: true });
+
+        try {
+            harness.controller.state.yang.workspace.compileId = `${originalCompileId}-stale`;
+            await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+
+            await expect(staleWarning).toBeVisible();
+            await expect(monitorPage).toContainText('主窗口的 Schema 已重新编译或清空');
+            await expect(requestEditor).toHaveValue(draftXml);
+            await expect(executeButton).toBeDisabled();
+        } finally {
+            harness.controller.state.yang.workspace.compileId = originalCompileId;
+            await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+        }
+
+        await expect(staleWarning).toHaveCount(0);
+        await expect(requestEditor).toHaveValue(draftXml);
+        await expect(executeButton).toBeEnabled();
     });
 
     test('keeps an in-flight RPC attached and blocks operation context switching', async ({ page }) => {
@@ -3870,9 +4049,8 @@ test.describe('NETCONF/YANG workbench', () => {
 
         const notificationButton = page.locator('.notification-history-trigger');
         await expect(notificationButton.locator('.notification-history-badge')).toHaveText('1');
-        await notificationButton.click();
-        const drawer = page.getByRole('dialog', { name: 'NETCONF 通知记录' });
-        const subscriptionItem = drawer.locator('.notification-subscription-item').first();
+        let { browser, drawer } = await openNetconfNotificationMonitor(page);
+        let subscriptionItem = browser.locator('.notification-subscription-item').first();
         await expect(subscriptionItem).toContainText('活动');
         await subscriptionItem.click();
         await expect(drawer.getByTestId('netconf-notification-disconnect-session')).toHaveCount(0);
@@ -3882,23 +4060,25 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(deleteButton).toBeEnabled();
 
         await modifyButton.click();
-        await expect(drawer).toBeHidden();
+        await deliverLatestNotificationAction(page, harness);
         await expect.poll(() => requestEditor.inputValue()).toContain('<modify-subscription');
         expect(await requestEditor.inputValue()).toContain('<id>51</id>');
         expect(await requestEditor.inputValue()).not.toContain('<stream>NETCONF</stream>');
         await operationPanel.getByRole('button', { name: '执行 modify-subscription', exact: true }).click();
         await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
 
-        await notificationButton.click();
+        ({ browser, drawer } = await openNetconfNotificationMonitor(page));
+        subscriptionItem = browser.locator('.notification-subscription-item').first();
         await subscriptionItem.click();
         await drawer.getByTestId('netconf-notification-delete-subscription').click();
-        await expect(drawer).toBeHidden();
+        await deliverLatestNotificationAction(page, harness);
         await expect.poll(() => requestEditor.inputValue()).toContain('<delete-subscription');
         expect(await requestEditor.inputValue()).toContain('<id>51</id>');
         await operationPanel.getByRole('button', { name: '执行 delete-subscription', exact: true }).click();
         await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
 
-        await notificationButton.click();
+        ({ browser, drawer } = await openNetconfNotificationMonitor(page));
+        subscriptionItem = browser.locator('.notification-subscription-item').first();
         await expect(subscriptionItem).toContainText('已结束');
         await subscriptionItem.click();
         await expect(drawer.getByTestId('netconf-notification-delete-subscription')).toBeDisabled();
@@ -3937,10 +4117,9 @@ test.describe('NETCONF/YANG workbench', () => {
 
         const notificationButton = page.locator('.notification-history-trigger');
         await expect(notificationButton.locator('.notification-history-badge')).toHaveText('1');
-        await notificationButton.click();
-        const drawer = page.getByRole('dialog', { name: 'NETCONF 通知记录' });
-        await expect(drawer.getByTestId('netconf-notification-row')).toContainText('push-update');
-        const subscriptionItem = drawer.locator('.notification-subscription-item').first();
+        const { browser, drawer } = await openNetconfNotificationMonitor(page);
+        await expect(browser.getByTestId('netconf-notification-row')).toContainText('push-update');
+        const subscriptionItem = browser.locator('.notification-subscription-item').first();
         await subscriptionItem.click();
         await expect(drawer).toContainText('YANG-Push');
         await expect(drawer.getByTestId('netconf-notification-modify-subscription')).toBeEnabled();
@@ -3984,14 +4163,13 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(operationPanel.locator('.rpc-result')).toContainText('>51</id>');
 
         const notificationButton = page.locator('.notification-history-trigger');
-        await notificationButton.click();
-        const drawer = page.getByRole('dialog', { name: 'NETCONF 通知记录' });
-        const subscriptionItem = drawer.locator('.notification-subscription-item').first();
+        const { browser, drawer } = await openNetconfNotificationMonitor(page);
+        const subscriptionItem = browser.locator('.notification-subscription-item').first();
         await subscriptionItem.click();
         const resyncButton = drawer.getByTestId('netconf-notification-resync-subscription');
         await expect(resyncButton).toBeEnabled();
         await resyncButton.click();
-        await expect(drawer).toBeHidden();
+        await deliverLatestNotificationAction(page, harness);
         await expect.poll(() => requestEditor.inputValue()).toContain('<resync-subscription');
         expect(await requestEditor.inputValue()).toContain('<id>51</id>');
         await operationPanel.getByRole('button', { name: '执行 resync-subscription', exact: true }).click();
@@ -4036,24 +4214,22 @@ test.describe('NETCONF/YANG workbench', () => {
         const notificationButton = page.locator('.notification-history-trigger');
         await expect(notificationButton).toBeVisible();
         await expect(notificationButton.locator('.notification-history-badge')).toHaveText('1');
-        await notificationButton.click();
-
-        const drawer = page.getByRole('dialog', { name: 'NETCONF 通知记录' });
-        await expect(drawer).toBeVisible();
-        await expect(drawer.getByText('Session e2e-session-101', { exact: true })).toBeVisible();
-        const notificationRow = drawer.getByTestId('netconf-notification-row');
+        let { browser, drawer } = await openNetconfNotificationMonitor(page);
+        await expect(browser.getByText('Session e2e-session-101', { exact: true })).toBeVisible();
+        const notificationRow = browser.getByTestId('netconf-notification-row');
         await expect(notificationRow).toHaveCount(1);
         await expect(notificationRow).toContainText('interface-event');
         await notificationRow.click();
+        await expect.poll(() => harness.controller.state.yang.notificationHistory[0]?.read).toBe(true);
 
-        const notificationXml = drawer.getByRole('textbox', { name: 'NETCONF Notification XML' });
+        const notificationXml = browser.getByRole('textbox', { name: 'NETCONF Notification XML' });
         await expect(notificationXml).toBeVisible();
         expect(await notificationXml.inputValue()).toContain('<notification');
         expect(await notificationXml.inputValue()).toContain('<interface-event');
         await expectXmlTextareaLineNumbers(notificationXml);
         await expectSelectableXmlTextarea(notificationXml);
 
-        await drawer.getByRole('button', { name: '关闭' }).click();
+        await page.goto('/#/yang/yang-workspace');
         await page.getByRole('button', { name: '执行记录', exact: true }).click();
         const historyDrawer = page.getByRole('dialog', { name: 'NETCONF 执行记录' });
         await expect(historyDrawer.getByTestId('netconf-history-item')).toHaveCount(1);
@@ -4063,19 +4239,22 @@ test.describe('NETCONF/YANG workbench', () => {
         );
 
         await historyDrawer.getByRole('button', { name: '关闭' }).click();
-        await notificationButton.click();
-        await expect(drawer).toBeVisible();
-        const subscriptionItem = drawer.locator('.notification-subscription-item').first();
+        ({ browser, drawer } = await openNetconfNotificationMonitor(page));
+        let subscriptionItem = browser.locator('.notification-subscription-item').first();
         await expect(subscriptionItem).toContainText('活动');
         await subscriptionItem.click();
         const disconnectSubscription = drawer.getByTestId('netconf-notification-disconnect-session');
         await expect(disconnectSubscription).toBeEnabled();
         await disconnectSubscription.click();
+        await deliverLatestNotificationAction(page, harness);
         const disconnectConfirmation = page.getByRole('dialog', { name: '结束 RFC 5277 订阅' });
         await expect(disconnectConfirmation).toContainText('必须断开 Session e2e-session-101');
         await disconnectConfirmation.getByRole('button', { name: '断开 Session', exact: true }).click();
+        ({ browser, drawer } = await openNetconfNotificationMonitor(page));
+        subscriptionItem = browser.locator('.notification-subscription-item').first();
         await expect(subscriptionItem).toContainText('已结束');
-        await expect(disconnectSubscription).toBeDisabled();
+        await subscriptionItem.click();
+        await expect(drawer.getByTestId('netconf-notification-disconnect-session')).toBeDisabled();
     });
 
     test('redirects the retired operations page to the Schema workspace', async ({ page }) => {

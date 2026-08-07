@@ -14,7 +14,7 @@ const { formatSnmpValue } = require('../utils/snmpValueFormatter');
 const MAX_MIB_SOURCE_PREVIEW_BYTES = 16 * 1024 * 1024;
 
 class SnmpApp {
-    constructor(ipcMain, store) {
+    constructor(ipcMain, store, options = {}) {
         this.ipcMain = ipcMain;
         this.store = store;
         this.snmpConfigFileKey = 'snmp-config';
@@ -26,6 +26,8 @@ class SnmpApp {
         this.eventDispatcher = null;
 
         this.logLevel = null;
+        this.closeMonitorWindowsHandler =
+            typeof options.closeMonitorWindows === 'function' ? options.closeMonitorWindows : null;
 
         // 注册IPC处理程序
         this.registerIpcHandlers();
@@ -143,9 +145,7 @@ class SnmpApp {
             this.eventDispatcher = new EventDispatcher();
             this.eventDispatcher.setWebContents(webContents);
             // 注册事件监听
-            this.snmpTrapEventHandler = data => {
-                this.eventDispatcher.emit('snmp:event', successResponse(data));
-            };
+            this.snmpTrapEventHandler = data => this.handleSnmpWorkerEvent(data);
 
             this.worker.addEventListener(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, this.snmpTrapEventHandler);
 
@@ -170,6 +170,7 @@ class SnmpApp {
      * 停止SNMP服务器
      */
     async handleStopSnmp() {
+        this.closeMonitorWindows();
         try {
             if (this.worker === null) {
                 logger.error('SNMP服务器未启动');
@@ -186,6 +187,51 @@ class SnmpApp {
         } finally {
             await this.cleanupWorker();
         }
+    }
+
+    closeMonitorWindows() {
+        if (!this.closeMonitorWindowsHandler) {
+            return;
+        }
+        try {
+            this.closeMonitorWindowsHandler();
+        } catch (error) {
+            logger.warn(`关闭 SNMP 独立监控窗口失败: ${error.message}`);
+        }
+    }
+
+    handleSnmpWorkerEvent(data) {
+        if (!this.eventDispatcher || !data) {
+            return;
+        }
+
+        if (data.type === SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_BATCH_RECEIVED) {
+            // 批量变化只用于驱动独立 Trap 窗口刷新。未开窗时不会产生这份 renderer IPC；
+            // 配置页只接收同频率、无 Trap 明细的计数快照。
+            this.eventDispatcher.emitToSubscribers('snmp:event', successResponse(data));
+            this.eventDispatcher.emitToPrimary(
+                'snmp:event',
+                successResponse({
+                    type: SnmpConst.SNMP_SUB_EVT_TYPES.STATS_UPDATED,
+                    data: data.data || {}
+                })
+            );
+            return;
+        }
+
+        if (
+            data.type === SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_RECEIVED ||
+            data.type === SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_PROCESSED ||
+            data.type === SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_ERROR ||
+            data.type === SnmpConst.SNMP_SUB_EVT_TYPES.AGENT_CONNECTION ||
+            data.type === SnmpConst.SNMP_SUB_EVT_TYPES.AGENT_DISCONNECTION
+        ) {
+            this.eventDispatcher.emitToSubscribers('snmp:event', successResponse(data));
+            return;
+        }
+
+        // 服务状态和清空历史属于低频控制事件，需要同步主配置页与已打开的监控窗口。
+        this.eventDispatcher.emit('snmp:event', successResponse(data));
     }
 
     /**

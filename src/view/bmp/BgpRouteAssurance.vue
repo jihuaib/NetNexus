@@ -337,14 +337,8 @@
     const hasLoaded = ref(false);
     const analysisEnabled = ref(false);
     const eventPageId = BMP_EVENT_PAGE_ID.PAGE_ID_BMP_ROUTE_ASSURANCE || 'bmp-route-assurance';
-    const liveEvents = [
-        'bmp:routeUpdate',
-        'bmp:instanceRouteUpdate',
-        'bmp:sessionUpdate',
-        'bmp:instanceUpdate',
-        'bmp:initiation',
-        'bmp:termination'
-    ];
+    const liveEventScope = 'bmp-route-assurance';
+    const liveEvents = ['bmp:routeAssuranceInvalidated', 'bmp:initiation', 'bmp:termination'];
     let refreshTimer = null;
     let requestId = 0;
     let toggleRequestId = 0;
@@ -471,8 +465,21 @@
     };
 
     const handleLiveRefresh = () => scheduleRefresh();
-    const registerEvents = () => liveEvents.forEach(event => EventBus.on(event, eventPageId, handleLiveRefresh));
-    const unregisterEvents = () => liveEvents.forEach(event => EventBus.off(event, eventPageId));
+    const setLiveEventScope = enabled => {
+        const method = enabled ? window.windowApi?.subscribeEventScope : window.windowApi?.unsubscribeEventScope;
+        if (typeof method !== 'function') return;
+        Promise.resolve(method(liveEventScope)).catch(error => {
+            console.error(`BMP Route Assurance 事件${enabled ? '订阅' : '退订'}失败`, error);
+        });
+    };
+    const registerEvents = () => {
+        liveEvents.forEach(event => EventBus.on(event, eventPageId, handleLiveRefresh));
+        setLiveEventScope(true);
+    };
+    const unregisterEvents = () => {
+        liveEvents.forEach(event => EventBus.off(event, eventPageId));
+        setLiveEventScope(false);
+    };
 
     const disableAnalysis = () => {
         clearRefreshTimer();

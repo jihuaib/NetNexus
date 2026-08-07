@@ -3,7 +3,14 @@ const { getBrowserMockScript } = require('../../scripts/e2e-support');
 
 const SOURCE_ID = 'statistics-source';
 const CONNECTION_ID = 'statistics-connection';
+const CLIENT_KEY = `source:${SOURCE_ID}`;
 const SESSION_TAB_NAME = 'global | 192.0.2.2 | 65000';
+const MONITOR_TABS = Object.freeze([
+    { key: 'session', label: 'BGP 会话' },
+    { key: 'loc-rib', label: 'Loc-RIB' },
+    { key: 'session-statistics', label: '会话统计' },
+    { key: 'loc-rib-statistics', label: 'Loc-RIB 统计' }
+]);
 
 const RIB_TYPE = Object.freeze({
     PRE_ADJ_RIB_IN: 1,
@@ -59,7 +66,6 @@ const OFFLINE_CLIENT = {
     remotePort: 49152,
     sysName: 'statistics-router'
 };
-const CLIENT_TAB_LABEL = `${OFFLINE_CLIENT.sysName} · ${OFFLINE_CLIENT.remoteIp}`;
 
 const ONLINE_CLIENT = {
     ...OFFLINE_CLIENT,
@@ -72,6 +78,17 @@ const RECONNECTED_CLIENT = {
     persistentConnectionId: 'statistics-connection-2',
     connectionId: 'statistics-connection-2',
     remotePort: 49153
+};
+
+const OTHER_CLIENT = {
+    ...ONLINE_CLIENT,
+    persistentSourceId: 'other-statistics-source',
+    sourceId: 'other-statistics-source',
+    persistentConnectionId: 'other-statistics-connection',
+    connectionId: 'other-statistics-connection',
+    remoteIp: '198.51.100.10',
+    remotePort: 49200,
+    sysName: 'other-statistics-router'
 };
 
 const SESSION = {
@@ -161,6 +178,26 @@ async function openSessionPanel(page) {
     const tab = page.getByRole('tab', { name: SESSION_TAB_NAME, exact: true });
     await expect(tab).toHaveCount(1);
     await expect(tab).toBeVisible();
+    const density = await page.evaluate(root => {
+        const card = root.querySelector('.bmp-full-card');
+        const nav = root.querySelector('.bmp-inner-tabs > .nn-tabs-nav');
+        const innerTab = nav?.querySelector('.nn-tabs-tab');
+        const content = root.querySelector('.bmp-inner-tabs > .nn-tabs-content-holder');
+        return {
+            contentGap:
+                nav && content
+                    ? Math.round(content.getBoundingClientRect().top - nav.getBoundingClientRect().bottom)
+                    : -1,
+            tabHeight: innerTab ? Math.round(innerTab.getBoundingClientRect().height) : -1,
+            topGap:
+                card && innerTab
+                    ? Math.round(innerTab.getBoundingClientRect().top - card.getBoundingClientRect().top)
+                    : -1
+        };
+    });
+    expect(density.topGap).toBeLessThanOrEqual(4);
+    expect(density.tabHeight).toBeLessThanOrEqual(34);
+    expect(density.contentGap).toBeLessThanOrEqual(4);
     await tab.click();
     const panel = page.getByRole('tabpanel', { name: SESSION_TAB_NAME, exact: true });
     await expect(panel).toBeVisible();
@@ -188,77 +225,85 @@ async function expectSessionStatistic(page, sessionRoot, ribType, value) {
     return panel;
 }
 
-async function expectRouteClientTabStyle(page, root, online) {
-    const label = root.getByTestId('bmp-statistics-client-tab-label');
-    const address = root.getByTestId('bmp-statistics-client-address');
-    const status = root.getByTestId('bmp-statistics-client-status');
-    const stateClass = online ? 'is-online' : 'is-offline';
-
-    await expect(label).toHaveClass(/(^|\s)client-tab-label(\s|$)/);
-    await expect(address).toHaveText(CLIENT_TAB_LABEL);
-    await expect(status).toHaveText(online ? '在线' : '已断开');
-    await expect(status).toHaveClass(new RegExp(`(^|\\s)client-connection-state(\\s|$)`));
-    await expect(status).toHaveClass(new RegExp(`(^|\\s)${stateClass}(\\s|$)`));
-
-    const presentation = await root.locator('.client-tabs').evaluate(clientTabs => {
-        const nav = clientTabs.querySelector(':scope > .nn-tabs-nav');
-        const labelElement = clientTabs.querySelector('[data-testid="bmp-statistics-client-tab-label"]');
-        const addressElement = labelElement.querySelector('.client-tab-address');
-        const statusElement = clientTabs.querySelector('[data-testid="bmp-statistics-client-status"]');
-        const navStyle = window.getComputedStyle(nav);
-        const labelStyle = window.getComputedStyle(labelElement);
-        const addressStyle = window.getComputedStyle(addressElement);
-        const statusStyle = window.getComputedStyle(statusElement);
-
-        return {
-            navWidth: Math.round(nav.getBoundingClientRect().width),
-            navFlexBasis: navStyle.flexBasis,
-            labelMaxWidth: labelStyle.maxWidth,
-            labelFontSize: labelStyle.fontSize,
-            labelLineHeight: labelStyle.lineHeight,
-            addressFontSize: addressStyle.fontSize,
-            addressLineHeight: addressStyle.lineHeight,
-            addressTextOverflow: addressStyle.textOverflow,
-            addressWhiteSpace: addressStyle.whiteSpace,
-            statusFontSize: statusStyle.fontSize,
-            statusLineHeight: statusStyle.lineHeight,
-            statusColor: statusStyle.color
-        };
-    });
-
-    expect(presentation).toEqual({
-        navWidth: 148,
-        navFlexBasis: '148px',
-        labelMaxWidth: '132px',
-        labelFontSize: '14px',
-        labelLineHeight: '22px',
-        addressFontSize: '14px',
-        addressLineHeight: '22px',
-        addressTextOverflow: 'ellipsis',
-        addressWhiteSpace: 'nowrap',
-        statusFontSize: '12px',
-        statusLineHeight: '12px',
-        statusColor: online ? 'rgb(56, 158, 13)' : 'rgb(212, 107, 8)'
-    });
-
-    const addressWidth = await address.evaluate(element => ({
-        clientWidth: element.clientWidth,
-        scrollWidth: element.scrollWidth
-    }));
-    expect(addressWidth.scrollWidth).toBeGreaterThan(addressWidth.clientWidth);
-
-    await address.hover();
-    await expect(page.getByRole('tooltip')).toHaveText(CLIENT_TAB_LABEL);
-    await page.mouse.move(0, 0);
-    await expect(page.getByRole('tooltip')).toHaveCount(0);
+function getMonitorUrl(view) {
+    return `/#/monitor/bmp-client?clientKey=${encodeURIComponent(CLIENT_KEY)}&view=${view}`;
 }
 
-test('restores offline Session and Loc-RIB statistics with stable source queries', async ({ page }) => {
+function getMonitorTabNav(page) {
+    return page.locator('.bmp-client-monitor-tabs > .nn-tabs-nav').first();
+}
+
+async function getCurrentMonitorView(page) {
+    return page.evaluate(() => {
+        const query = window.location.hash.split('?')[1] || '';
+        return new URLSearchParams(query).get('view');
+    });
+}
+
+async function expectUnifiedMonitor(page, selectedView) {
+    const monitor = page.getByTestId('bmp-client-monitor-page');
+    const tabNav = getMonitorTabNav(page);
+    const selectedTab = MONITOR_TABS.find(tab => tab.key === selectedView);
+    await expect(monitor).toBeVisible();
+    await expect(tabNav).toBeVisible();
+    await expect(tabNav.getByRole('tab')).toHaveCount(MONITOR_TABS.length);
+
+    for (const tabDefinition of MONITOR_TABS) {
+        const tab = tabNav.getByRole('tab', { name: tabDefinition.label, exact: true });
+        await expect(tab).toHaveCount(1);
+        await expect(tab).toHaveAttribute('aria-selected', String(tabDefinition.key === selectedView));
+    }
+
+    const density = await monitor.evaluate(root => {
+        const nav = root.querySelector('.bmp-client-monitor-tabs > .nn-tabs-nav');
+        const tab = nav?.querySelector('.nn-tabs-tab');
+        const content = root.querySelector('.bmp-client-monitor-tabs > .nn-tabs-content-holder');
+        return {
+            contentGap:
+                nav && content
+                    ? Math.round(content.getBoundingClientRect().top - nav.getBoundingClientRect().bottom)
+                    : -1,
+            tabHeight: tab ? Math.round(tab.getBoundingClientRect().height) : -1,
+            topGap: root.parentElement
+                ? Math.round(root.getBoundingClientRect().top - root.parentElement.getBoundingClientRect().top)
+                : -1
+        };
+    });
+    expect(density.tabHeight).toBeLessThanOrEqual(34);
+    expect(density.contentGap).toBeLessThanOrEqual(4);
+    expect(density.topGap).toBeLessThanOrEqual(4);
+
+    await expect(monitor.locator('.client-tabs')).toHaveCount(0);
+    await expect.poll(() => getCurrentMonitorView(page)).toBe(selectedView);
+    await expect
+        .poll(() => page.title())
+        .toBe(`${selectedTab.label} · ${OFFLINE_CLIENT.sysName} · ${OFFLINE_CLIENT.remoteIp}`);
+    return monitor;
+}
+
+async function switchMonitorView(page, view) {
+    const tabDefinition = MONITOR_TABS.find(tab => tab.key === view);
+    if (!tabDefinition) throw new Error(`Unknown BMP monitor view: ${view}`);
+    await getMonitorTabNav(page).getByRole('tab', { name: tabDefinition.label, exact: true }).click();
+    return expectUnifiedMonitor(page, view);
+}
+
+async function flushRenderer(page) {
+    await page.evaluate(
+        () =>
+            new Promise(resolve => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+            })
+    );
+}
+
+test('loads one Client statistics and switches between unified monitor tabs', async ({ page }) => {
     const calls = await installBmpStatisticsMock(page, OFFLINE_CLIENT);
 
-    await page.goto('/#/bmp/bgp-session-statis-report');
+    await page.goto(getMonitorUrl('session-statistics'));
+    await expectUnifiedMonitor(page, 'session-statistics');
     const sessionPage = page.getByTestId('bmp-session-statistics-page');
-    await expectRouteClientTabStyle(page, sessionPage, false);
+    await expect(sessionPage).toBeVisible();
     const sessionPanel = await openSessionPanel(sessionPage);
     await expectSelectedRibType(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].label);
     await expectStatistic(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].typeName, 42);
@@ -272,9 +317,9 @@ test('restores offline Session and Loc-RIB statistics with stable source queries
             connectionId: CONNECTION_ID
         });
 
-    await page.goto('/#/bmp/bgp-loc-rib-statis-report');
+    await switchMonitorView(page, 'loc-rib-statistics');
     const locRibPage = page.getByTestId('bmp-loc-rib-statistics-page');
-    await expectRouteClientTabStyle(page, locRibPage, false);
+    await expect(locRibPage).toBeVisible();
     await expectStatistic(locRibPage, 'Loc-RIB 路由数', 17);
 
     await expect
@@ -285,47 +330,55 @@ test('restores offline Session and Loc-RIB statistics with stable source queries
             persistentConnectionId: CONNECTION_ID,
             connectionId: CONNECTION_ID
         });
+
+    await switchMonitorView(page, 'session-statistics');
+    await expectStatistic(page.getByTestId('bmp-session-statistics-page'), 'Pre Adj-RIB-In 路由数', 42);
 });
 
-test('keeps statistics while a stable source reconnects and then disconnects', async ({ page }) => {
-    await installBmpStatisticsMock(page, ONLINE_CLIENT);
+test('ignores other Client events and keeps the monitored Client across reconnects', async ({ page }) => {
+    const calls = await installBmpStatisticsMock(page, ONLINE_CLIENT);
 
-    await page.goto('/#/bmp/bgp-session-statis-report');
+    await page.goto(getMonitorUrl('loc-rib-statistics'));
+    await expectUnifiedMonitor(page, 'loc-rib-statistics');
+    const locRibPage = page.getByTestId('bmp-loc-rib-statistics-page');
+    await expectStatistic(locRibPage, 'Loc-RIB 路由数', 17);
+
+    await emitBmpEvent(page, 'bmp:statisticsReport', instanceReport(OTHER_CLIENT, 777));
+    await flushRenderer(page);
+    await expectStatistic(locRibPage, 'Loc-RIB 路由数', 17);
+
+    await emitBmpEvent(page, 'bmp:statisticsReport', instanceReport(ONLINE_CLIENT, 88));
+    await expectStatistic(locRibPage, 'Loc-RIB 路由数', 88);
+
+    await switchMonitorView(page, 'session-statistics');
     const sessionPage = page.getByTestId('bmp-session-statistics-page');
-    await expectRouteClientTabStyle(page, sessionPage, true);
     const sessionPanel = await openSessionPanel(sessionPage);
     await expectSelectedRibType(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].label);
     await expectStatistic(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].typeName, 42);
 
     await emitBmpEvent(page, 'bmp:initiation', RECONNECTED_CLIENT);
+    await expect
+        .poll(() => calls.filter(call => call.method === 'getBgpStatisticsReports').at(-1)?.args[0]?.connectionId)
+        .toBe(RECONNECTED_CLIENT.connectionId);
+
+    await emitBmpEvent(page, 'bmp:statisticsReport', sessionReport(OTHER_CLIENT, RIB_TYPE.PRE_ADJ_RIB_IN, 777));
+    await flushRenderer(page);
+    await expectStatistic(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].typeName, 42);
+
     await emitBmpEvent(page, 'bmp:statisticsReport', sessionReport(RECONNECTED_CLIENT, RIB_TYPE.PRE_ADJ_RIB_IN, 99));
-    await expect(sessionPage.getByTestId('bmp-statistics-client-tab-label')).toHaveCount(1);
     await expectSelectedRibType(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].label);
     await expectStatistic(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].typeName, 99);
 
     await emitBmpEvent(page, 'bmp:termination', RECONNECTED_CLIENT);
-    await expectRouteClientTabStyle(page, sessionPage, false);
+    await flushRenderer(page);
     await expectStatistic(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].typeName, 99);
-
-    await page.goto('/#/bmp/bgp-loc-rib-statis-report');
-    const locRibPage = page.getByTestId('bmp-loc-rib-statistics-page');
-    await expectRouteClientTabStyle(page, locRibPage, true);
-    await expectStatistic(locRibPage, 'Loc-RIB 路由数', 17);
-
-    await emitBmpEvent(page, 'bmp:initiation', RECONNECTED_CLIENT);
-    await emitBmpEvent(page, 'bmp:statisticsReport', instanceReport(RECONNECTED_CLIENT, 88));
-    await expect(locRibPage.getByTestId('bmp-statistics-client-tab-label')).toHaveCount(1);
-    await expectStatistic(locRibPage, 'Loc-RIB 路由数', 88);
-
-    await emitBmpEvent(page, 'bmp:termination', RECONNECTED_CLIENT);
-    await expectRouteClientTabStyle(page, locRibPage, false);
-    await expectStatistic(locRibPage, 'Loc-RIB 路由数', 88);
 });
 
 test('keeps four session RIB stages stable while reports alternate', async ({ page }) => {
     await installBmpStatisticsMock(page, ONLINE_CLIENT);
 
-    await page.goto('/#/bmp/bgp-session-statis-report');
+    await page.goto(getMonitorUrl('session-statistics'));
+    await expectUnifiedMonitor(page, 'session-statistics');
     const sessionPage = page.getByTestId('bmp-session-statistics-page');
     const sessionPanel = await openSessionPanel(sessionPage);
     const ribTypeSelect = sessionPanel.getByTestId('bmp-statistics-rib-type-select');

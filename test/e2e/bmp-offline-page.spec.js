@@ -13,6 +13,19 @@ const CLIENT = {
     sysName: 'offline-router'
 };
 const CLIENT_LABEL = `${CLIENT.sysName} · ${CLIENT.remoteIp}`;
+const OTHER_CLIENT = {
+    ...CLIENT,
+    persistentSourceId: 'unrelated-source',
+    remoteIp: '192.0.2.99',
+    sysName: 'unrelated-router'
+};
+const CLIENT_KEY = encodeURIComponent(`source:${CLIENT.persistentSourceId}`);
+const SESSION_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=session`;
+const LOC_RIB_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=loc-rib`;
+const MISSING_CLIENT_KEY = 'source:missing-source';
+const ENCODED_MISSING_CLIENT_KEY = encodeURIComponent(MISSING_CLIENT_KEY);
+const MISSING_SESSION_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${ENCODED_MISSING_CLIENT_KEY}&view=session`;
+const MISSING_LOC_RIB_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${ENCODED_MISSING_CLIENT_KEY}&view=loc-rib`;
 
 const SESSION_SCOPE = {
     persistentScopeId: 'peer-scope',
@@ -75,27 +88,11 @@ function success(data) {
     return { status: 'success', data };
 }
 
-async function expectClientLabel(page, root) {
-    const address = root.locator('.client-tab-address').first();
-    await expect(address).toHaveText(CLIENT_LABEL);
-
-    const presentation = await address.evaluate(element => {
-        const style = window.getComputedStyle(element);
-        return {
-            clientWidth: element.clientWidth,
-            scrollWidth: element.scrollWidth,
-            textOverflow: style.textOverflow,
-            whiteSpace: style.whiteSpace
-        };
-    });
-    expect(presentation.textOverflow).toBe('ellipsis');
-    expect(presentation.whiteSpace).toBe('nowrap');
-    expect(presentation.scrollWidth).toBeGreaterThan(presentation.clientWidth);
-
-    await address.hover();
-    await expect(page.getByRole('tooltip')).toHaveText(CLIENT_LABEL);
-    await page.mouse.move(0, 0);
-    await expect(page.getByRole('tooltip')).toHaveCount(0);
+async function expectStandaloneMonitorLayout(page, root, pageType) {
+    await expect.poll(() => page.title()).toBe(`${pageType} · ${CLIENT_LABEL}`);
+    await expect(page.locator('.monitor-window-header')).toHaveCount(0);
+    await expect(root.locator('.bmp-full-card > .nn-card-head')).toHaveCount(0);
+    await expect(root.locator('.client-tabs')).toHaveCount(0);
 }
 
 async function expectScrollOnlyScrollbar(locator, axis) {
@@ -154,7 +151,7 @@ test('restores offline BGP and Loc-RIB pages through persistent scope selectors'
         calls.push({ method, args });
         switch (method) {
             case 'getClientList':
-                return success([CLIENT]);
+                return success([OTHER_CLIENT, CLIENT]);
             case 'getBgpSessions':
                 return success([SESSION]);
             case 'getBgpRoutes':
@@ -177,17 +174,13 @@ test('restores offline BGP and Loc-RIB pages through persistent scope selectors'
     });
     await page.addInitScript({ content: getBrowserMockScript('bmp') });
 
-    await page.goto('/#/bmp/bgp-session');
+    await page.goto(SESSION_MONITOR_ROUTE);
     const sessionPage = page.getByTestId('bmp-session-page');
-    await expectClientLabel(page, sessionPage);
+    await expectStandaloneMonitorLayout(page, sessionPage, 'BGP 会话');
     await expect(sessionPage).toContainText('192.0.2.2');
     await expect(sessionPage).toContainText('已断开');
     await expect(sessionPage).toContainText('203.0.113.0');
     await expect(sessionPage.getByText('过期 1')).toBeVisible();
-    await expectScrollOnlyScrollbar(
-        sessionPage.locator('.client-tabs:visible > .nn-tabs-nav > .nn-tabs-nav-wrap').first(),
-        'y'
-    );
     await expectScrollOnlyScrollbar(
         sessionPage.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first(),
         'x'
@@ -207,9 +200,9 @@ test('restores offline BGP and Loc-RIB pages through persistent scope selectors'
         })
         .toEqual({ sourceId: CLIENT.persistentSourceId, scopeId: SESSION_SCOPE.persistentScopeId, routeState: 'all' });
 
-    await page.goto('/#/bmp/bgp-loc-rib');
+    await page.goto(LOC_RIB_MONITOR_ROUTE);
     const locRibPage = page.getByTestId('bmp-loc-rib-page');
-    await expectClientLabel(page, locRibPage);
+    await expectStandaloneMonitorLayout(page, locRibPage, 'Loc-RIB');
     await expect(locRibPage).toContainText('global');
     await expect(locRibPage).toContainText('已断开');
     await expect(locRibPage).toContainText('198.51.100.0');
@@ -224,4 +217,47 @@ test('restores offline BGP and Loc-RIB pages through persistent scope selectors'
             };
         })
         .toEqual({ sourceId: CLIENT.persistentSourceId, scopeId: INSTANCE.persistentScopeId, routeState: 'all' });
+});
+
+test('shows a scoped empty state when the Client has no session or Loc-RIB instance', async ({ page }) => {
+    await page.exposeFunction('__bmpE2eCall', async method => {
+        if (method === 'getClientList') {
+            return success([OTHER_CLIENT, CLIENT]);
+        }
+        if (method === 'getBgpSessions' || method === 'getBgpInstances') {
+            return success([]);
+        }
+        return success(null);
+    });
+    await page.addInitScript({ content: getBrowserMockScript('bmp') });
+
+    await page.goto(SESSION_MONITOR_ROUTE);
+    const sessionPage = page.getByTestId('bmp-session-page');
+    await expectStandaloneMonitorLayout(page, sessionPage, 'BGP 会话');
+    await expect(sessionPage.getByText('当前 Client 暂无会话数据')).toBeVisible();
+
+    await page.goto(LOC_RIB_MONITOR_ROUTE);
+    const locRibPage = page.getByTestId('bmp-loc-rib-page');
+    await expectStandaloneMonitorLayout(page, locRibPage, 'Loc-RIB');
+    await expect(locRibPage.getByText('当前 Client 暂无 Loc-RIB 数据')).toBeVisible();
+});
+
+test('shows an empty state when the monitored clientKey has no matching Client', async ({ page }) => {
+    await page.exposeFunction('__bmpE2eCall', async method => {
+        if (method === 'getClientList') {
+            return success([OTHER_CLIENT, CLIENT]);
+        }
+        return success(null);
+    });
+    await page.addInitScript({ content: getBrowserMockScript('bmp') });
+
+    await page.goto(MISSING_SESSION_MONITOR_ROUTE);
+    const sessionPage = page.getByTestId('bmp-session-page');
+    await expect.poll(() => page.title()).toBe('BGP 会话');
+    await expect(sessionPage.getByText('未找到指定 Client')).toBeVisible();
+
+    await page.goto(MISSING_LOC_RIB_MONITOR_ROUTE);
+    const locRibPage = page.getByTestId('bmp-loc-rib-page');
+    await expect.poll(() => page.title()).toBe('Loc-RIB');
+    await expect(locRibPage.getByText('未找到指定 Client')).toBeVisible();
 });

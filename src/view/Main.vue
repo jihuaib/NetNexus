@@ -320,9 +320,7 @@
         top: 0;
         z-index: 1000;
         border-right: 1px solid var(--nn-color-border-sider);
-        background:
-            linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 28%),
-            var(--nn-color-bg-sider);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 28%), var(--nn-color-bg-sider);
         box-shadow: var(--nn-shadow-sider);
         transition: width 0.2s ease;
         width: var(--sidebar-width);

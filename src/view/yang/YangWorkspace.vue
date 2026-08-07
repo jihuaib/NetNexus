@@ -41,7 +41,7 @@
                         <template #icon><ClockCircleOutlined /></template>
                         执行记录
                     </nn-button>
-                    <nn-button class="notification-history-trigger" @click="openNotificationDrawer">
+                    <nn-button class="notification-history-trigger" @click="openNotificationWindow">
                         <template #icon><BellOutlined /></template>
                         通知记录
                         <span
@@ -244,15 +244,6 @@
         </nn-modal>
 
         <YangExecutionHistoryDrawer v-model:open="executionHistoryOpen" />
-        <YangNotificationDrawer
-            v-model:open="notificationHistoryOpen"
-            :disconnecting="notificationDisconnecting"
-            @export="exportNotifications"
-            @disconnect-session="disconnectNotificationSession"
-            @modify-subscription="openSubscriptionManagement"
-            @delete-subscription="openSubscriptionManagement"
-            @resync-subscription="openSubscriptionManagement"
-        />
     </div>
 </template>
 
@@ -302,9 +293,9 @@
         UnorderedListOutlined
     } from '../../ui/icons';
     import YangExecutionHistoryDrawer from './YangExecutionHistoryDrawer.vue';
-    import YangNotificationDrawer from './YangNotificationDrawer.vue';
     import YangOperations from './YangOperations.vue';
     import YangCurrentProfile from './YangCurrentProfile.vue';
+    import { buildYangNodeXml } from './yangSchemaDraft';
     import { resolveNetconfSubscriptionCapabilities } from './netconfSubscriptionCapabilities';
     import {
         invokeBridge,
@@ -314,7 +305,6 @@
         unwrapArray
     } from './yangUiUtils';
     import { usePaneResize } from './usePaneResize';
-    import { useNetconfNotificationHistory } from './useNetconfNotificationHistory';
     import { useYangProfileContext } from './useYangProfileContext';
 
     defineOptions({ name: 'YangWorkspace' });
@@ -323,6 +313,8 @@
     const DATA_NODE_KEYWORDS = new Set(['container', 'list', 'leaf', 'leaf-list', 'anydata', 'anyxml']);
     const RPC_NODE_KEYWORDS = new Set(['rpc', 'action']);
     const LEAF_NODE_KEYWORDS = new Set(['leaf', 'leaf-list', 'anydata', 'anyxml']);
+    const NOTIFICATION_SUMMARY_EVENT = YANG_EVENT.NOTIFICATION_SUMMARY || 'netconf:notificationSummary';
+    const NOTIFICATION_ACTION_EVENT = YANG_EVENT.NOTIFICATION_ACTION || 'netconf:notificationAction';
     const CONTEXT_MENU_MARGIN = 8;
     const SCHEMA_NODE_ICONS = Object.freeze({
         module: CodeOutlined,
@@ -369,8 +361,8 @@
     const operationExecuting = ref(false);
     const nodePropertyOpen = ref(false);
     const executionHistoryOpen = ref(false);
-    const notificationHistoryOpen = ref(false);
     const notificationDisconnecting = ref(false);
+    const notificationSummary = ref({ total: 0, unread: 0 });
     const workspaceLayoutRef = ref(null);
     const {
         paneSize: schemaPaneWidth,
@@ -410,11 +402,7 @@
     let initialWorkspaceLoadSettled = false;
     const { profilesLoading, selectedProfileId, selectedProfile, refreshProfiles, taskMatchesProfile } =
         useYangProfileContext();
-    const {
-        unreadCount: notificationUnreadCount,
-        upsertSubscription: upsertNotificationSubscription,
-        endSession: endNotificationSession
-    } = useNetconfNotificationHistory();
+    const notificationUnreadCount = computed(() => Math.max(0, Number(notificationSummary.value.unread) || 0));
 
     const normalizeModule = (module, index) => {
         if (typeof module === 'string') return { id: '', name: module, revision: '', _key: module };
@@ -436,20 +424,6 @@
     const normalizeSchemaKeys = value => {
         const values = Array.isArray(value) ? value : String(value || '').split(/\s+/u);
         return [...new Set(values.map(schemaLocalName).filter(name => /^[A-Za-z_][\w.-]*$/u.test(name)))];
-    };
-    const normalizeSchemaKeyDetails = node => {
-        const details = new Map(
-            (Array.isArray(node?.schemaKeyDetails) ? node.schemaKeyDetails : [])
-                .map(detail => {
-                    const name = schemaLocalName(typeof detail === 'string' ? detail : detail?.name);
-                    return name ? [name, detail] : null;
-                })
-                .filter(Boolean)
-        );
-        return normalizeSchemaKeys(node?.schemaKey).map(name => ({
-            name,
-            acceptsEmptyString: details.get(name)?.acceptsEmptyString === true
-        }));
     };
     const schemaChildContext = node => ({
         parentKeyword: schemaNodeKeyword(node),
@@ -1403,70 +1377,13 @@
         }));
     };
 
-    const buildNodeXml = (node, mode = 'filter') => {
-        if (!isDataNode(node)) return '';
-        const chain = schemaNodeChain(node);
-        if (chain.length === 0) return '';
-        const render = (index, depth) => {
-            const current = chain[index];
-            const name = String(current?.name || current?.title || 'node');
-            const indentation = '  '.repeat(depth);
-            const parent = chain[index - 1];
-            const namespace = namespaceForNode(current);
-            const namespaceAttribute =
-                namespace && (index === 0 || current?.module !== parent?.module)
-                    ? ` xmlns="${escapeXmlAttribute(namespace)}"`
-                    : '';
-            const keyword = String(current?.keyword || '').toLowerCase();
-            const isLast = index === chain.length - 1;
-            if (mode === 'filter' && isLast) return `${indentation}<${name}${namespaceAttribute}/>`;
-
-            const body = [];
-            if (mode === 'config' && keyword === 'list') {
-                const emptyKeyNames = new Set(
-                    normalizeSchemaKeyDetails(current)
-                        .filter(key => key.acceptsEmptyString)
-                        .map(key => key.name)
-                );
-                const rawKeys = Array.isArray(current?.schemaKey)
-                    ? current.schemaKey
-                    : String(current?.schemaKey || '').split(/\s+/u);
-                const keys = rawKeys
-                    .map(value => (value.includes(':') ? value.slice(value.lastIndexOf(':') + 1) : value))
-                    .filter(value => /^[A-Za-z_][\w.-]*$/u.test(value));
-                const nextName = chain[index + 1]?.name;
-                if (keys.length) {
-                    keys.filter(key => key !== nextName).forEach(key => {
-                        if (emptyKeyNames.has(key)) {
-                            body.push(`${'  '.repeat(depth + 1)}<${key}/>`);
-                            return;
-                        }
-                        body.push(
-                            `${'  '.repeat(depth + 1)}<${key}><!-- NETNEXUS_REQUIRED: 输入 list key 值 --></${key}>`
-                        );
-                    });
-                } else {
-                    body.push(`${'  '.repeat(depth + 1)}<!-- NETNEXUS_REQUIRED: 补充 list "${name}" 的所有 key -->`);
-                }
-            }
-            if (!isLast) {
-                body.push(render(index + 1, depth + 1));
-            } else if (
-                mode === 'config' &&
-                ['leaf', 'leaf-list'].includes(keyword) &&
-                current?.acceptsEmptyString === true
-            ) {
-                return `${indentation}<${name}${namespaceAttribute}/>`;
-            } else if (mode === 'config' && ['leaf', 'leaf-list'].includes(keyword)) {
-                const valueHint = typeof current?.type === 'string' && current.type ? `${current.type} 值` : '值';
-                return `${indentation}<${name}${namespaceAttribute}><!-- NETNEXUS_REQUIRED: 输入${valueHint} --></${name}>`;
-            } else if (mode === 'config' && keyword !== 'list') {
-                body.push(`${'  '.repeat(depth + 1)}<!-- NETNEXUS_REQUIRED: 在此补充配置 -->`);
-            }
-            return `${indentation}<${name}${namespaceAttribute}>\n${body.join('\n')}\n${indentation}</${name}>`;
-        };
-        return render(0, 0);
-    };
+    const buildNodeXml = (node, mode = 'filter') =>
+        buildYangNodeXml({
+            node,
+            chain: schemaNodeChain(node),
+            mode,
+            resolveNamespace: namespaceForNode
+        });
 
     const buildRawRpcDraft = node => {
         if (!isRpcNode(node)) {
@@ -1590,22 +1507,39 @@
         }
     };
 
-    const refreshNotificationSubscriptions = async (requestedProfileId = selectedProfileId.value) => {
-        const profileId = String(requestedProfileId || '');
-        if (!profileId) return;
+    const applyNotificationSummary = payload => {
+        const data = payload?.status === 'success' ? payload.data : payload?.data || payload;
+        const summary = data?.summary && typeof data.summary === 'object' ? data.summary : data;
+        if (!summary || typeof summary !== 'object') return;
+        notificationSummary.value = {
+            ...notificationSummary.value,
+            ...summary,
+            total: Math.max(0, Number(summary.total ?? summary.count) || 0),
+            unread: Math.max(0, Number(summary.unread ?? summary.unreadCount) || 0)
+        };
+    };
+
+    const loadNotificationSummary = async () => {
         try {
-            const { data } = await invokeBridge('netconfApi', 'getSubscriptions', profileId);
-            unwrapArray(data, ['subscriptions', 'items']).forEach(upsertNotificationSubscription);
+            const { data } = await invokeBridge('netconfApi', 'getNotificationSummary');
+            applyNotificationSummary(data);
         } catch (error) {
-            // Notification events continue to be collected globally even if an older
-            // preload bridge does not expose the subscription snapshot API.
-            console.warn('Unable to load NETCONF notification subscriptions:', error.message);
+            console.warn('Unable to load NETCONF notification summary:', error.message);
         }
     };
 
-    const openNotificationDrawer = () => {
-        notificationHistoryOpen.value = true;
-        void refreshNotificationSubscriptions();
+    const openNotificationWindow = async () => {
+        const openMonitor = window.windowApi?.openMonitor;
+        if (typeof openMonitor !== 'function') {
+            notify.error('当前环境不支持打开 NETCONF 通知窗口');
+            return;
+        }
+        try {
+            const result = await openMonitor('netconf-notifications');
+            if (result?.status !== 'success') notify.error(result?.msg || '打开 NETCONF 通知窗口失败');
+        } catch (error) {
+            notify.error(`打开 NETCONF 通知窗口失败：${error.message}`);
+        }
     };
 
     const closeNotificationDisconnectConfirm = () => {
@@ -1649,25 +1583,20 @@
                             ''
                     );
                     if (!currentConnected) {
-                        endNotificationSession(profileId, sessionId, 'ended');
-                        await refreshNotificationSubscriptions(profileId);
                         notify.info(`${sessionLabel} 已不再连接，订阅状态已刷新`);
                         return;
                     }
                     if (sessionId && currentSessionId !== sessionId) {
-                        await refreshNotificationSubscriptions(profileId);
                         notify.warning(
                             `订阅所属 ${sessionLabel} 已变化，未断开当前 Session ${currentSessionId || '未知'}`
                         );
                         return;
                     }
                     if (subscriptionId && currentSubscriptionId !== subscriptionId) {
-                        await refreshNotificationSubscriptions(profileId);
                         notify.warning('当前 Session 已没有所选活动订阅，未执行断开');
                         return;
                     }
                     const { data } = await invokeBridge('netconfApi', 'disconnect', profileId);
-                    endNotificationSession(profileId, sessionId, 'ended');
                     if (selectedProfileId.value === profileId) {
                         session.value = {
                             ...(data || {}),
@@ -1677,7 +1606,6 @@
                             capabilities: []
                         };
                     }
-                    await refreshNotificationSubscriptions(profileId);
                     notify.success(`${sessionLabel} 已断开，RFC 5277 订阅已结束`);
                 } catch (error) {
                     notify.error(`结束订阅失败：${error.message}`);
@@ -1692,30 +1620,27 @@
         notificationDisconnectConfirmHandle = confirmHandle;
     };
 
-    const exportNotifications = descriptor => {
-        const content = String(descriptor?.content || '');
-        if (!content) {
-            notify.warning('当前筛选下没有可导出的通知');
-            return;
-        }
+    const openEditConfigMonitor = async (node, params) => {
+        const openMonitor = window.windowApi?.openMonitor;
+        if (typeof openMonitor !== 'function') return false;
         try {
-            const blob = new Blob([content], { type: descriptor.mimeType || 'application/json;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const anchor = document.createElement('a');
-            anchor.href = url;
-            anchor.download = descriptor.filename || 'netconf-notifications.json';
-            anchor.style.display = 'none';
-            document.body.appendChild(anchor);
-            anchor.click();
-            anchor.remove();
-            URL.revokeObjectURL(url);
-            notify.success('通知记录已导出');
+            const result = await openMonitor('netconf-edit-config', {
+                profileId: selectedProfileId.value,
+                compileId: compileId.value,
+                nodeId: node?.id || node?.key,
+                target: params.target
+            });
+            if (result?.status !== 'success') {
+                notify.error(result?.msg || '打开 NETCONF Content Editor 失败');
+            }
+            return true;
         } catch (error) {
-            notify.error(`导出通知失败：${error.message}`);
+            notify.error(`打开 NETCONF Content Editor 失败：${error.message}`);
+            return true;
         }
     };
 
-    const openOperation = (operation, { scope = 'node', params = {}, executeImmediately = false } = {}) => {
+    const openOperation = async (operation, { scope = 'node', params = {}, executeImmediately = false } = {}) => {
         const contextNode = contextMenu.node;
         const node = ['node', 'notification'].includes(scope) ? contextNode : null;
         const disabledReason = operationDisabledReason(operation, node, params);
@@ -1723,6 +1648,7 @@
             notify.warning(disabledReason);
             return;
         }
+        if (operation === 'edit-config' && (await openEditConfigMonitor(node, params))) return;
         Object.assign(operationContext, {
             operation,
             autoExecute: executeImmediately,
@@ -1833,7 +1759,6 @@
             params
         });
         operationContextRevision.value += 1;
-        notificationHistoryOpen.value = false;
         notify.info(`已在操作区打开 ${operation}，检查参数后即可执行`);
     };
 
@@ -1853,6 +1778,17 @@
             return;
         }
         activateSubscriptionManagement(subscription);
+    };
+
+    const handleNotificationAction = async payload => {
+        const data = payload?.status === 'success' ? payload.data : payload?.data || payload;
+        if (!data || typeof data !== 'object') return;
+        if (router.currentRoute.value.path !== YANG_ROUTE.WORKSPACE) {
+            await router.push(YANG_ROUTE.WORKSPACE);
+            await nextTick();
+        }
+        if (data.operation === 'disconnect-session') disconnectNotificationSession(data);
+        else openSubscriptionManagement(data);
     };
 
     const handleOperationExecutingChange = value => {
@@ -2074,7 +2010,6 @@
         detailLoading.value = false;
         nodePropertyOpen.value = false;
         executionHistoryOpen.value = false;
-        notificationHistoryOpen.value = false;
         notificationDisconnecting.value = false;
         treeLoading.value = false;
         loading.value = false;
@@ -2091,10 +2026,6 @@
         if (profileId === previousProfileId) return;
         resetProfileWorkspace();
         if (profileContextReady) await reloadCurrentProfile();
-    });
-
-    watch(notificationHistoryOpen, open => {
-        if (!open) closeNotificationDisconnectConfirm();
     });
 
     const formatBoolean = value => (value === true ? 'true' : value === false ? 'false' : '-');
@@ -2153,7 +2084,6 @@
         detailRequestRevision += 1;
         nodePropertyOpen.value = false;
         executionHistoryOpen.value = false;
-        notificationHistoryOpen.value = false;
         schemaTreeResizeObserver?.disconnect();
         schemaTreeResizeObserver = null;
     };
@@ -2161,6 +2091,16 @@
     onMounted(async () => {
         EventBus.on(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE, handleCompileProgress);
         EventBus.on(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`, handleSessionEvent);
+        EventBus.on(
+            NOTIFICATION_SUMMARY_EVENT,
+            `${YANG_EVENT_PAGE_ID.WORKSPACE}-notification-summary`,
+            applyNotificationSummary
+        );
+        EventBus.on(
+            NOTIFICATION_ACTION_EVENT,
+            `${YANG_EVENT_PAGE_ID.WORKSPACE}-notification-action`,
+            handleNotificationAction
+        );
         EventBus.on(
             YANG_EVENT.PROFILE_DATA_REFRESH,
             `${YANG_EVENT_PAGE_ID.WORKSPACE}-profile-data`,
@@ -2173,6 +2113,7 @@
         await nextTick();
         observeSchemaTreeViewport();
         try {
+            await loadNotificationSummary();
             await refreshProfiles();
             profileContextReady = true;
             await reloadCurrentProfile();
@@ -2184,6 +2125,7 @@
     onActivated(async () => {
         if (!initialWorkspaceLoadSettled) return;
         await refreshSchemaTreeLayout();
+        await loadNotificationSummary();
         await refreshProfiles();
         profileContextReady = true;
         await reloadCurrentProfile({ preserveTree: true });
@@ -2197,6 +2139,8 @@
         closeNotificationDisconnectConfirm();
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE);
         EventBus.off(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`);
+        EventBus.off(NOTIFICATION_SUMMARY_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-notification-summary`);
+        EventBus.off(NOTIFICATION_ACTION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-notification-action`);
         EventBus.off(YANG_EVENT.PROFILE_DATA_REFRESH, `${YANG_EVENT_PAGE_ID.WORKSPACE}-profile-data`);
         document.removeEventListener('keydown', handleContextMenuKeydown);
         window.removeEventListener('resize', hideContextMenu);

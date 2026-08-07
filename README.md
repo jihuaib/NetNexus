@@ -97,7 +97,7 @@ npm run frr:bmp:lab -- start --port 1790 --routes 1024
 npm run dev
 ```
 
-进入 NetNexus 的“BMP → BMP配置”，将“服务端端口”设为 `1790`，然后点击“启动服务器”。FRR 在 NetNexus 启动前连接失败不会退出，而会持续重试；连接成功后可在“BGP会话”“BGP Loc-RIB”及对应统计页面查看数据。
+进入 NetNexus 的“BMP → BMP配置”，将“服务端端口”设为 `1790`，然后点击“启动服务器”。FRR 在 NetNexus 启动前连接失败不会退出，而会持续重试；连接成功后，可从客户端表格为对应 Client 打开唯一的独立监控窗口，并在窗口顶部切换 BGP 会话、Loc-RIB、会话统计和 Loc-RIB 统计。
 
 `--routes`（也可写成 `--routes-per-family`）表示 5 个可扩展地址族中每个地址族的路由数；IPv4/IPv6 Multicast 各固定生成一条 default。默认值 `1024` 会产生 5122 条源路由，以及 15366 条 pre-policy、post-policy、Loc-RIB 三视图路由。其他管理命令：
 

@@ -13,6 +13,12 @@
  * - connect(profileId | profile) -> data: SessionState
  * - disconnect(profileId?) -> data: SessionState
  * - getSessionState(profileId?) -> data: SessionState
+ * - getNotificationHistory({ scope? }) -> data: { notifications, subscriptions, summary, limits }
+ * - getNotificationSummary() -> data: { total, unread, received, dropped, lastReceivedAt, lastEventName }
+ * - markNotificationRead({ id?|ids?|scope?, read })
+ * - deleteNotificationHistory({ id?|ids?|scope? })
+ * - clearNotificationHistory({ scope? })
+ * - requestNotificationAction({ operation, profileId, sessionId?, subscriptionId? })
  * - selectPrivateKey() -> data: string | { filePath, path? } (opens a native file picker)
  * - discoverModules(profileId) -> data: Module[] | { modules: Module[], jobId? }
  * - downloadModules({ profileId, modules: [{ name, revision? }], includeDependencies: true })
@@ -48,7 +54,9 @@ export const YANG_EVENT = Object.freeze({
     PROFILE_DATA_REFRESH: 'yang:profileDataRefresh',
     SESSION_EVENT: 'netconf:sessionEvent',
     NOTIFICATION: 'netconf:notification',
-    SUBSCRIPTION_EVENT: 'netconf:subscriptionEvent'
+    SUBSCRIPTION_EVENT: 'netconf:subscriptionEvent',
+    NOTIFICATION_SUMMARY: 'netconf:notificationSummary',
+    NOTIFICATION_ACTION: 'netconf:notificationAction'
 });
 
 export const YANG_EVENT_PAGE_ID = Object.freeze({

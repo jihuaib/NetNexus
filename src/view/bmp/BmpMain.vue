@@ -4,10 +4,6 @@
         <div class="fixed-tabs">
             <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
                 <nn-tab-pane key="bmp-config" tab="BMP配置" />
-                <nn-tab-pane key="bgp-session" tab="BGP会话" />
-                <nn-tab-pane key="bgp-loc-rib" tab="BGP Loc-RIB" />
-                <nn-tab-pane key="bgp-session-statis-report" tab="BGP会话统计" />
-                <nn-tab-pane key="bgp-loc-rib-statis-report" tab="BGP Loc-RIB统计" />
                 <nn-tab-pane key="route-assurance" tab="路由矩阵" />
                 <nn-tab-pane key="route-lens" tab="路由追踪" />
                 <nn-tab-pane key="route-history" tab="路由轨迹" />
@@ -38,16 +34,8 @@
     const activeTabKey = ref('bmp-config');
     const currentTab = ref(null);
     const defaultTabKey = 'bmp-config';
-    const tabKeys = new Set([
-        'bmp-config',
-        'bgp-session',
-        'bgp-loc-rib',
-        'bgp-session-statis-report',
-        'bgp-loc-rib-statis-report',
-        'route-assurance',
-        'route-lens',
-        'route-history'
-    ]);
+    const tabKeys = new Set(['bmp-config', 'route-assurance', 'route-lens', 'route-history']);
+    const monitorOnlyTabKeys = new Set(['bgp-session', 'bgp-loc-rib']);
 
     const handleTabChange = key => {
         router.push(`/bmp/${key}`);
@@ -61,6 +49,9 @@
         const childPath = route.path.split('/').filter(Boolean)[1];
         if (tabKeys.has(childPath)) {
             activeTabKey.value = childPath;
+        } else if (monitorOnlyTabKeys.has(childPath)) {
+            activeTabKey.value = defaultTabKey;
+            router.replace(`/bmp/${defaultTabKey}`);
         }
     };
 

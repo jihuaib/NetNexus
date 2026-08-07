@@ -9,24 +9,14 @@ const HEARTBEAT_INTERVAL_MS = 50;
 
 const TAB_TARGETS = [
     {
-        label: 'BGP会话',
-        hash: '#/bmp/bgp-session',
-        pageTestId: 'bmp-session-page'
+        label: '路由矩阵',
+        hash: '#/bmp/route-assurance',
+        pageTestId: 'bmp-route-assurance-page'
     },
     {
-        label: 'BGP Loc-RIB',
-        hash: '#/bmp/bgp-loc-rib',
-        pageTestId: 'bmp-loc-rib-page'
-    },
-    {
-        label: 'BGP会话统计',
-        hash: '#/bmp/bgp-session-statis-report',
-        pageTestId: 'bmp-session-statistics-page'
-    },
-    {
-        label: 'BGP Loc-RIB统计',
-        hash: '#/bmp/bgp-loc-rib-statis-report',
-        pageTestId: 'bmp-loc-rib-statistics-page'
+        label: '路由追踪',
+        hash: '#/bmp/route-lens',
+        pageTestId: 'bmp-route-lens-page'
     },
     {
         label: 'BMP配置',

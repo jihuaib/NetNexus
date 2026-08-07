@@ -10,6 +10,9 @@ const CLIENT = {
     remotePort: 49152,
     sysName: 'tooltip-router'
 };
+const CLIENT_KEY = encodeURIComponent(`source:${CLIENT.persistentSourceId}`);
+const SESSION_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=session`;
+const LOC_RIB_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=loc-rib`;
 
 const SESSION_SCOPE = {
     persistentScopeId: 'tooltip-peer-scope',
@@ -114,7 +117,7 @@ test.describe('BMP route detail tooltip dismissal', () => {
     });
 
     test('keeps the Session route tooltip dismissed after the drawer restores focus', async ({ page }) => {
-        await page.goto('/#/bmp/bgp-session');
+        await page.goto(SESSION_MONITOR_ROUTE);
 
         const detailButton = page.getByTestId('bmp-session-route-detail');
         await expect(detailButton).toBeVisible();
@@ -139,7 +142,7 @@ test.describe('BMP route detail tooltip dismissal', () => {
     });
 
     test('keeps the Loc-RIB route tooltip dismissed after keyboard drawer close', async ({ page }) => {
-        await page.goto('/#/bmp/bgp-loc-rib');
+        await page.goto(LOC_RIB_MONITOR_ROUTE);
 
         const detailButton = page.getByTestId('bmp-loc-rib-route-detail');
         await expect(detailButton).toBeVisible();

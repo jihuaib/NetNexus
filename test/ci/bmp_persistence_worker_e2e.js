@@ -151,6 +151,12 @@ async function main() {
         const clients = await request(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST);
         assert.equal(clients.data.length, 1);
         const client = clients.data[0];
+        const singleClient = await request(BmpConst.BMP_REQ_TYPES.GET_CLIENT, {
+            persistentSourceId: client.persistentSourceId
+        });
+        assert.equal(singleClient.data.persistentSourceId, client.persistentSourceId);
+        assert.equal(singleClient.data.remoteIp, client.remoteIp);
+        assert.equal(singleClient.data.isOnline, true);
         const peerRoute = liveRoutes.data.list.find(
             route => route.scopeKind === 'peer' && route.afi === 1 && route.safi === 1 && route.ip === '10.10.0.0'
         );

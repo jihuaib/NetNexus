@@ -4,7 +4,14 @@
             <template #extra>
                 <nn-space>
                     <nn-button :loading="loading" @click="() => loadMessageList()">刷新</nn-button>
-                    <nn-button danger :loading="clearLoading" @click="clearHistory">清空历史</nn-button>
+                    <nn-button
+                        danger
+                        data-testid="clear-syslog-message-history"
+                        :loading="clearLoading"
+                        @click="clearHistory"
+                    >
+                        清空历史
+                    </nn-button>
                 </nn-space>
             </template>
 
@@ -138,7 +145,7 @@
 </template>
 
 <script setup>
-    import { computed, ref, onActivated, onDeactivated } from 'vue';
+    import { computed, ref, onActivated, onBeforeUnmount, onDeactivated, onMounted } from 'vue';
     import { notify } from '../../utils/notify';
     import {
         SYSLOG_SUB_EVT_TYPES,
@@ -318,7 +325,9 @@
 
         const payload = respData.data;
         if (payload.type === SYSLOG_SUB_EVT_TYPES.MESSAGE_RECEIVED) {
-            pagination.value.total += 1;
+            pagination.value.total = Number.isFinite(Number(payload.stats?.messageCount))
+                ? Number(payload.stats.messageCount)
+                : pagination.value.total + 1;
             if (pagination.value.current === 1) {
                 const others = messageList.value.filter(item => item.id !== payload.data.id);
                 messageList.value = [payload.data, ...others].slice(0, pagination.value.pageSize);
@@ -342,14 +351,29 @@
         }
     };
 
-    onActivated(async () => {
+    let pageActive = false;
+
+    const activatePage = async () => {
+        if (pageActive) {
+            return;
+        }
+        pageActive = true;
         EventBus.on('syslog:event', SYSLOG_EVENT_PAGE_ID.PAGE_ID_SYSLOG_MESSAGE_LOG, handleSyslogEvent);
         await loadMessageList();
-    });
+    };
 
-    onDeactivated(() => {
+    const deactivatePage = () => {
+        if (!pageActive) {
+            return;
+        }
+        pageActive = false;
         EventBus.off('syslog:event', SYSLOG_EVENT_PAGE_ID.PAGE_ID_SYSLOG_MESSAGE_LOG);
-    });
+    };
+
+    onMounted(activatePage);
+    onActivated(activatePage);
+    onDeactivated(deactivatePage);
+    onBeforeUnmount(deactivatePage);
 </script>
 
 <style scoped>

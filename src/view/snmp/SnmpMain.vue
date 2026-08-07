@@ -2,7 +2,7 @@
     <div class="nn-main-container snmp-main">
         <div class="fixed-tabs">
             <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
-                <nn-tab-pane v-for="tab in SNMP_TABS" :key="tab.key" :tab="tab.label" />
+                <nn-tab-pane v-for="tab in mainTabs" :key="tab.key" :tab="tab.label" />
             </nn-tabs>
         </div>
 
@@ -17,7 +17,7 @@
 </template>
 
 <script setup>
-    import { onActivated, ref, watch } from 'vue';
+    import { ref, watch } from 'vue';
     import { useRoute, useRouter } from 'vue-router';
     import { SNMP_ROUTE, SNMP_TABS } from '../../const/snmpConst';
 
@@ -25,7 +25,9 @@
 
     const route = useRoute();
     const router = useRouter();
-    const activeTabKey = ref(SNMP_TABS[0].key);
+    const mainTabs = SNMP_TABS;
+    const defaultTab = mainTabs[0];
+    const activeTabKey = ref(defaultTab.key);
     const currentTab = ref(null);
 
     defineExpose({
@@ -37,23 +39,25 @@
     });
 
     const handleTabChange = key => {
-        const tab = SNMP_TABS.find(item => item.key === key);
+        const tab = mainTabs.find(item => item.key === key);
         if (tab) router.push(tab.route);
     };
 
     const syncActiveTab = () => {
         const childPath = route.path.split('/').filter(Boolean)[1];
-        activeTabKey.value = SNMP_TABS.some(tab => tab.key === childPath) ? childPath : SNMP_TABS[0].key;
+        activeTabKey.value = mainTabs.some(tab => tab.key === childPath) ? childPath : defaultTab.key;
     };
 
-    watch(() => route.path, syncActiveTab, { immediate: true });
-
-    onActivated(() => {
+    const ensureMainRoute = () => {
         syncActiveTab();
         if (route.path === SNMP_ROUTE.BASE || route.path === `${SNMP_ROUTE.BASE}/`) {
-            router.replace(SNMP_ROUTE.CONFIG);
+            void router.replace(SNMP_ROUTE.CONFIG);
+        } else if (route.path === SNMP_ROUTE.TRAP) {
+            void router.replace(SNMP_ROUTE.MIB_WORKSPACE);
         }
-    });
+    };
+
+    watch(() => route.path, ensureMainRoute, { immediate: true });
 </script>
 
 <style scoped></style>

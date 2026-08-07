@@ -27,7 +27,8 @@ SNMP 模块当前包含 Trap 接收、Trap 历史、MIB 管理和基础 SNMP 查
 | 按钮 | 功能 |
 | --- | --- |
 | 启动SNMP / 已启动 | 按 Trap 端口、查询端口、版本和认证参数启动 SNMP 服务。 |
-| 停止SNMP | 停止 Trap 接收和查询服务。 |
+| 停止SNMP | 停止 Trap 接收和查询服务，并关闭已经打开的 Trap 独立监控窗口。 |
+| 打开 Trap 监控 | 打开或切换到独立 Trap 监控窗口。 |
 
 主要字段：
 
@@ -42,7 +43,7 @@ SNMP 模块当前包含 Trap 接收、Trap 历史、MIB 管理和基础 SNMP 查
 
 ### Trap 监控
 
-Trap 页面展示当前收到的 Trap 历史。
+Trap 历史从配置页右上角打开，并在独立窗口中展示。窗口打开时会先加载当前历史，之后按批量变化刷新；窗口不存在时不会投递 Trap 监控事件，配置页只接收轻量计数快照。
 
 ![SNMP Trap 监控](images/snmp/snmp-trap.png)
 

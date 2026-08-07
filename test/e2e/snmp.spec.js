@@ -7,8 +7,7 @@ const MIB_WORKSPACE_ROUTE = '/#/snmp/snmp-mib';
 const pageCases = [
     { route: '/#/snmp/snmp-config', title: 'SNMP 配置' },
     { route: MIB_COMPILE_ROUTE, title: 'MIB 编译', expectText: 'NETNEXUS-DEMO-MIB.mib' },
-    { route: MIB_WORKSPACE_ROUTE, title: 'MIB 工作区', expectText: 'system' },
-    { route: '/#/snmp/snmp-trap', title: 'SNMP Trap 监控', expectText: '192.0.2.80' }
+    { route: MIB_WORKSPACE_ROUTE, title: 'MIB 工作区', expectText: 'system' }
 ];
 
 const mibTreeItems = page => page.locator('.mib-tree-panel').getByRole('treeitem');
@@ -72,6 +71,30 @@ test.describe('SNMP pages', () => {
         for (const pageCase of pageCases) {
             await verifyPage(test, page, pageCase);
         }
+    });
+
+    test('opens Trap history in the standalone monitor route', async ({ page }) => {
+        await page.goto('/#/snmp/snmp-config');
+        await expect(page.getByRole('tab', { name: 'Trap监控' })).toHaveCount(0);
+        await expect(page.getByTestId('open-snmp-trap-monitor-window')).toHaveCount(0);
+
+        await page.goto(MIB_WORKSPACE_ROUTE);
+        await page.getByTestId('open-snmp-trap-monitor-window').click();
+        await expect.poll(() => page.evaluate(() => window.__featureMonitorRequests)).toEqual(['snmp-trap']);
+
+        await page.goto('/#/monitor/snmp-trap');
+        await expect(page.getByTestId('snmp-monitor-shell')).toBeVisible();
+        await expect(page.locator('.monitor-window-header')).toHaveCount(0);
+        await expect.poll(() => page.title()).toBe('SNMP Trap 监控 - NetNexus');
+        await expect(page.getByText('192.0.2.80')).toBeVisible();
+        await expect(page.getByRole('button', { name: '清空' })).toBeVisible();
+        await expect(page.locator('.sider')).toHaveCount(0);
+    });
+
+    test('redirects the legacy Trap route to the MIB workspace', async ({ page }) => {
+        await page.goto('/#/snmp/snmp-trap');
+        await expect.poll(() => new URL(page.url()).hash).toBe('#/snmp/snmp-mib');
+        await expect(page.getByTestId('open-snmp-trap-monitor-window')).toBeVisible();
     });
 
     test('keeps MIB files in the compile page and the OID tree in the workspace', async ({ page }) => {

@@ -7,6 +7,9 @@ const logger = require('../log/logger');
 const BmpConst = require('../const/bmpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 const BmpPersistenceClient = require('../worker/bmp/bmpPersistenceClient');
+const { normalizeBmpClientKey } = require('../window/monitorWindowManager');
+
+const BMP_ANALYSIS_INVALIDATION_EVENTS = Object.freeze(['bmp:routeAssuranceInvalidated', 'bmp:routeLensInvalidated']);
 
 const BMP_PERSISTENCE_ARTIFACTS = Object.freeze([
     { kind: 'database', suffix: '' },
@@ -16,7 +19,7 @@ const BMP_PERSISTENCE_ARTIFACTS = Object.freeze([
 ]);
 
 class BmpApp {
-    constructor(ipcMain, store) {
+    constructor(ipcMain, store, options = {}) {
         this.ipcMain = ipcMain;
         this.store = store;
         this.bmpConfigFileKey = 'bmp-config';
@@ -34,6 +37,8 @@ class BmpApp {
         this.offlinePersistenceOpenPromise = null;
         this.offlinePersistenceLock = Promise.resolve();
         this.offlinePersistenceClosePromises = new Set();
+        this.closeMonitorWindowsHandler =
+            typeof options.closeMonitorWindows === 'function' ? options.closeMonitorWindows : null;
 
         this.bmpInitiationHandler = null;
         this.bmpSessionUpdateHandler = null;
@@ -52,6 +57,7 @@ class BmpApp {
         this.ipcMain.handle('bmp:startBmp', this.handleStartBmp.bind(this));
         this.ipcMain.handle('bmp:stopBmp', this.handleStopBmp.bind(this));
         this.ipcMain.handle('bmp:getClientList', this.handleGetClientList.bind(this));
+        this.ipcMain.handle('bmp:getClient', this.handleGetClient.bind(this));
         this.ipcMain.handle('bmp:deleteClientData', this.handleDeleteClientData.bind(this));
         this.ipcMain.handle('bmp:getRouteLens', this.handleGetRouteLens.bind(this));
         this.ipcMain.handle('bmp:getRouteAssurance', this.handleGetRouteAssurance.bind(this));
@@ -74,6 +80,23 @@ class BmpApp {
         this.ipcMain.handle('bmp:deletePersistenceDatabase', this.handleDeletePersistenceDatabase.bind(this));
         this.ipcMain.handle('bmp:getPersistedRoutes', this.handleGetPersistedRoutes.bind(this));
         this.ipcMain.handle('bmp:getPersistedRouteEvents', this.handleGetPersistedRouteEvents.bind(this));
+    }
+
+    emitDetailedMonitorUpdate(eventType, data) {
+        if (!this.eventDispatcher) {
+            return;
+        }
+
+        // Session/路由明细只发往显式订阅的独立监控窗口；没有对应窗口时
+        // emitToSubscribers 会直接返回，不产生 renderer IPC。
+        this.eventDispatcher.emitToSubscribers(eventType, successResponse(data));
+
+        // 路由矩阵和路由追踪仅需失效信号来触发重查，并且只在各自页面
+        // 激活订阅期间投递，避免把完整 BMP 更新复制到主窗口。
+        const invalidation = successResponse({ sourceEvent: eventType });
+        BMP_ANALYSIS_INVALIDATION_EVENTS.forEach(invalidationEvent => {
+            this.eventDispatcher.emitToSubscribers(invalidationEvent, invalidation);
+        });
     }
 
     async handleSaveBmpConfig(event, config) {
@@ -123,6 +146,10 @@ class BmpApp {
 
     async queryClientList() {
         return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST, null, []);
+    }
+
+    async queryClient(client) {
+        return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_CLIENT, client, null);
     }
 
     async queryRouteLens(query, routeState) {
@@ -566,19 +593,19 @@ class BmpApp {
             };
 
             this.bmpSessionUpdateHandler = data => {
-                this.eventDispatcher.emit('bmp:sessionUpdate', successResponse(data.data));
+                this.emitDetailedMonitorUpdate('bmp:sessionUpdate', data.data);
             };
 
             this.bmpInstanceUpdateHandler = data => {
-                this.eventDispatcher.emit('bmp:instanceUpdate', successResponse(data.data));
+                this.emitDetailedMonitorUpdate('bmp:instanceUpdate', data.data);
             };
 
             this.bmpRouteUpdateHandler = data => {
-                this.eventDispatcher.emit('bmp:routeUpdate', successResponse(data.data));
+                this.emitDetailedMonitorUpdate('bmp:routeUpdate', data.data);
             };
 
             this.bmpInstanceRouteUpdateHandler = data => {
-                this.eventDispatcher.emit('bmp:instanceRouteUpdate', successResponse(data.data));
+                this.emitDetailedMonitorUpdate('bmp:instanceRouteUpdate', data.data);
             };
 
             this.bmpTerminationHandler = data => {
@@ -586,7 +613,8 @@ class BmpApp {
             };
 
             this.bmpStatisticsReportHandler = data => {
-                this.eventDispatcher.emit('bmp:statisticsReport', successResponse(data.data));
+                // 统计明细只供按 Client 打开的统一监控窗口使用；没有窗口时不产生 renderer IPC。
+                this.eventDispatcher.emitToSubscribers('bmp:statisticsReport', successResponse(data.data));
             };
 
             // 注册事件监听器，处理来自worker的事件通知
@@ -637,6 +665,7 @@ class BmpApp {
     }
 
     async handleStopBmp() {
+        this.closeMonitorWindows();
         if (null === this.worker) {
             logger.error('BMP未启动');
             return errorResponse('BMP未启动');
@@ -671,6 +700,17 @@ class BmpApp {
                 this.eventDispatcher.cleanup(); // 清理事件发送器
                 this.eventDispatcher = null;
             }
+        }
+    }
+
+    closeMonitorWindows() {
+        if (!this.closeMonitorWindowsHandler) {
+            return;
+        }
+        try {
+            this.closeMonitorWindowsHandler();
+        } catch (error) {
+            logger.warn(`关闭 BMP 独立监控窗口失败: ${error.message}`);
         }
     }
 
@@ -727,6 +767,34 @@ class BmpApp {
             return result;
         } catch (error) {
             logger.error('Error getting client list:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleGetClient(event, clientKey) {
+        const normalizedClientKey = normalizeBmpClientKey(clientKey);
+        if (!normalizedClientKey) {
+            return errorResponse('BMP Client 标识无效');
+        }
+
+        const client = normalizedClientKey.startsWith('source:')
+            ? { persistentSourceId: normalizedClientKey.slice('source:'.length) }
+            : (() => {
+                  const [localIp, localPort, remoteIp, remotePort] = normalizedClientKey
+                      .slice('connection:'.length)
+                      .split('|');
+                  return {
+                      localIp,
+                      localPort: Number(localPort),
+                      remoteIp,
+                      remotePort: Number(remotePort)
+                  };
+              })();
+
+        try {
+            return await this.queryClient(client);
+        } catch (error) {
+            logger.error('Error getting BMP client:', error.message);
             return errorResponse(error.message);
         }
     }

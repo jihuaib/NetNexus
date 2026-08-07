@@ -191,7 +191,7 @@
 </template>
 
 <script setup>
-    import { ref, reactive, onActivated, onDeactivated } from 'vue';
+    import { ref, reactive, onActivated, onBeforeUnmount, onDeactivated, onMounted } from 'vue';
     import { notify } from '../../utils/notify';
     import { DeleteOutlined, EyeOutlined } from '../../ui/icons';
 
@@ -467,6 +467,21 @@
         onlineAgents.value = payload.onlineAgents;
     };
 
+    const resetTrapPage = () => {
+        setTrapPage({
+            list: [],
+            page: 1,
+            pageSize: pagination.pageSize,
+            total: 0,
+            totalTraps: 0,
+            todayTraps: 0,
+            recentTraps: 0,
+            onlineAgents: 0
+        });
+        detailModalVisible.value = false;
+        selectedTrap.value = null;
+    };
+
     const clearScheduledTrapRefresh = () => {
         if (trapListRefreshTimer) {
             clearTimeout(trapListRefreshTimer);
@@ -530,16 +545,7 @@
             const result = await window.snmpApi.clearTrapHistory();
             if (result.status === 'success') {
                 clearScheduledTrapRefresh();
-                setTrapPage({
-                    list: [],
-                    page: 1,
-                    pageSize: pagination.pageSize,
-                    total: 0,
-                    totalTraps: 0,
-                    todayTraps: 0,
-                    recentTraps: 0,
-                    onlineAgents: 0
-                });
+                resetTrapPage();
                 notify.success(result.msg || '历史记录清空成功');
             } else {
                 notify.error(result.msg || '清空失败');
@@ -578,31 +584,40 @@
             const type = payload.type;
             if (type === SNMP_SUB_EVT_TYPES.TRAP_BATCH_RECEIVED || type === SNMP_SUB_EVT_TYPES.TRAP_RECEIVED) {
                 scheduleTrapListRefresh();
+            } else if (type === SNMP_SUB_EVT_TYPES.HISTORY_CLEARED) {
+                clearScheduledTrapRefresh();
+                resetTrapPage();
             } else if (type === SNMP_SUB_EVT_TYPES.SERVER_STATUS && payload.data?.status === 'stopped') {
                 clearScheduledTrapRefresh();
-                setTrapPage({
-                    list: [],
-                    page: 1,
-                    pageSize: pagination.pageSize,
-                    total: 0,
-                    totalTraps: 0,
-                    todayTraps: 0,
-                    recentTraps: 0,
-                    onlineAgents: 0
-                });
+                resetTrapPage();
             }
         }
     };
 
-    onActivated(async () => {
+    let pageActive = false;
+
+    const activatePage = async () => {
+        if (pageActive) {
+            return;
+        }
+        pageActive = true;
         EventBus.on('snmp:event', SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_TRAP, handleSnmpEvent);
         await loadTrapList();
-    });
+    };
 
-    onDeactivated(() => {
+    const deactivatePage = () => {
+        if (!pageActive) {
+            return;
+        }
+        pageActive = false;
         clearScheduledTrapRefresh();
         EventBus.off('snmp:event', SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_TRAP);
-    });
+    };
+
+    onMounted(activatePage);
+    onActivated(activatePage);
+    onDeactivated(deactivatePage);
+    onBeforeUnmount(deactivatePage);
 </script>
 
 <style scoped>

@@ -2,221 +2,169 @@
     <div class="nn-container bmp-full-page" data-testid="bmp-session-page">
         <nn-row class="bmp-full-row">
             <nn-col :span="24">
-                <nn-card title="BGP会话" class="bmp-full-card">
-                    <div v-if="clientList.length > 0" class="bmp-tabs-shell">
-                        <nn-tabs
-                            v-model:active-key="activeClientKey"
-                            tab-position="left"
-                            class="client-tabs"
-                            :tab-bar-style="clientTabBarStyle"
-                        >
-                            <nn-tab-pane v-for="client in clientList" :key="getClientKey(client)">
-                                <template #tab>
-                                    <span class="client-tab-label">
-                                        <nn-tooltip
-                                            class="client-tab-tooltip"
-                                            :title="formatClientTab(client)"
-                                            placement="right"
-                                        >
-                                            <span class="client-tab-address">{{ formatClientTab(client) }}</span>
-                                        </nn-tooltip>
-                                        <span
-                                            class="client-connection-state"
-                                            :class="isRecordOnline(client) ? 'is-online' : 'is-offline'"
-                                        >
-                                            {{ formatConnectionState(client) }}
-                                        </span>
-                                    </span>
-                                </template>
-                                <div
-                                    v-if="getClientKey(client) === activeClientKey && bgpSessionList.length > 0"
-                                    class="bmp-inner-tabs-shell"
-                                >
-                                    <nn-tabs v-model:active-key="activeBgpSessionKey" class="bmp-inner-tabs">
-                                        <nn-tab-pane
-                                            v-for="session in bgpSessionList"
-                                            :key="getSessionKey(session)"
-                                            :tab="formatSessionTab(session)"
-                                        >
-                                            <template v-if="getSessionKey(session) === activeBgpSessionKey">
-                                                <nn-table
-                                                    class="detail-table"
-                                                    data-testid="bmp-session-table"
-                                                    :columns="bgpSessionColumns"
-                                                    :data-source="[session]"
-                                                    :pagination="false"
-                                                    size="small"
-                                                    style="margin-bottom: 8px"
-                                                    row-key="peerIp"
-                                                    :scroll="{ x: 1322 }"
-                                                >
-                                                    <template #bodyCell="{ column, record }">
-                                                        <template v-if="column.key === 'addPathMap'">
-                                                            <nn-tooltip
-                                                                v-if="
-                                                                    record.addPathMap &&
-                                                                    Object.values(record.addPathMap).some(v => v)
-                                                                "
-                                                            >
-                                                                <template #title>
-                                                                    <div
-                                                                        v-for="(enabled, key) in record.addPathMap"
-                                                                        :key="key"
-                                                                    >
-                                                                        <span v-if="enabled">
-                                                                            {{ ADDRESS_FAMILY_NAME[key] }}: Yes
-                                                                        </span>
-                                                                    </div>
-                                                                </template>
-                                                                <nn-tag color="green">Yes</nn-tag>
-                                                            </nn-tooltip>
-                                                            <nn-tag v-else color="red">No</nn-tag>
-                                                        </template>
-                                                        <template v-else-if="column.key === 'sessionFlags'">
-                                                            <nn-tooltip :title="getBmpFlagsName(record.sessionFlags)">
-                                                                <span>{{ getBmpFlagsName(record.sessionFlags) }}</span>
-                                                            </nn-tooltip>
-                                                        </template>
-                                                        <template v-else-if="column.key === 'rawSessionFlags'">
-                                                            <span>{{ formatRawFlags(record.rawSessionFlags) }}</span>
-                                                        </template>
-                                                        <template v-else-if="column.key === 'peerDownReason'">
-                                                            <span>
-                                                                {{ formatPeerDownReason(record.peerDownReason) }}
-                                                            </span>
-                                                        </template>
-                                                        <template v-else-if="column.key === 'tlvCount'">
-                                                            <span>{{ getSessionTlvCount(record) }}</span>
-                                                        </template>
-                                                        <template v-else-if="column.key === 'connectionStatus'">
-                                                            <nn-tag
-                                                                :color="isSessionOnline(record) ? 'green' : 'orange'"
-                                                            >
-                                                                {{ formatSessionConnectionState(record) }}
-                                                            </nn-tag>
-                                                        </template>
-                                                        <template v-else-if="column.key === 'action'">
-                                                            <nn-button
-                                                                type="link"
-                                                                size="small"
-                                                                @click="viewSessionDetails(record)"
-                                                            >
-                                                                详情
-                                                            </nn-button>
-                                                        </template>
-                                                    </template>
-                                                </nn-table>
-                                                <div class="route-toolbar">
-                                                    <div class="route-toolbar-query">
-                                                        <nn-select v-model:value="activeLocRibAf" style="width: 200px">
-                                                            <nn-select-option
-                                                                v-for="af in getSessionAddressFamilyTypes(session)"
-                                                                :key="af"
-                                                                :value="af"
-                                                            >
-                                                                {{ ADDRESS_FAMILY_NAME[af] || af }}
-                                                            </nn-select-option>
-                                                        </nn-select>
-                                                        <nn-select
-                                                            v-model:value="activeLocRibType"
-                                                            style="width: 200px"
-                                                        >
-                                                            <nn-select-option
-                                                                v-for="rt in getSessionRibTypesForAf(
-                                                                    session,
-                                                                    activeLocRibAf
-                                                                )"
-                                                                :key="rt"
-                                                                :value="rt"
-                                                            >
-                                                                {{ BMP_BGP_RIB_TYPE_NAME[rt] }}
-                                                            </nn-select-option>
-                                                        </nn-select>
-                                                        <nn-radio-group v-model:value="routeStateFilter" size="small">
-                                                            <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
-                                                                当前
-                                                            </nn-radio-button>
-                                                            <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
-                                                                全部
-                                                            </nn-radio-button>
-                                                            <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
-                                                                过期
-                                                            </nn-radio-button>
-                                                        </nn-radio-group>
-                                                        <nn-input
-                                                            v-model:value="routePrefixFilter"
-                                                            allow-clear
-                                                            placeholder="Prefix 或 Prefix/Mask"
-                                                            style="width: 220px"
-                                                            @press-enter="searchBgpRoutes"
-                                                        />
-                                                        <nn-button type="primary" @click="searchBgpRoutes">
-                                                            查询
-                                                        </nn-button>
-                                                    </div>
-                                                    <div class="route-toolbar-status">
-                                                        <nn-tag color="green">当前 {{ routeSummary.active }}</nn-tag>
-                                                        <nn-tag color="orange">过期 {{ routeSummary.stale }}</nn-tag>
-                                                        <nn-button
-                                                            danger
-                                                            :disabled="routeSummary.stale === 0"
-                                                            @click="purgeStaleRoutes"
-                                                        >
-                                                            清理过期
-                                                        </nn-button>
-                                                    </div>
-                                                </div>
-                                                <nn-table
-                                                    class="route-table"
-                                                    data-testid="bmp-session-route-table"
-                                                    :columns="bgpRouteColumns"
-                                                    :data-source="bgpRouteList"
-                                                    :pagination="bgpRoutePagination"
-                                                    :row-key="getRouteRowKey"
-                                                    :row-class-name="
-                                                        record =>
-                                                            getRouteParseStatusRowClass(record.parseStatus) ||
-                                                            (record.routeState === BMP_ROUTE_STATE.STALE
-                                                                ? 'route-stale-row'
-                                                                : '')
+                <nn-card class="bmp-full-card">
+                    <div v-if="monitoredClient && bgpSessionList.length > 0" class="bmp-inner-tabs-shell">
+                        <nn-tabs v-model:active-key="activeBgpSessionKey" class="bmp-inner-tabs">
+                            <nn-tab-pane
+                                v-for="session in bgpSessionList"
+                                :key="getSessionKey(session)"
+                                :tab="formatSessionTab(session)"
+                            >
+                                <template v-if="getSessionKey(session) === activeBgpSessionKey">
+                                    <nn-table
+                                        class="detail-table"
+                                        data-testid="bmp-session-table"
+                                        :columns="bgpSessionColumns"
+                                        :data-source="[session]"
+                                        :pagination="false"
+                                        size="small"
+                                        style="margin-bottom: 8px"
+                                        row-key="peerIp"
+                                        :scroll="{ x: 1322 }"
+                                    >
+                                        <template #bodyCell="{ column, record }">
+                                            <template v-if="column.key === 'addPathMap'">
+                                                <nn-tooltip
+                                                    v-if="
+                                                        record.addPathMap &&
+                                                        Object.values(record.addPathMap).some(v => v)
                                                     "
-                                                    size="small"
-                                                    :scroll="{ x: 1546, y: '100%' }"
                                                 >
-                                                    <template #bodyCell="{ column, record }">
-                                                        <template v-if="column.key === 'routeAction'">
-                                                            <nn-space size="small">
-                                                                <nn-tooltip title="查询路由detail">
-                                                                    <nn-button
-                                                                        type="text"
-                                                                        size="small"
-                                                                        data-testid="bmp-session-route-detail"
-                                                                        @click="viewRouteDetailJson(record)"
-                                                                    >
-                                                                        <template #icon><ProfileOutlined /></template>
-                                                                    </nn-button>
-                                                                </nn-tooltip>
-                                                            </nn-space>
-                                                        </template>
-                                                        <template v-else-if="column.key === 'parseStatus'">
-                                                            <nn-tag
-                                                                :color="getRouteParseStatusColor(record.parseStatus)"
-                                                            >
-                                                                {{ getRouteParseStatusText(record.parseStatus) }}
-                                                            </nn-tag>
-                                                        </template>
+                                                    <template #title>
+                                                        <div v-for="(enabled, key) in record.addPathMap" :key="key">
+                                                            <span v-if="enabled">
+                                                                {{ ADDRESS_FAMILY_NAME[key] }}: Yes
+                                                            </span>
+                                                        </div>
                                                     </template>
-                                                </nn-table>
+                                                    <nn-tag color="green">Yes</nn-tag>
+                                                </nn-tooltip>
+                                                <nn-tag v-else color="red">No</nn-tag>
                                             </template>
-                                        </nn-tab-pane>
-                                    </nn-tabs>
-                                </div>
+                                            <template v-else-if="column.key === 'sessionFlags'">
+                                                <nn-tooltip :title="getBmpFlagsName(record.sessionFlags)">
+                                                    <span>{{ getBmpFlagsName(record.sessionFlags) }}</span>
+                                                </nn-tooltip>
+                                            </template>
+                                            <template v-else-if="column.key === 'rawSessionFlags'">
+                                                <span>{{ formatRawFlags(record.rawSessionFlags) }}</span>
+                                            </template>
+                                            <template v-else-if="column.key === 'peerDownReason'">
+                                                <span>
+                                                    {{ formatPeerDownReason(record.peerDownReason) }}
+                                                </span>
+                                            </template>
+                                            <template v-else-if="column.key === 'tlvCount'">
+                                                <span>{{ getSessionTlvCount(record) }}</span>
+                                            </template>
+                                            <template v-else-if="column.key === 'connectionStatus'">
+                                                <nn-tag :color="isSessionOnline(record) ? 'green' : 'orange'">
+                                                    {{ formatSessionConnectionState(record) }}
+                                                </nn-tag>
+                                            </template>
+                                            <template v-else-if="column.key === 'action'">
+                                                <nn-button type="link" size="small" @click="viewSessionDetails(record)">
+                                                    详情
+                                                </nn-button>
+                                            </template>
+                                        </template>
+                                    </nn-table>
+                                    <div class="route-toolbar">
+                                        <div class="route-toolbar-query">
+                                            <nn-select v-model:value="activeLocRibAf" style="width: 200px">
+                                                <nn-select-option
+                                                    v-for="af in getSessionAddressFamilyTypes(session)"
+                                                    :key="af"
+                                                    :value="af"
+                                                >
+                                                    {{ ADDRESS_FAMILY_NAME[af] || af }}
+                                                </nn-select-option>
+                                            </nn-select>
+                                            <nn-select v-model:value="activeLocRibType" style="width: 200px">
+                                                <nn-select-option
+                                                    v-for="rt in getSessionRibTypesForAf(session, activeLocRibAf)"
+                                                    :key="rt"
+                                                    :value="rt"
+                                                >
+                                                    {{ BMP_BGP_RIB_TYPE_NAME[rt] }}
+                                                </nn-select-option>
+                                            </nn-select>
+                                            <nn-radio-group v-model:value="routeStateFilter" size="small">
+                                                <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.ACTIVE">
+                                                    当前
+                                                </nn-radio-button>
+                                                <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.ALL">
+                                                    全部
+                                                </nn-radio-button>
+                                                <nn-radio-button :value="BMP_ROUTE_STATE_FILTER.STALE">
+                                                    过期
+                                                </nn-radio-button>
+                                            </nn-radio-group>
+                                            <nn-input
+                                                v-model:value="routePrefixFilter"
+                                                allow-clear
+                                                placeholder="Prefix 或 Prefix/Mask"
+                                                style="width: 220px"
+                                                @press-enter="searchBgpRoutes"
+                                            />
+                                            <nn-button type="primary" @click="searchBgpRoutes">查询</nn-button>
+                                        </div>
+                                        <div class="route-toolbar-status">
+                                            <nn-tag color="green">当前 {{ routeSummary.active }}</nn-tag>
+                                            <nn-tag color="orange">过期 {{ routeSummary.stale }}</nn-tag>
+                                            <nn-button
+                                                danger
+                                                :disabled="routeSummary.stale === 0"
+                                                @click="purgeStaleRoutes"
+                                            >
+                                                清理过期
+                                            </nn-button>
+                                        </div>
+                                    </div>
+                                    <nn-table
+                                        class="route-table"
+                                        data-testid="bmp-session-route-table"
+                                        :columns="bgpRouteColumns"
+                                        :data-source="bgpRouteList"
+                                        :pagination="bgpRoutePagination"
+                                        :row-key="getRouteRowKey"
+                                        :row-class-name="
+                                            record =>
+                                                getRouteParseStatusRowClass(record.parseStatus) ||
+                                                (record.routeState === BMP_ROUTE_STATE.STALE ? 'route-stale-row' : '')
+                                        "
+                                        size="small"
+                                        :scroll="{ x: 1546, y: '100%' }"
+                                    >
+                                        <template #bodyCell="{ column, record }">
+                                            <template v-if="column.key === 'routeAction'">
+                                                <nn-space size="small">
+                                                    <nn-tooltip title="查询路由detail">
+                                                        <nn-button
+                                                            type="text"
+                                                            size="small"
+                                                            data-testid="bmp-session-route-detail"
+                                                            @click="viewRouteDetailJson(record)"
+                                                        >
+                                                            <template #icon><ProfileOutlined /></template>
+                                                        </nn-button>
+                                                    </nn-tooltip>
+                                                </nn-space>
+                                            </template>
+                                            <template v-else-if="column.key === 'parseStatus'">
+                                                <nn-tag :color="getRouteParseStatusColor(record.parseStatus)">
+                                                    {{ getRouteParseStatusText(record.parseStatus) }}
+                                                </nn-tag>
+                                            </template>
+                                        </template>
+                                    </nn-table>
+                                </template>
                             </nn-tab-pane>
                         </nn-tabs>
                     </div>
 
                     <div v-else class="no-result-message">
-                        <nn-empty description="暂无数据" />
+                        <nn-empty :description="emptyDescription" />
                     </div>
                 </nn-card>
             </nn-col>
@@ -254,7 +202,8 @@
 </template>
 
 <script setup>
-    import { ref, watch, onActivated, onDeactivated } from 'vue';
+    import { computed, inject, ref, watch, onActivated, onBeforeUnmount, onDeactivated, onMounted } from 'vue';
+    import { useRoute } from 'vue-router';
     import { notify } from '../../utils/notify';
     import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import { ProfileOutlined } from '../../ui/icons';
@@ -280,12 +229,40 @@
         name: 'BgpSession'
     });
 
-    // 客户端
-    const clientList = ref([]);
-    const activeClientKey = ref('');
-    const clientTabBarStyle = { width: '148px', flex: '0 0 148px' };
+    const props = defineProps({
+        clientKey: {
+            type: String,
+            default: ''
+        }
+    });
 
+    const route = useRoute();
+
+    const hasControlCharacter = value =>
+        Array.from(value).some(character => {
+            const code = character.charCodeAt(0);
+            return code <= 0x1f || code === 0x7f;
+        });
+
+    const getRouteQueryString = value => {
+        const queryValue = Array.isArray(value) ? value[0] : value;
+        if (typeof queryValue !== 'string' || queryValue.length === 0 || queryValue.length > 512) {
+            return '';
+        }
+        return hasControlCharacter(queryValue) ? '' : queryValue;
+    };
+
+    const lockedClientKey = computed(
+        () => getRouteQueryString(props.clientKey) || getRouteQueryString(route.query.clientKey)
+    );
+
+    // 客户端
+    const monitoredClient = ref(null);
     const bgpSessionList = ref([]);
+    let clientLoadRequestId = 0;
+    let clientRevision = 0;
+    let clientReloadTimer = null;
+    let pageActive = false;
 
     // 对等体列表
     const bgpSessionColumns = [
@@ -399,32 +376,67 @@
     const getClientTransportKey = client =>
         `${client?.localIp || ''}|${client?.localPort || ''}|${client?.remoteIp || ''}|${client?.remotePort || ''}`;
 
-    const getClientKey = client =>
-        client?.persistentSourceId
-            ? `source:${client.persistentSourceId}`
+    const getClientKey = client => {
+        const sourceId = client?.persistentSourceId || client?.sourceId;
+        return sourceId
+            ? `source:${String(sourceId).trim().toLowerCase()}`
             : `connection:${getClientTransportKey(client)}`;
+    };
+
+    const monitoredClientKey = computed(() => (monitoredClient.value ? getClientKey(monitoredClient.value) : ''));
+
+    const clientMatchesKey = (client, clientKey) => {
+        if (!client || !clientKey) return false;
+        if (clientKey.startsWith('source:')) {
+            const sourceId = client.persistentSourceId || client.sourceId || '';
+            return `source:${String(sourceId).trim().toLowerCase()}` === clientKey;
+        }
+        if (clientKey.startsWith('connection:')) {
+            return `connection:${getClientTransportKey(client)}` === clientKey;
+        }
+        return false;
+    };
 
     const isSameClient = (left, right) => {
         if (!left || !right) return false;
-        if (left.persistentSourceId && right.persistentSourceId) {
-            return left.persistentSourceId === right.persistentSourceId;
+        const leftSourceId = left.persistentSourceId || left.sourceId;
+        const rightSourceId = right.persistentSourceId || right.sourceId;
+        if (leftSourceId && rightSourceId) {
+            return leftSourceId === rightSourceId;
         }
         return getClientTransportKey(left) === getClientTransportKey(right);
     };
 
-    const getActiveClient = () =>
-        clientList.value.find(client => getClientKey(client) === activeClientKey.value) || null;
+    const getClientConnectionId = client => client?.persistentConnectionId || client?.connectionId || null;
 
-    const getActiveClientApiInfo = () => {
-        const client = getActiveClient();
+    const hasCompleteClientTransport = client =>
+        [client?.localIp, client?.localPort, client?.remoteIp, client?.remotePort].every(
+            value => value !== null && value !== undefined && value !== ''
+        );
+
+    const isSameClientConnection = (left, right) => {
+        if (!isSameClient(left, right)) return false;
+        const leftConnectionId = getClientConnectionId(left);
+        const rightConnectionId = getClientConnectionId(right);
+        if (leftConnectionId && rightConnectionId) {
+            return leftConnectionId === rightConnectionId;
+        }
+        if (hasCompleteClientTransport(left) && hasCompleteClientTransport(right)) {
+            return getClientTransportKey(left) === getClientTransportKey(right);
+        }
+        return true;
+    };
+
+    const getMonitoredClientApiInfo = () => {
+        const client = monitoredClient.value;
         if (!client) return null;
         return {
             localIp: client.localIp,
             localPort: client.localPort,
             remoteIp: client.remoteIp,
             remotePort: client.remotePort,
-            persistentSourceId: client.persistentSourceId || null,
-            persistentConnectionId: client.persistentConnectionId || null
+            persistentSourceId: client.persistentSourceId || client.sourceId || null,
+            persistentConnectionId: client.persistentConnectionId || client.connectionId || null
         };
     };
 
@@ -439,9 +451,31 @@
 
     const isRecordOnline = record => getRecordOnlineState(record) ?? true;
 
-    const isSessionOnline = session => getRecordOnlineState(session) ?? isRecordOnline(getActiveClient());
+    const isSessionOnline = session => getRecordOnlineState(session) ?? isRecordOnline(monitoredClient.value);
 
-    const formatConnectionState = record => (isRecordOnline(record) ? '在线' : '已断开');
+    const monitorWindowTitleText = computed(() => {
+        const client = monitoredClient.value;
+        const clientLabel = client ? formatBmpClientLabel(client) : '';
+        return ['BGP会话', clientLabel].filter(Boolean).join(' · ');
+    });
+    const monitorWindowTitle = inject('monitorWindowTitle', null);
+    const monitorTitleOwner = Symbol('bmp-session-monitor-title');
+    watch(
+        monitorWindowTitleText,
+        title => {
+            if (!monitorWindowTitle) return;
+            monitorWindowTitle.setTitle(monitorTitleOwner, title);
+        },
+        { immediate: true }
+    );
+    onBeforeUnmount(() => monitorWindowTitle?.clearTitle(monitorTitleOwner));
+
+    const emptyDescription = computed(() => {
+        if (!lockedClientKey.value) {
+            return '缺少有效的 Client 标识';
+        }
+        return monitoredClient.value ? '当前 Client 暂无会话数据' : '未找到指定 Client';
+    });
 
     const formatSessionConnectionState = session => (isSessionOnline(session) ? '在线' : '已断开');
 
@@ -567,7 +601,7 @@
         };
 
         if (
-            !activeClientKey.value ||
+            !monitoredClient.value ||
             !activeBgpSessionKey.value ||
             activeLocRibAf.value === null ||
             activeLocRibAf.value === undefined ||
@@ -584,7 +618,7 @@
             return;
         }
 
-        const client = getActiveClientApiInfo();
+        const client = getMonitoredClientApiInfo();
         if (!client) {
             currentDetails.value = record;
             routeDetailLoading.value = false;
@@ -651,10 +685,6 @@
         return (record.peerUpTlvs || []).length + (record.peerDownTlvs || []).length;
     };
 
-    const formatClientTab = client => {
-        return formatBmpClientLabel(client);
-    };
-
     const getSessionVrfTableNames = session => {
         return Array.isArray(session?.vrfTableNames) ? session.vrfTableNames.filter(Boolean) : [];
     };
@@ -681,32 +711,105 @@
         routeDetailLoading.value = false;
     };
 
-    const markClientOffline = client => {
-        const existing = clientList.value.find(item => isSameClient(item, client));
-        if (existing) {
-            existing.isOnline = false;
-            existing.connectionState = 'offline';
+    const clearClientReloadTimer = () => {
+        if (clientReloadTimer) {
+            clearTimeout(clientReloadTimer);
+            clientReloadTimer = null;
         }
-        if (isSameClient(client, getActiveClient())) {
-            bgpSessionList.value = bgpSessionList.value.map(session => ({
-                ...session,
+    };
+
+    const invalidateClientDataRequests = () => {
+        clientRevision += 1;
+        sessionListRequestId += 1;
+        routeListRequestId += 1;
+        routeDetailRequestId += 1;
+        routeDetailLoading.value = false;
+        clearScheduledRouteRefresh();
+    };
+
+    const commitMonitoredClient = (client, { forceInvalidate = false } = {}) => {
+        const previousClient = monitoredClient.value;
+        const previousKey = previousClient ? getClientKey(previousClient) : '';
+        const nextClient = client || null;
+        const nextKey = nextClient ? getClientKey(nextClient) : '';
+        const identityChanged = previousKey !== nextKey;
+        const connectionChanged =
+            Boolean(previousClient) !== Boolean(nextClient) ||
+            (previousClient && nextClient && !isSameClientConnection(previousClient, nextClient));
+
+        if (forceInvalidate || identityChanged || connectionChanged) {
+            invalidateClientDataRequests();
+        }
+
+        monitoredClient.value = nextClient;
+        if (!nextClient || identityChanged || connectionChanged) {
+            bgpSessionList.value = [];
+            resetSessionAndRouteSelection();
+        }
+
+        return { identityChanged, connectionChanged };
+    };
+
+    const markMonitoredClientOffline = client => {
+        if (!monitoredClient.value || !isSameClientConnection(client, monitoredClient.value)) {
+            return false;
+        }
+
+        commitMonitoredClient(
+            {
+                ...monitoredClient.value,
                 isOnline: false,
                 connectionState: 'offline'
-            }));
-        }
+            },
+            { forceInvalidate: true }
+        );
+        bgpSessionList.value = bgpSessionList.value.map(session => ({
+            ...session,
+            isOnline: false,
+            connectionState: 'offline'
+        }));
+        return true;
+    };
+
+    const scheduleMonitoredClientReload = () => {
+        clearClientReloadTimer();
+        const expectedClientKey = lockedClientKey.value;
+        const expectedClientRevision = clientRevision;
+        clientReloadTimer = setTimeout(() => {
+            clientReloadTimer = null;
+            if (
+                !pageActive ||
+                lockedClientKey.value !== expectedClientKey ||
+                clientRevision !== expectedClientRevision
+            ) {
+                return;
+            }
+            loadMonitoredClient({ refreshSessions: true });
+        }, 50);
     };
 
     const onTerminationHandler = result => {
         if (result.status === 'success') {
             const data = result.data;
             if (data) {
-                markClientOffline(data);
-                setTimeout(loadClientList, 50);
+                if (!clientMatchesKey(data, lockedClientKey.value)) {
+                    return;
+                }
+                if (!monitoredClient.value) {
+                    clearClientReloadTimer();
+                    clientLoadRequestId += 1;
+                    commitMonitoredClient(
+                        { ...data, isOnline: false, connectionState: 'offline' },
+                        { forceInvalidate: true }
+                    );
+                } else if (!markMonitoredClientOffline(data)) {
+                    return;
+                }
+                scheduleMonitoredClientReload();
             } else {
-                clientList.value = [];
-                activeClientKey.value = '';
-                bgpSessionList.value = [];
-                resetSessionAndRouteSelection();
+                clearClientReloadTimer();
+                clientLoadRequestId += 1;
+                commitMonitoredClient(null, { forceInvalidate: true });
             }
         } else {
             console.error('termination handler error', result.msg);
@@ -716,7 +819,7 @@
     const onRouteUpdate = result => {
         if (result.status !== 'success' || !result.data) return;
         const updates = Array.isArray(result.data.updates) ? result.data.updates : [result.data];
-        const activeClient = getActiveClient();
+        const activeClient = monitoredClient.value;
         const activeSession = getActiveSession();
         if (!activeClient || !activeSession) return;
 
@@ -730,6 +833,7 @@
             null;
         const shouldRefresh = updates.some(update => {
             if (!update) return false;
+            if (update.client && !isSameClientConnection(update.client, activeClient)) return false;
             const updateSourceId =
                 update.sourceId ||
                 update.persistentSourceId ||
@@ -739,7 +843,7 @@
             const sourceMatches =
                 activeSourceId && updateSourceId
                     ? activeSourceId === updateSourceId
-                    : getClientKey(update.client) === activeClientKey.value;
+                    : clientMatchesKey(update.client, lockedClientKey.value);
             if (!sourceMatches) return false;
 
             const updateScopeId =
@@ -766,7 +870,7 @@
         if (result.status !== 'success' || !result.data) return;
         const data = result.data;
 
-        if (!data.session || !isSameClient(data.client, getActiveClient())) return;
+        if (!data.session || !isSameClientConnection(data.client, monitoredClient.value)) return;
 
         const existingIndex = bgpSessionList.value.findIndex(session => isSameSession(session, data.session));
         if (existingIndex >= 0) {
@@ -791,47 +895,63 @@
         }
     };
 
-    const onClientListUpdate = result => {
+    const onMonitoredClientUpdate = result => {
         if (result.status === 'success') {
-            // 存在则更新，否则添加
-            const existingIndex = clientList.value.findIndex(client => isSameClient(client, result.data));
-            if (existingIndex !== -1) {
-                const wasActive = getClientKey(clientList.value[existingIndex]) === activeClientKey.value;
-                clientList.value[existingIndex] = result.data;
-                if (wasActive) {
-                    activeClientKey.value = getClientKey(result.data);
-                }
-            } else {
-                clientList.value.push(result.data);
+            const client = result.data;
+            if (!clientMatchesKey(client, lockedClientKey.value)) {
+                return;
             }
-            if (clientList.value.length > 0 && !activeClientKey.value) {
-                activeClientKey.value = getClientKey(clientList.value[0]);
+
+            clearClientReloadTimer();
+            clientLoadRequestId += 1;
+            const hadMonitoredClient = Boolean(monitoredClient.value);
+            const { identityChanged, connectionChanged } = commitMonitoredClient(client);
+            if (!hadMonitoredClient || identityChanged || connectionChanged) {
+                loadBgpSessionList();
             }
         } else {
-            notify.error('客户端列表获取失败');
+            notify.error('Client 信息更新失败');
         }
     };
 
-    const loadClientList = async () => {
-        try {
-            const clientListResult = await window.bmpApi.getClientList();
-            if (clientListResult.status === 'success') {
-                const nextClientList = clientListResult.data || [];
-                const selectedClient = getActiveClient();
-                clientList.value = nextClientList;
+    const getClientFromResponse = response => {
+        if (response?.status === 'success') {
+            return response.data || null;
+        }
+        if (response?.status) {
+            throw new Error(response.msg || '获取 Client 失败');
+        }
+        return response || null;
+    };
 
-                if (clientList.value.length > 0) {
-                    const matchingClient = selectedClient
-                        ? clientList.value.find(client => isSameClient(client, selectedClient))
-                        : null;
-                    activeClientKey.value = getClientKey(matchingClient || clientList.value[0]);
-                } else {
-                    activeClientKey.value = '';
-                }
+    const loadMonitoredClient = async ({ refreshSessions = false } = {}) => {
+        const requestClientKey = lockedClientKey.value;
+        const requestId = ++clientLoadRequestId;
+        if (!requestClientKey) {
+            commitMonitoredClient(null, { forceInvalidate: true });
+            return null;
+        }
+
+        try {
+            const response = await window.bmpApi.getClient(requestClientKey);
+            if (!pageActive || requestId !== clientLoadRequestId || requestClientKey !== lockedClientKey.value) {
+                return null;
             }
+
+            const client = getClientFromResponse(response);
+            const nextClient = client && clientMatchesKey(client, requestClientKey) ? client : null;
+            const { identityChanged, connectionChanged } = commitMonitoredClient(nextClient);
+            if (refreshSessions && nextClient && (identityChanged || connectionChanged)) {
+                await loadBgpSessionList();
+            }
+            return nextClient;
         } catch (error) {
+            if (!pageActive || requestId !== clientLoadRequestId || requestClientKey !== lockedClientKey.value) {
+                return null;
+            }
             console.error(error);
-            notify.error('加载数据失败');
+            notify.error('加载 Client 失败');
+            return null;
         }
     };
 
@@ -852,7 +972,8 @@
     let suppressSessionSelectionReloadForKey = '';
 
     const captureRouteSelection = () => ({
-        clientKey: activeClientKey.value,
+        clientKey: lockedClientKey.value,
+        clientRevision,
         sessionKey: activeBgpSessionKey.value,
         af: activeLocRibAf.value,
         ribType: activeLocRibType.value,
@@ -862,7 +983,7 @@
     });
 
     const getRouteSelectionKey = selection =>
-        `${selection.clientKey}|${selection.sessionKey}|${selection.af}|${selection.ribType}|${selection.page}|${selection.routeState}|${selection.prefix}`;
+        `${selection.clientKey}|${selection.clientRevision}|${selection.sessionKey}|${selection.af}|${selection.ribType}|${selection.page}|${selection.routeState}|${selection.prefix}`;
 
     const isCurrentRouteSelection = selection =>
         Boolean(selection) && getRouteSelectionKey(selection) === getRouteSelectionKey(captureRouteSelection());
@@ -965,16 +1086,17 @@
 
     // 加载BGP会话列表
     const loadBgpSessionList = async () => {
-        if (!activeClientKey.value) {
+        if (!monitoredClient.value) {
             bgpSessionList.value = [];
             resetSessionAndRouteSelection();
             return;
         }
 
         const requestId = ++sessionListRequestId;
-        const requestClientKey = activeClientKey.value;
+        const requestClientKey = monitoredClientKey.value;
+        const requestClientRevision = clientRevision;
         try {
-            const clientInfo = getActiveClientApiInfo();
+            const clientInfo = getMonitoredClientApiInfo();
             if (!clientInfo) {
                 bgpSessionList.value = [];
                 resetSessionAndRouteSelection();
@@ -982,7 +1104,11 @@
             }
 
             const bgpSessionListResult = await window.bmpApi.getBgpSessions(clientInfo);
-            if (requestId !== sessionListRequestId || requestClientKey !== activeClientKey.value) {
+            if (
+                requestId !== sessionListRequestId ||
+                requestClientKey !== monitoredClientKey.value ||
+                requestClientRevision !== clientRevision
+            ) {
                 return;
             }
 
@@ -1010,7 +1136,11 @@
                 notify.error('获取BGP邻居列表失败');
             }
         } catch (error) {
-            if (requestId !== sessionListRequestId || requestClientKey !== activeClientKey.value) {
+            if (
+                requestId !== sessionListRequestId ||
+                requestClientKey !== monitoredClientKey.value ||
+                requestClientRevision !== clientRevision
+            ) {
                 return;
             }
             console.error(error);
@@ -1020,37 +1150,53 @@
         }
     };
 
-    // 监听activeClientKey变化，加载对应的peer列表 AND instances
-    watch(activeClientKey, newKey => {
-        bgpSessionList.value = [];
-        resetSessionAndRouteSelection();
-        if (newKey) {
-            loadBgpSessionList();
-        }
-    });
-
-    onActivated(async () => {
-        const previousActiveClientKey = activeClientKey.value;
-
-        EventBus.on('bmp:sessionUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onSessionUpdate);
-        EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onClientListUpdate);
-        EventBus.on('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onTerminationHandler);
-        EventBus.on('bmp:routeUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onRouteUpdate);
-
-        await loadClientList();
-        // activeClientKey 变化时 watcher 会负责加载；缓存回切且选择未变时在后台刷新当前数据。
-        if (activeClientKey.value && activeClientKey.value === previousActiveClientKey) {
+    watch(lockedClientKey, async () => {
+        clearClientReloadTimer();
+        clientLoadRequestId += 1;
+        commitMonitoredClient(null, { forceInvalidate: true });
+        if (!pageActive) return;
+        const client = await loadMonitoredClient();
+        if (client && pageActive) {
             await loadBgpSessionList();
         }
     });
 
-    onDeactivated(() => {
+    const activatePage = async () => {
+        if (pageActive) {
+            return;
+        }
+        pageActive = true;
+
+        EventBus.on('bmp:sessionUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onSessionUpdate);
+        EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onMonitoredClientUpdate);
+        EventBus.on('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onTerminationHandler);
+        EventBus.on('bmp:routeUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION, onRouteUpdate);
+
+        const client = await loadMonitoredClient();
+        if (client && pageActive) {
+            await loadBgpSessionList();
+        }
+    };
+
+    const deactivatePage = () => {
+        if (!pageActive) {
+            return;
+        }
+        pageActive = false;
+        clearClientReloadTimer();
+        clientLoadRequestId += 1;
+        invalidateClientDataRequests();
         clearScheduledRouteRefresh();
         EventBus.off('bmp:sessionUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION);
         EventBus.off('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION);
         EventBus.off('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION);
         EventBus.off('bmp:routeUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION);
-    });
+    };
+
+    onMounted(activatePage);
+    onActivated(activatePage);
+    onDeactivated(deactivatePage);
+    onBeforeUnmount(deactivatePage);
 
     const bgpRoutePagination = ref({
         current: 1,
@@ -1109,7 +1255,7 @@
         }
 
         if (
-            !activeClientKey.value ||
+            !monitoredClient.value ||
             !activeBgpSessionKey.value ||
             activeLocRibAf.value === null ||
             activeLocRibAf.value === undefined ||
@@ -1140,7 +1286,7 @@
             return;
         }
 
-        const client = getActiveClientApiInfo();
+        const client = getMonitoredClientApiInfo();
         if (!client) {
             if (!background) {
                 resetRouteData();
@@ -1201,7 +1347,7 @@
 
     const purgeStaleRoutes = async () => {
         if (
-            !activeClientKey.value ||
+            !monitoredClient.value ||
             !activeBgpSessionKey.value ||
             activeLocRibAf.value === null ||
             activeLocRibAf.value === undefined ||
@@ -1214,7 +1360,7 @@
             return;
         }
 
-        const client = getActiveClientApiInfo();
+        const client = getMonitoredClientApiInfo();
         if (!client) return;
 
         try {
@@ -1321,7 +1467,6 @@
         flex-direction: column;
     }
 
-    .bmp-tabs-shell,
     .bmp-inner-tabs-shell {
         flex: 1 1 0;
         min-height: 0;
@@ -1331,54 +1476,6 @@
         overflow: hidden;
     }
 
-    .client-tab-label {
-        display: flex;
-        width: 100%;
-        max-width: 132px;
-        min-width: 0;
-        flex-direction: column;
-        align-items: center;
-        gap: 2px;
-        font-size: 14px;
-        line-height: 22px;
-        overflow: hidden;
-    }
-
-    .client-tab-address {
-        display: block;
-        width: 100%;
-        max-width: 100%;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .client-tab-tooltip {
-        width: 100%;
-        max-width: 100%;
-        min-width: 0;
-    }
-
-    .client-tab-tooltip :deep(.nn-tooltip-trigger) {
-        max-width: 100%;
-        min-width: 0;
-    }
-
-    .client-connection-state {
-        font-size: 12px;
-        line-height: 1;
-    }
-
-    .client-connection-state.is-online {
-        color: #389e0d;
-    }
-
-    .client-connection-state.is-offline {
-        color: #d46b08;
-    }
-
-    .client-tabs,
     .bmp-inner-tabs {
         flex: 1 1 0;
         min-height: 0;
@@ -1387,9 +1484,6 @@
         overflow: hidden;
     }
 
-    .client-tabs > :deep(.nn-tabs-content-holder),
-    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
-    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane),
     .bmp-inner-tabs > :deep(.nn-tabs-content-holder),
     .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
     .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane) {
@@ -1409,16 +1503,6 @@
 
     .bmp-inner-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
         padding: 8px 0 !important;
-    }
-
-    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
-        justify-content: center;
-        padding: 8px;
-        text-align: center;
-    }
-
-    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab > .nn-tabs-tab-button) {
-        width: 100%;
     }
 
     .bgp-peer-info-header {

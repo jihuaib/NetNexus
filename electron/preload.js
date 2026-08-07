@@ -34,6 +34,16 @@ contextBridge.exposeInMainWorld('commonApi', {
     }
 });
 
+// 原生窗口模块：仅接受主进程白名单内的监控窗口标识。
+contextBridge.exposeInMainWorld('windowApi', {
+    openMonitor: (monitorId, options) =>
+        options === undefined
+            ? ipcRenderer.invoke('window:openMonitor', monitorId)
+            : ipcRenderer.invoke('window:openMonitor', monitorId, options),
+    subscribeEventScope: scopeId => ipcRenderer.invoke('window:subscribeEventScope', scopeId),
+    unsubscribeEventScope: scopeId => ipcRenderer.invoke('window:unsubscribeEventScope', scopeId)
+});
+
 // 更新模块
 contextBridge.exposeInMainWorld('updaterApi', {
     checkForUpdates: () => ipcRenderer.invoke('updater:checkForUpdates'),
@@ -136,6 +146,7 @@ contextBridge.exposeInMainWorld('bmpApi', {
 
     // 数据获取
     getClientList: () => ipcRenderer.invoke('bmp:getClientList'),
+    getClient: clientKey => ipcRenderer.invoke('bmp:getClient', clientKey),
     deleteClientData: (request = {}) =>
         ipcRenderer.invoke('bmp:deleteClientData', {
             sourceId: typeof request?.sourceId === 'string' ? request.sourceId : '',
@@ -272,6 +283,12 @@ contextBridge.exposeInMainWorld('netconfApi', {
     disconnect: profileId => ipcRenderer.invoke('netconf:disconnect', profileId),
     getSessionState: profileId => ipcRenderer.invoke('netconf:getSessionState', profileId),
     getSubscriptions: request => ipcRenderer.invoke('netconf:getSubscriptions', request),
+    getNotificationHistory: request => ipcRenderer.invoke('netconf:getNotificationHistory', request),
+    getNotificationSummary: () => ipcRenderer.invoke('netconf:getNotificationSummary'),
+    markNotificationRead: request => ipcRenderer.invoke('netconf:markNotificationRead', request),
+    deleteNotificationHistory: request => ipcRenderer.invoke('netconf:deleteNotificationHistory', request),
+    clearNotificationHistory: request => ipcRenderer.invoke('netconf:clearNotificationHistory', request),
+    requestNotificationAction: request => ipcRenderer.invoke('netconf:requestNotificationAction', request),
     discoverModules: profileId => ipcRenderer.invoke('netconf:discoverModules', profileId),
     downloadModules: request => ipcRenderer.invoke('netconf:downloadModules', request),
     executeOperation: request => ipcRenderer.invoke('netconf:executeOperation', request),

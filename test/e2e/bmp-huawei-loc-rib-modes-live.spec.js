@@ -27,17 +27,35 @@ function findMultiPathPrefix(device) {
     return [...pathIdsByPrefix.entries()].find(([, pathIds]) => pathIds.has(0) && pathIds.has(1))?.[0] || null;
 }
 
-async function verifyModeInLocRibPage(page, live, mode) {
+function clientLabel(client) {
+    const systemName = typeof client?.sysName === 'string' ? client.sysName.trim() : '';
+    const remoteIp = typeof client?.remoteIp === 'string' ? client.remoteIp.trim() : '';
+    return [systemName, remoteIp && remoteIp !== systemName ? remoteIp : ''].filter(Boolean).join(' · ') || '-';
+}
+
+async function getLocRibMonitorRoute(controller, remoteIp) {
+    const result = await controller.call('getClientList');
+    const client = (result.data || []).find(item => item.remoteIp === remoteIp);
+    if (!client) throw new Error(`BMP Client not found for ${remoteIp}`);
+    const sourceId = client.persistentSourceId || client.sourceId;
+    const clientKey = sourceId
+        ? `source:${sourceId}`
+        : `connection:${[client.localIp, client.localPort, client.remoteIp, client.remotePort].join('|')}`;
+    return `/#/monitor/bmp-loc-rib?clientKey=${encodeURIComponent(clientKey)}`;
+}
+
+async function verifyModeInLocRibPage(page, live, mode, controller) {
     const root = page.getByTestId('bmp-loc-rib-page');
     const addPath = mode.startsWith('add-path');
     const pathMarking = mode.includes('path-marking');
     live.report.uiLocRibMode = { mode, devices: [] };
 
-    await page.goto('/#/bmp/bgp-loc-rib');
-    await expect(root).toBeVisible();
-
     for (const device of live.report.devices) {
-        await root.locator('.client-tabs .client-tab-address').filter({ hasText: device.remoteIp }).first().click();
+        await page.goto(await getLocRibMonitorRoute(controller, device.remoteIp));
+        await expect(root).toBeVisible();
+        await expect.poll(() => page.title()).toBe(`Loc-RIB · ${clientLabel(device)}`);
+        await expect(page.locator('.monitor-window-header')).toHaveCount(0);
+        await expect(root.locator('.client-tabs')).toHaveCount(0);
         const ipv4Instance = device.locRib.find(instance => instance.af === 1 && instance.total > 0);
         expect(ipv4Instance, `${device.remoteIp} IPv4 Loc-RIB instance`).toBeTruthy();
 
@@ -119,7 +137,7 @@ test.describe('Huawei BMP Loc-RIB mode pages', () => {
                     timeoutMs: Number(process.env.NETNEXUS_HUAWEI_LOC_RIB_MODE_TIMEOUT_MS || 90000)
                 });
                 await live.collectFinal();
-                await verifyModeInLocRibPage(page, live, mode);
+                await verifyModeInLocRibPage(page, live, mode, controller);
                 expect.soft(live.report.setupIssues, 'scenario setup issues').toEqual([]);
                 expect.soft(live.report.codeIssues, 'real-device parser/UI issues').toEqual([]);
             } catch (error) {

@@ -11,6 +11,7 @@ const {
 const {
     buildGet,
     buildGetConfig,
+    buildEditConfig,
     buildCreateSubscription,
     buildEstablishSubscription,
     buildModifySubscription,
@@ -36,6 +37,12 @@ const yangPageApiScript = `
         disconnect: profileId => call('yang.netconf.disconnect', profileId),
         getSessionState: profileId => call('yang.netconf.getSessionState', profileId),
         getSubscriptions: profileId => call('yang.netconf.getSubscriptions', profileId),
+        getNotificationHistory: request => call('yang.netconf.getNotificationHistory', request),
+        getNotificationSummary: () => call('yang.netconf.getNotificationSummary'),
+        markNotificationRead: request => call('yang.netconf.markNotificationRead', request),
+        deleteNotificationHistory: request => call('yang.netconf.deleteNotificationHistory', request),
+        clearNotificationHistory: request => call('yang.netconf.clearNotificationHistory', request),
+        requestNotificationAction: request => call('yang.netconf.requestNotificationAction', request),
         selectPrivateKey: () => call('yang.netconf.selectPrivateKey'),
         discoverModules: profileId => call('yang.netconf.discoverModules', profileId),
         downloadModules: request => call('yang.netconf.downloadModules', request),
@@ -554,6 +561,9 @@ function createYangPageState() {
         profileWorkspaces: {},
         sessions: {},
         subscriptions: [],
+        notificationHistory: [],
+        notificationSequence: 0,
+        notificationActionRequests: [],
         connected: true,
         rpcSequence: 100,
         nextPublisherSubscriptionId: 51,
@@ -719,6 +729,34 @@ function emitSubscription(controller, subscription) {
     controller.emitEvent('netconf:subscriptionEvent', successResponse(clone(subscription), 'NETCONF 通知订阅状态更新'));
 }
 
+function notificationSummary(yang) {
+    const latest = yang.notificationHistory[0] || null;
+    return {
+        total: yang.notificationHistory.length,
+        unread: yang.notificationHistory.filter(item => item.read !== true).length,
+        lastReceivedAt: latest?.receivedAt || '',
+        lastEventName: latest?.eventName || '',
+        dropped: 0
+    };
+}
+
+function emitNotificationSummary(controller, yang) {
+    controller.emitEvent(
+        'netconf:notificationSummary',
+        successResponse(notificationSummary(yang), 'NETCONF 通知摘要更新')
+    );
+}
+
+function storeMockNotification(controller, yang, notification) {
+    const id = notification.id || `e2e-netconf-notification-${++yang.notificationSequence}`;
+    const stored = { ...notification, id, historyId: id, read: false };
+    yang.notificationHistory.unshift(stored);
+    yang.notificationHistory = yang.notificationHistory.slice(0, 500);
+    controller.emitEvent('netconf:notification', successResponse(clone(stored)));
+    emitNotificationSummary(controller, yang);
+    return stored;
+}
+
 function refreshSessionSubscriptions(yang) {
     if (!yang.session?.connected) return;
     const live = yang.subscriptions.filter(
@@ -749,25 +787,22 @@ function emitMockNotification(controller, yang, subscription) {
         `<eventTime>${eventTime}</eventTime>` +
         `<interface-event xmlns="${PAGE_INTERFACES_NAMESPACE}"><name>eth0</name><enabled>true</enabled></interface-event>` +
         '</notification>';
-    controller.emitEvent(
-        'netconf:notification',
-        successResponse({
-            profileId: yang.session.profileId,
-            profileName: yang.session.profileName,
-            host: yang.session.host,
-            port: yang.session.port,
-            sessionId: yang.session.sessionId,
-            subscriptionId: subscription.id,
-            deviceSubscriptionId: subscription.deviceSubscriptionId || '',
-            subscriptionType: subscription.subscriptionType || 'rfc5277',
-            state: 'active',
-            eventTime,
-            receivedAt: new Date().toISOString(),
-            eventName: 'interface-event',
-            namespace: PAGE_INTERFACES_NAMESPACE,
-            xml
-        })
-    );
+    storeMockNotification(controller, yang, {
+        profileId: yang.session.profileId,
+        profileName: yang.session.profileName,
+        host: yang.session.host,
+        port: yang.session.port,
+        sessionId: yang.session.sessionId,
+        subscriptionId: subscription.id,
+        deviceSubscriptionId: subscription.deviceSubscriptionId || '',
+        subscriptionType: subscription.subscriptionType || 'rfc5277',
+        state: 'active',
+        eventTime,
+        receivedAt: new Date().toISOString(),
+        eventName: 'interface-event',
+        namespace: PAGE_INTERFACES_NAMESPACE,
+        xml
+    });
 }
 
 function emitMockPushUpdate(controller, yang, subscription) {
@@ -780,25 +815,22 @@ function emitMockPushUpdate(controller, yang, subscription) {
         `<interfaces xmlns="${PAGE_INTERFACES_NAMESPACE}"><interface><name>eth0</name>` +
         '<enabled>true</enabled><in-octets>102400</in-octets></interface></interfaces>' +
         '</datastore-contents></push-update></notification>';
-    controller.emitEvent(
-        'netconf:notification',
-        successResponse({
-            profileId: yang.session.profileId,
-            profileName: yang.session.profileName,
-            host: yang.session.host,
-            port: yang.session.port,
-            sessionId: yang.session.sessionId,
-            subscriptionId: subscription.id,
-            deviceSubscriptionId: subscription.deviceSubscriptionId,
-            subscriptionType: subscription.subscriptionType,
-            state: subscription.state,
-            eventTime,
-            receivedAt: new Date().toISOString(),
-            eventName: 'push-update',
-            namespace: 'urn:ietf:params:xml:ns:yang:ietf-yang-push',
-            xml
-        })
-    );
+    storeMockNotification(controller, yang, {
+        profileId: yang.session.profileId,
+        profileName: yang.session.profileName,
+        host: yang.session.host,
+        port: yang.session.port,
+        sessionId: yang.session.sessionId,
+        subscriptionId: subscription.id,
+        deviceSubscriptionId: subscription.deviceSubscriptionId,
+        subscriptionType: subscription.subscriptionType,
+        state: subscription.state,
+        eventTime,
+        receivedAt: new Date().toISOString(),
+        eventName: 'push-update',
+        namespace: 'urn:ietf:params:xml:ns:yang:ietf-yang-push',
+        xml
+    });
 }
 
 function emitTask(controller, yang, action, count, message) {
@@ -980,6 +1012,65 @@ function handleNetconfCall(controller, yang, method, args) {
                 yang.subscriptions.filter(subscription => !profileId || subscription.profileId === profileId)
             )
         });
+    }
+    if (method === 'yang.netconf.getNotificationHistory') {
+        return successResponse({
+            notifications: clone(yang.notificationHistory),
+            subscriptions: clone(yang.subscriptions),
+            summary: notificationSummary(yang),
+            limits: { maxRecords: 500, maxTotalBytes: 16 * 1024 * 1024, maxXmlBytes: 2 * 1024 * 1024 }
+        });
+    }
+    if (method === 'yang.netconf.getNotificationSummary') {
+        return successResponse(notificationSummary(yang));
+    }
+    if (method === 'yang.netconf.markNotificationRead') {
+        const request = args[0] || {};
+        const ids = new Set([...(request.ids || []), request.id].filter(Boolean).map(String));
+        const scope = request.scope || null;
+        const matchesScope = item => {
+            if (!scope || !scope.kind || scope.kind === 'all') return true;
+            if (String(item.profileId || '') !== String(scope.profileId || '')) return false;
+            if (scope.kind === 'profile') return true;
+            if (String(item.sessionId || '') !== String(scope.sessionId || '')) return false;
+            if (scope.kind === 'session') return true;
+            return String(item.subscriptionId || '') === String(scope.subscriptionId || '');
+        };
+        yang.notificationHistory = yang.notificationHistory.map(item =>
+            (ids.size ? ids.has(String(item.id)) : matchesScope(item))
+                ? { ...item, read: request.read !== false }
+                : item
+        );
+        emitNotificationSummary(controller, yang);
+        return successResponse(notificationSummary(yang));
+    }
+    if (method === 'yang.netconf.deleteNotificationHistory' || method === 'yang.netconf.clearNotificationHistory') {
+        const request = args[0] || {};
+        const ids = new Set([...(request.ids || []), request.id].filter(Boolean).map(String));
+        const scope = request.scope || { kind: 'all' };
+        const matchesScope = item => {
+            if (!scope.kind || scope.kind === 'all') return true;
+            if (String(item.profileId || '') !== String(scope.profileId || '')) return false;
+            if (scope.kind === 'profile') return true;
+            if (String(item.sessionId || '') !== String(scope.sessionId || '')) return false;
+            if (scope.kind === 'session') return true;
+            return String(item.subscriptionId || '') === String(scope.subscriptionId || '');
+        };
+        const before = yang.notificationHistory.length;
+        yang.notificationHistory = yang.notificationHistory.filter(item =>
+            ids.size ? !ids.has(String(item.id)) : !matchesScope(item)
+        );
+        emitNotificationSummary(controller, yang);
+        return successResponse({
+            removed: before - yang.notificationHistory.length,
+            summary: notificationSummary(yang)
+        });
+    }
+    if (method === 'yang.netconf.requestNotificationAction') {
+        const request = clone(args[0] || {});
+        yang.notificationActionRequests.push(request);
+        controller.emitEvent('netconf:notificationAction', successResponse(request));
+        return successResponse(request, '已在主窗口打开订阅操作');
     }
     if (method === 'yang.netconf.selectPrivateKey') {
         return successResponse({ filePath: '/tmp/netnexus-e2e/id_ed25519' });
@@ -1231,6 +1322,8 @@ function executeNetconfOperation(yang, request) {
         delete readOptions.messageId;
         delete readOptions.wrap;
         operationXml = operation === 'get' ? buildGet(readOptions) : buildGetConfig(readOptions);
+    } else if (operation === 'edit-config') {
+        operationXml = buildEditConfig(operationOptions);
     } else if (operation === 'create-subscription') {
         operationXml = buildCreateSubscription(operationOptions);
     } else if (operation === 'establish-subscription') {

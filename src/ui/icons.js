@@ -13,6 +13,7 @@ import {
     Download,
     Edit,
     Eye,
+    ExternalLink,
     FileSearch,
     FileText,
     Folder,
@@ -83,6 +84,7 @@ export const DownloadOutlined = createIcon(Download);
 export const EditOutlined = createIcon(Edit);
 export const ExclamationCircleOutlined = createIcon(CircleAlert);
 export const EyeOutlined = createIcon(Eye);
+export const ExternalLinkOutlined = createIcon(ExternalLink);
 export const FileSearchOutlined = createIcon(FileSearch);
 export const FileTextOutlined = createIcon(FileText);
 export const FolderOpenOutlined = createIcon(FolderOpen);

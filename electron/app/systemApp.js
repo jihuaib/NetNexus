@@ -37,10 +37,11 @@ const { clearMajorVersionData } = require('../utils/majorVersionDataCleanup');
  * 用于系统菜单处理
  */
 class SystemApp {
-    constructor(ipc, win, progressCallback = null) {
+    constructor(ipc, win, progressCallback = null, options = {}) {
         this.win = win;
         this.isDev = !app.isPackaged;
         this.progressCallback = progressCallback;
+        this.monitorWindowManager = options.monitorWindowManager || null;
         // 注册IPC处理程序
         this.registerHandlers(ipc);
         this.generalSettingsFileKey = 'GeneralSettings';
@@ -64,17 +65,30 @@ class SystemApp {
         });
 
         this.bgpApp = new BgpApp(ipc, this.programStore);
-        this.bmpApp = new BmpApp(ipc, this.programStore);
+        this.bmpApp = new BmpApp(ipc, this.programStore, {
+            closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('bmp')
+        });
         this.rpkiApp = new RpkiApp(ipc, this.programStore);
         this.ftpApp = new FtpApp(ipc, this.programStore);
-        this.snmpApp = new SnmpApp(ipc, this.programStore);
+        this.snmpApp = new SnmpApp(ipc, this.programStore, {
+            closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('snmp')
+        });
         this.dhcpApp = new DhcpApp(ipc, this.programStore);
         this.ntpApp = new NtpApp(ipc, this.programStore);
         this.radiusApp = new RadiusApp(ipc, this.programStore);
         this.tftpApp = new TftpApp(ipc, this.programStore);
-        this.syslogApp = new SyslogApp(ipc, this.programStore);
-        this.yangApp = new YangApp(ipc, this.programStore);
-        this.netconfApp = new NetconfApp(ipc, this.programStore, { yangApp: this.yangApp });
+        this.syslogApp = new SyslogApp(ipc, this.programStore, {
+            closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('syslog')
+        });
+        const primaryWebContents = win?.webContents || null;
+        this.yangApp = new YangApp(ipc, this.programStore, { primaryWebContents });
+        this.netconfApp = new NetconfApp(ipc, this.programStore, {
+            yangApp: this.yangApp,
+            primaryWebContents,
+            closeProfileMonitorWindows: profileId =>
+                this.monitorWindowManager?.closeByProtocolProfile('netconf', profileId),
+            closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('netconf')
+        });
         this.updaterApp = new AppUpdater(ipc, win);
         this.nativeApp = new NativeApp(ipc);
         this.toolsApp = new ToolsApp(ipc, this.programStore);

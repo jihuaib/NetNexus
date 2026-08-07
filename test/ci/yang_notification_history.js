@@ -345,6 +345,35 @@ assert.equal(history.deleteNetconfNotification('collector-event'), true);
 assert(history.clearNetconfNotifications({ kind: 'all' }) > 0);
 assert.equal(state.records.value.length, 0);
 
+history.addNetconfNotification({
+    id: 'live-after-snapshot',
+    receivedAt: '2026-07-19T04:00:02Z',
+    xml: notificationXml('live-after-snapshot')
+});
+history.hydrateNetconfNotificationHistory({
+    subscriptions: [{ id: 'snapshot-subscription', profileId: 'snapshot-profile', state: 'ACTIVE' }],
+    notifications: [
+        {
+            id: 'snapshot-record',
+            receivedAt: '2026-07-19T04:00:01Z',
+            xml: notificationXml('snapshot-record')
+        },
+        {
+            id: 'live-after-snapshot',
+            receivedAt: '2026-07-19T04:00:02Z',
+            read: true,
+            xml: notificationXml('live-after-snapshot')
+        }
+    ]
+});
+assert.deepEqual(
+    state.records.value.map(record => record.id),
+    ['live-after-snapshot', 'snapshot-record'],
+    'snapshot hydration must de-duplicate stable ids and preserve newest-first order'
+);
+assert.equal(state.records.value[0].read, true, 'backend read state remains authoritative during hydration');
+assert(state.subscriptions.value.some(subscription => subscription.id === 'snapshot-subscription'));
+
 const componentPath = path.join(projectRoot, 'src', 'view', 'yang', 'YangNotificationDrawer.vue');
 const componentSource = fs.readFileSync(componentPath, 'utf8');
 const parsed = parse(componentSource, { filename: componentPath });
@@ -374,7 +403,11 @@ for (const expected of [
     'line-numbers',
     'netconf-notification-xml',
     '断开 Session 并结束订阅',
-    'disconnect-session'
+    'disconnect-session',
+    'standalone',
+    'mark-history-read',
+    'delete-history',
+    'clear-history'
 ]) {
     assert(componentSource.includes(expected), `notification drawer must include ${expected}`);
 }

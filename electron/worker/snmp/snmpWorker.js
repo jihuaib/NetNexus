@@ -531,6 +531,13 @@ class SnmpWorker {
         this.trapCounter = 0;
         this.clearTrapUpdateAggregation();
         this.messageHandler.sendSuccessResponse(messageId, null, 'Trap历史已清空');
+        this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
+            type: SnmpConst.SNMP_SUB_EVT_TYPES.HISTORY_CLEARED,
+            data: {
+                totalTraps: 0,
+                historyCount: 0
+            }
+        });
     }
 
     compileMibs(messageId, data = []) {
@@ -585,14 +592,14 @@ class SnmpWorker {
             this.clearTrapUpdateAggregation();
 
             logger.info('SNMP服务器停止成功');
-            this.messageHandler.sendSuccessResponse(messageId, null, 'SNMP协议停止成功');
-
             this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
                 type: SnmpConst.SNMP_SUB_EVT_TYPES.SERVER_STATUS,
                 data: {
                     status: 'stopped'
                 }
             });
+            // 先通知所有 renderer，再完成请求；主进程收到响应后会释放 worker 监听。
+            this.messageHandler.sendSuccessResponse(messageId, null, 'SNMP协议停止成功');
         } catch (error) {
             logger.error('停止SNMP服务器失败:', error);
             this.messageHandler.sendErrorResponse(messageId, 'SNMP协议停止失败: ' + error.message);

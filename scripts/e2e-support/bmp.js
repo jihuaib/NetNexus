@@ -21,12 +21,54 @@ const bmpBrowserMockScript = `
         openSoftwareInfo: () => {}
     };
 
+    window.__bmpMonitorRequests = [];
+    window.__bmpEventScopes = new Set();
+    const matchesClientKey = (client, clientKey) => {
+        if (!client || typeof clientKey !== 'string') return false;
+        if (clientKey.startsWith('source:')) {
+            const sourceId = client.persistentSourceId || client.sourceId || '';
+            return 'source:' + String(sourceId).trim().toLowerCase() === clientKey.toLowerCase();
+        }
+        if (clientKey.startsWith('connection:')) {
+            return (
+                'connection:' +
+                    [client.localIp, client.localPort, client.remoteIp, client.remotePort]
+                        .map(value => String(value ?? ''))
+                        .join('|') ===
+                clientKey
+            );
+        }
+        return false;
+    };
+    window.windowApi = {
+        openMonitor: async (monitorId, options) => {
+            window.__bmpMonitorRequests.push({ monitorId, options: options || null });
+            return { status: 'success', msg: 'monitor opened', data: { monitorId, reused: false } };
+        },
+        subscribeEventScope: async scopeId => {
+            window.__bmpEventScopes.add(scopeId);
+            return { status: 'success', data: { scopeId } };
+        },
+        unsubscribeEventScope: async scopeId => {
+            window.__bmpEventScopes.delete(scopeId);
+            return { status: 'success', data: { scopeId } };
+        }
+    };
+
     window.bmpApi = {
         saveBmpConfig: config => window.__bmpE2eCall('saveBmpConfig', config),
         loadBmpConfig: () => window.__bmpE2eCall('loadBmpConfig'),
         startBmp: config => window.__bmpE2eCall('startBmp', config),
         stopBmp: () => window.__bmpE2eCall('stopBmp'),
         getClientList: () => window.__bmpE2eCall('getClientList'),
+        getClient: async clientKey => {
+            const result = await window.__bmpE2eCall('getClientList');
+            if (result?.status !== 'success') return result;
+            const client = (Array.isArray(result.data) ? result.data : []).find(item =>
+                matchesClientKey(item, clientKey)
+            );
+            return { ...result, data: client || null };
+        },
         deleteClientData: request => window.__bmpE2eCall('deleteClientData', structuredClone(request)),
         getBgpSessions: client => window.__bmpE2eCall('getBgpSessions', client),
         getBgpRoutes: (client, session, af, ribType, page, pageSize, routeState, prefixFilter) =>

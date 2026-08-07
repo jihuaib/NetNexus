@@ -534,6 +534,32 @@ export const addNetconfNotification = input => {
     return records.value.find(record => record.id === notification.id) || null;
 };
 
+// Merge a backend snapshot with any live events that may already have arrived while
+// the standalone monitor was mounting. Stable backend ids make the operation
+// idempotent; sorting restores chronological order if snapshot and live IPC overlap.
+export const hydrateNetconfNotificationHistory = snapshot => {
+    const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const snapshotSubscriptions = Array.isArray(source.subscriptions) ? source.subscriptions : [];
+    snapshotSubscriptions.forEach(upsertNetconfNotificationSubscription);
+
+    const normalizedRecords = (
+        Array.isArray(source.notifications) ? source.notifications : Array.isArray(source.records) ? source.records : []
+    )
+        .map(normalizeNotification)
+        .filter(Boolean);
+    if (normalizedRecords.length === 0) return { notifications: 0, subscriptions: snapshotSubscriptions.length };
+
+    const merged = new Map(records.value.map(record => [record.id, record]));
+    normalizedRecords.forEach(record => merged.set(record.id, record));
+    records.value = [...merged.values()].sort(
+        (left, right) =>
+            String(right.receivedAt || '').localeCompare(String(left.receivedAt || '')) ||
+            Number(right.sequence || 0) - Number(left.sequence || 0)
+    );
+    trimRecords();
+    return { notifications: normalizedRecords.length, subscriptions: snapshotSubscriptions.length };
+};
+
 export const ingestNetconfNotificationEvent = payload => {
     const source = unwrapNetconfNotificationPayload(payload);
     if (!source || typeof source !== 'object') return null;
@@ -991,6 +1017,7 @@ export const useNetconfNotificationHistory = () => ({
     totalBytes: readonly(totalBytes),
     limits: readonly(limits),
     addNotification: addNetconfNotification,
+    hydrateHistory: hydrateNetconfNotificationHistory,
     ingestEvent: ingestNetconfNotificationEvent,
     upsertSubscription: upsertNetconfNotificationSubscription,
     updateSubscription: updateNetconfNotificationSubscription,

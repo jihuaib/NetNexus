@@ -12,6 +12,9 @@ const CLIENT = {
     remotePort: 49152,
     sysName: 'incremental-router'
 };
+const CLIENT_KEY = encodeURIComponent(`source:${CLIENT.persistentSourceId}`);
+const SESSION_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=session`;
+const LOC_RIB_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=loc-rib`;
 
 function scope(scopeId, ownerKey, ribType = 2) {
     return {
@@ -151,7 +154,7 @@ test.describe('BMP incremental route pages', () => {
     });
 
     test('upserts Session tabs and refreshes only the active current page', async ({ page }) => {
-        await page.goto('/#/bmp/bgp-session');
+        await page.goto(SESSION_MONITOR_ROUTE);
         const routeTable = page.getByTestId('bmp-session-route-table');
         await expect(routeTable).toContainText('10.0.0.0');
         const originalTab = page.getByRole('tab', { name: /192\.0\.2\.2/ });
@@ -270,7 +273,7 @@ test.describe('BMP incremental route pages', () => {
     });
 
     test('upserts Loc-RIB tabs and ignores inactive instance route events', async ({ page }) => {
-        await page.goto('/#/bmp/bgp-loc-rib');
+        await page.goto(LOC_RIB_MONITOR_ROUTE);
         const routeTable = page.getByTestId('bmp-loc-rib-route-table');
         await expect(routeTable).toContainText('10.0.0.0');
         const originalTab = page.getByRole('tab', { name: /global/ });

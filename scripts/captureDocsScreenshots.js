@@ -39,8 +39,10 @@ const BMP_ROUTE_HISTORY_IPV4_QUERY = '198.18.250.0/24';
 const BMP_ROUTE_HISTORY_EVPN_QUERY = 'evpn:mac-ip:';
 const BMP_ROUTE_HISTORY_BGP_LS_QUERY = 'bgp-ls:';
 const BMP_ROUTE_HISTORY_FLOW_SPEC_QUERY = 'dst=198.18.253.0/24';
+const BMP_CLIENT_KEY_PLACEHOLDER = '__BMP_CLIENT_KEY__';
 const DEFAULT_WINDOW_WIDTH = 1920;
 const DEFAULT_WINDOW_HEIGHT = 1200;
+let bmpDocsClientKey = '';
 
 const screenshots = [
     ['/bgp/bgp-config', 'docs/images/bgp/bgp-config.png'],
@@ -99,54 +101,66 @@ const screenshots = [
         prepare: 'open-text-detail-0',
         cleanup: 'close-overlay'
     },
-    ['/bmp/bgp-session', 'docs/images/bmp/bmp-client-and-bgp-monitor-peer-info.png'],
+    [
+        `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=session`,
+        'docs/images/bmp/bmp-client-and-bgp-monitor-peer-info.png'
+    ],
     {
-        route: '/bmp/bgp-session',
+        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=session`,
         outputPath: 'docs/images/bmp/bmp-session-detail.png',
         prepare: 'open-text-detail-0',
         cleanup: 'close-overlay'
     },
     {
-        route: '/bmp/bgp-session',
+        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=session`,
         outputPath: 'docs/images/bmp/bmp-session-route-detail.png',
         prepare: 'open-bmp-session-route-detail',
         cleanup: 'close-overlay'
     },
     {
-        route: '/bmp/bgp-session',
+        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=session`,
         outputPath: 'docs/images/bmp/bmp-session-route-event-timeline.png',
         prepare: 'open-bmp-session-route-event-timeline',
         cleanup: 'close-overlay'
     },
-    ['/bmp/bgp-loc-rib', 'docs/images/bmp/bmp-monitor-bgp-route.png'],
+    [
+        `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=loc-rib`,
+        'docs/images/bmp/bmp-monitor-bgp-route.png'
+    ],
     {
-        route: '/bmp/bgp-loc-rib',
+        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=loc-rib`,
         outputPath: 'docs/images/bmp/bmp-loc-rib-instance-detail.png',
         prepare: 'open-text-detail-0',
         cleanup: 'close-overlay'
     },
     {
-        route: '/bmp/bgp-loc-rib',
+        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=loc-rib`,
         outputPath: 'docs/images/bmp/bmp-loc-rib-route-detail.png',
         prepare: 'open-bmp-loc-rib-route-detail',
         cleanup: 'close-overlay'
     },
     {
-        route: '/bmp/bgp-loc-rib',
+        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=loc-rib`,
         outputPath: 'docs/images/bmp/bmp-loc-rib-route-event-timeline.png',
         prepare: 'open-bmp-loc-rib-route-event-timeline',
         cleanup: 'close-overlay'
     },
-    ['/bmp/bgp-session-statis-report', 'docs/images/bmp/bmp-session-statis-report.png'],
+    [
+        `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=session-statistics`,
+        'docs/images/bmp/bmp-session-statis-report.png'
+    ],
     {
-        route: '/bmp/bgp-session-statis-report',
+        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=session-statistics`,
         outputPath: 'docs/images/bmp/bmp-session-statis-detail.png',
         prepare: 'open-text-detail-0',
         cleanup: 'close-overlay'
     },
-    ['/bmp/bgp-loc-rib-statis-report', 'docs/images/bmp/bmp-loc-rib-statis-report.png'],
+    [
+        `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=loc-rib-statistics`,
+        'docs/images/bmp/bmp-loc-rib-statis-report.png'
+    ],
     {
-        route: '/bmp/bgp-loc-rib-statis-report',
+        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=loc-rib-statistics`,
         outputPath: 'docs/images/bmp/bmp-loc-rib-statis-detail.png',
         prepare: 'open-text-detail-0',
         cleanup: 'close-overlay'
@@ -213,9 +227,9 @@ const screenshots = [
     ['/rpki/rpki-router-key-config', 'docs/images/rpki/rpki-router-key.png'],
     ['/rpki/rpki-aspa-config', 'docs/images/rpki/rpki-aspa.png'],
     ['/snmp/snmp-config', 'docs/images/snmp/snmp-config.png'],
-    ['/snmp/snmp-trap', 'docs/images/snmp/snmp-trap.png'],
+    ['/monitor/snmp-trap', 'docs/images/snmp/snmp-trap.png'],
     {
-        route: '/snmp/snmp-trap',
+        route: '/monitor/snmp-trap',
         outputPath: 'docs/images/snmp/snmp-trap-detail.png',
         prepare: 'open-text-detail-0',
         cleanup: 'close-overlay'
@@ -262,9 +276,9 @@ const screenshots = [
     ['/tftp/tftp-config', 'docs/images/tftp/tftp-config.png'],
     ['/tftp/tftp-transfer-log', 'docs/images/tftp/tftp-transfer-log.png'],
     ['/syslog/syslog-config', 'docs/images/syslog/syslog-config.png'],
-    ['/syslog/syslog-message-log', 'docs/images/syslog/syslog-message-log.png'],
+    ['/monitor/syslog-message-log', 'docs/images/syslog/syslog-message-log.png'],
     {
-        route: '/syslog/syslog-message-log',
+        route: '/monitor/syslog-message-log',
         outputPath: 'docs/images/syslog/syslog-message-detail.png',
         prepare: 'open-text-detail-0',
         cleanup: 'close-overlay'
@@ -372,6 +386,12 @@ async function runScreenshotHandler(map, handlerName, win, label) {
 }
 
 async function navigateAndCapture(win, route, outputPath, prepare, cleanup) {
+    if (route.includes(BMP_CLIENT_KEY_PLACEHOLDER)) {
+        if (!bmpDocsClientKey) {
+            throw new Error(`BMP Client key is unavailable for ${outputPath}`);
+        }
+        route = route.replace(BMP_CLIENT_KEY_PLACEHOLDER, encodeURIComponent(bmpDocsClientKey));
+    }
     await closeOpenOverlay(win);
     await wait(150);
     await win.webContents.executeJavaScript(`window.location.hash = ${JSON.stringify(route)}`);
@@ -1518,6 +1538,10 @@ async function waitForBmpMockData(win) {
                 }
 
                 const client = clients[0];
+                const sourceId = client.persistentSourceId || client.sourceId;
+                state.clientKey = sourceId
+                    ? 'source:' + sourceId
+                    : 'connection:' + [client.localIp, client.localPort, client.remoteIp, client.remotePort].join('|');
                 const sessionsResult = await window.bmpApi.getBgpSessions(client);
                 const sessions = sessionsResult?.status === 'success' && Array.isArray(sessionsResult.data)
                     ? sessionsResult.data
@@ -1584,7 +1608,7 @@ async function waitForBmpMockData(win) {
 
         if (lastState.ready) {
             console.log(`BMP mock data ready: ${JSON.stringify(lastState)}`);
-            return;
+            return lastState;
         }
 
         await wait(300);
@@ -2644,7 +2668,8 @@ async function setupDocsDemoData(win, runtimeDir, longRunningProcesses) {
     const mock = startMockBmpClient();
     longRunningProcesses.push(mock.child);
     await mock.ready;
-    await waitForBmpMockData(win);
+    const bmpState = await waitForBmpMockData(win);
+    bmpDocsClientKey = bmpState.clientKey;
     let routeHistoryFixturePromise = null;
     pagePreparers.set('/bmp/route-history', async pageWin => {
         if (!routeHistoryFixturePromise) {

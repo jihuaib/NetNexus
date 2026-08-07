@@ -32,7 +32,9 @@ const YANG_EVT_TYPES = Object.freeze({
     TASK_PROGRESS: 'yang:taskProgress',
     SESSION_EVENT: 'netconf:sessionEvent',
     SUBSCRIPTION_EVENT: 'netconf:subscriptionEvent',
-    NOTIFICATION: 'netconf:notification'
+    NOTIFICATION: 'netconf:notification',
+    NOTIFICATION_SUMMARY: 'netconf:notificationSummary',
+    NOTIFICATION_ACTION: 'netconf:notificationAction'
 });
 
 const NETCONF_CAPABILITIES = Object.freeze({

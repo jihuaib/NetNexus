@@ -77,6 +77,17 @@
         <nn-row class="adaptive-config-fill-row">
             <nn-col :span="24">
                 <nn-card title="服务状态" class="adaptive-config-fill-card">
+                    <template #extra>
+                        <nn-button
+                            v-if="canOpenMonitorWindow"
+                            data-testid="open-syslog-monitor-window"
+                            :loading="monitorOpening"
+                            @click="openMonitorWindow"
+                        >
+                            <template #icon><ExternalLinkOutlined /></template>
+                            独立监控窗口
+                        </nn-button>
+                    </template>
                     <nn-descriptions :column="2" bordered>
                         <nn-descriptions-item label="服务状态">
                             <nn-tag :color="isServerRunning ? 'green' : 'red'">
@@ -104,6 +115,7 @@
 <script setup>
     import { ref, computed, onMounted, onActivated, onDeactivated } from 'vue';
     import { notify } from '../../utils/notify';
+    import { ExternalLinkOutlined } from '../../ui/icons';
     import { DEFAULT_VALUES, SYSLOG_SUB_EVT_TYPES, SYSLOG_EVENT_PAGE_ID } from '../../const/syslogConst';
     import EventBus from '../../utils/eventBus';
 
@@ -127,6 +139,7 @@
 
     const validationErrors = ref(emptyErrors());
     const serverLoading = ref(false);
+    const monitorOpening = ref(false);
     const isServerRunning = ref(false);
     const messageCount = ref(0);
     const totalReceived = ref(0);
@@ -145,6 +158,7 @@
         }
         return protocols.length > 0 ? protocols.join(' / ') : '-';
     });
+    const canOpenMonitorWindow = computed(() => typeof window.windowApi?.openMonitor === 'function');
 
     const validateConfig = () => {
         const errors = {};
@@ -229,6 +243,32 @@
         }
     };
 
+    const openMonitorWindow = async () => {
+        if (!canOpenMonitorWindow.value || monitorOpening.value) {
+            return;
+        }
+
+        monitorOpening.value = true;
+        try {
+            const result = await window.windowApi.openMonitor('syslog-message-log');
+            if (result?.status !== 'success') {
+                notify.error(result?.msg || '打开独立监控窗口失败');
+            }
+        } catch (error) {
+            notify.error('打开独立监控窗口失败: ' + error.message);
+        } finally {
+            monitorOpening.value = false;
+        }
+    };
+
+    const resetMessageSummary = () => {
+        messageCount.value = 0;
+        lastMessageAt.value = '-';
+        lastClient.value = '-';
+        lastFacility.value = '-';
+        lastSeverity.value = '-';
+    };
+
     const applyStats = stats => {
         if (!stats) {
             return;
@@ -247,7 +287,10 @@
         }
 
         const payload = respData.data;
-        if (payload.type === SYSLOG_SUB_EVT_TYPES.MESSAGE_RECEIVED) {
+        if (
+            payload.type === SYSLOG_SUB_EVT_TYPES.MESSAGE_RECEIVED ||
+            payload.type === SYSLOG_SUB_EVT_TYPES.STATS_UPDATED
+        ) {
             applyStats(payload.stats);
         } else if (payload.type === SYSLOG_SUB_EVT_TYPES.SERVER_STATUS) {
             isServerRunning.value = payload.data.status === 'running';
@@ -261,11 +304,7 @@
                 lastSeverity.value = '-';
             }
         } else if (payload.type === SYSLOG_SUB_EVT_TYPES.HISTORY_CLEARED) {
-            messageCount.value = 0;
-            lastMessageAt.value = '-';
-            lastClient.value = '-';
-            lastFacility.value = '-';
-            lastSeverity.value = '-';
+            resetMessageSummary();
             totalReceived.value = payload.stats?.totalReceived ?? totalReceived.value;
         }
     };

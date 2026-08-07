@@ -52,6 +52,11 @@ class YangApp {
         this.configurePromise = null;
         this.progressReporters = new Map();
         this.eventDispatcher = new EventDispatcher();
+        this.primaryWebContents = options.primaryWebContents || null;
+        this.hasFixedPrimaryWebContents = Boolean(this.primaryWebContents);
+        if (this.primaryWebContents && !this.primaryWebContents.isDestroyed?.()) {
+            this.eventDispatcher.setWebContents(this.primaryWebContents);
+        }
         this.activeProfileId = null;
         this.lastCompile = this.readStoredState();
         this.compileResult = new Map();
@@ -91,12 +96,18 @@ class YangApp {
     }
 
     setWebContents(event) {
+        if (this.hasFixedPrimaryWebContents) {
+            if (this.primaryWebContents && !this.primaryWebContents.isDestroyed?.()) {
+                this.eventDispatcher.setWebContents(this.primaryWebContents);
+            }
+            return;
+        }
         const sender = event?.sender;
         if (sender && !sender.isDestroyed?.()) this.eventDispatcher.setWebContents(sender);
     }
 
     emitTaskProgress(progress) {
-        if (!this.eventDispatcher.canEmit()) return;
+        if (!this.eventDispatcher.canEmit(YANG_EVT_TYPES.TASK_PROGRESS)) return;
         const profileId = progress?.metadata?.profileId || null;
         const workspaceId = progress?.metadata?.workspaceId || null;
         this.eventDispatcher.emit(

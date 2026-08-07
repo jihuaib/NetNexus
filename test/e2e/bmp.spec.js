@@ -79,6 +79,47 @@ function expectPublicLocRibRoute(route) {
     ).toBe(true);
 }
 
+function getBmpClientKey(client) {
+    const sourceId = client?.persistentSourceId || client?.sourceId;
+    if (sourceId) return `source:${sourceId}`;
+    return `connection:${[client?.localIp, client?.localPort, client?.remoteIp, client?.remotePort].join('|')}`;
+}
+
+function getBmpMonitorRoute(view, client) {
+    return `/#/monitor/bmp-client?clientKey=${encodeURIComponent(getBmpClientKey(client))}&view=${encodeURIComponent(view)}`;
+}
+
+function getBmpClientLabel(client) {
+    const systemName = [client?.sysName, client?.systemName, client?.hostName, client?.name]
+        .map(value => (typeof value === 'string' ? value.trim() : ''))
+        .find(Boolean);
+    const remoteIp = typeof client?.remoteIp === 'string' ? client.remoteIp.trim() : '';
+    return [systemName, remoteIp && remoteIp !== systemName ? remoteIp : ''].filter(Boolean).join(' · ') || '-';
+}
+
+async function expectBmpMonitorView(page, view, viewLabel, client) {
+    const expectedClientKey = getBmpClientKey(client);
+    await expect
+        .poll(() =>
+            page.evaluate(() => {
+                const routeUrl = new URL(window.location.hash.slice(1), window.location.origin);
+                return {
+                    path: routeUrl.pathname,
+                    clientKey: routeUrl.searchParams.get('clientKey'),
+                    view: routeUrl.searchParams.get('view')
+                };
+            })
+        )
+        .toEqual({
+            path: '/monitor/bmp-client',
+            clientKey: expectedClientKey,
+            view
+        });
+    await expect(page.getByTestId('bmp-client-monitor-page')).toBeVisible();
+    await expect(page.getByRole('tab', { name: viewLabel, exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(() => page.title()).toBe(`${viewLabel} · ${getBmpClientLabel(client)}`);
+}
+
 async function expectAutoHidingHorizontalScrollbar(locator) {
     const isXActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-x-active'));
     const isYActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-y-active'));
@@ -110,21 +151,16 @@ async function expectAutoHidingHorizontalScrollbar(locator) {
     await expect.poll(isYActive).toBe(false);
 }
 
-async function expectBmpRouteLayout(page, pageTestId, detailTableTestId, routeTableTestId) {
+async function expectBmpRouteLayout(page, pageType, pageTestId, detailTableTestId, routeTableTestId, client) {
     const pageRoot = page.getByTestId(pageTestId);
-    await expect(pageRoot.locator('.client-tab-label').first()).toHaveText(/\S/);
+    await expect.poll(() => page.title()).toBe(`${pageType} · ${getBmpClientLabel(client)}`);
+    await expect(page.locator('.monitor-window-header')).toHaveCount(0);
+    await expect(pageRoot.locator('.client-tabs')).toHaveCount(0);
+    await expect(pageRoot.locator('.bmp-full-card > .nn-card-head')).toHaveCount(0);
 
     const layout = await pageRoot.evaluate(
         (root, testIds) => {
-            const clientTabs = root.querySelector('.client-tabs');
-            const clientNav = clientTabs?.querySelector(':scope > .nn-tabs-nav');
-            const clientNavWrap = clientNav?.querySelector('.nn-tabs-nav-wrap');
-            const activeClientTab = clientNav?.querySelector('.nn-tabs-tab-active');
-            const activeClientLabel = activeClientTab?.querySelector('.client-tab-label');
-            const activeClientPane = clientTabs?.querySelector(
-                ':scope > .nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane-active'
-            );
-            const innerTabs = activeClientPane?.querySelector('.bmp-inner-tabs');
+            const innerTabs = root.querySelector('.bmp-inner-tabs');
             const nav = innerTabs?.querySelector(':scope > .nn-tabs-nav');
             const navWrap = nav?.querySelector('.nn-tabs-nav-wrap');
             const navList = nav?.querySelector('.nn-tabs-nav-list');
@@ -143,9 +179,6 @@ async function expectBmpRouteLayout(page, pageTestId, detailTableTestId, routeTa
             const contentContainer = root.parentElement;
             const rootRect = root.getBoundingClientRect();
             const contentRect = contentContainer?.getBoundingClientRect();
-            const clientNavRect = clientNav?.getBoundingClientRect();
-            const activeClientTabRect = activeClientTab?.getBoundingClientRect();
-            const activeClientLabelRect = activeClientLabel?.getBoundingClientRect();
             const navRect = nav?.getBoundingClientRect();
             const detailRect = detailTable?.getBoundingClientRect();
             const detailContentRect = detailContent?.getBoundingClientRect();
@@ -154,19 +187,8 @@ async function expectBmpRouteLayout(page, pageTestId, detailTableTestId, routeTa
             return {
                 innerTabsDirection: innerTabs ? getComputedStyle(innerTabs).flexDirection : '',
                 navListDirection: navList ? getComputedStyle(navList).flexDirection : '',
-                clientNavOverflowX: clientNavWrap ? getComputedStyle(clientNavWrap).overflowX : '',
-                clientNavOverflowY: clientNavWrap ? getComputedStyle(clientNavWrap).overflowY : '',
                 innerNavOverflowX: navWrap ? getComputedStyle(navWrap).overflowX : '',
                 innerNavOverflowY: navWrap ? getComputedStyle(navWrap).overflowY : '',
-                clientTabRightGap:
-                    clientNavRect && activeClientTabRect
-                        ? clientNavRect.right - activeClientTabRect.right
-                        : Number.POSITIVE_INFINITY,
-                clientLabelCenterGap:
-                    clientNavRect && activeClientLabelRect
-                        ? (activeClientLabelRect.left + activeClientLabelRect.right) / 2 -
-                          (clientNavRect.left + clientNavRect.right) / 2
-                        : Number.POSITIVE_INFINITY,
                 tabTops: tabs.map(tab => tab.getBoundingClientRect().top),
                 detailGap: navRect && detailRect ? detailRect.top - navRect.bottom : Number.POSITIVE_INFINITY,
                 detailActionButtonWidth: detailActionButton?.getBoundingClientRect().width || 0,
@@ -195,12 +217,8 @@ async function expectBmpRouteLayout(page, pageTestId, detailTableTestId, routeTa
 
     expect(layout.innerTabsDirection).toBe('column');
     expect(layout.navListDirection).toBe('row');
-    expect(layout.clientNavOverflowX).toBe('hidden');
-    expect(layout.clientNavOverflowY).toBe('auto');
     expect(layout.innerNavOverflowX).toBe('auto');
     expect(layout.innerNavOverflowY).toBe('hidden');
-    expect(Math.abs(layout.clientTabRightGap)).toBeLessThanOrEqual(1);
-    expect(Math.abs(layout.clientLabelCenterGap)).toBeLessThanOrEqual(1);
     expect(layout.tabTops.length).toBeGreaterThan(1);
     expect(Math.max(...layout.tabTops) - Math.min(...layout.tabTops)).toBeLessThanOrEqual(1);
     expect(layout.detailGap).toBeGreaterThanOrEqual(0);
@@ -334,16 +352,32 @@ test.describe('BMP pages', () => {
             await expect(clientTable).toContainText(EXPECTED_CLIENT_DESCRIPTION);
             await expect(clientTable).toContainText('BMPv4');
             await expect(clientTable).toContainText('draft-20');
+            await expect(page.getByRole('tab', { name: 'BGP会话', exact: true })).toHaveCount(0);
+            await expect(page.getByRole('tab', { name: 'BGP Loc-RIB', exact: true })).toHaveCount(0);
+            await expect(page.getByRole('tab', { name: 'BGP会话统计', exact: true })).toHaveCount(0);
+            await expect(page.getByRole('tab', { name: 'BGP Loc-RIB统计', exact: true })).toHaveCount(0);
+
+            const clientRow = clientTable.locator('.nn-table-tbody > .nn-table-row', {
+                hasText: EXPECTED_CLIENT_NAME
+            });
+            const clientMonitorButton = clientRow.getByTestId('bmp-client-monitor-button');
+            await expect(clientMonitorButton).toHaveCount(1);
+            await expect(clientMonitorButton).toHaveText('Client 监控');
+            await clientMonitorButton.click();
+            await expect
+                .poll(() => page.evaluate(() => window.__bmpMonitorRequests))
+                .toEqual([{ monitorId: 'bmp-client', options: { clientKey: getBmpClientKey(liveClient) } }]);
 
             await recordStep(`Output: clientTable contains ${EXPECTED_CLIENT_NAME}, BMPv4, draft-20`);
         });
 
         await test.step('Verify BGP session page and Adj-RIB routes', async () => {
             await recordStep(
-                `Input: route=/#/bmp/bgp-session, expectedSession=192.0.2.2 AS 65000, routeState=all, expectedRoutes=${EXPECTED_PUBLIC_ROUTE_COUNT}`
+                `Input: route=/#/monitor/bmp-client&view=session, expectedSession=192.0.2.2 AS 65000, routeState=all, expectedRoutes=${EXPECTED_PUBLIC_ROUTE_COUNT}`
             );
 
-            await page.goto('/#/bmp/bgp-session');
+            await page.goto(getBmpMonitorRoute('session', liveClient));
+            await expectBmpMonitorView(page, 'session', 'BGP 会话', liveClient);
             await expect(page.getByTestId('bmp-session-page')).toBeVisible();
 
             const expectedSessionTab = page.getByRole('tab', {
@@ -371,7 +405,14 @@ test.describe('BMP pages', () => {
             await expect(sessionRouteTable).toContainText('65000 65100');
             await expect(sessionRouteTable.locator('tr.route-stale-row', { hasText: '10.10.0.0' })).toHaveCount(0);
             await expect(expectedSessionPanel.getByText(`当前 ${EXPECTED_PUBLIC_ROUTE_COUNT}`)).toBeVisible();
-            await expectBmpRouteLayout(page, 'bmp-session-page', 'bmp-session-table', 'bmp-session-route-table');
+            await expectBmpRouteLayout(
+                page,
+                'BGP 会话',
+                'bmp-session-page',
+                'bmp-session-table',
+                'bmp-session-route-table',
+                liveClient
+            );
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
             expect(snapshot.adjRib.total).toBe(EXPECTED_PUBLIC_ROUTE_COUNT);
@@ -696,9 +737,9 @@ test.describe('BMP pages', () => {
                 item => item.message === 'worker query: getRouteLens'
             ).length;
             await page.evaluate(() => {
-                window.__bmpE2eEmit?.('bmp:routeUpdate', {
+                window.__bmpE2eEmit?.('bmp:routeLensInvalidated', {
                     status: 'success',
-                    data: { changedCount: 1 }
+                    data: { sourceEvent: 'bmp:routeUpdate' }
                 });
             });
             await expect
@@ -916,10 +957,11 @@ test.describe('BMP pages', () => {
 
         await test.step('Verify BGP Loc-RIB page and Loc-RIB routes', async () => {
             await recordStep(
-                `Input: route=/#/bmp/bgp-loc-rib, expectedInstance=global Local RIB, routeState=all, expectedRoutes=${EXPECTED_LOC_RIB_ROUTE_COUNT}`
+                `Input: route=/#/monitor/bmp-client&view=loc-rib, expectedInstance=global Local RIB, routeState=all, expectedRoutes=${EXPECTED_LOC_RIB_ROUTE_COUNT}`
             );
 
-            await page.goto('/#/bmp/bgp-loc-rib');
+            await page.goto(getBmpMonitorRoute('loc-rib', liveClient));
+            await expectBmpMonitorView(page, 'loc-rib', 'Loc-RIB', liveClient);
             await expect(page.getByTestId('bmp-loc-rib-page')).toBeVisible();
 
             const locRibInstanceTable = page.getByTestId('bmp-loc-rib-instance-table');
@@ -932,9 +974,11 @@ test.describe('BMP pages', () => {
             await expect(page.getByText(`当前 ${EXPECTED_LOC_RIB_ROUTE_COUNT}`)).toBeVisible();
             await expectBmpRouteLayout(
                 page,
+                'Loc-RIB',
                 'bmp-loc-rib-page',
                 'bmp-loc-rib-instance-table',
-                'bmp-loc-rib-route-table'
+                'bmp-loc-rib-route-table',
+                liveClient
             );
             const snapshot = controller.lastRouteQuerySnapshot;
             expect(snapshot).toBeTruthy();
@@ -1202,10 +1246,11 @@ test.describe('BMP pages', () => {
 
         await test.step('Verify BGP session statistics page', async () => {
             await recordStep(
-                'Input: route=/#/bmp/bgp-session-statis-report, expectedSession=global | 192.0.2.2 | 65000'
+                'Input: unified Client window view=session-statistics, expectedSession=global | 192.0.2.2 | 65000'
             );
 
-            await page.goto('/#/bmp/bgp-session-statis-report');
+            await page.getByRole('tab', { name: '会话统计', exact: true }).click();
+            await expectBmpMonitorView(page, 'session-statistics', '会话统计', liveClient);
             const statisticsPage = page.getByTestId('bmp-session-statistics-page');
             const statisticsTab = statisticsPage.getByRole('tab', {
                 name: 'global | 192.0.2.2 | 65000',
@@ -1232,10 +1277,11 @@ test.describe('BMP pages', () => {
 
         await test.step('Verify BGP Loc-RIB statistics page', async () => {
             await recordStep(
-                'Input: route=/#/bmp/bgp-loc-rib-statis-report, expected RDs=0:0/65000:100/65000:120/65000:102'
+                'Input: unified Client window view=loc-rib-statistics, expected RDs=0:0/65000:100/65000:120/65000:102'
             );
 
-            await page.goto('/#/bmp/bgp-loc-rib-statis-report');
+            await page.getByRole('tab', { name: 'Loc-RIB 统计', exact: true }).click();
+            await expectBmpMonitorView(page, 'loc-rib-statistics', 'Loc-RIB 统计', liveClient);
             const statisticsPage = page.getByTestId('bmp-loc-rib-statistics-page');
             const expectedReports = [
                 { tabText: 'global-evpn', exact: false, rd: '0:0', value: EXPECTED_LOC_RIB_ROUTE_COUNT },
@@ -1263,22 +1309,18 @@ test.describe('BMP pages', () => {
             );
         });
 
-        await test.step('Stop BMP server from UI and verify the mock client is disconnected', async () => {
-            await recordStep('Input: click BMP stop button while mock client keeps its TCP connection open');
+        await test.step('Stop BMP server and verify the mock client is disconnected', async () => {
+            await recordStep('Input: stop BMP while mock client keeps its TCP connection open');
 
-            await page.goto('/#/bmp/bmp-config');
-            await expect(page.getByTestId('bmp-stop-button')).toBeEnabled();
-            await page.getByTestId('bmp-stop-button').click();
+            const stopResult = await controller.call('stopBmp');
+            expect(stopResult.status).toBe('success');
 
             const exitInfo = await controller.waitForMockClientExit({ timeout: 5000 });
             expect(exitInfo.code).toBe(0);
             expect(exitInfo.signal).toBeNull();
             expect(exitInfo.output).toContain('BMP mock connection closed');
 
-            await expect(page.getByTestId('bmp-stop-button')).toBeDisabled();
-            await expect(page.getByTestId('bmp-client-table')).not.toContainText(EXPECTED_CLIENT_NAME);
-
-            await recordStep(`Output: stopButtonDisabled=true, mockClientExitCode=${exitInfo.code}, socketClosed=true`);
+            await recordStep(`Output: mockClientExitCode=${exitInfo.code}, socketClosed=true`);
         });
     });
 
@@ -1324,9 +1366,10 @@ test.describe('BMP pages', () => {
         });
 
         await test.step('Verify BGP session is visible before client disconnect', async () => {
-            await recordStep('Input: route=/#/bmp/bgp-session, expectedSession=192.0.2.2');
+            await recordStep('Input: route=/#/monitor/bmp-client&view=session, expectedSession=192.0.2.2');
 
-            await page.goto('/#/bmp/bgp-session');
+            await page.goto(getBmpMonitorRoute('session', persistedClient));
+            await expectBmpMonitorView(page, 'session', 'BGP 会话', persistedClient);
             await expect(page.getByTestId('bmp-session-page')).toBeVisible();
 
             const sessionTab = page.getByRole('tab', { name: expectedSessionTabName, exact: true });

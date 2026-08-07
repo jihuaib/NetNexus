@@ -41,17 +41,38 @@ function locRibTabLabel(instance) {
     return `${vrf} | ${ADDRESS_FAMILY_LABEL[instance.af] || instance.af}`;
 }
 
+function clientLabel(client) {
+    const systemName = typeof client?.sysName === 'string' ? client.sysName.trim() : '';
+    const remoteIp = typeof client?.remoteIp === 'string' ? client.remoteIp.trim() : '';
+    return [systemName, remoteIp && remoteIp !== systemName ? remoteIp : ''].filter(Boolean).join(' · ') || '-';
+}
+
+async function getClientMonitorRoute(controller, monitorId, remoteIp) {
+    const result = await controller.call('getClientList');
+    const client = (result.data || []).find(item => item.remoteIp === remoteIp);
+    if (!client) throw new Error(`BMP Client not found for ${remoteIp}`);
+    const sourceId = client.persistentSourceId || client.sourceId;
+    const clientKey = sourceId
+        ? `source:${sourceId}`
+        : `connection:${[client.localIp, client.localPort, client.remoteIp, client.remotePort].join('|')}`;
+    return `/#/monitor/${monitorId}?clientKey=${encodeURIComponent(clientKey)}`;
+}
+
 async function selectOption(page, select, label) {
     await select.click();
     await page.getByRole('option', { name: label, exact: true }).click();
     await expect(select.locator('.nn-select-single-value')).toHaveText(label);
 }
 
-async function verifyAllSessionScopes(page, live) {
-    const root = page.getByTestId('bmp-session-page');
+async function verifyAllSessionScopes(page, live, controller) {
     live.report.uiSessionScopes = [];
     for (const device of live.report.devices) {
-        await root.locator('.client-tabs .client-tab-address').filter({ hasText: device.remoteIp }).first().click();
+        await page.goto(await getClientMonitorRoute(controller, 'bmp-session', device.remoteIp));
+        const root = page.getByTestId('bmp-session-page');
+        await expect(root).toBeVisible();
+        await expect.poll(() => page.title()).toBe(`BGP会话 · ${clientLabel(device)}`);
+        await expect(page.locator('.monitor-window-header')).toHaveCount(0);
+        await expect(root.locator('.client-tabs')).toHaveCount(0);
         for (const session of device.sessions) {
             const routeSets = session.routes.filter(route => route.total > 0);
             if (!routeSets.length) continue;
@@ -87,11 +108,15 @@ async function verifyAllSessionScopes(page, live) {
     }
 }
 
-async function verifyAllLocRibScopes(page, live) {
-    const root = page.getByTestId('bmp-loc-rib-page');
+async function verifyAllLocRibScopes(page, live, controller) {
     live.report.uiLocRibScopes = [];
     for (const device of live.report.devices) {
-        await root.locator('.client-tabs .client-tab-address').filter({ hasText: device.remoteIp }).first().click();
+        await page.goto(await getClientMonitorRoute(controller, 'bmp-loc-rib', device.remoteIp));
+        const root = page.getByTestId('bmp-loc-rib-page');
+        await expect(root).toBeVisible();
+        await expect.poll(() => page.title()).toBe(`Loc-RIB · ${clientLabel(device)}`);
+        await expect(page.locator('.monitor-window-header')).toHaveCount(0);
+        await expect(root.locator('.client-tabs')).toHaveCount(0);
         for (const instance of device.locRib.filter(item => item.total > 0)) {
             await root
                 .locator('.bmp-inner-tabs [role="tab"]')
@@ -116,7 +141,7 @@ async function verifyAllLocRibScopes(page, live) {
     }
 }
 
-async function verifyPages(page, live) {
+async function verifyPages(page, live, controller) {
     const screenshotDirectory = path.join(live.lab.artifactDirectory, 'screenshots');
     fs.mkdirSync(screenshotDirectory, { recursive: true });
 
@@ -131,25 +156,20 @@ async function verifyPages(page, live) {
         fullPage: true
     });
 
-    await page.goto('/#/bmp/bgp-session');
-    await expect(page.getByTestId('bmp-session-page')).toBeVisible();
-    const sessionTable = page.locator('[data-testid="bmp-session-table"]:visible').first();
-    await expect(sessionTable).toBeVisible({ timeout: 20000 });
     const hasAdjRibRoutes = live.report.devices.some(device =>
         device.sessions.some(session => session.routes.some(route => route.total > 0))
     );
-    if (hasAdjRibRoutes) await verifyAllSessionScopes(page, live);
-    else await expect(page.locator('[data-testid="bmp-session-route-table"]:visible').first()).toBeVisible();
+    await verifyAllSessionScopes(page, live, controller);
+    if (!hasAdjRibRoutes) {
+        await expect(page.locator('[data-testid="bmp-session-route-table"]:visible').first()).toBeVisible();
+    }
     await page.screenshot({
         path: path.join(screenshotDirectory, `${live.scenario.key}-sessions.png`),
         fullPage: true
     });
 
     if (live.scenario.families.some(family => family.locRib)) {
-        await page.goto('/#/bmp/bgp-loc-rib');
-        await expect(page.getByTestId('bmp-loc-rib-page')).toBeVisible();
-        await expect(page.getByTestId('bmp-loc-rib-instance-table')).toBeVisible({ timeout: 20000 });
-        await verifyAllLocRibScopes(page, live);
+        await verifyAllLocRibScopes(page, live, controller);
         await page.screenshot({
             path: path.join(screenshotDirectory, `${live.scenario.key}-loc-rib.png`),
             fullPage: true
@@ -192,7 +212,7 @@ test.describe('Huawei BMP live device pages', () => {
                 await live.apply({ trialSeconds: Number(process.env.NETNEXUS_HUAWEI_TRIAL_SECONDS || 900) });
                 await live.waitForData({ timeoutMs: scenario.key.startsWith('evpn') ? 90000 : 180000 });
                 await live.collectFinal();
-                await verifyPages(page, live);
+                await verifyPages(page, live, controller);
                 if (scenario.key === 'public-unicast') await verifyUiStopRestart(page, live);
                 expect.soft(live.report.setupIssues, 'scenario setup issues').toEqual([]);
                 expect.soft(live.report.codeIssues, 'real-device parser/UI issues').toEqual([]);

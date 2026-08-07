@@ -24,10 +24,7 @@ const BmpConfig = () => import('../view/bmp/BmpConfig.vue');
 const BgpRouteAssurance = () => import('../view/bmp/BgpRouteAssurance.vue');
 const BgpRouteLens = () => import('../view/bmp/BgpRouteLens.vue');
 const BgpRouteHistory = () => import('../view/bmp/BgpRouteHistory.vue');
-const BgpSession = () => import('../view/bmp/BgpSession.vue');
-const BgpLocRib = () => import('../view/bmp/BgpLocRib.vue');
-const BgpSessionStatisReport = () => import('../view/bmp/BgpSessionStatisReport.vue');
-const BgpLocRibStatisReport = () => import('../view/bmp/BgpLocRibStatisReport.vue');
+const BmpClientMonitor = () => import('../view/bmp/BmpClientMonitor.vue');
 const RpkiMain = () => import('../view/rpki/RpkiMain.vue');
 const RpkiConfig = () => import('../view/rpki/RpkiConfig.vue');
 const RpkiRoaConfig = () => import('../view/rpki/RpkiRoaConfig.vue');
@@ -44,6 +41,8 @@ const YangMain = () => import('../view/yang/YangMain.vue');
 const YangConnection = () => import('../view/yang/YangConnection.vue');
 const YangModules = () => import('../view/yang/YangModules.vue');
 const YangWorkspace = () => import('../view/yang/YangWorkspace.vue');
+const NetconfEditConfigWindow = () => import('../view/yang/NetconfEditConfigWindow.vue');
+const NetconfNotificationWindow = () => import('../view/yang/NetconfNotificationWindow.vue');
 const DhcpMain = () => import('../view/dhcp/DhcpMain.vue');
 const DhcpConfig = () => import('../view/dhcp/DhcpConfig.vue');
 const DhcpLeaseList = () => import('../view/dhcp/DhcpLeaseList.vue');
@@ -60,8 +59,83 @@ const TftpTransferLog = () => import('../view/tftp/TftpTransferLog.vue');
 const SyslogMain = () => import('../view/syslog/SyslogMain.vue');
 const SyslogConfig = () => import('../view/syslog/SyslogConfig.vue');
 const SyslogMessageLog = () => import('../view/syslog/SyslogMessageLog.vue');
+const MonitorWindow = () => import('../view/MonitorWindow.vue');
 
 const routes = [
+    {
+        path: '/monitor',
+        component: MonitorWindow,
+        meta: { monitorWindow: true },
+        children: [
+            {
+                path: 'syslog-message-log',
+                name: 'SyslogMessageLogMonitor',
+                component: SyslogMessageLog,
+                meta: {
+                    monitorWindow: true,
+                    windowTitle: 'Syslog 消息监控 - NetNexus',
+                    monitorTestId: 'syslog-monitor-shell'
+                }
+            },
+            {
+                path: 'snmp-trap',
+                name: 'SnmpTrapMonitor',
+                component: SnmpTrap,
+                meta: {
+                    monitorWindow: true,
+                    windowTitle: 'SNMP Trap 监控 - NetNexus',
+                    monitorTestId: 'snmp-monitor-shell'
+                }
+            },
+            {
+                path: 'bmp-client',
+                name: 'BmpClientMonitor',
+                component: BmpClientMonitor,
+                meta: {
+                    monitorWindow: true,
+                    windowTitle: 'BMP Client 监控 - NetNexus',
+                    monitorCompactTop: true,
+                    monitorTestId: 'bmp-client-monitor-shell'
+                }
+            },
+            {
+                path: 'bmp-session',
+                redirect: to => ({
+                    name: 'BmpClientMonitor',
+                    query: { ...to.query, view: 'session' }
+                })
+            },
+            {
+                path: 'bmp-loc-rib',
+                redirect: to => ({
+                    name: 'BmpClientMonitor',
+                    query: { ...to.query, view: 'loc-rib' }
+                })
+            },
+            {
+                path: 'netconf-edit-config',
+                name: 'NetconfEditConfigMonitor',
+                component: NetconfEditConfigWindow,
+                meta: {
+                    monitorWindow: true,
+                    windowTitle: 'NETCONF edit-config - NetNexus',
+                    monitorCompactTop: true,
+                    monitorTestId: 'netconf-edit-config-monitor-shell'
+                }
+            },
+            {
+                path: 'netconf-notifications',
+                name: 'NetconfNotificationMonitor',
+                component: NetconfNotificationWindow,
+                meta: {
+                    monitorWindow: true,
+                    windowTitle: 'NETCONF Notifications - NetNexus',
+                    monitorCompactTop: true,
+                    monitorTestId: 'netconf-notification-monitor-shell'
+                }
+            }
+        ]
+    },
     {
         path: '/',
         component: Main,
@@ -192,9 +266,7 @@ const routes = [
                     },
                     {
                         path: 'bgp-session',
-                        name: 'BgpSession',
-                        component: BgpSession,
-                        meta: { keepAlive: true }
+                        redirect: '/bmp/bmp-config'
                     },
                     {
                         path: 'route-assurance',
@@ -216,21 +288,15 @@ const routes = [
                     },
                     {
                         path: 'bgp-loc-rib',
-                        name: 'BgpLocRib',
-                        component: BgpLocRib,
-                        meta: { keepAlive: true }
+                        redirect: '/bmp/bmp-config'
                     },
                     {
                         path: 'bgp-session-statis-report',
-                        name: 'BgpSessionStatisReport',
-                        component: BgpSessionStatisReport,
-                        meta: { keepAlive: true }
+                        redirect: '/bmp/bmp-config'
                     },
                     {
                         path: 'bgp-loc-rib-statis-report',
-                        name: 'BgpLocRibStatisReport',
-                        component: BgpLocRibStatisReport,
-                        meta: { keepAlive: true }
+                        redirect: '/bmp/bmp-config'
                     }
                 ]
             },
@@ -309,9 +375,7 @@ const routes = [
                     },
                     {
                         path: 'snmp-trap',
-                        name: 'SnmpTrap',
-                        component: SnmpTrap,
-                        meta: { keepAlive: true }
+                        redirect: '/snmp/snmp-mib'
                     }
                 ]
             },
@@ -452,9 +516,7 @@ const routes = [
                     },
                     {
                         path: 'syslog-message-log',
-                        name: 'SyslogMessageLog',
-                        component: SyslogMessageLog,
-                        meta: { keepAlive: true }
+                        redirect: '/syslog/syslog-config'
                     }
                 ]
             }

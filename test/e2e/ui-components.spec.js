@@ -18,10 +18,6 @@ const fullHeightPageRoutes = [
     '/#/bgp/route-ipv4-qp',
     '/#/bgp/route-ipv6-qp',
     '/#/bmp/bmp-config',
-    '/#/bmp/bgp-session',
-    '/#/bmp/bgp-loc-rib',
-    '/#/bmp/bgp-session-statis-report',
-    '/#/bmp/bgp-loc-rib-statis-report',
     '/#/rpki/rpki-config',
     '/#/rpki/rpki-roa-config',
     '/#/rpki/rpki-router-key-config',
@@ -30,7 +26,6 @@ const fullHeightPageRoutes = [
     '/#/snmp/snmp-config',
     '/#/snmp/snmp-mib-compile',
     '/#/snmp/snmp-mib',
-    '/#/snmp/snmp-trap',
     '/#/dhcp/dhcp-config',
     '/#/dhcp/dhcp-lease',
     '/#/ntp/ntp-config',
@@ -40,8 +35,7 @@ const fullHeightPageRoutes = [
     '/#/radius/radius-session',
     '/#/tftp/tftp-config',
     '/#/tftp/tftp-transfer-log',
-    '/#/syslog/syslog-config',
-    '/#/syslog/syslog-message-log'
+    '/#/syslog/syslog-config'
 ];
 
 const moduleDefaultRoutes = [
@@ -466,14 +460,14 @@ test.describe('Custom UI component interactions', () => {
         const tableImageMarkup = await tableImage.evaluate(element => element.innerHTML);
         const tableVisual = await getEmptyVisualSnapshot(tableEmpty);
 
-        await page.goto('/#/bmp/bgp-session');
+        await page.goto('/#/monitor/bmp-client?clientKey=source%3Aempty-client&view=session');
 
         const pageEmpty = page.locator('.no-result-message .nn-empty');
         await expect(pageEmpty).toHaveCount(1);
         const pageImage = pageEmpty.locator('svg.nn-empty-image');
         const pageDescription = pageEmpty.locator('.nn-empty-description');
         await expect(pageImage).toBeVisible();
-        await expect(pageDescription).toHaveText('暂无数据');
+        await expect(pageDescription).toHaveText('未找到指定 Client');
         await expect(pageDescription).toHaveCSS('font-size', '13px');
         expect(await pageImage.evaluate(element => element.innerHTML)).toBe(tableImageMarkup);
         const lightPageVisual = await getEmptyVisualSnapshot(pageEmpty);
@@ -1272,17 +1266,12 @@ test.describe('Custom UI component interactions', () => {
             }
         });
 
-        await page.goto('/#/snmp/snmp-trap');
-
-        const settingsDialog = await openSettingsDialog(page);
-        const darkTheme = settingsDialog.getByRole('radiogroup', { name: '主题颜色' }).getByRole('radio', {
-            name: '深色',
-            exact: true
+        await page.goto('/#/monitor/snmp-trap');
+        await page.evaluate(() => {
+            document.documentElement.dataset.theme = 'dark';
+            document.documentElement.dataset.themePreset = 'dark';
+            document.documentElement.style.colorScheme = 'dark';
         });
-        await darkTheme.click();
-        await expect(darkTheme).toBeChecked();
-        await settingsDialog.getByRole('button', { name: '关闭' }).click();
-        await expect(settingsDialog).toBeHidden();
         await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 
         const picker = page.locator('.nn-range-picker').first();

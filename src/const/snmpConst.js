@@ -10,7 +10,9 @@ export const SNMP_SUB_EVT_TYPES = {
     TRAP_PROCESSED: 4,
     TRAP_ERROR: 5,
     SERVER_STATUS: 6,
-    TRAP_BATCH_RECEIVED: 7
+    TRAP_BATCH_RECEIVED: 7,
+    HISTORY_CLEARED: 8,
+    STATS_UPDATED: 9
 };
 
 // SNMP版本
@@ -85,6 +87,5 @@ export const SNMP_ROUTE = Object.freeze({
 export const SNMP_TABS = Object.freeze([
     { key: 'snmp-config', label: 'SNMP配置', route: SNMP_ROUTE.CONFIG },
     { key: 'snmp-mib-compile', label: 'MIB编译', route: SNMP_ROUTE.MIB_COMPILER },
-    { key: 'snmp-mib', label: 'MIB工作区', route: SNMP_ROUTE.MIB_WORKSPACE },
-    { key: 'snmp-trap', label: 'Trap监控', route: SNMP_ROUTE.TRAP }
+    { key: 'snmp-mib', label: 'MIB工作区', route: SNMP_ROUTE.MIB_WORKSPACE }
 ]);

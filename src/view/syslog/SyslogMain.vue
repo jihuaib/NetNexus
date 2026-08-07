@@ -1,9 +1,8 @@
 <template>
     <div class="nn-main-container">
         <div class="fixed-tabs">
-            <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
+            <nn-tabs active-key="syslog-config">
                 <nn-tab-pane key="syslog-config" tab="Syslog配置" />
-                <nn-tab-pane key="syslog-message-log" tab="消息日志" />
             </nn-tabs>
         </div>
 
@@ -18,28 +17,11 @@
 </template>
 
 <script setup>
-    import { ref, onActivated, watch } from 'vue';
-    import { useRoute, useRouter } from 'vue-router';
+    import { ref } from 'vue';
 
     defineOptions({ name: 'SyslogMain' });
 
-    const route = useRoute();
-    const router = useRouter();
-    const activeTabKey = ref('syslog-config');
     const currentTab = ref(null);
-    const defaultTabKey = 'syslog-config';
-    const tabKeys = new Set(['syslog-config', 'syslog-message-log']);
-
-    const handleTabChange = key => {
-        router.push(`/syslog/${key}`);
-    };
-
-    const syncActiveTab = () => {
-        const childPath = route.path.split('/').filter(Boolean)[1];
-        if (tabKeys.has(childPath)) {
-            activeTabKey.value = childPath;
-        }
-    };
 
     defineExpose({
         clearValidationErrors: () => {
@@ -47,17 +29,6 @@
                 currentTab.value.clearValidationErrors();
             }
         }
-    });
-
-    watch(() => route.path, syncActiveTab, { immediate: true });
-
-    onActivated(() => {
-        if (route.path === '/syslog' || route.path === '/syslog/') {
-            activeTabKey.value = defaultTabKey;
-            router.replace(`/syslog/${defaultTabKey}`);
-            return;
-        }
-        syncActiveTab();
     });
 </script>
 

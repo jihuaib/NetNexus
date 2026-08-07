@@ -2,11 +2,13 @@ const { app, BrowserWindow, ipcMain, Tray } = require('electron');
 const path = require('path');
 const logger = require('./log/logger');
 const { getIconPath, getTrayIconPath } = require('./utils/iconUtils');
+const { MonitorWindowManager } = require('./window/monitorWindowManager');
 
 const isDev = !app.isPackaged;
 const isPackagedE2e = app.isPackaged && process.env.NETNEXUS_E2E === '1';
 const RENDERER_READY_TIMEOUT_MS = 15000;
 const MIN_SPLASH_VISIBLE_MS = 900;
+const SPLASH_BACKGROUND_COLOR = '#667eea';
 let mainWindow = null;
 let splashWindow = null;
 let systemApp = null;
@@ -16,6 +18,7 @@ let splashShownAt = 0;
 let startupComplete = false;
 let allowQuitAfterStorageClose = false;
 let storageCloseForQuitPromise = null;
+let monitorWindowManager = null;
 
 app.commandLine.appendSwitch('lang', 'zh-CN');
 
@@ -61,13 +64,16 @@ async function createSplashWindow() {
         height: splashHeight,
         x: x,
         y: y,
-        transparent: true,
+        // Windows 对长时间存在的透明无框窗口可能生成拉伸、模糊的合成画面。
+        // splash 页面本身已有完整不透明背景，因此不需要使用透明分层窗口。
+        transparent: false,
+        backgroundColor: SPLASH_BACKGROUND_COLOR,
         frame: false,
         resizable: false,
         alwaysOnTop: true,
         skipTaskbar: true,
         hasShadow: false,
-        show: true,
+        show: false,
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -75,17 +81,40 @@ async function createSplashWindow() {
         }
     });
 
+    const readyToShow = new Promise(resolve => splash.once('ready-to-show', resolve));
     splashWindow = splash;
-    splashShownAt = Date.now();
     splash.once('closed', () => {
         if (splashWindow === splash) {
             splashWindow = null;
         }
     });
     await splash.loadFile(path.join(__dirname, 'splash.html'));
-    splash.show();
-    splash.focus();
+    await readyToShow;
+    if (!splash.isDestroyed()) {
+        splashShownAt = Date.now();
+        splash.show();
+        splash.focus();
+    }
     return splash;
+}
+
+function getRendererUrl() {
+    return isDev ? 'http://127.0.0.1:3000' : `file://${path.join(__dirname, '../dist/index.html')}`;
+}
+
+function initializeMonitorWindowManager() {
+    if (monitorWindowManager) {
+        return monitorWindowManager;
+    }
+
+    monitorWindowManager = new MonitorWindowManager({
+        rendererUrl: getRendererUrl(),
+        preloadPath: path.join(__dirname, 'preload.js'),
+        icon: getIconPath(),
+        isPackagedE2e
+    });
+    monitorWindowManager.registerIpcHandlers(ipcMain);
+    return monitorWindowManager;
 }
 
 function createWindow() {
@@ -115,7 +144,7 @@ function createWindow() {
     });
 
     logger.info(`Dev ${isDev} E2E ${isPackagedE2e} __dirname ${__dirname}`);
-    const urlLocation = isDev ? 'http://127.0.0.1:3000' : `file://${path.join(__dirname, '../dist/index.html')}`;
+    const urlLocation = getRendererUrl();
     win.startupRendererReadyPromise = isPackagedE2e ? Promise.resolve() : waitForRendererReady(win);
     if (!isPackagedE2e) {
         win.startupRendererReadyPromise.catch(error => logger.error(`渲染进程就绪等待失败: ${error.message}`));
@@ -132,6 +161,7 @@ function createWindow() {
         event.preventDefault();
 
         if (!systemApp) {
+            monitorWindowManager?.closeAll();
             win.destroy();
             return;
         }
@@ -141,6 +171,7 @@ function createWindow() {
             return;
         }
 
+        monitorWindowManager?.closeAll();
         win.destroy();
     });
 
@@ -269,6 +300,8 @@ function finishStartup() {
 }
 
 async function startApplication() {
+    initializeMonitorWindowManager();
+
     if (isPackagedE2e) {
         createWindow();
         await mainWindow.startupLoadPromise;
@@ -281,6 +314,8 @@ async function startApplication() {
 
     // SystemApp 会加载所有协议模块，必须放到 splash 首帧之后，避免点击应用后长时间没有任何反馈。
     updateSplashProgress(10, '正在加载核心组件...');
+    // 先让首帧和 10% 状态提交给原生窗口；Windows 首次检查原生模块时可能耗时较长。
+    await new Promise(resolve => setImmediate(resolve));
     const SystemApp = require('./app/systemApp');
     updateSplashProgress(18, '核心组件加载完成');
 
@@ -308,7 +343,7 @@ async function startApplication() {
 
     // 启动应用
     updateSplashProgress(34, '正在注册主进程服务...');
-    systemApp = new SystemApp(ipcMain, mainWindow, updateSplashProgress);
+    systemApp = new SystemApp(ipcMain, mainWindow, updateSplashProgress, { monitorWindowManager });
     updateSplashProgress(40, '主进程服务注册完成');
 
     // 兼容性检查

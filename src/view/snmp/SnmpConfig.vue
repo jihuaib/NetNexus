@@ -430,6 +430,13 @@
                 trapCount.value++;
             } else if (type === SNMP_SUB_EVT_TYPES.TRAP_BATCH_RECEIVED) {
                 trapCount.value += Number(payload.data?.changedCount) || 0;
+            } else if (type === SNMP_SUB_EVT_TYPES.STATS_UPDATED) {
+                const total = Number(payload.data?.totalTraps ?? payload.data?.historyCount);
+                if (Number.isFinite(total)) {
+                    trapCount.value = total;
+                }
+            } else if (type === SNMP_SUB_EVT_TYPES.HISTORY_CLEARED) {
+                trapCount.value = 0;
             } else if (type === SNMP_SUB_EVT_TYPES.SERVER_STATUS && payload.data?.status === 'stopped') {
                 trapCount.value = 0;
                 isServerRunning.value = false;

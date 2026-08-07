@@ -20,9 +20,58 @@ const ALLOWED_HOST_KEY_POLICIES = new Set(['ask', 'strict', 'accept-new']);
 const INITIAL_PASSWORD_CHANGE_REQUIRED_CODE = 'NETCONF_INITIAL_PASSWORD_CHANGE_REQUIRED';
 const MAX_SUBSCRIPTION_SNAPSHOTS_PER_PROFILE = 256;
 const MAX_SUBSCRIPTION_SNAPSHOT_BYTES_PER_PROFILE = 16 * 1024 * 1024;
+const MAX_NOTIFICATION_HISTORY_RECORDS = 500;
+const MAX_NOTIFICATION_HISTORY_BYTES = 16 * 1024 * 1024;
+const MAX_NOTIFICATION_XML_BYTES = 2 * 1024 * 1024;
+const MAX_NOTIFICATION_ACTION_BYTES = 128 * 1024;
+const NOTIFICATION_SUMMARY_DELAY_MS = 200;
 const MAX_RPC_REPLY_ARTIFACTS = 32;
 const MAX_RPC_REPLY_ARTIFACT_BYTES = 256 * 1024 * 1024;
 const RPC_REPLY_ARTIFACT_PREFIX = 'netnexus-netconf-replies-';
+const NOTIFICATION_ACTIONS = new Set([
+    'modify-subscription',
+    'delete-subscription',
+    'resync-subscription',
+    'disconnect-session'
+]);
+
+const NOTIFICATION_ACTION_FIELDS = Object.freeze([
+    'id',
+    'subscriptionId',
+    'deviceSubscriptionId',
+    'modernSubscriptionId',
+    'profileId',
+    'profileName',
+    'host',
+    'port',
+    'sessionId',
+    'label',
+    'subscriptionName',
+    'protocol',
+    'type',
+    'subscriptionType',
+    'targetType',
+    'stream',
+    'datastore',
+    'datastoreNamespaces',
+    'filter',
+    'replayStartTime',
+    'stopTime',
+    'dscp',
+    'weighting',
+    'dependency',
+    'encoding',
+    'encodingNamespaces',
+    'updateTrigger',
+    'period',
+    'anchorTime',
+    'dampeningPeriod',
+    'syncOnStart',
+    'excludedChanges',
+    'capabilitySupport',
+    'state',
+    'status'
+]);
 
 const snapshotBytes = value => {
     try {
@@ -30,6 +79,49 @@ const snapshotBytes = value => {
     } catch (_error) {
         return 0;
     }
+};
+
+const truncateUtf8Text = (value, maxBytes, markerText) => {
+    const text = String(value ?? '');
+    if (Buffer.byteLength(text, 'utf8') <= maxBytes) return { value: text, truncated: false };
+    const marker = `\n<!-- ${markerText} -->`;
+    const markerBytes = Buffer.byteLength(marker, 'utf8');
+    const availableBytes = Math.max(0, maxBytes - markerBytes);
+    let low = 0;
+    let high = text.length;
+    while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if (Buffer.byteLength(text.slice(0, middle), 'utf8') <= availableBytes) low = middle;
+        else high = middle - 1;
+    }
+    return { value: `${text.slice(0, low)}${marker}`, truncated: true };
+};
+
+const clonePlainValue = value => {
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch (_error) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+    }
+};
+
+const compactActionValue = (value, depth = 0) => {
+    if (value === null || value === undefined) return value ?? null;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'string') {
+        return truncateUtf8Text(value, 64 * 1024, 'NetNexus：动作字段已截断').value;
+    }
+    if (depth >= 5) return null;
+    if (Array.isArray(value)) return value.slice(0, 256).map(item => compactActionValue(item, depth + 1));
+    if (typeof value !== 'object') return String(value).slice(0, 1024);
+    const result = {};
+    for (const [rawKey, item] of Object.entries(value).slice(0, 128)) {
+        const key = String(rawKey || '').slice(0, 128);
+        if (!key || ['__proto__', 'prototype', 'constructor'].includes(key)) continue;
+        result[key] = compactActionValue(item, depth + 1);
+    }
+    return result;
 };
 
 const rpcReplyPreview = buffer => {
@@ -72,8 +164,17 @@ class NetconfApp {
         this.ipcMain = ipcMain;
         this.store = store;
         this.yangApp = options.yangApp || null;
+        this.primaryWebContents = options.primaryWebContents || null;
+        this.hasFixedPrimaryWebContents = Boolean(this.primaryWebContents);
+        this.closeProfileMonitorWindowsHandler =
+            typeof options.closeProfileMonitorWindows === 'function' ? options.closeProfileMonitorWindows : null;
+        this.closeMonitorWindowsHandler =
+            typeof options.closeMonitorWindows === 'function' ? options.closeMonitorWindows : null;
         this.workerClient = null;
         this.eventDispatcher = new EventDispatcher();
+        if (this.primaryWebContents && !this.primaryWebContents.isDestroyed?.()) {
+            this.eventDispatcher.setWebContents(this.primaryWebContents);
+        }
         this.credentialStore = options.credentialStore || new SecureCredentialStore();
         this.transientSecrets = new Map();
         this.inventories = new Map();
@@ -82,6 +183,14 @@ class NetconfApp {
         this.profileDeletionPromises = new Map();
         this.sessionSnapshots = new Map();
         this.subscriptionSnapshots = new Map();
+        this.notificationHistory = [];
+        this.notificationHistoryBytes = 0;
+        this.notificationHistoryReceived = 0;
+        this.notificationHistoryDropped = 0;
+        this.notificationSummaryTimer = null;
+        this.notificationSummaryDelayMs = Number.isFinite(Number(options.notificationSummaryDelayMs))
+            ? Math.max(0, Math.min(5000, Number(options.notificationSummaryDelayMs)))
+            : NOTIFICATION_SUMMARY_DELAY_MS;
         this.profileRpcTimeouts = new Map();
         this.pendingProfileConnections = new Set();
         this.activeRpcOperations = new Map();
@@ -98,7 +207,7 @@ class NetconfApp {
         this.logLevel = null;
         this.taskManager = new TaskManager({
             onProgress: progress => {
-                if (this.eventDispatcher.canEmit()) {
+                if (this.eventDispatcher.canEmit(YANG_EVT_TYPES.TASK_PROGRESS)) {
                     this.eventDispatcher.emit(YANG_EVT_TYPES.TASK_PROGRESS, successResponse(progress, 'YANG任务进度'));
                 }
             }
@@ -118,6 +227,12 @@ class NetconfApp {
         handle('netconf:disconnect', this.handleDisconnect);
         handle('netconf:getSessionState', this.handleGetSessionState);
         handle('netconf:getSubscriptions', this.handleGetSubscriptions);
+        handle('netconf:getNotificationHistory', this.handleGetNotificationHistory);
+        handle('netconf:getNotificationSummary', this.handleGetNotificationSummary);
+        handle('netconf:markNotificationRead', this.handleMarkNotificationRead);
+        handle('netconf:deleteNotificationHistory', this.handleDeleteNotificationHistory);
+        handle('netconf:clearNotificationHistory', this.handleClearNotificationHistory);
+        handle('netconf:requestNotificationAction', this.handleRequestNotificationAction);
         handle('netconf:discoverModules', this.handleDiscoverModules);
         handle('netconf:downloadModules', this.handleDownloadModules);
         handle('netconf:executeOperation', this.handleExecuteOperation);
@@ -311,7 +426,31 @@ class NetconfApp {
     }
 
     setWebContents(event) {
+        if (this.hasFixedPrimaryWebContents) {
+            if (this.primaryWebContents && !this.primaryWebContents.isDestroyed?.()) {
+                this.eventDispatcher.setWebContents(this.primaryWebContents);
+            }
+            return;
+        }
         if (event?.sender && !event.sender.isDestroyed?.()) this.eventDispatcher.setWebContents(event.sender);
+    }
+
+    closeProfileMonitorWindows(profileId) {
+        if (!this.closeProfileMonitorWindowsHandler || !profileId) return;
+        try {
+            this.closeProfileMonitorWindowsHandler(String(profileId));
+        } catch (error) {
+            logger.warn(`关闭 NETCONF Profile 独立窗口失败: ${error.message}`);
+        }
+    }
+
+    closeMonitorWindows() {
+        if (!this.closeMonitorWindowsHandler) return;
+        try {
+            this.closeMonitorWindowsHandler();
+        } catch (error) {
+            logger.warn(`关闭 NETCONF 独立窗口失败: ${error.message}`);
+        }
     }
 
     profileGeneration(profileId) {
@@ -408,14 +547,33 @@ class NetconfApp {
             key,
             operationId,
             profileId: String(profileId || ''),
-            controller: new AbortController()
+            controller: new AbortController(),
+            sender: event?.sender || null,
+            senderDestroyedListener: null
         };
         this.activeRpcOperations.set(key, operation);
+        if (operation.sender && typeof operation.sender.once === 'function') {
+            operation.senderDestroyedListener = () => {
+                if (this.activeRpcOperations.get(operation.key) !== operation) return;
+                operation.controller.abort();
+                this.finishRpcOperation(operation);
+            };
+            operation.sender.once('destroyed', operation.senderDestroyedListener);
+        }
         return operation;
     }
 
     finishRpcOperation(operation) {
-        if (operation && this.activeRpcOperations.get(operation.key) === operation) {
+        if (!operation) return;
+        if (operation.senderDestroyedListener && operation.sender) {
+            if (typeof operation.sender.removeListener === 'function') {
+                operation.sender.removeListener('destroyed', operation.senderDestroyedListener);
+            } else if (typeof operation.sender.off === 'function') {
+                operation.sender.off('destroyed', operation.senderDestroyedListener);
+            }
+            operation.senderDestroyedListener = null;
+        }
+        if (this.activeRpcOperations.get(operation.key) === operation) {
             this.activeRpcOperations.delete(operation.key);
         }
     }
@@ -497,6 +655,397 @@ class NetconfApp {
         };
     }
 
+    normalizeNotificationScope(input = null) {
+        const request = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+        const source = request.scope && typeof request.scope === 'object' ? request.scope : request;
+        let kind = String(source.kind || '').toLowerCase();
+        if (!kind) {
+            if (source.subscriptionId) kind = 'subscription';
+            else if (source.sessionId) kind = 'session';
+            else if (source.profileId) kind = 'profile';
+            else kind = 'all';
+        }
+        if (!['all', 'profile', 'session', 'subscription'].includes(kind)) kind = 'all';
+        return {
+            kind,
+            profileId: String(source.profileId || ''),
+            sessionId: String(source.sessionId || ''),
+            subscriptionId: String(source.subscriptionId || '')
+        };
+    }
+
+    notificationMatchesScope(notification, scope = { kind: 'all' }) {
+        if (!scope.kind || scope.kind === 'all') return true;
+        if (String(notification.profileId || '') !== scope.profileId) return false;
+        if (scope.kind === 'profile') return true;
+        if (String(notification.sessionId || '') !== scope.sessionId) return false;
+        if (scope.kind === 'session') return true;
+        return String(notification.subscriptionId || '') === scope.subscriptionId;
+    }
+
+    notificationSubscriptionMatchesScope(subscription, scope = { kind: 'all' }) {
+        if (!scope.kind || scope.kind === 'all') return true;
+        if (String(subscription.profileId || '') !== scope.profileId) return false;
+        if (scope.kind === 'profile') return true;
+        if (String(subscription.sessionId || '') !== scope.sessionId) return false;
+        if (scope.kind === 'session') return true;
+        return String(subscription.subscriptionId || subscription.id || '') === scope.subscriptionId;
+    }
+
+    notificationSummary() {
+        const latest = this.notificationHistory[0] || null;
+        const last = latest
+            ? {
+                  historyId: latest.historyId,
+                  id: latest.id,
+                  profileId: latest.profileId || '',
+                  profileName: latest.profileName || '',
+                  host: latest.host || '',
+                  port: latest.port ?? '',
+                  sessionId: latest.sessionId || '',
+                  subscriptionId: latest.subscriptionId || '',
+                  eventName: latest.eventName || '',
+                  namespace: latest.namespace || '',
+                  receivedAt: latest.receivedAt || '',
+                  eventTime: latest.eventTime || ''
+              }
+            : null;
+        return {
+            total: this.notificationHistory.length,
+            unread: this.notificationHistory.reduce((total, notification) => total + (notification.read ? 0 : 1), 0),
+            totalBytes: this.notificationHistoryBytes,
+            received: this.notificationHistoryReceived,
+            dropped: this.notificationHistoryDropped,
+            lastReceivedAt: latest?.receivedAt || '',
+            lastEventName: latest?.eventName || '',
+            latest: last,
+            updatedAt: new Date().toISOString()
+        };
+    }
+
+    emitNotificationSummary() {
+        if (this.notificationSummaryTimer) {
+            clearTimeout(this.notificationSummaryTimer);
+            this.notificationSummaryTimer = null;
+        }
+        const target = this.eventDispatcher.webContents;
+        if (!target || target.isDestroyed?.()) return 0;
+        return this.eventDispatcher.emitToPrimary(
+            YANG_EVT_TYPES.NOTIFICATION_SUMMARY,
+            successResponse(this.notificationSummary(), 'NETCONF 通知摘要')
+        );
+    }
+
+    scheduleNotificationSummary() {
+        if (this.closing) return;
+        if (this.notificationSummaryTimer) return;
+        const target = this.eventDispatcher.webContents;
+        if (!target || target.isDestroyed?.()) return;
+        this.notificationSummaryTimer = setTimeout(() => {
+            this.notificationSummaryTimer = null;
+            this.emitNotificationSummary();
+        }, this.notificationSummaryDelayMs);
+        this.notificationSummaryTimer.unref?.();
+    }
+
+    normalizeNotificationRecord(data) {
+        const payload = clonePlainValue(data && typeof data === 'object' ? data : {});
+        const rawXml = String(payload.xml || payload.notificationXml || payload.payloadXml || '');
+        const xml = truncateUtf8Text(rawXml, MAX_NOTIFICATION_XML_BYTES, 'NetNexus：通知 XML 已截断');
+        const historyId = `netconf-notification-${Date.now()}-${randomUUID()}`;
+        const receivedAt = String(payload.receivedAt || payload.receivedTime || new Date().toISOString());
+        const sourceEventId = payload.id === undefined || payload.id === null ? '' : String(payload.id);
+        const record = {
+            ...payload,
+            ...(sourceEventId ? { sourceEventId } : {}),
+            id: historyId,
+            historyId,
+            read: false,
+            receivedAt,
+            xml: xml.value,
+            xmlTruncated: xml.truncated || Boolean(payload.xmlTruncated)
+        };
+        delete record.notificationXml;
+        delete record.payloadXml;
+
+        // Parsed documents can duplicate the complete XML tree. Keep small documents
+        // for compatibility, but discard the duplicate when one record would dominate
+        // the bounded history.
+        if (snapshotBytes(record) > MAX_NOTIFICATION_XML_BYTES + 256 * 1024 && record.document !== undefined) {
+            delete record.document;
+            record.documentOmitted = true;
+        }
+
+        let bytes = snapshotBytes(record);
+        if (bytes > MAX_NOTIFICATION_HISTORY_BYTES) {
+            const compact = {
+                id: record.id,
+                historyId: record.historyId,
+                sourceEventId: record.sourceEventId,
+                profileId: record.profileId || '',
+                profileName: record.profileName || '',
+                host: record.host || '',
+                port: record.port ?? '',
+                sessionId: record.sessionId || '',
+                subscriptionId: record.subscriptionId || '',
+                publisherSubscriptionId: record.publisherSubscriptionId || '',
+                subscriptionType: record.subscriptionType || '',
+                targetType: record.targetType || '',
+                stream: record.stream || '',
+                datastore: record.datastore || '',
+                state: record.state || '',
+                receivedAt: record.receivedAt,
+                eventTime: record.eventTime || '',
+                eventName: record.eventName || '',
+                namespace: record.namespace || '',
+                xml: record.xml,
+                xmlTruncated: true,
+                documentOmitted: record.document !== undefined || record.documentOmitted === true,
+                metadataOmitted: true,
+                read: false
+            };
+            bytes = snapshotBytes(compact);
+            compact.estimatedBytes = bytes;
+            return compact;
+        }
+        record.estimatedBytes = bytes;
+        return record;
+    }
+
+    rememberNotification(data) {
+        const notification = this.normalizeNotificationRecord(data);
+        const bytes = Number(notification.estimatedBytes) || snapshotBytes(notification);
+        this.notificationHistory.unshift(notification);
+        this.notificationHistoryBytes += bytes;
+        this.notificationHistoryReceived += 1;
+        while (
+            this.notificationHistory.length > MAX_NOTIFICATION_HISTORY_RECORDS ||
+            this.notificationHistoryBytes > MAX_NOTIFICATION_HISTORY_BYTES
+        ) {
+            const removed = this.notificationHistory.pop();
+            if (!removed) break;
+            this.notificationHistoryBytes = Math.max(
+                0,
+                this.notificationHistoryBytes - (Number(removed.estimatedBytes) || snapshotBytes(removed))
+            );
+            this.notificationHistoryDropped += 1;
+        }
+        this.scheduleNotificationSummary();
+        return notification;
+    }
+
+    notificationHistoryLimits() {
+        return {
+            maxRecords: MAX_NOTIFICATION_HISTORY_RECORDS,
+            maxTotalBytes: MAX_NOTIFICATION_HISTORY_BYTES,
+            maxXmlBytes: MAX_NOTIFICATION_XML_BYTES,
+            maxSubscriptions: MAX_SUBSCRIPTION_SNAPSHOTS_PER_PROFILE
+        };
+    }
+
+    async handleGetNotificationHistory(_event, request = null) {
+        try {
+            const scope = this.normalizeNotificationScope(request);
+            const notifications = this.notificationHistory
+                .filter(notification => this.notificationMatchesScope(notification, scope))
+                .map(notification => clonePlainValue(notification));
+            const subscriptions = [...this.subscriptionSnapshots.values()]
+                .filter(subscription => this.notificationSubscriptionMatchesScope(subscription, scope))
+                .sort((left, right) => String(left.createdAt || '').localeCompare(String(right.createdAt || '')))
+                .map(subscription => clonePlainValue(subscription));
+            return successResponse(
+                {
+                    notifications,
+                    subscriptions,
+                    total: notifications.length,
+                    summary: this.notificationSummary(),
+                    limits: this.notificationHistoryLimits(),
+                    scope
+                },
+                'NETCONF 通知历史获取成功'
+            );
+        } catch (error) {
+            return errorResponse('获取 NETCONF 通知历史失败: ' + error.message, { code: error.code });
+        }
+    }
+
+    async handleGetNotificationSummary() {
+        return successResponse(this.notificationSummary(), 'NETCONF 通知摘要获取成功');
+    }
+
+    notificationMutationPredicate(request, defaultAll = true) {
+        const source = typeof request === 'string' ? { id: request } : request || {};
+        const ids = new Set(
+            [source.id, source.notificationId, ...(Array.isArray(source.ids) ? source.ids : [])]
+                .map(value => String(value || ''))
+                .filter(Boolean)
+        );
+        if (ids.size > 0) {
+            return notification => ids.has(String(notification.historyId || notification.id || ''));
+        }
+        if (!defaultAll && !source.scope && !source.kind && !source.profileId) {
+            const error = new Error('缺少 NETCONF 通知历史目标');
+            error.code = 'NETCONF_NOTIFICATION_TARGET_REQUIRED';
+            throw error;
+        }
+        const scope = this.normalizeNotificationScope(source);
+        return notification => this.notificationMatchesScope(notification, scope);
+    }
+
+    async handleMarkNotificationRead(_event, request = {}) {
+        try {
+            const predicate = this.notificationMutationPredicate(request, true);
+            const read = request?.read !== false;
+            let updated = 0;
+            this.notificationHistory = this.notificationHistory.map(notification => {
+                if (!predicate(notification) || notification.read === read) return notification;
+                updated += 1;
+                return { ...notification, read };
+            });
+            this.scheduleNotificationSummary();
+            return successResponse({ updated, read, summary: this.notificationSummary() }, 'NETCONF 通知状态已更新');
+        } catch (error) {
+            return errorResponse('更新 NETCONF 通知状态失败: ' + error.message, { code: error.code });
+        }
+    }
+
+    deleteNotificationRecords(predicate) {
+        let removed = 0;
+        let removedBytes = 0;
+        this.notificationHistory = this.notificationHistory.filter(notification => {
+            if (!predicate(notification)) return true;
+            removed += 1;
+            removedBytes += Number(notification.estimatedBytes) || snapshotBytes(notification);
+            return false;
+        });
+        this.notificationHistoryBytes = Math.max(0, this.notificationHistoryBytes - removedBytes);
+        this.scheduleNotificationSummary();
+        return removed;
+    }
+
+    async handleDeleteNotificationHistory(_event, request = {}) {
+        try {
+            const removed = this.deleteNotificationRecords(this.notificationMutationPredicate(request, false));
+            return successResponse({ removed, summary: this.notificationSummary() }, 'NETCONF 通知已删除');
+        } catch (error) {
+            return errorResponse('删除 NETCONF 通知失败: ' + error.message, { code: error.code });
+        }
+    }
+
+    async handleClearNotificationHistory(_event, request = {}) {
+        try {
+            const removed = this.deleteNotificationRecords(this.notificationMutationPredicate(request, true));
+            return successResponse({ removed, summary: this.notificationSummary() }, 'NETCONF 通知历史已清空');
+        } catch (error) {
+            return errorResponse('清空 NETCONF 通知历史失败: ' + error.message, { code: error.code });
+        }
+    }
+
+    findNotificationActionSubscription(request) {
+        const profileId = String(request.profileId || '');
+        const localId = String(request.subscriptionId || request.id || '');
+        const deviceId = String(request.deviceSubscriptionId || request.modernSubscriptionId || '');
+        return (
+            [...this.subscriptionSnapshots.values()].find(subscription => {
+                if (profileId && String(subscription.profileId || '') !== profileId) return false;
+                if (
+                    localId &&
+                    [subscription.subscriptionId, subscription.id].some(value => String(value || '') === localId)
+                ) {
+                    return true;
+                }
+                return (
+                    deviceId &&
+                    [subscription.publisherSubscriptionId, subscription.deviceSubscriptionId].some(
+                        value => String(value || '') === deviceId
+                    )
+                );
+            }) || null
+        );
+    }
+
+    compactNotificationAction(request, operation) {
+        const snapshot = this.findNotificationActionSubscription(request);
+        const source = { ...request, ...(snapshot || {}), operation };
+        const action = { operation };
+        for (const field of NOTIFICATION_ACTION_FIELDS) {
+            if (!Object.prototype.hasOwnProperty.call(source, field)) continue;
+            action[field] = compactActionValue(source[field]);
+        }
+        action.profileId = String(action.profileId || '').trim();
+        action.sessionId = String(action.sessionId || '').trim();
+        action.subscriptionId = String(action.subscriptionId || action.id || '').trim();
+        action.deviceSubscriptionId = String(
+            action.deviceSubscriptionId || action.modernSubscriptionId || source.publisherSubscriptionId || ''
+        ).trim();
+        action.modernSubscriptionId = action.deviceSubscriptionId;
+        if (!action.profileId || action.profileId.length > 160) {
+            const error = new Error('通知动作缺少有效 Profile');
+            error.code = 'NETCONF_NOTIFICATION_ACTION_PROFILE_INVALID';
+            throw error;
+        }
+        if (action.sessionId.length > 160 || action.subscriptionId.length > 160) {
+            const error = new Error('通知动作的 Session 或订阅标识无效');
+            error.code = 'NETCONF_NOTIFICATION_ACTION_ID_INVALID';
+            throw error;
+        }
+        if (operation === 'disconnect-session' && !action.sessionId) {
+            const error = new Error('断开订阅 Session 时缺少 Session 标识');
+            error.code = 'NETCONF_NOTIFICATION_ACTION_SESSION_REQUIRED';
+            throw error;
+        }
+        if (operation !== 'disconnect-session' && !action.deviceSubscriptionId) {
+            const error = new Error('现代订阅动作缺少设备订阅 ID');
+            error.code = 'NETCONF_NOTIFICATION_ACTION_SUBSCRIPTION_REQUIRED';
+            throw error;
+        }
+        if (snapshotBytes(action) > MAX_NOTIFICATION_ACTION_BYTES) {
+            const error = new Error('通知动作上下文超过大小限制');
+            error.code = 'NETCONF_NOTIFICATION_ACTION_TOO_LARGE';
+            throw error;
+        }
+        return action;
+    }
+
+    focusPrimaryWindow() {
+        const target = this.eventDispatcher.webContents;
+        if (!target || target.isDestroyed?.()) return;
+        try {
+            const win = BrowserWindow?.fromWebContents?.(target);
+            if (!win || win.isDestroyed?.()) return;
+            if (win.isMinimized?.()) win.restore?.();
+            win.show?.();
+            win.focus?.();
+        } catch (error) {
+            logger.warn(`激活 NETCONF 主窗口失败: ${error.message}`);
+        }
+    }
+
+    async handleRequestNotificationAction(_event, request = {}) {
+        try {
+            const operation = String(request?.operation || request?.action || '').trim();
+            if (!NOTIFICATION_ACTIONS.has(operation)) {
+                const error = new Error('不支持的 NETCONF 通知动作');
+                error.code = 'NETCONF_NOTIFICATION_ACTION_UNSUPPORTED';
+                throw error;
+            }
+            const action = this.compactNotificationAction(request, operation);
+            const sent = this.eventDispatcher.emitToPrimary(
+                YANG_EVT_TYPES.NOTIFICATION_ACTION,
+                successResponse(action, 'NETCONF 通知动作请求')
+            );
+            if (!sent) {
+                const error = new Error('NETCONF 主窗口当前不可用');
+                error.code = 'NETCONF_NOTIFICATION_ACTION_TARGET_UNAVAILABLE';
+                throw error;
+            }
+            this.focusPrimaryWindow();
+            return successResponse({ accepted: true, operation }, '已转交 NETCONF 主窗口处理');
+        } catch (error) {
+            return errorResponse('转交通知动作失败: ' + error.message, { code: error.code });
+        }
+    }
+
     relayWorkerEvent(eventName, data) {
         const state = data && typeof data === 'object' ? data : null;
         if (eventName === YANG_EVT_TYPES.SESSION_EVENT) {
@@ -516,14 +1065,17 @@ class NetconfApp {
         } else if (eventName === YANG_EVT_TYPES.SUBSCRIPTION_EVENT) {
             this.rememberSubscriptionSnapshot(state);
         }
-        if (!this.eventDispatcher.canEmit()) return;
         if (eventName === YANG_EVT_TYPES.NOTIFICATION) {
-            this.eventDispatcher.emit(YANG_EVT_TYPES.NOTIFICATION, successResponse(data));
-        } else if (eventName === YANG_EVT_TYPES.SUBSCRIPTION_EVENT) {
-            this.eventDispatcher.emit(YANG_EVT_TYPES.SUBSCRIPTION_EVENT, successResponse(data));
-        } else {
-            this.eventDispatcher.emit(YANG_EVT_TYPES.SESSION_EVENT, successResponse(data));
+            const notification = this.rememberNotification(data);
+            this.eventDispatcher.emitToSubscribers(YANG_EVT_TYPES.NOTIFICATION, successResponse(notification));
+            return;
         }
+        const relayEventType =
+            eventName === YANG_EVT_TYPES.SUBSCRIPTION_EVENT
+                ? YANG_EVT_TYPES.SUBSCRIPTION_EVENT
+                : YANG_EVT_TYPES.SESSION_EVENT;
+        if (!this.eventDispatcher.canEmit(relayEventType)) return;
+        this.eventDispatcher.emit(relayEventType, successResponse(data));
     }
 
     handleWorkerExit(client, code) {
@@ -729,6 +1281,7 @@ class NetconfApp {
         if (!id) return errorResponse('缺少连接ID');
         if (this.closing) return errorResponse('NETCONF 服务正在关闭');
         if (this.deletingProfiles.has(id)) return errorResponse('连接 Profile 正在删除');
+        this.closeProfileMonitorWindows(id);
         this.beginProfileDeletion(id);
         const deletionPromise = (async () => {
             const pending = [];
@@ -805,6 +1358,7 @@ class NetconfApp {
 
     async handleConnect(event, profileOrId) {
         let pendingProfileId = '';
+        const previousProfileId = this.activeProfileId ? String(this.activeProfileId) : '';
         try {
             const requestedId =
                 profileOrId && typeof profileOrId === 'object' ? profileOrId.id : profileOrId || this.activeProfileId;
@@ -829,6 +1383,9 @@ class NetconfApp {
                     this.yangApp?.setActiveProfileId?.(null);
                 }
                 throw error;
+            }
+            if (previousProfileId && previousProfileId !== String(runtime.id)) {
+                this.closeProfileMonitorWindows(previousProfileId);
             }
             this.activeProfileId = runtime.id;
             this.yangApp?.setActiveProfileId?.(runtime.id);
@@ -868,6 +1425,7 @@ class NetconfApp {
         try {
             const id = String(profileId || this.activeProfileId || '');
             if (!id) return successResponse({ status: 'disconnected' }, '当前没有活动连接');
+            this.closeProfileMonitorWindows(id);
             return successResponse(await this.disconnectProfile(event, id), 'NETCONF连接已断开');
         } catch (error) {
             return errorResponse('断开NETCONF连接失败: ' + error.message);
@@ -1410,8 +1968,15 @@ class NetconfApp {
         if (this.closePromise) return this.closePromise;
         const closePromise = (async () => {
             this.closing = true;
-            for (const operation of this.activeRpcOperations.values()) operation.controller.abort();
-            this.activeRpcOperations.clear();
+            if (this.notificationSummaryTimer) {
+                clearTimeout(this.notificationSummaryTimer);
+                this.notificationSummaryTimer = null;
+            }
+            this.closeMonitorWindows();
+            for (const operation of [...this.activeRpcOperations.values()]) {
+                operation.controller.abort();
+                this.finishRpcOperation(operation);
+            }
             const pendingTasks = [];
             for (const task of this.taskManager.tasks.values()) {
                 if (task.status !== 'running') continue;

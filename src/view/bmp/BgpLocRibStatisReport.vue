@@ -2,102 +2,57 @@
     <div class="nn-container bmp-full-page" data-testid="bmp-loc-rib-statistics-page">
         <nn-row class="bmp-full-row">
             <nn-col :span="24">
-                <nn-card title="BGP LocRib统计" class="bmp-full-card">
-                    <div v-if="clientList.length > 0" class="bmp-tabs-shell">
-                        <nn-tabs
-                            v-model:active-key="activeClientKey"
-                            tab-position="left"
-                            class="client-tabs"
-                            :tab-bar-style="clientTabBarStyle"
-                        >
-                            <nn-tab-pane v-for="client in clientList" :key="getClientKey(client)">
-                                <template #tab>
-                                    <span class="client-tab-label" data-testid="bmp-statistics-client-tab-label">
-                                        <nn-tooltip
-                                            class="client-tab-tooltip"
-                                            :title="formatClientTab(client)"
-                                            placement="right"
-                                        >
-                                            <span
-                                                class="client-tab-address"
-                                                data-testid="bmp-statistics-client-address"
-                                            >
-                                                {{ formatClientTab(client) }}
-                                            </span>
-                                        </nn-tooltip>
-                                        <span
-                                            class="client-connection-state"
-                                            :class="isRecordOnline(client) ? 'is-online' : 'is-offline'"
-                                            data-testid="bmp-statistics-client-status"
-                                        >
-                                            {{ formatConnectionState(client) }}
-                                        </span>
-                                    </span>
-                                </template>
-                                <div v-if="getClientReports(client).length > 0" class="bmp-inner-tabs-shell">
-                                    <nn-tabs class="bmp-inner-tabs">
-                                        <nn-tab-pane
-                                            v-for="report in getClientReports(client)"
-                                            :key="report.key"
-                                            :tab="formatInstanceTab(report)"
-                                        >
-                                            <div class="report-header">
-                                                <nn-space>
-                                                    <nn-tag color="blue">
-                                                        Type {{ report.instance.instanceType }}
-                                                    </nn-tag>
-                                                    <nn-tag>RD {{ report.instance.instanceRd }}</nn-tag>
-                                                    <nn-tag v-if="formatVrfTableName(report)">
-                                                        {{ formatVrfTableName(report) }}
-                                                    </nn-tag>
-                                                    <nn-tag>TLV {{ getReportTlvCount(report) }}</nn-tag>
-                                                    <nn-button
-                                                        type="link"
-                                                        size="small"
-                                                        @click="viewReportDetails(report)"
-                                                    >
-                                                        详情
-                                                    </nn-button>
-                                                </nn-space>
-                                            </div>
-                                            <nn-table
-                                                class="report-table"
-                                                :columns="columns"
-                                                :data-source="report.statistics"
-                                                :pagination="{
-                                                    pageSize: 20,
-                                                    showSizeChanger: false,
-                                                    position: ['bottomCenter'],
-                                                    showTotal: total => '共 ' + total + ' 条，每页 20 条'
-                                                }"
-                                                :row-key="
-                                                    record => `${record.type}|${record.afi || ''}|${record.safi || ''}`
-                                                "
-                                                size="small"
-                                                bordered
-                                                :scroll="{ y: '100%' }"
-                                            >
-                                                <template #bodyCell="{ column, record }">
-                                                    <template v-if="column.key === 'typeName'">
-                                                        {{ record.typeName }}
-                                                    </template>
-                                                    <template v-if="column.key === 'value'">
-                                                        {{ record.value }}
-                                                    </template>
-                                                </template>
-                                            </nn-table>
-                                        </nn-tab-pane>
-                                    </nn-tabs>
+                <nn-card class="bmp-full-card">
+                    <div v-if="monitoredClient && monitoredClientReports.length > 0" class="bmp-inner-tabs-shell">
+                        <nn-tabs class="bmp-inner-tabs">
+                            <nn-tab-pane
+                                v-for="report in monitoredClientReports"
+                                :key="report.key"
+                                :tab="formatInstanceTab(report)"
+                            >
+                                <div class="report-header">
+                                    <nn-space>
+                                        <nn-tag color="blue">Type {{ report.instance.instanceType }}</nn-tag>
+                                        <nn-tag>RD {{ report.instance.instanceRd }}</nn-tag>
+                                        <nn-tag v-if="formatVrfTableName(report)">
+                                            {{ formatVrfTableName(report) }}
+                                        </nn-tag>
+                                        <nn-tag>TLV {{ getReportTlvCount(report) }}</nn-tag>
+                                        <nn-button type="link" size="small" @click="viewReportDetails(report)">
+                                            详情
+                                        </nn-button>
+                                    </nn-space>
                                 </div>
-                                <div v-else class="no-result-message">
-                                    <nn-empty description="暂无统计数据" />
-                                </div>
+                                <nn-table
+                                    class="report-table"
+                                    :columns="columns"
+                                    :data-source="report.statistics"
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    :row-key="record => `${record.type}|${record.afi || ''}|${record.safi || ''}`"
+                                    size="small"
+                                    bordered
+                                    :scroll="{ y: '100%' }"
+                                >
+                                    <template #bodyCell="{ column, record }">
+                                        <template v-if="column.key === 'typeName'">
+                                            {{ record.typeName }}
+                                        </template>
+                                        <template v-if="column.key === 'value'">
+                                            {{ record.value }}
+                                        </template>
+                                    </template>
+                                </nn-table>
                             </nn-tab-pane>
                         </nn-tabs>
                     </div>
 
                     <div v-else class="no-result-message">
-                        <nn-empty description="暂无数据" />
+                        <nn-empty :description="emptyDescription" />
                     </div>
                 </nn-card>
             </nn-col>
@@ -116,9 +71,9 @@
 </template>
 
 <script setup>
-    import { ref, onActivated, onDeactivated } from 'vue';
+    import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
+    import { useRoute } from 'vue-router';
     import { notify } from '../../utils/notify';
-    import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import EventBus from '../../utils/eventBus';
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME, getAddrFamilyType } from '../../const/bgpConst';
@@ -126,6 +81,35 @@
     defineOptions({
         name: 'BgpLocRibStatisReport'
     });
+
+    const props = defineProps({
+        clientKey: {
+            type: String,
+            default: ''
+        }
+    });
+
+    const route = useRoute();
+
+    const hasControlCharacter = value =>
+        Array.from(value).some(character => {
+            const code = character.charCodeAt(0);
+            return code <= 0x1f || code === 0x7f;
+        });
+
+    const normalizeClientKey = value => {
+        const candidate = Array.isArray(value) ? value[0] : value;
+        if (typeof candidate !== 'string' || candidate.length === 0 || candidate.length > 512) return '';
+        if (hasControlCharacter(candidate)) return '';
+        if (candidate.startsWith('source:')) {
+            return `source:${candidate.slice('source:'.length).trim().toLowerCase()}`;
+        }
+        return candidate.startsWith('connection:') ? candidate : '';
+    };
+
+    const lockedClientKey = computed(
+        () => normalizeClientKey(props.clientKey) || normalizeClientKey(route.query.clientKey)
+    );
 
     const formatAddrFamily = record => {
         if (record.afi === null || record.afi === undefined || record.safi === null || record.safi === undefined) {
@@ -135,23 +119,6 @@
         const name = ADDRESS_FAMILY_NAME[addrFamilyType] || `AFI ${record.afi} / SAFI ${record.safi}`;
         return `${name} (${record.afi}/${record.safi})`;
     };
-
-    const formatClientTab = client => {
-        return formatBmpClientLabel(client);
-    };
-
-    const getRecordOnlineState = record => {
-        if (typeof record?.isOnline === 'boolean') return record.isOnline;
-        if (typeof record?.online === 'boolean') return record.online;
-        const state = String(record?.connectionState || '').toLowerCase();
-        if (['offline', 'disconnected', 'closed', 'down'].includes(state)) return false;
-        if (['online', 'connected', 'open', 'up'].includes(state)) return true;
-        return null;
-    };
-
-    const isRecordOnline = record => getRecordOnlineState(record) ?? true;
-
-    const formatConnectionState = record => (isRecordOnline(record) ? '在线' : '已断开');
 
     const columns = [
         {
@@ -181,10 +148,7 @@
         }
     ];
 
-    // 客户端
-    const clientList = ref([]);
-    const activeClientKey = ref('');
-    const clientTabBarStyle = { width: '148px', flex: '0 0 148px' };
+    const monitoredClient = ref(null);
     const reportMap = ref(new Map());
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
@@ -197,7 +161,14 @@
 
     const getClientKey = client => {
         const sourceId = getClientSourceId(client);
-        return sourceId ? `source:${sourceId}` : `connection:${getClientTransportKey(client)}`;
+        return sourceId
+            ? `source:${String(sourceId).trim().toLowerCase()}`
+            : `connection:${getClientTransportKey(client)}`;
+    };
+
+    const clientMatchesKey = (client, clientKey) => {
+        if (!client || !clientKey) return false;
+        return getClientKey(client) === clientKey;
     };
 
     const isSameClient = (left, right) => {
@@ -227,9 +198,16 @@
     };
 
     const getClientReports = client => {
+        if (!client) return [];
         const clientKey = getClientKey(client);
         return Array.from(reportMap.value.values()).filter(report => report.clientKey === clientKey);
     };
+
+    const monitoredClientReports = computed(() => getClientReports(monitoredClient.value));
+    const emptyDescription = computed(() => {
+        if (!lockedClientKey.value) return '未指定监控 Client';
+        return monitoredClient.value ? '暂无统计数据' : '暂无数据';
+    });
 
     const formatInstanceTab = report => {
         const vrfName = formatVrfTableName(report);
@@ -274,134 +252,188 @@
         reportMap.value = nextMap;
     };
 
-    const upsertReport = (data, fallbackClient = null) => {
-        if (data && data.client && data.instance && data.statistics) {
-            const sourceId = getClientSourceId(data.client) || getClientSourceId(fallbackClient);
-            const client = {
-                ...(fallbackClient || {}),
-                ...data.client,
-                ...(sourceId ? { persistentSourceId: sourceId, sourceId } : {})
-            };
-            const clientKey = getClientKey(client);
-            const key = `${clientKey}|${getInstanceKey(data.instance)}`;
-            const nextMap = new Map(reportMap.value);
-            nextMap.set(key, {
-                key,
-                clientKey,
-                client,
-                instance: data.instance,
-                statistics: data.statistics,
-                tlvs: data.tlvs || [],
-                updatedAt: data.updatedAt || new Date().toISOString()
-            });
-            reportMap.value = nextMap;
-        }
+    let clientRequestId = 0;
+    let statisticsRequestId = 0;
+    let clientEventRevision = 0;
+    let pageActive = false;
+
+    const invalidateRequests = () => {
+        clientRequestId += 1;
+        statisticsRequestId += 1;
     };
 
+    const upsertReport = (data, fallbackClient = null) => {
+        if (!data?.client || !data?.instance || !Array.isArray(data.statistics)) return;
+
+        const sourceId = getClientSourceId(data.client) || getClientSourceId(fallbackClient);
+        const client = {
+            ...(fallbackClient || {}),
+            ...data.client,
+            ...(sourceId ? { persistentSourceId: sourceId, sourceId } : {})
+        };
+        if (!clientMatchesKey(client, lockedClientKey.value)) return;
+
+        const clientKey = getClientKey(client);
+        const key = `${clientKey}|${getInstanceKey(data.instance)}`;
+        const nextMap = new Map(reportMap.value);
+        nextMap.set(key, {
+            key,
+            clientKey,
+            client,
+            instance: data.instance,
+            statistics: data.statistics,
+            tlvs: data.tlvs || [],
+            updatedAt: data.updatedAt || new Date().toISOString()
+        });
+        reportMap.value = nextMap;
+    };
+
+    const getEventUpdates = data => (data?.batch === true && Array.isArray(data.updates) ? data.updates : [data]);
+
     const onStatisticsReport = result => {
-        if (result.status === 'success') {
-            upsertReport(result.data);
-        }
+        if (result.status !== 'success') return;
+        getEventUpdates(result.data).forEach(data => {
+            if (!clientMatchesKey(data?.client, lockedClientKey.value)) return;
+            upsertReport(data, monitoredClient.value);
+        });
+    };
+
+    const markMonitoredClientOffline = data => {
+        if (!monitoredClient.value && !data) return;
+        const previousClientKey = monitoredClient.value ? getClientKey(monitoredClient.value) : lockedClientKey.value;
+        const nextClient = {
+            ...(monitoredClient.value || {}),
+            ...(data || {}),
+            isOnline: false,
+            connectionState: 'closed'
+        };
+        monitoredClient.value = nextClient;
+        updateReportsForClient(previousClientKey, nextClient);
     };
 
     const onTerminationHandler = result => {
-        if (result.status === 'success') {
-            const data = result.data;
-            if (data) {
-                const existingIndex = clientList.value.findIndex(client => isSameClient(client, data));
-                if (existingIndex !== -1) {
-                    const existingClient = clientList.value[existingIndex];
-                    const clientKey = getClientKey(existingClient);
-                    Object.assign(existingClient, data, { isOnline: false, connectionState: 'closed' });
-                    updateReportsForClient(clientKey, existingClient);
-                }
-            } else {
-                for (const client of clientList.value) {
-                    const clientKey = getClientKey(client);
-                    Object.assign(client, { isOnline: false, connectionState: 'closed' });
-                    updateReportsForClient(clientKey, client);
-                }
-            }
-        } else {
+        if (result.status !== 'success') {
             console.error('termination handler error', result.msg);
+            return;
         }
+
+        const data = result.data;
+        if (!lockedClientKey.value) return;
+        if (data && !clientMatchesKey(data, lockedClientKey.value) && !isSameClient(monitoredClient.value, data)) {
+            return;
+        }
+        clientEventRevision += 1;
+        markMonitoredClientOffline(data);
     };
 
-    const onClientListUpdate = result => {
-        if (result.status === 'success') {
-            const existingIndex = clientList.value.findIndex(client => isSameClient(client, result.data));
-            if (existingIndex !== -1) {
-                const existingClient = clientList.value[existingIndex];
-                const previousClientKey = getClientKey(existingClient);
-                const wasActive = previousClientKey === activeClientKey.value;
-                Object.assign(existingClient, result.data, { isOnline: true, connectionState: 'open' });
-                updateReportsForClient(previousClientKey, existingClient);
-                if (wasActive) activeClientKey.value = getClientKey(existingClient);
-            } else {
-                clientList.value.push({ ...result.data, isOnline: true, connectionState: 'open' });
-            }
-            if (clientList.value.length > 0 && !activeClientKey.value) {
-                activeClientKey.value = getClientKey(clientList.value[0]);
-            }
-        } else {
-            notify.error('客户端列表获取失败');
-        }
-    };
-
-    const loadClientList = async () => {
+    const loadStatisticsReports = async client => {
+        if (!client || !clientMatchesKey(client, lockedClientKey.value)) return;
+        const requestId = ++statisticsRequestId;
+        const requestedClientKey = lockedClientKey.value;
         try {
-            const clientListResult = await window.bmpApi.getClientList();
-            if (clientListResult.status === 'success') {
-                clientList.value = clientListResult.data;
-
-                if (clientList.value.length > 0) {
-                    const activeClientExists = clientList.value.some(
-                        client => getClientKey(client) === activeClientKey.value
-                    );
-                    if (!activeClientKey.value || !activeClientExists) {
-                        activeClientKey.value = getClientKey(clientList.value[0]);
-                    }
-                } else {
-                    activeClientKey.value = '';
-                }
+            const result = await window.bmpApi.getBgpInstanceStatisticsReports(toPlainClient(client));
+            if (requestId !== statisticsRequestId || !pageActive) return;
+            if (lockedClientKey.value !== requestedClientKey || !clientMatchesKey(client, requestedClientKey)) return;
+            if (result.status === 'success') {
+                (result.data || []).forEach(report => upsertReport(report, client));
             }
         } catch (error) {
-            console.error(error);
-            notify.error('加载数据失败');
-        }
-    };
-
-    const loadStatisticsReports = async () => {
-        try {
-            for (const client of clientList.value) {
-                const result = await window.bmpApi.getBgpInstanceStatisticsReports(toPlainClient(client));
-                if (result.status === 'success') {
-                    (result.data || []).forEach(report => upsertReport(report, client));
-                }
-            }
-        } catch (error) {
+            if (requestId !== statisticsRequestId) return;
             console.error(error);
             notify.error('加载统计数据失败');
         }
     };
 
-    onActivated(async () => {
-        EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB_STATIS_REPORT, onClientListUpdate);
+    const onClientUpdate = result => {
+        if (result.status !== 'success' || !result.data) {
+            if (result.status !== 'success') notify.error('Client 更新失败');
+            return;
+        }
+
+        if (!clientMatchesKey(result.data, lockedClientKey.value)) return;
+        clientEventRevision += 1;
+        const previousClientKey = monitoredClient.value ? getClientKey(monitoredClient.value) : null;
+        const nextClient = {
+            ...(monitoredClient.value || {}),
+            ...result.data,
+            isOnline: true,
+            connectionState: 'open'
+        };
+        monitoredClient.value = nextClient;
+        if (previousClientKey) updateReportsForClient(previousClientKey, nextClient);
+        void loadStatisticsReports(nextClient);
+    };
+
+    const loadMonitoredClient = async () => {
+        const clientKey = lockedClientKey.value;
+        const requestId = ++clientRequestId;
+        const eventRevision = clientEventRevision;
+        if (!clientKey) {
+            monitoredClient.value = null;
+            return;
+        }
+
+        try {
+            const result = await window.bmpApi.getClient(clientKey);
+            if (requestId !== clientRequestId || !pageActive || lockedClientKey.value !== clientKey) return;
+            if (eventRevision !== clientEventRevision) {
+                if (monitoredClient.value && clientMatchesKey(monitoredClient.value, clientKey)) {
+                    await loadStatisticsReports(monitoredClient.value);
+                }
+                return;
+            }
+            if (result.status !== 'success' || !result.data || !clientMatchesKey(result.data, clientKey)) {
+                monitoredClient.value = null;
+                reportMap.value = new Map();
+                return;
+            }
+
+            const previousClientKey = monitoredClient.value ? getClientKey(monitoredClient.value) : null;
+            monitoredClient.value = { ...(monitoredClient.value || {}), ...result.data };
+            if (previousClientKey) updateReportsForClient(previousClientKey, monitoredClient.value);
+            await loadStatisticsReports(monitoredClient.value);
+        } catch (error) {
+            if (requestId !== clientRequestId) return;
+            console.error(error);
+            notify.error('加载数据失败');
+        }
+    };
+
+    const activatePage = async () => {
+        if (pageActive) return;
+        pageActive = true;
+        EventBus.on('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB_STATIS_REPORT, onClientUpdate);
         EventBus.on('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB_STATIS_REPORT, onTerminationHandler);
         EventBus.on(
             'bmp:statisticsReport',
             BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB_STATIS_REPORT,
             onStatisticsReport
         );
-        await loadClientList();
-        await loadStatisticsReports();
-    });
+        await loadMonitoredClient();
+    };
 
-    onDeactivated(() => {
+    const deactivatePage = () => {
+        if (!pageActive) return;
+        pageActive = false;
+        invalidateRequests();
         EventBus.off('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB_STATIS_REPORT);
         EventBus.off('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB_STATIS_REPORT);
         EventBus.off('bmp:statisticsReport', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB_STATIS_REPORT);
+    };
+
+    watch(lockedClientKey, (clientKey, previousClientKey) => {
+        if (clientKey === previousClientKey) return;
+        invalidateRequests();
+        clientEventRevision += 1;
+        monitoredClient.value = null;
+        reportMap.value = new Map();
+        if (pageActive) void loadMonitoredClient();
     });
+
+    onMounted(activatePage);
+    onActivated(activatePage);
+    onDeactivated(deactivatePage);
+    onBeforeUnmount(deactivatePage);
 </script>
 
 <style scoped>
@@ -433,7 +465,6 @@
         flex-direction: column;
     }
 
-    .bmp-tabs-shell,
     .bmp-inner-tabs-shell {
         flex: 1 1 0;
         min-height: 0;
@@ -443,7 +474,6 @@
         overflow: hidden;
     }
 
-    .client-tabs,
     .bmp-inner-tabs {
         flex: 1 1 0;
         min-height: 0;
@@ -452,9 +482,6 @@
         overflow: hidden;
     }
 
-    .client-tabs > :deep(.nn-tabs-content-holder),
-    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
-    .client-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane),
     .bmp-inner-tabs > :deep(.nn-tabs-content-holder),
     .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content),
     .bmp-inner-tabs > :deep(.nn-tabs-content-holder > .nn-tabs-content > .nn-tabs-tabpane) {
@@ -526,63 +553,6 @@
         position: sticky;
         top: 0;
         z-index: 1;
-    }
-
-    .client-tab-label {
-        display: flex;
-        width: 100%;
-        max-width: 132px;
-        min-width: 0;
-        flex-direction: column;
-        align-items: center;
-        gap: 2px;
-        font-size: 14px;
-        line-height: 22px;
-        overflow: hidden;
-    }
-
-    .client-tab-address {
-        display: block;
-        width: 100%;
-        max-width: 100%;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .client-tab-tooltip {
-        width: 100%;
-        max-width: 100%;
-        min-width: 0;
-    }
-
-    .client-tab-tooltip :deep(.nn-tooltip-trigger) {
-        max-width: 100%;
-        min-width: 0;
-    }
-
-    .client-connection-state {
-        font-size: 12px;
-        line-height: 1;
-    }
-
-    .client-connection-state.is-online {
-        color: #389e0d;
-    }
-
-    .client-connection-state.is-offline {
-        color: #d46b08;
-    }
-
-    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
-        justify-content: center;
-        padding: 8px;
-        text-align: center;
-    }
-
-    .client-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab > .nn-tabs-tab-button) {
-        width: 100%;
     }
 
     .no-result-message {

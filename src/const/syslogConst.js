@@ -8,7 +8,8 @@ export const DEFAULT_VALUES = {
 export const SYSLOG_SUB_EVT_TYPES = {
     MESSAGE_RECEIVED: 1,
     SERVER_STATUS: 2,
-    HISTORY_CLEARED: 3
+    HISTORY_CLEARED: 3,
+    STATS_UPDATED: 4
 };
 
 export const SYSLOG_EVENT_PAGE_ID = {

@@ -99,7 +99,7 @@
                                 position: ['bottomCenter'],
                                 showTotal: total => '共 ' + total + ' 条，每页 20 条'
                             }"
-                            :scroll="{ y: '100%' }"
+                            :scroll="{ x: 'max-content', y: '100%' }"
                             size="small"
                         >
                             <template #bodyCell="{ column, record }">
@@ -120,38 +120,49 @@
                                     </nn-tag>
                                 </template>
                                 <template v-else-if="column.key === 'action'">
-                                    <nn-button
-                                        type="link"
-                                        data-testid="bmp-client-detail-button"
-                                        @click="viewClientDetails(record)"
-                                    >
-                                        详情
-                                    </nn-button>
-                                    <nn-tooltip :title="getClientDeleteDisabledReason(record)">
-                                        <span>
-                                            <nn-popconfirm
-                                                title="确认删除该客户端的全部数据？"
-                                                description="将删除数据库和内存中的所有关联数据，此操作不可恢复。"
-                                                ok-text="确认删除"
-                                                cancel-text="取消"
-                                                :disabled="!canDeleteClientData(record)"
-                                                @confirm="deleteClientData(record)"
-                                            >
-                                                <nn-button
-                                                    type="link"
-                                                    danger
-                                                    data-testid="bmp-client-delete-data-button"
-                                                    :loading="deletingClientKey === getClientKey(record)"
-                                                    :disabled="
-                                                        !canDeleteClientData(record) ||
-                                                        deletingClientKey === getClientKey(record)
-                                                    "
+                                    <nn-space size="small">
+                                        <nn-button
+                                            type="link"
+                                            data-testid="bmp-client-monitor-button"
+                                            :loading="isMonitorOpening(record)"
+                                            :disabled="!canOpenClientMonitor(record)"
+                                            @click="openClientMonitor(record)"
+                                        >
+                                            Client 监控
+                                        </nn-button>
+                                        <nn-button
+                                            type="link"
+                                            data-testid="bmp-client-detail-button"
+                                            @click="viewClientDetails(record)"
+                                        >
+                                            详情
+                                        </nn-button>
+                                        <nn-tooltip :title="getClientDeleteDisabledReason(record)">
+                                            <span>
+                                                <nn-popconfirm
+                                                    title="确认删除该客户端的全部数据？"
+                                                    description="将删除数据库和内存中的所有关联数据，此操作不可恢复。"
+                                                    ok-text="确认删除"
+                                                    cancel-text="取消"
+                                                    :disabled="!canDeleteClientData(record)"
+                                                    @confirm="deleteClientData(record)"
                                                 >
-                                                    删除数据
-                                                </nn-button>
-                                            </nn-popconfirm>
-                                        </span>
-                                    </nn-tooltip>
+                                                    <nn-button
+                                                        type="link"
+                                                        danger
+                                                        data-testid="bmp-client-delete-data-button"
+                                                        :loading="deletingClientKey === getClientKey(record)"
+                                                        :disabled="
+                                                            !canDeleteClientData(record) ||
+                                                            deletingClientKey === getClientKey(record)
+                                                        "
+                                                    >
+                                                        删除数据
+                                                    </nn-button>
+                                                </nn-popconfirm>
+                                            </span>
+                                        </nn-tooltip>
+                                    </nn-space>
                                 </template>
                             </template>
                         </nn-table>
@@ -173,7 +184,7 @@
 </template>
 
 <script setup>
-    import { ref, onMounted, onActivated, onDeactivated, watch } from 'vue';
+    import { computed, ref, onMounted, onActivated, onDeactivated, watch } from 'vue';
     import { notify } from '../../utils/notify';
     import { FormValidator, createBmpConfigValidationRules } from '../../utils/validationCommon';
     import {
@@ -208,10 +219,15 @@
         return (record.rawTlvs || []).length + (record.terminationTlvs || []).length;
     };
 
-    const getClientKey = record =>
-        record?.persistentSourceId ||
-        record?.sourceId ||
-        `${record?.localIp || ''}-${record?.localPort || ''}-${record?.remoteIp || ''}-${record?.remotePort || ''}`;
+    const getClientTransportKey = record =>
+        `${record?.localIp || ''}|${record?.localPort || ''}|${record?.remoteIp || ''}|${record?.remotePort || ''}`;
+
+    const getClientKey = record => {
+        const sourceId = record?.persistentSourceId || record?.sourceId;
+        return sourceId
+            ? `source:${String(sourceId).trim().toLowerCase()}`
+            : `connection:${getClientTransportKey(record)}`;
+    };
 
     const normalizeBmpV4TlvDraft = draft => {
         return Number(draft) === BMP_V4_TLV_DRAFT.DRAFT_19 ? BMP_V4_TLV_DRAFT.DRAFT_19 : BMP_V4_TLV_DRAFT.DRAFT_20;
@@ -225,6 +241,8 @@
     // Initiation messages list
     const clientList = ref([]);
     const deletingClientKey = ref('');
+    const openingMonitorKey = ref('');
+    const canOpenMonitorWindow = computed(() => typeof window.windowApi?.openMonitor === 'function');
     const clientColumns = [
         {
             title: '客户端IP',
@@ -288,7 +306,7 @@
         {
             title: '操作',
             key: 'action',
-            width: 180,
+            width: 280,
             align: 'center'
         }
     ];
@@ -380,6 +398,66 @@
     const closeDetailsDrawer = () => {
         detailsDrawerVisible.value = false;
         currentDetails.value = null;
+    };
+
+    const hasControlCharacter = value =>
+        Array.from(value).some(character => {
+            const code = character.charCodeAt(0);
+            return code <= 0x1f || code === 0x7f;
+        });
+
+    const isValidMonitorClientKey = clientKey => {
+        if (typeof clientKey !== 'string' || clientKey.length === 0 || clientKey.length > 512) {
+            return false;
+        }
+        if (hasControlCharacter(clientKey)) {
+            return false;
+        }
+        if (clientKey.startsWith('source:')) {
+            return /^[0-9a-f]{64}$/i.test(clientKey.slice('source:'.length));
+        }
+        if (!clientKey.startsWith('connection:')) {
+            return false;
+        }
+        const [localIp, localPort, remoteIp, remotePort, ...extra] = clientKey.slice('connection:'.length).split('|');
+        return (
+            extra.length === 0 &&
+            [localIp, localPort, remoteIp, remotePort].every(part => part.length > 0 && part.length <= 128) &&
+            [localPort, remotePort].every(port => {
+                const value = Number(port);
+                return Number.isInteger(value) && value >= 1 && value <= 65535;
+            })
+        );
+    };
+
+    const BMP_CLIENT_MONITOR_ID = 'bmp-client';
+
+    const getMonitorRequestKey = record => `${BMP_CLIENT_MONITOR_ID}:${getClientKey(record)}`;
+
+    const canOpenClientMonitor = record => canOpenMonitorWindow.value && isValidMonitorClientKey(getClientKey(record));
+
+    const isMonitorOpening = record => openingMonitorKey.value === getMonitorRequestKey(record);
+
+    const openClientMonitor = async record => {
+        const clientKey = getClientKey(record);
+        if (!canOpenClientMonitor(record) || openingMonitorKey.value) {
+            return;
+        }
+
+        const requestKey = getMonitorRequestKey(record);
+        openingMonitorKey.value = requestKey;
+        try {
+            const result = await window.windowApi.openMonitor(BMP_CLIENT_MONITOR_ID, { clientKey });
+            if (result?.status !== 'success') {
+                notify.error(result?.msg || '打开独立监控窗口失败');
+            }
+        } catch (error) {
+            notify.error('打开独立监控窗口失败: ' + error.message);
+        } finally {
+            if (openingMonitorKey.value === requestKey) {
+                openingMonitorKey.value = '';
+            }
+        }
     };
 
     const getStableClientSourceId = record => record?.persistentSourceId || record?.sourceId || '';

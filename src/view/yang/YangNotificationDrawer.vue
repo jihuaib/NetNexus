@@ -1,11 +1,14 @@
 <template>
     <nn-drawer
         :open="open"
-        title="NETCONF 通知记录"
-        width="min(1180px, calc(100vw - 24px))"
+        :title="standalone ? '' : 'NETCONF 通知记录'"
+        :width="standalone ? '100vw' : 'min(1180px, calc(100vw - 24px))'"
         placement="right"
+        :closable="!standalone"
+        :keyboard="!standalone"
+        :class="{ 'netconf-notification-standalone-drawer': standalone }"
         :body-style="{ padding: '0', overflow: 'hidden' }"
-        @update:open="value => emit('update:open', value)"
+        @update:open="value => !standalone && emit('update:open', value)"
     >
         <div class="notification-browser" data-testid="netconf-notification-drawer">
             <div class="notification-browser-toolbar">
@@ -374,6 +377,10 @@
         disconnecting: {
             type: Boolean,
             default: false
+        },
+        standalone: {
+            type: Boolean,
+            default: false
         }
     });
 
@@ -383,7 +390,10 @@
         'disconnect-session',
         'modify-subscription',
         'delete-subscription',
-        'resync-subscription'
+        'resync-subscription',
+        'mark-history-read',
+        'delete-history',
+        'clear-history'
     ]);
     const {
         records,
@@ -576,7 +586,9 @@
     ];
 
     const selectRow = record => {
+        const wasUnread = !record.read;
         selectNotification(record.id);
+        if (wasUnread) emit('mark-history-read', { ids: [record.id], read: true });
     };
 
     const notificationRowProps = record => ({
@@ -596,12 +608,16 @@
     const currentScope = () => activeGroup.value.scope || { kind: 'all' };
 
     const markVisibleRead = () => {
-        markScopeRead(currentScope());
+        const scope = currentScope();
+        markScopeRead(scope);
+        emit('mark-history-read', { scope, read: true });
         notify.success('当前分组通知已全部标为已读');
     };
 
     const clearVisibleScope = () => {
-        const removed = clearNotifications(currentScope());
+        const scope = currentScope();
+        const removed = clearNotifications(scope);
+        emit('clear-history', { scope });
         notify.success(`已清空 ${removed} 条通知`);
     };
 
@@ -626,13 +642,16 @@
 
     const deleteSelected = () => {
         if (!selectedRecord.value) return;
-        deleteNotification(selectedRecord.value.id);
+        const id = selectedRecord.value.id;
+        deleteNotification(id);
+        emit('delete-history', { ids: [id] });
         notify.success('通知已删除');
     };
 
     const requestDisconnectSession = () => {
         if (!canDisconnectSelectedSubscription.value) return;
         emit('disconnect-session', {
+            operation: 'disconnect-session',
             profileId: selectedSubscription.value.profileId,
             sessionId: selectedSubscription.value.sessionId,
             subscriptionId: selectedSubscription.value.subscriptionId,
@@ -685,6 +704,11 @@
 </script>
 
 <style scoped>
+    :global(.netconf-notification-standalone-drawer .nn-drawer-content) {
+        border: 0;
+        box-shadow: none;
+    }
+
     .notification-browser {
         display: grid;
         height: 100%;

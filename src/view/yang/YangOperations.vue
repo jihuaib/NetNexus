@@ -166,6 +166,15 @@
                             >
                                 复制请求
                             </nn-button>
+                            <nn-button
+                                v-if="showExecutionHistory"
+                                class="execution-history-trigger"
+                                size="small"
+                                @click="executionHistoryOpen = true"
+                            >
+                                <template #icon><ClockCircleOutlined /></template>
+                                执行记录
+                            </nn-button>
                         </nn-space>
                     </div>
 
@@ -1154,6 +1163,8 @@
         >
             <pre class="rpc-preview" data-xml-viewer><XmlHighlight :value="displayedRequestXml" /></pre>
         </nn-modal>
+
+        <YangExecutionHistoryDrawer v-if="showExecutionHistory" v-model:open="executionHistoryOpen" />
     </div>
 </template>
 
@@ -1183,6 +1194,7 @@
     import { notify } from '../../utils/notify';
     import {
         ApiOutlined,
+        ClockCircleOutlined,
         CodeOutlined,
         DeleteOutlined,
         DownloadOutlined,
@@ -1200,6 +1212,7 @@
     } from '../../ui/icons';
     import XmlCodeEditor from './XmlCodeEditor.vue';
     import XmlHighlight from './XmlHighlight.vue';
+    import YangExecutionHistoryDrawer from './YangExecutionHistoryDrawer.vue';
     import { isRfc3339DateTime, rfc3339Timestamp, validateNetconfRpc } from './netconfRpcValidation';
     import {
         SUBSCRIBED_NOTIFICATIONS_NAMESPACE,
@@ -1227,6 +1240,10 @@
             default: ''
         },
         embedded: {
+            type: Boolean,
+            default: false
+        },
+        showExecutionHistory: {
             type: Boolean,
             default: false
         },
@@ -1269,6 +1286,10 @@
         contextRevision: {
             type: Number,
             default: 0
+        },
+        executionBlockedReason: {
+            type: String,
+            default: ''
         }
     });
 
@@ -1327,6 +1348,7 @@
     const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, capabilities: [] });
     const confirmationOpen = ref(false);
     const previewOpen = ref(false);
+    const executionHistoryOpen = ref(false);
     const requestOptionsCollapsed = ref(false);
     const parameterExpandedKeys = ref([]);
     const parameterSelectedKeys = ref([]);
@@ -2789,7 +2811,12 @@
 
     const loadDirectParameterSchemaChildren = async node => {
         if (!node) return [];
-        if (Array.isArray(node.children) && (node.children.length || node.childrenLoaded)) return node.children;
+        if (
+            Array.isArray(node.children) &&
+            (node.childrenLoaded === true || (node.children.length && node.childrenLoaded !== false))
+        ) {
+            return node.children;
+        }
         if (!props.compileId || !node.id || node.isLeaf) return [];
         const profileId = props.profileId;
         const requestedCompileId = props.compileId;
@@ -3265,6 +3292,7 @@
         );
 
     const validateOperation = () => {
+        if (props.executionBlockedReason) return props.executionBlockedReason;
         if (!connected.value) return '请先建立 NETCONF 会话';
         if (requestOverrideActive.value) return '';
         if (activeOperation.value === 'edit-config' && editConfigLoading.value) {
@@ -4698,6 +4726,7 @@
         editConfigReadbackSource.value = form.target;
         closeConfirmation();
         previewOpen.value = false;
+        executionHistoryOpen.value = false;
         clearResult();
         void nextTick(() => {
             applyingOperationContext = false;

@@ -62,7 +62,8 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 | 按钮 | 功能 |
 | --- | --- |
 | 启动BMP / BMP已启动 | 按监听端口和 TLV draft 启动 BMP 服务；启动后显示运行状态。 |
-| 停止BMP | 停止 BMP 服务并断开当前客户端连接。 |
+| 停止BMP | 停止 BMP 服务、断开当前客户端连接，并关闭所有 BMP Client 独立监控窗口。 |
+| Client 监控 | 为当前客户端打开或切换到唯一的独立监控窗口；窗口内可查看会话、Loc-RIB 和两类统计。 |
 | 详情 | 打开当前 BMP 客户端的连接、Initiation TLV 和 Termination 信息。 |
 
 客户端详情：
@@ -75,9 +76,24 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 - `draft-19` 的 Route Monitoring `BGP Message TLV` 类型为 `4`。
 - 如果发送端的 draft 与页面配置不一致，日志可能出现 `does not contain mandatory BGP Message TLV`。
 
+### Client 独立监控窗口
+
+每个 BMP Client 只打开一个独立窗口；重复点击“Client 监控”会复用已有窗口，不会为同一份数据再建立第二个 renderer。窗口顶部提供四个页签：
+
+- BGP 会话
+- Loc-RIB
+- 会话统计
+- Loc-RIB 统计
+
+原生标题栏随当前页签显示 `BGP 会话 / Loc-RIB / 会话统计 / Loc-RIB 统计 · Client 名称 · IP`。Client 信息只出现在原生标题栏，页面正文不再重复显示 Client 标题或 Client Tab。
+
+Session、Loc-RIB 和 Statistics Report 更新只投递给对应 Client 的独立窗口；该 Client 窗口不存在时不产生这些 renderer IPC。主窗口中的路由矩阵和路由追踪仅在页面激活期间订阅轻量失效信号，再按需重新查询，不接收完整更新明细。
+
+独立监控页按 URL 中的 `clientKey` 向 Worker 查询单个 Client，不维护或传输完整 Client 列表；完整列表只供 BMP 配置页使用。停止 BMP 服务会直接关闭全部 Client 监控窗口并解除订阅。
+
 ### BGP Session
 
-展示指定 BMP 客户端下的 BGP peer session，以及 session RIB 路由。
+统一 Client 窗口中的“BGP 会话”页签展示该客户端下的 BGP peer session 和 session RIB 路由。
 
 ![BMP 客户端和 BGP 监控对等体信息](images/bmp/bmp-client-and-bgp-monitor-peer-info.png)
 
@@ -121,7 +137,7 @@ Session RIB 适合检查：
 
 ### Loc-RIB
 
-展示 BMP Local-RIB instance 和 Loc-RIB 路由。
+统一 Client 窗口中的“Loc-RIB”页签展示该客户端的 Local-RIB instance 和 Loc-RIB 路由。窗口只接收对应客户端的 BMP 更新批次；关闭后会立即退订。
 
 ![BMP 监控 BGP 路由](images/bmp/bmp-monitor-bgp-route.png)
 
@@ -287,7 +303,7 @@ dst=198.18.253.0/24; proto = 6; dst-port = 443
 
 ### 统计报告
 
-统计报告页展示 BMP Statistics Report 当前内存数据：
+统一 Client 窗口中的“会话统计”和“Loc-RIB 统计”页签展示该 Client 的 BMP Statistics Report 当前内存数据，不再查询或渲染 Client 列表：
 
 - session statistics（同一 peer 使用唯一会话页签，在 Pre/Post Adj-RIB-In/Out 四个 RIB 阶段间切换）
 - Loc-RIB statistics

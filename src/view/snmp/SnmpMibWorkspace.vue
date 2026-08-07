@@ -32,6 +32,15 @@
                         <template #icon><ReloadOutlined /></template>
                         刷新
                     </nn-button>
+                    <nn-button
+                        v-if="canOpenMonitorWindow"
+                        data-testid="open-snmp-trap-monitor-window"
+                        :loading="monitorOpening"
+                        @click="openMonitorWindow"
+                    >
+                        <template #icon><ExternalLinkOutlined /></template>
+                        打开 Trap 监控
+                    </nn-button>
                 </div>
             </div>
 
@@ -228,6 +237,7 @@
         CopyOutlined,
         EditOutlined,
         EyeOutlined,
+        ExternalLinkOutlined,
         FileSearchOutlined,
         FileTextOutlined,
         FolderOpenOutlined,
@@ -258,6 +268,7 @@
 
     const loading = ref(false);
     const oidTranslateLoading = ref(false);
+    const monitorOpening = ref(false);
     const oidQuery = ref('');
     const mibStatus = ref(emptyMibStatus());
     const treeRef = ref(null);
@@ -318,6 +329,25 @@
     const workspaceLayoutStyle = computed(() =>
         treePaneWidth.value > 0 ? { '--mib-tree-pane-width': `${treePaneWidth.value}px` } : undefined
     );
+    const canOpenMonitorWindow = computed(() => typeof window.windowApi?.openMonitor === 'function');
+
+    const openMonitorWindow = async () => {
+        if (!canOpenMonitorWindow.value || monitorOpening.value) {
+            return;
+        }
+
+        monitorOpening.value = true;
+        try {
+            const result = await window.windowApi.openMonitor('snmp-trap');
+            if (result?.status !== 'success') {
+                notify.error(result?.msg || '打开 Trap 监控窗口失败');
+            }
+        } catch (error) {
+            notify.error('打开 Trap 监控窗口失败: ' + error.message);
+        } finally {
+            monitorOpening.value = false;
+        }
+    };
 
     const nodePropertyTitle = computed(() => {
         const name = detailNode.value?.moduleQualifiedName || detailNode.value?.objectName || detailNode.value?.title;

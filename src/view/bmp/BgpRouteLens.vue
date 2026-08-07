@@ -488,14 +488,8 @@
     const selectedStageTitle = ref('');
     const drawerTabKey = ref('detail');
     const eventPageId = BMP_EVENT_PAGE_ID.PAGE_ID_BMP_ROUTE_LENS || 'bmp-route-lens';
-    const liveEvents = [
-        'bmp:routeUpdate',
-        'bmp:instanceRouteUpdate',
-        'bmp:sessionUpdate',
-        'bmp:instanceUpdate',
-        'bmp:initiation',
-        'bmp:termination'
-    ];
+    const liveEventScope = 'bmp-route-lens';
+    const liveEvents = ['bmp:routeLensInvalidated', 'bmp:initiation', 'bmp:termination'];
     let refreshTimer = null;
     let requestId = 0;
     let lastAutoErrorMessage = '';
@@ -695,8 +689,21 @@
         }, 900);
     };
 
-    const registerEvents = () => liveEvents.forEach(event => EventBus.on(event, eventPageId, scheduleRefresh));
-    const unregisterEvents = () => liveEvents.forEach(event => EventBus.off(event, eventPageId));
+    const setLiveEventScope = enabled => {
+        const method = enabled ? window.windowApi?.subscribeEventScope : window.windowApi?.unsubscribeEventScope;
+        if (typeof method !== 'function') return;
+        Promise.resolve(method(liveEventScope)).catch(error => {
+            console.error(`BMP Route Lens 事件${enabled ? '订阅' : '退订'}失败`, error);
+        });
+    };
+    const registerEvents = () => {
+        liveEvents.forEach(event => EventBus.on(event, eventPageId, scheduleRefresh));
+        setLiveEventScope(true);
+    };
+    const unregisterEvents = () => {
+        liveEvents.forEach(event => EventBus.off(event, eventPageId));
+        setLiveEventScope(false);
+    };
 
     const applyDeepLinkQuery = () => {
         if (currentRoute.name !== 'BgpRouteLens') return;

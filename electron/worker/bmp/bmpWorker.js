@@ -59,6 +59,7 @@ class BmpWorker {
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.START_BMP, this.startBmp.bind(this));
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.STOP_BMP, this.stopBmp.bind(this));
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST, this.getClientList.bind(this));
+        this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_CLIENT, this.getClient.bind(this));
         this.messageHandler.registerHandler(
             BmpConst.BMP_REQ_TYPES.DELETE_CLIENT_DATA,
             this.deleteClientData.bind(this)
@@ -1042,6 +1043,29 @@ class BmpWorker {
             this.messageHandler.sendSuccessResponse(messageId, clientList, '获取客户端列表成功');
         } catch (error) {
             logger.error(`Error getting BMP clients: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    async getClient(messageId, selector = {}) {
+        try {
+            const { client: persistedClient } = await this.queryClientTopology(selector);
+            const liveClient = this.findLiveBmpSession(selector)?.getClientInfo?.() || null;
+            const persistedInfo = persistedClient
+                ? (({ sessions: _sessions, instances: _instances, ...clientInfo }) => clientInfo)(persistedClient)
+                : null;
+
+            const client =
+                persistedInfo || liveClient
+                    ? {
+                          ...(persistedInfo || {}),
+                          ...(liveClient || {}),
+                          ...(liveClient ? { connectionState: 'open', isOnline: true } : {})
+                      }
+                    : null;
+            this.messageHandler.sendSuccessResponse(messageId, client, '获取客户端成功');
+        } catch (error) {
+            logger.error(`Error getting BMP client: ${error.message}`);
             this.messageHandler.sendErrorResponse(messageId, error.message);
         }
     }
