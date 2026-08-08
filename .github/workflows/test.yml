@@ -150,13 +150,9 @@ jobs:
 
             - name: Run Windows tests
               run: npm test
-              env:
-                  BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS: '20000'
 
             - name: Run Windows minified CI tests
               run: npm run test:ci:minified
-              env:
-                  BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS: '20000'
 
             - name: Build on Windows
               run: npm run build
