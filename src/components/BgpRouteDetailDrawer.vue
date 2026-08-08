@@ -2,7 +2,7 @@
     <nn-drawer :open="open" title="BGP路由详情" width="640px" placement="right" @close="close">
         <nn-spin :spinning="loading">
             <nn-empty v-if="!route" description="暂无详情" />
-            <pre v-else class="json-detail">{{ routeJson }}</pre>
+            <nn-json-viewer v-else class="json-detail" :value="routeJson" wrap />
         </nn-spin>
     </nn-drawer>
 </template>
@@ -33,14 +33,10 @@
             return '';
         }
 
-        return JSON.stringify(
-            {
-                ...props.route,
-                addressFamilyName: ADDRESS_FAMILY_NAME[props.route.addressFamily] || props.route.addressFamily
-            },
-            null,
-            2
-        );
+        return {
+            ...props.route,
+            addressFamilyName: ADDRESS_FAMILY_NAME[props.route.addressFamily] || props.route.addressFamily
+        };
     });
 
     const close = () => {

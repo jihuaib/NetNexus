@@ -124,7 +124,7 @@
                                         复制
                                     </nn-button>
                                 </header>
-                                <XmlCodeEditor
+                                <nn-xml-code-editor
                                     :key="`${selectedRecord.id}-request`"
                                     :value="selectedRequestXml"
                                     :rows="8"
@@ -180,7 +180,7 @@
                                         </nn-button>
                                     </nn-space>
                                 </header>
-                                <XmlCodeEditor
+                                <nn-xml-code-editor
                                     :key="`${selectedRecord.id}-reply`"
                                     :value="selectedReplyXml"
                                     :rows="8"
@@ -211,7 +211,6 @@
     import { computed, nextTick, ref, watch } from 'vue';
     import { CopyOutlined, DeleteOutlined, DownloadOutlined } from 'netnexus-ui/icons';
     import { notify } from '../../utils/notify';
-    import XmlCodeEditor from './XmlCodeEditor.vue';
     import { formatXmlForDisplay, invokeBridge } from './yangUiUtils';
     import { useNetconfExecutionHistory } from './useNetconfExecutionHistory';
 

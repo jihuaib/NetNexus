@@ -1,7 +1,7 @@
 <template>
-    <FloatingProgressNotification
+    <nn-floating-notification
         root-class="update-notification"
-        :visible="showNotification"
+        v-model:open="showNotification"
         :title="notificationTitle"
         :description="notificationDescription"
         :percent="downloadProgress.percent || 0"
@@ -28,7 +28,7 @@
             </nn-button>
             <nn-button v-if="updateDownloaded" type="primary" size="small" @click="installUpdate">安装</nn-button>
         </template>
-    </FloatingProgressNotification>
+    </nn-floating-notification>
 </template>
 
 <script setup>
@@ -44,7 +44,6 @@
 
     import EventBus from '../utils/eventBus';
     import { TOOLS_EVENT_PAGE_ID } from '../const/toolsConst';
-    import FloatingProgressNotification from './FloatingProgressNotification.vue';
 
     defineOptions({
         name: 'UpdateNotification'

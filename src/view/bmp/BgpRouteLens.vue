@@ -386,7 +386,7 @@
                         </nn-descriptions>
                         <div class="raw-detail">
                             <div class="raw-detail-title">原始查询结果</div>
-                            <pre>{{ JSON.stringify(selectedRecord, null, 2) }}</pre>
+                            <nn-json-viewer :value="selectedRecord" :max-height="440" wrap />
                         </div>
                     </nn-tab-pane>
                     <nn-tab-pane key="history" tab="事件轨迹">
@@ -410,7 +410,7 @@
             </template>
             <div v-if="selectedRecord && selectedType !== 'route'" class="raw-detail">
                 <div class="raw-detail-title">原始查询结果</div>
-                <pre>{{ JSON.stringify(selectedRecord, null, 2) }}</pre>
+                <nn-json-viewer :value="selectedRecord" :max-height="440" wrap />
             </div>
         </nn-drawer>
     </div>
@@ -1692,21 +1692,6 @@
         color: var(--nn-color-text-strong);
         font-size: 13px;
         font-weight: 650;
-    }
-
-    .raw-detail pre {
-        max-height: 440px;
-        margin: 0;
-        overflow: auto;
-        padding: 10px;
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 6px;
-        background: var(--nn-color-bg-subtle);
-        color: var(--nn-color-text-secondary);
-        font-size: 11px;
-        line-height: 1.5;
-        white-space: pre-wrap;
-        word-break: break-word;
     }
 
     @media (max-width: 980px) {

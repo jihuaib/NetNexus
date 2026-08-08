@@ -426,7 +426,7 @@ async function capturePage(win, label, outputPath) {
                 document.head.appendChild(style);
             }
             style.textContent =
-                '.nn-toast-host, .update-notification, .floating-progress-notification { display: none !important; } ' +
+                '.nn-toast-host, .update-notification, .nn-floating-notification { display: none !important; } ' +
                 '.nn-drawer-content-wrapper { transition: none !important; } ' +
                 '.nn-drawer-motion-enter-from, .nn-drawer-motion-leave-to { opacity: 1 !important; } ' +
                 '.nn-drawer-motion-enter-from .nn-drawer-content-wrapper, ' +
@@ -454,7 +454,7 @@ async function capturePage(win, label, outputPath) {
                 }
             });
             document.querySelectorAll(
-                '.nn-toast, .update-notification, [class*="update-notification"], .floating-progress-notification'
+                '.nn-toast, .update-notification, [class*="update-notification"], .nn-floating-notification'
             ).forEach(element => {
                 element.remove();
             });

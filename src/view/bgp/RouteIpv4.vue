@@ -280,9 +280,13 @@
             </nn-table>
         </nn-card>
 
-        <CustomPktDrawer
+        <nn-textarea-drawer
             v-model:open="customRouteAttrVisible"
             v-model:input-value="ipv4Data.customAttr"
+            title="报文输入"
+            input-label="报文内容"
+            placeholder="请输入16进制数字, 用空格分隔, 例如: 11 22 33 44 55 66 77"
+            :validator="validatePacketData"
             @submit="handleCustomRouteAttrSubmit"
         />
 
@@ -311,7 +315,6 @@
 
 <script setup>
     import { onMounted, ref, computed, onActivated, nextTick, watch } from 'vue';
-    import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import RouteViewsImportModal from '../../components/RouteViewsImportModal.vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
     import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
@@ -326,7 +329,11 @@
         BGP_SRV6_SID_MODE,
         DEFAULT_VALUES
     } from '../../const/bgpConst';
-    import { FormValidator, createBgpIpv4RouteConfigValidationRules } from '../../utils/validationCommon';
+    import {
+        FormValidator,
+        createBgpIpv4RouteConfigValidationRules,
+        validatePacketData
+    } from '../../utils/validationCommon';
 
     defineOptions({
         name: 'RouteIpv4'

@@ -258,7 +258,7 @@
                                     </nn-popconfirm>
                                 </div>
                             </header>
-                            <XmlCodeEditor
+                            <nn-xml-code-editor
                                 :key="selectedRecord.id"
                                 :value="selectedXml"
                                 :rows="12"
@@ -351,7 +351,6 @@
         DownloadOutlined
     } from 'netnexus-ui/icons';
     import { notify } from '../../utils/notify';
-    import XmlCodeEditor from './XmlCodeEditor.vue';
     import { formatXmlForDisplay } from './yangUiUtils';
     import { useNetconfNotificationHistory } from './useNetconfNotificationHistory';
 

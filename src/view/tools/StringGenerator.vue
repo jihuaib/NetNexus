@@ -11,10 +11,12 @@
                 <!-- 字符串模板输入 -->
                 <nn-form-item label="字符串模板" name="template">
                     <nn-tooltip :title="validationErrors.template" :open="!!validationErrors.template">
-                        <ScrollTextarea
-                            v-model:model-value="formState.template"
+                        <nn-textarea
+                            v-model:value="formState.template"
                             data-testid="string-template-input"
                             :height="120"
+                            auto-scroll="end"
+                            resize="none"
                             :status="validationErrors.template ? 'error' : ''"
                         />
                     </nn-tooltip>
@@ -72,10 +74,12 @@
                 <!-- 结果显示 -->
                 <nn-form-item label="生成结果" class="generator-result-item">
                     <div class="generator-result-textarea-wrap">
-                        <ScrollTextarea
-                            v-model:model-value="result"
+                        <nn-textarea
+                            v-model:value="result"
                             data-testid="string-result-textarea"
                             height="100%"
+                            auto-scroll="end"
+                            resize="none"
                         />
                     </div>
                 </nn-form-item>
@@ -134,7 +138,6 @@
 </template>
 
 <script setup>
-    import ScrollTextarea from '../../components/ScrollTextarea.vue';
     import { ref, toRaw } from 'vue';
     import { notify } from '../../utils/notify';
     import { FormValidator, createStringGeneratorValidationRules } from '../../utils/validationCommon';

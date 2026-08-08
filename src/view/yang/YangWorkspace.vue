@@ -164,22 +164,20 @@
             </div>
         </nn-card>
 
-        <div
-            v-if="contextMenu.visible"
+        <nn-context-menu
             ref="contextMenuRef"
-            class="schema-context-menu"
-            :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
-            @click.stop
+            v-model:open="contextMenu.visible"
+            :width="276"
+            root-class="schema-context-menu"
+            title-class="schema-context-menu-title"
+            meta-class="schema-context-menu-keyword"
+            description-class="schema-context-menu-path"
+            hint-class="schema-context-menu-hint"
+            :title="contextMenu.node?.name || contextMenu.node?.title || 'Schema 节点'"
+            :meta="contextMenu.node?.keyword || contextMenu.node?.kind || '-'"
+            :description="contextMenu.node?.path || '-'"
+            :hint="contextMenuHint"
         >
-            <div class="schema-context-menu-title">
-                <span>{{ contextMenu.node?.name || contextMenu.node?.title || 'Schema 节点' }}</span>
-                <span class="schema-context-menu-keyword">
-                    {{ contextMenu.node?.keyword || contextMenu.node?.kind || '-' }}
-                </span>
-            </div>
-            <div class="schema-context-menu-path" :title="contextMenu.node?.path">
-                {{ contextMenu.node?.path || '-' }}
-            </div>
             <nn-menu
                 class="schema-context-menu-list"
                 submenu-mode="popup"
@@ -187,10 +185,7 @@
                 :selectable="false"
                 @click="handleContextMenuClick"
             />
-            <div class="schema-context-menu-hint">
-                {{ contextMenuHint }}
-            </div>
-        </div>
+        </nn-context-menu>
 
         <nn-modal
             v-model:open="nodePropertyOpen"
@@ -347,7 +342,7 @@
     const treeQuery = ref('');
     const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] });
     const contextMenuRef = ref(null);
-    const contextMenu = reactive({ visible: false, x: 0, y: 0, node: null });
+    const contextMenu = reactive({ visible: false, node: null });
     const operationContext = reactive({
         operation: 'get',
         autoExecute: false,
@@ -388,8 +383,6 @@
     const schemaTreeRef = ref(null);
     const schemaTreeViewportHeight = ref(480);
     let schemaTreeResizeObserver = null;
-    let contextMenuOpenRequest = 0;
-    let contextMenuScrollSession = null;
     let detailRequestRevision = 0;
     let workspaceRequestRevision = 0;
     let profileRequestRevision = 0;
@@ -440,11 +433,11 @@
         const parentListKeys = Array.isArray(parentContext.listKeys) ? parentContext.listKeys : [];
         const isListKey = Boolean(
             node?.isListKey === true ||
-                node?.isKey === true ||
-                node?.keyLeaf === true ||
-                (normalizedKeyword === 'leaf' &&
-                    parentContext.parentKeyword === 'list' &&
-                    parentListKeys.includes(schemaLocalName(name)))
+            node?.isKey === true ||
+            node?.keyLeaf === true ||
+            (normalizedKeyword === 'leaf' &&
+                parentContext.parentKeyword === 'list' &&
+                parentListKeys.includes(schemaLocalName(name)))
         );
         const childContext = {
             parentKeyword: normalizedKeyword,
@@ -676,11 +669,11 @@
     const workspaceHasSchemaCompilation = workspace =>
         Boolean(
             workspace?.compileId &&
-                (workspace?.success === true ||
-                    workspace?.schemaAvailable === true ||
-                    workspace?.schemaTree?.authoritative === true ||
-                    workspace?.validation?.schemaAvailable === true ||
-                    workspace?.validation?.succeeded === true)
+            (workspace?.success === true ||
+                workspace?.schemaAvailable === true ||
+                workspace?.schemaTree?.authoritative === true ||
+                workspace?.validation?.schemaAvailable === true ||
+                workspace?.validation?.succeeded === true)
         );
 
     const loadWorkspace = async ({ preserveTree = false, retrySchemaRestore = true } = {}) => {
@@ -1403,96 +1396,26 @@
         return `<${name || 'notification'}${namespaceAttribute}/>`;
     };
 
-    const getContextMenuPosition = (anchor, menuRect) => {
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-        const maxX = Math.max(CONTEXT_MENU_MARGIN, viewportWidth - menuRect.width - CONTEXT_MENU_MARGIN);
-        const maxY = Math.max(CONTEXT_MENU_MARGIN, viewportHeight - menuRect.height - CONTEXT_MENU_MARGIN);
-        return {
-            x: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientX), maxX),
-            y: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientY), maxY)
-        };
-    };
-
-    const normalizeScrollTarget = target => {
-        if (target === window || target === document) {
-            return document.scrollingElement || document.documentElement;
-        }
-        return target instanceof Element ? target : null;
-    };
-
-    const readScrollOffset = target => {
-        const element = normalizeScrollTarget(target);
-        if (!element) return null;
-        return { element, top: element.scrollTop, left: element.scrollLeft };
-    };
-
-    const contextMenuEventPath = event => {
-        const composedPath = event?.composedPath?.();
-        if (composedPath?.length) return composedPath;
-
-        const path = [];
-        let current = event?.target;
-        while (current) {
-            path.push(current);
-            current = current.parentNode;
-        }
-        path.push(document, window);
-        return path;
-    };
-
-    const captureContextMenuScrollSession = (event, request) => {
-        const offsets = new Map();
-        contextMenuEventPath(event).forEach(target => {
-            const offset = readScrollOffset(target);
-            if (offset && !offsets.has(offset.element)) {
-                offsets.set(offset.element, { top: offset.top, left: offset.left });
-            }
-        });
-        return { request, offsets };
-    };
-
-    const contextMenuOpeningGeometryUnchanged = event => {
-        // Native scroll notifications can arrive after the offset changed and the menu opened.
-        if (!contextMenuScrollSession || contextMenuScrollSession.request !== contextMenuOpenRequest) return false;
-        const current = readScrollOffset(event.target);
-        if (!current) return false;
-        if (!contextMenuScrollSession.offsets.has(current.element)) return false;
-        const opening = contextMenuScrollSession.offsets.get(current.element);
-        return Object.is(current.top, opening.top) && Object.is(current.left, opening.left);
-    };
-
     const handleTreeRightClick = async ({ event, node }) => {
         event?.preventDefault?.();
         event?.stopPropagation?.();
         const key = node?.key || node?.eventKey || node?.dataRef?.key;
         const matchedNode = findNode(treeData.value, key) || node?.dataRef || node;
         if (!matchedNode?.key) return;
-        const openRequest = ++contextMenuOpenRequest;
-        contextMenuScrollSession = captureContextMenuScrollSession(event, openRequest);
 
         selectedKeys.value = [matchedNode.key];
         nodePropertyOpen.value = false;
         contextMenu.node = matchedNode;
-        const anchor = {
-            clientX: Number.isFinite(event?.clientX) ? event.clientX : CONTEXT_MENU_MARGIN,
-            clientY: Number.isFinite(event?.clientY) ? event.clientY : CONTEXT_MENU_MARGIN
-        };
-        contextMenu.x = Math.max(CONTEXT_MENU_MARGIN, anchor.clientX);
-        contextMenu.y = Math.max(CONTEXT_MENU_MARGIN, anchor.clientY);
-        contextMenu.visible = true;
-
         await nextTick();
-        if (!contextMenuRef.value) await new Promise(resolve => window.requestAnimationFrame(resolve));
-        if (!contextMenu.visible || openRequest !== contextMenuOpenRequest || !contextMenuRef.value) return;
-        const position = getContextMenuPosition(anchor, contextMenuRef.value.getBoundingClientRect());
-        contextMenu.x = position.x;
-        contextMenu.y = position.y;
+        await contextMenuRef.value?.openAt(
+            Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)
+                ? event
+                : { x: CONTEXT_MENU_MARGIN, y: CONTEXT_MENU_MARGIN }
+        );
     };
 
     const hideContextMenu = () => {
-        contextMenuOpenRequest += 1;
-        contextMenuScrollSession = null;
+        contextMenuRef.value?.close({ reason: 'api' });
         contextMenu.visible = false;
     };
 
@@ -1993,7 +1916,6 @@
         profileRequestRevision += 1;
         workspaceRequestRevision += 1;
         detailRequestRevision += 1;
-        contextMenuOpenRequest += 1;
         schemaRootsPromise = null;
         schemaRootsPromiseKey = '';
         schemaRestoreFailedCompileId = '';
@@ -2038,17 +1960,6 @@
         if (value === null || value === undefined || value === '') return '-';
         return Array.isArray(value) ? value.join(', ') || '-' : String(value);
     };
-    const handleContextMenuKeydown = event => {
-        if (event.key === 'Escape') hideContextMenu();
-    };
-
-    const handleWorkspaceScroll = event => {
-        if (!contextMenu.visible) return;
-        if (event.target instanceof Node && contextMenuRef.value?.contains(event.target)) return;
-        if (contextMenuOpeningGeometryUnchanged(event)) return;
-        hideContextMenu();
-    };
-
     const updateSchemaTreeViewportHeight = observedHeight => {
         const scrollElement = schemaTreeScrollRef.value;
         const fallbackHeight = scrollElement ? Math.max(0, scrollElement.clientHeight - 12) : 0;
@@ -2106,10 +2017,7 @@
             `${YANG_EVENT_PAGE_ID.WORKSPACE}-profile-data`,
             handleProfileDataRefresh
         );
-        document.addEventListener('keydown', handleContextMenuKeydown);
-        window.addEventListener('resize', hideContextMenu);
         window.addEventListener('resize', updateSchemaTreeViewportHeight);
-        window.addEventListener('scroll', handleWorkspaceScroll, true);
         await nextTick();
         observeSchemaTreeViewport();
         try {
@@ -2142,10 +2050,7 @@
         EventBus.off(NOTIFICATION_SUMMARY_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-notification-summary`);
         EventBus.off(NOTIFICATION_ACTION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-notification-action`);
         EventBus.off(YANG_EVENT.PROFILE_DATA_REFRESH, `${YANG_EVENT_PAGE_ID.WORKSPACE}-profile-data`);
-        document.removeEventListener('keydown', handleContextMenuKeydown);
-        window.removeEventListener('resize', hideContextMenu);
         window.removeEventListener('resize', updateSchemaTreeViewportHeight);
-        window.removeEventListener('scroll', handleWorkspaceScroll, true);
         schemaTreeResizeObserver?.disconnect();
         schemaTreeResizeObserver = null;
     });
@@ -2334,7 +2239,7 @@
         padding: 6px;
     }
 
-    .schema-context-menu {
+    :global(.schema-context-menu) {
         position: fixed;
         z-index: 1200;
         width: 276px;
@@ -2348,7 +2253,7 @@
         box-shadow: var(--nn-shadow-elevated);
     }
 
-    .schema-context-menu-title {
+    :global(.schema-context-menu-title) {
         display: flex;
         min-width: 0;
         align-items: center;
@@ -2360,14 +2265,14 @@
         font-weight: 600;
     }
 
-    .schema-context-menu-title > span:first-child,
-    .schema-context-menu-path {
+    :global(.schema-context-menu-title > span:first-child),
+    :global(.schema-context-menu-path) {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    .schema-context-menu-keyword {
+    :global(.schema-context-menu-keyword) {
         flex: 0 0 auto;
         color: var(--nn-color-primary);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -2375,7 +2280,7 @@
         font-weight: 500;
     }
 
-    .schema-context-menu-path {
+    :global(.schema-context-menu-path) {
         padding: 1px 12px 6px;
         color: var(--nn-color-text-muted);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -2383,11 +2288,11 @@
         border-bottom: 1px solid var(--nn-color-border-light);
     }
 
-    .schema-context-menu-list {
+    :global(.schema-context-menu-list) {
         border-inline-end: 0;
     }
 
-    .schema-context-menu-list :deep(.nn-menu-item) {
+    :global(.schema-context-menu-list .nn-menu-item) {
         height: 30px;
         min-height: 30px;
         margin: 2px 4px;
@@ -2396,11 +2301,11 @@
         line-height: 24px;
     }
 
-    .schema-context-menu-list :deep(.nn-menu-divider) {
+    :global(.schema-context-menu-list .nn-menu-divider) {
         margin: 4px 0;
     }
 
-    .schema-context-menu-hint {
+    :global(.schema-context-menu-hint) {
         padding: 6px 12px 4px;
         color: var(--nn-color-text-muted);
         font-size: 11px;

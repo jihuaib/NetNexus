@@ -54,16 +54,13 @@
                             {{ mibCompileCounts.failed }}
                         </span>
                     </div>
-                    <div
-                        class="mib-compile-progress-bar"
-                        role="progressbar"
+                    <nn-progress
+                        :percent="mibCompilePercent"
                         aria-label="MIB编译进度"
-                        aria-valuemin="0"
-                        aria-valuemax="100"
-                        :aria-valuenow="mibCompilePercent"
-                    >
-                        <div class="mib-compile-progress-fill" :style="{ width: mibCompilePercent + '%' }" />
-                    </div>
+                        status="active"
+                        :stroke-width="3"
+                        class="mib-compile-progress-bar"
+                    />
                 </div>
 
                 <div class="mib-results">
@@ -936,18 +933,7 @@
     }
 
     .mib-compile-progress-bar {
-        height: 3px;
         margin-top: 5px;
-        overflow: hidden;
-        background: var(--nn-color-bg-progress);
-        border-radius: 2px;
-    }
-
-    .mib-compile-progress-fill {
-        height: 100%;
-        background: var(--nn-gradient-progress);
-        border-radius: 2px;
-        transition: width 0.2s ease;
     }
 
     .mib-results {

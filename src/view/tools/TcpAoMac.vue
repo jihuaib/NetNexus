@@ -21,9 +21,11 @@
                                 <nn-col :xs="24" :lg="12">
                                     <nn-form-item label="SNE（可选）" name="sne" class="compact-item">
                                         <nn-tooltip :title="validationErrors.sne" :open="!!validationErrors.sne">
-                                            <ScrollTextarea
-                                                v-model:model-value="formState.sne"
+                                            <nn-textarea
+                                                v-model:value="formState.sne"
                                                 :height="44"
+                                                auto-scroll="end"
+                                                resize="none"
                                                 placeholder="SNE（4字节hex）"
                                                 :status="validationErrors.sne ? 'error' : ''"
                                             />
@@ -71,9 +73,11 @@
                                 :help="validationErrors.ipPacket || ''"
                             >
                                 <div class="packet-textarea-wrap">
-                                    <ScrollTextarea
-                                        v-model:model-value="formState.ipPacket"
+                                    <nn-textarea
+                                        v-model:value="formState.ipPacket"
                                         height="100%"
+                                        auto-scroll="end"
+                                        resize="none"
                                         placeholder="完整 IPv4 / IPv6 报文（hex），自动识别版本"
                                         :status="validationErrors.ipPacket ? 'error' : ''"
                                     />
@@ -191,7 +195,6 @@
 </template>
 
 <script setup>
-    import ScrollTextarea from '../../components/ScrollTextarea.vue';
     import { InfoCircleOutlined } from 'netnexus-ui/icons';
     import { ref, computed, onMounted } from 'vue';
     import { notify } from '../../utils/notify';

@@ -536,14 +536,22 @@
         </nn-row>
 
         <!-- Custom Open Cap Drawers -->
-        <CustomPktDrawer
+        <nn-textarea-drawer
             v-model:open="customOpenCapVisible"
             v-model:input-value="ipv4PeerConfigData.openCapCustom"
+            title="报文输入"
+            input-label="报文内容"
+            placeholder="请输入16进制数字, 用空格分隔, 例如: 11 22 33 44 55 66 77"
+            :validator="validatePacketData"
             @submit="handleCustomOpenCapSubmit"
         />
-        <CustomPktDrawer
+        <nn-textarea-drawer
             v-model:open="customOpenCapIpv6Visible"
             v-model:input-value="ipv6PeerConfigData.openCapCustomIpv6"
+            title="报文输入"
+            input-label="报文内容"
+            placeholder="请输入16进制数字, 用空格分隔, 例如: 11 22 33 44 55 66 77"
+            :validator="validatePacketData"
             @submit="handleCustomOpenCapIpv6Submit"
         />
     </div>
@@ -564,11 +572,11 @@
     import { DeleteOutlined, SettingOutlined, UnorderedListOutlined } from 'netnexus-ui/icons';
 
     import EventBus from '../../utils/eventBus';
-    import CustomPktDrawer from '../../components/CustomPktDrawer.vue';
     import {
         FormValidator,
         createBgpPeerIpv4ConfigValidationRules,
-        createBgpPeerIpv6ConfigValidationRules
+        createBgpPeerIpv6ConfigValidationRules,
+        validatePacketData
     } from '../../utils/validationCommon';
 
     defineOptions({

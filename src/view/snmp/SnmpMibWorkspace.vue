@@ -127,22 +127,20 @@
             </div>
         </nn-card>
 
-        <div
-            v-if="contextMenu.visible"
+        <nn-context-menu
             ref="contextMenuRef"
-            class="mib-context-menu"
-            :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
-            @click.stop
+            v-model:open="contextMenu.visible"
+            :width="224"
+            root-class="mib-context-menu"
+            title-class="mib-context-menu-title"
+            meta-class="mib-context-menu-kind"
+            description-class="mib-context-menu-oid"
+            hint-class="mib-context-menu-hint"
+            :title="contextMenu.node?.moduleQualifiedName || contextMenu.node?.objectName || 'OID 节点'"
+            :meta="contextMenu.node?.macro || contextMenu.node?.nodeRole || '-'"
+            :description="contextMenu.node?.oid || '-'"
+            :hint="getNodeAbilityText(contextMenu.node)"
         >
-            <div class="mib-context-menu-title">
-                <span>{{ contextMenu.node?.moduleQualifiedName || contextMenu.node?.objectName || 'OID 节点' }}</span>
-                <span class="mib-context-menu-kind">
-                    {{ contextMenu.node?.macro || contextMenu.node?.nodeRole || '-' }}
-                </span>
-            </div>
-            <div class="mib-context-menu-oid" :title="contextMenu.node?.oid">
-                {{ contextMenu.node?.oid || '-' }}
-            </div>
             <nn-menu class="mib-context-menu-list" :selectable="false" @click="handleContextMenuClick">
                 <nn-menu-item key="properties">
                     <template #icon><EyeOutlined /></template>
@@ -170,10 +168,7 @@
                     SET 设置
                 </nn-menu-item>
             </nn-menu>
-            <div class="mib-context-menu-hint">
-                {{ getNodeAbilityText(contextMenu.node) }}
-            </div>
-        </div>
+        </nn-context-menu>
 
         <nn-modal
             v-model:open="nodePropertyOpen"
@@ -276,7 +271,7 @@
     const treeExpandedKeys = ref([]);
     const treeSelectedKeys = ref([]);
     const contextMenuRef = ref(null);
-    const contextMenu = reactive({ visible: false, x: 0, y: 0, node: null });
+    const contextMenu = reactive({ visible: false, node: null });
     const operationsRef = ref(null);
     const operationContext = reactive({ node: null, operation: '', revision: 0 });
     const nodePropertyOpen = ref(false);
@@ -308,7 +303,6 @@
     let statusLoadPromise = null;
     let statusRequestRevision = 0;
     let treeDataRevision = 0;
-    let contextMenuOpenRequest = 0;
     let statusLoaded = false;
 
     function emptyMibStatus() {
@@ -677,21 +671,9 @@
         }
     };
 
-    const getContextMenuPosition = (anchor, menuRect) => {
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-        const maxX = Math.max(CONTEXT_MENU_MARGIN, viewportWidth - menuRect.width - CONTEXT_MENU_MARGIN);
-        const maxY = Math.max(CONTEXT_MENU_MARGIN, viewportHeight - menuRect.height - CONTEXT_MENU_MARGIN);
-        return {
-            x: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientX), maxX),
-            y: Math.min(Math.max(CONTEXT_MENU_MARGIN, anchor.clientY), maxY)
-        };
-    };
-
     const handleTreeRightClick = async ({ event, node }) => {
         event?.preventDefault?.();
         event?.stopPropagation?.();
-        const openRequest = ++contextMenuOpenRequest;
         const key = node?.key || node?.eventKey || node?.dataRef?.key;
         const matchedNode = findTreeNode(mibStatus.value.oidTree, key) || node?.dataRef || node;
         if (!matchedNode?.key) return;
@@ -699,24 +681,16 @@
         treeSelectedKeys.value = [matchedNode.key];
         nodePropertyOpen.value = false;
         contextMenu.node = matchedNode;
-        const anchor = {
-            clientX: Number.isFinite(event?.clientX) ? event.clientX : CONTEXT_MENU_MARGIN,
-            clientY: Number.isFinite(event?.clientY) ? event.clientY : CONTEXT_MENU_MARGIN
-        };
-        contextMenu.x = Math.max(CONTEXT_MENU_MARGIN, anchor.clientX);
-        contextMenu.y = Math.max(CONTEXT_MENU_MARGIN, anchor.clientY);
-        contextMenu.visible = true;
-
         await nextTick();
-        if (!contextMenuRef.value) await new Promise(resolve => window.requestAnimationFrame(resolve));
-        if (!contextMenu.visible || openRequest !== contextMenuOpenRequest || !contextMenuRef.value) return;
-        const position = getContextMenuPosition(anchor, contextMenuRef.value.getBoundingClientRect());
-        contextMenu.x = position.x;
-        contextMenu.y = position.y;
+        await contextMenuRef.value?.openAt(
+            Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)
+                ? event
+                : { x: CONTEXT_MENU_MARGIN, y: CONTEXT_MENU_MARGIN }
+        );
     };
 
     const hideContextMenu = () => {
-        contextMenuOpenRequest += 1;
+        contextMenuRef.value?.close({ reason: 'api' });
         contextMenu.visible = false;
     };
 
@@ -775,8 +749,6 @@
 
     onMounted(() => {
         loadMibStatus({ force: true });
-        window.addEventListener('resize', hideContextMenu);
-        document.addEventListener('scroll', hideContextMenu, true);
     });
 
     onBeforeUnmount(() => {
@@ -785,8 +757,6 @@
         stopTreePaneResize();
         clearPendingTreeReleases();
         treeLoadingPromises.clear();
-        window.removeEventListener('resize', hideContextMenu);
-        document.removeEventListener('scroll', hideContextMenu, true);
     });
 </script>
 
@@ -1052,7 +1022,7 @@
         background: var(--nn-color-primary);
     }
 
-    .mib-context-menu {
+    :global(.mib-context-menu) {
         position: fixed;
         z-index: 1200;
         width: 224px;
@@ -1066,7 +1036,7 @@
         box-shadow: var(--nn-shadow-elevated);
     }
 
-    .mib-context-menu-title {
+    :global(.mib-context-menu-title) {
         display: flex;
         min-width: 0;
         align-items: center;
@@ -1078,14 +1048,14 @@
         font-weight: 600;
     }
 
-    .mib-context-menu-title > span:first-child,
-    .mib-context-menu-oid {
+    :global(.mib-context-menu-title > span:first-child),
+    :global(.mib-context-menu-oid) {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    .mib-context-menu-kind {
+    :global(.mib-context-menu-kind) {
         flex: 0 0 auto;
         color: var(--nn-color-primary);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -1093,7 +1063,7 @@
         font-weight: 500;
     }
 
-    .mib-context-menu-oid {
+    :global(.mib-context-menu-oid) {
         padding: 1px 12px 6px;
         color: var(--nn-color-text-muted);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -1101,11 +1071,11 @@
         border-bottom: 1px solid var(--nn-color-border-light);
     }
 
-    .mib-context-menu-list {
+    :global(.mib-context-menu-list) {
         border-inline-end: 0;
     }
 
-    .mib-context-menu-list :deep(.nn-menu-item) {
+    :global(.mib-context-menu-list .nn-menu-item) {
         height: 30px;
         min-height: 30px;
         margin: 2px 4px;
@@ -1114,11 +1084,11 @@
         line-height: 24px;
     }
 
-    .mib-context-menu-list :deep(.nn-menu-divider) {
+    :global(.mib-context-menu-list .nn-menu-divider) {
         margin: 4px 0;
     }
 
-    .mib-context-menu-hint {
+    :global(.mib-context-menu-hint) {
         padding: 6px 12px 4px;
         color: var(--nn-color-text-muted);
         font-size: 11px;

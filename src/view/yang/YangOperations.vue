@@ -178,7 +178,7 @@
                         </nn-space>
                     </div>
 
-                    <XmlCodeEditor
+                    <nn-xml-code-editor
                         v-if="embedded"
                         :value="currentRequestXml"
                         :status="requestValidation.status"
@@ -214,7 +214,7 @@
                                 />
                             </nn-form-item>
                             <nn-form-item v-if="form.filterType === 'subtree'" label="Subtree" required>
-                                <XmlCodeEditor
+                                <nn-xml-code-editor
                                     v-model:value="form.subtree"
                                     :rows="10"
                                     placeholder='输入过滤内容，例如 <interfaces xmlns="..."><interface/></interfaces>'
@@ -256,7 +256,7 @@
                                 </nn-col>
                             </nn-row>
                             <nn-form-item label="config XML" required>
-                                <XmlCodeEditor
+                                <nn-xml-code-editor
                                     v-model:value="form.config"
                                     :rows="15"
                                     placeholder="输入 <config> 内容；支持命名空间与 nc:operation 属性"
@@ -379,7 +379,7 @@
                                 <nn-input v-model:value="form.xpath" placeholder="例如：/notification/example:event" />
                             </nn-form-item>
                             <nn-form-item v-if="form.filterType === 'subtree'" label="Subtree" required>
-                                <XmlCodeEditor
+                                <nn-xml-code-editor
                                     v-model:value="form.subtree"
                                     :rows="10"
                                     placeholder='例如 <alarm xmlns="urn:example:alarms"/>'
@@ -493,7 +493,7 @@
                                 />
                             </nn-form-item>
                             <nn-form-item v-if="form.filterType === 'subtree'" label="Subtree" required>
-                                <XmlCodeEditor
+                                <nn-xml-code-editor
                                     v-model:value="form.subtree"
                                     :rows="10"
                                     placeholder='例如 <state xmlns="urn:example:device"/>'
@@ -675,7 +675,7 @@
 
                         <template v-else-if="activeOperation === 'raw-rpc'">
                             <nn-form-item label="RPC XML" required>
-                                <XmlCodeEditor
+                                <nn-xml-code-editor
                                     v-model:value="form.rawRpc"
                                     :rows="18"
                                     placeholder="输入完整 <rpc>，或输入 rpc 内部的操作元素"
@@ -815,7 +815,7 @@
                         完整响应 {{ formatByteSize(result.replyBytes) }}，为避免页面卡顿仅显示有界的头尾预览；可保存完整
                         XML 后使用专用编辑器查看。
                     </div>
-                    <XmlCodeEditor
+                    <nn-xml-code-editor
                         v-if="result.reply"
                         :value="displayedReplyXml"
                         :rows="8"
@@ -959,20 +959,20 @@
             </aside>
         </div>
 
-        <div
-            v-if="parameterContextMenu.visible"
+        <nn-context-menu
             ref="parameterContextMenuRef"
-            class="operation-parameter-context-menu"
-            :style="{ left: parameterContextMenu.x + 'px', top: parameterContextMenu.y + 'px' }"
-            @click.stop
+            v-model:open="parameterContextMenu.visible"
+            :width="260"
+            :z-index="1400"
+            root-class="operation-parameter-context-menu"
+            title-class="operation-parameter-context-menu-title"
+            description-class="operation-parameter-context-menu-path"
+            hint-class="operation-parameter-context-menu-hint"
+            :title="parameterContextMenu.node?.title || '参数节点'"
+            :meta="parameterKindLabel(parameterContextMenu.node || {})"
+            :description="parameterContextMenu.node?.parameterPath || '/rpc'"
+            :hint="parameterContextMenuHint"
         >
-            <div class="operation-parameter-context-menu-title">
-                <span>{{ parameterContextMenu.node?.title || '参数节点' }}</span>
-                <span>{{ parameterKindLabel(parameterContextMenu.node || {}) }}</span>
-            </div>
-            <div class="operation-parameter-context-menu-path" :title="parameterContextMenu.node?.parameterPath">
-                {{ parameterContextMenu.node?.parameterPath || '/rpc' }}
-            </div>
             <nn-menu
                 class="operation-parameter-context-menu-list"
                 :selectable="false"
@@ -1000,10 +1000,7 @@
                     移除节点
                 </nn-menu-item>
             </nn-menu>
-            <div class="operation-parameter-context-menu-hint">
-                {{ parameterContextMenuHint }}
-            </div>
-        </div>
+        </nn-context-menu>
 
         <nn-modal v-model:open="parameterActionOpen" :title="parameterActionTitle" :footer="null" width="520px">
             <nn-spin :spinning="parameterActionLoading">
@@ -1040,7 +1037,7 @@
                             >
                                 {{ parameterAction.value ? '启用' : '未启用' }}
                             </nn-checkbox>
-                            <XmlCodeEditor
+                            <nn-xml-code-editor
                                 v-else-if="parameterActionValueDescriptor.editor === 'textarea'"
                                 :value="String(parameterAction.value ?? '')"
                                 :rows="10"
@@ -1161,7 +1158,7 @@
             :footer="null"
             width="820px"
         >
-            <pre class="rpc-preview" data-xml-viewer><XmlHighlight :value="displayedRequestXml" /></pre>
+            <pre class="rpc-preview" data-xml-viewer><nn-xml-highlight :value="displayedRequestXml" /></pre>
         </nn-modal>
 
         <YangExecutionHistoryDrawer v-if="showExecutionHistory" v-model:open="executionHistoryOpen" />
@@ -1210,8 +1207,6 @@
         SendOutlined,
         UnorderedListOutlined
     } from 'netnexus-ui/icons';
-    import XmlCodeEditor from './XmlCodeEditor.vue';
-    import XmlHighlight from './XmlHighlight.vue';
     import YangExecutionHistoryDrawer from './YangExecutionHistoryDrawer.vue';
     import { isRfc3339DateTime, rfc3339Timestamp, validateNetconfRpc } from './netconfRpcValidation';
     import {
@@ -1353,7 +1348,7 @@
     const parameterExpandedKeys = ref([]);
     const parameterSelectedKeys = ref([]);
     const parameterContextMenuRef = ref(null);
-    const parameterContextMenu = reactive({ visible: false, x: 0, y: 0, node: null, parent: null });
+    const parameterContextMenu = reactive({ visible: false, node: null, parent: null });
     const parameterActionOpen = ref(false);
     const parameterActionLoading = ref(false);
     const parameterAction = reactive({
@@ -1370,10 +1365,8 @@
         contextRevision: 0,
         operation: ''
     });
-    let parameterContextMenuOpenRequest = 0;
     let parameterActionOpenRequest = 0;
     let parameterSchemaRequestRevision = 0;
-    let parameterContextMenuTrigger = null;
     const parameterSchemaChildrenCache = new Map();
     const parameterDiscoveredSchemaNodes = ref([]);
     const {
@@ -1823,9 +1816,9 @@
         });
         const presenceRequired = Boolean(
             requiredComment ||
-                schemaMetadata.placeholder ||
-                valueSchemaMetadata.isListKey ||
-                valueSchemaMetadata.schemaNode?.mandatory === true
+            schemaMetadata.placeholder ||
+            valueSchemaMetadata.isListKey ||
+            valueSchemaMetadata.schemaNode?.mandatory === true
         );
         const required = presenceRequired && !valueSchemaMetadata.acceptsEmptyString;
         const hasRequiredDescendant = childNodes.some(child => child.required || child.hasRequiredDescendant);
@@ -2692,59 +2685,23 @@
         parameterSelectedKeys.value = [];
     };
 
-    const getParameterContextMenuPosition = (anchor, menuRect) => {
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-        const maxX = Math.max(
-            PARAMETER_CONTEXT_MENU_MARGIN,
-            viewportWidth - menuRect.width - PARAMETER_CONTEXT_MENU_MARGIN
-        );
-        const maxY = Math.max(
-            PARAMETER_CONTEXT_MENU_MARGIN,
-            viewportHeight - menuRect.height - PARAMETER_CONTEXT_MENU_MARGIN
-        );
-        return {
-            x: Math.min(Math.max(PARAMETER_CONTEXT_MENU_MARGIN, anchor.clientX), maxX),
-            y: Math.min(Math.max(PARAMETER_CONTEXT_MENU_MARGIN, anchor.clientY), maxY)
-        };
-    };
-
     const handleParameterTreeRightClick = async ({ event, node }) => {
         event?.preventDefault?.();
         event?.stopPropagation?.();
         const record = findParameterRecord(operationParameterTree.value, node?.key || node?.eventKey);
         const matchedNode = record?.node || node?.dataRef || node;
         if (!matchedNode?.key) return;
-        const openRequest = ++parameterContextMenuOpenRequest;
-        parameterContextMenuTrigger =
-            (event?.target instanceof Element && event.target.closest('[role="treeitem"]')) ||
-            (document.activeElement instanceof HTMLElement ? document.activeElement : null);
         parameterSelectedKeys.value = [matchedNode.key];
         Object.assign(parameterContextMenu, {
-            visible: true,
-            x: Number.isFinite(event?.clientX) ? event.clientX : PARAMETER_CONTEXT_MENU_MARGIN,
-            y: Number.isFinite(event?.clientY) ? event.clientY : PARAMETER_CONTEXT_MENU_MARGIN,
             node: matchedNode,
             parent: record?.parent || null
         });
         await nextTick();
-        if (!parameterContextMenuRef.value) await new Promise(resolve => window.requestAnimationFrame(resolve));
-        if (
-            !parameterContextMenu.visible ||
-            openRequest !== parameterContextMenuOpenRequest ||
-            !parameterContextMenuRef.value
-        ) {
-            return;
-        }
-        const position = getParameterContextMenuPosition(
-            { clientX: parameterContextMenu.x, clientY: parameterContextMenu.y },
-            parameterContextMenuRef.value.getBoundingClientRect()
+        await parameterContextMenuRef.value?.openAt(
+            Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)
+                ? event
+                : { x: PARAMETER_CONTEXT_MENU_MARGIN, y: PARAMETER_CONTEXT_MENU_MARGIN }
         );
-        parameterContextMenu.x = position.x;
-        parameterContextMenu.y = position.y;
-        parameterContextMenuRef.value
-            .querySelector('[role="menuitem"]:not([aria-disabled="true"])')
-            ?.focus?.({ preventScroll: true });
     };
 
     const handleParameterTreeKeydown = event => {
@@ -2769,19 +2726,8 @@
     };
 
     const hideParameterContextMenu = (restoreFocus = false) => {
-        parameterContextMenuOpenRequest += 1;
+        parameterContextMenuRef.value?.close({ reason: 'api', restoreFocus });
         parameterContextMenu.visible = false;
-        const trigger = parameterContextMenuTrigger;
-        parameterContextMenuTrigger = null;
-        if (restoreFocus === true && trigger?.isConnected) {
-            void nextTick(() => trigger.focus?.({ preventScroll: true }));
-        }
-    };
-
-    const handleParameterContextMenuPointerDown = event => {
-        if (!parameterContextMenu.visible) return;
-        if (event.target instanceof Node && parameterContextMenuRef.value?.contains(event.target)) return;
-        hideParameterContextMenu();
     };
 
     const parameterContextCapabilities = computed(() => {
@@ -4748,16 +4694,6 @@
 
     const goToConnections = () => router.push(YANG_ROUTE.CONNECTION);
 
-    const handleParameterContextMenuKeydown = event => {
-        if (event.key !== 'Escape' || !parameterContextMenu.visible) return;
-        event.preventDefault();
-        hideParameterContextMenu(true);
-    };
-    const handleParameterContextMenuScroll = event => {
-        if (event.target instanceof Node && parameterContextMenuRef.value?.contains(event.target)) return;
-        hideParameterContextMenu();
-    };
-
     watch(
         form,
         () => {
@@ -4872,10 +4808,6 @@
 
     onMounted(() => {
         EventBus.on(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.OPERATIONS, handleSessionEvent);
-        document.addEventListener('keydown', handleParameterContextMenuKeydown);
-        document.addEventListener('pointerdown', handleParameterContextMenuPointerDown, true);
-        window.addEventListener('resize', hideParameterContextMenu);
-        window.addEventListener('scroll', handleParameterContextMenuScroll, true);
         loadSession();
     });
 
@@ -4908,10 +4840,6 @@
         stopParameterPaneResize();
         hideParameterContextMenu();
         EventBus.off(YANG_EVENT.SESSION_EVENT, YANG_EVENT_PAGE_ID.OPERATIONS);
-        document.removeEventListener('keydown', handleParameterContextMenuKeydown);
-        document.removeEventListener('pointerdown', handleParameterContextMenuPointerDown, true);
-        window.removeEventListener('resize', hideParameterContextMenu);
-        window.removeEventListener('scroll', handleParameterContextMenuScroll, true);
     });
 </script>
 
@@ -5449,7 +5377,7 @@
         flex: 0 1 auto;
     }
 
-    .operation-parameter-context-menu {
+    :global(.operation-parameter-context-menu) {
         position: fixed;
         z-index: 1400;
         width: 260px;
@@ -5463,7 +5391,7 @@
         box-shadow: var(--nn-shadow-elevated);
     }
 
-    .operation-parameter-context-menu-title {
+    :global(.operation-parameter-context-menu-title) {
         display: flex;
         min-width: 0;
         align-items: center;
@@ -5475,14 +5403,14 @@
         font-weight: 600;
     }
 
-    .operation-parameter-context-menu-title > span:first-child,
-    .operation-parameter-context-menu-path {
+    :global(.operation-parameter-context-menu-title > span:first-child),
+    :global(.operation-parameter-context-menu-path) {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    .operation-parameter-context-menu-title > span:last-child {
+    :global(.operation-parameter-context-menu-title > span:last-child) {
         flex: 0 0 auto;
         color: var(--nn-color-primary);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -5490,7 +5418,7 @@
         font-weight: 500;
     }
 
-    .operation-parameter-context-menu-path {
+    :global(.operation-parameter-context-menu-path) {
         padding: 1px 12px 6px;
         border-bottom: 1px solid var(--nn-color-border-light);
         color: var(--nn-color-text-muted);
@@ -5498,11 +5426,11 @@
         font-size: 10px;
     }
 
-    .operation-parameter-context-menu-list {
+    :global(.operation-parameter-context-menu-list) {
         border-inline-end: 0;
     }
 
-    .operation-parameter-context-menu-list :deep(.nn-menu-item) {
+    :global(.operation-parameter-context-menu-list .nn-menu-item) {
         height: 30px;
         min-height: 30px;
         margin: 2px 4px;
@@ -5511,11 +5439,11 @@
         line-height: 24px;
     }
 
-    .operation-parameter-context-menu-list :deep(.nn-menu-divider) {
+    :global(.operation-parameter-context-menu-list .nn-menu-divider) {
         margin: 4px 0;
     }
 
-    .operation-parameter-context-menu-hint {
+    :global(.operation-parameter-context-menu-hint) {
         padding: 6px 12px 4px;
         border-top: 1px solid var(--nn-color-border-light);
         color: var(--nn-color-text-muted);

@@ -182,7 +182,7 @@
                     <nn-spin :spinning="routeDetailLoading">
                         <div v-if="routeDetailLoading && !currentDetails" class="route-detail-loading" />
                         <nn-empty v-else-if="!currentDetails" description="暂无路由详情" />
-                        <pre v-else class="route-detail-json">{{ JSON.stringify(currentDetails, null, 2) }}</pre>
+                        <nn-json-viewer v-else class="route-detail-json" :value="currentDetails" wrap />
                     </nn-spin>
                 </nn-tab-pane>
                 <nn-tab-pane key="history" tab="事件轨迹">
@@ -194,9 +194,7 @@
                     />
                 </nn-tab-pane>
             </nn-tabs>
-            <pre v-else-if="currentDetails" class="route-detail-json">{{
-                JSON.stringify(currentDetails, null, 2)
-            }}</pre>
+            <nn-json-viewer v-else-if="currentDetails" class="route-detail-json" :value="currentDetails" wrap />
         </nn-drawer>
     </div>
 </template>
@@ -1431,12 +1429,6 @@
 <style scoped>
     .route-detail-loading {
         min-height: 160px;
-    }
-
-    .route-detail-json {
-        margin: 0;
-        overflow-wrap: anywhere;
-        white-space: pre-wrap;
     }
 
     .bmp-full-page {

@@ -56,9 +56,11 @@
                     :help="validationErrors.packetData || ''"
                 >
                     <div class="packet-data-textarea-wrap">
-                        <ScrollTextarea
-                            v-model:model-value="formState.packetData"
+                        <nn-textarea
+                            v-model:value="formState.packetData"
                             height="100%"
+                            auto-scroll="end"
+                            resize="none"
                             placeholder="请输入16进制格式的报文内容, 如: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF 00 13 01"
                             :status="validationErrors.packetData ? 'error' : ''"
                         />
@@ -76,7 +78,7 @@
     </div>
 
     <!-- 报文结果查看器弹窗 -->
-    <PacketResultViewer
+    <nn-packet-viewer
         v-model:open="resultViewerVisible"
         :packet-data="formState.packetData"
         :raw-parse-result="rawParseResult"
@@ -121,8 +123,6 @@
 </template>
 
 <script setup>
-    import ScrollTextarea from '../../components/ScrollTextarea.vue';
-    import PacketResultViewer from '../../components/PacketResultViewer.vue';
     import { ref, onMounted } from 'vue';
     import { notify } from '../../utils/notify';
     import { FormValidator, createPacketDataValidationRules } from '../../utils/validationCommon';

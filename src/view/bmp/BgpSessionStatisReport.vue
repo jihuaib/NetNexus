@@ -87,7 +87,7 @@
             width="520px"
             @close="closeDetailsDrawer"
         >
-            <pre v-if="currentDetails">{{ JSON.stringify(currentDetails, null, 2) }}</pre>
+            <nn-json-viewer v-if="currentDetails" :value="currentDetails" wrap />
         </nn-drawer>
     </div>
 </template>

@@ -315,16 +315,12 @@
                     <span>{{ profileDataLoad.message }}</span>
                     <span>{{ profileDataLoad.percent }}%</span>
                 </div>
-                <div
-                    class="profile-data-load-track"
-                    role="progressbar"
-                    :aria-valuenow="profileDataLoad.percent"
-                    aria-valuemin="0"
-                    aria-valuemax="100"
+                <nn-progress
+                    :percent="profileDataLoad.percent"
                     :aria-label="profileDataLoad.message"
-                >
-                    <span class="profile-data-load-bar" :style="{ width: `${profileDataLoad.percent}%` }" />
-                </div>
+                    :status="profileDataLoad.status === 'error' ? 'error' : 'active'"
+                    :stroke-width="4"
+                />
                 <div v-if="profileDataLoadTerminal" class="profile-data-load-summary">
                     <span>模型 {{ profileDataLoad.moduleCount }}</span>
                     <span>Schema 模块 {{ profileDataLoad.workspaceModuleCount }}</span>
@@ -1430,21 +1426,6 @@
     .profile-data-load-detail > span:last-child {
         flex: none;
         font-variant-numeric: tabular-nums;
-    }
-
-    .profile-data-load-track {
-        height: 4px;
-        overflow: hidden;
-        border-radius: 2px;
-        background: var(--nn-color-bg-progress);
-    }
-
-    .profile-data-load-bar {
-        display: block;
-        height: 100%;
-        border-radius: inherit;
-        background: var(--nn-gradient-progress);
-        transition: width 0.2s ease;
     }
 
     .profile-data-load-actions {

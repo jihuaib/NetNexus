@@ -173,7 +173,12 @@
                                     </nn-tab-pane>
                                     <nn-tab-pane key="body" tab="请求体">
                                         <div class="request-body-pane">
-                                            <ScrollTextarea v-model:model-value="activeApi.body" height="100%" />
+                                            <nn-textarea
+                                                v-model:value="activeApi.body"
+                                                height="100%"
+                                                auto-scroll="end"
+                                                resize="none"
+                                            />
                                         </div>
                                     </nn-tab-pane>
                                 </nn-tabs>
@@ -197,12 +202,20 @@
                                 />
                                 <nn-tabs v-model:active-key="responseTabKey" size="small" class="response-tabs">
                                     <nn-tab-pane key="body" tab="响应体">
-                                        <ScrollTextarea :model-value="activeApi.responseBody" height="100%" readonly />
+                                        <nn-textarea
+                                            :value="activeApi.responseBody"
+                                            height="100%"
+                                            auto-scroll="end"
+                                            resize="none"
+                                            readonly
+                                        />
                                     </nn-tab-pane>
                                     <nn-tab-pane key="headers" tab="响应头">
-                                        <ScrollTextarea
-                                            :model-value="activeApi.responseHeaders"
+                                        <nn-textarea
+                                            :value="activeApi.responseHeaders"
                                             height="100%"
+                                            auto-scroll="end"
+                                            resize="none"
                                             readonly
                                         />
                                     </nn-tab-pane>
@@ -229,8 +242,6 @@
         SaveOutlined,
         SendOutlined
     } from 'netnexus-ui/icons';
-
-    import ScrollTextarea from '../../components/ScrollTextarea.vue';
 
     defineOptions({
         name: 'HttpApiTester'

@@ -144,10 +144,10 @@ npm run release:mac:universal # 构建并发布 macOS universal 版本
 **组件** (`src/components/`):
 - `SettingsDialog.vue`: 全局设置对话框
 - `UpdateNotification.vue`: 更新通知界面
-- `PacketResultViewer.vue`: 报文分析显示
-- `CodeEditor.vue`: 代码编辑组件
-- `CustomPktDrawer.vue`: 自定义报文抽屉
-- `ScrollTextarea.vue`: 可滚动文本区域组件
+- `BgpIpv4AdvancedRouteModal.vue`、`BgpRandomAsPathFields.vue`、`BgpRouteDetailDrawer.vue`: BGP 业务组件
+- `BmpRouteEventTimeline.vue`: BMP 路由事件时间线
+- `RouteViewsImportModal.vue`、`Rpki*ImportModal.vue`: 协议数据导入组件
+- 通用组件（报文查看、XML/JSON 展示、进度、右键菜单、文本抽屉等）由 `netnexus-ui` npm 包提供
 
 **常量** (`src/const/` 和 `electron/const/`):
 - 前后端之间镜像的协议特定常量
