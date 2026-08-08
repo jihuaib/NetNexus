@@ -1118,31 +1118,45 @@ function testCiRuntimeInstallOrdering() {
     );
 
     const macTestJobSource = getWorkflowJobSource('.github/workflows/test.yml', 'e2e-macos', 'e2e-windows');
-    for (const [jobSource, workflowFile] of [
-        [macTestJobSource, '.github/workflows/test.yml'],
+    const windowsJobSource = getWorkflowJobSource('.github/workflows/test.yml', 'e2e-windows', null);
+    const windowsReleaseJobSource = getWorkflowJobSource(
+        '.github/workflows/release.yml',
+        'build-windows',
+        'build-macos'
+    );
+    for (const [jobSource, workflowFile, platformName] of [
+        [macTestJobSource, '.github/workflows/test.yml', 'macOS'],
         [
             getWorkflowJobSource('.github/workflows/release.yml', 'build-macos', 'publish'),
-            '.github/workflows/release.yml'
-        ]
+            '.github/workflows/release.yml',
+            'macOS'
+        ],
+        [windowsJobSource, '.github/workflows/test.yml', 'Windows'],
+        [windowsReleaseJobSource, '.github/workflows/release.yml', 'Windows']
     ]) {
         assert.equal(
             Array.from(jobSource.matchAll(/BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS:\s*['"]20000['"]/g)).length,
             2,
-            `${workflowFile} must apply the hosted macOS performance budget to both CI test passes`
+            `${workflowFile} must apply the hosted ${platformName} performance budget to both CI test passes`
         );
         assert.match(
             jobSource,
-            /- name: Run macOS tests\s+run: npm test\s+env:\s+BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS:\s*['"]20000['"]/,
-            `${workflowFile} must scope the hosted-runner budget to the normal macOS test step`
+            new RegExp(
+                `- name: Run ${platformName} tests\\s+run: npm test\\s+env:\\s+` +
+                    `BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS:\\s*['"]20000['"]`
+            ),
+            `${workflowFile} must scope the hosted-runner budget to the normal ${platformName} test step`
         );
         assert.match(
             jobSource,
-            /- name: Run macOS minified CI tests\s+run: npm run test:ci:minified\s+env:\s+BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS:\s*['"]20000['"]/,
-            `${workflowFile} must scope the hosted-runner budget to the minified macOS test step`
+            new RegExp(
+                `- name: Run ${platformName} minified CI tests\\s+run: npm run test:ci:minified\\s+env:\\s+` +
+                    `BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS:\\s*['"]20000['"]`
+            ),
+            `${workflowFile} must scope the hosted-runner budget to the minified ${platformName} test step`
         );
     }
 
-    const windowsJobSource = getWorkflowJobSource('.github/workflows/test.yml', 'e2e-windows', null);
     assert.match(
         windowsJobSource,
         /- name: Install dependencies\s+run: npm ci/,
@@ -1153,14 +1167,6 @@ function testCiRuntimeInstallOrdering() {
         /(?:VCPKG_ROOT|VCPKG_INSTALLATION_ROOT):\s*['"]{2}/,
         'Windows CI must not hide the runner-provided vcpkg installation from the build'
     );
-    assert.doesNotMatch(windowsJobSource, /BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS/);
-
-    const windowsReleaseJobSource = getWorkflowJobSource(
-        '.github/workflows/release.yml',
-        'build-windows',
-        'build-macos'
-    );
-    assert.doesNotMatch(windowsReleaseJobSource, /BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS/);
 
     const performanceTestSource = fs.readFileSync(
         path.join(projectRoot, 'test', 'ci', 'bmp_route_assurance_performance.js'),
@@ -1169,7 +1175,7 @@ function testCiRuntimeInstallOrdering() {
     assert.match(
         performanceTestSource,
         /FIRST_BUILD_BUDGET_MS\s*=\s*Number\([^\r\n]+\|\|\s*15_000\)/,
-        'local and non-macOS CI must retain the 15-second default performance budget'
+        'local/default runs must retain the 15-second performance budget'
     );
 
     const macReleaseJobSource = getWorkflowJobSource('.github/workflows/release.yml', 'build-macos', 'publish');
