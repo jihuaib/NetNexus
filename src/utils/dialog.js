@@ -1,4 +1,4 @@
-import { confirmDialogService } from '../ui/services/confirmDialogService';
+import { confirmDialogService } from 'netnexus-ui/services';
 
 export const dialog = {
     confirm(options) {

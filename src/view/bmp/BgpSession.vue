@@ -206,7 +206,7 @@
     import { useRoute } from 'vue-router';
     import { notify } from '../../utils/notify';
     import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
-    import { ProfileOutlined } from '../../ui/icons';
+    import { ProfileOutlined } from 'netnexus-ui/icons';
     import BmpRouteEventTimeline from '../../components/BmpRouteEventTimeline.vue';
     import {
         BMP_SESSION_TYPE_NAME,

@@ -192,7 +192,7 @@
 
 <script setup>
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
-    import { InfoCircleOutlined } from '../../ui/icons';
+    import { InfoCircleOutlined } from 'netnexus-ui/icons';
     import { ref, computed, onMounted } from 'vue';
     import { notify } from '../../utils/notify';
     import { FormValidator, createTcpAoMacValidationRules } from '../../utils/validationCommon';

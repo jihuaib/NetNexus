@@ -96,8 +96,8 @@
         MenuUnfoldOutlined,
         SettingOutlined,
         ToolOutlined
-    } from '../ui/icons';
-    import { moduleNavigationIcons } from '../ui/navigationIcons';
+    } from 'netnexus-ui/icons';
+    import { moduleNavigationIcons } from '../const/navigationIcons';
 
     import SettingsDialog from '../components/SettingsDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';

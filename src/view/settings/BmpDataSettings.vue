@@ -64,7 +64,7 @@
 
 <script setup>
     import { computed, onActivated, ref } from 'vue';
-    import { DeleteOutlined, ReloadOutlined } from '../../ui/icons';
+    import { DeleteOutlined, ReloadOutlined } from 'netnexus-ui/icons';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
 

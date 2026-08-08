@@ -218,7 +218,6 @@
     "devDependencies": {
         "@babel/eslint-parser": "^7.23.10",
         "@babel/preset-env": "^7.27.1",
-        "@lucide/vue": "^1.24.0",
         "@playwright/test": "1.44.1",
         "@vitejs/plugin-vue": "^4.2.3",
         "concurrently": "^7.6.0",
@@ -248,6 +247,7 @@
         "iconv-lite": "^0.6.3",
         "ipaddr.js": "^2.1.0",
         "net-snmp": "^3.26.3",
+        "netnexus-ui": "0.1.0",
         "ssh2": "^1.15.0"
     }
 }

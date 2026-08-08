@@ -37,23 +37,6 @@
     box-shadow: inset 0 0 0 2px var(--nn-color-primary-hover) !important;
 }
 
-.nn-icon {
-    display: inline-block;
-    flex-shrink: 0;
-    color: currentcolor;
-    vertical-align: -0.125em;
-}
-
-.nn-icon-spin {
-    animation: nn-icon-spin 1s linear infinite;
-}
-
-@keyframes nn-icon-spin {
-    to {
-        transform: rotate(360deg);
-    }
-}
-
 .main-menu .nn-icon {
     color: var(--nn-color-text-sider) !important;
 }

@@ -209,7 +209,7 @@
 
 <script setup>
     import { computed, nextTick, ref, watch } from 'vue';
-    import { CopyOutlined, DeleteOutlined, DownloadOutlined } from '../../ui/icons';
+    import { CopyOutlined, DeleteOutlined, DownloadOutlined } from 'netnexus-ui/icons';
     import { notify } from '../../utils/notify';
     import XmlCodeEditor from './XmlCodeEditor.vue';
     import { formatXmlForDisplay, invokeBridge } from './yangUiUtils';

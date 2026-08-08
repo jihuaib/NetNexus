@@ -193,7 +193,7 @@
 <script setup>
     import { ref, reactive, onActivated, onBeforeUnmount, onDeactivated, onMounted } from 'vue';
     import { notify } from '../../utils/notify';
-    import { DeleteOutlined, EyeOutlined } from '../../ui/icons';
+    import { DeleteOutlined, EyeOutlined } from 'netnexus-ui/icons';
 
     import { SNMP_TRAP_STATUS, SNMP_SUB_EVT_TYPES, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
     import dayjs from 'dayjs';

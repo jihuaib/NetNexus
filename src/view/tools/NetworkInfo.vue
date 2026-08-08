@@ -347,7 +347,7 @@
 <script setup>
     import { ref, reactive, computed, onMounted, onActivated, watch } from 'vue';
     import { notify } from '../../utils/notify';
-    import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '../../ui/icons';
+    import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from 'netnexus-ui/icons';
 
     import {
         FormValidator,

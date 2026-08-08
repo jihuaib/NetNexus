@@ -40,7 +40,7 @@
         DownloadOutlined,
         ExclamationCircleOutlined,
         LoadingOutlined
-    } from '../ui/icons';
+    } from 'netnexus-ui/icons';
 
     import EventBus from '../utils/eventBus';
     import { TOOLS_EVENT_PAGE_ID } from '../const/toolsConst';

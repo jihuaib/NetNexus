@@ -162,7 +162,7 @@
     import { computed, ref, onMounted, watch } from 'vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { UploadOutlined } from '../../ui/icons';
+    import { UploadOutlined } from 'netnexus-ui/icons';
     import RpkiRoaImportModal from '../../components/RpkiRoaImportModal.vue';
     import { FormValidator, createRpkiRoaConfigValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES } from '../../const/rpkiConst';

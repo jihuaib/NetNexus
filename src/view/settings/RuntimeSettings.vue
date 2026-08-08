@@ -51,7 +51,7 @@
 <script setup>
     import { computed, onActivated, onMounted } from 'vue';
     import { YANG_COMPILER_STATUS_META } from '../../const/yangConst';
-    import { ReloadOutlined } from '../../ui/icons';
+    import { ReloadOutlined } from 'netnexus-ui/icons';
     import { notify } from '../../utils/notify';
     import { useYangCompilerStatus } from '../yang/yangCompilerStatus';
 

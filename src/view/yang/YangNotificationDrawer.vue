@@ -349,7 +349,7 @@
         CopyOutlined,
         DeleteOutlined,
         DownloadOutlined
-    } from '../../ui/icons';
+    } from 'netnexus-ui/icons';
     import { notify } from '../../utils/notify';
     import XmlCodeEditor from './XmlCodeEditor.vue';
     import { formatXmlForDisplay } from './yangUiUtils';

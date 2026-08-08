@@ -247,7 +247,7 @@
         ReloadOutlined,
         StepForwardOutlined,
         UnorderedListOutlined
-    } from '../../ui/icons';
+    } from 'netnexus-ui/icons';
     import { usePaneResize } from '../yang/usePaneResize';
     import SnmpMibOperations from './SnmpMibOperations.vue';
 

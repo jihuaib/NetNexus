@@ -420,7 +420,7 @@
     import ipaddr from 'ipaddr.js';
     import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
     import { useRoute } from 'vue-router';
-    import { EyeOutlined, RouteOutlined, SearchOutlined } from '../../ui/icons';
+    import { EyeOutlined, RouteOutlined, SearchOutlined } from 'netnexus-ui/icons';
     import { ADDRESS_FAMILY_NAME } from '../../const/bgpConst';
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
     import EventBus from '../../utils/eventBus';

@@ -213,7 +213,7 @@
 <script setup>
     import { computed, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
     import { DEFAULT_VALUES } from '../../const/snmpConst';
-    import { ReloadOutlined, SendOutlined } from '../../ui/icons';
+    import { ReloadOutlined, SendOutlined } from 'netnexus-ui/icons';
     import { notify } from '../../utils/notify';
     import { usePaneResize } from '../yang/usePaneResize';
 

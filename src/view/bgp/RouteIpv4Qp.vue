@@ -212,7 +212,7 @@
     import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from '../../ui/icons';
+    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from 'netnexus-ui/icons';
 
     import { BGP_ADDR_FAMILY, BGP_QP_ROUTE_GROWTH_MODE, BGP_QP_BSID_MODE } from '../../const/bgpConst';
     import { FormValidator, createBgpIpv4QpRouteConfigValidationRules } from '../../utils/validationCommon';

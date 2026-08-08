@@ -251,7 +251,7 @@
     import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from '../../ui/icons';
+    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from 'netnexus-ui/icons';
 
     import {
         BGP_ADDR_FAMILY,

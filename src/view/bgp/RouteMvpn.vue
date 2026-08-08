@@ -274,7 +274,7 @@
     import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from '../../ui/icons';
+    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from 'netnexus-ui/icons';
 
     import { BGP_ADDR_FAMILY, DEFAULT_VALUES, BGP_MVPN_ROUTE_TYPE } from '../../const/bgpConst';
     import { FormValidator, createBgpMvpnRouteConfigValidationRules } from '../../utils/validationCommon';

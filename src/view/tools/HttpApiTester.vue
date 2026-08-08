@@ -228,7 +228,7 @@
         ReloadOutlined,
         SaveOutlined,
         SendOutlined
-    } from '../../ui/icons';
+    } from 'netnexus-ui/icons';
 
     import ScrollTextarea from '../../components/ScrollTextarea.vue';
 

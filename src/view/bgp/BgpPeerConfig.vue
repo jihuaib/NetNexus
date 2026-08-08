@@ -561,7 +561,7 @@
         DEFAULT_VALUES,
         IP_TYPE
     } from '../../const/bgpConst';
-    import { DeleteOutlined, SettingOutlined, UnorderedListOutlined } from '../../ui/icons';
+    import { DeleteOutlined, SettingOutlined, UnorderedListOutlined } from 'netnexus-ui/icons';
 
     import EventBus from '../../utils/eventBus';
     import CustomPktDrawer from '../../components/CustomPktDrawer.vue';

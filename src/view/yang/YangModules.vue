@@ -471,7 +471,7 @@
         LoadingOutlined,
         ReloadOutlined,
         SearchOutlined
-    } from '../../ui/icons';
+    } from 'netnexus-ui/icons';
     import YangCurrentProfile from './YangCurrentProfile.vue';
     import { usePaneResize } from './usePaneResize';
     import { useYangCompilerStatus } from './yangCompilerStatus';

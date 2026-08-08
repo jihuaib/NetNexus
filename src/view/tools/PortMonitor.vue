@@ -101,7 +101,7 @@
     import { ref, computed, onActivated, onDeactivated } from 'vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { ReloadOutlined } from '../../ui/icons';
+    import { ReloadOutlined } from 'netnexus-ui/icons';
     defineOptions({
         name: 'PortMonitor'
     });

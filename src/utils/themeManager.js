@@ -1,10 +1,10 @@
-import { computed, ref, watch } from 'vue';
 import {
     DEFAULT_THEME_PRESET,
     THEME_PRESET_STORAGE_KEY,
-    getResolvedThemeFromPreset,
-    normalizeThemePreset
-} from '../theme/themeConst';
+    getThemeState,
+    normalizeThemePreset,
+    setThemePreset
+} from 'netnexus-ui/theme';
 
 function canUseDom() {
     return typeof window !== 'undefined' && typeof document !== 'undefined';
@@ -23,62 +23,14 @@ function readLocalStorage(key) {
     }
 }
 
-function writeLocalStorage(key, value) {
-    if (!canUseDom()) {
-        return;
-    }
-
-    try {
-        window.localStorage.setItem(key, value);
-    } catch (error) {
-        console.warn('保存主题设置失败:', error);
-    }
-}
-
 function readStoredThemePreset() {
     return normalizeThemePreset(readLocalStorage(THEME_PRESET_STORAGE_KEY), DEFAULT_THEME_PRESET);
 }
 
-const themePreset = ref(readStoredThemePreset());
-const resolvedTheme = computed(() => getResolvedThemeFromPreset(themePreset.value));
-
-function applyThemeAttributes() {
-    if (!canUseDom()) {
-        return;
-    }
-
-    const normalizedPreset = normalizeThemePreset(themePreset.value);
-    const root = document.documentElement;
-    root.dataset.theme = getResolvedThemeFromPreset(normalizedPreset);
-    root.dataset.themePreset = normalizedPreset;
-    root.style.colorScheme = root.dataset.theme;
-}
-
-watch(themePreset, applyThemeAttributes, { immediate: true });
-
-export function initializeTheme() {
-    applyThemeAttributes();
-}
-
-export function getThemeState() {
-    return {
-        themePreset,
-        resolvedTheme
-    };
-}
-
-export function setThemePreset(preset, options = {}) {
-    const normalizedPreset = normalizeThemePreset(preset);
-    themePreset.value = normalizedPreset;
-
-    if (options.persistLocal !== false) {
-        writeLocalStorage(THEME_PRESET_STORAGE_KEY, normalizedPreset);
-    }
-
-    return normalizedPreset;
-}
+export { getThemeState, setThemePreset };
 
 export async function syncThemeFromGeneralSettings() {
+    const { themePreset } = getThemeState();
     if (!canUseDom() || !window.commonApi || typeof window.commonApi.getGeneralSettings !== 'function') {
         return themePreset.value;
     }

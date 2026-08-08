@@ -55,8 +55,8 @@
     import { ref, onMounted } from 'vue';
     import { notify } from '../../utils/notify';
     import { DEFAULT_LOG_SETTINGS } from '../../const/toolsConst';
-    import { APP_THEME_PRESET_OPTIONS, DEFAULT_THEME_PRESET, normalizeThemePreset } from '../../theme/themeConst';
-    import { CheckCircleOutlined } from '../../ui/icons';
+    import { APP_THEME_PRESET_OPTIONS, DEFAULT_THEME_PRESET, normalizeThemePreset } from 'netnexus-ui/theme';
+    import { CheckCircleOutlined } from 'netnexus-ui/icons';
     import { getThemeState, setThemePreset } from '../../utils/themeManager';
 
     const { themePreset } = getThemeState();

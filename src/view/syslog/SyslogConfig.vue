@@ -115,7 +115,7 @@
 <script setup>
     import { ref, computed, onMounted, onActivated, onDeactivated } from 'vue';
     import { notify } from '../../utils/notify';
-    import { ExternalLinkOutlined } from '../../ui/icons';
+    import { ExternalLinkOutlined } from 'netnexus-ui/icons';
     import { DEFAULT_VALUES, SYSLOG_SUB_EVT_TYPES, SYSLOG_EVENT_PAGE_ID } from '../../const/syslogConst';
     import EventBus from '../../utils/eventBus';
 

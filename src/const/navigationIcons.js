@@ -16,7 +16,7 @@ import {
     SwapOutlined,
     ToolOutlined,
     WifiOutlined
-} from './icons';
+} from 'netnexus-ui/icons';
 
 export const moduleNavigationIcons = Object.freeze({
     tools: AppstoreOutlined,

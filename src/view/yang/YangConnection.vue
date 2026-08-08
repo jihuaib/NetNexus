@@ -369,7 +369,7 @@
     import EventBus from '../../utils/eventBus';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { ApiOutlined, CloudServerOutlined, DeleteOutlined, PlusOutlined, SaveOutlined } from '../../ui/icons';
+    import { ApiOutlined, CloudServerOutlined, DeleteOutlined, PlusOutlined, SaveOutlined } from 'netnexus-ui/icons';
     import {
         clonePlain,
         formatDateTime,

@@ -1,7 +1,8 @@
 import { createApp, nextTick } from 'vue';
-import './assets/styles/reset.css';
-import './assets/styles/theme.css';
-import './assets/styles/ui-services.css';
+import NetNexusUi, { initializeTheme } from 'netnexus-ui';
+import 'netnexus-ui/reset.css';
+import 'netnexus-ui/base.css';
+import 'netnexus-ui/style.css';
 import './assets/styles/common.css';
 import App from './App.vue';
 import router from './router';
@@ -9,8 +10,7 @@ import store from './store';
 import EventBus from './utils/eventBus';
 import { YANG_EVENT } from './const/yangConst';
 import { installNetconfNotificationCollector } from './view/yang/useNetconfNotificationHistory';
-import { registerUiComponents } from './ui/registerUiComponents';
-import { initializeTheme, syncThemeFromGeneralSettings } from './utils/themeManager';
+import { syncThemeFromGeneralSettings } from './utils/themeManager';
 // 引入弹出框缩放自适应处理工具
 import './utils/modalResizeHandler';
 
@@ -34,7 +34,7 @@ if (import.meta.hot) import.meta.hot.dispose(disposeGlobalEventListeners);
 initializeTheme();
 
 const app = createApp(App);
-registerUiComponents(app);
+app.use(NetNexusUi);
 
 function waitForPaint() {
     return new Promise(resolve => {

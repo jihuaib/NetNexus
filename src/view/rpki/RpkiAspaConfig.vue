@@ -116,7 +116,7 @@
     import { computed, ref, onMounted } from 'vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { UploadOutlined } from '../../ui/icons';
+    import { UploadOutlined } from 'netnexus-ui/icons';
     import RpkiAspaImportModal from '../../components/RpkiAspaImportModal.vue';
     import { FormValidator, createRpkiAspaValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES, RPKI_ASPA_AFI_FLAGS } from '../../const/rpkiConst';

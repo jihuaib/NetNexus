@@ -93,7 +93,7 @@
 <script setup>
     import { ref, watch, onMounted, computed } from 'vue';
     import { notify } from '../utils/notify';
-    import { FileSearchOutlined } from '../ui/icons';
+    import { FileSearchOutlined } from 'netnexus-ui/icons';
     const props = defineProps({
         open: {
             type: Boolean,

@@ -291,7 +291,7 @@
         SafetyOutlined,
         SendOutlined,
         UnorderedListOutlined
-    } from '../../ui/icons';
+    } from 'netnexus-ui/icons';
     import YangExecutionHistoryDrawer from './YangExecutionHistoryDrawer.vue';
     import YangOperations from './YangOperations.vue';
     import YangCurrentProfile from './YangCurrentProfile.vue';

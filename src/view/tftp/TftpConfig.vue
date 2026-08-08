@@ -150,7 +150,7 @@
 <script setup>
     import { ref, onMounted, onActivated, onDeactivated } from 'vue';
     import { notify } from '../../utils/notify';
-    import { FolderOutlined } from '../../ui/icons';
+    import { FolderOutlined } from 'netnexus-ui/icons';
     import { DEFAULT_VALUES, TFTP_SUB_EVT_TYPES, TFTP_EVENT_PAGE_ID } from '../../const/tftpConst';
     import EventBus from '../../utils/eventBus';
 

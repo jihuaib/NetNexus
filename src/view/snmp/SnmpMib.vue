@@ -235,7 +235,7 @@
         InfoCircleOutlined,
         ReloadOutlined,
         SaveOutlined
-    } from '../../ui/icons';
+    } from 'netnexus-ui/icons';
     import EventBus from '../../utils/eventBus';
     import { notify } from '../../utils/notify';
 

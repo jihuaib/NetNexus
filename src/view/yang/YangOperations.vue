@@ -1209,7 +1209,7 @@
         ReloadOutlined,
         SendOutlined,
         UnorderedListOutlined
-    } from '../../ui/icons';
+    } from 'netnexus-ui/icons';
     import XmlCodeEditor from './XmlCodeEditor.vue';
     import XmlHighlight from './XmlHighlight.vue';
     import YangExecutionHistoryDrawer from './YangExecutionHistoryDrawer.vue';

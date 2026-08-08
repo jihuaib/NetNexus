@@ -55,7 +55,7 @@
 
 <script setup>
     import { ref, computed, watch } from 'vue';
-    import { settingsNavigationIcons } from '../ui/navigationIcons';
+    import { settingsNavigationIcons } from '../const/navigationIcons';
 
     import GeneralSettings from '../view/settings/GeneralSettings.vue';
     import ToolsSettings from '../view/settings/ToolsSettings.vue';

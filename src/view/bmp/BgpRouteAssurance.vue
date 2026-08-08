@@ -276,7 +276,7 @@
     import { useRouter } from 'vue-router';
     import { ADDRESS_FAMILY_NAME } from '../../const/bgpConst';
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
-    import { RouteOutlined, SafetyOutlined, SearchOutlined } from '../../ui/icons';
+    import { RouteOutlined, SafetyOutlined, SearchOutlined } from 'netnexus-ui/icons';
     import EventBus from '../../utils/eventBus';
     import { notify } from '../../utils/notify';
 

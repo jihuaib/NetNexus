@@ -2,7 +2,7 @@
 
 [![Vue.js](https://img.shields.io/badge/Vue.js-3.x-4FC08D?style=flat-square&logo=vue.js)](https://vuejs.org/)
 [![Electron](https://img.shields.io/badge/Electron-15+-47848F?style=flat-square&logo=electron)](https://electronjs.org/)
-[![NetNexus UI](https://img.shields.io/badge/UI-NetNexus-FF7A1A?style=flat-square)](src/ui)
+[![NetNexus UI](https://img.shields.io/badge/UI-NetNexus-FF7A1A?style=flat-square)](https://github.com/jihuaib/NetNexusUI)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
 NetNexus 是一个基于 Vue 3、自研 NetNexus UI 和 Electron 的本地网络工具集。项目当前重点是协议联调、报文解析、轻量服务器和本机调试工具。
@@ -35,6 +35,8 @@ NetNexus 是一个基于 Vue 3、自研 NetNexus UI 和 Electron 的本地网络
 npm install
 npm run dev
 ```
+
+渲染层通过精确锁定的 npm 依赖 `netnexus-ui@0.1.0` 消费独立的 [NetNexus UI](https://github.com/jihuaib/NetNexusUI)。组件源码、主题样式与发布验证均由独立仓库维护。
 
 常用脚本：
 
@@ -119,7 +121,7 @@ npm run frr:bmp:lab -- stop
 - Vue 3
 - Vue Router 4
 - Vuex 4
-- NetNexus UI（项目内自研组件库）
+- [NetNexus UI](https://github.com/jihuaib/NetNexusUI)（独立 npm 组件与主题包）
 - Electron 15
 - Vite
 - Node.js worker_threads

@@ -1,4 +1,4 @@
-import { notificationService } from '../ui/services/notificationService';
+import { notificationService } from 'netnexus-ui/services';
 
 export const notify = {
     success(content, duration, onClose) {
