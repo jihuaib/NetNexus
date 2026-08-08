@@ -6,15 +6,7 @@
             role="tablist"
             :aria-orientation="tabPosition === 'left' ? 'vertical' : 'horizontal'"
         >
-            <div
-                ref="navWrapRef"
-                class="nn-tabs-nav-wrap"
-                :class="{
-                    'nn-scrollbar-x-active': scrollbarXActive,
-                    'nn-scrollbar-y-active': scrollbarYActive
-                }"
-                @scroll.passive="handleScroll"
-            >
+            <div class="nn-tabs-nav-wrap">
                 <div class="nn-tabs-nav-list">
                     <button
                         v-for="tabPane in panes"
@@ -53,7 +45,6 @@
 
 <script setup>
     import { cloneVNode, computed, defineComponent, Fragment, ref, useSlots, watch } from 'vue';
-    import { useAutoHideScrollbar } from '../useAutoHideScrollbar';
     import NnRenderContent from './NnRenderContent';
     import NnTabPane from './NnTabPane.vue';
 
@@ -83,8 +74,6 @@
     const emit = defineEmits(['update:activeKey', 'change']);
 
     const slots = useSlots();
-    const navWrapRef = ref(null);
-    const { scrollbarXActive, scrollbarYActive, handleScroll } = useAutoHideScrollbar(navWrapRef);
     const internalActiveKey = ref(undefined);
     const hasControlledActiveKey = computed(() => props.activeKey !== undefined && props.activeKey !== null);
     const currentActiveKey = computed(() => (hasControlledActiveKey.value ? props.activeKey : internalActiveKey.value));
@@ -222,41 +211,6 @@
         align-items: stretch;
         overflow-x: auto;
         overflow-y: hidden;
-        scrollbar-color: transparent transparent;
-        scrollbar-width: thin;
-    }
-
-    .nn-tabs-nav-wrap::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
-    }
-
-    .nn-tabs-nav-wrap::-webkit-scrollbar-track,
-    .nn-tabs-nav-wrap::-webkit-scrollbar-corner {
-        background: transparent;
-    }
-
-    .nn-tabs-nav-wrap::-webkit-scrollbar-thumb {
-        border-radius: 999px;
-        background: transparent;
-    }
-
-    .nn-tabs-nav-wrap:hover,
-    .nn-tabs-nav-wrap.nn-scrollbar-x-active,
-    .nn-tabs-nav-wrap.nn-scrollbar-y-active {
-        scrollbar-color: var(--nn-color-text-placeholder) transparent;
-    }
-
-    .nn-tabs-nav-wrap:hover::-webkit-scrollbar-thumb:horizontal,
-    .nn-tabs-nav-wrap.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal,
-    .nn-tabs-nav-wrap.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical {
-        background: var(--nn-color-text-placeholder);
-    }
-
-    .nn-tabs-nav-wrap:hover::-webkit-scrollbar-thumb:horizontal:hover,
-    .nn-tabs-nav-wrap.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal:hover,
-    .nn-tabs-nav-wrap.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical:hover {
-        background: var(--nn-color-text-muted);
     }
 
     .nn-tabs-nav-list {

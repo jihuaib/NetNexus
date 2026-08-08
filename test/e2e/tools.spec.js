@@ -68,7 +68,7 @@ test.describe('Tools pages', () => {
         await expect(emptyMacCell.locator('.nn-tag')).toHaveCount(0);
     });
 
-    test('only shows the port table scrollbar for the axis being scrolled', async ({ page }) => {
+    test('keeps the port table scrollable with native scrollbars', async ({ page }) => {
         await page.setViewportSize({ width: 1000, height: 800 });
         await page.goto('/#/tools/port-monitor');
         await expectAnyTextVisible(page, '3000', { timeout: 10000 });
@@ -95,9 +95,6 @@ test.describe('Tools pages', () => {
         expect(initialGeometry.scrollTop).toBe(0);
         expect((await processHeader.boundingBox()).width).toBeGreaterThanOrEqual(178);
 
-        await tableContent.hover();
-        await expect(tableContent).not.toHaveClass(/nn-scrollbar-[xy]-active/u);
-        await tableContent.dispatchEvent('scroll');
         await expect(tableContent).not.toHaveClass(/nn-scrollbar-[xy]-active/u);
 
         const verticalScroll = await tableContent.evaluate(element => {
@@ -107,18 +104,16 @@ test.describe('Tools pages', () => {
             return { previousScrollTop, scrollTop: element.scrollTop };
         });
         expect(verticalScroll.scrollTop).toBeGreaterThan(verticalScroll.previousScrollTop);
-        await expect(tableContent).toHaveClass(/nn-scrollbar-y-active/u);
-        await expect(tableContent).not.toHaveClass(/nn-scrollbar-x-active/u);
-        await expect(tableContent).not.toHaveClass(/nn-scrollbar-y-active/u, { timeout: 2500 });
+        await expect(tableContent).not.toHaveClass(/nn-scrollbar-[xy]-active/u);
 
+        await tableContent.hover();
         await page.mouse.wheel(500, 0);
-        await expect(tableContent).toHaveClass(/nn-scrollbar-x-active/u);
-        await expect(tableContent).not.toHaveClass(/nn-scrollbar-y-active/u);
         await expect
             .poll(() =>
                 tableContent.evaluate(element => element.scrollWidth - element.clientWidth - element.scrollLeft)
             )
             .toBeLessThanOrEqual(1);
+        await expect(tableContent).not.toHaveClass(/nn-scrollbar-[xy]-active/u);
 
         const contentBox = await tableContent.boundingBox();
         const processBox = await processHeader.boundingBox();

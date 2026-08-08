@@ -9,16 +9,7 @@
             <div class="nn-spin-container" :class="{ 'nn-spin-container-loading': isLoading }">
                 <div class="nn-table">
                     <div class="nn-table-container">
-                        <div
-                            ref="contentRef"
-                            class="nn-table-content"
-                            :class="{
-                                'nn-scrollbar-x-active': scrollbarXActive,
-                                'nn-scrollbar-y-active': scrollbarYActive
-                            }"
-                            :style="contentStyle"
-                            @scroll.passive="handleScroll"
-                        >
+                        <div class="nn-table-content" :style="contentStyle">
                             <table :style="tableStyle">
                                 <colgroup>
                                     <col
@@ -208,7 +199,6 @@
 
 <script setup>
     import { Comment, computed, onBeforeUnmount, onMounted, ref, Text, useSlots, watch } from 'vue';
-    import { useAutoHideScrollbar } from '../useAutoHideScrollbar';
     import NnEmpty from './NnEmpty.vue';
     import NnRenderContent from './NnRenderContent';
 
@@ -257,8 +247,6 @@
 
     const emit = defineEmits(['change']);
     const slots = useSlots();
-    const contentRef = ref(null);
-    const { scrollbarXActive, scrollbarYActive, handleScroll } = useAutoHideScrollbar(contentRef);
     const localCurrentPage = ref(1);
     const localPageSize = ref(10);
     const quickPageInput = ref('1');
@@ -696,35 +684,6 @@
         border: 1px solid var(--nn-color-border-light);
         border-radius: 6px;
         background: var(--nn-color-bg-surface);
-        scrollbar-color: auto;
-        scrollbar-width: thin;
-    }
-
-    .nn-table-content::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
-    }
-
-    .nn-table-content::-webkit-scrollbar-track,
-    .nn-table-content::-webkit-scrollbar-corner {
-        background: transparent;
-    }
-
-    .nn-table-content::-webkit-scrollbar-thumb {
-        border-radius: 999px;
-        background: transparent;
-    }
-
-    .nn-table-content:hover::-webkit-scrollbar-thumb:horizontal,
-    .nn-table-content.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal,
-    .nn-table-content.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical {
-        background: var(--nn-color-text-placeholder);
-    }
-
-    .nn-table-content:hover::-webkit-scrollbar-thumb:horizontal:hover,
-    .nn-table-content.nn-scrollbar-x-active::-webkit-scrollbar-thumb:horizontal:hover,
-    .nn-table-content.nn-scrollbar-y-active::-webkit-scrollbar-thumb:vertical:hover {
-        background: var(--nn-color-text-muted);
     }
 
     table {

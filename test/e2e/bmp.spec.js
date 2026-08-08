@@ -120,18 +120,8 @@ async function expectBmpMonitorView(page, view, viewLabel, client) {
     await expect.poll(() => page.title()).toBe(`${viewLabel} · ${getBmpClientLabel(client)}`);
 }
 
-async function expectAutoHidingHorizontalScrollbar(locator) {
-    const isXActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-x-active'));
-    const isYActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-y-active'));
-
-    await expect.poll(isXActive, { timeout: 2500 }).toBe(false);
-    await expect.poll(isYActive).toBe(false);
-
-    await locator.hover();
-    await locator.dispatchEvent('pointermove');
-    await expect.poll(isXActive).toBe(false);
-    await expect.poll(isYActive).toBe(false);
-
+async function expectNativeHorizontalScrolling(locator) {
+    await expect(locator).toBeVisible();
     const scrollPosition = await locator.evaluate(element => {
         if (element.scrollWidth <= element.clientWidth && element.firstElementChild) {
             element.firstElementChild.style.minWidth = `${element.clientWidth + 100}px`;
@@ -140,15 +130,20 @@ async function expectAutoHidingHorizontalScrollbar(locator) {
         const previousScrollLeft = element.scrollLeft;
         element.scrollLeft = previousScrollLeft < maximumScrollLeft ? previousScrollLeft + 20 : previousScrollLeft - 20;
         element.dispatchEvent(new Event('scroll'));
-        return { maximumScrollLeft, previousScrollLeft, scrollLeft: element.scrollLeft };
+        return {
+            maximumScrollLeft,
+            previousScrollLeft,
+            scrollLeft: element.scrollLeft,
+            overflowX: getComputedStyle(element).overflowX,
+            hasCustomScrollbarState:
+                element.classList.contains('nn-scrollbar-x-active') ||
+                element.classList.contains('nn-scrollbar-y-active')
+        };
     });
     expect(scrollPosition.maximumScrollLeft).toBeGreaterThan(0);
     expect(scrollPosition.scrollLeft).not.toBe(scrollPosition.previousScrollLeft);
-    await expect.poll(isXActive).toBe(true);
-    await expect.poll(isYActive).toBe(false);
-
-    await expect.poll(isXActive, { timeout: 2500 }).toBe(false);
-    await expect.poll(isYActive).toBe(false);
+    expect(scrollPosition.overflowX).toBe('auto');
+    expect(scrollPosition.hasCustomScrollbarState).toBe(false);
 }
 
 async function expectBmpRouteLayout(page, pageType, pageTestId, detailTableTestId, routeTableTestId, client) {
@@ -196,12 +191,6 @@ async function expectBmpRouteLayout(page, pageType, pageTestId, detailTableTestI
                 detailHasHorizontalOverflow: Boolean(
                     detailContent && detailContent.scrollWidth > detailContent.clientWidth
                 ),
-                detailScrollbarHeight: detailContent
-                    ? Number.parseFloat(getComputedStyle(detailContent, '::-webkit-scrollbar').height)
-                    : Number.POSITIVE_INFINITY,
-                tabsScrollbarHeight: navWrap
-                    ? Number.parseFloat(getComputedStyle(navWrap, '::-webkit-scrollbar').height)
-                    : Number.POSITIVE_INFINITY,
                 detailLastRowBottomOverflow:
                     detailContent && detailContentRect && detailLastRowRect
                         ? detailLastRowRect.bottom - (detailContentRect.top + detailContent.clientHeight)
@@ -228,8 +217,6 @@ async function expectBmpRouteLayout(page, pageType, pageTestId, detailTableTestI
     expect(layout.detailActionCellWidth).toBeGreaterThanOrEqual(64);
     expect(layout.detailActionCellWidth).toBeLessThanOrEqual(80);
     expect(layout.detailHasHorizontalOverflow).toBe(true);
-    expect(layout.detailScrollbarHeight).toBe(6);
-    expect(layout.tabsScrollbarHeight).toBe(6);
     expect(layout.detailLastRowBottomOverflow).toBeLessThanOrEqual(1);
     expect(Math.abs(layout.pageTopGap - layout.pageBottomGap)).toBeLessThanOrEqual(1);
     expect(layout.routeContentHeight).toBeGreaterThan(200);
@@ -238,8 +225,8 @@ async function expectBmpRouteLayout(page, pageType, pageTestId, detailTableTestI
 
     const detailScrollbar = pageRoot.locator(`[data-testid="${detailTableTestId}"]:visible .nn-table-content`).first();
     const tabsScrollbar = pageRoot.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first();
-    await expectAutoHidingHorizontalScrollbar(detailScrollbar);
-    await expectAutoHidingHorizontalScrollbar(tabsScrollbar);
+    await expectNativeHorizontalScrolling(detailScrollbar);
+    await expectNativeHorizontalScrolling(tabsScrollbar);
 }
 
 test.describe('BMP pages', () => {

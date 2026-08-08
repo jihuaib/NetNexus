@@ -95,21 +95,8 @@ async function expectStandaloneMonitorLayout(page, root, pageType) {
     await expect(root.locator('.client-tabs')).toHaveCount(0);
 }
 
-async function expectScrollOnlyScrollbar(locator, axis) {
-    const isXActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-x-active'));
-    const isYActive = () => locator.evaluate(element => element.classList.contains('nn-scrollbar-y-active'));
-    const isTargetAxisActive = axis === 'x' ? isXActive : isYActive;
-    const isOtherAxisActive = axis === 'x' ? isYActive : isXActive;
-
+async function expectNativeScrolling(locator, axis) {
     await expect(locator).toBeVisible();
-    await expect.poll(isXActive, { timeout: 2500 }).toBe(false);
-    await expect.poll(isYActive).toBe(false);
-
-    await locator.hover();
-    await locator.dispatchEvent('pointermove');
-    await expect.poll(isXActive).toBe(false);
-    await expect.poll(isYActive).toBe(false);
-
     const scrollPosition = await locator.evaluate((element, targetAxis) => {
         const isHorizontal = targetAxis === 'x';
         if (isHorizontal && element.scrollWidth <= element.clientWidth && element.firstElementChild) {
@@ -133,15 +120,17 @@ async function expectScrollOnlyScrollbar(locator, axis) {
         return {
             maximumScrollOffset,
             previousScrollOffset,
-            scrollOffset: isHorizontal ? element.scrollLeft : element.scrollTop
+            scrollOffset: isHorizontal ? element.scrollLeft : element.scrollTop,
+            overflow: isHorizontal ? getComputedStyle(element).overflowX : getComputedStyle(element).overflowY,
+            hasCustomScrollbarState:
+                element.classList.contains('nn-scrollbar-x-active') ||
+                element.classList.contains('nn-scrollbar-y-active')
         };
     }, axis);
     expect(scrollPosition.maximumScrollOffset).toBeGreaterThan(0);
     expect(scrollPosition.scrollOffset).not.toBe(scrollPosition.previousScrollOffset);
-    await expect.poll(isTargetAxisActive).toBe(true);
-    await expect.poll(isOtherAxisActive).toBe(false);
-    await expect.poll(isTargetAxisActive, { timeout: 2500 }).toBe(false);
-    await expect.poll(isOtherAxisActive).toBe(false);
+    expect(['auto', 'scroll']).toContain(scrollPosition.overflow);
+    expect(scrollPosition.hasCustomScrollbarState).toBe(false);
 }
 
 test('restores offline BGP and Loc-RIB pages through persistent scope selectors', async ({ page }) => {
@@ -181,11 +170,11 @@ test('restores offline BGP and Loc-RIB pages through persistent scope selectors'
     await expect(sessionPage).toContainText('已断开');
     await expect(sessionPage).toContainText('203.0.113.0');
     await expect(sessionPage.getByText('过期 1')).toBeVisible();
-    await expectScrollOnlyScrollbar(
+    await expectNativeScrolling(
         sessionPage.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first(),
         'x'
     );
-    await expectScrollOnlyScrollbar(
+    await expectNativeScrolling(
         sessionPage.locator('[data-testid="bmp-session-table"]:visible .nn-table-content').first(),
         'x'
     );

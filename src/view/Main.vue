@@ -405,17 +405,6 @@
         overflow-x: hidden;
         overflow-y: auto;
         flex: 1 1 auto;
-        scrollbar-color: var(--nn-color-border-sider) transparent;
-        scrollbar-width: thin;
-    }
-
-    .sidebar-nav::-webkit-scrollbar {
-        width: 4px;
-    }
-
-    .sidebar-nav::-webkit-scrollbar-thumb {
-        border-radius: 999px;
-        background: var(--nn-color-border-sider);
     }
 
     .main-menu {
