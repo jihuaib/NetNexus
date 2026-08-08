@@ -563,7 +563,9 @@ class BmpApp {
                 persistenceFlushMs: Number(bmpConfigData.persistenceFlushMs) || 20,
                 persistenceHighWatermarkBytes: Number(bmpConfigData.persistenceHighWatermarkBytes) || 64 * 1024 * 1024,
                 persistenceLowWatermarkBytes: Number(bmpConfigData.persistenceLowWatermarkBytes) || 32 * 1024 * 1024,
-                persistenceStaleRetentionMs: Number(bmpConfigData.persistenceStaleRetentionMs) || 24 * 60 * 60 * 1000,
+                // Offline current RIB data is persistent state. It may only be
+                // reconciled by that source's lifecycle or removed explicitly.
+                persistencePurgeExpiredStaleRoutes: false,
                 persistenceRefreshTimeoutMs: Number(bmpConfigData.persistenceRefreshTimeoutMs) || 30 * 60 * 1000,
                 persistenceEventRetentionMs:
                     Number(bmpConfigData.persistenceEventRetentionMs) || 7 * 24 * 60 * 60 * 1000,

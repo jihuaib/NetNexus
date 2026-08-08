@@ -784,6 +784,7 @@ try {
         ])
     );
     const overlappingFirstSweep = overlappingSweepStore.sweep({
+        purgeExpiredStaleRoutes: true,
         staleBeforeMs: Date.now(),
         refreshTimeoutBeforeMs: 0,
         eventsBeforeMs: 0,
@@ -792,6 +793,7 @@ try {
     assert.equal(overlappingFirstSweep.routes, 2);
     assert.equal(overlappingSweepStore.queryRoutes({ routeState: 'all' }).total, 1);
     const overlappingSecondSweep = overlappingSweepStore.sweep({
+        purgeExpiredStaleRoutes: true,
         staleBeforeMs: Date.now(),
         refreshTimeoutBeforeMs: 0,
         eventsBeforeMs: 0,

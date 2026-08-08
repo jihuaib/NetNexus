@@ -133,6 +133,8 @@ try {
     );
 
     const protectedByConcurrentConnection = store.sweep({
+        mode: 'lifecycle',
+        sourceId: initialScope.source.id,
         staleBeforeMs: 0,
         refreshTimeoutBeforeMs: replacementOpenedAtMs + 10000,
         eventsBeforeMs: 0
@@ -161,7 +163,24 @@ try {
     assert.equal(topologyBeforeTimeout.clients[0].isOnline, true, 'the BMP source itself is online');
     assert.equal(topologyBeforeTimeout.clients[0].sessions[0].isOnline, false, 'a peer without PU stays offline');
 
+    const unrelatedClientSweep = store.sweep({
+        mode: 'lifecycle',
+        sourceId: 'different-client-source',
+        staleBeforeMs: 0,
+        refreshTimeoutBeforeMs: replacementOpenedAtMs - 1,
+        eventsBeforeMs: 0
+    });
+    assert.equal(unrelatedClientSweep.routes, 0, 'another Client lifecycle sweep must not clean this source');
+    assert.equal(
+        unrelatedClientSweep.nextRefreshStartedMs,
+        replacementOpenedAtMs,
+        'deadline discovery must remain global even when route cleanup is source-scoped'
+    );
+    assert.equal(unrelatedClientSweep.nextRefreshSourceId, initialScope.source.id);
+
     const beforeTimeout = store.sweep({
+        mode: 'lifecycle',
+        sourceId: initialScope.source.id,
         staleBeforeMs: 0,
         refreshTimeoutBeforeMs: replacementOpenedAtMs - 1,
         eventsBeforeMs: 0
@@ -169,9 +188,12 @@ try {
     assert.equal(beforeTimeout.routes, 0);
     assert.equal(beforeTimeout.reconnectTimeoutScopes, 0);
     assert.equal(beforeTimeout.nextRefreshStartedMs, replacementOpenedAtMs);
+    assert.equal(beforeTimeout.nextRefreshSourceId, initialScope.source.id);
     assert.equal(store.queryRoutes({ routeState: 'all' }).total, 1);
 
     const afterTimeout = store.sweep({
+        mode: 'lifecycle',
+        sourceId: initialScope.source.id,
         staleBeforeMs: 0,
         refreshTimeoutBeforeMs: replacementOpenedAtMs,
         eventsBeforeMs: 0

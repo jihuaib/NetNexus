@@ -3470,9 +3470,21 @@ class BmpPersistenceStore {
         const routeLimit = positiveInteger(options.routeLimit, 2000, 20000);
         const eventLimit = positiveInteger(options.eventLimit, 5000, 50000);
         const auxiliaryLimit = positiveInteger(options.auxiliaryLimit, eventLimit, 50000);
+        const mode = options.mode === 'lifecycle' ? 'lifecycle' : 'maintenance';
+        const sourceId = mode === 'lifecycle' && typeof options.sourceId === 'string' ? options.sourceId.trim() : '';
+        if (mode === 'lifecycle' && !sourceId) {
+            throw new Error('BMP lifecycle persistence sweep requires sourceId');
+        }
+        const purgeExpiredStaleRoutes = mode === 'maintenance' && options.purgeExpiredStaleRoutes === true ? 1 : 0;
         const staleBeforeMs = finiteNumber(options.staleBeforeMs, Date.now() - 24 * 60 * 60 * 1000);
         const eventsBeforeMs = finiteNumber(options.eventsBeforeMs, Date.now() - 7 * 24 * 60 * 60 * 1000);
         const refreshTimeoutBeforeMs = finiteNumber(options.refreshTimeoutBeforeMs, Date.now() - 30 * 60 * 1000);
+        const sweepParams = {
+            sourceId: sourceId || null,
+            purgeExpiredStaleRoutes,
+            staleBeforeMs,
+            refreshTimeoutBeforeMs
+        };
         const result = this.db.transaction(() => {
             const candidateScopes = this.db
                 .prepare(
@@ -3484,6 +3496,7 @@ class BmpPersistenceStore {
                                MIN(opened_at_ms) AS opened_at_ms
                           FROM bmp_connections
                          WHERE connection_state = 'open'
+                           AND (@sourceId IS NULL OR source_id = @sourceId)
                          GROUP BY source_id
                         HAVING COUNT(*) = 1
                     ), reconnect_candidates AS (
@@ -3503,6 +3516,8 @@ class BmpPersistenceStore {
                            scope.last_connection_id, scope.current_epoch,
                            CASE
                                WHEN (
+                                   @purgeExpiredStaleRoutes = 1
+                                   AND
                                    scope.scope_state IN ('stale', 'down')
                                    AND scope.stale_since_ms <= @staleBeforeMs
                                ) OR reconnect.refresh_started_ms <= @refreshTimeoutBeforeMs
@@ -3514,20 +3529,24 @@ class BmpPersistenceStore {
                            END AS reconnect_timeout
                       FROM bmp_rib_scopes scope
                       LEFT JOIN reconnect_candidates reconnect ON reconnect.scope_id = scope.scope_id
-                     WHERE scope.cleanup_pending_epoch >= scope.current_epoch
-                        OR (
-                            scope.scope_state = 'syncing'
-                            AND scope.refresh_started_ms <= @refreshTimeoutBeforeMs
-                        )
-                        OR (
-                            scope.scope_state IN ('stale', 'down')
-                            AND scope.stale_since_ms <= @staleBeforeMs
-                        )
-                        OR reconnect.refresh_started_ms <= @refreshTimeoutBeforeMs
+                     WHERE (@sourceId IS NULL OR scope.source_id = @sourceId)
+                       AND (
+                            scope.cleanup_pending_epoch >= scope.current_epoch
+                            OR (
+                                scope.scope_state = 'syncing'
+                                AND scope.refresh_started_ms <= @refreshTimeoutBeforeMs
+                            )
+                            OR (
+                                @purgeExpiredStaleRoutes = 1
+                                AND scope.scope_state IN ('stale', 'down')
+                                AND scope.stale_since_ms <= @staleBeforeMs
+                            )
+                            OR reconnect.refresh_started_ms <= @refreshTimeoutBeforeMs
+                       )
                      ORDER BY scope.scope_id
                 `
                 )
-                .all({ staleBeforeMs, refreshTimeoutBeforeMs });
+                .all(sweepParams);
             const candidateStatements = new Map();
             const affectedScopes = new Map();
             let routes = 0;
@@ -3589,6 +3608,7 @@ class BmpPersistenceStore {
                        SET cleanup_pending_epoch = NULL
                      WHERE scope.cleanup_pending_epoch >= scope.current_epoch
                        AND scope.cleanup_pending_epoch IS NOT NULL
+                       AND (@sourceId IS NULL OR scope.source_id = @sourceId)
                        AND NOT EXISTS (
                            SELECT 1
                              FROM bmp_scope_route_counts count
@@ -3600,7 +3620,7 @@ class BmpPersistenceStore {
                        )
                 `
                 )
-                .run().changes;
+                .run({ sourceId: sourceId || null }).changes;
             const refreshTimeoutScopes = this.db
                 .prepare(
                     `
@@ -3609,6 +3629,7 @@ class BmpPersistenceStore {
                            refresh_started_ms = NULL,
                            updated_at_ms = MAX(updated_at_ms, @finalizedAtMs)
                      WHERE scope.scope_state = 'syncing'
+                       AND (@sourceId IS NULL OR scope.source_id = @sourceId)
                        AND scope.refresh_started_ms <= @refreshTimeoutBeforeMs
                        AND NOT EXISTS (
                            SELECT 1
@@ -3621,7 +3642,11 @@ class BmpPersistenceStore {
                        )
                 `
                 )
-                .run({ refreshTimeoutBeforeMs, finalizedAtMs: Date.now() }).changes;
+                .run({
+                    sourceId: sourceId || null,
+                    refreshTimeoutBeforeMs,
+                    finalizedAtMs: Date.now()
+                }).changes;
             const reconnectTimeoutScopes = this.db
                 .prepare(
                     `
@@ -3631,6 +3656,7 @@ class BmpPersistenceStore {
                                MIN(opened_at_ms) AS opened_at_ms
                           FROM bmp_connections
                          WHERE connection_state = 'open'
+                           AND (@sourceId IS NULL OR source_id = @sourceId)
                          GROUP BY source_id
                         HAVING COUNT(*) = 1
                     )
@@ -3638,6 +3664,7 @@ class BmpPersistenceStore {
                        SET stale_reason = 'reconnect-refresh-timeout',
                            updated_at_ms = MAX(updated_at_ms, @finalizedAtMs)
                      WHERE scope.scope_state IN ('stale', 'down')
+                       AND (@sourceId IS NULL OR scope.source_id = @sourceId)
                        AND COALESCE(scope.stale_reason, '') <> 'reconnect-refresh-timeout'
                        AND EXISTS (
                            SELECT 1
@@ -3656,10 +3683,17 @@ class BmpPersistenceStore {
                        )
                 `
                 )
-                .run({ refreshTimeoutBeforeMs, finalizedAtMs: Date.now() }).changes;
-            const events = this.db
-                .prepare(
-                    `
+                .run({
+                    sourceId: sourceId || null,
+                    refreshTimeoutBeforeMs,
+                    finalizedAtMs: Date.now()
+                }).changes;
+            const events =
+                mode === 'lifecycle'
+                    ? 0
+                    : this.db
+                          .prepare(
+                              `
                     DELETE FROM bmp_route_events
                      WHERE event_id IN (
                         SELECT event_id FROM bmp_route_events
@@ -3668,11 +3702,14 @@ class BmpPersistenceStore {
                           LIMIT @eventLimit
                      )
                 `
-                )
-                .run({ eventsBeforeMs, eventLimit }).changes;
-            const statistics = this.db
-                .prepare(
-                    `
+                          )
+                          .run({ eventsBeforeMs, eventLimit }).changes;
+            const statistics =
+                mode === 'lifecycle'
+                    ? 0
+                    : this.db
+                          .prepare(
+                              `
                     DELETE FROM bmp_statistics_samples
                      WHERE sample_id IN (
                         SELECT sample_id FROM bmp_statistics_samples
@@ -3685,11 +3722,14 @@ class BmpPersistenceStore {
                          LIMIT @auxiliaryLimit
                      )
                 `
-                )
-                .run({ eventsBeforeMs, auxiliaryLimit }).changes;
-            const batches = this.db
-                .prepare(
-                    `
+                          )
+                          .run({ eventsBeforeMs, auxiliaryLimit }).changes;
+            const batches =
+                mode === 'lifecycle'
+                    ? 0
+                    : this.db
+                          .prepare(
+                              `
                     DELETE FROM bmp_ingest_batches
                      WHERE batch_id IN (
                         SELECT batch.batch_id FROM bmp_ingest_batches batch
@@ -3703,11 +3743,14 @@ class BmpPersistenceStore {
                          LIMIT @auxiliaryLimit
                      )
                 `
-                )
-                .run({ eventsBeforeMs, auxiliaryLimit }).changes;
-            const attributes = this.db
-                .prepare(
-                    `
+                          )
+                          .run({ eventsBeforeMs, auxiliaryLimit }).changes;
+            const attributes =
+                mode === 'lifecycle'
+                    ? 0
+                    : this.db
+                          .prepare(
+                              `
                     DELETE FROM bmp_route_attributes
                      WHERE attr_id IN (
                         SELECT attr.attr_id
@@ -3719,11 +3762,14 @@ class BmpPersistenceStore {
                          LIMIT @auxiliaryLimit
                      )
                 `
-                )
-                .run({ eventsBeforeMs, auxiliaryLimit }).changes;
-            const payloads = this.db
-                .prepare(
-                    `
+                          )
+                          .run({ eventsBeforeMs, auxiliaryLimit }).changes;
+            const payloads =
+                mode === 'lifecycle'
+                    ? 0
+                    : this.db
+                          .prepare(
+                              `
                     DELETE FROM bmp_route_payloads
                      WHERE payload_id IN (
                         SELECT payload_id
@@ -3735,11 +3781,14 @@ class BmpPersistenceStore {
                          LIMIT @auxiliaryLimit
                      )
                 `
-                )
-                .run({ eventsBeforeMs, auxiliaryLimit }).changes;
-            const identities = this.db
-                .prepare(
-                    `
+                          )
+                          .run({ eventsBeforeMs, auxiliaryLimit }).changes;
+            const identities =
+                mode === 'lifecycle'
+                    ? 0
+                    : this.db
+                          .prepare(
+                              `
                     DELETE FROM bmp_route_identities
                      WHERE route_pk IN (
                         SELECT route_pk
@@ -3751,8 +3800,8 @@ class BmpPersistenceStore {
                          LIMIT @auxiliaryLimit
                      )
                 `
-                )
-                .run({ eventsBeforeMs, auxiliaryLimit }).changes;
+                          )
+                          .run({ eventsBeforeMs, auxiliaryLimit }).changes;
             const nextRefresh = this.db
                 .prepare(
                     `
@@ -3765,12 +3814,12 @@ class BmpPersistenceStore {
                          GROUP BY source_id
                         HAVING COUNT(*) = 1
                     ), refresh_starts AS (
-                        SELECT refresh_started_ms AS started_at_ms
+                        SELECT source_id, refresh_started_ms AS started_at_ms
                           FROM bmp_rib_scopes
                          WHERE scope_state = 'syncing'
                            AND refresh_started_ms IS NOT NULL
                         UNION ALL
-                        SELECT replacement.opened_at_ms AS started_at_ms
+                        SELECT scope.source_id, replacement.opened_at_ms AS started_at_ms
                           FROM bmp_rib_scopes scope
                           JOIN bmp_connections previous
                             ON previous.connection_id = scope.last_connection_id
@@ -3781,7 +3830,10 @@ class BmpPersistenceStore {
                            AND previous.connection_state = 'closed'
                            AND replacement.connection_generation > previous.connection_generation
                     )
-                    SELECT MIN(started_at_ms) AS started_at_ms FROM refresh_starts
+                    SELECT source_id, started_at_ms
+                      FROM refresh_starts
+                     ORDER BY started_at_ms, source_id
+                     LIMIT 1
                 `
                 )
                 .get();
@@ -3798,6 +3850,7 @@ class BmpPersistenceStore {
                 reconnectTimeoutScopes,
                 affectedScopes: Array.from(affectedScopes.values()),
                 nextRefreshStartedMs: finiteNumber(nextRefresh?.started_at_ms),
+                nextRefreshSourceId: nextRefresh?.source_id || null,
                 effectiveLimits: { routeLimit, eventLimit, auxiliaryLimit },
                 hasMore:
                     routes >= routeLimit ||

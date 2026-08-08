@@ -45,7 +45,9 @@ class BmpWorker {
         this.persistenceSweepRequestTimer = null;
         this.persistenceSweepDeadlineTimer = null;
         this.persistenceSweepRunning = false;
-        this.persistenceSweepPending = false;
+        this.persistenceSweepPendingMaintenance = false;
+        this.persistenceSweepPendingSources = new Set();
+        this.persistenceSweepRequestSources = new Set();
         this.clientDataDeleteInProgress = new Set();
         this.clientDeleteRemoteIpGates = new Map();
 
@@ -490,7 +492,7 @@ class BmpWorker {
             return;
         }
         const intervalMs = Math.max(1000, Number(this.bmpConfigData?.persistenceSweepIntervalMs) || 30000);
-        this.persistenceSweepTimer = setInterval(() => this.runPersistenceSweep(), intervalMs);
+        this.persistenceSweepTimer = setInterval(() => this.runPersistenceSweep({ mode: 'maintenance' }), intervalMs);
         this.persistenceSweepTimer.unref?.();
     }
 
@@ -511,7 +513,9 @@ class BmpWorker {
             clearTimeout(this.persistenceSweepDeadlineTimer);
             this.persistenceSweepDeadlineTimer = null;
         }
-        this.persistenceSweepPending = false;
+        this.persistenceSweepPendingMaintenance = false;
+        this.persistenceSweepPendingSources?.clear?.();
+        this.persistenceSweepRequestSources?.clear?.();
     }
 
     getPersistenceRefreshTimeoutMs() {
@@ -521,41 +525,133 @@ class BmpWorker {
         return Math.max(floorMs, Number(this.bmpConfigData?.persistenceRefreshTimeoutMs) || 30 * 60 * 1000);
     }
 
-    schedulePersistenceRefreshDeadline(refreshStartedMs, refreshTimeoutMs = this.getPersistenceRefreshTimeoutMs()) {
+    schedulePersistenceRefreshDeadline(
+        refreshStartedMs,
+        refreshTimeoutMs = this.getPersistenceRefreshTimeoutMs(),
+        sourceId = null
+    ) {
         if (this.persistenceSweepDeadlineTimer) {
             clearTimeout(this.persistenceSweepDeadlineTimer);
             this.persistenceSweepDeadlineTimer = null;
         }
-        const startedAtMs = Number(refreshStartedMs);
+        // `Number(null)` is zero. Check the nullable database value first or an
+        // idle store becomes a permanent 25 ms maintenance loop.
+        const startedAtMs =
+            refreshStartedMs === null || refreshStartedMs === undefined ? Number.NaN : Number(refreshStartedMs);
         if (!this.persistence || !Number.isFinite(startedAtMs)) {
             return;
         }
+        const normalizedSourceId = typeof sourceId === 'string' ? sourceId.trim() : '';
         const delayMs = Math.min(0x7fffffff, Math.max(25, startedAtMs + refreshTimeoutMs - Date.now()));
         this.persistenceSweepDeadlineTimer = setTimeout(() => {
             this.persistenceSweepDeadlineTimer = null;
-            this.runPersistenceSweep();
+            this.runPersistenceSweep(
+                normalizedSourceId ? { mode: 'lifecycle', sourceId: normalizedSourceId } : { mode: 'maintenance' }
+            );
         }, delayMs);
         this.persistenceSweepDeadlineTimer.unref?.();
     }
 
-    requestPersistenceSweep() {
-        if (!this.persistence || this.persistenceSweepRequestTimer) {
+    queuePersistenceSweep(options = {}) {
+        const mode = options.mode === 'lifecycle' ? 'lifecycle' : 'maintenance';
+        const sourceId = mode === 'lifecycle' && typeof options.sourceId === 'string' ? options.sourceId.trim() : '';
+        if (mode === 'lifecycle') {
+            if (!sourceId) {
+                return false;
+            }
+            if (!(this.persistenceSweepPendingSources instanceof Set)) {
+                this.persistenceSweepPendingSources = new Set();
+            }
+            this.persistenceSweepPendingSources.add(sourceId);
+        } else {
+            this.persistenceSweepPendingMaintenance = true;
+        }
+        return true;
+    }
+
+    takePendingPersistenceSweep() {
+        if (this.persistenceSweepPendingMaintenance === true) {
+            this.persistenceSweepPendingMaintenance = false;
+            return { mode: 'maintenance' };
+        }
+        if (!(this.persistenceSweepPendingSources instanceof Set)) {
+            this.persistenceSweepPendingSources = new Set();
+        }
+        const first = this.persistenceSweepPendingSources.values().next();
+        if (first.done) {
+            return null;
+        }
+        this.persistenceSweepPendingSources.delete(first.value);
+        return { mode: 'lifecycle', sourceId: first.value };
+    }
+
+    hasPendingPersistenceSweep() {
+        return (
+            this.persistenceSweepPendingMaintenance === true ||
+            (this.persistenceSweepPendingSources instanceof Set && this.persistenceSweepPendingSources.size > 0)
+        );
+    }
+
+    schedulePendingPersistenceSweep(delayMs) {
+        if (!this.persistence || this.persistenceSweepCatchupTimer || !this.hasPendingPersistenceSweep()) {
             return false;
+        }
+        this.persistenceSweepCatchupTimer = setTimeout(
+            () => {
+                this.persistenceSweepCatchupTimer = null;
+                const nextSweep = this.takePendingPersistenceSweep();
+                if (nextSweep) {
+                    this.runPersistenceSweep(nextSweep);
+                }
+            },
+            Math.max(0, Number(delayMs) || 0)
+        );
+        this.persistenceSweepCatchupTimer.unref?.();
+        return true;
+    }
+
+    requestPersistenceSweep(sourceId) {
+        const normalizedSourceId = typeof sourceId === 'string' ? sourceId.trim() : '';
+        if (!this.persistence || !normalizedSourceId) {
+            return false;
+        }
+        if (!(this.persistenceSweepRequestSources instanceof Set)) {
+            this.persistenceSweepRequestSources = new Set();
+        }
+        this.persistenceSweepRequestSources.add(normalizedSourceId);
+        if (this.persistenceSweepRequestTimer) {
+            return true;
         }
         this.persistenceSweepRequestTimer = setTimeout(() => {
             this.persistenceSweepRequestTimer = null;
-            this.runPersistenceSweep();
+            const sourceIds = Array.from(this.persistenceSweepRequestSources);
+            this.persistenceSweepRequestSources.clear();
+            sourceIds.forEach(pendingSourceId => {
+                this.queuePersistenceSweep({ mode: 'lifecycle', sourceId: pendingSourceId });
+            });
+            if (!this.persistenceSweepRunning) {
+                const nextSweep = this.takePendingPersistenceSweep();
+                if (nextSweep) {
+                    this.runPersistenceSweep(nextSweep);
+                }
+            }
         }, 250);
         this.persistenceSweepRequestTimer.unref?.();
         return true;
     }
 
-    async runPersistenceSweep() {
+    async runPersistenceSweep(options = {}) {
         if (!this.persistence) {
             return;
         }
+        const mode = options.mode === 'lifecycle' ? 'lifecycle' : 'maintenance';
+        const sourceId = mode === 'lifecycle' && typeof options.sourceId === 'string' ? options.sourceId.trim() : '';
+        if (mode === 'lifecycle' && !sourceId) {
+            logger.error('BMP lifecycle persistence sweep requires sourceId');
+            return;
+        }
         if (this.persistenceSweepRunning) {
-            this.persistenceSweepPending = true;
+            this.queuePersistenceSweep({ mode, sourceId });
             return;
         }
         this.persistenceSweepRunning = true;
@@ -563,6 +659,7 @@ class BmpWorker {
         let routeProjectionChanged = false;
         let sweepCompleted = false;
         let nextRefreshStartedMs = null;
+        let nextRefreshSourceId = null;
         const affectedScopes = new Map();
         const refreshTimeoutMs = this.getPersistenceRefreshTimeoutMs();
         try {
@@ -570,10 +667,14 @@ class BmpWorker {
             // Fence the writer queue before calculating retention candidates.
             await this.persistence.fence();
             const now = Date.now();
-            const staleRetentionMs = Math.max(
-                60000,
-                Number(this.bmpConfigData?.persistenceStaleRetentionMs) || 24 * 60 * 60 * 1000
-            );
+            // Persisted current routes are never expired merely because another
+            // Client connected or because an offline scope is old. Same-source
+            // EOR/refresh cleanup remains active through lifecycle-scoped sweeps.
+            const purgeExpiredStaleRoutes =
+                mode === 'maintenance' && this.bmpConfigData?.persistencePurgeExpiredStaleRoutes === true;
+            const staleRetentionMs = purgeExpiredStaleRoutes
+                ? Math.max(60000, Number(this.bmpConfigData?.persistenceStaleRetentionMs) || 24 * 60 * 60 * 1000)
+                : null;
             const eventRetentionMs = Math.max(
                 60000,
                 Number(this.bmpConfigData?.persistenceEventRetentionMs) || 7 * 24 * 60 * 60 * 1000
@@ -597,7 +698,10 @@ class BmpWorker {
             const sweepStartedAt = Date.now();
             for (let pass = 0; pass < maxPasses; pass += 1) {
                 const result = await this.persistence.sweep({
-                    staleBeforeMs: storagePressure ? now : now - staleRetentionMs,
+                    mode,
+                    sourceId: sourceId || null,
+                    purgeExpiredStaleRoutes,
+                    staleBeforeMs: purgeExpiredStaleRoutes ? (storagePressure ? now : now - staleRetentionMs) : 0,
                     refreshTimeoutBeforeMs: now - refreshTimeoutMs,
                     eventsBeforeMs: storagePressure ? now : now - eventRetentionMs,
                     routeLimit,
@@ -625,6 +729,7 @@ class BmpWorker {
                     }
                 });
                 shouldCatchUp = result.hasMore === true;
+                nextRefreshSourceId = result.nextRefreshSourceId ?? null;
                 if (!shouldCatchUp || Date.now() - sweepStartedAt >= timeBudgetMs) {
                     break;
                 }
@@ -635,7 +740,7 @@ class BmpWorker {
         } finally {
             this.persistenceSweepRunning = false;
             if (sweepCompleted) {
-                this.schedulePersistenceRefreshDeadline(nextRefreshStartedMs, refreshTimeoutMs);
+                this.schedulePersistenceRefreshDeadline(nextRefreshStartedMs, refreshTimeoutMs, nextRefreshSourceId);
             }
             if (routeProjectionChanged) {
                 this.invalidateRouteAssurance('persistence-sweep');
@@ -643,17 +748,15 @@ class BmpWorker {
             if (affectedScopes.size > 0) {
                 this.emitPersistenceSweepRouteUpdates(Array.from(affectedScopes.values()));
             }
-            const rerunRequested = this.persistenceSweepPending;
-            this.persistenceSweepPending = false;
-            if ((shouldCatchUp || rerunRequested) && this.persistence && !this.persistenceSweepCatchupTimer) {
-                const delayMs = rerunRequested
+            const pendingRequest = this.hasPendingPersistenceSweep();
+            if (shouldCatchUp) {
+                this.queuePersistenceSweep({ mode, sourceId });
+            }
+            if (this.hasPendingPersistenceSweep()) {
+                const delayMs = pendingRequest
                     ? 25
                     : Math.max(250, Number(this.bmpConfigData?.persistenceSweepCatchupDelayMs) || 1000);
-                this.persistenceSweepCatchupTimer = setTimeout(() => {
-                    this.persistenceSweepCatchupTimer = null;
-                    this.runPersistenceSweep();
-                }, delayMs);
-                this.persistenceSweepCatchupTimer.unref?.();
+                this.schedulePendingPersistenceSweep(delayMs);
             }
         }
     }

@@ -961,7 +961,11 @@ const BmpE2eController = (() => {
             worker.persistenceSweepTimer = null;
             worker.persistenceSweepCatchupTimer = null;
             worker.persistenceSweepRequestTimer = null;
+            worker.persistenceSweepDeadlineTimer = null;
             worker.persistenceSweepRunning = false;
+            worker.persistenceSweepPendingMaintenance = false;
+            worker.persistenceSweepPendingSources = new Set();
+            worker.persistenceSweepRequestSources = new Set();
             worker.messageHandler = new CaptureMessageHandler(event => this.emitEvent(event));
             worker.createPersistenceClient = options => new E2eBmpPersistenceClient(options);
             if (!hasPersistenceFactory) {

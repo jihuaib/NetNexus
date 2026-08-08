@@ -119,9 +119,17 @@ class BmpSession {
             this.invalidateRouteAssurance('persistence-connection-open');
             // Arm the single refresh deadline for both scopes explicitly reopened
             // by Peer Up and scopes that never reappear on the replacement connection.
-            this.bmpWorker?.requestPersistenceSweep?.();
+            this.requestPersistenceSweep();
         }
         return accepted;
+    }
+
+    requestPersistenceSweep() {
+        const sourceId = this.getPersistentSourceId();
+        if (!sourceId) {
+            return false;
+        }
+        return this.bmpWorker?.requestPersistenceSweep?.(sourceId) === true;
     }
 
     persistSourceUpdate() {
@@ -142,7 +150,7 @@ class BmpSession {
         if (accepted) {
             // A close can turn an ambiguous multi-connection source into one
             // unambiguous replacement connection, so recompute its deadline.
-            this.bmpWorker?.requestPersistenceSweep?.();
+            this.requestPersistenceSweep();
         }
         return accepted;
     }
@@ -1390,7 +1398,7 @@ class BmpSession {
                             'scope_eor',
                             { sourceTimestampMs }
                         );
-                        this.bmpWorker?.requestPersistenceSweep?.();
+                        this.requestPersistenceSweep();
                     });
                 });
             }
@@ -1631,7 +1639,7 @@ class BmpSession {
                         'scope_eor',
                         { sourceTimestampMs }
                     );
-                    this.bmpWorker?.requestPersistenceSweep?.();
+                    this.requestPersistenceSweep();
                 });
             }
 
@@ -2405,7 +2413,7 @@ class BmpSession {
                 );
             } else {
                 this.sendSessionStaleEvents(bgpSession, staleUpdates);
-                this.bmpWorker?.requestPersistenceSweep?.();
+                this.requestPersistenceSweep();
                 if (addressFamilyKeys.length > 1) {
                     logger.info(
                         `Peer Down marked ${addressFamilyKeys.length} address families stale for ${sessKey}; keeping routes until refresh, withdraw, purge, or BMP close`
@@ -2468,7 +2476,7 @@ class BmpSession {
                 this.sendInstanceStaleEvent(instance);
                 this.sendInstanceUpdateEvent(instance);
             });
-            this.bmpWorker?.requestPersistenceSweep?.();
+            this.requestPersistenceSweep();
 
             if (candidates.length > 1) {
                 logger.info(
@@ -2777,7 +2785,7 @@ class BmpSession {
                     });
                 });
             });
-            this.bmpWorker?.requestPersistenceSweep?.();
+            this.requestPersistenceSweep();
 
             this.sendSessionUpdateEvent(bgpSession);
         } catch (err) {
@@ -3011,7 +3019,7 @@ class BmpSession {
                     { sourceTimestampMs: instanceTimestampMs }
                 );
             });
-            this.bmpWorker?.requestPersistenceSweep?.();
+            this.requestPersistenceSweep();
 
             const allKeys = new Set([...recvAddPaths.keys(), ...sendAddPaths.keys()]);
             allKeys.forEach(key => {
