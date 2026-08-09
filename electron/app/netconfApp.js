@@ -1956,7 +1956,7 @@ class NetconfApp {
     getRunning() {
         return Boolean(
             (this.workerClient && this.activeProfileId) ||
-                this.taskManager.list().some(task => task.status === 'running')
+            this.taskManager.list().some(task => task.status === 'running')
         );
     }
 

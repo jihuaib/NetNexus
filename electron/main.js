@@ -9,7 +9,7 @@ const isPackagedE2e = app.isPackaged && process.env.NETNEXUS_E2E === '1';
 const RENDERER_READY_TIMEOUT_MS = 15000;
 const MIN_SPLASH_VISIBLE_MS = 900;
 const SPLASH_VISIBLE_FRAME_TIMEOUT_MS = 1000;
-const SPLASH_BACKGROUND_COLOR = '#667eea';
+const SPLASH_BACKGROUND_COLOR = '#f4f6f8';
 let mainWindow = null;
 let splashWindow = null;
 let systemApp = null;

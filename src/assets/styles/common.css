@@ -9,84 +9,59 @@
     margin: 2px 0 !important;
     padding: 7px 10px !important;
     border: 1px solid transparent;
-    border-radius: 8px !important;
-    color: var(--nn-color-text-sider) !important;
+    border-radius: 2px !important;
+    color: var(--nn-color-text-secondary) !important;
     font-weight: 400 !important;
 }
 
 .main-menu .nn-menu-item-selected {
-    background: var(--nn-color-bg-sider-active) !important;
-    color: var(--nn-color-text-inverse) !important;
-    border-color: var(--nn-color-border-sider-active);
-    box-shadow: inset 3px 0 0 var(--nn-color-primary);
+    background: var(--nn-color-bg-selected) !important;
+    color: var(--nn-color-text-info) !important;
+    border-color: var(--nn-color-border-info);
+    border-inline-start: 3px solid var(--nn-color-text-info);
+    box-shadow: none;
     font-weight: 500 !important;
 }
 
 /* 选中状态的菜单项 hover 时保持不变 */
 .main-menu .nn-menu-item-selected:hover {
-    background: var(--nn-color-bg-sider-active) !important;
-    color: var(--nn-color-text-inverse) !important;
+    background: var(--nn-color-bg-selected) !important;
+    color: var(--nn-color-text-info) !important;
 }
 
 .main-menu .nn-menu-item:hover:not(.nn-menu-item-selected) {
-    background: var(--nn-color-bg-sider-hover) !important;
-    color: var(--nn-color-text-inverse) !important;
+    background: var(--nn-color-bg-hover) !important;
+    color: var(--nn-color-text-info) !important;
 }
 
 .main-menu .nn-menu-item:focus-visible {
-    box-shadow: inset 0 0 0 2px var(--nn-color-primary-hover) !important;
-}
-
-.main-menu .nn-icon {
-    color: var(--nn-color-text-sider) !important;
-}
-
-.main-menu .nn-menu-item-selected .nn-icon {
-    color: var(--nn-color-primary-hover) !important;
-}
-
-.main-menu .nn-menu-item:hover:not(.nn-menu-item-selected) .nn-icon {
-    color: var(--nn-color-text-inverse) !important;
+    outline: 2px solid var(--nn-color-text-info) !important;
+    outline-offset: -2px;
+    box-shadow: none !important;
 }
 
 /* 底部菜单按钮样式 */
 .bottom-menu-btn {
-    border-top: 1px solid var(--nn-color-border-sider);
+    border-top: 1px solid var(--nn-color-border);
 }
 
 .bottom-menu-btn .nn-button {
-    color: var(--nn-color-text-sider) !important;
+    color: var(--nn-color-text-secondary) !important;
 }
 
 .bottom-menu-btn .nn-button:hover {
-    color: var(--nn-color-text-inverse) !important;
-    background: var(--nn-color-bg-sider-hover) !important;
-}
-
-.bottom-menu-btn .nn-icon {
-    color: var(--nn-color-text-sider) !important;
-}
-
-.bottom-menu-btn .nn-button:hover .nn-icon {
-    color: var(--nn-color-text-inverse) !important;
+    color: var(--nn-color-text-info) !important;
+    background: var(--nn-color-bg-hover) !important;
 }
 
 /* 折叠按钮样式 */
 .toggle-btn.nn-button {
-    color: var(--nn-color-text-sider) !important;
+    color: var(--nn-color-text-secondary) !important;
 }
 
 .toggle-btn.nn-button:hover {
-    color: var(--nn-color-primary-hover) !important;
-    background: var(--nn-color-bg-sider-active) !important;
-}
-
-.toggle-btn.nn-button .nn-icon {
-    color: var(--nn-color-text-sider) !important;
-}
-
-.toggle-btn.nn-button:hover .nn-icon {
-    color: var(--nn-color-primary-hover) !important;
+    color: var(--nn-color-text-info) !important;
+    background: var(--nn-color-bg-hover) !important;
 }
 
 /* 主页面样式 */
@@ -146,6 +121,13 @@
     margin-top: 10px;
 }
 
+.settings-page-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 /* 配置页中的补充说明，和表单正文保持清晰的视觉层级 */
 .nn-helper-text {
     color: var(--nn-color-text-muted);
@@ -161,7 +143,7 @@
     padding: 8px 10px;
     overflow-y: auto;
     border: 1px solid var(--nn-color-border-light);
-    border-radius: 6px;
+    border-radius: 2px;
     background: var(--nn-color-bg-code);
     color: var(--nn-color-text);
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
@@ -243,7 +225,8 @@
 
 .nn-input-status-error:focus {
     border-color: var(--nn-color-error) !important;
-    box-shadow: var(--nn-focus-shadow-error) !important;
+    outline: none !important;
+    box-shadow: none !important;
 }
 
 /* 表格样式 */

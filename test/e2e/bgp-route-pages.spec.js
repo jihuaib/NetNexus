@@ -161,6 +161,7 @@ test.describe('BGP route pages', () => {
                 const body = element.querySelector('.nn-modal-body');
                 const formItem = element.querySelector('.nn-form-item');
                 const section = element.querySelector('.advanced-section');
+                const sections = Array.from(element.querySelectorAll('.advanced-section'));
                 const sectionTitle = element.querySelector('.section-title');
                 const startAsItem = Array.from(element.querySelectorAll('.nn-form-item')).find(item =>
                     item.querySelector('.nn-form-item-label')?.textContent.includes('起始 AS')
@@ -169,6 +170,11 @@ test.describe('BGP route pages', () => {
                 const startAsControl = startAsItem.querySelector('.nn-form-item-control');
                 const startAsLabelBox = startAsLabel.getBoundingClientRect();
                 const startAsControlBox = startAsControl.getBoundingClientRect();
+                const borderProbe = document.createElement('span');
+                borderProbe.style.borderColor = 'var(--nn-color-border-light)';
+                document.body.appendChild(borderProbe);
+                const expectedSectionBorderColor = getComputedStyle(borderProbe).borderColor;
+                borderProbe.remove();
 
                 return {
                     dialogWidth: element.getBoundingClientRect().width,
@@ -176,6 +182,32 @@ test.describe('BGP route pages', () => {
                     formItemMarginBottom: parseFloat(getComputedStyle(formItem).marginBottom),
                     sectionTitleMarginBottom: parseFloat(getComputedStyle(sectionTitle).marginBottom),
                     sectionPaddingTop: parseFloat(getComputedStyle(section).paddingTop),
+                    sectionFrames: sections.map(currentSection => {
+                        const style = getComputedStyle(currentSection);
+                        return {
+                            borderWidths: [
+                                style.borderTopWidth,
+                                style.borderRightWidth,
+                                style.borderBottomWidth,
+                                style.borderLeftWidth
+                            ],
+                            borderStyles: [
+                                style.borderTopStyle,
+                                style.borderRightStyle,
+                                style.borderBottomStyle,
+                                style.borderLeftStyle
+                            ],
+                            borderColor: style.borderColor,
+                            borderRadius: parseFloat(style.borderRadius),
+                            paddingInline: [parseFloat(style.paddingLeft), parseFloat(style.paddingRight)]
+                        };
+                    }),
+                    sectionGaps: sections.slice(1).map((currentSection, index) => {
+                        const previousBox = sections[index].getBoundingClientRect();
+                        const currentBox = currentSection.getBoundingClientRect();
+                        return currentBox.top - previousBox.bottom;
+                    }),
+                    expectedSectionBorderColor,
                     startAsIsHorizontal:
                         startAsLabelBox.right <= startAsControlBox.left + 1 &&
                         Math.abs(startAsLabelBox.top - startAsControlBox.top) <= 1,
@@ -187,7 +219,18 @@ test.describe('BGP route pages', () => {
             expect(geometry.hasHorizontalOverflow).toBe(false);
             expect(geometry.formItemMarginBottom).toBeLessThanOrEqual(6);
             expect(geometry.sectionTitleMarginBottom).toBeLessThanOrEqual(6);
-            expect(geometry.sectionPaddingTop).toBeLessThanOrEqual(10);
+            expect(geometry.sectionPaddingTop).toBe(8);
+            expect(geometry.sectionFrames).toHaveLength(pageCase.sections.length);
+            for (const frame of geometry.sectionFrames) {
+                expect(frame.borderWidths).toEqual(['1px', '1px', '1px', '1px']);
+                expect(frame.borderStyles).toEqual(['solid', 'solid', 'solid', 'solid']);
+                expect(frame.borderColor).toBe(geometry.expectedSectionBorderColor);
+                expect(frame.borderRadius).toBe(6);
+                expect(frame.paddingInline).toEqual([10, 10]);
+            }
+            for (const gap of geometry.sectionGaps) {
+                expect(gap).toBe(8);
+            }
             expect(geometry.startAsIsHorizontal).toBe(true);
             expect(geometry.startAsLabelHasColon).toBe(true);
 

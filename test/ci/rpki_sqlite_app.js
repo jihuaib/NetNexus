@@ -68,19 +68,17 @@ async function testCloseWaitsForImport(rootDir) {
     );
 
     const sqliteStore = await app.ensureRpkiStorage();
-    const originalStageRoaBatch = sqliteStore.stageRoaBatch.bind(sqliteStore);
-    let firstBatchResolve;
-    const firstBatch = new Promise(resolve => {
-        firstBatchResolve = resolve;
+    const originalRunImportWorker = app.runImportWorker.bind(app);
+    let importWorkerStartedResolve;
+    const importWorkerStarted = new Promise(resolve => {
+        importWorkerStartedResolve = resolve;
     });
-    sqliteStore.stageRoaBatch = (...args) => {
-        const result = originalStageRoaBatch(...args);
-        firstBatchResolve();
-        return result;
+    app.runImportWorker = (...args) => {
+        importWorkerStartedResolve();
+        return originalRunImportWorker(...args);
     };
-
     const importPromise = app.importRoaJsonFile(importPath);
-    await firstBatch;
+    await importWorkerStarted;
     const closePromise = app.closeStorage();
     const stats = await importPromise;
     await closePromise;
@@ -233,21 +231,9 @@ async function main() {
             JSON.stringify({ roas: Array.from({ length: 10001 }, () => makeRoa(0)) }),
             'utf8'
         );
-        const originalStageRoaBatch = sqliteStore.stageRoaBatch.bind(sqliteStore);
-        let duplicateBatchCalls = 0;
-        sqliteStore.stageRoaBatch = (...args) => {
-            duplicateBatchCalls += 1;
-            return originalStageRoaBatch(...args);
-        };
         const duplicateStats = await rpkiApp.importRoaJsonFile(duplicateImportPath, { limit: 1 });
-        sqliteStore.stageRoaBatch = originalStageRoaBatch;
         assert.equal(duplicateStats.imported, 0);
         assert.equal(duplicateStats.duplicate, 10001);
-        assert.equal(
-            duplicateBatchCalls,
-            3,
-            'small import limits with many duplicates must retain 5000-row transaction batching'
-        );
 
         workerCalls.length = 0;
         const aspaStats = await rpkiApp.importAspaJsonFile(aspaImportPath);

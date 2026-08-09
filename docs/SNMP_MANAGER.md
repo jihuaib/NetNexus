@@ -70,6 +70,12 @@ Trap 详情：
 
 MIB 页面用于导入、编译和浏览 MIB。
 
+MIB 编译页展示导入工具、模块与 OID 统计，以及逐文件编译结果：
+
+![SNMP MIB 编译](images/snmp/snmp-mib-compile.png)
+
+MIB 工作区用于浏览已编译的 OID 树并执行查询：
+
 ![SNMP MIB 管理（展开节点）](images/snmp/snmp-mib.png)
 
 按钮说明：

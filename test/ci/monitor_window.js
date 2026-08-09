@@ -641,6 +641,90 @@ async function verifyScopedBmpMonitorWindows() {
     sourceWindow.destroy();
 }
 
+async function verifyUnopenedBmpClientIsNotQueuedOrCrossDelivered() {
+    FakeBrowserWindow.instances = [];
+    const sourceWindow = new FakeBrowserWindow({ role: 'main' });
+    const ipcMain = new FakeIpcMain();
+    const manager = new MonitorWindowManager({
+        BrowserWindowClass: FakeBrowserWindow,
+        rendererUrl: 'file:///tmp/netnexus/dist/index.html',
+        preloadPath: '/tmp/netnexus/electron/preload.js',
+        maxWindows: 2
+    });
+    manager.registerIpcHandlers(ipcMain);
+    const openHandler = ipcMain.handlers.get(OPEN_MONITOR_CHANNEL);
+    const clientAId = 'a'.repeat(64);
+    const clientBId = 'b'.repeat(64);
+    const clientA = `source:${clientAId}`;
+    const clientB = `source:${clientBId}`;
+
+    const openedB = await openHandler({ sender: sourceWindow.webContents }, 'bmp-client', { clientKey: clientB });
+    assert.equal(openedB.status, 'success');
+    assert.equal(manager.getOpenCount(), 1, 'only Client B has an open monitor window');
+
+    const clientBWindow = FakeBrowserWindow.instances[1];
+    const dispatcher = new EventDispatcher();
+    dispatcher.setWebContents(sourceWindow.webContents);
+    const makeUpdate = sourceId => ({
+        client: { persistentSourceId: sourceId },
+        sourceId,
+        changedCount: 1
+    });
+    const eventResponses = new Map([
+        ['bmp:sessionUpdate', { status: 'success', data: makeUpdate(clientAId) }],
+        ['bmp:routeUpdate', { status: 'success', data: { batch: true, updates: [makeUpdate(clientAId)] } }],
+        ['bmp:instanceUpdate', { status: 'success', data: makeUpdate(clientAId) }],
+        ['bmp:instanceRouteUpdate', { status: 'success', data: { batch: true, updates: [makeUpdate(clientAId)] } }],
+        ['bmp:statisticsReport', { status: 'success', data: makeUpdate(clientAId) }]
+    ]);
+
+    for (const [eventType, response] of eventResponses) {
+        const primaryCount = sourceWindow.webContents.sent.length;
+        const clientBCount = clientBWindow.webContents.sent.length;
+        assert.equal(
+            dispatcher.emitToSubscribers(eventType, response),
+            0,
+            `${eventType} for unopened Client A has no delivery target`
+        );
+        assert.equal(
+            clientBWindow.webContents.sent.length,
+            clientBCount,
+            `${eventType} for Client A is not cross-delivered to open Client B`
+        );
+        assert.equal(
+            sourceWindow.webContents.sent.length,
+            primaryCount,
+            `${eventType} detail still bypasses the primary window`
+        );
+    }
+
+    const openedA = await openHandler({ sender: sourceWindow.webContents }, 'bmp-client', { clientKey: clientA });
+    assert.equal(openedA.status, 'success');
+    assert.equal(manager.getOpenCount(), 2);
+    const clientAWindow = FakeBrowserWindow.instances[2];
+    assert.equal(
+        clientAWindow.webContents.sent.length,
+        0,
+        'opening Client A does not replay events emitted while its window was closed'
+    );
+
+    const clientBCount = clientBWindow.webContents.sent.length;
+    assert.equal(
+        dispatcher.emitToSubscribers('bmp:statisticsReport', {
+            status: 'success',
+            data: makeUpdate(clientAId)
+        }),
+        1,
+        'Client A starts receiving matching events after its window subscribes'
+    );
+    assert.equal(clientAWindow.webContents.sent.at(-1).payload.type, 'bmp:statisticsReport');
+    assert.equal(clientBWindow.webContents.sent.length, clientBCount, 'Client B remains isolated after Client A opens');
+
+    manager.closeAll();
+    dispatcher.cleanup();
+    sourceWindow.destroy();
+}
+
 async function verifyMonitorWindowLifecycle() {
     FakeBrowserWindow.instances = [];
     FakeBrowserWindow.nextLoadError = null;
@@ -1048,6 +1132,7 @@ function verifyBmpDeliveryPolicy() {
 async function main() {
     await verifyPreloadBridge();
     await verifyMonitorWindowLifecycle();
+    await verifyUnopenedBmpClientIsNotQueuedOrCrossDelivered();
     await verifyScopedBmpMonitorWindows();
     await verifyScopedNetconfEditConfigWindows();
     await verifyNetconfNotificationWindow();

@@ -42,6 +42,10 @@ ROA 页面用于维护本地 ROA 数据。
 
 ![RPKI ROA 记录](images/rpki/rpki-roa.png)
 
+ROA JSON 导入：
+
+![RPKI ROA JSON 导入](images/rpki/rpki-roa-import.png)
+
 按钮说明：
 
 | 按钮 | 功能 |
@@ -103,6 +107,10 @@ Router Key 页面用于维护 RPKI-RTR v1+ 的 Router Key PDU 数据。
 ASPA 页面用于维护 RPKI-RTR v2 的 ASPA PDU 数据。
 
 ![RPKI ASPA 记录](images/rpki/rpki-aspa.png)
+
+ASPA JSON 导入：
+
+![RPKI ASPA JSON 导入](images/rpki/rpki-aspa-import.png)
 
 按钮说明：
 

@@ -1,8 +1,8 @@
 import { createApp, nextTick } from 'vue';
-import NetNexusUi, { initializeTheme } from 'netnexus-ui';
 import 'netnexus-ui/reset.css';
 import 'netnexus-ui/base.css';
 import 'netnexus-ui/style.css';
+import NetNexusUi, { initializeTheme } from 'netnexus-ui';
 import './assets/styles/common.css';
 import App from './App.vue';
 import router from './router';

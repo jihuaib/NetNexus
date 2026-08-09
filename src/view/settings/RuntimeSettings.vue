@@ -1,6 +1,6 @@
 <template>
-    <div class="runtime-settings">
-        <nn-card title="运行时诊断" class="settings-card">
+    <nn-settings class="runtime-settings">
+        <nn-settings-section title="YANG 编译器" description="权威编译、语义校验与本地运行时信息。">
             <nn-alert
                 :type="statusAlert.type"
                 show-icon
@@ -44,8 +44,8 @@
                 </nn-button>
                 <span class="runtime-action-hint">libyang 不可用时，YANG 编译会保持停用，不会回退到简化解析器。</span>
             </div>
-        </nn-card>
-    </div>
+        </nn-settings-section>
+    </nn-settings>
 </template>
 
 <script setup>

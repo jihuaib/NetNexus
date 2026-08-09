@@ -1,83 +1,137 @@
 <template>
-    <div class="api-settings">
-        <nn-card title="外部接入" class="settings-card">
-            <nn-form :model="settingsForm" layout="vertical">
-                <nn-form-item label="接入方式" name="mode">
-                    <nn-radio-group v-model:value="settingsForm.mode" button-style="solid">
+    <nn-settings class="api-settings">
+        <nn-settings-section title="接入配置" description="选择本机对外提供的访问方式及其运行参数。">
+            <nn-settings-item title="服务模式" align="center" actions-width="min(360px, 100%)">
+                <template #actions>
+                    <nn-radio-group v-model:value="settingsForm.mode" button-style="solid" aria-label="接入方式">
                         <nn-radio-button :value="API_ACCESS_MODE.NONE">关闭</nn-radio-button>
                         <nn-radio-button :value="API_ACCESS_MODE.HTTP">HTTP API</nn-radio-button>
                         <nn-radio-button :value="API_ACCESS_MODE.CLI">Telnet CLI</nn-radio-button>
                     </nn-radio-group>
-                </nn-form-item>
+                </template>
+            </nn-settings-item>
 
-                <template v-if="settingsForm.mode === API_ACCESS_MODE.HTTP">
-                    <nn-form-item label="HTTP监听端口" name="port">
-                        <nn-input-number v-model:value="settingsForm.port" :min="1" :max="65535" style="width: 100%" />
-                    </nn-form-item>
-
-                    <nn-form-item label="分页最大条数" name="maxPageSize">
+            <template v-if="settingsForm.mode === API_ACCESS_MODE.HTTP">
+                <nn-settings-item
+                    title="HTTP监听端口"
+                    label-for="api-http-port"
+                    align="center"
+                    :actions-width="180"
+                    class="api-setting-pair-start"
+                >
+                    <template #actions>
                         <nn-input-number
+                            id="api-http-port"
+                            v-model:value="settingsForm.port"
+                            :min="1"
+                            :max="65535"
+                            style="width: 100%"
+                        />
+                    </template>
+                </nn-settings-item>
+
+                <nn-settings-item
+                    title="分页最大条数"
+                    label-for="api-max-page-size"
+                    align="center"
+                    :actions-width="180"
+                >
+                    <template #actions>
+                        <nn-input-number
+                            id="api-max-page-size"
                             v-model:value="settingsForm.maxPageSize"
                             :min="1"
                             :max="10000"
                             style="width: 100%"
                         />
-                    </nn-form-item>
-                </template>
+                    </template>
+                </nn-settings-item>
+            </template>
 
-                <template v-if="settingsForm.mode === API_ACCESS_MODE.CLI">
-                    <nn-form-item label="Telnet监听端口" name="cliPort">
+            <template v-if="settingsForm.mode === API_ACCESS_MODE.CLI">
+                <nn-settings-item
+                    title="Telnet监听端口"
+                    label-for="api-cli-port"
+                    align="center"
+                    :actions-width="180"
+                    class="api-setting-pair-start"
+                >
+                    <template #actions>
                         <nn-input-number
+                            id="api-cli-port"
                             v-model:value="settingsForm.cliPort"
                             :min="1"
                             :max="65535"
                             :disabled="true"
                             style="width: 100%"
                         />
-                    </nn-form-item>
+                    </template>
+                </nn-settings-item>
 
-                    <nn-form-item label="最大会话数" name="cliMaxSessions">
+                <nn-settings-item
+                    title="最大会话数"
+                    label-for="api-cli-max-sessions"
+                    align="center"
+                    :actions-width="180"
+                >
+                    <template #actions>
                         <nn-input-number
+                            id="api-cli-max-sessions"
                             v-model:value="settingsForm.cliMaxSessions"
                             :min="1"
                             :max="100"
                             style="width: 100%"
                         />
-                    </nn-form-item>
-                </template>
+                    </template>
+                </nn-settings-item>
+            </template>
+        </nn-settings-section>
 
-                <nn-form-item label="运行状态">
-                    <nn-space direction="vertical" size="small">
-                        <nn-space>
-                            <nn-tag :color="apiStatus.running ? 'green' : 'default'">
-                                {{ apiStatus.running ? '运行中' : '未运行' }}
+        <nn-settings-section title="运行状态" description="查看当前 HTTP API 与 Telnet CLI 的监听状态。">
+            <div class="api-status-panel">
+                <nn-alert
+                    :type="apiStatus.running ? 'success' : 'info'"
+                    :message="apiStatusMessage"
+                    :description="apiStatusDescription"
+                    show-icon
+                    variant="subtle"
+                    class="api-status-summary"
+                />
+
+                <nn-descriptions :column="1" bordered size="small" class="api-status-details">
+                    <nn-descriptions-item label="HTTP API">
+                        <div class="api-endpoint-state">
+                            <span class="api-endpoint-address">
+                                {{ apiStatus.http.host }}:{{ apiStatus.http.port }}
+                            </span>
+                            <nn-tag :color="apiStatus.http.running ? 'green' : 'default'">
+                                {{ apiStatus.http.running ? '运行中' : '未运行' }}
                             </nn-tag>
-                            <span v-if="apiStatus.running">{{ modeLabel(apiStatus.mode) }}</span>
-                        </nn-space>
-                        <nn-space wrap>
-                            <nn-tag :color="apiStatus.http.running ? 'green' : 'default'">HTTP API</nn-tag>
-                            <span>{{ apiStatus.http.host }}:{{ apiStatus.http.port }}</span>
-                        </nn-space>
-                        <nn-space wrap>
-                            <nn-tag :color="apiStatus.cli.running ? 'green' : 'default'">Telnet CLI</nn-tag>
-                            <span>{{ apiStatus.cli.host }}:{{ apiStatus.cli.port }}</span>
-                        </nn-space>
-                    </nn-space>
-                </nn-form-item>
+                        </div>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="Telnet CLI">
+                        <div class="api-endpoint-state">
+                            <span class="api-endpoint-address">{{ apiStatus.cli.host }}:{{ apiStatus.cli.port }}</span>
+                            <nn-tag :color="apiStatus.cli.running ? 'green' : 'default'">
+                                {{ apiStatus.cli.running ? '运行中' : '未运行' }}
+                            </nn-tag>
+                        </div>
+                    </nn-descriptions-item>
+                </nn-descriptions>
+            </div>
+        </nn-settings-section>
 
-                <nn-form-item>
-                    <nn-space>
-                        <nn-button type="primary" @click="saveSettings">保存并应用</nn-button>
-                        <nn-button @click="refreshStatus">刷新状态</nn-button>
-                    </nn-space>
-                </nn-form-item>
-            </nn-form>
-        </nn-card>
-    </div>
+        <div class="settings-page-actions">
+            <nn-space wrap>
+                <nn-button type="primary" @click="saveSettings">保存并应用</nn-button>
+                <nn-button @click="refreshStatus">刷新状态</nn-button>
+            </nn-space>
+        </div>
+    </nn-settings>
 </template>
 
 <script setup>
-    import { ref, onMounted } from 'vue';
+    import { computed, ref, onMounted } from 'vue';
     import { notify } from '../../utils/notify';
     import { API_ACCESS_MODE, DEFAULT_API_SETTINGS } from '../../const/apiConst';
 
@@ -143,6 +197,22 @@
         }
         return '关闭';
     };
+
+    const apiStatusMessage = computed(() => {
+        if (!apiStatus.value.running) {
+            return '外部接入服务未运行';
+        }
+
+        if (apiStatus.value.mode === API_ACCESS_MODE.NONE) {
+            return '外部接入服务正在运行';
+        }
+
+        return `${modeLabel(apiStatus.value.mode)} 正在运行`;
+    });
+
+    const apiStatusDescription = computed(() =>
+        apiStatus.value.running ? '当前对外接入服务已启动。' : 'HTTP API 与 Telnet CLI 当前均未监听。'
+    );
 
     const getSettings = async () => {
         try {
@@ -235,7 +305,39 @@
         max-width: 100%;
     }
 
-    :deep(.nn-form-item-label > label) {
-        font-size: 12px;
+    .api-status-panel {
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+    }
+
+    .api-settings :deep(.api-setting-pair-start) {
+        min-height: 0;
+        padding-bottom: 4px;
+        border-bottom: 0;
+    }
+
+    .api-settings :deep(.api-setting-pair-start + .nn-settings-item) {
+        min-height: 0;
+        padding-top: 4px;
+    }
+
+    .api-status-details {
+        min-width: 0;
+    }
+
+    .api-endpoint-state {
+        display: flex;
+        gap: 8px 16px;
+        align-items: center;
+        justify-content: space-between;
+        min-width: 0;
+    }
+
+    .api-endpoint-address {
+        min-width: 0;
+        color: var(--nn-color-text-strong);
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
     }
 </style>

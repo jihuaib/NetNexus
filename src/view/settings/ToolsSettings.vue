@@ -1,68 +1,84 @@
 <template>
-    <div class="tools-settings">
-        <nn-card title="Tools设置" class="settings-card">
-            <nn-form :model="settingsForm" layout="vertical">
-                <nn-divider>字符串生成</nn-divider>
-                <nn-form-item label="字符串生成历史记录最大存储条数" name="maxStringHistory">
+    <nn-settings class="tools-settings">
+        <nn-settings-section title="字符串生成" description="控制字符串生成器保留的历史记录数量。">
+            <nn-settings-item
+                title="历史记录最大存储条数"
+                label-for="tools-string-history-limit"
+                align="center"
+                :actions-width="180"
+            >
+                <template #actions>
                     <nn-input-number
+                        id="tools-string-history-limit"
                         v-model:value="settingsForm.stringGenerator.maxStringHistory"
                         :min="10"
                         :max="1000"
                         style="width: 100%"
                     />
-                </nn-form-item>
+                </template>
+            </nn-settings-item>
+        </nn-settings-section>
 
-                <nn-divider>报文解析</nn-divider>
-                <nn-form-item label="报文解析历史记录最大存储条数" name="maxMessageHistory">
+        <nn-settings-section title="报文解析" description="控制报文解析器保留的历史记录数量。">
+            <nn-settings-item
+                title="历史记录最大存储条数"
+                label-for="tools-packet-history-limit"
+                align="center"
+                :actions-width="180"
+            >
+                <template #actions>
                     <nn-input-number
+                        id="tools-packet-history-limit"
                         v-model:value="settingsForm.packetParser.maxMessageHistory"
                         :min="10"
                         :max="1000"
                         style="width: 100%"
                     />
-                </nn-form-item>
+                </template>
+            </nn-settings-item>
+        </nn-settings-section>
 
-                <nn-divider>Wireshark</nn-divider>
-                <div class="wireshark-plugin-panel">
-                    <nn-descriptions size="small" :column="1" bordered>
-                        <nn-descriptions-item label="BMP draft-20 Lua插件">
-                            <nn-space wrap>
-                                <nn-tag :color="wiresharkPluginTag.color">{{ wiresharkPluginTag.text }}</nn-tag>
-                                <span class="plugin-path">{{ wiresharkPluginStatus.installedPath || '-' }}</span>
-                            </nn-space>
-                        </nn-descriptions-item>
-                        <nn-descriptions-item label="TShark">
-                            <span class="plugin-path">
-                                {{ wiresharkPluginStatus.tsharkPath || '未检测到，使用默认插件目录' }}
-                            </span>
-                        </nn-descriptions-item>
-                    </nn-descriptions>
-                    <nn-space wrap class="plugin-actions">
-                        <nn-button type="primary" :loading="wiresharkPluginLoading" @click="installWiresharkBmpPlugin">
-                            安装/更新插件
-                        </nn-button>
-                        <nn-button
-                            danger
-                            :loading="wiresharkPluginUninstalling"
-                            :disabled="!wiresharkPluginStatus.installed"
-                            @click="uninstallWiresharkBmpPlugin"
-                        >
-                            卸载插件
-                        </nn-button>
-                        <nn-button :loading="wiresharkPluginOpening" @click="openWiresharkPluginDirectory">
-                            打开插件目录
-                        </nn-button>
-                        <nn-button :loading="wiresharkPluginRefreshing" @click="refreshWiresharkBmpPluginStatus">
-                            刷新状态
-                        </nn-button>
-                    </nn-space>
-                </div>
-                <nn-form-item>
-                    <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
-                </nn-form-item>
-            </nn-form>
-        </nn-card>
-    </div>
+        <nn-settings-section title="Wireshark" description="管理 BMP draft-20 Lua 插件及 TShark 检测状态。">
+            <div class="wireshark-plugin-panel">
+                <nn-descriptions size="small" :column="1" bordered>
+                    <nn-descriptions-item label="BMP draft-20 Lua插件">
+                        <nn-space wrap>
+                            <nn-tag :color="wiresharkPluginTag.color">{{ wiresharkPluginTag.text }}</nn-tag>
+                            <span class="plugin-path">{{ wiresharkPluginStatus.installedPath || '-' }}</span>
+                        </nn-space>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="TShark">
+                        <span class="plugin-path">
+                            {{ wiresharkPluginStatus.tsharkPath || '未检测到，使用默认插件目录' }}
+                        </span>
+                    </nn-descriptions-item>
+                </nn-descriptions>
+                <nn-space wrap class="plugin-actions">
+                    <nn-button type="primary" :loading="wiresharkPluginLoading" @click="installWiresharkBmpPlugin">
+                        安装/更新插件
+                    </nn-button>
+                    <nn-button
+                        danger
+                        :loading="wiresharkPluginUninstalling"
+                        :disabled="!wiresharkPluginStatus.installed"
+                        @click="uninstallWiresharkBmpPlugin"
+                    >
+                        卸载插件
+                    </nn-button>
+                    <nn-button :loading="wiresharkPluginOpening" @click="openWiresharkPluginDirectory">
+                        打开插件目录
+                    </nn-button>
+                    <nn-button :loading="wiresharkPluginRefreshing" @click="refreshWiresharkBmpPluginStatus">
+                        刷新状态
+                    </nn-button>
+                </nn-space>
+            </div>
+        </nn-settings-section>
+
+        <div class="settings-page-actions">
+            <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
+        </div>
+    </nn-settings>
 </template>
 
 <script setup>
@@ -225,10 +241,6 @@
 <style scoped>
     .tools-settings {
         max-width: 100%;
-    }
-
-    :deep(.nn-form-item-label > label) {
-        font-size: 12px;
     }
 
     .wireshark-plugin-panel {

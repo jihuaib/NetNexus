@@ -1,56 +1,18 @@
 <template>
-    <nn-modal
+    <nn-navigation-modal
         v-model:open="isOpen"
+        v-model:active-key="activeKey"
+        class="settings-dialog-modal"
         title="设置"
-        :footer="null"
-        class="modal-xlarge settings-dialog-modal"
-        wrap-class-name="settings-dialog-wrap"
-        :mask-closable="false"
+        :items="settingsNavigationItems"
+        width="min(1400px, 80vw)"
+        height="min(760px, calc(100vh - 32px))"
         @cancel="onClose"
     >
-        <div class="settings-layout">
-            <!-- 左侧分类菜单 -->
-            <div class="settings-sidebar">
-                <nn-menu v-model:selected-keys="selectedCategory" mode="inline" class="settings-menu">
-                    <nn-menu-item key="general">
-                        <template #icon><component :is="settingsNavigationIcons.general" /></template>
-                        <span>通用设置</span>
-                    </nn-menu-item>
-                    <nn-menu-item key="tools">
-                        <template #icon><component :is="settingsNavigationIcons.tools" /></template>
-                        <span>工具集合</span>
-                    </nn-menu-item>
-                    <nn-menu-item key="ftp">
-                        <template #icon><component :is="settingsNavigationIcons.ftp" /></template>
-                        <span>FTP服务器</span>
-                    </nn-menu-item>
-                    <nn-menu-item key="api">
-                        <template #icon><component :is="settingsNavigationIcons.externalApi" /></template>
-                        <span>外部API</span>
-                    </nn-menu-item>
-                    <nn-menu-item key="data-management">
-                        <template #icon><component :is="settingsNavigationIcons.dataManagement" /></template>
-                        <span>数据管理</span>
-                    </nn-menu-item>
-                    <nn-menu-item key="runtime">
-                        <template #icon><component :is="settingsNavigationIcons.runtime" /></template>
-                        <span>运行时诊断</span>
-                    </nn-menu-item>
-                    <nn-menu-item key="update">
-                        <template #icon><component :is="settingsNavigationIcons.update" /></template>
-                        <span>应用更新</span>
-                    </nn-menu-item>
-                </nn-menu>
-            </div>
-
-            <!-- 右侧设置内容区域 -->
-            <div class="settings-content">
-                <keep-alive>
-                    <component :is="currentSettingComponent" />
-                </keep-alive>
-            </div>
-        </div>
-    </nn-modal>
+        <keep-alive>
+            <component :is="currentSettingComponent" />
+        </keep-alive>
+    </nn-navigation-modal>
 </template>
 
 <script setup>
@@ -77,7 +39,7 @@
     // Use a local state instead of relying solely on the computed property
     const isOpen = ref(props.open);
 
-    // Update isOpen when props.visible changes
+    // Update isOpen when props.open changes
     watch(
         () => props.open,
         newValue => {
@@ -93,29 +55,64 @@
         }
     );
 
-    const selectedCategory = ref(['general']);
-
-    const currentSettingComponent = computed(() => {
-        const category = selectedCategory.value[0];
-        switch (category) {
-            case 'general':
-                return GeneralSettings;
-            case 'tools':
-                return ToolsSettings;
-            case 'ftp':
-                return FtpSettings;
-            case 'api':
-                return ApiSettings;
-            case 'data-management':
-                return BmpDataSettings;
-            case 'runtime':
-                return RuntimeSettings;
-            case 'update':
-                return UpdateSettings;
-            default:
-                return GeneralSettings;
+    const settingsNavigationItems = Object.freeze([
+        {
+            key: 'general',
+            label: '通用',
+            description: '界面主题与运行日志',
+            icon: settingsNavigationIcons.general
+        },
+        {
+            key: 'tools',
+            label: '工具',
+            description: '历史记录与 Wireshark 插件',
+            icon: settingsNavigationIcons.tools
+        },
+        {
+            key: 'ftp',
+            label: 'FTP',
+            description: 'FTP 用户记录存储',
+            icon: settingsNavigationIcons.ftp
+        },
+        {
+            key: 'api',
+            label: 'API',
+            description: 'HTTP API 与 Telnet CLI',
+            icon: settingsNavigationIcons.externalApi
+        },
+        {
+            key: 'data-management',
+            label: '数据',
+            description: 'BMP SQLite 数据库维护',
+            icon: settingsNavigationIcons.dataManagement
+        },
+        {
+            key: 'runtime',
+            label: '运行时',
+            description: 'YANG 编译器运行状态',
+            icon: settingsNavigationIcons.runtime
+        },
+        {
+            key: 'update',
+            label: '更新',
+            description: '版本检查、下载与安装',
+            icon: settingsNavigationIcons.update
         }
+    ]);
+
+    const settingComponents = Object.freeze({
+        general: GeneralSettings,
+        tools: ToolsSettings,
+        ftp: FtpSettings,
+        api: ApiSettings,
+        'data-management': BmpDataSettings,
+        runtime: RuntimeSettings,
+        update: UpdateSettings
     });
+
+    const activeKey = ref('general');
+
+    const currentSettingComponent = computed(() => settingComponents[activeKey.value] || GeneralSettings);
 
     const onClose = () => {
         isOpen.value = false;
@@ -123,7 +120,7 @@
     };
 
     const openDialog = (category = 'general') => {
-        selectedCategory.value = [category];
+        activeKey.value = category;
         isOpen.value = true;
     };
 
@@ -134,90 +131,15 @@
 </script>
 
 <style scoped>
-    :global(.settings-dialog-wrap) {
-        overflow: hidden !important;
+    :global(.settings-dialog-modal .nn-navigation-modal-rail) {
+        width: 160px;
+        flex-basis: 160px;
     }
 
-    :global(.settings-dialog-modal) {
-        max-height: calc(100vh - 32px) !important;
-        padding-bottom: 0 !important;
-    }
-
-    :global(.settings-dialog-modal .nn-modal-content) {
-        height: min(760px, calc(100vh - 32px)) !important;
-        max-height: calc(100vh - 32px) !important;
-    }
-
-    :global(.settings-dialog-modal .nn-modal-body) {
-        flex: 1 !important;
-        min-height: 0 !important;
-        max-height: none !important;
-        overflow: hidden !important;
-    }
-
-    .settings-layout {
-        display: flex;
-        width: 100%;
-        height: 100%;
-        min-height: 0;
-        overflow: hidden;
-    }
-
-    .settings-sidebar {
-        flex: 0 0 140px;
-        min-height: 0;
-        border-right: 1px solid var(--nn-color-border-light);
-        overflow: auto;
-    }
-
-    .settings-menu {
-        min-height: 100%;
-        border-right: none;
-        font-size: 13px;
-    }
-
-    .settings-menu :deep(.nn-menu-item) {
-        font-size: 13px;
-    }
-
-    .settings-content {
-        flex: 1;
-        min-width: 0;
-        min-height: 0;
-        padding-left: 16px;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-        font-size: 0.9rem;
-    }
-
-    .settings-content :deep(.general-settings),
-    .settings-content :deep(.tools-settings),
-    .settings-content :deep(.ftp-settings),
-    .settings-content :deep(.api-settings),
-    .settings-content :deep(.bmp-data-settings),
-    .settings-content :deep(.runtime-settings),
-    .settings-content :deep(.update-settings) {
-        flex: 1 1 0;
-        min-width: 0;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-    }
-
-    .settings-content :deep(.settings-card) {
-        flex: 1 1 0;
-        min-width: 0;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-    }
-
-    .settings-content :deep(.settings-card > .nn-card-body) {
-        flex: 1 1 0;
-        min-height: 0;
-        overflow: auto;
+    @media (max-width: 680px) {
+        :global(.settings-dialog-modal .nn-navigation-modal-rail) {
+            width: 100%;
+            flex-basis: auto;
+        }
     }
 </style>

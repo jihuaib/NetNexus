@@ -64,6 +64,18 @@ assert(!packageJson.dependencies?.['@lucide/vue'], '@lucide/vue must be owned by
 assert(!packageJson.devDependencies?.['@lucide/vue'], '@lucide/vue must be owned by netnexus-ui');
 assert(!packageJson.dependencies?.['ant-design-vue'], 'ant-design-vue remains in dependencies');
 assert(!packageJson.devDependencies?.['ant-design-vue'], 'ant-design-vue remains in devDependencies');
+assert.match(
+    packageJson.scripts?.start || '',
+    /(?:^|\s)vite\b[\s\S]*\s--force(?:\s|$)/u,
+    'the Vite dev server must force dependency re-optimization after a netnexus-ui package update'
+);
+
+const viteConfigSource = fs.readFileSync(path.join(projectRoot, 'vite.config.js'), 'utf8');
+assert.match(
+    viteConfigSource,
+    /server\s*:\s*\{[\s\S]*?port\s*:\s*3000\s*,[\s\S]*?strictPort\s*:\s*true/u,
+    'the Vite dev server must fail instead of silently moving away from Electron port 3000'
+);
 
 assert(!fs.existsSync(path.join(sourceRoot, 'ui')), 'the embedded UI source must live in the netnexus-ui package');
 assert(
@@ -102,6 +114,73 @@ assert.deepStrictEqual(
     [],
     `unregistered NetNexus UI components: ${missingRegistrations.join(', ')}`
 );
+
+const settingsDialogSource = fs.readFileSync(path.join(sourceRoot, 'components', 'SettingsDialog.vue'), 'utf8');
+assert.match(settingsDialogSource, /<nn-navigation-modal(?:\s|>)/u, 'SettingsDialog must use NnNavigationModal');
+assert(
+    !/<nn-(?:modal|menu|menu-item)(?:\s|>)/u.test(settingsDialogSource),
+    'SettingsDialog retains a local modal or navigation implementation'
+);
+
+const fileImportModalFiles = ['RouteViewsImportModal.vue', 'RpkiRoaImportModal.vue', 'RpkiAspaImportModal.vue'];
+for (const fileName of fileImportModalFiles) {
+    const source = fs.readFileSync(path.join(sourceRoot, 'components', fileName), 'utf8');
+    assert.match(source, /<nn-file-import-modal(?:\s|>)/u, `${fileName} must use NnFileImportModal`);
+    assert(!/<nn-modal(?:\s|>)/u.test(source), `${fileName} retains a local NnModal shell`);
+    assert(
+        !/\.(?:file-selector|selected-path|importing-feedback)\b/u.test(source),
+        `${fileName} retains duplicate import shell CSS`
+    );
+}
+
+const settingsPageFiles = [
+    'GeneralSettings.vue',
+    'ToolsSettings.vue',
+    'FtpSettings.vue',
+    'ApiSettings.vue',
+    'BmpDataSettings.vue',
+    'RuntimeSettings.vue',
+    'UpdateSettings.vue'
+];
+const settingsPageSources = new Map(
+    settingsPageFiles.map(fileName => [
+        fileName,
+        fs.readFileSync(path.join(sourceRoot, 'view', 'settings', fileName), 'utf8')
+    ])
+);
+const expectedSettingsItemCounts = new Map([
+    ['GeneralSettings.vue', 2],
+    ['ToolsSettings.vue', 2],
+    ['FtpSettings.vue', 1],
+    ['ApiSettings.vue', 5],
+    ['BmpDataSettings.vue', 1],
+    ['RuntimeSettings.vue', 0],
+    ['UpdateSettings.vue', 3]
+]);
+const expectedSettingsSectionTitles = new Map([
+    ['GeneralSettings.vue', ['主题', '日志']],
+    ['ToolsSettings.vue', ['字符串生成', '报文解析', 'Wireshark']],
+    ['FtpSettings.vue', ['用户存储']],
+    ['ApiSettings.vue', ['接入配置', '运行状态']],
+    ['BmpDataSettings.vue', ['BMP SQLite 数据库']],
+    ['RuntimeSettings.vue', ['YANG 编译器']],
+    ['UpdateSettings.vue', ['版本与安装', '自动更新']]
+]);
+
+for (const [fileName, source] of settingsPageSources) {
+    assert.match(source, /<nn-settings(?:\s|>)/u, `${fileName} must use the NnSettings page container`);
+    assert.deepStrictEqual(
+        [...source.matchAll(/<nn-settings-section\b[^>]*\btitle="([^"]+)"/gu)].map(match => match[1]),
+        expectedSettingsSectionTitles.get(fileName),
+        `${fileName} must expose only its real business sections below the navigation heading`
+    );
+    assert(!/<nn-card(?:\s|>)/u.test(source), `${fileName} retains a page-level Card instead of a settings section`);
+    assert.strictEqual(
+        (source.match(/<nn-settings-item(?:\s|>)/gu) || []).length,
+        expectedSettingsItemCounts.get(fileName),
+        `${fileName} must only map simple preference rows to NnSettingsItem`
+    );
+}
 
 const mainSource = fs.readFileSync(path.join(sourceRoot, 'main.js'), 'utf8');
 assert.match(mainSource, /from 'netnexus-ui'/u);

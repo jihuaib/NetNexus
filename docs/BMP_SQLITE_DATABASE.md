@@ -1260,7 +1260,7 @@ SELECT r.scope_id, r.route_id, r.afi, r.safi, r.prefix, r.prefix_length,
 
 ## 18. SQL 调试日志
 
-在“设置 → 通用设置”中把日志级别切换为 `debug` 并保存后，BMP SQLite writer、只读 reader 和离线 reader 会输出 SQL 跟踪。切回 `info`、`warn`、`error` 或 `off` 会立即停止跟踪。
+在“设置 → 通用”中把日志级别切换为 `debug` 并保存后，BMP SQLite writer、只读 reader 和离线 reader 会输出 SQL 跟踪。切回 `info`、`warn`、`error` 或 `off` 会立即停止跟踪。
 
 SQL 跟踪包括执行方式、耗时、受影响行数或返回行数，以及归一化后的 SQL。BMP 写入频率高，`debug` 会产生大量日志，只应临时启用。
 

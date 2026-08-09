@@ -64,10 +64,18 @@ assert.doesNotMatch(
     /fadeIn(?:Down|Up)/u,
     'startup content must not remain on a half-transparent entrance-animation frame'
 );
+assert.match(splashSource, /--nn-color-bg-body:\s*#f4f6f8/u, 'startup UI must use the flat theme body token');
 assert.match(
     splashSource,
-    /background:\s*linear-gradient/u,
-    'the opaque startup window must retain its own background'
+    /background:\s*var\(--nn-color-bg-body\)/u,
+    'the opaque startup window must retain its own tokenized background'
+);
+assert.doesNotMatch(splashSource, /(?:linear|radial)-gradient\s*\(/u, 'flat startup UI must not use gradients');
+assert.doesNotMatch(splashSource, /(?:box|text)-shadow\s*:/u, 'flat startup UI must not use decorative shadows');
+assert.match(
+    mainSource,
+    /const SPLASH_BACKGROUND_COLOR = '#f4f6f8';/u,
+    'the native startup surface must match the flat renderer background'
 );
 
 const coreProgressIndex = mainSource.indexOf("updateSplashProgress(10, '正在加载核心组件...')");

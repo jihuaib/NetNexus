@@ -103,6 +103,18 @@
 
 详见 [外部 API 文档](API.md)。
 
+## BMP 数据设置
+
+![BMP 数据设置](images/setting/setting-data.png)
+
+数据页展示 BMP SQLite 数据库的服务状态、文件数量、占用空间和存储路径。BMP 服务停止后，可在这里刷新状态或删除全部 BMP 客户端、会话、RIB 路由、历史事件和统计数据；BMP 配置本身不会被删除。
+
+## 运行时设置
+
+![YANG 运行时设置](images/setting/setting-runtime.png)
+
+运行时页展示内置 libyang/YANG 编译器的状态、版本、来源、可执行文件和实际路径。点击“重新检测”可再次验证运行时；编译器不可用时，YANG 编译保持停用，不会回退到简化解析器。
+
 ## 应用更新
 
 ![更新设置](images/setting/setting-updater.png)

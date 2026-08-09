@@ -197,6 +197,8 @@ Open 消息支持自定义能力字段，路由生成支持自定义路由属性
 
 RouteViews 导入用于把本地 MRT 文件转换为 BGP 路由数据。页面会读取项目内置默认文件或用户选择的 MRT 文件。
 
+![RouteViews MRT 导入](images/bgp/bgp-routeviews-import.png)
+
 注意：
 
 - 大文件导入会占用 CPU 和磁盘 IO。

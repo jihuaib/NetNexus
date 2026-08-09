@@ -1,10 +1,12 @@
-const { app, BrowserWindow, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const SystemApp = require('../electron/app/systemApp');
 const BgpConst = require('../electron/const/bgpConst');
+const { MonitorWindowManager } = require('../electron/window/monitorWindowManager');
+const { MockNetconfServer } = require('./mockNetconfServer');
 
 const BASE_URL = process.env.NETNEXUS_DOCS_URL || 'http://127.0.0.1:3000';
 const OUTPUT_ROOT = path.join(__dirname, '..');
@@ -42,12 +44,26 @@ const BMP_ROUTE_HISTORY_FLOW_SPEC_QUERY = 'dst=198.18.253.0/24';
 const BMP_CLIENT_KEY_PLACEHOLDER = '__BMP_CLIENT_KEY__';
 const DEFAULT_WINDOW_WIDTH = 1920;
 const DEFAULT_WINDOW_HEIGHT = 1200;
+const STARTUP_BANNER_WIDTH = 600;
+const STARTUP_BANNER_HEIGHT = 500;
 let bmpDocsClientKey = '';
+let netconfDocsMockServer = null;
+let yangDocsContext = null;
 
 const screenshots = [
+    {
+        kind: 'startup',
+        outputPath: 'docs/images/startup/startup-banner.png'
+    },
     ['/bgp/bgp-config', 'docs/images/bgp/bgp-config.png'],
     ['/bgp/bgp-peer-config', 'docs/images/bgp/bgp-peer.png'],
     ['/bgp/route-ipv4', 'docs/images/bgp/bgp-route.png'],
+    {
+        route: '/bgp/route-ipv4',
+        outputPath: 'docs/images/bgp/bgp-routeviews-import.png',
+        prepare: 'open-routeviews-import',
+        cleanup: 'close-overlay'
+    },
     {
         route: '/bgp/route-ipv4',
         outputPath: 'docs/images/bgp/bgp-route-advanced-config.png',
@@ -98,7 +114,7 @@ const screenshots = [
     {
         route: '/bmp/bmp-config',
         outputPath: 'docs/images/bmp/bmp-client-detail.png',
-        prepare: 'open-text-detail-0',
+        prepare: 'open-bmp-client-detail',
         cleanup: 'close-overlay'
     },
     [
@@ -224,8 +240,59 @@ const screenshots = [
     },
     ['/rpki/rpki-config', 'docs/images/rpki/rpki-config-and-client.png'],
     ['/rpki/rpki-roa-config', 'docs/images/rpki/rpki-roa.png'],
+    {
+        route: '/rpki/rpki-roa-config',
+        outputPath: 'docs/images/rpki/rpki-roa-import.png',
+        prepare: 'open-rpki-roa-import',
+        cleanup: 'close-overlay'
+    },
     ['/rpki/rpki-router-key-config', 'docs/images/rpki/rpki-router-key.png'],
     ['/rpki/rpki-aspa-config', 'docs/images/rpki/rpki-aspa.png'],
+    {
+        route: '/rpki/rpki-aspa-config',
+        outputPath: 'docs/images/rpki/rpki-aspa-import.png',
+        prepare: 'open-rpki-aspa-import',
+        cleanup: 'close-overlay'
+    },
+    ['/yang/yang-connection', 'docs/images/yang/yang-connection.png'],
+    ['/yang/yang-modules', 'docs/images/yang/yang-modules.png'],
+    ['/yang/yang-workspace', 'docs/images/yang/yang-workspace.png'],
+    {
+        route: '/yang/yang-workspace',
+        outputPath: 'docs/images/yang/yang-operations.png',
+        prepare: 'execute-yang-get'
+    },
+    {
+        route: '/yang/yang-workspace',
+        outputPath: 'docs/images/yang/yang-schema-context-menu.png',
+        prepare: 'open-yang-schema-context-menu',
+        cleanup: 'close-overlay'
+    },
+    {
+        kind: 'monitor',
+        monitorId: 'netconf-edit-config',
+        outputPath: 'docs/images/yang/yang-edit-config-editor.png',
+        prepare: 'prepare-yang-edit-config-editor'
+    },
+    {
+        kind: 'monitor',
+        monitorId: 'netconf-edit-config',
+        outputPath: 'docs/images/yang/yang-operation-parameter-edit.png',
+        prepare: 'open-yang-operation-parameter-edit',
+        cleanup: 'close-overlay'
+    },
+    {
+        kind: 'monitor',
+        monitorId: 'netconf-edit-config',
+        outputPath: 'docs/images/yang/yang-execution-history.png',
+        prepare: 'execute-yang-edit-config-and-open-history'
+    },
+    {
+        kind: 'monitor',
+        monitorId: 'netconf-notifications',
+        outputPath: 'docs/images/yang/yang-notifications.png',
+        prepare: 'prepare-yang-notifications'
+    },
     ['/snmp/snmp-config', 'docs/images/snmp/snmp-config.png'],
     ['/monitor/snmp-trap', 'docs/images/snmp/snmp-trap.png'],
     {
@@ -234,6 +301,7 @@ const screenshots = [
         prepare: 'open-text-detail-0',
         cleanup: 'close-overlay'
     },
+    ['/snmp/snmp-mib-compile', 'docs/images/snmp/snmp-mib-compile.png'],
     ['/snmp/snmp-mib', 'docs/images/snmp/snmp-mib.png'],
     {
         route: '/snmp/snmp-mib',
@@ -309,12 +377,9 @@ function parsePositiveInteger(value, defaultValue) {
 }
 
 function getCaptureWindowSize() {
-    const { width: workAreaWidth, height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize;
-    const defaultWidth = Math.max(DEFAULT_WINDOW_WIDTH, workAreaWidth);
-    const defaultHeight = Math.max(DEFAULT_WINDOW_HEIGHT, workAreaHeight);
     return {
-        width: parsePositiveInteger(process.env.NETNEXUS_DOCS_WINDOW_WIDTH, defaultWidth),
-        height: parsePositiveInteger(process.env.NETNEXUS_DOCS_WINDOW_HEIGHT, defaultHeight)
+        width: parsePositiveInteger(process.env.NETNEXUS_DOCS_WINDOW_WIDTH, DEFAULT_WINDOW_WIDTH),
+        height: parsePositiveInteger(process.env.NETNEXUS_DOCS_WINDOW_HEIGHT, DEFAULT_WINDOW_HEIGHT)
     };
 }
 
@@ -394,7 +459,16 @@ async function navigateAndCapture(win, route, outputPath, prepare, cleanup) {
     }
     await closeOpenOverlay(win);
     await wait(150);
-    await win.webContents.executeJavaScript(`window.location.hash = ${JSON.stringify(route)}`);
+    if (route === '/monitor/netconf-notifications') {
+        const directUrl = new URL(BASE_URL);
+        directUrl.searchParams.set('docs-screenshot', 'netconf-notifications');
+        directUrl.hash = route;
+        const rendererReady = waitForRendererReady(win);
+        await win.loadURL(directUrl.toString());
+        await rendererReady;
+    } else {
+        await win.webContents.executeJavaScript(`window.location.hash = ${JSON.stringify(route)}`);
+    }
     await waitForRoute(win, route);
     await wait(1300);
     if (pagePreparers.has(route)) {
@@ -415,7 +489,54 @@ async function navigateAndCapture(win, route, outputPath, prepare, cleanup) {
     }
 }
 
-async function capturePage(win, label, outputPath) {
+function monitorScreenshotOptions(monitorId) {
+    if (monitorId !== 'netconf-edit-config') return undefined;
+    if (!yangDocsContext?.profileId || !yangDocsContext?.compileId || !yangDocsContext?.editableNodeId) {
+        throw new Error('YANG edit-config monitor context is unavailable');
+    }
+    return {
+        profileId: yangDocsContext.profileId,
+        compileId: yangDocsContext.compileId,
+        nodeId: yangDocsContext.editableNodeId,
+        target: 'candidate'
+    };
+}
+
+async function openAndCaptureMonitor(monitorWindowManager, screenshot) {
+    const { monitorId, outputPath, prepare, cleanup } = screenshot;
+    const response = await monitorWindowManager.openMonitor(monitorId, monitorScreenshotOptions(monitorId));
+    assertSuccess(response, `open ${monitorId} documentation monitor`);
+
+    const entry = [...monitorWindowManager.monitorWindows.values()].find(item => item.monitorId === monitorId);
+    const monitorWindow = entry?.window;
+    if (!monitorWindow || monitorWindow.isDestroyed()) {
+        throw new Error(`${monitorId} documentation monitor window is unavailable`);
+    }
+
+    monitorWindow.hide();
+    const { width, height } = getCaptureWindowSize();
+    monitorWindow.setContentSize(width, height);
+    await wait(400);
+    await closeOpenOverlay(monitorWindow);
+    await runScreenshotHandler(screenshotPreparers, prepare, monitorWindow, outputPath);
+    if (prepare) await wait(500);
+    monitorWindow.showInactive();
+    await wait(250);
+    try {
+        await capturePage(monitorWindow, `/monitor/${monitorId}`, outputPath, {
+            outputSize: { width, height },
+            warmOverlayCapture: false
+        });
+        if (cleanup) {
+            await runScreenshotHandler(screenshotCleanups, cleanup, monitorWindow, outputPath);
+            await wait(300);
+        }
+    } finally {
+        monitorWindow.hide();
+    }
+}
+
+async function capturePage(win, label, outputPath, options = {}) {
     await win.webContents.executeJavaScript('document.fonts && document.fonts.ready');
     const hasOpenOverlay = await win.webContents.executeJavaScript(`
         (() => {
@@ -468,16 +589,88 @@ async function capturePage(win, label, outputPath) {
     `);
     win.webContents.invalidate();
     await wait(150);
-    if (hasOpenOverlay) {
+    if (hasOpenOverlay && options.warmOverlayCapture !== false) {
         await win.capturePage();
         await wait(100);
         win.webContents.invalidate();
     }
     const image = await win.capturePage();
+    const [contentWidth, contentHeight] = win.getContentSize();
+    const outputWidth = options.outputSize?.width || contentWidth;
+    const outputHeight = options.outputSize?.height || contentHeight;
+    const imageSize = image.getSize();
+    const normalizedImage =
+        imageSize.width === outputWidth && imageSize.height === outputHeight
+            ? image
+            : image.resize({
+                  width: outputWidth,
+                  height: outputHeight,
+                  quality: 'best'
+              });
     const absoluteOutputPath = path.join(OUTPUT_ROOT, outputPath);
     await fs.mkdir(path.dirname(absoluteOutputPath), { recursive: true });
-    await fs.writeFile(absoluteOutputPath, image.toPNG());
+    await fs.writeFile(absoluteOutputPath, normalizedImage.toPNG());
     console.log(`captured ${label} -> ${outputPath}`);
+}
+
+async function captureStartupBanner(outputPath) {
+    const splash = new BrowserWindow({
+        width: STARTUP_BANNER_WIDTH,
+        height: STARTUP_BANNER_HEIGHT,
+        useContentSize: true,
+        show: false,
+        transparent: false,
+        backgroundColor: '#f4f6f8',
+        frame: false,
+        resizable: false,
+        hasShadow: false,
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true
+        }
+    });
+
+    try {
+        await splash.loadFile(path.join(__dirname, '../electron/splash.html'));
+        await splash.webContents.executeJavaScript(`
+            (() => {
+                const style = document.createElement('style');
+                style.id = 'docs-screenshot-stable-startup';
+                style.textContent =
+                    '.progress-bar { transition: none !important; } ' +
+                    '.startup-step-current .startup-step-status { animation: none !important; }';
+                document.head.appendChild(style);
+
+                const steps = [
+                    [18, '核心组件已加载', 'done'],
+                    [34, '基础设置已加载', 'done'],
+                    [52, '工具设置已加载', 'done'],
+                    [72, '主进程服务已启动', 'done'],
+                    [88, '等待页面渲染', 'active']
+                ];
+                steps.forEach(step => window.updateProgress(...step));
+            })()
+        `);
+        await splash.webContents.executeJavaScript('document.fonts && document.fonts.ready');
+        await splash.webContents.executeJavaScript(`
+            new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+        `);
+        splash.webContents.invalidate();
+        await wait(100);
+
+        const image = await splash.capturePage();
+        const normalizedImage = image.resize({
+            width: STARTUP_BANNER_WIDTH,
+            height: STARTUP_BANNER_HEIGHT,
+            quality: 'best'
+        });
+        const absoluteOutputPath = path.join(OUTPUT_ROOT, outputPath);
+        await fs.mkdir(path.dirname(absoluteOutputPath), { recursive: true });
+        await fs.writeFile(absoluteOutputPath, normalizedImage.toPNG());
+        console.log(`captured startup banner -> ${outputPath}`);
+    } finally {
+        splash.destroy();
+    }
 }
 
 async function waitForOpenOverlay(win, label, expectedText = '') {
@@ -991,9 +1184,9 @@ async function prepareSnmpMibTreePage(win) {
     const targetOid = '1.3.6.1.4.1.55555.1.1.3';
     const result = await win.webContents.executeJavaScript(`
         (() => {
-            const input = document.querySelector('.mib-query-row input');
-            const button = Array.from(document.querySelectorAll('.mib-query-row button'))
-                .find(item => item.textContent.includes('解析OID'));
+            const input = document.querySelector('.oid-query-row input');
+            const button = Array.from(document.querySelectorAll('.oid-query-row button'))
+                .find(item => item.textContent.includes('定位节点'));
             if (!input || !button) {
                 return { ready: false, reason: 'query controls not found' };
             }
@@ -1013,22 +1206,593 @@ async function prepareSnmpMibTreePage(win) {
         throw new Error(`SNMP MIB query controls unavailable: ${JSON.stringify(result)}`);
     }
 
-    await waitForOpenOverlay(win, 'SNMP MIB OID parse result', 'OID解析结果');
-    await closeOpenOverlay(win);
     await waitForRendererCondition(
         win,
         `
         (() => {
             const target = document.querySelector('.mib-node-title[data-tree-oid="${targetOid}"]');
-            const detailText = document.querySelector('.mib-node-detail')?.textContent || '';
+            const treeNode = target?.closest('.nn-tree-node');
             return {
-                ready: Boolean(target) && detailText.includes('demoWritableName'),
+                ready:
+                    Boolean(target) &&
+                    target.textContent.includes('demoWritableName') &&
+                    (treeNode?.getAttribute('aria-selected') === 'true' ||
+                        treeNode?.classList.contains('nn-tree-node-selected')),
                 targetVisible: Boolean(target),
-                detailText: detailText.slice(0, 120)
+                selected: treeNode?.getAttribute('aria-selected'),
+                text: target?.textContent?.slice(0, 120) || ''
             };
         })()
     `,
         'SNMP MIB expanded tree',
+        10000
+    );
+}
+
+async function prepareSnmpMibCompilerPage(win) {
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const page = document.querySelector('.snmp-mib-page');
+            const rows = Array.from(page?.querySelectorAll('.mib-file-table .nn-table-tbody tr') || []);
+            const text = page?.textContent || '';
+            const loading = Boolean(page?.querySelector('.nn-spin-spinning, .nn-table-loading-mask'));
+            return {
+                ready:
+                    Boolean(page) &&
+                    !loading &&
+                    rows.length > 0 &&
+                    text.includes('NETNEXUS-DEMO-MIB') &&
+                    text.includes('文件状态'),
+                rows: rows.length,
+                loading,
+                text: text.slice(0, 240)
+            };
+        })()
+    `,
+        'SNMP MIB compiler fixture',
+        10000
+    );
+}
+
+async function prepareYangConnectionPage(win) {
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const page = document.querySelector('.yang-connection-page');
+            const text = page?.textContent || '';
+            const loading = Boolean(page?.querySelector('.nn-spin-spinning'));
+            const capabilityButton = Array.from(page?.querySelectorAll('.session-card button') || [])
+                .find(button => button.textContent.includes('Capability'));
+            return {
+                ready:
+                    Boolean(page) &&
+                    !loading &&
+                    text.includes('连接设置') &&
+                    text.includes('Local NETCONF Mock') &&
+                    text.includes('NETCONF 已连接') &&
+                    Boolean(capabilityButton),
+                loading,
+                text: text.slice(0, 320)
+            };
+        })()
+    `,
+        'YANG connected profile page',
+        20000
+    );
+}
+
+async function prepareYangModulesPage(win) {
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const page = document.querySelector('.yang-modules-page');
+            const rows = Array.from(page?.querySelectorAll('.module-table .nn-table-tbody tr') || []);
+            const text = page?.textContent || '';
+            const loading = Boolean(page?.querySelector('.nn-spin-spinning, .nn-table-loading-mask'));
+            return {
+                ready:
+                    Boolean(page) &&
+                    !loading &&
+                    rows.length >= 2 &&
+                    text.includes('Local NETCONF Mock') &&
+                    text.includes('netnexus-mock-device') &&
+                    text.includes('netnexus-mock-types') &&
+                    text.includes('已编译'),
+                rows: rows.length,
+                loading,
+                text: text.slice(0, 360)
+            };
+        })()
+    `,
+        'YANG downloaded and compiled modules page',
+        30000
+    );
+}
+
+async function expandYangSchemaNode(win, nodeName, expectedChild) {
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const item = Array.from(document.querySelectorAll('.schema-panel [role="treeitem"]'))
+                .find(node => node.querySelector('.schema-node-name')?.textContent.trim() === ${JSON.stringify(nodeName)});
+            const switcher = item?.querySelector('button.nn-tree-switcher');
+            if (!item || !switcher) {
+                return { found: Boolean(item), expanded: false };
+            }
+            const expanded = switcher.getAttribute('aria-label') === '收起节点';
+            if (!expanded) switcher.click();
+            return { found: true, expanded: true };
+        })()
+    `);
+    if (!result?.found) {
+        throw new Error(`YANG Schema node not found: ${nodeName}`);
+    }
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const names = Array.from(document.querySelectorAll('.schema-panel .schema-node-name'))
+                .map(node => node.textContent.trim());
+            return {
+                ready: names.includes(${JSON.stringify(expectedChild)}),
+                names: names.slice(0, 30)
+            };
+        })()
+    `,
+        `YANG Schema ${nodeName} expanded`,
+        10000
+    );
+}
+
+async function prepareYangWorkspacePage(win) {
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const page = document.querySelector('.yang-workspace-page');
+            const text = page?.textContent || '';
+            const roots = page?.querySelectorAll('.schema-panel [role="treeitem"]') || [];
+            const loading = Boolean(page?.querySelector('.schema-panel .nn-spin-spinning'));
+            return {
+                ready:
+                    Boolean(page) &&
+                    !loading &&
+                    roots.length >= 2 &&
+                    text.includes('Schema 与设备操作') &&
+                    text.includes('Schema 已就绪') &&
+                    text.includes('Local NETCONF Mock') &&
+                    text.includes('netnexus-mock-device'),
+                roots: roots.length,
+                loading,
+                text: text.slice(0, 360)
+            };
+        })()
+    `,
+        'YANG Schema workspace',
+        30000
+    );
+    await expandYangSchemaNode(win, 'netnexus-mock-device', 'interfaces');
+    await expandYangSchemaNode(win, 'interfaces', 'interface');
+}
+
+async function executeYangGet(win, label) {
+    await prepareYangWorkspacePage(win);
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const panel = document.querySelector('.workspace-operation-panel .yang-operations-page');
+            const button = Array.from(panel?.querySelectorAll('button') || [])
+                .find(item => item.textContent.trim() === '执行 get');
+            if (!panel || !button || button.disabled) {
+                return {
+                    clicked: false,
+                    panelFound: Boolean(panel),
+                    buttonFound: Boolean(button),
+                    disabled: Boolean(button?.disabled)
+                };
+            }
+            button.scrollIntoView({ block: 'center', inline: 'nearest' });
+            button.click();
+            return { clicked: true };
+        })()
+    `);
+    if (!result?.clicked) {
+        throw new Error(`YANG get action unavailable for ${label}: ${JSON.stringify(result)}`);
+    }
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const panel = document.querySelector('.workspace-operation-panel .yang-operations-page');
+            const resultCard = panel?.querySelector('.operation-result-card');
+            const responseEditor = resultCard?.querySelector('.rpc-result textarea');
+            const requestEditor = panel?.querySelector('.rpc-request-editor textarea');
+            const response = responseEditor?.value || '';
+            const request = requestEditor?.value || '';
+            const text = resultCard?.textContent || '';
+            return {
+                ready:
+                    text.includes('成功') &&
+                    request.includes('<rpc') &&
+                    request.includes('<get') &&
+                    response.includes('<rpc-reply') &&
+                    response.includes('<data'),
+                text: text.slice(0, 240),
+                request: request.slice(0, 160),
+                response: response.slice(0, 160)
+            };
+        })()
+    `,
+        'YANG get request and response',
+        20000
+    );
+}
+
+async function prepareYangNotificationsPage(win) {
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const page = document.querySelector('[data-testid="netconf-notification-monitor-page"]');
+            const browser = document.querySelector('[data-testid="netconf-notification-drawer"]');
+            const rows = browser?.querySelectorAll('[data-testid="netconf-notification-row"]') || [];
+            return {
+                ready: Boolean(page) && Boolean(browser) && rows.length > 0,
+                rows: rows.length,
+                text: browser?.textContent?.slice(0, 320) || '',
+                hash: window.location.hash,
+                title: document.title,
+                bodyText: document.body?.innerText?.slice(0, 320) || '',
+                appHtml: document.querySelector('#app')?.innerHTML?.slice(0, 500) || ''
+            };
+        })()
+    `,
+        'YANG notification history list',
+        20000
+    );
+    await win.webContents.executeJavaScript(`
+        (() => {
+            const subscription = Array.from(document.querySelectorAll('.notification-subscription-item'))
+                .find(item => item.textContent.includes('活动'));
+            subscription?.click();
+        })()
+    `);
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const browser = document.querySelector('[data-testid="netconf-notification-drawer"]');
+            const subscription = browser?.querySelector(
+                '.notification-subscription-item[aria-selected="true"], .notification-subscription-item-active'
+            );
+            const row = browser?.querySelector('[data-testid="netconf-notification-row"]');
+            return { ready: Boolean(subscription && row) };
+        })()
+    `,
+        'YANG notification subscription selection',
+        10000
+    );
+    await win.webContents.executeJavaScript(`
+        (() => {
+            const rows = Array.from(document.querySelectorAll('[data-testid="netconf-notification-row"]'));
+            // The documentation notification is emitted during fixture setup.
+            // Later RPCs may add newer mock-event rows, so select the oldest row.
+            rows.at(-1)?.click();
+        })()
+    `);
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const browser = document.querySelector('[data-testid="netconf-notification-drawer"]');
+            const xmlEditor = browser?.querySelector('[data-testid="netconf-notification-xml"]');
+            const xml = xmlEditor?.value || xmlEditor?.querySelector('textarea')?.value || '';
+            const text = browser?.textContent || '';
+            const activeSubscription = browser?.querySelector(
+                '.notification-subscription-item[aria-selected="true"], .notification-subscription-item-active'
+            );
+            return {
+                ready:
+                    Boolean(activeSubscription) &&
+                    text.includes('通知浏览器') &&
+                    text.includes('mock-event') &&
+                    xml.includes('<notification') &&
+                    xml.includes('NetNexus 文档演示通知'),
+                xml: xml.slice(0, 240),
+                text: text.slice(0, 360)
+            };
+        })()
+    `,
+        'YANG notification XML detail',
+        15000
+    );
+}
+
+async function openYangSchemaContextMenu(win, label) {
+    await prepareYangWorkspacePage(win);
+    const opened = await win.webContents.executeJavaScript(`
+        (() => {
+            const item = Array.from(document.querySelectorAll('.schema-panel [role="treeitem"]'))
+                .find(node => node.querySelector('.schema-node-name')?.textContent.trim() === 'interfaces');
+            if (!item) return { opened: false, reason: 'interfaces Schema node not found' };
+            item.scrollIntoView({ block: 'center', inline: 'nearest' });
+            const bounds = item.getBoundingClientRect();
+            item.dispatchEvent(new MouseEvent('contextmenu', {
+                bubbles: true,
+                cancelable: true,
+                clientX: Math.min(bounds.left + Math.max(80, bounds.width / 2), window.innerWidth - 320),
+                clientY: Math.min(bounds.top + Math.max(12, bounds.height / 2), window.innerHeight - 520),
+                button: 2
+            }));
+            return { opened: true };
+        })()
+    `);
+    if (!opened?.opened) {
+        throw new Error(`YANG Schema context menu unavailable for ${label}: ${JSON.stringify(opened)}`);
+    }
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const menu = document.querySelector('.schema-context-menu');
+            const text = menu?.textContent || '';
+            const bounds = menu?.getBoundingClientRect();
+            return {
+                ready:
+                    Boolean(menu && bounds?.width > 0 && bounds?.height > 0) &&
+                    text.includes('interfaces') &&
+                    text.includes('读取当前节点（get）') &&
+                    text.includes('编辑当前节点（edit-config）'),
+                text: text.slice(0, 500)
+            };
+        })()
+    `,
+        'YANG Schema context menu',
+        10000
+    );
+    await win.webContents.executeJavaScript(`
+        (() => {
+            const item = Array.from(document.querySelectorAll('.schema-context-menu [role="menuitem"]'))
+                .find(node => node.textContent.trim().startsWith('编辑当前节点（edit-config）'));
+            item?.click();
+        })()
+    `);
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const menu = document.querySelector('.schema-context-menu');
+            const submenuTrigger = Array.from(menu?.querySelectorAll('[role="menuitem"]') || [])
+                .find(node => node.textContent.trim().startsWith('编辑当前节点（edit-config）'));
+            const text = menu?.textContent || '';
+            return {
+                ready:
+                    submenuTrigger?.getAttribute('aria-expanded') === 'true' &&
+                    text.includes('Candidate') &&
+                    text.includes('Running'),
+                expanded: submenuTrigger?.getAttribute('aria-expanded'),
+                text: text.slice(0, 600)
+            };
+        })()
+    `,
+        'YANG edit-config Schema submenu',
+        10000
+    );
+}
+
+async function prepareYangEditConfigEditor(win) {
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const page = document.querySelector('[data-testid="netconf-edit-config-monitor-page"]');
+            const panel = page?.querySelector('.yang-operations-page');
+            const request = panel?.querySelector('.rpc-request-editor textarea')?.value || '';
+            const readback = panel?.querySelector('.edit-config-readback-bar')?.textContent || '';
+            const target = panel?.querySelector('[data-parameter-path="/rpc/edit-config/target"]')?.textContent || '';
+            const defaultOperation =
+                panel?.querySelector('[data-parameter-path="/rpc/edit-config/default-operation"]')?.textContent || '';
+            const name = panel?.querySelector(
+                '[data-parameter-path="/rpc/edit-config/config/interfaces[1]/interface[1]/name[1]"]'
+            )?.textContent || '';
+            const enabled = panel?.querySelector(
+                '[data-parameter-path="/rpc/edit-config/config/interfaces[1]/interface[1]/enabled[1]"]'
+            )?.textContent || '';
+            const executeButton = Array.from(panel?.querySelectorAll('button') || [])
+                .find(button => button.textContent.trim() === '执行 edit-config');
+            return {
+                ready:
+                    Boolean(page && panel) &&
+                    !page.querySelector('.netconf-edit-config-state') &&
+                    readback.includes('已载入') &&
+                    request.includes('<edit-config') &&
+                    request.includes('<enabled>true</enabled>') &&
+                    target.includes('candidate') &&
+                    defaultOperation.includes('merge') &&
+                    name.includes('eth0') &&
+                    enabled.includes('true') &&
+                    Boolean(executeButton && !executeButton.disabled),
+                readback: readback.slice(0, 160),
+                target: target.slice(0, 100),
+                defaultOperation: defaultOperation.slice(0, 100),
+                name: name.slice(0, 100),
+                enabled: enabled.slice(0, 100),
+                request: request.slice(0, 300),
+                pageText: page?.textContent?.slice(0, 500) || ''
+            };
+        })()
+    `,
+        'YANG edit-config Content Editor readback',
+        30000
+    );
+}
+
+async function openYangEnabledParameterMenu(win, label) {
+    await prepareYangEditConfigEditor(win);
+    const opened = await win.webContents.executeJavaScript(`
+        (() => {
+            const node = document.querySelector(
+                '[data-parameter-path="/rpc/edit-config/config/interfaces[1]/interface[1]/enabled[1]"]'
+            );
+            const item = node?.closest('[role="treeitem"]') || node;
+            if (!item) return { opened: false, reason: 'enabled parameter not found' };
+            item.scrollIntoView({ block: 'center', inline: 'nearest' });
+            const bounds = item.getBoundingClientRect();
+            item.dispatchEvent(new MouseEvent('contextmenu', {
+                bubbles: true,
+                cancelable: true,
+                clientX: Math.min(bounds.left + Math.max(80, bounds.width / 2), window.innerWidth - 300),
+                clientY: Math.min(bounds.top + Math.max(12, bounds.height / 2), window.innerHeight - 360),
+                button: 2
+            }));
+            return { opened: true };
+        })()
+    `);
+    if (!opened?.opened) {
+        throw new Error(`YANG enabled parameter menu unavailable for ${label}: ${JSON.stringify(opened)}`);
+    }
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const menu = document.querySelector('.operation-parameter-context-menu');
+            const item = Array.from(menu?.querySelectorAll('[role="menuitem"]') || [])
+                .find(node => node.textContent.trim() === '修改值');
+            const bounds = menu?.getBoundingClientRect();
+            return {
+                ready:
+                    Boolean(menu && bounds?.width > 0 && bounds?.height > 0) &&
+                    Boolean(item) &&
+                    item.getAttribute('aria-disabled') !== 'true',
+                text: menu?.textContent?.slice(0, 320) || '',
+                disabled: item?.getAttribute('aria-disabled')
+            };
+        })()
+    `,
+        'YANG enabled parameter context menu',
+        10000
+    );
+}
+
+async function openYangOperationParameterEdit(win, label) {
+    await openYangEnabledParameterMenu(win, label);
+    await win.webContents.executeJavaScript(`
+        (() => {
+            const menu = document.querySelector('.operation-parameter-context-menu');
+            const item = Array.from(menu?.querySelectorAll('[role="menuitem"]') || [])
+                .find(node => node.textContent.trim() === '修改值');
+            item?.click();
+        })()
+    `);
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const dialog = Array.from(document.querySelectorAll('[role="dialog"]'))
+                .find(node => node.textContent.includes('修改值 · enabled'));
+            const editor = dialog?.querySelector('[aria-label="节点值"]');
+            const bounds = dialog?.getBoundingClientRect();
+            return {
+                ready:
+                    Boolean(dialog && bounds?.width > 0 && bounds?.height > 0) &&
+                    Boolean(editor) &&
+                    dialog.textContent.includes('true'),
+                text: dialog?.textContent?.slice(0, 320) || '',
+                value: editor?.value || editor?.textContent || ''
+            };
+        })()
+    `,
+        'YANG operation parameter value editor',
+        10000
+    );
+}
+
+async function executeYangEditConfigAndOpenHistory(win, label) {
+    await prepareYangEditConfigEditor(win);
+    const executed = await win.webContents.executeJavaScript(`
+        (() => {
+            const panel = document.querySelector('[data-testid="netconf-edit-config-monitor-page"] .yang-operations-page');
+            const button = Array.from(panel?.querySelectorAll('button') || [])
+                .find(item => item.textContent.trim() === '执行 edit-config');
+            if (!button || button.disabled) return { clicked: false, disabled: Boolean(button?.disabled) };
+            button.click();
+            return { clicked: true };
+        })()
+    `);
+    if (!executed?.clicked) {
+        throw new Error(`YANG edit-config action unavailable for ${label}: ${JSON.stringify(executed)}`);
+    }
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const panel = document.querySelector('[data-testid="netconf-edit-config-monitor-page"] .yang-operations-page');
+            const result = panel?.querySelector('.operation-result-card');
+            const response = result?.querySelector('.rpc-result textarea')?.value || '';
+            return {
+                ready: Boolean(result?.textContent.includes('成功')) && response.includes('<ok'),
+                text: result?.textContent?.slice(0, 260) || '',
+                response: response.slice(0, 220)
+            };
+        })()
+    `,
+        'YANG edit-config RPC result',
+        20000
+    );
+    await win.webContents.executeJavaScript(`
+        (() => {
+            const page = document.querySelector('[data-testid="netconf-edit-config-monitor-page"]');
+            const button = Array.from(page?.querySelectorAll('.execution-history-trigger') || [])
+                .find(item => item.textContent.trim() === '执行记录');
+            button?.click();
+        })()
+    `);
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const drawer = document.querySelector('.execution-history-drawer');
+            const items = Array.from(drawer?.querySelectorAll('[data-testid="netconf-history-item"]') || []);
+            const editRecord = items.find(item =>
+                item.textContent.includes('edit-config') && !item.textContent.includes('自动回读')
+            );
+            const readbackRecord = items.find(item => item.textContent.includes('edit-config 自动回读'));
+            if (readbackRecord && readbackRecord.getAttribute('aria-selected') !== 'true') readbackRecord.click();
+            return {
+                ready: Boolean(drawer && editRecord && readbackRecord),
+                total: items.length,
+                records: items.map(item => item.textContent.trim().slice(0, 160))
+            };
+        })()
+    `,
+        'YANG edit-config execution history list',
+        10000
+    );
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const drawer = document.querySelector('.execution-history-drawer');
+            const selected = drawer?.querySelector('[data-testid="netconf-history-item"][aria-selected="true"]');
+            const requestEditor = drawer?.querySelector('[data-testid="netconf-history-request"]');
+            const replyEditor = drawer?.querySelector('[data-testid="netconf-history-reply"]');
+            const request = requestEditor?.value || requestEditor?.querySelector('textarea')?.value || '';
+            const reply = replyEditor?.value || replyEditor?.querySelector('textarea')?.value || '';
+            return {
+                ready:
+                    Boolean(selected?.textContent.includes('edit-config 自动回读')) &&
+                    request.includes('<get-config') &&
+                    reply.includes('<rpc-reply') &&
+                    reply.includes('<enabled>true</enabled>'),
+                selected: selected?.textContent?.slice(0, 180) || '',
+                request: request.slice(0, 240),
+                reply: reply.slice(0, 300)
+            };
+        })()
+    `,
+        'YANG edit-config execution history detail',
         10000
     );
 }
@@ -1067,7 +1831,8 @@ async function openSnmpMibContextMenuAtOid(win, label, targetOid) {
             const menu = document.querySelector('.mib-context-menu');
             const text = menu?.textContent?.trim() || '';
             return {
-                ready: Boolean(menu) && text.includes('复制OID') && text.includes('GET 查询') && text.includes('SET 设置'),
+                ready:
+                    Boolean(menu) && text.includes('复制 OID') && text.includes('GET 查询') && text.includes('SET 设置'),
                 text: text.slice(0, 160)
             };
         })()
@@ -1098,10 +1863,35 @@ async function openSnmpMibWalkModal(win, label) {
         throw new Error(`SNMP MIB WALK menu item unavailable for ${label}: ${JSON.stringify(clicked)}`);
     }
 
-    await waitForOpenOverlay(win, label, 'SNMP WALK');
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const operations = document.querySelector('.snmp-mib-operations');
+            const request = operations?.querySelector('.operation-request-pane');
+            const response = operations?.querySelector('.operation-result-pane');
+            const startButton = Array.from(request?.querySelectorAll('button') || [])
+                .find(item => item.textContent.includes('开始 WALK'));
+            const text = operations?.textContent || '';
+            return {
+                ready:
+                    Boolean(request) &&
+                    Boolean(response) &&
+                    Boolean(startButton) &&
+                    !startButton.disabled &&
+                    text.includes('请求 · WALK'),
+                text: text.slice(0, 240)
+            };
+        })()
+    `,
+        `${label} request panel`,
+        5000
+    );
     const started = await win.webContents.executeJavaScript(`
         (() => {
-            const button = Array.from(document.querySelectorAll('.walk-modal-wrap .nn-modal-footer button'))
+            const button = Array.from(
+                document.querySelectorAll('.snmp-mib-operations .operation-request-pane button')
+            )
                 .find(item => item.textContent.includes('开始 WALK'));
             if (!button) {
                 return { started: false, reason: 'start button not found' };
@@ -1118,12 +1908,17 @@ async function openSnmpMibWalkModal(win, label) {
         win,
         `
         (() => {
-            const modal = document.querySelector('.walk-modal-wrap');
-            const textarea = modal?.querySelector('textarea');
-            const text = modal?.textContent || '';
+            const operations = document.querySelector('.snmp-mib-operations');
+            const response = operations?.querySelector('.operation-result-pane');
+            const textarea = response?.querySelector('.walk-result-output');
+            const text = response?.textContent || '';
             const output = textarea?.value || '';
             return {
-                ready: Boolean(modal) && text.includes('3 条') && output.includes('demoAgentName'),
+                ready:
+                    Boolean(response) &&
+                    text.includes('成功') &&
+                    text.includes('3 条') &&
+                    output.includes('NetNexus Demo Agent'),
                 text: text.slice(0, 240),
                 output: output.slice(0, 240)
             };
@@ -1132,6 +1927,14 @@ async function openSnmpMibWalkModal(win, label) {
         label,
         10000
     );
+
+    await win.webContents.executeJavaScript(`
+        new Promise(resolve => {
+            const treeScroll = document.querySelector('.snmp-mib-page .mib-tree-scroll');
+            if (treeScroll) treeScroll.scrollLeft = 0;
+            requestAnimationFrame(() => requestAnimationFrame(resolve));
+        })
+    `);
 }
 
 async function closeSnmpMibContextMenu(win) {
@@ -1176,6 +1979,97 @@ async function openRouteAdvancedConfig(win, label) {
     await waitForOpenOverlay(win, label, '高级配置');
 }
 
+async function openBmpClientDetail(win, label) {
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const rows = Array.from(document.querySelectorAll('[data-testid="bmp-client-table"] .nn-table-tbody tr'));
+            const row = rows.find(item => item.textContent.includes('demo-bmp-router'));
+            const button = row?.querySelector('[data-testid="bmp-client-detail-button"]');
+            if (!row || !button || button.disabled) {
+                return {
+                    clicked: false,
+                    rows: rows.map(item => item.textContent.trim()).filter(Boolean)
+                };
+            }
+            button.scrollIntoView({ block: 'center', inline: 'nearest' });
+            button.click();
+            return { clicked: true, row: row.textContent.trim() };
+        })()
+    `);
+    if (!result?.clicked) {
+        throw new Error(`BMP demo Client detail button not found for ${label}: ${JSON.stringify(result)}`);
+    }
+    await waitForOpenOverlay(win, label, 'BMP客户端信息');
+}
+
+async function openImportModal(win, label, { pageSelector, buttonText, dialogTitle }) {
+    const result = await win.webContents.executeJavaScript(`
+        (() => {
+            const page = document.querySelector(${JSON.stringify(pageSelector)});
+            const buttonText = ${JSON.stringify(buttonText)};
+            const button = Array.from(page?.querySelectorAll('button') || [])
+                .find(item => item.textContent.trim() === buttonText);
+            if (!page || !button || button.disabled) {
+                return {
+                    clicked: false,
+                    pageFound: Boolean(page),
+                    buttons: Array.from(page?.querySelectorAll('button') || [])
+                        .map(item => item.textContent.trim())
+                        .filter(Boolean)
+                };
+            }
+            button.scrollIntoView({ block: 'center', inline: 'nearest' });
+            button.click();
+            return { clicked: true };
+        })()
+    `);
+    if (!result?.clicked) {
+        throw new Error(`import button not found for ${label}: ${JSON.stringify(result)}`);
+    }
+
+    await waitForOpenOverlay(win, label, dialogTitle);
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const dialogTitle = ${JSON.stringify(dialogTitle)};
+            const isVisible = element => {
+                const rect = element?.getBoundingClientRect();
+                const style = element ? window.getComputedStyle(element) : null;
+                return Boolean(
+                    rect?.width > 0 &&
+                    rect?.height > 0 &&
+                    style?.display !== 'none' &&
+                    style?.visibility !== 'hidden'
+                );
+            };
+            const candidates = Array.from(document.querySelectorAll('.nn-file-import-modal'));
+            const body = candidates.find(item => {
+                const candidateModal = item.closest('.nn-modal');
+                return isVisible(candidateModal) && candidateModal.textContent.includes(dialogTitle);
+            });
+            const modal = body?.closest('.nn-modal');
+            const text = modal?.textContent || '';
+            const rect = modal?.getBoundingClientRect();
+            const loading = body?.getAttribute('aria-busy') === 'true';
+            return {
+                ready:
+                    Boolean(body) &&
+                    Boolean(modal) &&
+                    !loading &&
+                    text.includes(dialogTitle) &&
+                    rect?.width > 0 &&
+                    rect?.height > 0,
+                loading,
+                text: text.slice(0, 240)
+            };
+        })()
+    `,
+        `${label} import modal`,
+        10000
+    );
+}
+
 screenshotPreparers.set('open-text-detail-0', (win, label) => openDetailButtonByText(win, 0, label));
 screenshotPreparers.set('open-bmp-session-route-detail', (win, label) =>
     openDetailButtonBySelector(win, '[data-testid="bmp-session-route-table"] .nn-table-tbody button', label)
@@ -1214,6 +2108,34 @@ screenshotPreparers.set('open-snmp-mib-context-menu', openSnmpMibContextMenu);
 screenshotPreparers.set('open-snmp-mib-walk', openSnmpMibWalkModal);
 screenshotPreparers.set('open-ftp-users', openFtpUsersModal);
 screenshotPreparers.set('open-route-advanced-config', openRouteAdvancedConfig);
+screenshotPreparers.set('open-bmp-client-detail', openBmpClientDetail);
+screenshotPreparers.set('execute-yang-get', executeYangGet);
+screenshotPreparers.set('open-yang-schema-context-menu', openYangSchemaContextMenu);
+screenshotPreparers.set('prepare-yang-edit-config-editor', prepareYangEditConfigEditor);
+screenshotPreparers.set('open-yang-operation-parameter-edit', openYangOperationParameterEdit);
+screenshotPreparers.set('execute-yang-edit-config-and-open-history', executeYangEditConfigAndOpenHistory);
+screenshotPreparers.set('prepare-yang-notifications', prepareYangNotificationsPage);
+screenshotPreparers.set('open-routeviews-import', (win, label) =>
+    openImportModal(win, label, {
+        pageSelector: '[data-testid="bgp-route-ipv4-page"]',
+        buttonText: '从 RouteViews 导入',
+        dialogTitle: '导入 BGP MRT 路由文件'
+    })
+);
+screenshotPreparers.set('open-rpki-roa-import', (win, label) =>
+    openImportModal(win, label, {
+        pageSelector: '.adaptive-list-page',
+        buttonText: '导入JSON',
+        dialogTitle: '导入 ROA JSON 文件'
+    })
+);
+screenshotPreparers.set('open-rpki-aspa-import', (win, label) =>
+    openImportModal(win, label, {
+        pageSelector: '.adaptive-list-page',
+        buttonText: '导入JSON',
+        dialogTitle: '导入 ASPA JSON 文件'
+    })
+);
 screenshotCleanups.set('close-overlay', closeOpenOverlay);
 screenshotCleanups.set('close-snmp-context-menu', closeSnmpMibContextMenu);
 
@@ -1221,7 +2143,9 @@ async function selectSettingsCategory(win, categoryText) {
     await win.webContents.executeJavaScript(`
         (() => {
             const categoryText = ${JSON.stringify(categoryText)};
-            const items = Array.from(document.querySelectorAll('.settings-dialog-modal .nn-menu-item'));
+            const items = Array.from(
+                document.querySelectorAll('.settings-dialog-modal .nn-navigation-modal-nav-item')
+            );
             const item = items.find(element => element.textContent.includes(categoryText));
             if (!item) {
                 throw new Error('settings category not found: ' + categoryText);
@@ -1258,9 +2182,31 @@ async function openSettingsDialog(win) {
 
 async function closeSettingsDialog(win) {
     await win.webContents.executeJavaScript(`
-        document.querySelector('.settings-dialog-modal .nn-modal-close')?.click();
+        document.querySelector('.settings-dialog-modal .nn-navigation-modal-close')?.click();
     `);
     await wait(300);
+}
+
+async function waitForSettingsPage(win, selector, expectedText, pendingText = '') {
+    await waitForRendererCondition(
+        win,
+        `
+        (() => {
+            const page = document.querySelector(${JSON.stringify(selector)});
+            const pendingText = ${JSON.stringify(pendingText)};
+            const text = page?.textContent || '';
+            return {
+                ready:
+                    Boolean(page) &&
+                    text.includes(${JSON.stringify(expectedText)}) &&
+                    (!pendingText || !text.includes(pendingText)),
+                text: text.slice(0, 240)
+            };
+        })()
+    `,
+        `settings ${expectedText}`,
+        15000
+    );
 }
 
 async function captureSettingsScreenshots(win) {
@@ -1268,7 +2214,7 @@ async function captureSettingsScreenshots(win) {
     await waitForRoute(win, '/tools/string-generator');
     await wait(800);
     await openSettingsDialog(win);
-    await selectSettingsCategory(win, '通用设置');
+    await selectSettingsCategory(win, '通用');
     await capturePage(win, 'settings/general', 'docs/images/setting/setting.png');
     await win.webContents.executeJavaScript(`
         (() => {
@@ -1281,13 +2227,19 @@ async function captureSettingsScreenshots(win) {
     await capturePage(win, 'settings/theme-dark', 'docs/images/setting/setting-theme-dark.png');
     await win.webContents.executeJavaScript(`document.querySelector('.theme-preset-option-blue')?.click()`);
     await wait(300);
-    await selectSettingsCategory(win, '工具集合');
+    await selectSettingsCategory(win, '工具');
     await capturePage(win, 'settings/tools', 'docs/images/setting/setting-tools.png');
-    await selectSettingsCategory(win, 'FTP服务器');
+    await selectSettingsCategory(win, 'FTP');
     await capturePage(win, 'settings/ftp', 'docs/images/setting/setting-ftp.png');
-    await selectSettingsCategory(win, '外部API');
+    await selectSettingsCategory(win, 'API');
     await capturePage(win, 'settings/api', 'docs/images/setting/setting-api.png');
-    await selectSettingsCategory(win, '应用更新');
+    await selectSettingsCategory(win, '数据');
+    await waitForSettingsPage(win, '.bmp-data-settings', 'BMP SQLite 数据库', '检测中');
+    await capturePage(win, 'settings/data', 'docs/images/setting/setting-data.png');
+    await selectSettingsCategory(win, '运行时');
+    await waitForSettingsPage(win, '.runtime-settings', 'YANG 编译器', '正在检查内置 YANG 编译器');
+    await capturePage(win, 'settings/runtime', 'docs/images/setting/setting-runtime.png');
+    await selectSettingsCategory(win, '更新');
     await capturePage(win, 'settings/update', 'docs/images/setting/setting-updater.png');
     await closeSettingsDialog(win);
 }
@@ -2658,11 +3610,209 @@ async function setupToolsDemo(win, longRunningProcesses) {
     pagePreparers.set('/tools/udp-tool', prepareUdpToolPage);
 }
 
-async function setupDocsDemoData(win, runtimeDir, longRunningProcesses) {
+async function awaitDocsTask(taskManager, response, action) {
+    assertSuccess(response, action);
+    const taskId = response?.data?.taskId;
+    const task = taskId ? taskManager?.tasks?.get(taskId) : null;
+    if (!taskId || !task?.promise) {
+        throw new Error(`${action} did not return a managed task`);
+    }
+    await task.promise;
+    if (task.status !== 'completed') {
+        throw new Error(`${action} failed: ${task.error?.message || task.status || 'unknown task error'}`);
+    }
+    return task.result;
+}
+
+function schemaNodesFromResponse(response, action) {
+    assertSuccess(response, action);
+    const data = response?.data;
+    const nodes = Array.isArray(data) ? data : data?.nodes || data?.items || data?.roots || [];
+    if (!Array.isArray(nodes)) throw new Error(`${action} did not return a Schema node list`);
+    return nodes;
+}
+
+function findNamedSchemaNode(nodes, name) {
+    return nodes.find(
+        node =>
+            String(node?.name || node?.title || '')
+                .split(':')
+                .at(-1) === name
+    );
+}
+
+async function findYangDocsEditableNode(event, yangApp, profileId, compileId) {
+    const query = { profileId, compileId };
+    const roots = schemaNodesFromResponse(
+        await yangApp.handleGetSchemaRoots(event, query),
+        'load YANG docs Schema roots'
+    );
+    const moduleNode = findNamedSchemaNode(roots, 'netnexus-mock-device');
+    if (!moduleNode?.id) throw new Error('netnexus-mock-device Schema root is unavailable');
+
+    let parent = moduleNode;
+    for (const name of ['interfaces', 'interface', 'enabled']) {
+        const children = schemaNodesFromResponse(
+            await yangApp.handleGetSchemaChildren(event, { ...query, parentId: parent.id }),
+            `load YANG docs Schema children for ${parent.name || parent.title || parent.id}`
+        );
+        const child = findNamedSchemaNode(children, name);
+        if (!child?.id) throw new Error(`YANG docs Schema node is unavailable: ${name}`);
+        parent = child;
+    }
+    return parent;
+}
+
+async function setupYangDemo(win, systemApp) {
+    netconfDocsMockServer = new MockNetconfServer({
+        host: '127.0.0.1',
+        port: 0,
+        username: 'netconf',
+        password: 'netconf',
+        quiet: true
+    });
+    const serverStatus = await netconfDocsMockServer.start();
+    const event = { sender: win.webContents };
+    const netconfApp = systemApp.netconfApp;
+    const yangApp = systemApp.yangApp;
+
+    const profileResult = await netconfApp.handleSaveProfile(event, {
+        name: 'Local NETCONF Mock',
+        host: serverStatus.host,
+        port: serverStatus.port,
+        username: 'netconf',
+        password: 'netconf',
+        authMethod: 'password',
+        hostKeyPolicy: 'accept-new',
+        rememberCredentials: false,
+        connectTimeout: 5000,
+        rpcTimeout: 30000,
+        keepaliveInterval: 0,
+        autoReconnect: false
+    });
+    assertSuccess(profileResult, 'save YANG docs NETCONF profile');
+    const profileId = profileResult.data?.id;
+    if (!profileId) throw new Error('YANG docs NETCONF profile ID is unavailable');
+
+    const connectResult = await netconfApp.handleConnect(event, profileId);
+    assertSuccess(connectResult, 'connect YANG docs NETCONF profile');
+
+    const inventoryResult = await netconfApp.handleDiscoverModules(event, profileId);
+    assertSuccess(inventoryResult, 'discover YANG docs modules');
+    const deviceModule = (inventoryResult.data?.modules || []).find(module => module.name === 'netnexus-mock-device');
+    if (!deviceModule) throw new Error('NETCONF mock did not advertise netnexus-mock-device');
+
+    const downloadResult = await netconfApp.handleDownloadModules(event, {
+        profileId,
+        modules: [{ name: deviceModule.name, revision: deviceModule.revision }],
+        includeDependencies: true
+    });
+    await awaitDocsTask(netconfApp.taskManager, downloadResult, 'download YANG docs modules');
+
+    const modulesResult = await yangApp.handleListModules(event, { profileId });
+    assertSuccess(modulesResult, 'list downloaded YANG docs modules');
+    const localModuleNames = new Set((modulesResult.data || []).map(module => module.name));
+    for (const moduleName of ['netnexus-mock-device', 'netnexus-mock-types']) {
+        if (!localModuleNames.has(moduleName)) {
+            throw new Error(`downloaded YANG docs module is unavailable: ${moduleName}`);
+        }
+    }
+
+    const compileResult = await yangApp.handleCompile(event, { profileId });
+    await awaitDocsTask(yangApp.taskManager, compileResult, 'compile YANG docs modules');
+    const workspaceResult = await yangApp.handleGetWorkspace(event, { profileId });
+    assertSuccess(workspaceResult, 'load compiled YANG docs workspace');
+    if (!workspaceResult.data?.compileId || workspaceResult.data?.success !== true) {
+        throw new Error(`YANG docs workspace was not compiled: ${JSON.stringify(workspaceResult.data?.summary || {})}`);
+    }
+    const compileId = workspaceResult.data.compileId;
+    const editableNode = await findYangDocsEditableNode(event, yangApp, profileId, compileId);
+    yangDocsContext = {
+        profileId,
+        compileId,
+        editableNodeId: editableNode.id,
+        editableNodePath: editableNode.path || ''
+    };
+
+    const subscriptionResult = await netconfApp.handleExecuteOperation(event, {
+        profileId,
+        operation: 'establish-subscription',
+        targetType: 'stream',
+        stream: 'NETCONF'
+    });
+    assertSuccess(subscriptionResult, 'establish YANG docs notification subscription');
+    await waitForRendererCondition(
+        win,
+        `
+        (async () => {
+            const result = await window.netconfApi.getSubscriptions({ profileId: ${JSON.stringify(profileId)} });
+            const subscriptions = result?.data?.subscriptions || result?.data?.items || result?.data || [];
+            const items = Array.isArray(subscriptions) ? subscriptions : [];
+            return {
+                ready: result?.status === 'success' && items.some(item =>
+                    ['active', 'started'].includes(String(item.state || item.status || '').toLowerCase())
+                ),
+                total: items.length,
+                states: items.map(item => item.state || item.status)
+            };
+        })()
+    `,
+        'YANG docs notification subscription',
+        15000
+    );
+
+    netconfDocsMockServer.notify('NetNexus 文档演示通知');
+    await waitForRendererCondition(
+        win,
+        `
+        (async () => {
+            const result = await window.netconfApi.getNotificationHistory({ profileId: ${JSON.stringify(profileId)} });
+            const notifications = result?.data?.notifications || [];
+            return {
+                ready:
+                    result?.status === 'success' &&
+                    notifications.some(item =>
+                        String(item.eventName || '').includes('mock-event') &&
+                        String(item.xml || item.rawXml || '').includes('NetNexus 文档演示通知')
+                    ),
+                total: notifications.length,
+                events: notifications.map(item => item.eventName)
+            };
+        })()
+    `,
+        'YANG docs notification history',
+        15000
+    );
+
+    console.log(
+        `YANG docs demo ready: ${JSON.stringify({
+            profileId,
+            editableNode: yangDocsContext.editableNodePath || yangDocsContext.editableNodeId,
+            modules: localModuleNames.size,
+            schemaNodes: workspaceResult.data?.summary?.nodeCount || 0,
+            notification: true
+        })}`
+    );
+}
+
+async function setupDocsDemoData(win, runtimeDir, longRunningProcesses, systemApp) {
     pagePreparers.set('/bgp/bgp-config', prepareBgpConfigPage);
     pagePreparers.set('/bgp/route-mvpn', prepareBgpMvpnPage);
+    pagePreparers.set('/yang/yang-connection', prepareYangConnectionPage);
+    pagePreparers.set('/yang/yang-modules', prepareYangModulesPage);
+    pagePreparers.set('/yang/yang-workspace', prepareYangWorkspacePage);
+    pagePreparers.set('/monitor/netconf-notifications', prepareYangNotificationsPage);
+    pagePreparers.set('/snmp/snmp-mib-compile', prepareSnmpMibCompilerPage);
     pagePreparers.set('/snmp/snmp-mib', prepareSnmpMibTreePage);
+    if (SCREENSHOT_SCOPE === 'yang') {
+        systemApp.applyLogLevel('off');
+        await setupYangDemo(win, systemApp);
+        return;
+    }
     await setupSettingsDemo(win);
+    // Keep the persisted demo selection visible in Settings while avoiding
+    // high-volume protocol logs during the full documentation capture.
+    systemApp.applyLogLevel('off');
     await setupBgpDemo(win, longRunningProcesses);
     await startBmpForDocs(win);
     const mock = startMockBmpClient();
@@ -2680,6 +3830,7 @@ async function setupDocsDemoData(win, runtimeDir, longRunningProcesses) {
         await routeHistoryFixturePromise;
     });
     await setupRpkiDemo(win);
+    await setupYangDemo(win, systemApp);
     await setupFtpDemo(win, runtimeDir);
     await setupDhcpDemo(win);
     await setupSnmpDemo(win, longRunningProcesses);
@@ -2716,13 +3867,51 @@ async function stopRunningServices(systemApp) {
     }
 }
 
+async function stopNetconfDocsMockServer() {
+    const server = netconfDocsMockServer;
+    netconfDocsMockServer = null;
+    if (!server) return;
+    try {
+        await server.stop();
+    } catch (error) {
+        warnOptional(error, 'stop NETCONF docs mock server');
+    }
+}
+
 async function run() {
     app.commandLine.appendSwitch('disable-gpu');
+    app.commandLine.appendSwitch('force-device-scale-factor', '1');
+    // The standalone startup banner is captured before the application window.
+    // Keep Electron alive when that temporary window is destroyed.
+    app.on('window-all-closed', () => {});
     const userDataPath = path.join(os.tmpdir(), 'netnexus-docs-screenshots');
     await fs.rm(userDataPath, { recursive: true, force: true });
     app.setPath('userData', userDataPath);
 
     await app.whenReady();
+
+    const selectedScreenshots = screenshots.filter(matchesScreenshotScope);
+    const captureSettings = (!SCREENSHOT_SCOPE && !SCREENSHOT_MATCH) || SCREENSHOT_SCOPE === 'setting';
+    if ((SCREENSHOT_SCOPE || SCREENSHOT_MATCH) && selectedScreenshots.length === 0 && !captureSettings) {
+        throw new Error(
+            `no documentation screenshots matched scope=${SCREENSHOT_SCOPE || '*'} match=${SCREENSHOT_MATCH || '*'}`
+        );
+    }
+
+    const startupScreenshots = selectedScreenshots.filter(
+        screenshot => normalizeScreenshotEntry(screenshot).kind === 'startup'
+    );
+    for (const screenshot of startupScreenshots) {
+        await captureStartupBanner(normalizeScreenshotEntry(screenshot).outputPath);
+    }
+
+    const pageScreenshots = selectedScreenshots.filter(
+        screenshot => normalizeScreenshotEntry(screenshot).kind !== 'startup'
+    );
+    if (pageScreenshots.length === 0 && !captureSettings) {
+        app.quit();
+        return;
+    }
 
     const { width, height } = getCaptureWindowSize();
     const win = new BrowserWindow({
@@ -2739,7 +3928,12 @@ async function run() {
     });
     console.log(`docs screenshot viewport: ${width}x${height}`);
 
-    const systemApp = new SystemApp(ipcMain, win, null);
+    const monitorWindowManager = new MonitorWindowManager({
+        rendererUrl: BASE_URL,
+        preloadPath: path.join(__dirname, '../electron/preload.js')
+    });
+    monitorWindowManager.registerIpcHandlers(ipcMain);
+    const systemApp = new SystemApp(ipcMain, win, null, { monitorWindowManager });
     await systemApp.loadSettings();
 
     await win.loadURL(`${BASE_URL}/#/tools/string-generator`);
@@ -2749,32 +3943,36 @@ async function run() {
     const longRunningProcesses = [];
     const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'netnexus-docs-runtime-'));
     try {
-        await setupDocsDemoData(win, runtimeDir, longRunningProcesses);
+        await setupDocsDemoData(win, runtimeDir, longRunningProcesses, systemApp);
 
-        const selectedScreenshots = screenshots.filter(matchesScreenshotScope);
-        if (
-            (SCREENSHOT_SCOPE || SCREENSHOT_MATCH) &&
-            selectedScreenshots.length === 0 &&
-            SCREENSHOT_SCOPE !== 'setting'
-        ) {
-            throw new Error(
-                `no documentation screenshots matched scope=${SCREENSHOT_SCOPE || '*'} match=${SCREENSHOT_MATCH || '*'}`
-            );
+        for (const screenshot of pageScreenshots) {
+            const normalizedScreenshot = normalizeScreenshotEntry(screenshot);
+            if (normalizedScreenshot.kind === 'monitor') {
+                await openAndCaptureMonitor(monitorWindowManager, normalizedScreenshot);
+            } else {
+                const { route, outputPath, prepare, cleanup } = normalizedScreenshot;
+                await navigateAndCapture(win, route, outputPath, prepare, cleanup);
+            }
         }
-        for (const screenshot of selectedScreenshots) {
-            const { route, outputPath, prepare, cleanup } = normalizeScreenshotEntry(screenshot);
-            await navigateAndCapture(win, route, outputPath, prepare, cleanup);
-        }
-        if ((!SCREENSHOT_SCOPE && !SCREENSHOT_MATCH) || SCREENSHOT_SCOPE === 'setting') {
+        if (captureSettings) {
             await captureSettingsScreenshots(win);
         }
     } finally {
+        monitorWindowManager.closeAll();
         for (const child of [...longRunningProcesses].reverse()) {
             await stopChildProcess(child);
         }
         await stopRunningServices(systemApp);
         await fs.rm(runtimeDir, { recursive: true, force: true });
-        await systemApp.handleWindowClose();
+        try {
+            // Documentation fixtures intentionally keep a NETCONF session active.
+            // Close it before SystemApp's interactive shutdown guard so headless
+            // capture never waits on a native confirmation dialog.
+            await systemApp.netconfApp.closeAll();
+            await systemApp.handleWindowClose();
+        } finally {
+            await stopNetconfDocsMockServer();
+        }
         win.destroy();
         app.quit();
     }

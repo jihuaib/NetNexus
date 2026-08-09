@@ -121,6 +121,8 @@ Mock 默认只监听 `127.0.0.1`。默认账号、密码以及仓库中的固定
 
 设备侧需要启用 NETCONF over SSH，并允许该用户打开 `netconf` subsystem。普通 SSH Shell 登录成功不代表 NETCONF subsystem 一定可用。
 
+![NETCONF 连接 Profile 与当前会话](images/yang/yang-connection.png)
+
 ### 2. 读取和下载设备模型
 
 连接成功后进入“模型列表”，点击“读取设备列表”。发现过程按以下顺序回退：
@@ -144,6 +146,8 @@ YANG 的 import/include 依赖必须同时存在于本地仓库。建议下载�
 
 模型列表底部的编译日志会实时显示编译阶段和逐文件状态，并保留最近一次编译的错误、警告和信息。新增导入或下载的模型保持“未编译”，不会清空仍然有效的旧编译结果；再次执行“编译所选”时会扩展现有编译上下文。需要查看源码时，使用模型表格对应行的“源码”按钮。
 
+![YANG 模型与 libyang 编译日志](images/yang/yang-modules.png)
+
 libyang 是唯一权威编译引擎：
 
 - YANG 1.0/1.1 的语法和语义是否合法，以 libyang 结果为准。
@@ -158,7 +162,7 @@ Terminal leaf and leaf-list nodes expose libyang-derived type, enumeration, and 
 
 当前导出合同的范围是 core effective schema：datastore 数据节点，以及 RPC、action、notification、input 和 output。libyang 仍会编译并校验内置扩展插件，但由 `yang-data`、`structure`、schema-mount 等扩展产生的独立扩展树暂不并入普通 Schema 树；运行时能力中会明确返回 `extensionSchemaExport: false`。
 
-正式安装包应携带当前平台对应的 libyang/`yanglint` 运行时和 `netnexus-libyang-schema` effective-schema 导出工具。“设置 → 运行时诊断”会展示实际使用的引擎、版本和路径；任一内置程序缺失、损坏或与当前系统架构不兼容时，模型列表中的编译按钮会停用并给出修复提示。
+正式安装包应携带当前平台对应的 libyang/`yanglint` 运行时和 `netnexus-libyang-schema` effective-schema 导出工具。“设置 → 运行时”会展示实际使用的引擎、版本和路径；任一内置程序缺失、损坏或与当前系统架构不兼容时，模型列表中的编译按钮会停用并给出修复提示。
 
 打包运行时按平台和 CPU 架构隔离在应用资源目录的 `libyang/<platform>-<arch>/` 下，包括 `bin/yanglint`、`bin/netnexus-libyang-schema` 和配套的 libyang 内置模块。两个程序均静态链接同一个固定版本的 libyang；Worker 使用 Schema 导出工具一次完成权威编译和结构化 JSON 导出。
 
@@ -212,6 +216,12 @@ npm run dev
 
 原始 YANG 源码统一在“模型列表”的对应模型行中查看，Schema 工作区不再提供重复入口。
 
+![YANG effective Schema 工作区](images/yang/yang-workspace.png)
+
+Schema 节点右键菜单是读取、配置、事务和订阅的统一入口；菜单会按照节点类型、`config` 属性和当前设备 Capability 裁剪不可用操作：
+
+![YANG Schema 节点右键操作菜单](images/yang/yang-schema-context-menu.png)
+
 设备会话状态和完整 Capability 列表统一在“连接设置”中查看；Schema 工作区不再重复显示设备状态条或 Capability 入口。
 
 Schema 数据节点的右键操作会预填 subtree/config XML 草稿。`get`、已选定 datastore 的 `get-config`、普通 `commit` 等不需要继续编辑参数的菜单动作会立即下发；`edit-config` 打开独立 Content Editor，confirmed commit、通用 copy-config、订阅和原始 RPC 等仍先在右侧打开以便补全或调整参数。树顶部不再放置虚拟的“设备级操作”节点；Candidate 和配置存储操作保留在普通 Schema 节点的右键菜单中，并明确标注它们作用于整个 datastore：
@@ -236,15 +246,35 @@ Schema 数据节点的右键操作会预填 subtree/config XML 草稿。`get`、
 
 YANG-Push 修改默认使用“保持当前过滤器/策略”，对应 RFC 8641 的 omission 语义：未出现在 `modify-subscription` 中的参数必须保持不变。标准没有用 omission 清除既有过滤器或 stop-time 的语义，需要清除时应删除并重新建立订阅；event-stream 修改受 mandatory target choice 约束，必须显式提供一种 stream filter。结构化操作支持内联 subtree/XPath、已配置过滤器引用、默认 XML 命名空间以及厂商派生 datastore identityref；厂商 identityref 的前缀必须同时提供对应 XML namespace binding。
 
+需要补全参数的操作会保留在工作区右侧。右键“操作参数树”的节点可以修改值、添加可选节点或移除节点；每次修改都会同步更新中间的 RPC XML：
+
+![YANG 操作参数树右侧编辑](images/yang/yang-operation-parameter-edit.png)
+
 页面会依据节点的 `config` 属性和服务端 Capability 禁用明显不可用的结构化操作。Schema 工作区右侧和独立 Content Editor 复用同一套 NETCONF Browser 布局及 XML 草稿生成器：上方是 Request 区，可在操作参数与 RPC XML 之间切换；下方是 RPC Reply 响应区，状态、耗时和 message-id 与响应一起显示。请求和响应 XML 默认以格式化后的缩进结构展示，并可切换到“原文”查看设备实际收发内容；格式化只影响显示，不改变实际发送的 XML。Content Editor 还提供当前独立窗口内的执行记录，可同时检查自动 `get-config` 回读和最终 `edit-config` 请求。
+
+下图只展示无需补充参数的 `get` 成功链路：请求区发送 `<get>`，响应区显示状态、耗时、message-id 和完整 `rpc-reply`；右侧参数编辑与独立 `edit-config` 窗口分别见前后两图。
+
+![NETCONF Browser 请求与 RPC Reply](images/yang/yang-operations.png)
 
 Content Editor 的 URL 只携带 `profileId`、`compileId`、`nodeId` 和初始 `target`，不会复制完整 Schema 树或配置 XML。窗口通过编译索引恢复节点祖先链并按需懒加载子节点；完整编译树仍保存在 YANG Worker 和磁盘编译缓存中。应用全局只保留一个 Content Editor：再次选择任意节点或 datastore 时会聚焦现有窗口、切换到最新上下文，并同步更新该窗口的 Profile Session 事件过滤，不再继续创建 Editor。窗口不存在时不会产生这一路 renderer IPC。显式断开或删除当前 Profile、切换活动 Profile，以及应用退出时，会关闭对应的 Content Editor。
 
+从 config 数据节点选择 `edit-config → Candidate/Running` 后，独立 Content Editor 会恢复节点上下文、生成配置草稿，并在同一窗口完成参数编辑、YANG 校验、自动回读和执行：
+
+![NETCONF edit-config 独立 Content Editor](images/yang/yang-edit-config-editor.png)
+
 若主窗口重新编译或清空了当前 Profile 的 Schema，已经打开的 Editor 会保留尚未复制的 XML 草稿，但禁用执行，要求从主窗口按新编译上下文重新打开。关闭正在等待 RPC 的 Editor 只终止该窗口的本地等待，不会断开或破坏共享 NETCONF Session。
+
+“执行记录”按当前运行期保存最近执行。选择记录可以同时核对请求、响应、设备、Session、message-id 和耗时；Content Editor 中的自动 `get-config` 回读会单独标记，不会和最终 `edit-config` 混为一条：
+
+![NETCONF 执行记录与 edit-config 自动回读](images/yang/yang-execution-history.png)
 
 RPC 等待回复期间会锁定操作切换和工作区清空，避免重复下发或丢失结果。合法 RPC 点击执行后直接下发，不再弹出通用二次确认；只有本地 YANG 校验失败而用户选择强制下发时，才要求单独确认。原始 RPC 不做 Capability 推断，执行前需要自行检查命名空间、目标 datastore 和操作风险。旧的 `/yang/yang-operations` 地址会自动跳转到 Schema 工作区。
 
 订阅控制 RPC 的 `<rpc-reply>` 仍保留在当前响应区和执行记录中，之后到达的异步 `<notification>` 不会混入响应。Notifications 独立窗口按 Profile → Session → Subscription 分组，支持未读状态、全文筛选、完整 XML 行号/高亮、复制、删除和 JSON/XML 导出。现代动态订阅可从该窗口转回主工作区打开修改、删除和 on-change 重同步；RFC 5277 没有按订阅 ID 取消订阅的 RPC，因此结束旧订阅仍会断开其 Session。
+
+下图是独立的通知记录窗口：左侧为 Profile/Session/Subscription 分组，中间为 Generated/Received 记录表，右侧为选中记录的完整 XML；它与上面的同步 RPC 执行记录是两套独立历史。
+
+![NETCONF Notifications 分组、时间与完整 XML](images/yang/yang-notifications.png)
 
 完整 Notification 只投递给已经打开的 Notifications 窗口；窗口关闭时，主窗口只接收 200 ms 合并后的总数、未读数和最近事件摘要，不携带 XML。主进程仍持续接收设备订阅流，并在内存中最多保留 500 条、总计 16 MiB、单条 XML 2 MiB 的有界历史。因此关闭窗口不会形成双份完整消息投递，也不会丢失重新打开前已经收到的通知；窗口重开后先加载历史和订阅快照，再按稳定记录 ID 合并实时事件。
 
@@ -298,7 +328,7 @@ YANG 仓库位于 Electron `userData/yang` 下，主要包含：
 按诊断中的 module/submodule 名称和 revision 导入依赖。若同名模块有多个 revision，应优先提供 import/include 中通过 `revision-date` 指定的版本。
 
 **页面提示“内置 libyang 运行时不可用”。**  
-正式安装环境中这表示运行时文件缺失、损坏、没有执行权限或平台架构不匹配。先在“设置 → 运行时诊断”中查看实际路径并重新检测，随后修复或重新安装 NetNexus。源码开发环境可设置 `NETNEXUS_YANGLINT_PATH` 临时指定兼容的 `yanglint`，重启后点击“重新检测”。编译不会回退到 JavaScript 简化解析器。
+正式安装环境中这表示运行时文件缺失、损坏、没有执行权限或平台架构不匹配。先在“设置 → 运行时”中查看实际路径并重新检测，随后修复或重新安装 NetNexus。源码开发环境可设置 `NETNEXUS_YANGLINT_PATH` 临时指定兼容的 `yanglint`，重启后点击“重新检测”。编译不会回退到 JavaScript 简化解析器。
 
 **candidate、validate 或 XPath 操作不可选。**  
 这是服务端 Capability 门控结果。不要把表单禁用当成客户端故障；可以先查看连接页的 Capability，确认设备是否支持对应能力。

@@ -15,7 +15,7 @@ async function openRuntimeSettings(page) {
     await page.getByRole('menuitem', { name: '设置', exact: true }).click();
     const settingsDialog = page.getByRole('dialog', { name: '设置' });
     await expect(settingsDialog).toBeVisible();
-    await settingsDialog.getByRole('menuitem', { name: '运行时诊断', exact: true }).click();
+    await settingsDialog.getByRole('tab', { name: '运行时', exact: true }).click();
     return settingsDialog;
 }
 

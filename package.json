@@ -29,7 +29,7 @@
         "字符串生成器",
         "报文解析"
     ],
-    "homepage": "https://github.com/jihuaib/NetNexus#readme",
+    "homepage": "https://jihuaib.github.io/NetNexus/",
     "bugs": {
         "url": "https://github.com/jihuaib/NetNexus/issues"
     },
@@ -52,9 +52,11 @@
         "libyang:ensure": "node scripts/ensure-libyang-runtime.js",
         "libyang:smoke": "node scripts/smoke-libyang-runtime.js",
         "libyang:verify": "node scripts/verify-libyang-runtime.js",
-        "start": "vite",
+        "start": "vite --force",
         "predev": "npm run libyang:ensure",
         "dev": "concurrently -k \"cross-env BROWSER=none npm start\" \"wait-port 3000 && electron .\"",
+        "dev:ui": "node scripts/run-with-local-ui.js dev",
+        "build:ui": "node scripts/run-with-local-ui.js build",
         "pack": "electron-builder --win --x64 --dir",
         "pack:mac": "electron-builder --mac --x64 --dir",
         "pack:mac:arm64": "electron-builder --mac --arm64 --dir",
@@ -94,6 +96,10 @@
         "mock:tftp": "node scripts/mockTftpClient.js",
         "mock:tcp": "node scripts/mockTcpServer.js",
         "mock:udp": "node scripts/mockUdpServer.js",
+        "docs:install": "node scripts/run-docs-site.js install",
+        "docs:dev": "node scripts/run-docs-site.js dev",
+        "docs:build": "node scripts/run-docs-site.js build",
+        "docs:preview": "node scripts/run-docs-site.js preview",
         "docs:screenshots": "electron scripts/captureDocsScreenshots.js",
         "docs:pdf": "electron scripts/generateDocsPdf.js",
         "lint": "eslint --ext .js,.vue src electron",

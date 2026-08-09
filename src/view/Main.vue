@@ -117,42 +117,42 @@
         {
             key: '工具集合',
             icon: h(moduleNavigationIcons.tools),
-            label: '工具集合',
+            label: '工具',
             title: '工具集合',
             route: '/tools'
         },
         {
             key: 'BGP模拟器',
             icon: h(moduleNavigationIcons.bgp),
-            label: 'BGP模拟器',
+            label: 'BGP',
             title: 'BGP模拟器',
             route: '/bgp'
         },
         {
             key: 'BMP服务器',
             icon: h(moduleNavigationIcons.bmp),
-            label: 'BMP服务器',
+            label: 'BMP',
             title: 'BMP服务器',
             route: '/bmp'
         },
         {
             key: 'RPKI服务器',
             icon: h(moduleNavigationIcons.rpki),
-            label: 'RPKI服务器',
+            label: 'RPKI',
             title: 'RPKI服务器',
             route: '/rpki'
         },
         {
             key: 'FTP服务器',
             icon: h(moduleNavigationIcons.ftp),
-            label: 'FTP服务器',
+            label: 'FTP',
             title: 'FTP服务器',
             route: '/ftp'
         },
         {
             key: 'SNMP服务器',
             icon: h(moduleNavigationIcons.snmp),
-            label: 'SNMP服务器',
+            label: 'SNMP',
             title: 'SNMP服务器',
             route: '/snmp'
         },
@@ -166,35 +166,35 @@
         {
             key: 'DHCP服务器',
             icon: h(moduleNavigationIcons.dhcp),
-            label: 'DHCP服务器',
+            label: 'DHCP',
             title: 'DHCP服务器',
             route: '/dhcp'
         },
         {
             key: 'NTP服务器',
             icon: h(moduleNavigationIcons.ntp),
-            label: 'NTP服务器',
+            label: 'NTP',
             title: 'NTP服务器',
             route: '/ntp'
         },
         {
             key: 'RADIUS服务器',
             icon: h(moduleNavigationIcons.radius),
-            label: 'RADIUS服务器',
+            label: 'RADIUS',
             title: 'RADIUS服务器',
             route: '/radius'
         },
         {
             key: 'TFTP服务器',
             icon: h(moduleNavigationIcons.tftp),
-            label: 'TFTP服务器',
+            label: 'TFTP',
             title: 'TFTP服务器',
             route: '/tftp'
         },
         {
             key: 'Syslog服务器',
             icon: h(moduleNavigationIcons.syslog),
-            label: 'Syslog服务器',
+            label: 'Syslog',
             title: 'Syslog服务器',
             route: '/syslog'
         }
@@ -302,7 +302,7 @@
 
 <style scoped>
     .main-layout {
-        --sidebar-width: 184px;
+        --sidebar-width: 160px;
         --sidebar-collapsed-width: 64px;
 
         width: 100%;
@@ -319,9 +319,9 @@
         left: 0;
         top: 0;
         z-index: 1000;
-        border-right: 1px solid var(--nn-color-border-sider);
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 28%), var(--nn-color-bg-sider);
-        box-shadow: var(--nn-shadow-sider);
+        border-right: 1px solid var(--nn-color-border);
+        background: var(--nn-color-bg-surface);
+        box-shadow: none;
         transition: width 0.2s ease;
         width: var(--sidebar-width);
         overflow: hidden;
@@ -335,20 +335,20 @@
 
     .sidebar-header {
         height: 66px;
-        padding: 0 12px 0 14px;
+        padding: 0 8px;
         display: flex;
         flex: 0 0 auto;
         align-items: center;
         justify-content: space-between;
-        gap: 8px;
-        border-bottom: 1px solid var(--nn-color-border-sider);
+        gap: 4px;
+        border-bottom: 1px solid var(--nn-color-border);
     }
 
     .sidebar-brand {
         min-width: 0;
         display: flex;
         align-items: center;
-        gap: 9px;
+        gap: 7px;
     }
 
     .sidebar-brand-logo {
@@ -356,9 +356,9 @@
         height: 30px;
         display: block;
         flex: 0 0 auto;
-        border: 1px solid rgba(255, 255, 255, 0.24);
-        border-radius: 9px;
-        box-shadow: 0 5px 14px rgba(15, 23, 42, 0.24);
+        border: 1px solid var(--nn-color-border);
+        border-radius: 2px;
+        box-shadow: none;
         object-fit: cover;
     }
 
@@ -371,7 +371,7 @@
 
     .sidebar-brand-copy strong {
         overflow: hidden;
-        color: var(--nn-color-text-inverse);
+        color: var(--nn-color-text-strong);
         font-size: 14px;
         font-weight: 600;
         letter-spacing: 0.2px;
@@ -382,7 +382,7 @@
     .sidebar-brand-copy small {
         margin-top: 4px;
         overflow: hidden;
-        color: var(--nn-color-text-sider);
+        color: var(--nn-color-text-secondary);
         font-size: 10px;
         letter-spacing: 0.8px;
         opacity: 0.72;
@@ -405,6 +405,7 @@
         overflow-x: hidden;
         overflow-y: auto;
         flex: 1 1 auto;
+        background: var(--nn-color-bg-muted);
     }
 
     .main-menu {
@@ -413,7 +414,7 @@
     }
 
     .bottom-menu-btn {
-        border-top: 1px solid var(--nn-color-border-sider);
+        border-top: 1px solid var(--nn-color-border);
         padding: 10px 12px 12px;
         flex: 0 0 auto;
     }
@@ -429,7 +430,7 @@
         justify-content: flex-start;
         gap: 9px;
         padding-inline: 10px;
-        border-radius: 8px;
+        border-radius: 2px;
         font-size: 13px;
     }
 
@@ -466,7 +467,7 @@
         flex-direction: column;
         width: 100%;
         box-sizing: border-box;
-        background: var(--nn-color-bg-layout);
+        background: var(--nn-color-bg-surface);
     }
 
     /* 菜单图标样式 */

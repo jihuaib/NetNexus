@@ -1,6 +1,12 @@
 <template>
-    <div class="bmp-data-settings">
-        <nn-card title="数据管理" class="settings-card">
+    <nn-settings class="bmp-data-settings">
+        <nn-settings-section title="BMP SQLite 数据库" description="无需启动 BMP 即可查看并删除本地数据库。">
+            <template #actions>
+                <span class="database-live-status" role="status" aria-live="polite">
+                    <nn-tag :color="statusTag.color">{{ statusTag.text }}</nn-tag>
+                </span>
+            </template>
+
             <nn-alert
                 type="warning"
                 show-icon
@@ -10,16 +16,6 @@
             />
 
             <div class="database-panel">
-                <div class="database-heading">
-                    <div>
-                        <div class="database-title">BMP SQLite 数据库</div>
-                        <div class="database-subtitle">无需启动 BMP 即可查看并删除本地数据库。</div>
-                    </div>
-                    <span class="database-live-status" role="status" aria-live="polite">
-                        <nn-tag :color="statusTag.color">{{ statusTag.text }}</nn-tag>
-                    </span>
-                </div>
-
                 <nn-descriptions :column="1" bordered size="small" class="database-details">
                     <nn-descriptions-item label="BMP 服务">
                         {{ serviceStatusText }}
@@ -38,28 +34,32 @@
                     </nn-descriptions-item>
                 </nn-descriptions>
 
-                <div class="database-actions">
-                    <nn-button :loading="refreshing" :disabled="deleting" @click="refreshDatabaseInfo">
-                        <template #icon><ReloadOutlined /></template>
-                        刷新状态
-                    </nn-button>
-                    <nn-button
-                        type="primary"
-                        danger
-                        data-testid="bmp-database-delete-button"
-                        aria-describedby="bmp-database-delete-hint"
-                        :loading="deleting"
-                        :disabled="!canDeleteDatabase"
-                        @click="confirmDeleteDatabase"
-                    >
-                        <template #icon><DeleteOutlined /></template>
-                        删除 BMP 数据库
-                    </nn-button>
-                    <span id="bmp-database-delete-hint" class="database-action-hint">{{ deleteHint }}</span>
-                </div>
+                <nn-settings-item title="数据库操作" align="center" actions-width="min(360px, 100%)">
+                    <template #description>
+                        <span id="bmp-database-delete-hint">{{ deleteHint }}</span>
+                    </template>
+                    <template #actions>
+                        <nn-button :loading="refreshing" :disabled="deleting" @click="refreshDatabaseInfo">
+                            <template #icon><ReloadOutlined /></template>
+                            刷新状态
+                        </nn-button>
+                        <nn-button
+                            type="primary"
+                            danger
+                            data-testid="bmp-database-delete-button"
+                            aria-describedby="bmp-database-delete-hint"
+                            :loading="deleting"
+                            :disabled="!canDeleteDatabase"
+                            @click="confirmDeleteDatabase"
+                        >
+                            <template #icon><DeleteOutlined /></template>
+                            删除 BMP 数据库
+                        </nn-button>
+                    </template>
+                </nn-settings-item>
             </div>
-        </nn-card>
-    </div>
+        </nn-settings-section>
+    </nn-settings>
 </template>
 
 <script setup>
@@ -213,25 +213,9 @@
     }
 
     .database-panel {
-        padding: 16px;
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 8px;
-        background: var(--nn-color-bg-surface);
-    }
-
-    .database-heading {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
+        display: grid;
+        min-width: 0;
         gap: 16px;
-        margin-bottom: 14px;
-    }
-
-    .database-title {
-        color: var(--nn-color-text-strong);
-        font-size: 14px;
-        font-weight: 600;
-        line-height: 1.5;
     }
 
     .database-live-status {
@@ -239,33 +223,7 @@
         flex: 0 0 auto;
     }
 
-    .database-subtitle,
-    .database-action-hint {
-        color: var(--nn-color-text-secondary);
-        font-size: 12px;
-        line-height: 1.5;
-    }
-
-    .database-subtitle {
-        margin-top: 2px;
-    }
-
-    .database-details {
-        margin-bottom: 16px;
-    }
-
     .database-path {
         word-break: break-all;
-    }
-
-    .database-actions {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 10px;
-    }
-
-    .database-action-hint {
-        flex: 1 1 220px;
     }
 </style>

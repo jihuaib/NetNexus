@@ -12,15 +12,23 @@ const CLIENT = {
     remotePort: 49152,
     sysName: 'incremental-router'
 };
+const OTHER_CLIENT = {
+    ...CLIENT,
+    persistentSourceId: 'other-incremental-source',
+    persistentConnectionId: 'other-incremental-connection',
+    remoteIp: '198.51.100.10',
+    remotePort: 49200,
+    sysName: 'other-incremental-router'
+};
 const CLIENT_KEY = encodeURIComponent(`source:${CLIENT.persistentSourceId}`);
 const SESSION_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=session`;
 const LOC_RIB_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=loc-rib`;
 
-function scope(scopeId, ownerKey, ribType = 2) {
+function scope(scopeId, ownerKey, ribType = 2, client = CLIENT) {
     return {
         persistentScopeId: scopeId,
         scopeId,
-        persistentSourceId: CLIENT.persistentSourceId,
+        persistentSourceId: client.persistentSourceId,
         persistentOwnerKey: ownerKey,
         ownerKey,
         afi: 1,
@@ -32,9 +40,9 @@ function scope(scopeId, ownerKey, ribType = 2) {
     };
 }
 
-function session(ownerKey, scopeId, ip, asn, vrfName) {
+function session(ownerKey, scopeId, ip, asn, vrfName, client = CLIENT) {
     return {
-        persistentSourceId: CLIENT.persistentSourceId,
+        persistentSourceId: client.persistentSourceId,
         persistentOwnerKey: ownerKey,
         ownerKey,
         connectionState: 'open',
@@ -48,13 +56,13 @@ function session(ownerKey, scopeId, ip, asn, vrfName) {
         enabledAddrFamilyTypes: [1],
         ribTypes: [2],
         vrfTableNames: [vrfName],
-        routeScopes: [scope(scopeId, ownerKey)]
+        routeScopes: [scope(scopeId, ownerKey, 2, client)]
     };
 }
 
-function instance(ownerKey, scopeId, vrfName) {
+function instance(ownerKey, scopeId, vrfName, client = CLIENT) {
     return {
-        persistentSourceId: CLIENT.persistentSourceId,
+        persistentSourceId: client.persistentSourceId,
         persistentOwnerKey: ownerKey,
         ownerKey,
         persistentScopeId: scopeId,
@@ -73,15 +81,24 @@ function instance(ownerKey, scopeId, vrfName) {
         enabledAddrFamilyTypes: [1],
         ribTypes: ['loc-rib'],
         vrfTableNames: [vrfName],
-        routeScopes: [scope(scopeId, ownerKey, 'loc-rib')],
+        routeScopes: [scope(scopeId, ownerKey, 'loc-rib', client)],
         routeSummary: { active: 60, stale: 0, total: 60 }
     };
 }
 
 const SESSION_A = session('session-owner-a', 'session-scope-a', '192.0.2.2', 65000, 'global');
 const SESSION_B = session('session-owner-b', 'session-scope-b', '192.0.2.3', 65001, 'blue');
+const OTHER_SESSION = session(
+    'other-session-owner',
+    'other-session-scope',
+    '198.51.100.2',
+    65100,
+    'other',
+    OTHER_CLIENT
+);
 const INSTANCE_A = instance('instance-owner-a', 'instance-scope-a', 'global');
 const INSTANCE_B = instance('instance-owner-b', 'instance-scope-b', 'blue');
+const OTHER_INSTANCE = instance('other-instance-owner', 'other-instance-scope', 'other', OTHER_CLIENT);
 
 function route(scopeId, page) {
     const index = (page - 1) * 25;
@@ -388,5 +405,145 @@ test.describe('BMP incremental route pages', () => {
             { sourceId: CLIENT.persistentSourceId, scopeId: INSTANCE_A.persistentScopeId }
         );
         await expect(routeTable).not.toContainText('10.0.25.0');
+    });
+
+    test('keeps the monitored Client isolated from another Client incremental events', async ({ page }) => {
+        await page.goto(SESSION_MONITOR_ROUTE);
+        const sessionPage = page.getByTestId('bmp-session-page');
+        const sessionRouteTable = page.getByTestId('bmp-session-route-table');
+        const originalSessionTab = page.getByRole('tab', { name: /192\.0\.2\.2/ });
+        await expect(originalSessionTab).toBeVisible();
+        await expect(sessionRouteTable).toContainText('10.0.0.0');
+
+        const sessionCallsBeforeOther = calls.filter(call => call.method === 'getBgpSessions').length;
+        const sessionRouteCallsBeforeOther = calls.filter(call => call.method === 'getBgpRoutes').length;
+
+        await page.evaluate(
+            ({ otherClient, otherSession, monitoredScopeId }) => {
+                window.__bmpE2eEmit('bmp:sessionUpdate', {
+                    status: 'success',
+                    data: { client: otherClient, session: otherSession }
+                });
+                window.__bmpE2eEmit('bmp:routeUpdate', {
+                    status: 'success',
+                    data: {
+                        client: otherClient,
+                        sourceId: otherClient.persistentSourceId,
+                        session: otherSession,
+                        scopeId: monitoredScopeId,
+                        af: 1,
+                        ribType: 2,
+                        projectionReset: true
+                    }
+                });
+            },
+            {
+                otherClient: OTHER_CLIENT,
+                otherSession: OTHER_SESSION,
+                monitoredScopeId: SESSION_A.routeScopes[0].persistentScopeId
+            }
+        );
+
+        await page.waitForTimeout(100);
+        await expect(sessionPage.getByRole('tab')).toHaveCount(1);
+        await expect(sessionPage.getByRole('tab', { name: /198\.51\.100\.2/ })).toHaveCount(0);
+        await expect(sessionRouteTable).toContainText('10.0.0.0');
+        expect(calls.filter(call => call.method === 'getBgpSessions').length).toBe(sessionCallsBeforeOther);
+        expect(calls.filter(call => call.method === 'getBgpRoutes').length).toBe(sessionRouteCallsBeforeOther);
+
+        await page.evaluate(
+            ({ client, nextSession, activeSession }) => {
+                window.__bmpE2eEmit('bmp:sessionUpdate', {
+                    status: 'success',
+                    data: { client, session: nextSession }
+                });
+                window.__bmpE2eEmit('bmp:routeUpdate', {
+                    status: 'success',
+                    data: {
+                        client,
+                        sourceId: client.persistentSourceId,
+                        session: activeSession,
+                        scopeId: activeSession.routeScopes[0].persistentScopeId,
+                        af: 1,
+                        ribType: 2,
+                        projectionReset: true
+                    }
+                });
+            },
+            { client: CLIENT, nextSession: SESSION_B, activeSession: SESSION_A }
+        );
+
+        await expect(sessionPage.getByRole('tab', { name: /192\.0\.2\.3/ })).toBeVisible();
+        await expect
+            .poll(() => calls.filter(call => call.method === 'getBgpRoutes').length)
+            .toBeGreaterThan(sessionRouteCallsBeforeOther);
+
+        await page.goto(LOC_RIB_MONITOR_ROUTE);
+        const locRibPage = page.getByTestId('bmp-loc-rib-page');
+        const instanceRouteTable = page.getByTestId('bmp-loc-rib-route-table');
+        const originalInstanceTab = page.getByRole('tab', { name: /global/ });
+        await expect(originalInstanceTab).toBeVisible();
+        await expect(instanceRouteTable).toContainText('10.0.0.0');
+
+        const instanceCallsBeforeOther = calls.filter(call => call.method === 'getBgpInstances').length;
+        const instanceRouteCallsBeforeOther = calls.filter(call => call.method === 'getBgpInstanceRoutes').length;
+
+        await page.evaluate(
+            ({ otherClient, otherInstance, monitoredScopeId }) => {
+                window.__bmpE2eEmit('bmp:instanceUpdate', {
+                    status: 'success',
+                    data: { client: otherClient, instance: otherInstance }
+                });
+                window.__bmpE2eEmit('bmp:instanceRouteUpdate', {
+                    status: 'success',
+                    data: {
+                        client: otherClient,
+                        sourceId: otherClient.persistentSourceId,
+                        instance: otherInstance,
+                        scopeId: monitoredScopeId,
+                        af: 1,
+                        projectionReset: true
+                    }
+                });
+            },
+            {
+                otherClient: OTHER_CLIENT,
+                otherInstance: OTHER_INSTANCE,
+                monitoredScopeId: INSTANCE_A.persistentScopeId
+            }
+        );
+
+        await page.waitForTimeout(100);
+        await expect(locRibPage.getByRole('tab')).toHaveCount(1);
+        await expect(locRibPage.getByRole('tab', { name: /other/ })).toHaveCount(0);
+        await expect(instanceRouteTable).toContainText('10.0.0.0');
+        expect(calls.filter(call => call.method === 'getBgpInstances').length).toBe(instanceCallsBeforeOther);
+        expect(calls.filter(call => call.method === 'getBgpInstanceRoutes').length).toBe(instanceRouteCallsBeforeOther);
+
+        await page.evaluate(
+            ({ client, nextInstance, activeInstance }) => {
+                window.__bmpE2eEmit('bmp:instanceUpdate', {
+                    status: 'success',
+                    data: { client, instance: nextInstance }
+                });
+                window.__bmpE2eEmit('bmp:instanceRouteUpdate', {
+                    status: 'success',
+                    data: {
+                        client,
+                        sourceId: client.persistentSourceId,
+                        instance: activeInstance,
+                        scopeId: activeInstance.persistentScopeId,
+                        af: 1,
+                        projectionReset: true
+                    }
+                });
+            },
+            { client: CLIENT, nextInstance: INSTANCE_B, activeInstance: INSTANCE_A }
+        );
+
+        await expect(locRibPage.getByRole('tab', { name: /blue/ })).toBeVisible();
+        await expect
+            .poll(() => calls.filter(call => call.method === 'getBgpInstanceRoutes').length)
+            .toBeGreaterThan(instanceRouteCallsBeforeOther);
     });
 });

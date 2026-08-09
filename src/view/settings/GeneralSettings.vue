@@ -1,8 +1,8 @@
 <template>
-    <div class="general-settings">
-        <nn-card title="通用设置" class="settings-card">
-            <nn-form :model="settingsForm" layout="vertical">
-                <nn-form-item label="主题" name="themePreset">
+    <nn-settings class="general-settings">
+        <nn-settings-section title="主题" description="选择界面配色，切换后立即预览。">
+            <nn-settings-item title="界面主题" description="保存后会在下次启动时恢复" actions-width="min(600px, 100%)">
+                <template #actions>
                     <nn-radio-group
                         v-model:value="settingsForm.themePreset"
                         class="theme-preset-options"
@@ -31,24 +31,33 @@
                             </span>
                         </nn-radio>
                     </nn-radio-group>
-                </nn-form-item>
+                </template>
+            </nn-settings-item>
+        </nn-settings-section>
 
-                <nn-form-item label="日志级别" name="logLevel">
-                    <nn-select v-model:value="settingsForm.logLevel" style="width: 100%">
+        <nn-settings-section title="日志" description="控制主进程及协议服务的运行日志级别。">
+            <nn-settings-item
+                title="日志级别"
+                description="高频场景建议保持关闭或警告"
+                align="center"
+                :actions-width="240"
+            >
+                <template #actions>
+                    <nn-select v-model:value="settingsForm.logLevel" aria-label="日志级别" style="width: 100%">
                         <nn-select-option value="off">关闭</nn-select-option>
                         <nn-select-option value="debug">debug</nn-select-option>
                         <nn-select-option value="info">info</nn-select-option>
                         <nn-select-option value="warn">warn</nn-select-option>
                         <nn-select-option value="error">error</nn-select-option>
                     </nn-select>
-                </nn-form-item>
+                </template>
+            </nn-settings-item>
+        </nn-settings-section>
 
-                <nn-form-item>
-                    <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
-                </nn-form-item>
-            </nn-form>
-        </nn-card>
-    </div>
+        <div class="settings-page-actions">
+            <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
+        </div>
+    </nn-settings>
 </template>
 
 <script setup>
@@ -113,10 +122,6 @@
         max-width: 100%;
     }
 
-    :deep(.nn-form-item-label > label) {
-        font-size: 12px;
-    }
-
     .theme-preset-options {
         display: grid;
         width: 100%;
@@ -126,38 +131,41 @@
     }
 
     .theme-preset-options :deep(.nn-radio-wrapper) {
-        --theme-preview-accent: #1677ff;
-        --theme-preview-ring: rgba(22, 119, 255, 0.18);
-        --theme-preview-sider: #243447;
-        --theme-preview-canvas: #f5f7fb;
+        --theme-preview-accent: #075cbd;
+        --theme-preview-sider: #edf1f4;
+        --theme-preview-selected: #dcebfa;
+        --theme-preview-canvas: #f4f6f8;
         --theme-preview-surface: #ffffff;
-        --theme-preview-line: #d9e2ef;
+        --theme-preview-line: #8795a3;
 
         min-width: 0;
         padding: 9px;
         border: 1px solid var(--nn-color-border);
-        border-radius: 8px;
+        border-radius: 2px;
         background: var(--nn-color-bg-surface);
         transition:
             border-color 0.2s,
-            box-shadow 0.2s,
-            transform 0.2s;
+            background-color 0.2s;
         white-space: normal;
     }
 
     .theme-preset-options :deep(.nn-radio-wrapper:hover) {
         border-color: var(--theme-preview-accent);
-        transform: translateY(-1px);
+        background: var(--nn-color-bg-hover);
     }
 
     .theme-preset-options :deep(.nn-radio-wrapper:focus-within) {
         border-color: var(--theme-preview-accent);
-        box-shadow: 0 0 0 2px var(--theme-preview-ring);
+        outline: 2px solid var(--theme-preview-accent);
+        outline-offset: 1px;
+        box-shadow: none;
     }
 
     .theme-preset-options :deep(.nn-radio-wrapper-checked) {
+        border-inline-start-width: 3px;
         border-color: var(--theme-preview-accent);
-        box-shadow: 0 0 0 2px var(--theme-preview-ring);
+        background: var(--nn-color-bg-subtle);
+        box-shadow: none;
     }
 
     .theme-preset-options :deep(.nn-radio) {
@@ -174,17 +182,17 @@
     }
 
     .theme-preset-options :deep(.theme-preset-option-orange) {
-        --theme-preview-accent: #f97316;
-        --theme-preview-ring: rgba(249, 115, 22, 0.2);
+        --theme-preview-accent: #b54708;
+        --theme-preview-selected: #fde1cf;
     }
 
     .theme-preset-options :deep(.theme-preset-option-dark) {
-        --theme-preview-accent: #2563eb;
-        --theme-preview-ring: rgba(96, 165, 250, 0.24);
-        --theme-preview-sider: #111827;
-        --theme-preview-canvas: #0f172a;
-        --theme-preview-surface: #1b263b;
-        --theme-preview-line: #334155;
+        --theme-preview-accent: #3f6fc7;
+        --theme-preview-sider: #222e3a;
+        --theme-preview-selected: #263f68;
+        --theme-preview-canvas: #11161c;
+        --theme-preview-surface: #1d2732;
+        --theme-preview-line: #657482;
     }
 
     .theme-preset-preview {
@@ -198,7 +206,19 @@
     }
 
     .theme-preset-preview-sidebar {
+        position: relative;
         background: var(--theme-preview-sider);
+    }
+
+    .theme-preset-preview-sidebar::after {
+        position: absolute;
+        top: 14px;
+        right: 3px;
+        left: 3px;
+        height: 12px;
+        border-inline-start: 2px solid var(--theme-preview-accent);
+        background: var(--theme-preview-selected);
+        content: '';
     }
 
     .theme-preset-preview-main {

@@ -65,11 +65,11 @@ async function openSettingsDialog(page) {
     return settingsDialog;
 }
 
-async function getMenuIconShapes(menu, itemNames) {
+async function getMenuIconShapes(menu, itemNames, role = 'menuitem') {
     const shapes = {};
 
     for (const itemName of itemNames) {
-        const icon = menu.getByRole('menuitem', { name: itemName, exact: true }).locator('svg.nn-icon');
+        const icon = menu.getByRole(role, { name: itemName, exact: true }).locator('svg.nn-icon');
         await expect(icon).toHaveCount(1);
         shapes[itemName] = await icon.evaluate(element => element.innerHTML);
     }
@@ -320,11 +320,159 @@ test.describe('Custom UI component interactions', () => {
         }
     });
 
+    test('renders the application shell with the flat visual contract', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await expect(page.getByText('报文解析器', { exact: true })).toBeVisible();
+
+        const snapshot = await page.evaluate(() => {
+            const sider = document.querySelector('.main-layout > .sider');
+            const sidebarNav = sider.querySelector('.sidebar-nav');
+            const contentArea = document.querySelector('.main-layout .content-area');
+            const logo = document.querySelector('.sidebar-brand-logo');
+            const selectedItem = document.querySelector('.main-menu .nn-menu-item-selected');
+            const selectedIcon = selectedItem.querySelector('svg.nn-icon');
+            const unselectedItem = [...document.querySelectorAll('.main-menu .nn-menu-item')].find(
+                item => !item.classList.contains('nn-menu-item-selected')
+            );
+            const unselectedIcon = unselectedItem.querySelector('svg.nn-icon');
+            const cardHeader = document.querySelector('.nn-card-head');
+            const parseColor = color => (color.match(/[\d.]+/gu) || []).slice(0, 3).map(Number);
+            const luminance = color => {
+                const channels = parseColor(color).map(value => {
+                    const normalized = value / 255;
+                    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+                });
+                return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+            };
+            const contrast = (firstColor, secondColor) => {
+                const first = luminance(firstColor);
+                const second = luminance(secondColor);
+                return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+            };
+            const selectedStyle = getComputedStyle(selectedItem);
+            const selectedBackground = selectedStyle.backgroundColor;
+            const selectedForeground = selectedStyle.color;
+            const selectedIconColor = getComputedStyle(selectedIcon).color;
+            const selectedRail = selectedStyle.borderInlineStartColor;
+            const unselectedStyle = getComputedStyle(unselectedItem);
+            const unselectedForeground = unselectedStyle.color;
+            const unselectedIconColor = getComputedStyle(unselectedIcon).color;
+            const siderStyle = getComputedStyle(sider);
+            const sidebarNavStyle = getComputedStyle(sidebarNav);
+            const contentAreaStyle = getComputedStyle(contentArea);
+            const probe = document.createElement('span');
+            document.body.appendChild(probe);
+            const resolveColor = token => {
+                probe.style.color = `var(${token})`;
+                return getComputedStyle(probe).color;
+            };
+            const result = {
+                siderBackgroundImage: siderStyle.backgroundImage,
+                siderBackground: siderStyle.backgroundColor,
+                expectedSiderBackground: resolveColor('--nn-color-bg-surface'),
+                siderBorder: siderStyle.borderRightColor,
+                expectedSiderBorder: resolveColor('--nn-color-border'),
+                sidebarNavBackground: sidebarNavStyle.backgroundColor,
+                expectedSidebarNavBackground: resolveColor('--nn-color-bg-muted'),
+                contentAreaBackground: contentAreaStyle.backgroundColor,
+                expectedContentAreaBackground: resolveColor('--nn-color-bg-surface'),
+                siderShadow: siderStyle.boxShadow,
+                logoRadius: getComputedStyle(logo).borderRadius,
+                logoShadow: getComputedStyle(logo).boxShadow,
+                menuRadius: getComputedStyle(selectedItem).borderRadius,
+                menuShadow: getComputedStyle(selectedItem).boxShadow,
+                selectedBackground,
+                expectedSelectedBackground: resolveColor('--nn-color-bg-selected'),
+                selectedForeground,
+                expectedSelectedForeground: resolveColor('--nn-color-text-info'),
+                menuIconMatchesText: selectedIconColor === selectedForeground,
+                menuTextContrast: contrast(selectedForeground, selectedBackground),
+                menuIconContrast: contrast(selectedIconColor, selectedBackground),
+                menuRailContrast: contrast(selectedRail, selectedBackground),
+                unselectedIconMatchesText: unselectedIconColor === unselectedForeground,
+                unselectedTextContrast: contrast(unselectedForeground, sidebarNavStyle.backgroundColor),
+                unselectedIconContrast: contrast(unselectedIconColor, sidebarNavStyle.backgroundColor),
+                cardHeaderBackground: getComputedStyle(cardHeader).backgroundColor,
+                expectedCardHeaderBackground: resolveColor('--nn-color-bg-card-head'),
+                cardAccent: getComputedStyle(cardHeader, '::before').backgroundColor,
+                expectedAccent: resolveColor('--nn-color-primary')
+            };
+            probe.remove();
+            return result;
+        });
+
+        expect(snapshot.siderBackgroundImage).toBe('none');
+        expect(snapshot.siderBackground).toBe(snapshot.expectedSiderBackground);
+        expect(snapshot.siderBorder).toBe(snapshot.expectedSiderBorder);
+        expect(snapshot.sidebarNavBackground).toBe(snapshot.expectedSidebarNavBackground);
+        expect(snapshot.contentAreaBackground).toBe(snapshot.expectedContentAreaBackground);
+        expect(snapshot.siderShadow).toBe('none');
+        expect(snapshot.logoRadius).toBe('2px');
+        expect(snapshot.logoShadow).toBe('none');
+        expect(snapshot.menuRadius).toBe('2px');
+        expect(snapshot.menuShadow).toBe('none');
+        expect(snapshot.selectedBackground).toBe(snapshot.expectedSelectedBackground);
+        expect(snapshot.selectedBackground).not.toBe(snapshot.sidebarNavBackground);
+        expect(snapshot.selectedForeground).toBe(snapshot.expectedSelectedForeground);
+        expect(snapshot.menuIconMatchesText).toBe(true);
+        expect(snapshot.menuTextContrast).toBeGreaterThanOrEqual(4.5);
+        expect(snapshot.menuIconContrast).toBeGreaterThanOrEqual(3);
+        expect(snapshot.menuRailContrast).toBeGreaterThanOrEqual(3);
+        expect(snapshot.unselectedIconMatchesText).toBe(true);
+        expect(snapshot.unselectedTextContrast).toBeGreaterThanOrEqual(4.5);
+        expect(snapshot.unselectedIconContrast).toBeGreaterThanOrEqual(3);
+        expect(snapshot.cardHeaderBackground).toBe(snapshot.expectedCardHeaderBackground);
+        expect(snapshot.cardAccent).toBe(snapshot.expectedAccent);
+
+        const selectedMenuItem = page.locator('.main-menu .nn-menu-item-selected');
+        await selectedMenuItem.focus();
+        await expect(selectedMenuItem).not.toHaveCSS('outline-style', 'none');
+
+        const input = page.locator('.nn-input').first();
+        await input.click();
+        await expect(input).toHaveCSS('outline-style', 'none');
+        await expect(input).toHaveCSS('box-shadow', 'none');
+
+        const settingsDialog = await openSettingsDialog(page);
+        await expect(settingsDialog.locator('.nn-navigation-modal-rail')).toHaveCSS('width', '160px');
+        const selectedSettingsTab = settingsDialog.locator('.nn-navigation-modal-nav-item-active');
+        const settingsTabContrast = await selectedSettingsTab.evaluate(element => {
+            const channels = color => (color.match(/[\d.]+/gu) || []).slice(0, 3).map(Number);
+            const luminance = color =>
+                channels(color)
+                    .map(value => {
+                        const normalized = value / 255;
+                        return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+                    })
+                    .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+            const ratio = (firstColor, secondColor) => {
+                const first = luminance(firstColor);
+                const second = luminance(secondColor);
+                return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+            };
+            const style = getComputedStyle(element);
+            const background = style.backgroundColor;
+            const foreground = style.color;
+            const icon = getComputedStyle(element.querySelector('svg.nn-icon')).color;
+            return {
+                iconMatchesText: icon === foreground,
+                text: ratio(foreground, background),
+                icon: ratio(icon, background),
+                rail: ratio(style.borderInlineStartColor, background)
+            };
+        });
+        expect(settingsTabContrast.iconMatchesText).toBe(true);
+        expect(settingsTabContrast.text).toBeGreaterThanOrEqual(4.5);
+        expect(settingsTabContrast.icon).toBeGreaterThanOrEqual(3);
+        expect(settingsTabContrast.rail).toBeGreaterThanOrEqual(3);
+        await page.keyboard.press('Escape');
+    });
+
     test('navigates with the main sidebar menu', async ({ page }) => {
         await page.goto('/#/tools/packet-parser');
         await expect(page.getByText('报文解析器', { exact: true })).toBeVisible();
 
-        const ntpMenuItem = page.locator('.main-menu').getByRole('menuitem', { name: 'NTP服务器' });
+        const ntpMenuItem = page.locator('.main-menu').getByRole('menuitem', { name: 'NTP' });
         await ntpMenuItem.click();
 
         await expect(page).toHaveURL(/#\/ntp\/ntp-config$/u);
@@ -366,17 +514,17 @@ test.describe('Custom UI component interactions', () => {
 
         const mainMenu = page.locator('.main-menu');
         const mainIconShapes = await getMenuIconShapes(mainMenu, [
-            '工具集合',
-            'BGP模拟器',
-            'BMP服务器',
-            'RPKI服务器',
-            'FTP服务器',
-            'SNMP服务器',
-            'DHCP服务器',
-            'NTP服务器',
-            'RADIUS服务器',
-            'TFTP服务器',
-            'Syslog服务器'
+            '工具',
+            'BGP',
+            'BMP',
+            'RPKI',
+            'FTP',
+            'SNMP',
+            'DHCP',
+            'NTP',
+            'RADIUS',
+            'TFTP',
+            'Syslog'
         ]);
         expect(new Set(Object.values(mainIconShapes)).size).toBe(Object.keys(mainIconShapes).length);
 
@@ -389,19 +537,15 @@ test.describe('Custom UI component interactions', () => {
         await quickMenu.getByRole('menuitem', { name: '设置', exact: true }).click();
         const settingsDialog = page.getByRole('dialog', { name: '设置' });
         await expect(settingsDialog).toBeVisible();
-        const settingsIconShapes = await getMenuIconShapes(settingsDialog.locator('.settings-menu'), [
-            '通用设置',
-            '工具集合',
-            'FTP服务器',
-            '外部API',
-            '数据管理',
-            '运行时诊断',
-            '应用更新'
-        ]);
+        const settingsIconShapes = await getMenuIconShapes(
+            settingsDialog.locator('.nn-navigation-modal-nav'),
+            ['通用', '工具', 'FTP', 'API', '数据', '运行时', '更新'],
+            'tab'
+        );
         expect(new Set(Object.values(settingsIconShapes)).size).toBe(Object.keys(settingsIconShapes).length);
-        expect(settingsIconShapes['通用设置']).toBe(quickIconShapes['设置']);
-        expect(settingsIconShapes['工具集合']).toBe(mainIconShapes['工具集合']);
-        expect(settingsIconShapes['FTP服务器']).toBe(mainIconShapes['FTP服务器']);
+        expect(settingsIconShapes['通用']).toBe(quickIconShapes['设置']);
+        expect(settingsIconShapes['工具']).toBe(mainIconShapes['工具']);
+        expect(settingsIconShapes.FTP).toBe(mainIconShapes.FTP);
     });
 
     test('keeps configuration labels compact, radio buttons joined and selected sidebar text emphasized', async ({
@@ -432,8 +576,8 @@ test.describe('Custom UI component interactions', () => {
         ).toBeLessThanOrEqual(0);
 
         const mainMenu = page.locator('.main-menu');
-        const selectedMenuItem = mainMenu.getByRole('menuitem', { name: 'BMP服务器', exact: true });
-        const regularMenuItem = mainMenu.getByRole('menuitem', { name: 'BGP模拟器', exact: true });
+        const selectedMenuItem = mainMenu.getByRole('menuitem', { name: 'BMP', exact: true });
+        const regularMenuItem = mainMenu.getByRole('menuitem', { name: 'BGP', exact: true });
         await expect(selectedMenuItem).toHaveCSS('font-size', '13px');
         await expect(selectedMenuItem).toHaveCSS('font-weight', '500');
         await expect(regularMenuItem).toHaveCSS('font-size', '13px');
@@ -487,7 +631,7 @@ test.describe('Custom UI component interactions', () => {
     test('keeps the current workspace when its main sidebar item is clicked again', async ({ page }) => {
         await page.goto('/#/tools/packet-parser');
 
-        const toolsMenuItem = page.locator('.main-menu').getByRole('menuitem', { name: '工具集合' });
+        const toolsMenuItem = page.locator('.main-menu').getByRole('menuitem', { name: '工具' });
         const packetParserPage = page.locator('.packet-parser-page');
         await expect(packetParserPage).toBeVisible();
 
@@ -530,7 +674,7 @@ test.describe('Custom UI component interactions', () => {
             await toggleButton.click();
         }
         await expect(sidebar).not.toHaveClass(/collapsed/u);
-        await expectSnmpMibLayout(page, 184);
+        await expectSnmpMibLayout(page, 160);
         await toggleButton.click();
         await expect(sidebar).toHaveClass(/collapsed/u);
         await expectSnmpMibLayout(page, 64);
@@ -656,12 +800,6 @@ test.describe('Custom UI component interactions', () => {
             return Math.max(...firstChannels.map((value, index) => Math.abs(value - secondChannels[index])));
         };
 
-        const expectedHeaderColors = {
-            orange: 'rgb(249, 115, 22)',
-            blue: 'rgb(22, 119, 255)',
-            dark: 'rgb(37, 99, 235)'
-        };
-
         for (const preset of ['orange', 'blue', 'dark']) {
             await page.evaluate(nextPreset => {
                 document.documentElement.dataset.theme = nextPreset === 'dark' ? 'dark' : 'light';
@@ -712,21 +850,24 @@ test.describe('Custom UI component interactions', () => {
                     border: buttonStyle.borderColor,
                     shadow: buttonStyle.boxShadow,
                     headerBackground: headerStyle.backgroundColor,
+                    headerAccent: getComputedStyle(header, '::before').backgroundColor,
                     controlTextContrast: contrast(buttonStyle.color, buttonStyle.backgroundColor),
-                    controlBackground: readToken('backgroundColor', '--nn-color-bg-card-head-control'),
-                    controlText: readToken('color', '--nn-color-text-card-head-control'),
-                    controlBorder: readToken('borderColor', '--nn-color-border-card-head-control')
+                    expectedHeaderBackground: readToken('backgroundColor', '--nn-color-bg-card-head'),
+                    primaryBackground: readToken('backgroundColor', '--nn-color-primary'),
+                    primaryText: readToken('color', '--nn-color-text-inverse'),
+                    primaryBorder: readToken('borderColor', '--nn-color-primary')
                 };
                 probe.remove();
                 return snapshot;
             });
 
-            expect(contrastStyle.background).toBe(contrastStyle.controlBackground);
-            expect(contrastStyle.headerBackground).toBe(expectedHeaderColors[preset]);
+            expect(contrastStyle.background).toBe(contrastStyle.primaryBackground);
+            expect(contrastStyle.headerBackground).toBe(contrastStyle.expectedHeaderBackground);
+            expect(contrastStyle.headerAccent).toBe(contrastStyle.primaryBackground);
             expect(contrastStyle.background).not.toBe(contrastStyle.headerBackground);
-            expect(maxColorChannelDifference(contrastStyle.color, contrastStyle.controlText)).toBeLessThanOrEqual(2);
-            expect(maxColorChannelDifference(contrastStyle.border, contrastStyle.controlBorder)).toBeLessThanOrEqual(2);
-            expect(contrastStyle.shadow).not.toBe('none');
+            expect(maxColorChannelDifference(contrastStyle.color, contrastStyle.primaryText)).toBeLessThanOrEqual(2);
+            expect(maxColorChannelDifference(contrastStyle.border, contrastStyle.primaryBorder)).toBeLessThanOrEqual(2);
+            expect(contrastStyle.shadow).toBe('none');
             expect(contrastStyle.controlTextContrast).toBeGreaterThanOrEqual(4.5);
 
             if (preset === 'orange') {
@@ -855,7 +996,7 @@ test.describe('Custom UI component interactions', () => {
                     ghostHoverBackground: readToken('backgroundColor', '--nn-color-bg-card-head-ghost-hover'),
                     ghostText: readToken('color', '--nn-color-text-card-head-ghost'),
                     ghostBorder: readToken('borderColor', '--nn-color-border-card-head-ghost'),
-                    primaryActive: readToken('backgroundColor', '--nn-color-primary-active'),
+                    primary: readToken('backgroundColor', '--nn-color-primary'),
                     inverseText: readToken('color', '--nn-color-text-inverse')
                 };
                 probe.remove();
@@ -869,18 +1010,18 @@ test.describe('Custom UI component interactions', () => {
         expect(offAppearance.pillHeight).toBe('24px');
         expect(offAppearance.pillTextContrast).toBeGreaterThanOrEqual(4.5);
         expect(offAppearance.toggleBackground).toBe(offAppearance.ghostHoverBackground);
-        expect(offAppearance.toggleShadow).not.toBe('none');
+        expect(offAppearance.toggleShadow).toBe('none');
         expect(offAppearance.toggleHeight).toBe('18px');
         expect(offAppearance.handleBackground).toBe(offAppearance.ghostText);
 
         await analysisToggle.click();
         await expect(analysisToggle).toHaveAttribute('aria-checked', 'true');
-        await expectHeaderSwitchTokens(analysisToggle, '--nn-color-primary-active', '--nn-color-text-inverse');
+        await expectHeaderSwitchTokens(analysisToggle, '--nn-color-primary', '--nn-color-text-inverse');
         const generatedAt = assurancePage.locator('.generated-at');
         await expect(generatedAt).toHaveText('更新于 E2E-TIME');
 
         const onAppearance = await readHeaderAppearance();
-        expect(onAppearance.toggleBackground).toBe(onAppearance.primaryActive);
+        expect(onAppearance.toggleBackground).toBe(onAppearance.primary);
         expect(onAppearance.toggleBackground).not.toBe(onAppearance.headerBackground);
         expect(onAppearance.handleBackground).toBe(onAppearance.inverseText);
         expect(onAppearance.handleBackground).not.toBe(onAppearance.toggleBackground);
@@ -1033,7 +1174,11 @@ test.describe('Custom UI component interactions', () => {
         });
         expect(themePresetGeometry.groupWidth).toBeLessThanOrEqual(720);
         expect(themePresetGeometry.widestCard).toBeLessThanOrEqual(240);
-        await expect(settingsDialog.getByRole('combobox')).toHaveCount(1);
+        const logLevelSelect = settingsDialog.getByRole('combobox');
+        await expect(logLevelSelect).toHaveCount(1);
+        await logLevelSelect.click();
+        await page.getByRole('option', { name: 'error', exact: true }).click();
+        await expect(logLevelSelect).toContainText('error');
 
         const previewColors = await themeGroup
             .locator('.theme-preset-preview-header')
@@ -1043,13 +1188,29 @@ test.describe('Custom UI component interactions', () => {
         const blueTheme = themeGroup.getByRole('radio', { name: '蓝色', exact: true });
         await blueTheme.click();
         await expect(blueTheme).toBeChecked();
-        await expect(themeGroup.locator('.theme-preset-option-blue')).toHaveCSS('border-color', 'rgb(22, 119, 255)');
+        const selectedThemeBorder = await themeGroup.locator('.theme-preset-option-blue').evaluate(element => {
+            const probe = document.createElement('span');
+            probe.style.borderColor = 'var(--nn-color-primary)';
+            document.body.appendChild(probe);
+            const result = {
+                actual: getComputedStyle(element).borderColor,
+                expected: getComputedStyle(probe).borderColor
+            };
+            probe.remove();
+            return result;
+        });
+        expect(selectedThemeBorder.actual).toBe(selectedThemeBorder.expected);
         await expect(page.locator('html')).toHaveAttribute('data-theme-preset', 'blue');
 
-        const toolsCategory = settingsDialog.getByRole('menuitem', { name: '工具集合', exact: true });
+        const toolsCategory = settingsDialog.getByRole('tab', { name: '工具', exact: true });
         await toolsCategory.click();
-        await expect(toolsCategory).toHaveAttribute('aria-current', 'page');
-        await expect(settingsDialog.getByText('Tools设置', { exact: true })).toBeVisible();
+        await expect(toolsCategory).toHaveAttribute('aria-selected', 'true');
+        await expect(settingsDialog.getByRole('heading', { name: '工具', level: 2 })).toBeVisible();
+
+        const generalCategory = settingsDialog.getByRole('tab', { name: '通用', exact: true });
+        await generalCategory.click();
+        await expect(generalCategory).toHaveAttribute('aria-selected', 'true');
+        await expect(settingsDialog.getByRole('combobox')).toContainText('error');
 
         await settingsDialog.getByRole('button', { name: '关闭' }).click();
         expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
@@ -1057,6 +1218,185 @@ test.describe('Custom UI component interactions', () => {
         expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
         await expect(settingsDialog).toBeHidden();
         await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe(initialBodyOverflow);
+    });
+
+    test('uses settings primitives without flattening complex page layouts', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            window.__settingsLayoutSaveCalls = [];
+            const fallbacks = {
+                getFtpSettings: async () => ({ status: 'success', data: { maxFtpUser: 100 } }),
+                getApiSettings: async () => ({ status: 'success', data: {} }),
+                getApiServerStatus: async () => ({
+                    status: 'success',
+                    data: {
+                        running: true,
+                        mode: 'cli',
+                        http: { running: false, host: '127.0.0.1', port: 18080 },
+                        cli: { running: true, host: '127.0.0.1', port: 3788 }
+                    }
+                }),
+                getUpdateSettings: async () => ({
+                    status: 'success',
+                    data: { autoCheckOnStartup: true, autoDownload: false }
+                }),
+                saveUpdateSettings: async settings => {
+                    window.__settingsLayoutSaveCalls.push({ ...settings });
+                    return { status: 'success' };
+                }
+            };
+            window.commonApi = new Proxy(window.commonApi, {
+                get(target, property, receiver) {
+                    return property in fallbacks ? fallbacks[property] : Reflect.get(target, property, receiver);
+                }
+            });
+        });
+        const settingsDialog = await openSettingsDialog(page);
+        const categories = [
+            {
+                tab: '通用',
+                description: '界面主题与运行日志',
+                root: '.general-settings',
+                layout: '.theme-preset-options',
+                items: 2,
+                sections: ['主题', '日志']
+            },
+            {
+                tab: '工具',
+                description: '历史记录与 Wireshark 插件',
+                root: '.tools-settings',
+                layout: '.wireshark-plugin-panel',
+                items: 2,
+                sections: ['字符串生成', '报文解析', 'Wireshark']
+            },
+            {
+                tab: 'FTP',
+                description: 'FTP 用户记录存储',
+                root: '.ftp-settings',
+                layout: '#ftp-user-limit',
+                items: 1,
+                sections: ['用户存储']
+            },
+            {
+                tab: 'API',
+                description: 'HTTP API 与 Telnet CLI',
+                root: '.api-settings',
+                layout: '[role="radiogroup"]',
+                items: 1,
+                sections: ['接入配置', '运行状态']
+            },
+            {
+                tab: '数据',
+                description: 'BMP SQLite 数据库维护',
+                root: '.bmp-data-settings',
+                layout: '.database-panel',
+                items: 1,
+                sections: ['BMP SQLite 数据库']
+            },
+            {
+                tab: '运行时',
+                description: 'YANG 编译器运行状态',
+                root: '.runtime-settings',
+                layout: '.runtime-details',
+                items: 0,
+                sections: ['YANG 编译器']
+            },
+            {
+                tab: '更新',
+                description: '版本检查、下载与安装',
+                root: '.update-settings',
+                layout: '.version-info',
+                items: 3,
+                sections: ['版本与安装', '自动更新']
+            }
+        ];
+
+        for (const category of categories) {
+            const tab = settingsDialog.getByRole('tab', { name: category.tab, exact: true });
+            await tab.click();
+            await expect(tab).toHaveAttribute('aria-selected', 'true');
+
+            const panel = settingsDialog.getByRole('tabpanel');
+            const settingsPage = panel.locator(category.root);
+            await expect(settingsPage).toBeVisible();
+            await expect(settingsPage).toHaveAttribute('data-nn-settings', '');
+            await expect(settingsDialog.getByRole('heading', { name: category.tab, level: 2 })).toBeVisible();
+            await expect(settingsDialog.locator('.nn-navigation-modal-description')).toHaveText(category.description);
+            await expect(settingsPage.locator(category.layout)).toBeVisible();
+            await expect(settingsPage.locator(':scope > [data-nn-settings-section]')).toHaveCount(
+                category.sections.length
+            );
+            for (const sectionTitle of category.sections) {
+                await expect(settingsPage.getByRole('heading', { name: sectionTitle, level: 3 })).toBeVisible();
+            }
+            await expect(settingsPage.locator('[data-nn-settings-item]')).toHaveCount(category.items);
+            await expect(settingsPage.locator(':scope > .nn-card')).toHaveCount(0);
+        }
+
+        await settingsDialog.getByRole('tab', { name: '通用', exact: true }).click();
+        await expect(settingsDialog.getByRole('combobox', { name: '日志级别' })).toBeVisible();
+        await settingsDialog.getByRole('tab', { name: '工具', exact: true }).click();
+        await expect(
+            settingsDialog.getByRole('region', { name: '字符串生成' }).getByLabel('历史记录最大存储条数')
+        ).toBeVisible();
+        await expect(
+            settingsDialog.getByRole('region', { name: '报文解析' }).getByLabel('历史记录最大存储条数')
+        ).toBeVisible();
+        await settingsDialog.getByRole('tab', { name: 'FTP', exact: true }).click();
+        await expect(settingsDialog.getByRole('region', { name: '用户存储' }).getByLabel('最大存储条数')).toBeVisible();
+        await settingsDialog.getByRole('tab', { name: 'API', exact: true }).click();
+        const apiSettings = settingsDialog.locator('.api-settings');
+        await expect(apiSettings.getByRole('radiogroup', { name: '接入方式' })).toBeVisible();
+        const apiRuntimeStatus = apiSettings.getByRole('region', { name: '运行状态' });
+        await expect(apiRuntimeStatus.getByRole('alert')).toContainText('Telnet CLI 正在运行');
+        const apiEndpointRows = apiRuntimeStatus.locator('.nn-descriptions-item');
+        await expect(apiEndpointRows).toHaveCount(2);
+        const httpEndpoint = apiEndpointRows.filter({ hasText: 'HTTP API' });
+        await expect(httpEndpoint).toContainText('127.0.0.1:18080');
+        await expect(httpEndpoint.getByText('未运行', { exact: true })).toBeVisible();
+        const cliEndpoint = apiEndpointRows.filter({ hasText: 'Telnet CLI' });
+        await expect(cliEndpoint).toContainText('127.0.0.1:3788');
+        await expect(cliEndpoint.getByText('运行中', { exact: true })).toBeVisible();
+        await expect(apiEndpointRows.locator('.api-endpoint-state').first()).toHaveCSS(
+            'justify-content',
+            'space-between'
+        );
+        await apiSettings.getByRole('radio', { name: 'HTTP API', exact: true }).click();
+        await expect(apiSettings.locator('[data-nn-settings-item]')).toHaveCount(3);
+        const httpPort = apiSettings.getByLabel('HTTP监听端口');
+        await expect(httpPort).toBeVisible();
+        const httpPageSize = apiSettings.getByLabel('分页最大条数');
+        await expect(httpPageSize).toBeVisible();
+        const httpPortItem = httpPort.locator('xpath=ancestor::*[@data-nn-settings-item]');
+        const httpPageSizeItem = httpPageSize.locator('xpath=ancestor::*[@data-nn-settings-item]');
+        await expect(httpPortItem).toHaveCSS('border-bottom-width', '0px');
+        await expect(httpPortItem).toHaveCSS('padding-bottom', '4px');
+        await expect(httpPageSizeItem).toHaveCSS('padding-top', '4px');
+        await apiSettings.getByRole('radio', { name: 'Telnet CLI', exact: true }).click();
+        await expect(apiSettings.locator('[data-nn-settings-item]')).toHaveCount(3);
+        const telnetPort = apiSettings.getByLabel('Telnet监听端口');
+        await expect(telnetPort).toBeDisabled();
+        const telnetMaxSessions = apiSettings.getByLabel('最大会话数');
+        await expect(telnetMaxSessions).toBeVisible();
+        const telnetPortItem = telnetPort.locator('xpath=ancestor::*[@data-nn-settings-item]');
+        const telnetMaxSessionsItem = telnetMaxSessions.locator('xpath=ancestor::*[@data-nn-settings-item]');
+        await expect(telnetPortItem).toHaveCSS('border-bottom-width', '0px');
+        await expect(telnetPortItem).toHaveCSS('padding-bottom', '4px');
+        await expect(telnetMaxSessionsItem).toHaveCSS('padding-top', '4px');
+        await settingsDialog.getByRole('tab', { name: '更新', exact: true }).click();
+
+        const updateSettings = settingsDialog.locator('.update-settings');
+        const automaticUpdates = updateSettings.getByRole('region', { name: '自动更新' });
+        await expect(automaticUpdates).toBeVisible();
+        await expect(automaticUpdates.locator('[data-nn-settings-item]')).toHaveCount(2);
+        await expect(automaticUpdates.getByRole('switch', { name: '启动时检查更新' })).toBeVisible();
+        const automaticDownload = automaticUpdates.getByRole('switch', { name: '自动下载更新' });
+        await expect(automaticDownload).toHaveAttribute('aria-checked', 'false');
+        await automaticDownload.click();
+        await expect(automaticDownload).toHaveAttribute('aria-checked', 'true');
+        await expect
+            .poll(() => page.evaluate(() => window.__settingsLayoutSaveCalls.at(-1)))
+            .toEqual({ autoCheckOnStartup: true, autoDownload: true });
     });
 
     test('deletes the stopped BMP database from data management after confirmation', async ({ page }) => {
@@ -1112,7 +1452,7 @@ test.describe('Custom UI component interactions', () => {
         });
 
         const settingsDialog = await openSettingsDialog(page);
-        await settingsDialog.getByRole('menuitem', { name: '数据管理', exact: true }).click();
+        await settingsDialog.getByRole('tab', { name: '数据', exact: true }).click();
         await expect(settingsDialog.getByText('/tmp/netnexus/bmp/bmp.sqlite3', { exact: true })).toBeVisible();
         await expect(settingsDialog.getByText('1.50 KB', { exact: true })).toBeVisible();
         expect(await page.evaluate(() => window.__bmpDataSettingsE2e.statusCalls)).toBe(1);
@@ -1186,7 +1526,7 @@ test.describe('Custom UI component interactions', () => {
 
         const settingsDialog = await openSettingsDialog(page);
         const modalRoot = page.locator('.nn-modal-root');
-        const modalHeader = settingsDialog.locator('.nn-modal-header');
+        const modalHeader = settingsDialog.locator('.nn-navigation-modal-header');
         const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
 
         await expect(modalRoot).toHaveCSS('position', 'fixed');

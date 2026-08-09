@@ -212,13 +212,17 @@
         padding: 7px 14px !important;
     }
 
-    .advanced-section + .advanced-section {
-        margin-top: 4px;
-        padding-top: 10px;
-        border-top: 1px solid var(--nn-color-border-light);
+    .bgp-route-advanced-form :deep(.advanced-section) {
+        min-width: 0;
+        padding: 8px 10px 0;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
     }
 
     .bgp-route-advanced-form {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
         font-size: 13px !important;
     }
 
@@ -269,7 +273,7 @@
     }
 
     .bgp-route-advanced-form :deep(.nn-alert) {
-        margin-bottom: 8px;
+        margin-bottom: 0;
     }
 
     @media (max-width: 720px) {

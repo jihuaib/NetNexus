@@ -1,93 +1,73 @@
 <template>
-    <nn-modal
+    <nn-file-import-modal
         v-model:open="open"
+        :file-path="effectiveFilePath"
         title="导入 BGP MRT 路由文件"
-        :confirm-loading="importing"
+        description-title="数据来源说明"
+        :loading="importing"
+        :show-picker="fileSource === 'custom'"
+        select-text="选择本地 MRT 文件"
+        empty-text="尚未选择文件，请选择一个 .gz 或解压后的原始文件。"
+        status-text="解析中…"
+        :validator="validateImport"
         width="600px"
         height="612px"
-        ok-text="开始导入"
-        cancel-text="取消"
-        @ok="handleImport"
+        @request-select="selectLocalFile"
+        @update:file-path="updateLocalFilePath"
+        @submit="handleImport"
     >
-        <div class="mrt-import-container">
-            <nn-alert message="数据来源说明" type="info" show-icon style="margin-bottom: 16px">
-                <template #description>
-                    您可以从
-                    <a class="external-link" @click="openRouteViews">RouteViews Archive</a>
-                    下载最新的 RIB 数据。 通常位于
-                    <code>bgpdata/YYYY.MM/RIBS/</code>
-                    目录下。
-                    <br />
-                    支持格式：
-                    <code>.gz</code>
-                    或解压后的原始文件 (如
-                    <code>rib.2024...</code>
-                    )。
-                    <br />
-                    <span class="import-warning">
-                        注意：
-                        <code>.bz2</code>
-                        文件请先解压，解压后即便没有后缀名也可导入。
-                    </span>
-                </template>
-            </nn-alert>
+        <template #description>
+            您可以从
+            <a class="external-link" @click="openRouteViews">RouteViews Archive</a>
+            下载最新的 RIB 数据。通常位于
+            <code>bgpdata/YYYY.MM/RIBS/</code>
+            目录下。
+            <br />
+            支持格式：
+            <code>.gz</code>
+            或解压后的原始文件（如
+            <code>rib.2024...</code>
+            ）。
+            <br />
+            <span class="import-warning">
+                注意：
+                <code>.bz2</code>
+                文件请先解压，解压后即便没有后缀名也可导入。
+            </span>
+        </template>
 
-            <!-- 文件来源选择 -->
-            <nn-form layout="vertical" style="margin-top: 16px">
+        <template #source>
+            <div class="route-views-source">
                 <nn-radio-group v-model:value="fileSource" button-style="solid">
                     <nn-radio-button value="default">默认文件</nn-radio-button>
                     <nn-radio-button value="custom">自定义文件</nn-radio-button>
                 </nn-radio-group>
+
+                <div v-if="fileSource === 'default'" class="route-views-default-file">
+                    <nn-select
+                        v-model:value="selectedDefaultFile"
+                        placeholder="选择预置的 MRT 文件"
+                        style="width: 100%"
+                        :loading="loadingDefaultFiles"
+                    >
+                        <nn-select-option v-for="file in defaultFiles" :key="file.path" :value="file.path">
+                            {{ file.name }} ({{ formatFileSize(file.size) }})
+                        </nn-select-option>
+                    </nn-select>
+                    <p v-if="!selectedDefaultFile" class="empty-selection">请选择一个预置的 MRT 文件</p>
+                </div>
+            </div>
+        </template>
+
+        <template #select-icon><FileSearchOutlined /></template>
+        <template #options>
+            <nn-form layout="vertical">
+                <nn-form-item label="导入数量限制（建议 10,000 - 100,000）">
+                    <nn-input-number v-model:value="importLimit" :min="1" :max="1000000" style="width: 100%" />
+                </nn-form-item>
             </nn-form>
-
-            <!-- 默认文件选择 -->
-            <div v-if="fileSource === 'default'" class="file-selector">
-                <nn-select
-                    v-model:value="selectedDefaultFile"
-                    placeholder="选择预置的 MRT 文件"
-                    style="width: 100%"
-                    :loading="loadingDefaultFiles"
-                >
-                    <nn-select-option v-for="file in defaultFiles" :key="file.path" :value="file.path">
-                        {{ file.name }} ({{ formatFileSize(file.size) }})
-                    </nn-select-option>
-                </nn-select>
-                <div v-if="!selectedDefaultFile" class="empty-selection" style="margin-top: 12px">
-                    请选择一个预置的 MRT 文件
-                </div>
-            </div>
-
-            <!-- 自定义文件选择 -->
-            <div v-else class="file-selector">
-                <nn-button type="primary" @click="selectLocalFile">
-                    <template #icon><FileSearchOutlined /></template>
-                    选择本地 MRT 文件
-                </nn-button>
-                <div v-if="selectedFilePath" class="selected-path">
-                    <span class="label">已选文件:</span>
-                    <span class="path">{{ selectedFilePath }}</span>
-                    <nn-button type="link" size="small" danger @click="clearSelection">清除</nn-button>
-                </div>
-                <div v-else class="empty-selection">
-                    尚未选择文件，请点击上方按钮选择一个
-                    <code>.gz</code>
-                    或解压后的原始文件。
-                </div>
-            </div>
-
-            <div class="import-options" style="margin-top: 20px">
-                <nn-form layout="vertical">
-                    <nn-form-item label="导入数量限制 (建议 10,000 - 100,000)">
-                        <nn-input-number v-model:value="importLimit" :min="1" :max="1000000" style="width: 100%" />
-                    </nn-form-item>
-                    <div v-if="importing" class="importing-feedback">
-                        <nn-spin size="small" />
-                        <span class="status-text">{{ importingStatus }}</span>
-                    </div>
-                </nn-form>
-            </div>
-        </div>
-    </nn-modal>
+        </template>
+    </nn-file-import-modal>
 </template>
 
 <script setup>
@@ -109,7 +89,6 @@
 
     const open = ref(props.open);
     const importing = ref(false);
-    const importingStatus = ref('');
     const importLimit = ref(10000);
     const selectedFilePath = ref('');
     const fileSource = ref('default');
@@ -177,8 +156,8 @@
         }
     };
 
-    const clearSelection = () => {
-        selectedFilePath.value = '';
+    const updateLocalFilePath = filePath => {
+        selectedFilePath.value = filePath;
     };
 
     const openRouteViews = () => {
@@ -186,20 +165,16 @@
         window.bgpApi.openExternal('https://archive.routeviews.org/');
     };
 
-    const handleImport = async () => {
-        const filePath = effectiveFilePath.value;
-
-        if (!filePath) {
-            notify.warning('请先选择一个 MRT 文件');
-            return;
+    const validateImport = filePath => {
+        if (!filePath) return '请先选择一个 MRT 文件';
+        if (filePath.toLowerCase().endsWith('.bz2')) {
+            return '检测到 .bz2 文件，请先使用 7-Zip 或 WinRAR 解压后再导入';
         }
-        if (filePath.endsWith('.bz2')) {
-            notify.warning('检测到 .bz2 文件，请先使用 7-Zip 或 WinRAR 解压后再导入');
-            return;
-        }
+        return true;
+    };
 
+    const handleImport = async filePath => {
         importing.value = true;
-        importingStatus.value = '解析中...';
 
         try {
             const result = await window.bgpApi.importRouteViewsData(filePath, importLimit.value, props.addressFamily);
@@ -221,47 +196,24 @@
 </script>
 
 <style scoped>
-    .mrt-import-container {
-        padding: 8px;
+    .route-views-source {
+        display: grid;
+        min-width: 0;
+        gap: 12px;
+    }
+
+    .route-views-default-file {
+        min-width: 0;
+    }
+
+    .empty-selection {
+        margin: 8px 0 0;
+        color: var(--nn-color-text-placeholder);
+        font-size: 12px;
     }
 
     .import-warning {
         color: var(--nn-color-warning);
-    }
-
-    .file-selector {
-        background: var(--nn-color-bg-subtle);
-        border: 1px dashed var(--nn-color-border);
-        border-radius: 4px;
-        padding: 24px;
-        text-align: center;
-    }
-
-    .selected-path {
-        margin-top: 16px;
-        background: var(--nn-color-bg-surface);
-        padding: 8px 12px;
-        border-radius: 4px;
-        border: 1px solid var(--nn-color-border-light);
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        word-break: break-all;
-    }
-
-    .selected-path .label {
-        color: var(--nn-color-text-muted);
-        white-space: nowrap;
-    }
-
-    .selected-path .path {
-        flex: 1;
-        font-family: monospace;
-    }
-
-    .empty-selection {
-        margin-top: 12px;
-        color: var(--nn-color-text-placeholder);
     }
 
     .external-link {
@@ -270,23 +222,11 @@
         cursor: pointer;
     }
 
-    .importing-feedback {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 8px;
-        color: var(--nn-color-primary);
-    }
-
-    .status-text {
-        font-size: 13px;
-    }
-
     code {
         color: var(--nn-color-text);
         background-color: var(--nn-color-bg-code);
         padding: 2px 4px;
-        border-radius: 3px;
+        border-radius: 2px;
         font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
     }
 </style>

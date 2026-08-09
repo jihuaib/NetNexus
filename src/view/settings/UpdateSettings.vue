@@ -1,7 +1,6 @@
 <template>
-    <div class="update-settings">
-        <nn-card title="应用更新" class="settings-card">
-            <!-- 当前版本信息 -->
+    <nn-settings class="update-settings">
+        <nn-settings-section title="版本与安装" description="查看当前版本，检查、下载并安装可用更新。">
             <nn-row class="version-info">
                 <nn-col :span="12">
                     <nn-statistic title="当前版本" :value="currentVersion" />
@@ -11,42 +10,63 @@
                 </nn-col>
             </nn-row>
 
-            <!-- 更新检查按钮 -->
-            <div class="update-actions">
-                <nn-space>
-                    <nn-button type="primary" :loading="isChecking" :disabled="isDownloading" @click="checkForUpdates">
-                        检查更新
-                    </nn-button>
-                    <nn-button
-                        v-if="updateAvailable && !isDownloading && !updateDownloaded"
-                        type="default"
-                        @click="downloadUpdate"
-                    >
-                        下载更新
-                    </nn-button>
-                    <nn-button v-if="updateDownloaded" type="danger" @click="installUpdate">重启并安装</nn-button>
-                </nn-space>
-            </div>
+            <nn-settings-item
+                title="更新操作"
+                description="手动检查版本，发现更新后可下载并重启安装"
+                class="update-actions"
+            >
+                <template #actions>
+                    <nn-space wrap>
+                        <nn-button
+                            type="primary"
+                            :loading="isChecking"
+                            :disabled="isDownloading"
+                            @click="checkForUpdates"
+                        >
+                            检查更新
+                        </nn-button>
+                        <nn-button
+                            v-if="updateAvailable && !isDownloading && !updateDownloaded"
+                            type="default"
+                            @click="downloadUpdate"
+                        >
+                            下载更新
+                        </nn-button>
+                        <nn-button v-if="updateDownloaded" type="danger" @click="installUpdate">重启并安装</nn-button>
+                    </nn-space>
+                </template>
+            </nn-settings-item>
+        </nn-settings-section>
 
-            <!-- 自动更新设置 -->
-            <nn-divider>自动更新设置</nn-divider>
-            <div class="auto-update-settings">
-                <nn-form layout="vertical">
-                    <nn-form-item label="启动时检查更新">
-                        <nn-switch
-                            v-model:checked="updateSettings.autoCheckOnStartup"
-                            @change="saveAutoUpdateSettings"
-                        />
-                        <div class="setting-description">启用后，应用启动时会自动检查更新</div>
-                    </nn-form-item>
-                    <nn-form-item label="自动下载更新">
-                        <nn-switch v-model:checked="updateSettings.autoDownload" @change="saveAutoUpdateSettings" />
-                        <div class="setting-description">启用后，发现更新时会自动下载（仍需手动安装）</div>
-                    </nn-form-item>
-                </nn-form>
-            </div>
-        </nn-card>
-    </div>
+        <nn-settings-section
+            title="自动更新"
+            description="自动检查和下载更新，安装仍由用户确认。"
+            class="auto-update-settings"
+        >
+            <nn-settings-item title="启动时检查更新" description="启用后，应用启动时会自动检查更新" align="center">
+                <template #actions>
+                    <nn-switch
+                        v-model:checked="updateSettings.autoCheckOnStartup"
+                        aria-label="启动时检查更新"
+                        @change="saveAutoUpdateSettings"
+                    />
+                </template>
+            </nn-settings-item>
+            <nn-settings-item
+                title="自动下载更新"
+                description="启用后，发现更新时会自动下载（仍需手动安装）"
+                align="center"
+            >
+                <template #actions>
+                    <nn-switch
+                        v-model:checked="updateSettings.autoDownload"
+                        aria-label="自动下载更新"
+                        @change="saveAutoUpdateSettings"
+                    />
+                </template>
+            </nn-settings-item>
+        </nn-settings-section>
+    </nn-settings>
 </template>
 
 <script setup>
@@ -246,10 +266,6 @@
         margin-bottom: 24px;
     }
 
-    .update-actions {
-        margin-bottom: 20px;
-    }
-
     .update-info {
         margin-bottom: 20px;
     }
@@ -266,17 +282,6 @@
         color: var(--nn-color-text-secondary);
     }
 
-    .auto-update-settings h4 {
-        margin-bottom: 16px;
-        color: var(--nn-color-text);
-    }
-
-    .setting-description {
-        margin-top: 4px;
-        font-size: 12px;
-        color: var(--nn-color-text-secondary);
-    }
-
     :deep(.nn-statistic-title) {
         color: var(--nn-color-text-secondary);
         font-size: 14px;
@@ -286,9 +291,5 @@
         color: var(--nn-color-text);
         font-size: 18px;
         font-weight: 500;
-    }
-
-    :deep(.nn-form-item-label > label) {
-        font-size: 12px;
     }
 </style>

@@ -884,7 +884,7 @@
     const compileDisabledReason = computed(() => {
         if (clearingWorkspace.value) return '正在清空 YANG 工作区';
         if (!selectedProfileId.value) return '请先选择连接 Profile';
-        if (!compilerAvailable.value) return 'YANG 编译暂不可用，请在“设置 → 运行时诊断”中检查';
+        if (!compilerAvailable.value) return 'YANG 编译暂不可用，请在“设置 → 运行时”中检查';
         if (selectedLocalModules.value.length === 0) return '请先选择已下载或已导入的本地模块';
         return '';
     });

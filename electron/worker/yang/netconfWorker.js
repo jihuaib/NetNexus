@@ -2287,16 +2287,16 @@ class NetconfWorkerService {
     requestUsesDatastore(request = {}) {
         return Boolean(
             request.targetType === 'datastore' ||
-                ['yang-push', 'rfc8641'].includes(request.subscriptionType) ||
-                request.datastore ||
-                request.datastoreFilter ||
-                request.datastoreFilterName ||
-                request.selectionFilterRef ||
-                request.updateTrigger ||
-                request.trigger ||
-                request.mode ||
-                request.period !== undefined ||
-                request.dampeningPeriod !== undefined
+            ['yang-push', 'rfc8641'].includes(request.subscriptionType) ||
+            request.datastore ||
+            request.datastoreFilter ||
+            request.datastoreFilterName ||
+            request.selectionFilterRef ||
+            request.updateTrigger ||
+            request.trigger ||
+            request.mode ||
+            request.period !== undefined ||
+            request.dampeningPeriod !== undefined
         );
     }
 

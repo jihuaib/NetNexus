@@ -4,18 +4,14 @@ const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
 const WorkerWithPromise = require('../worker/core/workerWithPromise');
+const RequestWorkerClient = require('../worker/core/requestWorkerClient');
 const RpkiConst = require('../const/rpkiConst');
 const RpkiAspa = require('../worker/rpki/rpkiAspa');
+const RPKI_IMPORT_OP = require('../worker/rpki/rpkiImportConst');
 const RpkiSqliteStore = require('../worker/rpki/rpkiSqliteStore');
 const EventDispatcher = require('../utils/eventDispatcher');
-const { normalizeRoaObject, parseRoaJsonFile } = require('../utils/rpkiRoaImport');
-const { normalizeAspaObject, parseAspaJsonFile } = require('../utils/rpkiAspaImport');
-
-const STORAGE_BATCH_SIZE = 5000;
-
-function yieldToEventLoop() {
-    return new Promise(resolve => setImmediate(resolve));
-}
+const { normalizeRoaObject } = require('../utils/rpkiRoaImport');
+const { normalizeAspaObject } = require('../utils/rpkiAspaImport');
 
 class RpkiApp {
     constructor(ipcMain, store) {
@@ -122,6 +118,21 @@ class RpkiApp {
         const pending = this.storageMutationQueue.then(task, task);
         this.storageMutationQueue = pending.catch(() => {});
         return pending;
+    }
+
+    async runImportWorker(operation, importOptions) {
+        const workerPath = resolveWorkerPath('rpki/rpkiImportWorker.js');
+        const client = new RequestWorkerClient(workerPath, { defaultTimeoutMs: 0 }).start();
+        try {
+            const result = await client.sendRequest(operation, importOptions, { timeoutMs: 0 });
+            return result.data;
+        } finally {
+            try {
+                await client.terminate();
+            } catch (error) {
+                logger.warn(`停止RPKI导入worker失败: ${error.message}`);
+            }
+        }
     }
 
     async notifyDatasetChanged(cacheSerial, operations = [], invalidate = false) {
@@ -377,62 +388,17 @@ class RpkiApp {
         return this.runStorageMutation(async () => {
             const sqliteStore = await this.ensureRpkiStorage();
             const importLimit = this.normalizeRoaImportLimit(options.limit);
-            const stats = {
+            const workerStats = await this.runImportWorker(RPKI_IMPORT_OP.IMPORT_ROA_JSON, {
                 filePath: importFilePath,
-                limit: importLimit,
-                existing: sqliteStore.getRoaCount(),
-                parsed: 0,
-                imported: 0,
-                duplicate: 0,
-                invalid: 0,
-                total: 0
-            };
-            let batch = [];
-            let candidates = 0;
-
-            sqliteStore.beginRoaImport();
-
-            const flush = async () => {
-                if (batch.length === 0) {
-                    return;
-                }
-                const result = sqliteStore.stageRoaBatch(batch, { countCandidates: Boolean(importLimit) });
-                if (result.candidates !== null) {
-                    candidates = result.candidates;
-                }
-                stats.duplicate += result.skipped || 0;
-                batch = [];
-                await yieldToEventLoop();
-            };
-
-            try {
-                const parseStats = await parseRoaJsonFile(importFilePath, async roa => {
-                    batch.push(roa);
-                    if (batch.length >= STORAGE_BATCH_SIZE) {
-                        await flush();
-                    }
-                    if (importLimit && candidates >= importLimit) {
-                        return false;
-                    }
-                    return undefined;
-                });
-                await flush();
-                const result = sqliteStore.commitRoaImport({ maxInserted: importLimit });
-                stats.parsed = parseStats.valid;
-                stats.invalid = parseStats.invalid;
-                stats.imported = result.inserted || result.added || 0;
-                stats.duplicate += Math.max(0, result.staged - result.candidates);
-                stats.ignoredByLimit = result.ignoredByLimit || 0;
-                stats.total = result.total;
-                if (stats.imported > 0) {
-                    await this.notifyDatasetChanged(result.cacheSerial, [], true);
-                }
-                logger.info(`ROA JSON导入完成: ${JSON.stringify(stats)}`);
-                return stats;
-            } catch (error) {
-                sqliteStore.abortRoaImport();
-                throw error;
+                dbPath: sqliteStore.dbPath,
+                limit: importLimit
+            });
+            const { cacheSerial, changed, ...stats } = workerStats;
+            if (changed > 0) {
+                await this.notifyDatasetChanged(cacheSerial, [], true);
             }
+            logger.info(`ROA JSON导入完成: ${JSON.stringify(stats)}`);
+            return stats;
         });
     }
 
@@ -629,59 +595,17 @@ class RpkiApp {
         return this.runStorageMutation(async () => {
             const sqliteStore = await this.ensureRpkiStorage();
             const importLimit = this.normalizeAspaImportLimit(options.limit);
-            const stats = {
+            const workerStats = await this.runImportWorker(RPKI_IMPORT_OP.IMPORT_ASPA_JSON, {
                 filePath: importFilePath,
-                limit: importLimit,
-                existing: sqliteStore.getAspaCount(),
-                parsed: 0,
-                imported: 0,
-                overwritten: 0,
-                invalid: 0,
-                total: 0
-            };
-            let batch = [];
-            let parsedCount = 0;
-
-            sqliteStore.beginAspaImport();
-
-            const flush = async () => {
-                if (batch.length === 0) {
-                    return;
-                }
-                sqliteStore.stageAspaBatch(batch);
-                batch = [];
-                await yieldToEventLoop();
-            };
-
-            try {
-                const parseStats = await parseAspaJsonFile(importFilePath, async aspa => {
-                    batch.push(aspa);
-                    parsedCount += 1;
-                    if (batch.length >= STORAGE_BATCH_SIZE || (importLimit && parsedCount >= importLimit)) {
-                        await flush();
-                    }
-                    if (importLimit && parsedCount >= importLimit) {
-                        return false;
-                    }
-                    return undefined;
-                });
-                await flush();
-                const result = sqliteStore.commitAspaImport();
-                stats.parsed = parseStats.valid;
-                stats.invalid = parseStats.invalid;
-                stats.imported = result.inserted || result.added || 0;
-                stats.overwritten = result.overwritten || 0;
-                stats.unchanged = result.skipped || 0;
-                stats.total = result.total;
-                if (result.changed > 0) {
-                    await this.notifyDatasetChanged(result.cacheSerial, [], true);
-                }
-                logger.info(`ASPA JSON导入完成: ${JSON.stringify(stats)}`);
-                return stats;
-            } catch (error) {
-                sqliteStore.abortAspaImport();
-                throw error;
+                dbPath: sqliteStore.dbPath,
+                limit: importLimit
+            });
+            const { cacheSerial, changed, ...stats } = workerStats;
+            if (changed > 0) {
+                await this.notifyDatasetChanged(cacheSerial, [], true);
             }
+            logger.info(`ASPA JSON导入完成: ${JSON.stringify(stats)}`);
+            return stats;
         });
     }
 

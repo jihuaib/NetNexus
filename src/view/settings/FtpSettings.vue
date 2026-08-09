@@ -1,22 +1,23 @@
 <template>
-    <div class="ftp-settings">
-        <nn-card title="FTP设置" class="settings-card">
-            <nn-form :model="settingsForm" layout="vertical">
-                <nn-form-item label="FTP用户最大存储条数" name="maxFtpUser">
+    <nn-settings class="ftp-settings">
+        <nn-settings-section title="用户存储" description="控制本地保留的 FTP 用户记录数量。">
+            <nn-settings-item title="最大存储条数" label-for="ftp-user-limit" align="center" :actions-width="180">
+                <template #actions>
                     <nn-input-number
+                        id="ftp-user-limit"
                         v-model:value="settingsForm.maxFtpUser"
                         :min="10"
                         :max="1000"
                         style="width: 100%"
                     />
-                </nn-form-item>
+                </template>
+            </nn-settings-item>
+        </nn-settings-section>
 
-                <nn-form-item>
-                    <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
-                </nn-form-item>
-            </nn-form>
-        </nn-card>
-    </div>
+        <div class="settings-page-actions">
+            <nn-button type="primary" @click="saveSettings">保存设置</nn-button>
+        </div>
+    </nn-settings>
 </template>
 
 <script setup>
@@ -63,9 +64,5 @@
 <style scoped>
     .ftp-settings {
         max-width: 100%;
-    }
-
-    :deep(.nn-form-item-label > label) {
-        font-size: 12px;
     }
 </style>

@@ -6,12 +6,18 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const OUTPUT_FILE = path.join(ROOT, 'output/pdf/netnexus-docs.pdf');
 const TMP_DIR = path.join(ROOT, 'tmp/pdfs');
+const PDF_TITLE = 'NetNexus 功能手册';
+const PDF_SUBJECT = 'NetNexus 协议仿真、网络服务、监控和本地工具用户手册';
 
-const PREFERRED_DOCS = [
+// Public, user-facing chapters only. The order here is the published PDF order;
+// do not discover Markdown files from docs because that can expose internal guides.
+const PDF_CHAPTERS = Object.freeze([
     'docs/BGP_SIMULATOR.md',
     'docs/BMP_MONITOR.md',
+    'docs/BMP_SQLITE_DATABASE.md',
     'docs/RPKI_VALIDATOR.md',
     'docs/SNMP_MANAGER.md',
+    'docs/NETCONF_YANG.md',
     'docs/FTP_SERVER.md',
     'docs/DHCP_SERVER.md',
     'docs/NTP_SERVER.md',
@@ -20,9 +26,7 @@ const PREFERRED_DOCS = [
     'docs/SYSLOG_SERVER.md',
     'docs/TOOLS.md',
     'docs/SETTINGS.md'
-];
-
-const EXCLUDED_DOCS = new Set(['README.md', 'docs/API.md']);
+]);
 
 function getMarkdownTitle(markdown, fallback) {
     const title = markdown.match(/^\s*#\s+(.+?)\s*#*\s*$/m)?.[1]?.trim();
@@ -338,7 +342,7 @@ async function renderMarkdown(markdown, baseDir, docIndex, docNumber) {
 }
 
 function toPdfName(id) {
-    return encodeURIComponent(id).replace(/[%#()[\]{}<>\/\s]/g, char => {
+    return encodeURIComponent(id).replace(/[%#()[\]{}<>/\s]/g, char => {
         return `#${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`;
     });
 }
@@ -350,6 +354,44 @@ function toPdfHexString(value) {
         bytes.push((code >> 8) & 0xff, code & 0xff);
     }
     return `<${bytes.map(byte => byte.toString(16).toUpperCase().padStart(2, '0')).join('')}>`;
+}
+
+function formatPdfDate(date) {
+    const pad = value => String(value).padStart(2, '0');
+    const offsetMinutes = -date.getTimezoneOffset();
+    const timezone =
+        offsetMinutes === 0
+            ? 'Z'
+            : `${offsetMinutes >= 0 ? '+' : '-'}${pad(Math.floor(Math.abs(offsetMinutes) / 60))}'${pad(
+                  Math.abs(offsetMinutes) % 60
+              )}'`;
+
+    return [
+        'D:',
+        date.getFullYear(),
+        pad(date.getMonth() + 1),
+        pad(date.getDate()),
+        pad(date.getHours()),
+        pad(date.getMinutes()),
+        pad(date.getSeconds()),
+        timezone
+    ].join('');
+}
+
+function buildPdfInfoDictionary(generatedAt) {
+    const pdfDate = formatPdfDate(generatedAt);
+    return [
+        '<<',
+        `/Title ${toPdfHexString(PDF_TITLE)}`,
+        `/Author ${toPdfHexString('NetNexus')}`,
+        `/Subject ${toPdfHexString(PDF_SUBJECT)}`,
+        `/Keywords ${toPdfHexString('NetNexus, BGP, BMP, RPKI, SNMP, NETCONF, YANG, network tools')}`,
+        `/Creator ${toPdfHexString('NetNexus documentation generator')}`,
+        `/Producer ${toPdfHexString('Electron Chromium via NetNexus')}`,
+        `/CreationDate (${pdfDate})`,
+        `/ModDate (${pdfDate})`,
+        '>>'
+    ].join('\n');
 }
 
 function countOutlineDescendants(node) {
@@ -509,7 +551,7 @@ function updateCatalogDictionary(pdfText, rootObjectId, outlineRootId, xrefOffse
     return clean.replace(/>>\s*$/, `\n/Outlines ${outlineRootId} 0 R\n/PageMode /UseOutlines>>`);
 }
 
-function addPdfOutlines(pdfBuffer, docs) {
+function addPdfOutlines(pdfBuffer, docs, generatedAt = new Date()) {
     const outlineTree = buildOutlineTree(docs);
     if (outlineTree.length === 0) {
         return pdfBuffer;
@@ -519,13 +561,13 @@ function addPdfOutlines(pdfBuffer, docs) {
     const previousStartXref = getLastStartXref(pdfText);
     const size = getTrailerNumber(pdfText, 'Size');
     const rootRef = getTrailerRef(pdfText, 'Root');
-    const infoRef = getTrailerRef(pdfText, 'Info');
     if (!previousStartXref || !size || !rootRef) {
         throw new Error('PDF trailer does not contain the required Root and Size entries');
     }
 
     const rootObjectId = Number(rootRef.split(/\s+/)[0]);
-    const outlineRootId = size;
+    const metadataObjectId = size;
+    const outlineRootId = size + 1;
     const xrefOffsets = parseXrefOffsets(pdfText, previousStartXref);
     const nextObjectId = assignOutlineObjectIds(outlineTree, outlineRootId + 1);
     const newSize = nextObjectId;
@@ -541,6 +583,7 @@ function addPdfOutlines(pdfBuffer, docs) {
     const catalogBody = updateCatalogDictionary(pdfText, rootObjectId, outlineRootId, xrefOffsets);
     const objects = [
         { id: rootObjectId, body: catalogBody },
+        { id: metadataObjectId, body: buildPdfInfoDictionary(generatedAt) },
         { id: outlineRootId, body: outlineRootBody },
         ...outlineObjects
     ];
@@ -573,9 +616,9 @@ function addPdfOutlines(pdfBuffer, docs) {
     const trailerEntries = [
         `/Size ${newSize}`,
         `/Root ${rootRef}`,
-        infoRef ? `/Info ${infoRef}` : '',
+        `/Info ${metadataObjectId} 0 R`,
         `/Prev ${previousStartXref}`
-    ].filter(Boolean);
+    ];
     append += [
         'xref',
         ...sections,
@@ -591,25 +634,23 @@ function addPdfOutlines(pdfBuffer, docs) {
 }
 
 async function collectDocs() {
-    const preferred = [];
-    for (const relativePath of PREFERRED_DOCS) {
+    const missing = [];
+    for (const relativePath of PDF_CHAPTERS) {
         try {
-            await fs.access(path.join(ROOT, relativePath));
-            preferred.push(relativePath);
+            const file = await fs.stat(path.join(ROOT, relativePath));
+            if (!file.isFile()) {
+                missing.push(relativePath);
+            }
         } catch (_error) {
-            // Skip docs that are not present in this checkout.
+            missing.push(relativePath);
         }
     }
 
-    const docsDir = path.join(ROOT, 'docs');
-    const extraDocs = (await fs.readdir(docsDir))
-        .filter(file => file.endsWith('.md'))
-        .map(file => `docs/${file}`)
-        .filter(file => !EXCLUDED_DOCS.has(file))
-        .filter(file => !preferred.includes(file))
-        .sort();
+    if (missing.length > 0) {
+        throw new Error(`PDF chapter manifest contains missing files: ${missing.join(', ')}`);
+    }
 
-    return [...preferred, ...extraDocs].filter(file => !EXCLUDED_DOCS.has(file));
+    return [...PDF_CHAPTERS];
 }
 
 async function buildDocument() {
@@ -643,11 +684,13 @@ async function buildDocument() {
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8" />
-    <title>NetNexus 功能手册</title>
+    <meta name="author" content="NetNexus" />
+    <meta name="description" content="${escapeHtml(PDF_SUBJECT)}" />
+    <title>${escapeHtml(PDF_TITLE)}</title>
     <style>
         @page {
             size: A4;
-            margin: 14mm 12mm;
+            margin: 14mm 12mm 18mm;
         }
         * {
             box-sizing: border-box;
@@ -894,7 +937,7 @@ async function buildDocument() {
 </head>
 <body>
     <section class="cover">
-        <h1>NetNexus 功能手册</h1>
+        <h1>${escapeHtml(PDF_TITLE)}</h1>
         <p class="cover-subtitle">协议仿真、服务端、监控与本地工具功能说明。</p>
     </section>
     ${renderToc(renderedDocs)}
@@ -903,6 +946,51 @@ async function buildDocument() {
 </html>`;
 
     return { html, docs: renderedDocs };
+}
+
+function renderPdfFooterTemplate() {
+    return `
+        <div style="
+            box-sizing: border-box;
+            width: 100%;
+            margin: 0 12mm;
+            padding-top: 2mm;
+            border-top: 1px solid #d1d5db;
+            color: #6b7280;
+            display: flex;
+            justify-content: space-between;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            font-size: 8pt;
+            line-height: 1.3;
+            white-space: nowrap;
+            -webkit-print-color-adjust: exact;
+        ">
+            <span>${escapeHtml(PDF_TITLE)}</span>
+            <span>第 <span class="pageNumber"></span> / <span class="totalPages"></span> 页</span>
+        </div>
+    `;
+}
+
+async function writeFileAtomically(filePath, data) {
+    const temporaryFile = path.join(
+        path.dirname(filePath),
+        `.${path.basename(filePath)}.${process.pid}-${Date.now()}.tmp`
+    );
+    let handle;
+
+    try {
+        handle = await fs.open(temporaryFile, 'wx');
+        await handle.writeFile(data);
+        await handle.sync();
+        await handle.close();
+        handle = null;
+        await fs.rename(temporaryFile, filePath);
+    } finally {
+        if (handle) {
+            await handle.close().catch(() => {});
+        }
+        await fs.rm(temporaryFile, { force: true }).catch(() => {});
+    }
 }
 
 async function run() {
@@ -915,7 +1003,7 @@ async function run() {
     await fs.mkdir(TMP_DIR, { recursive: true });
 
     const { html, docs } = await buildDocument();
-    const htmlFile = path.join(TMP_DIR, 'netnexus-docs.html');
+    const htmlFile = path.join(TMP_DIR, `netnexus-docs-${process.pid}-${Date.now()}.html`);
     await fs.writeFile(htmlFile, html, 'utf8');
 
     const win = new BrowserWindow({
@@ -946,9 +1034,13 @@ async function run() {
         const pdf = await win.webContents.printToPDF({
             landscape: false,
             pageSize: 'A4',
-            printBackground: true
+            printBackground: true,
+            displayHeaderFooter: true,
+            headerTemplate: '<div></div>',
+            footerTemplate: renderPdfFooterTemplate(),
+            preferCSSPageSize: true
         });
-        await fs.writeFile(OUTPUT_FILE, addPdfOutlines(pdf, docs));
+        await writeFileAtomically(OUTPUT_FILE, addPdfOutlines(pdf, docs));
         console.log(`generated ${path.relative(ROOT, OUTPUT_FILE)}`);
     } finally {
         win.destroy();
