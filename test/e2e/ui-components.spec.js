@@ -324,6 +324,12 @@ test.describe('Custom UI component interactions', () => {
         await page.goto('/#/tools/packet-parser');
         await expect(page.getByText('报文解析器', { exact: true })).toBeVisible();
 
+        const expandSidebarButton = page.getByRole('button', { name: '展开侧边栏' });
+        if (await expandSidebarButton.isVisible()) {
+            await expandSidebarButton.evaluate(button => button.click());
+        }
+        await expect(page.locator('.sidebar-brand-logo')).toBeVisible();
+
         const snapshot = await page.evaluate(() => {
             const sider = document.querySelector('.main-layout > .sider');
             const sidebarNav = sider.querySelector('.sidebar-nav');
@@ -996,7 +1002,7 @@ test.describe('Custom UI component interactions', () => {
                     ghostHoverBackground: readToken('backgroundColor', '--nn-color-bg-card-head-ghost-hover'),
                     ghostText: readToken('color', '--nn-color-text-card-head-ghost'),
                     ghostBorder: readToken('borderColor', '--nn-color-border-card-head-ghost'),
-                    primary: readToken('backgroundColor', '--nn-color-primary'),
+                    primaryActive: readToken('backgroundColor', '--nn-color-primary-active'),
                     inverseText: readToken('color', '--nn-color-text-inverse')
                 };
                 probe.remove();
@@ -1016,12 +1022,12 @@ test.describe('Custom UI component interactions', () => {
 
         await analysisToggle.click();
         await expect(analysisToggle).toHaveAttribute('aria-checked', 'true');
-        await expectHeaderSwitchTokens(analysisToggle, '--nn-color-primary', '--nn-color-text-inverse');
+        await expectHeaderSwitchTokens(analysisToggle, '--nn-color-primary-active', '--nn-color-text-inverse');
         const generatedAt = assurancePage.locator('.generated-at');
         await expect(generatedAt).toHaveText('更新于 E2E-TIME');
 
         const onAppearance = await readHeaderAppearance();
-        expect(onAppearance.toggleBackground).toBe(onAppearance.primary);
+        expect(onAppearance.toggleBackground).toBe(onAppearance.primaryActive);
         expect(onAppearance.toggleBackground).not.toBe(onAppearance.headerBackground);
         expect(onAppearance.handleBackground).toBe(onAppearance.inverseText);
         expect(onAppearance.handleBackground).not.toBe(onAppearance.toggleBackground);

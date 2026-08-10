@@ -36,7 +36,6 @@ const migrationFiles = [
     path.join(projectRoot, 'vite.config.js'),
     path.join(projectRoot, 'package.json'),
     path.join(projectRoot, 'README.md'),
-    path.join(projectRoot, 'CLAUDE.md'),
     path.join(projectRoot, 'scripts', 'captureDocsScreenshots.js')
 ];
 const legacyPatterns = [

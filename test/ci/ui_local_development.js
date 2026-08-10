@@ -9,7 +9,9 @@ const {
     resolveLocalUiRoot
 } = require('../../scripts/local-ui-source');
 
-const projectRoot = path.resolve(__dirname, '..', '..');
+const projectRoot = process.env.NETNEXUS_SOURCE_PROJECT_ROOT
+    ? path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT)
+    : path.resolve(__dirname, '..', '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
 
 assert.equal(resolveLocalUiRoot(projectRoot, ''), null, 'normal builds must not probe a sibling UI repository');
