@@ -324,6 +324,12 @@ test.describe('Custom UI component interactions', () => {
         await page.goto('/#/tools/packet-parser');
         await expect(page.getByText('报文解析器', { exact: true })).toBeVisible();
 
+        const expandSidebarButton = page.getByRole('button', { name: '展开侧边栏' });
+        if (await expandSidebarButton.isVisible()) {
+            await expandSidebarButton.evaluate(button => button.click());
+        }
+        await expect(page.locator('.sidebar-brand-logo')).toBeVisible();
+
         const snapshot = await page.evaluate(() => {
             const sider = document.querySelector('.main-layout > .sider');
             const sidebarNav = sider.querySelector('.sidebar-nav');
