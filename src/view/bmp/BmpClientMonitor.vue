@@ -4,7 +4,6 @@
             v-model:active-key="activeView"
             class="bmp-client-monitor-tabs"
             :animated="false"
-            size="small"
             @change="handleViewChange"
         >
             <nn-tab-pane v-for="view in monitorViews" :key="view.key" :tab="view.label">
@@ -236,13 +235,5 @@
 
     .bmp-client-monitor-content :deep(.bmp-inner-tabs > .nn-tabs-nav) {
         margin-bottom: 4px;
-    }
-
-    .bmp-client-monitor-content
-        :deep(.bmp-inner-tabs > .nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
-        min-height: 32px;
-        padding: 5px 0 !important;
-        font-size: 13px;
-        line-height: 20px;
     }
 </style>

@@ -4,7 +4,7 @@
             <nn-col :span="24">
                 <nn-card class="bmp-full-card">
                     <div v-if="monitoredClient && bgpInstances.length > 0" class="bmp-inner-tabs-shell">
-                        <nn-tabs v-model:active-key="activeInstanceKey" class="bmp-inner-tabs">
+                        <nn-tabs v-model:active-key="activeInstanceKey" class="bmp-inner-tabs" size="small">
                             <nn-tab-pane
                                 v-for="instance in bgpInstances"
                                 :key="getInstanceKey(instance)"
@@ -49,6 +49,7 @@
                                                 <nn-button
                                                     type="link"
                                                     size="small"
+                                                    data-testid="bmp-loc-rib-instance-detail-button"
                                                     @click="viewInstanceDetails(record)"
                                                 >
                                                     详情
@@ -139,6 +140,13 @@
             </nn-col>
         </nn-row>
 
+        <BmpLocRibInstanceDetailModal
+            :open="instanceDetailModalVisible"
+            :instance="instanceDetailRecord"
+            :client="monitoredClient"
+            @update:open="handleInstanceDetailOpenChange"
+        />
+
         <nn-drawer
             v-model:open="detailsDrawerVisible"
             :title="detailsDrawerTitle"
@@ -174,6 +182,7 @@
     import { notify } from '../../utils/notify';
     import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import { ProfileOutlined } from 'netnexus-ui/icons';
+    import BmpLocRibInstanceDetailModal from '../../components/BmpLocRibInstanceDetailModal.vue';
     import BmpRouteEventTimeline from '../../components/BmpRouteEventTimeline.vue';
     import {
         BMP_SESSION_TYPE_NAME,
@@ -474,7 +483,34 @@
     const detailsTabKey = ref('detail');
     const routeEventTarget = ref(null);
     const routeDetailLoading = ref(false);
+    const instanceDetailModalVisible = ref(false);
+    const selectedInstanceDetail = ref(null);
     let routeDetailRequestId = 0;
+    let instanceDetailRequestId = 0;
+    let instanceDetailRefreshTimer = null;
+    const INSTANCE_DETAIL_REFRESH_DEBOUNCE_MS = 120;
+
+    const clearScheduledInstanceDetailRefresh = () => {
+        if (instanceDetailRefreshTimer) {
+            clearTimeout(instanceDetailRefreshTimer);
+            instanceDetailRefreshTimer = null;
+        }
+    };
+
+    const closeInstanceDetails = () => {
+        instanceDetailRequestId += 1;
+        clearScheduledInstanceDetailRefresh();
+        instanceDetailModalVisible.value = false;
+        selectedInstanceDetail.value = null;
+    };
+
+    const handleInstanceDetailOpenChange = open => {
+        if (open) {
+            instanceDetailModalVisible.value = true;
+            return;
+        }
+        closeInstanceDetails();
+    };
 
     // Close details drawer
     const closeDetailsDrawer = () => {
@@ -502,7 +538,9 @@
         instanceListRequestId += 1;
         routeListRequestId += 1;
         routeDetailRequestId += 1;
+        instanceDetailRequestId += 1;
         routeDetailLoading.value = false;
+        clearScheduledInstanceDetailRefresh();
         clearScheduledRouteRefresh();
     };
 
@@ -594,6 +632,17 @@
     const onInstanceRouteUpdate = result => {
         if (result.status !== 'success' || !result.data) return;
         const updates = Array.isArray(result.data.updates) ? result.data.updates : [result.data];
+        const detailInstance = instanceDetailRecord.value;
+        if (
+            instanceDetailModalVisible.value &&
+            detailInstance &&
+            updates.some(
+                update => update?.projectionReset === true && routeUpdateMatchesInstanceDetail(update, detailInstance)
+            )
+        ) {
+            scheduleInstanceDetailRefresh();
+        }
+
         const activeClient = monitoredClient.value;
         const activeInstance = getActiveInstance();
         if (!activeClient || !activeInstance) return;
@@ -639,7 +688,13 @@
 
         if (!client || !instance || !isSameClient(client, monitoredClient.value)) return;
 
+        const shouldRefreshInstanceDetail =
+            instanceDetailModalVisible.value &&
+            Boolean(instanceDetailRecord.value) &&
+            isSameInstance(instanceDetailRecord.value, instance);
+
         upsertBgpInstance(instance);
+        if (shouldRefreshInstanceDetail) scheduleInstanceDetailRefresh();
     };
 
     const onMonitoredClientUpdate = result => {
@@ -791,6 +846,7 @@
     };
 
     const resetInstanceAndRouteSelection = () => {
+        closeInstanceDetails();
         activeInstanceKey.value = '';
         resetRouteData();
     };
@@ -802,6 +858,14 @@
 
     const getActiveInstance = () =>
         bgpInstances.value.find(instance => getInstanceKey(instance) === activeInstanceKey.value) || null;
+
+    const instanceDetailRecord = computed(() => {
+        if (!selectedInstanceDetail.value) return null;
+        return (
+            bgpInstances.value.find(instance => isSameInstance(instance, selectedInstanceDetail.value)) ||
+            selectedInstanceDetail.value
+        );
+    });
 
     const upsertBgpInstance = instance => {
         const existingIndex = bgpInstances.value.findIndex(item => {
@@ -828,6 +892,125 @@
         if (!activeInstanceKey.value) {
             activeInstanceKey.value = getInstanceKey(instance);
         }
+    };
+
+    const routeUpdateMatchesInstanceDetail = (update, instance) => {
+        if (!update || !instance) return false;
+        if (update.client && !isSameClient(update.client, monitoredClient.value)) return false;
+
+        const updateSourceId =
+            update.persistentSourceId ||
+            update.sourceId ||
+            update.client?.persistentSourceId ||
+            update.client?.sourceId ||
+            null;
+        const instanceSourceId =
+            instance.persistentSourceId ||
+            instance.sourceId ||
+            monitoredClient.value?.persistentSourceId ||
+            monitoredClient.value?.sourceId ||
+            null;
+        if (updateSourceId && instanceSourceId && updateSourceId !== instanceSourceId) return false;
+
+        if (update.instance && !isSameInstance(update.instance, instance)) return false;
+
+        const updateScopeId =
+            update.persistentScopeId ||
+            update.scopeId ||
+            update.instance?.persistentScopeId ||
+            update.instance?.scopeId ||
+            null;
+        if (updateScopeId) {
+            const instanceScopeIds = new Set(
+                [
+                    instance.persistentScopeId,
+                    instance.scopeId,
+                    ...(Array.isArray(instance.routeScopes)
+                        ? instance.routeScopes.flatMap(scope => [scope?.persistentScopeId, scope?.scopeId])
+                        : [])
+                ].filter(Boolean)
+            );
+            return instanceScopeIds.has(updateScopeId);
+        }
+
+        const updateOwnerKey =
+            update.persistentOwnerKey ||
+            update.ownerKey ||
+            update.instance?.persistentOwnerKey ||
+            update.instance?.ownerKey ||
+            null;
+        const instanceOwnerKey = instance.persistentOwnerKey || instance.ownerKey || null;
+        if (updateOwnerKey && instanceOwnerKey) return updateOwnerKey === instanceOwnerKey;
+
+        return Boolean(update.instance && isSameInstance(update.instance, instance));
+    };
+
+    const isCurrentInstanceDetailRequest = ({ requestId, clientIdentity, targetInstance }) =>
+        requestId === instanceDetailRequestId &&
+        pageActive &&
+        instanceDetailModalVisible.value &&
+        clientIdentity === getClientRequestIdentity(monitoredClient.value) &&
+        Boolean(instanceDetailRecord.value) &&
+        isSameInstance(instanceDetailRecord.value, targetInstance);
+
+    const commitRefreshedInstanceDetail = refreshedInstance => {
+        const existingIndex = bgpInstances.value.findIndex(instance => isSameInstance(instance, refreshedInstance));
+        const existingInstance =
+            existingIndex >= 0 && isSameInstance(bgpInstances.value[existingIndex], instanceDetailRecord.value)
+                ? bgpInstances.value[existingIndex]
+                : null;
+        const targetInstance = existingInstance || selectedInstanceDetail.value;
+        if (!targetInstance || !isSameInstance(targetInstance, refreshedInstance)) return;
+
+        const previousKey = getInstanceKey(targetInstance);
+        const wasActive = previousKey === activeInstanceKey.value;
+        Object.assign(targetInstance, refreshedInstance);
+        selectedInstanceDetail.value = targetInstance;
+
+        const nextKey = getInstanceKey(targetInstance);
+        if (wasActive && nextKey !== previousKey) {
+            clearScheduledRouteRefresh();
+            activeInstanceKeyWithoutRouteReload = nextKey;
+            activeInstanceKey.value = nextKey;
+        }
+    };
+
+    const refreshInstanceDetails = async ({ targetInstance = instanceDetailRecord.value, silent = false } = {}) => {
+        clearScheduledInstanceDetailRefresh();
+        const requestId = ++instanceDetailRequestId;
+        const clientIdentity = getClientRequestIdentity(monitoredClient.value);
+        const clientInfo = getMonitoredClientApiInfo();
+
+        if (!targetInstance || !clientInfo || !instanceDetailModalVisible.value) return;
+
+        const request = { requestId, clientIdentity, targetInstance };
+        try {
+            const result = await window.bmpApi.getBgpInstances(clientInfo);
+            if (!isCurrentInstanceDetailRequest(request)) return;
+
+            if (result.status !== 'success') {
+                if (!silent) notify.error('刷新 Loc-RIB 详情失败');
+                return;
+            }
+
+            const refreshedInstance = (Array.isArray(result.data) ? result.data : []).find(instance =>
+                isSameInstance(instance, targetInstance)
+            );
+            if (refreshedInstance) commitRefreshedInstanceDetail(refreshedInstance);
+        } catch (error) {
+            if (!isCurrentInstanceDetailRequest(request)) return;
+            console.error(error);
+            if (!silent) notify.error('刷新 Loc-RIB 详情失败');
+        }
+    };
+
+    const scheduleInstanceDetailRefresh = () => {
+        if (!instanceDetailModalVisible.value || !instanceDetailRecord.value) return;
+        clearScheduledInstanceDetailRefresh();
+        instanceDetailRefreshTimer = setTimeout(() => {
+            instanceDetailRefreshTimer = null;
+            refreshInstanceDetails({ silent: true });
+        }, INSTANCE_DETAIL_REFRESH_DEBOUNCE_MS);
     };
 
     const getActiveInstanceApiInfo = () => {
@@ -1008,13 +1191,9 @@
     };
 
     const viewInstanceDetails = record => {
-        routeDetailRequestId += 1;
-        routeDetailLoading.value = false;
-        detailsTabKey.value = 'detail';
-        routeEventTarget.value = null;
-        currentDetails.value = record;
-        detailsDrawerTitle.value = `Instance 详情: ${record.instanceRd}`;
-        detailsDrawerVisible.value = true;
+        selectedInstanceDetail.value = record;
+        instanceDetailModalVisible.value = true;
+        refreshInstanceDetails({ targetInstance: record });
     };
 
     const viewRouteDetailJson = async record => {
@@ -1108,6 +1287,7 @@
         pageActive = false;
         invalidateMonitoredClientRequest();
         invalidateClientDependentRequests();
+        closeInstanceDetails();
         EventBus.off('bmp:instanceUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB);
         EventBus.off('bmp:instanceRouteUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB);
         EventBus.off('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_LOC_RIB);
@@ -1246,10 +1426,6 @@
     .bmp-inner-tabs > :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin-bottom: 8px;
-    }
-
-    .bmp-inner-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
-        padding: 8px 0 !important;
     }
 
     .route-toolbar {

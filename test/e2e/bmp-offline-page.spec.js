@@ -170,9 +170,9 @@ test('restores offline BGP and Loc-RIB pages through persistent scope selectors'
     await expect(sessionPage).toContainText('已断开');
     await expect(sessionPage).toContainText('203.0.113.0');
     await expect(sessionPage.getByText('过期 1')).toBeVisible();
-    await expectNativeScrolling(
-        sessionPage.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first(),
-        'x'
+    await expect(sessionPage.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first()).toHaveCSS(
+        'overflow-x',
+        'hidden'
     );
     await expectNativeScrolling(
         sessionPage.locator('[data-testid="bmp-session-table"]:visible .nn-table-content').first(),

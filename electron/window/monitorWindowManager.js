@@ -1,7 +1,8 @@
-const { BrowserWindow } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const logger = require('../log/logger');
 const EventDispatcher = require('../utils/eventDispatcher');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
+const { GET_PROCESS_RESOURCE_SNAPSHOT_CHANNEL, ProcessResourceSampler } = require('./processResourceService');
 
 const OPEN_MONITOR_CHANNEL = 'window:openMonitor';
 const MONITOR_CONTEXT_EVENT = 'window:monitorContext';
@@ -25,6 +26,16 @@ const MONITOR_ALIASES = Object.freeze({
 });
 
 const MONITOR_DEFINITIONS = Object.freeze({
+    'process-resource-manager': Object.freeze({
+        protocol: 'system',
+        route: '/monitor/process-resource-manager',
+        title: '进程资源管理器 - NetNexus',
+        width: 1180,
+        height: 760,
+        minWidth: 900,
+        minHeight: 600,
+        eventTypes: Object.freeze([])
+    }),
     'syslog-message-log': Object.freeze({
         protocol: 'syslog',
         route: '/monitor/syslog-message-log',
@@ -338,6 +349,17 @@ class MonitorWindowManager {
             Number.isInteger(options.maxWindows) && options.maxWindows > 0 ? options.maxWindows : MAX_MONITOR_WINDOWS;
         this.monitorWindows = new Map();
         this.ipcRegistered = false;
+        const processResourceSampler =
+            options.processResourceSampler ||
+            new ProcessResourceSampler({
+                appInstance: options.appInstance || app,
+                BrowserWindowClass: this.BrowserWindowClass,
+                processObject: options.processObject || process
+            });
+        this.processResourceSnapshotProvider =
+            typeof options.processResourceSnapshotProvider === 'function'
+                ? options.processResourceSnapshotProvider
+                : () => processResourceSampler.getSnapshot();
 
         if (!this.rendererUrl) {
             throw new Error('MonitorWindowManager requires rendererUrl');
@@ -361,6 +383,7 @@ class MonitorWindowManager {
         ipcMain.handle(UNSUBSCRIBE_EVENT_SCOPE_CHANNEL, (event, scopeId) =>
             this.handleEventScopeSubscription(event, scopeId, false)
         );
+        ipcMain.handle(GET_PROCESS_RESOURCE_SNAPSHOT_CHANNEL, event => this.handleGetProcessResourceSnapshot(event));
         if (typeof ipcMain.on === 'function') {
             ipcMain.on(RENDERER_READY_CHANNEL, event => this.handleRendererReady(event));
         }
@@ -371,7 +394,8 @@ class MonitorWindowManager {
         const fromWebContents = this.BrowserWindowClass.fromWebContents;
         if (
             !event?.sender ||
-            (typeof fromWebContents === 'function' && !fromWebContents.call(this.BrowserWindowClass, event.sender))
+            typeof fromWebContents !== 'function' ||
+            !fromWebContents.call(this.BrowserWindowClass, event.sender)
         ) {
             return null;
         }
@@ -383,6 +407,21 @@ class MonitorWindowManager {
             return errorResponse('无法识别窗口来源');
         }
         return this.openMonitor(monitorId, options);
+    }
+
+    async handleGetProcessResourceSnapshot(event) {
+        const sender = this.resolveSender(event);
+        const resourceWindowEntry = this.monitorWindows.get('process-resource-manager');
+        if (!sender || !resourceWindowEntry || resourceWindowEntry.webContents !== sender) {
+            return errorResponse('无法识别窗口来源');
+        }
+        try {
+            const snapshot = await this.processResourceSnapshotProvider();
+            return successResponse(snapshot, '进程资源指标获取成功');
+        } catch (error) {
+            logger.error(`获取进程资源指标失败: ${error.message}`);
+            return errorResponse(error.message || '进程资源指标获取失败');
+        }
     }
 
     handleEventScopeSubscription(event, scopeId, subscribe) {
@@ -629,6 +668,7 @@ class MonitorWindowManager {
 module.exports = {
     MonitorWindowManager,
     EVENT_SCOPE_DEFINITIONS,
+    GET_PROCESS_RESOURCE_SNAPSHOT_CHANNEL,
     MAX_MONITOR_WINDOWS,
     MAX_NETCONF_MONITOR_IDENTIFIER_BYTES,
     MONITOR_CONTEXT_EVENT,

@@ -74,33 +74,18 @@
 }
 
 .nn-main-container .fixed-tabs {
-    height: 40px;
     flex-shrink: 0;
     background-color: var(--nn-color-bg-surface);
     z-index: 10;
     padding: 0 8px;
 }
 
-.nn-main-container .fixed-tabs .nn-tabs {
-    height: 100%;
-}
-
 .nn-main-container .fixed-tabs .nn-tabs-nav {
-    height: 40px;
     margin: 0 !important;
 }
 
-.nn-main-container .fixed-tabs .nn-tabs-nav-wrap {
-    align-items: center;
-}
-
 .nn-main-container .fixed-tabs .nn-tabs-tab {
-    padding: 8px 0 !important;
     font-size: 14px;
-}
-
-.nn-main-container .fixed-tabs .nn-tabs-tab-active::after {
-    height: 2px;
 }
 
 .nn-main-container > .content-container {

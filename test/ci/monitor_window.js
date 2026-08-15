@@ -11,6 +11,7 @@ const SnmpConst = require('../../electron/const/snmpConst');
 const SyslogApp = require('../../electron/app/syslogApp');
 const SyslogConst = require('../../electron/const/syslogConst');
 const {
+    GET_PROCESS_RESOURCE_SNAPSHOT_CHANNEL,
     MonitorWindowManager,
     MONITOR_CONTEXT_EVENT,
     OPEN_MONITOR_CHANNEL,
@@ -174,6 +175,17 @@ async function verifyPreloadBridge() {
         assert.equal(typeof exposed.get('windowApi')?.openMonitor, 'function');
         assert.equal(typeof exposed.get('windowApi')?.subscribeEventScope, 'function');
         assert.equal(typeof exposed.get('windowApi')?.unsubscribeEventScope, 'function');
+        assert.equal(typeof exposed.get('processResourceApi')?.getSnapshot, 'function');
+        await exposed.get('windowApi').openMonitor('process-resource-manager');
+        assert.deepEqual(invocations.at(-1), {
+            channel: OPEN_MONITOR_CHANNEL,
+            args: ['process-resource-manager']
+        });
+        await exposed.get('processResourceApi').getSnapshot();
+        assert.deepEqual(invocations.at(-1), {
+            channel: GET_PROCESS_RESOURCE_SNAPSHOT_CHANNEL,
+            args: []
+        });
         await exposed.get('windowApi').openMonitor('syslog-message-log');
         assert.deepEqual(invocations.at(-1), {
             channel: OPEN_MONITOR_CHANNEL,
@@ -225,6 +237,105 @@ async function verifyPreloadBridge() {
         Module._load = originalLoad;
         delete require.cache[require.resolve(preloadPath)];
     }
+}
+
+async function verifyProcessResourceWindowLifecycle() {
+    FakeBrowserWindow.instances = [];
+    FakeBrowserWindow.nextLoadError = null;
+    FakeBrowserWindow.nextLoadPromise = null;
+    const sourceWindow = new FakeBrowserWindow({ role: 'main' });
+    const ipcMain = new FakeIpcMain();
+    const snapshot = {
+        schemaVersion: 1,
+        sampledAt: 1786800000000,
+        warmingUp: false,
+        summary: { processCount: 2, totalCpuPercent: 7.5, totalWorkingSetBytes: 536870912 },
+        processes: [{ key: '4100:1', pid: 4100, cpuPercent: 7.5, workingSetBytes: 536870912 }]
+    };
+    let snapshotError = null;
+    let snapshotCalls = 0;
+    const manager = new MonitorWindowManager({
+        BrowserWindowClass: FakeBrowserWindow,
+        rendererUrl: 'file:///tmp/netnexus/dist/index.html',
+        preloadPath: '/tmp/netnexus/electron/preload.js',
+        icon: '/tmp/netnexus/electron/assets/icon.ico',
+        async processResourceSnapshotProvider() {
+            snapshotCalls += 1;
+            if (snapshotError) throw snapshotError;
+            return snapshot;
+        }
+    });
+    manager.registerIpcHandlers(ipcMain);
+
+    const openHandler = ipcMain.handlers.get(OPEN_MONITOR_CHANNEL);
+    const snapshotHandler = ipcMain.handlers.get(GET_PROCESS_RESOURCE_SNAPSHOT_CHANNEL);
+    assert.equal(typeof openHandler, 'function');
+    assert.equal(typeof snapshotHandler, 'function');
+
+    const unknownSenderResult = await snapshotHandler({ sender: new FakeWebContents() });
+    assert.equal(unknownSenderResult.status, 'error');
+    assert.match(unknownSenderResult.msg, /无法识别窗口来源/);
+    assert.equal(snapshotCalls, 0, 'untrusted senders must not invoke the snapshot provider');
+
+    const invalidOptions = await openHandler({ sender: sourceWindow.webContents }, 'process-resource-manager', {
+        route: '/untrusted'
+    });
+    assert.equal(invalidOptions.status, 'error');
+    assert.equal(manager.getOpenCount(), 0);
+
+    const opened = await openHandler({ sender: sourceWindow.webContents }, 'process-resource-manager');
+    assert.equal(opened.status, 'success');
+    assert.deepEqual(opened.data, { monitorId: 'process-resource-manager', reused: false });
+    assert.equal(manager.getOpenCount(), 1);
+    assert.equal(FakeBrowserWindow.instances.length, 2);
+
+    const resourceWindow = FakeBrowserWindow.instances[1];
+    assert.equal(resourceWindow.loadedUrl, 'file:///tmp/netnexus/dist/index.html#/monitor/process-resource-manager');
+    assert.equal(resourceWindow.options.title, '进程资源管理器 - NetNexus');
+    assert.equal(resourceWindow.options.width, 1180);
+    assert.equal(resourceWindow.options.height, 760);
+    assert.equal(resourceWindow.options.minWidth, 900);
+    assert.equal(resourceWindow.options.minHeight, 600);
+    assert.equal(resourceWindow.options.webPreferences.nodeIntegration, false);
+    assert.equal(resourceWindow.options.webPreferences.contextIsolation, true);
+    assert.equal(resourceWindow.options.webPreferences.preload, '/tmp/netnexus/electron/preload.js');
+
+    const wrongWindowResult = await snapshotHandler({ sender: sourceWindow.webContents });
+    assert.equal(wrongWindowResult.status, 'error');
+    assert.match(wrongWindowResult.msg, /无法识别窗口来源/);
+    assert.equal(snapshotCalls, 0, 'other trusted app windows must not read process resource snapshots');
+
+    const snapshotResult = await snapshotHandler({ sender: resourceWindow.webContents });
+    assert.equal(snapshotResult.status, 'success');
+    assert.equal(snapshotResult.msg, '进程资源指标获取成功');
+    assert.deepEqual(snapshotResult.data, snapshot);
+    assert.equal(snapshotCalls, 1);
+
+    snapshotError = new Error('mock process metrics failure');
+    const failureResult = await snapshotHandler({ sender: resourceWindow.webContents });
+    assert.equal(failureResult.status, 'error');
+    assert.match(failureResult.msg, /mock process metrics failure/);
+    assert.equal(snapshotCalls, 2);
+    snapshotError = null;
+
+    resourceWindow.minimized = true;
+    const reused = await openHandler({ sender: sourceWindow.webContents }, 'process-resource-manager');
+    assert.equal(reused.status, 'success');
+    assert.deepEqual(reused.data, { monitorId: 'process-resource-manager', reused: true });
+    assert.equal(FakeBrowserWindow.instances.length, 2, 'the resource manager is a singleton window');
+    assert.equal(resourceWindow.restoreCalls, 1);
+    assert.equal(resourceWindow.showCalls, 1);
+    assert.equal(resourceWindow.focusCalls, 1);
+
+    resourceWindow.close();
+    assert.equal(manager.getOpenCount(), 0);
+    const reopened = await openHandler({ sender: sourceWindow.webContents }, 'process-resource-manager');
+    assert.equal(reopened.status, 'success');
+    assert.equal(reopened.data.reused, false);
+    assert.equal(FakeBrowserWindow.instances.length, 3);
+
+    manager.closeAll();
+    sourceWindow.destroy();
 }
 
 async function verifyScopedNetconfEditConfigWindows() {
@@ -742,7 +853,7 @@ async function verifyMonitorWindowLifecycle() {
 
     const openHandler = ipcMain.handlers.get(OPEN_MONITOR_CHANNEL);
     assert.equal(typeof openHandler, 'function');
-    assert.equal(ipcMain.handlers.size, 3, 'window IPC handlers should only be registered once');
+    assert.equal(ipcMain.handlers.size, 4, 'window IPC handlers should only be registered once');
 
     const subscribeScope = ipcMain.handlers.get(SUBSCRIBE_EVENT_SCOPE_CHANNEL);
     const unsubscribeScope = ipcMain.handlers.get(UNSUBSCRIBE_EVENT_SCOPE_CHANNEL);
@@ -1131,6 +1242,7 @@ function verifyBmpDeliveryPolicy() {
 
 async function main() {
     await verifyPreloadBridge();
+    await verifyProcessResourceWindowLifecycle();
     await verifyMonitorWindowLifecycle();
     await verifyUnopenedBmpClientIsNotQueuedOrCrossDelivered();
     await verifyScopedBmpMonitorWindows();

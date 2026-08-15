@@ -305,6 +305,16 @@ test('loads one Client statistics and switches between unified monitor tabs', as
     const sessionPage = page.getByTestId('bmp-session-statistics-page');
     await expect(sessionPage).toBeVisible();
     const sessionPanel = await openSessionPanel(sessionPage);
+    const tabHeights = await page.evaluate(() => {
+        const primaryTab = document.querySelector('.bmp-client-monitor-tabs > .nn-tabs-nav .nn-tabs-tab');
+        const secondaryTab = document.querySelector('.bmp-inner-tabs > .nn-tabs-nav .nn-tabs-tab');
+        return {
+            primary: Math.round(primaryTab?.getBoundingClientRect().height || 0),
+            secondary: Math.round(secondaryTab?.getBoundingClientRect().height || 0)
+        };
+    });
+    expect(tabHeights.secondary).toBeGreaterThan(0);
+    expect(tabHeights.primary).toBeGreaterThan(tabHeights.secondary);
     await expectSelectedRibType(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].label);
     await expectStatistic(sessionPanel, RIB_TYPE_DETAILS[RIB_TYPE.PRE_ADJ_RIB_IN].typeName, 42);
 

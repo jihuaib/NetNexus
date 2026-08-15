@@ -50,6 +50,16 @@
                                     <span>设置</span>
                                 </nn-space>
                             </nn-menu-item>
+                            <nn-menu-item
+                                key="process-resource-manager"
+                                data-testid="open-process-resource-manager"
+                                @click="handleBottomMenuClick('process-resource-manager')"
+                            >
+                                <nn-space>
+                                    <ClusterOutlined />
+                                    <span>进程资源管理器</span>
+                                </nn-space>
+                            </nn-menu-item>
                             <nn-menu-item key="developer" @click="handleBottomMenuClick('developer')">
                                 <nn-space>
                                     <ToolOutlined />
@@ -91,6 +101,7 @@
     import { useRouter, useRoute } from 'vue-router';
     import { useStore } from 'vuex';
     import {
+        ClusterOutlined,
         InfoCircleOutlined,
         MenuFoldOutlined,
         MenuUnfoldOutlined,
@@ -102,6 +113,7 @@
     import SettingsDialog from '../components/SettingsDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
     import modalResizeHandler from '../utils/modalResizeHandler';
+    import { notify } from '../utils/notify';
     import appLogoUrl from '../../electron/assets/logo.png';
 
     const router = useRouter();
@@ -111,6 +123,7 @@
     const isCollapsed = ref(false);
     const openKeys = ref([]);
     const settingsDialog = ref(null);
+    const processResourceOpening = ref(false);
 
     const current = ref(['工具集合']);
     const items = ref([
@@ -220,6 +233,26 @@
     };
 
     // 底部菜单点击事件
+    const openProcessResourceManager = async () => {
+        if (processResourceOpening.value) return;
+        if (typeof window.windowApi?.openMonitor !== 'function') {
+            notify.error('进程资源管理器仅支持桌面版');
+            return;
+        }
+
+        processResourceOpening.value = true;
+        try {
+            const result = await window.windowApi.openMonitor('process-resource-manager');
+            if (result?.status !== 'success') {
+                notify.error(result?.msg || '打开进程资源管理器失败');
+            }
+        } catch (error) {
+            notify.error('打开进程资源管理器失败: ' + error.message);
+        } finally {
+            processResourceOpening.value = false;
+        }
+    };
+
     const handleBottomMenuClick = key => {
         if (key === 'developer') {
             window.commonApi.openDeveloperOptions();
@@ -227,6 +260,8 @@
             window.commonApi.openSoftwareInfo();
         } else if (key === 'settings') {
             settingsDialog.value.openDialog();
+        } else if (key === 'process-resource-manager') {
+            openProcessResourceManager();
         }
     };
 

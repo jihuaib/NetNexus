@@ -206,7 +206,7 @@ async function expectBmpRouteLayout(page, pageType, pageTestId, detailTableTestI
 
     expect(layout.innerTabsDirection).toBe('column');
     expect(layout.navListDirection).toBe('row');
-    expect(layout.innerNavOverflowX).toBe('auto');
+    expect(layout.innerNavOverflowX).toBe('hidden');
     expect(layout.innerNavOverflowY).toBe('hidden');
     expect(layout.tabTops.length).toBeGreaterThan(1);
     expect(Math.max(...layout.tabTops) - Math.min(...layout.tabTops)).toBeLessThanOrEqual(1);
@@ -224,9 +224,11 @@ async function expectBmpRouteLayout(page, pageType, pageTestId, detailTableTestI
     expect(layout.routeRowHeights.every(height => height >= 24)).toBe(true);
 
     const detailScrollbar = pageRoot.locator(`[data-testid="${detailTableTestId}"]:visible .nn-table-content`).first();
-    const tabsScrollbar = pageRoot.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first();
     await expectNativeHorizontalScrolling(detailScrollbar);
-    await expectNativeHorizontalScrolling(tabsScrollbar);
+    await expect(pageRoot.locator('.bmp-inner-tabs:visible > .nn-tabs-nav .nn-tabs-nav-wrap').first()).toHaveCSS(
+        'overflow-x',
+        'hidden'
+    );
 }
 
 test.describe('BMP pages', () => {

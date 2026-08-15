@@ -1385,8 +1385,9 @@ class BmpSession {
                 ribTypes
             });
 
-            if (parsedBgpUpdate.valid) {
-                this.getEndOfRibAddressFamilies(parsedBgpUpdate).forEach(family => {
+            const eorAddressFamilies = parsedBgpUpdate.valid ? this.getEndOfRibAddressFamilies(parsedBgpUpdate) : [];
+            if (eorAddressFamilies.length > 0) {
+                eorAddressFamilies.forEach(family => {
                     ribTypes.forEach(ribType => {
                         this.persistScopeState(
                             bgpSession,
@@ -1398,9 +1399,10 @@ class BmpSession {
                             'scope_eor',
                             { sourceTimestampMs }
                         );
-                        this.requestPersistenceSweep();
                     });
                 });
+                this.requestPersistenceSweep();
+                this.sendSessionUpdateEvent(bgpSession);
             }
 
             // 处理withdrawn routes (IPv4)
@@ -1624,8 +1626,10 @@ class BmpSession {
                 effectiveFlags: effectiveLocRibFlags
             });
 
-            if (parsedBgpUpdate.valid) {
-                this.getEndOfRibAddressFamilies(parsedBgpUpdate).forEach(family => {
+            const eorAddressFamilies = parsedBgpUpdate.valid ? this.getEndOfRibAddressFamilies(parsedBgpUpdate) : [];
+            if (eorAddressFamilies.length > 0) {
+                const eorInstances = new Set();
+                eorAddressFamilies.forEach(family => {
                     const bgpInstance = this.getOrCreateLocRibInstance(locRibPeer, family.afi, family.safi, {
                         routeTlvs: routePayload.routeTlvs
                     });
@@ -1639,8 +1643,10 @@ class BmpSession {
                         'scope_eor',
                         { sourceTimestampMs }
                     );
-                    this.requestPersistenceSweep();
+                    eorInstances.add(bgpInstance);
                 });
+                this.requestPersistenceSweep();
+                eorInstances.forEach(bgpInstance => this.sendInstanceUpdateEvent(bgpInstance));
             }
 
             let isNotify = false;
@@ -2090,6 +2096,12 @@ class BmpSession {
                 safi: Number(scope.safi),
                 addrFamilyType: getAddrFamilyType(Number(scope.afi), Number(scope.safi)),
                 ribType: scope.ribType,
+                scopeState: this.getPersistenceScopeState(
+                    bgpSession,
+                    Number(scope.afi),
+                    Number(scope.safi),
+                    scope.ribType
+                ),
                 routeSummary: bgpSession.getRouteSummary(scope.afi, scope.safi, scope.ribType)
             };
         });
@@ -2131,6 +2143,12 @@ class BmpSession {
             safi: Number(bgpInstance.safi),
             addrFamilyType: getAddrFamilyType(Number(bgpInstance.afi), Number(bgpInstance.safi)),
             ribType: 'loc-rib',
+            scopeState: this.getPersistenceScopeState(
+                bgpInstance,
+                Number(bgpInstance.afi),
+                Number(bgpInstance.safi),
+                'loc-rib'
+            ),
             routeSummary
         };
         return {

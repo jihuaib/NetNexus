@@ -44,6 +44,11 @@ contextBridge.exposeInMainWorld('windowApi', {
     unsubscribeEventScope: scopeId => ipcRenderer.invoke('window:unsubscribeEventScope', scopeId)
 });
 
+// 进程资源指标：只读取主进程归一化后的 Electron 进程快照。
+contextBridge.exposeInMainWorld('processResourceApi', {
+    getSnapshot: () => ipcRenderer.invoke('process-resource:getSnapshot')
+});
+
 // 更新模块
 contextBridge.exposeInMainWorld('updaterApi', {
     checkForUpdates: () => ipcRenderer.invoke('updater:checkForUpdates'),

@@ -699,6 +699,30 @@ assert.equal(ipv4UnicastRoute.getRouteInfo().nlriDetail.rd, '0:0');
 assert.equal(ipv4UnicastRoute.getRouteInfo().nlriDetail.pathId, 0);
 assert.ok(events.some(event => event.type === BmpConst.BMP_EVT_TYPES.ROUTE_UPDATE));
 
+const eventCountBeforeSessionEor = events.length;
+session.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(
+                BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE,
+                0,
+                bgpPacket(BgpConst.BGP_PACKET_TYPE.UPDATE, Buffer.concat([u16(0), u16(0)]))
+            )
+        ])
+    )
+);
+const sessionEorEvents = events
+    .slice(eventCountBeforeSessionEor)
+    .filter(event => event.type === BmpConst.BMP_EVT_TYPES.SESSION_UPDATE);
+assert.equal(sessionEorEvents.length, 1, 'one Session EOR message must emit one topology update');
+assert.ok(
+    sessionEorEvents[0].payload?.data?.session?.routeScopes?.some(scope => scope.scopeState === 'ready'),
+    'a Session EOR must emit a ready SESSION_UPDATE topology event'
+);
+
 const { session: bmp3RibInPolicySession } = makeSession();
 bmp3RibInPolicySession.processMessage(
     bmpMessage(BmpConst.BMP_VERSION.V3, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())

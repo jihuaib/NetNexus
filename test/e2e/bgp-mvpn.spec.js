@@ -211,10 +211,43 @@ async function readRendererRows(table) {
     );
 }
 
+async function selectTabsItem(page, tabs, name) {
+    const targetTab = tabs.getByRole('tab', { name, exact: true, includeHidden: true });
+    await expect(targetTab).toHaveCount(1);
+
+    if ((await targetTab.getAttribute('aria-hidden')) !== 'true') {
+        await targetTab.click();
+        return;
+    }
+
+    const overflowTriggers = tabs.locator('.nn-tabs-overflow-button:visible');
+    const triggerCount = await overflowTriggers.count();
+    for (let index = 0; index < triggerCount; index += 1) {
+        const trigger = overflowTriggers.nth(index);
+        const menuId = await trigger.getAttribute('aria-controls');
+        if (!menuId) continue;
+
+        await trigger.click();
+        const menu = page.locator(`[id=${JSON.stringify(menuId)}]`);
+        await expect(menu).toBeVisible();
+        const menuItem = menu.getByRole('menuitem', { name, exact: true });
+        if ((await menuItem.count()) > 0) {
+            await menuItem.click();
+            return;
+        }
+
+        await trigger.click();
+        await expect(menu).toBeHidden();
+    }
+
+    throw new Error(`Unable to select tab "${name}" from the visible tabs or overflow menus`);
+}
+
 async function assertRendererPage(page, routes) {
     await page.goto('/#/bgp/route-mvpn');
-    await expect(page.getByTestId('bgp-route-mvpn-page')).toBeVisible();
-    await page.getByRole('tab', { name: 'Source Active A-D (Type 5)', exact: true }).click();
+    const routePage = page.getByTestId('bgp-route-mvpn-page');
+    await expect(routePage).toBeVisible();
+    await selectTabsItem(page, routePage.locator('.mvpn-route-tabs'), 'Source Active A-D (Type 5)');
 
     const table = page.getByTestId(`bgp-mvpn-route-table-${MVPN_ROUTE_TYPE}`);
     await expect(table.getByText(`共 ${routes.length} 条，每页 ${PAGE_SIZE} 条`)).toBeVisible({ timeout: 30000 });

@@ -4,7 +4,7 @@
             <nn-col :span="24">
                 <nn-card class="bmp-full-card">
                     <div v-if="monitoredClient && sessionGroups.length > 0" class="bmp-inner-tabs-shell">
-                        <nn-tabs class="bmp-inner-tabs">
+                        <nn-tabs class="bmp-inner-tabs" size="small">
                             <nn-tab-pane
                                 v-for="group in sessionGroups"
                                 :key="group.key"

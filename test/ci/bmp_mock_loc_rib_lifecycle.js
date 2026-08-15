@@ -13,6 +13,7 @@ const { buildScenario, parseArgs } = require('../../scripts/mockBmpClient');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-mock-loc-rib-'));
 const store = new BmpPersistenceStore({ dbPath: path.join(tempDir, 'bmp.sqlite3') }).open();
 const persistenceFailures = [];
+const topologyEvents = [];
 let batchSequence = 0;
 
 try {
@@ -39,7 +40,16 @@ try {
         invalidateRouteAssurance() {},
         requestPersistenceSweep() {}
     };
-    const session = new BmpSession({ sendEvent() {} }, bmpWorker);
+    const session = new BmpSession(
+        {
+            sendEvent(type, payload) {
+                if (type === BmpConst.BMP_EVT_TYPES.SESSION_UPDATE || type === BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE) {
+                    topologyEvents.push({ type, payload });
+                }
+            }
+        },
+        bmpWorker
+    );
     Object.assign(session, {
         localIp: '127.0.0.1',
         localPort: 1790,
@@ -48,8 +58,23 @@ try {
     });
 
     const options = parseArgs(['--routes', '1', '--interval', '0', '--no-dump-packets']);
-    buildScenario(options).forEach(message => session.processMessage(message.data));
+    const eorEventBatches = new Map();
+    buildScenario(options).forEach(message => {
+        const topologyEventCount = topologyEvents.length;
+        session.processMessage(message.data);
+        if (message.name === 'eor-loc-rib-default-ipv4-unicast') {
+            eorEventBatches.set(message.name, topologyEvents.slice(topologyEventCount));
+        }
+    });
     assert.deepEqual(persistenceFailures, []);
+
+    const defaultLocRibEorEvents = eorEventBatches.get('eor-loc-rib-default-ipv4-unicast') || [];
+    assert.equal(defaultLocRibEorEvents.length, 1, 'one Loc-RIB EOR message must emit one topology update');
+    assert.equal(defaultLocRibEorEvents[0].type, BmpConst.BMP_EVT_TYPES.INSTANCE_UPDATE);
+    assert.ok(
+        defaultLocRibEorEvents[0].payload?.data?.instance?.routeScopes?.some(scope => scope.scopeState === 'ready'),
+        'a Loc-RIB EOR must emit a ready INSTANCE_UPDATE topology event'
+    );
 
     const globalSessionReports = Array.from(session.bgpStatisticsReportMap.values()).filter(
         report =>

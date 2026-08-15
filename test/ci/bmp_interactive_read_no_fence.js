@@ -36,7 +36,7 @@ async function expectSettledBeforeImmediate(promise, message) {
 }
 
 async function main() {
-    const fenceGate = deferred();
+    let fenceGate = deferred();
     const calls = {
         fence: 0,
         reader: [],
@@ -196,7 +196,38 @@ async function main() {
     );
     assert.deepEqual(calls.writer, [], 'interactive reads should use the read replica when it is available');
 
+    const topologyReaderCallsBeforeExplicitLists = calls.reader.length;
+    let sessionListSettled = false;
+    let instanceListSettled = false;
+    const sessionList = worker.getBgpSessions('explicit-session-list', client).then(() => {
+        sessionListSettled = true;
+    });
+    const instanceList = worker.getBgpInstances('explicit-instance-list', client).then(() => {
+        instanceListSettled = true;
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sessionListSettled, false, 'the explicit session list must wait for queued writer mutations');
+    assert.equal(instanceListSettled, false, 'the explicit instance list must wait for queued writer mutations');
+    assert.equal(calls.fence, 2);
+    assert.equal(
+        calls.reader.length,
+        topologyReaderCallsBeforeExplicitLists,
+        'fenced topology lists must not reach the read replica before the writer fence completes'
+    );
+
+    fenceGate.resolve();
+    await Promise.all([sessionList, instanceList]);
+    assert.equal(responses.get('explicit-session-list')?.status, 'success');
+    assert.equal(responses.get('explicit-instance-list')?.status, 'success');
+    assert.deepEqual(
+        calls.reader.slice(topologyReaderCallsBeforeExplicitLists).map(call => call.method),
+        ['queryTopology', 'queryTopology']
+    );
+
     const readerCallsBeforeDefaultRead = calls.reader.length;
+    const fenceCallsBeforeDefaultRead = calls.fence;
+    fenceGate = deferred();
     let defaultReadSettled = false;
     const defaultRead = worker.readPersistence('queryRoutes', { defaultFenceProbe: true }).then(result => {
         defaultReadSettled = true;
@@ -205,7 +236,7 @@ async function main() {
 
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(defaultReadSettled, false, 'readPersistence must wait for the writer fence by default');
-    assert.equal(calls.fence, 1);
+    assert.equal(calls.fence, fenceCallsBeforeDefaultRead + 1);
     assert.equal(
         calls.reader.length,
         readerCallsBeforeDefaultRead,

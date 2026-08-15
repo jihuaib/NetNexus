@@ -4,7 +4,7 @@
             <nn-col :span="24">
                 <nn-card class="bmp-full-card">
                     <div v-if="monitoredClient && bgpSessionList.length > 0" class="bmp-inner-tabs-shell">
-                        <nn-tabs v-model:active-key="activeBgpSessionKey" class="bmp-inner-tabs">
+                        <nn-tabs v-model:active-key="activeBgpSessionKey" class="bmp-inner-tabs" size="small">
                             <nn-tab-pane
                                 v-for="session in bgpSessionList"
                                 :key="getSessionKey(session)"
@@ -63,7 +63,12 @@
                                                 </nn-tag>
                                             </template>
                                             <template v-else-if="column.key === 'action'">
-                                                <nn-button type="link" size="small" @click="viewSessionDetails(record)">
+                                                <nn-button
+                                                    type="link"
+                                                    size="small"
+                                                    data-testid="bmp-session-detail-button"
+                                                    @click="viewSessionDetails(record)"
+                                                >
                                                     详情
                                                 </nn-button>
                                             </template>
@@ -170,6 +175,13 @@
             </nn-col>
         </nn-row>
 
+        <BmpSessionDetailModal
+            :open="sessionDetailModalVisible"
+            :loading="sessionDetailLoading"
+            :session="sessionDetailRecord"
+            @update:open="handleSessionDetailOpenChange"
+        />
+
         <nn-drawer
             v-model:open="detailsDrawerVisible"
             :title="detailsDrawerTitle"
@@ -206,6 +218,7 @@
     import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import { ProfileOutlined } from 'netnexus-ui/icons';
     import BmpRouteEventTimeline from '../../components/BmpRouteEventTimeline.vue';
+    import BmpSessionDetailModal from '../../components/BmpSessionDetailModal.vue';
     import {
         BMP_SESSION_TYPE_NAME,
         BMP_SESSION_STATE_NAME,
@@ -369,7 +382,13 @@
     const detailsTabKey = ref('detail');
     const routeEventTarget = ref(null);
     const routeDetailLoading = ref(false);
+    const sessionDetailModalVisible = ref(false);
+    const sessionDetailLoading = ref(false);
+    const selectedSessionDetail = ref(null);
     let routeDetailRequestId = 0;
+    let sessionDetailRequestId = 0;
+    let sessionDetailRefreshTimer = null;
+    const SESSION_DETAIL_REFRESH_DEBOUNCE_MS = 120;
 
     const getClientTransportKey = client =>
         `${client?.localIp || ''}|${client?.localPort || ''}|${client?.remoteIp || ''}|${client?.remotePort || ''}`;
@@ -495,6 +514,102 @@
         return getSessionIdentityKey(left) === getSessionIdentityKey(right);
     };
 
+    const sessionDetailRecord = computed(() => {
+        if (!selectedSessionDetail.value) return null;
+        return (
+            bgpSessionList.value.find(session => isSameSession(session, selectedSessionDetail.value)) ||
+            selectedSessionDetail.value
+        );
+    });
+
+    const clearScheduledSessionDetailRefresh = () => {
+        if (sessionDetailRefreshTimer) {
+            clearTimeout(sessionDetailRefreshTimer);
+            sessionDetailRefreshTimer = null;
+        }
+    };
+
+    const isCurrentSessionDetailRequest = ({ requestId, clientKey, revision, targetSession }) =>
+        requestId === sessionDetailRequestId &&
+        pageActive &&
+        sessionDetailModalVisible.value &&
+        clientKey === monitoredClientKey.value &&
+        revision === clientRevision &&
+        Boolean(sessionDetailRecord.value) &&
+        isSameSession(sessionDetailRecord.value, targetSession);
+
+    const commitRefreshedSessionDetail = refreshedSession => {
+        const existingIndex = bgpSessionList.value.findIndex(session => isSameSession(session, refreshedSession));
+        if (existingIndex >= 0) {
+            const existingSession = bgpSessionList.value[existingIndex];
+            const wasActive = getSessionKey(existingSession) === activeBgpSessionKey.value;
+            Object.assign(existingSession, refreshedSession);
+            selectedSessionDetail.value = existingSession;
+
+            if (wasActive) {
+                const nextActiveKey = getSessionKey(existingSession);
+                if (nextActiveKey !== activeBgpSessionKey.value) {
+                    clearScheduledRouteRefresh();
+                    suppressSessionSelectionReloadForKey = nextActiveKey;
+                    activeBgpSessionKey.value = nextActiveKey;
+                }
+            }
+            return;
+        }
+
+        bgpSessionList.value.push(refreshedSession);
+        selectedSessionDetail.value = refreshedSession;
+    };
+
+    const refreshSessionDetails = async ({ targetSession = sessionDetailRecord.value, silent = false } = {}) => {
+        clearScheduledSessionDetailRefresh();
+        const requestId = ++sessionDetailRequestId;
+        const clientKey = monitoredClientKey.value;
+        const revision = clientRevision;
+        const clientInfo = getMonitoredClientApiInfo();
+
+        if (!targetSession || !clientInfo || !sessionDetailModalVisible.value) {
+            sessionDetailLoading.value = false;
+            return;
+        }
+
+        sessionDetailLoading.value = true;
+        const request = { requestId, clientKey, revision, targetSession };
+        try {
+            const result = await window.bmpApi.getBgpSessions(clientInfo);
+            if (!isCurrentSessionDetailRequest(request)) return;
+
+            if (result.status !== 'success') {
+                if (!silent) notify.error('刷新 Session 详情失败');
+                return;
+            }
+
+            const refreshedSession = (Array.isArray(result.data) ? result.data : []).find(session =>
+                isSameSession(session, targetSession)
+            );
+            if (refreshedSession) {
+                commitRefreshedSessionDetail(refreshedSession);
+            }
+        } catch (error) {
+            if (!isCurrentSessionDetailRequest(request)) return;
+            console.error(error);
+            if (!silent) notify.error('刷新 Session 详情失败');
+        } finally {
+            if (requestId === sessionDetailRequestId) {
+                sessionDetailLoading.value = false;
+            }
+        }
+    };
+
+    const scheduleSessionDetailRefresh = () => {
+        if (!sessionDetailModalVisible.value || !sessionDetailRecord.value) return;
+        clearScheduledSessionDetailRefresh();
+        sessionDetailRefreshTimer = setTimeout(() => {
+            sessionDetailRefreshTimer = null;
+            refreshSessionDetails({ silent: true });
+        }, SESSION_DETAIL_REFRESH_DEBOUNCE_MS);
+    };
+
     const getSessionRouteScopes = session => {
         const scopes = Array.isArray(session?.routeScopes) ? session.routeScopes : [];
         if (scopes.length > 0) {
@@ -573,13 +688,25 @@
 
     // View peer details
     const viewSessionDetails = record => {
-        routeDetailRequestId += 1;
-        routeDetailLoading.value = false;
-        detailsTabKey.value = 'detail';
-        routeEventTarget.value = null;
-        currentDetails.value = record;
-        detailsDrawerTitle.value = `Session 详情: ${record.sessionIp}`;
-        detailsDrawerVisible.value = true;
+        selectedSessionDetail.value = record;
+        sessionDetailModalVisible.value = true;
+        refreshSessionDetails({ targetSession: record });
+    };
+
+    const closeSessionDetails = () => {
+        sessionDetailRequestId += 1;
+        clearScheduledSessionDetailRefresh();
+        sessionDetailLoading.value = false;
+        sessionDetailModalVisible.value = false;
+        selectedSessionDetail.value = null;
+    };
+
+    const handleSessionDetailOpenChange = open => {
+        if (open) {
+            sessionDetailModalVisible.value = true;
+            return;
+        }
+        closeSessionDetails();
     };
 
     const viewRouteDetailJson = async record => {
@@ -721,7 +848,10 @@
         sessionListRequestId += 1;
         routeListRequestId += 1;
         routeDetailRequestId += 1;
+        sessionDetailRequestId += 1;
         routeDetailLoading.value = false;
+        sessionDetailLoading.value = false;
+        clearScheduledSessionDetailRefresh();
         clearScheduledRouteRefresh();
     };
 
@@ -814,9 +944,69 @@
         }
     };
 
+    const routeUpdateMatchesSessionDetail = (update, session) => {
+        if (!update || !session) return false;
+        if (update.client && !isSameClientConnection(update.client, monitoredClient.value)) return false;
+
+        const updateSourceId =
+            update.persistentSourceId ||
+            update.sourceId ||
+            update.client?.persistentSourceId ||
+            update.client?.sourceId ||
+            null;
+        const sessionSourceId =
+            session.persistentSourceId ||
+            session.sourceId ||
+            monitoredClient.value?.persistentSourceId ||
+            monitoredClient.value?.sourceId ||
+            null;
+        if (updateSourceId && sessionSourceId && updateSourceId !== sessionSourceId) return false;
+
+        if (update.session && !isSameSession(update.session, session)) return false;
+
+        const updateOwnerKey =
+            update.persistentOwnerKey ||
+            update.ownerKey ||
+            update.session?.persistentOwnerKey ||
+            update.session?.ownerKey ||
+            null;
+        const sessionOwnerKey = session.persistentOwnerKey || session.ownerKey || null;
+        if (updateOwnerKey && sessionOwnerKey) return updateOwnerKey === sessionOwnerKey;
+
+        const updateScopeId =
+            update.persistentScopeId ||
+            update.scopeId ||
+            update.session?.persistentScopeId ||
+            update.session?.scopeId ||
+            null;
+        if (!updateScopeId) return Boolean(update.session && isSameSession(update.session, session));
+
+        const sessionScopeIds = new Set(
+            [
+                session.persistentScopeId,
+                session.scopeId,
+                ...(Array.isArray(session.routeScopes)
+                    ? session.routeScopes.flatMap(scope => [scope?.persistentScopeId, scope?.scopeId])
+                    : [])
+            ].filter(Boolean)
+        );
+        return sessionScopeIds.has(updateScopeId);
+    };
+
     const onRouteUpdate = result => {
         if (result.status !== 'success' || !result.data) return;
         const updates = Array.isArray(result.data.updates) ? result.data.updates : [result.data];
+        const detailSession = sessionDetailRecord.value;
+        if (
+            sessionDetailModalVisible.value &&
+            detailSession &&
+            updates.some(
+                update => update?.projectionReset === true && routeUpdateMatchesSessionDetail(update, detailSession)
+            )
+        ) {
+            scheduleSessionDetailRefresh();
+        }
+
         const activeClient = monitoredClient.value;
         const activeSession = getActiveSession();
         if (!activeClient || !activeSession) return;
@@ -870,6 +1060,11 @@
 
         if (!data.session || !isSameClientConnection(data.client, monitoredClient.value)) return;
 
+        const shouldRefreshSessionDetail =
+            sessionDetailModalVisible.value &&
+            Boolean(sessionDetailRecord.value) &&
+            isSameSession(sessionDetailRecord.value, data.session);
+
         const existingIndex = bgpSessionList.value.findIndex(session => isSameSession(session, data.session));
         if (existingIndex >= 0) {
             const existingSession = bgpSessionList.value[existingIndex];
@@ -884,6 +1079,7 @@
                     activeBgpSessionKey.value = nextActiveKey;
                 }
             }
+            if (shouldRefreshSessionDetail) scheduleSessionDetailRefresh();
             return;
         }
 
@@ -891,6 +1087,7 @@
         if (!activeBgpSessionKey.value) {
             activeBgpSessionKey.value = getSessionKey(data.session);
         }
+        if (shouldRefreshSessionDetail) scheduleSessionDetailRefresh();
     };
 
     const onMonitoredClientUpdate = result => {
@@ -1024,6 +1221,7 @@
     };
 
     const resetSessionAndRouteSelection = () => {
+        closeSessionDetails();
         activeBgpSessionKey.value = '';
         activeLocRibAf.value = null;
         activeLocRibType.value = '';
@@ -1185,6 +1383,7 @@
         clientLoadRequestId += 1;
         invalidateClientDataRequests();
         clearScheduledRouteRefresh();
+        closeSessionDetails();
         EventBus.off('bmp:sessionUpdate', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION);
         EventBus.off('bmp:initiation', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION);
         EventBus.off('bmp:termination', BMP_EVENT_PAGE_ID.PAGE_ID_BMP_BGP_SESSION);
@@ -1491,10 +1690,6 @@
     .bmp-inner-tabs > :deep(.nn-tabs-nav) {
         flex: 0 0 auto;
         margin-bottom: 8px;
-    }
-
-    .bmp-inner-tabs > :deep(.nn-tabs-nav > .nn-tabs-nav-wrap > .nn-tabs-nav-list > .nn-tabs-tab) {
-        padding: 8px 0 !important;
     }
 
     .bgp-peer-info-header {

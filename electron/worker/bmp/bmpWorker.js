@@ -1112,9 +1112,11 @@ class BmpWorker {
         return clients.find(item => this.makeClientEndpointKey(item) === key) || null;
     }
 
-    async queryClientTopology(client = null) {
+    async queryClientTopology(client = null, options = {}) {
         const sourceId = this.getPersistentSourceId(client || {});
-        const topology = await this.readPersistence('queryTopology', sourceId ? { sourceId } : {}, { fence: false });
+        const topology = await this.readPersistence('queryTopology', sourceId ? { sourceId } : {}, {
+            fence: options.fence === true
+        });
         return {
             topology,
             client: client ? this.findTopologyClient(topology, client) : null
@@ -1407,7 +1409,7 @@ class BmpWorker {
 
     async getBgpSessions(messageId, client) {
         try {
-            const { client: persistedClient } = await this.queryClientTopology(client);
+            const { client: persistedClient } = await this.queryClientTopology(client, { fence: true });
             const peerMap = new Map();
             (persistedClient?.sessions || []).forEach(session => {
                 const normalized = this.normalizePersistedSession(session);
@@ -2080,7 +2082,7 @@ class BmpWorker {
 
     async getBgpInstances(messageId, client) {
         try {
-            const { client: persistedClient } = await this.queryClientTopology(client);
+            const { client: persistedClient } = await this.queryClientTopology(client, { fence: true });
             const instanceMap = new Map();
             (persistedClient?.instances || []).forEach(instance => {
                 const normalized = this.normalizePersistedInstance(instance);

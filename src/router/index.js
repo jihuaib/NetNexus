@@ -60,6 +60,7 @@ const SyslogMain = () => import('../view/syslog/SyslogMain.vue');
 const SyslogConfig = () => import('../view/syslog/SyslogConfig.vue');
 const SyslogMessageLog = () => import('../view/syslog/SyslogMessageLog.vue');
 const MonitorWindow = () => import('../view/MonitorWindow.vue');
+const ProcessResourceManager = () => import('../view/system/ProcessResourceManager.vue');
 
 const routes = [
     {
@@ -67,6 +68,17 @@ const routes = [
         component: MonitorWindow,
         meta: { monitorWindow: true },
         children: [
+            {
+                path: 'process-resource-manager',
+                name: 'ProcessResourceManagerMonitor',
+                component: ProcessResourceManager,
+                meta: {
+                    monitorWindow: true,
+                    windowTitle: '进程资源管理器 - NetNexus',
+                    monitorCompactTop: true,
+                    monitorTestId: 'process-resource-manager-shell'
+                }
+            },
             {
                 path: 'syslog-message-log',
                 name: 'SyslogMessageLogMonitor',

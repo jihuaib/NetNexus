@@ -133,22 +133,22 @@ async function expectSnmpMibLayout(page, expectedSidebarWidth) {
                 const sidebar = document.querySelector('.main-layout > .sider');
                 const mainContent = document.querySelector('.main-layout > .content-container');
                 const fixedTabs = document.querySelector('.nn-main-container > .fixed-tabs');
+                const fixedTabsNav = fixedTabs?.querySelector('.nn-tabs-nav');
                 const fixedTabsNavWrap = fixedTabs?.querySelector('.nn-tabs-nav-wrap');
                 const mibCard = document.querySelector('.snmp-mib-page .mib-card');
-                const firstTab = document.querySelector('.fixed-tabs .nn-tabs-tab');
                 const sidebarBox = sidebar?.getBoundingClientRect();
                 const mainContentBox = mainContent?.getBoundingClientRect();
                 const fixedTabsBox = fixedTabs?.getBoundingClientRect();
+                const fixedTabsNavBox = fixedTabsNav?.getBoundingClientRect();
                 const mibCardBox = mibCard?.getBoundingClientRect();
-                const firstTabBox = firstTab?.getBoundingClientRect();
 
                 if (
                     !sidebarBox ||
                     !mainContentBox ||
                     !fixedTabsBox ||
+                    !fixedTabsNavBox ||
                     !fixedTabsNavWrap ||
-                    !mibCardBox ||
-                    !firstTabBox
+                    !mibCardBox
                 ) {
                     return null;
                 }
@@ -160,7 +160,7 @@ async function expectSnmpMibLayout(page, expectedSidebarWidth) {
                     cardRightInset: window.innerWidth - mibCardBox.right,
                     cardTopInset: mibCardBox.top - fixedTabsBox.bottom,
                     cardBottomInset: window.innerHeight - mibCardBox.bottom,
-                    tabsCardAlignment: firstTabBox.left - mibCardBox.left,
+                    tabsCardAlignment: fixedTabsNavBox.left - mibCardBox.left,
                     fixedTabsOverflowY: getComputedStyle(fixedTabsNavWrap).overflowY,
                     fixedTabsVerticalScrollbarWidth: fixedTabsNavWrap.offsetWidth - fixedTabsNavWrap.clientWidth
                 };
@@ -537,7 +537,7 @@ test.describe('Custom UI component interactions', () => {
         await page.getByRole('button', { name: '更多选项' }).click();
         const quickMenu = page.locator('.nn-dropdown-popup');
         await expect(quickMenu).toBeVisible();
-        const quickIconShapes = await getMenuIconShapes(quickMenu, ['设置', '开发人员选项', '关于']);
+        const quickIconShapes = await getMenuIconShapes(quickMenu, ['设置', '进程资源管理器', '开发人员选项', '关于']);
         expect(new Set(Object.values(quickIconShapes)).size).toBe(Object.keys(quickIconShapes).length);
 
         await quickMenu.getByRole('menuitem', { name: '设置', exact: true }).click();
