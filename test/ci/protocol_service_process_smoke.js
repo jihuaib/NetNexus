@@ -181,7 +181,11 @@ async function runDhcpService() {
         };
         await assert.rejects(
             client.sendRequest(Dhcp6Const.DHCP6_REQ_TYPES.START_DHCP6, occupiedV6Config),
-            error => error.code === 'WORKER_REQUEST_FAILED' && /EADDRINUSE/.test(error.message)
+            error =>
+                error.code === 'WORKER_REQUEST_FAILED' &&
+                (process.platform === 'win32'
+                    ? /EACCES|EADDRINUSE/.test(error.message)
+                    : /EADDRINUSE/.test(error.message))
         );
         const v4LeasesAfterV6Failure = await client.sendRequest(DhcpConst.DHCP_REQ_TYPES.GET_LEASE_LIST);
         assert.deepEqual(v4LeasesAfterV6Failure.data, []);

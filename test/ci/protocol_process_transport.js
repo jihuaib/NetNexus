@@ -63,7 +63,9 @@ async function testLongRunningProcess() {
 async function testRequestProcessClient() {
     const client = new RequestProcessClient(fixturePath, {
         serviceName: fixtureServiceName,
-        defaultTimeoutMs: 100
+        // Process startup alone can exceed 100ms on hosted Windows runners.
+        // Timeout behavior is covered below with an explicit 10ms request.
+        defaultTimeoutMs: 5000
     });
 
     const echoed = await client.sendRequest('echo', { value: 9 });

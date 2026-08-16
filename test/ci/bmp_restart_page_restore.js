@@ -370,7 +370,11 @@ async function main() {
 
         // Also cover an ungraceful collector restart. The preceding persisted
         // route query fences every EOR/update before the worker is terminated.
-        const secondSocketClosed = once(secondSocket, 'close');
+        const secondSocketClosed = once(secondSocket, 'close').catch(error => {
+            // Killing the collector is intentionally abrupt. Windows reports the
+            // peer shutdown as ECONNRESET instead of a clean close event.
+            if (error?.code !== 'ECONNRESET') throw error;
+        });
         secondHarness.stopped = true;
         await secondHarness.worker.terminate();
         await secondSocketClosed;
