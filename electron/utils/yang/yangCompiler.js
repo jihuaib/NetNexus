@@ -1152,7 +1152,8 @@ class YangCompiler {
                 cwd: materialized.inputDirectory,
                 timeoutMs: timeout,
                 maxOutputBytes: maxBuffer,
-                env: options.env || process.env
+                env: options.env || process.env,
+                signal: options.signal
             });
         } catch (error) {
             result = {
@@ -1442,6 +1443,11 @@ class YangCompiler {
     }
 
     async compile(options = {}) {
+        if (options.signal?.aborted) {
+            const error = new Error('YANG compilation was cancelled');
+            error.code = 'WORKER_CANCELLED';
+            throw error;
+        }
         const entries = this.repository.resolveEntries({
             hashes: options.hashes,
             workspaceId: options.workspaceId,
@@ -1463,6 +1469,11 @@ class YangCompiler {
             runtime: options.runtime
         });
         const compilerStatus = await runtime.getStatus({ force: options.forceRuntimeDiscovery === true });
+        if (options.signal?.aborted) {
+            const error = new Error('YANG compilation was cancelled');
+            error.code = 'WORKER_CANCELLED';
+            throw error;
+        }
         const hashes = this.calculateHashes(uniqueEntries, options, compilerStatus, schemaHelperArgs);
         const compileId = hashes.contextHash;
         progress('runtime', {
@@ -1506,6 +1517,11 @@ class YangCompiler {
         const modules = [];
         const diagnostics = [];
         for (let index = 0; index < uniqueEntries.length; index += 1) {
+            if (options.signal?.aborted) {
+                const error = new Error('YANG compilation was cancelled');
+                error.code = 'WORKER_CANCELLED';
+                throw error;
+            }
             const entry = uniqueEntries[index];
             try {
                 const module = this.loadModule(entry);
@@ -1576,6 +1592,11 @@ class YangCompiler {
                 modules,
                 options
             );
+            if (options.signal?.aborted) {
+                const error = new Error('YANG compilation was cancelled');
+                error.code = 'WORKER_CANCELLED';
+                throw error;
+            }
             diagnostics.push(...externalCompiler.diagnostics);
             progress('schema', {
                 completed: uniqueEntries.length,
@@ -1622,6 +1643,11 @@ class YangCompiler {
             progress,
             compileDiagnostics: finalDiagnostics
         });
+        if (options.signal?.aborted) {
+            const error = new Error('YANG compilation was cancelled');
+            error.code = 'WORKER_CANCELLED';
+            throw error;
+        }
         fileResults.forEach((fileResult, index) => {
             const completed = index + 1;
             progress('file-result', {
@@ -1669,6 +1695,11 @@ class YangCompiler {
                 options,
                 new Set(compiledTopLevelHashes)
             );
+            if (options.signal?.aborted) {
+                const error = new Error('YANG compilation was cancelled');
+                error.code = 'WORKER_CANCELLED';
+                throw error;
+            }
             if (partialCompiler.succeeded && partialCompiler.tree) {
                 tree = partialCompiler.tree;
                 schemaCompiler = partialCompiler;
@@ -2118,7 +2149,8 @@ class YangCompiler {
                         1024,
                         8 * 1024 * 1024
                     ),
-                    env: options.env || process.env
+                    env: options.env || process.env,
+                    signal: options.signal
                 }
             );
             if (execution.error) throw execution.error;

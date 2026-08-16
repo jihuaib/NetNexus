@@ -33,7 +33,7 @@
                     <span v-if="workspaceSummary.cacheHit" class="cache-hint">缓存命中</span>
                 </div>
                 <div class="workspace-actions">
-                    <nn-button :loading="loading" @click="loadWorkspace()">
+                    <nn-button :loading="loading" :disabled="!runtimeRunning" @click="loadWorkspace()">
                         <template #icon><ReloadOutlined /></template>
                         刷新
                     </nn-button>
@@ -54,7 +54,9 @@
                     </nn-button>
                     <nn-button
                         danger
-                        :disabled="operationExecuting || (!compileId && workspaceModules.length === 0)"
+                        :disabled="
+                            !runtimeRunning || operationExecuting || (!compileId && workspaceModules.length === 0)
+                        "
                         @click="clearWorkspace"
                     >
                         <template #icon><DeleteOutlined /></template>
@@ -341,6 +343,7 @@
     const detailLoading = ref(false);
     const treeQuery = ref('');
     const session = ref({ status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] });
+    const runtimeRunning = ref(false);
     const contextMenuRef = ref(null);
     const contextMenu = reactive({ visible: false, node: null });
     const operationContext = reactive({
@@ -386,6 +389,8 @@
     let detailRequestRevision = 0;
     let workspaceRequestRevision = 0;
     let profileRequestRevision = 0;
+    let runtimeRequestRevision = 0;
+    let sessionRequestRevision = 0;
     let profileContextReady = false;
     let schemaRootsPromise = null;
     let schemaRootsPromiseKey = '';
@@ -506,7 +511,8 @@
     });
     const contextMenuHint = computed(() => {
         if (operationExecuting.value) return '设备操作执行中，请等待 rpc-reply 后再切换操作';
-        if (!connected.value) return '设备未连接；Schema 仍可查看，设备操作需先建立连接';
+        if (!runtimeRunning.value) return 'YANG进程未启动；请先建立NETCONF连接';
+        if (!connected.value) return '设备连接正在恢复；Schema 仍可查看，设备操作需等待连接';
         const node = contextMenu.node;
         if (isNotificationNode(node)) {
             return supportsModernNotifications.value && supportsRfc8640.value
@@ -680,7 +686,7 @@
         const requestRevision = ++workspaceRequestRevision;
         const profileId = selectedProfileId.value;
         const profileRevision = profileRequestRevision;
-        if (!profileId) {
+        if (!profileId || !runtimeRunning.value) {
             loading.value = false;
             return;
         }
@@ -732,7 +738,7 @@
     const loadWorkspaceModules = async () => {
         const profileId = selectedProfileId.value;
         const requestRevision = profileRequestRevision;
-        if (!profileId) return;
+        if (!profileId || !runtimeRunning.value) return;
         try {
             const { data } = await invokeBridge('yangApi', 'listModules', { profileId });
             if (requestRevision !== profileRequestRevision || profileId !== selectedProfileId.value) return;
@@ -1728,19 +1734,54 @@
         hideContextMenu();
     };
 
+    const runtimeAvailable = data =>
+        data?.ready === true ||
+        (data?.ready === undefined && (data?.running === true || data?.processRunning === true));
+
+    const loadRuntimeState = async () => {
+        const requestRevision = ++runtimeRequestRevision;
+        try {
+            const { data } = await invokeBridge('yangApi', 'getRuntimeState');
+            if (requestRevision !== runtimeRequestRevision) return runtimeRunning.value;
+            sessionRequestRevision += 1;
+            runtimeRunning.value = runtimeAvailable(data);
+            if (!runtimeRunning.value) resetProfileWorkspace();
+            return runtimeRunning.value;
+        } catch (_error) {
+            if (requestRevision !== runtimeRequestRevision) return runtimeRunning.value;
+            sessionRequestRevision += 1;
+            resetProfileWorkspace();
+            return false;
+        }
+    };
+
     const loadSession = async () => {
         const profileId = selectedProfileId.value;
-        const requestRevision = profileRequestRevision;
+        const profileRevision = profileRequestRevision;
+        const runtimeRevision = runtimeRequestRevision;
+        const requestRevision = ++sessionRequestRevision;
         if (!profileId) {
             session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
             return;
         }
         try {
             const { data } = await invokeBridge('netconfApi', 'getSessionState', profileId);
-            if (requestRevision !== profileRequestRevision || profileId !== selectedProfileId.value) return;
+            if (
+                requestRevision !== sessionRequestRevision ||
+                runtimeRevision !== runtimeRequestRevision ||
+                profileRevision !== profileRequestRevision ||
+                profileId !== selectedProfileId.value
+            ) {
+                return;
+            }
             session.value = { ...session.value, ...(data || {}) };
         } catch (error) {
-            if (requestRevision === profileRequestRevision && profileId === selectedProfileId.value) {
+            if (
+                requestRevision === sessionRequestRevision &&
+                runtimeRevision === runtimeRequestRevision &&
+                profileRevision === profileRequestRevision &&
+                profileId === selectedProfileId.value
+            ) {
                 session.value = {
                     status: NETCONF_SESSION_STATUS.DISCONNECTED,
                     connected: false,
@@ -1754,7 +1795,28 @@
     const handleSessionEvent = payload => {
         const next = normalizeSessionEvent(payload, session.value);
         if (next?.profileId && next.profileId !== selectedProfileId.value) return;
+        const status = String(next?.status || next?.state || '').toLowerCase();
+        sessionRequestRevision += 1;
+        if (['disconnected', 'error'].includes(status)) {
+            runtimeRequestRevision += 1;
+            resetProfileWorkspace();
+            return;
+        }
+        if (!runtimeRunning.value) return;
         session.value = next;
+        if (status === NETCONF_SESSION_STATUS.CONNECTED && profileContextReady) void loadWorkspace();
+    };
+
+    const handleRuntimeChanged = payload => {
+        const data = payload?.status === 'success' ? payload.data : payload?.data || payload || {};
+        runtimeRequestRevision += 1;
+        sessionRequestRevision += 1;
+        runtimeRunning.value = runtimeAvailable(data);
+        if (!runtimeRunning.value) {
+            resetProfileWorkspace();
+            return;
+        }
+        if (profileContextReady) void reloadCurrentProfile(undefined, { runtimeKnown: true });
     };
 
     const handleTreeExpand = async (_keys, info) => {
@@ -1831,6 +1893,7 @@
     };
 
     const clearWorkspace = () => {
+        if (!runtimeRunning.value) return;
         if (operationExecuting.value) {
             notify.warning('设备操作执行中，请等待 rpc-reply 后再清空工作区');
             return;
@@ -1890,6 +1953,7 @@
     };
 
     const handleCompileProgress = payload => {
+        if (!runtimeRunning.value) return;
         if (payload?.status === 'error') return;
         const data = payload?.status === 'success' ? payload.data : payload?.data || payload;
         if (!data || typeof data !== 'object') return;
@@ -1900,6 +1964,7 @@
     };
 
     const handleProfileDataRefresh = payload => {
+        if (!runtimeRunning.value) return;
         const profileId = String(payload?.profileId || '');
         if (!profileId) return;
         if (
@@ -1936,13 +2001,19 @@
         treeLoading.value = false;
         loading.value = false;
         session.value = { status: NETCONF_SESSION_STATUS.DISCONNECTED, connected: false, capabilities: [] };
+        runtimeRunning.value = false;
         hideContextMenu();
         closeClearWorkspaceConfirm();
         closeNotificationDisconnectConfirm();
         resetOperationContext();
     };
 
-    const reloadCurrentProfile = options => Promise.all([loadWorkspace(options), loadSession()]);
+    const reloadCurrentProfile = async (options, { runtimeKnown = false } = {}) => {
+        if (!runtimeKnown) await loadRuntimeState();
+        const runtimeRevision = runtimeRequestRevision;
+        await loadSession();
+        if (runtimeRevision === runtimeRequestRevision && runtimeRunning.value) await loadWorkspace(options);
+    };
 
     watch(selectedProfileId, async (profileId, previousProfileId) => {
         if (profileId === previousProfileId) return;
@@ -2002,6 +2073,7 @@
     onMounted(async () => {
         EventBus.on(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE, handleCompileProgress);
         EventBus.on(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`, handleSessionEvent);
+        EventBus.on(YANG_EVENT.RUNTIME_CHANGED, `${YANG_EVENT_PAGE_ID.WORKSPACE}-runtime`, handleRuntimeChanged);
         EventBus.on(
             NOTIFICATION_SUMMARY_EVENT,
             `${YANG_EVENT_PAGE_ID.WORKSPACE}-notification-summary`,
@@ -2047,6 +2119,7 @@
         closeNotificationDisconnectConfirm();
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.WORKSPACE);
         EventBus.off(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-session`);
+        EventBus.off(YANG_EVENT.RUNTIME_CHANGED, `${YANG_EVENT_PAGE_ID.WORKSPACE}-runtime`);
         EventBus.off(NOTIFICATION_SUMMARY_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-notification-summary`);
         EventBus.off(NOTIFICATION_ACTION_EVENT, `${YANG_EVENT_PAGE_ID.WORKSPACE}-notification-action`);
         EventBus.off(YANG_EVENT.PROFILE_DATA_REFRESH, `${YANG_EVENT_PAGE_ID.WORKSPACE}-profile-data`);

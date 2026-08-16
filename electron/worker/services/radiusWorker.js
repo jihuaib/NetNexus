@@ -1151,10 +1151,10 @@ class RadiusWorker {
         this.pendingChallenges.clear();
         this.responseCache.clear();
         const data = this.getStatusData('stopped');
-        this.messageHandler.sendSuccessResponse(messageId, null, 'RADIUS服务器已停止');
         this.sendStatusEvent(data);
         this.sendSessionEvent();
         this.config = null;
+        this.messageHandler.sendSuccessResponse(messageId, null, 'RADIUS服务器已停止');
     }
 
     async closeSockets() {

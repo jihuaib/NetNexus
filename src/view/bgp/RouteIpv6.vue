@@ -248,16 +248,18 @@
 </template>
 
 <script setup>
-    import { onMounted, ref, computed, onActivated, nextTick } from 'vue';
+    import { onMounted, ref, computed, nextTick } from 'vue';
     import RouteViewsImportModal from '../../components/RouteViewsImportModal.vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
     import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
     import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from 'netnexus-ui/icons';
+    import { useBgpRouteRuntime } from './useBgpRouteRuntime';
 
     import {
         BGP_ADDR_FAMILY,
+        BGP_EVENT_PAGE_ID,
         BGP_SRV6_ENDPOINT_BEHAVIOR,
         BGP_SRV6_SID_MODE,
         DEFAULT_VALUES
@@ -329,6 +331,7 @@
     const sentRoutes = ref([]);
     const routeListLoading = ref(false);
     let routeListRequestId = 0;
+    let routeDetailRequestId = 0;
     const hasRoutes = computed(() => pagination.value.total > 0);
     const routesGenerating = ref(false);
     const deleteAllLoading = ref(false);
@@ -426,6 +429,17 @@
         showTotal: total => `共 ${total} 条，每页 25 条`
     });
 
+    const clearRuntimeRoutes = () => {
+        routeListRequestId += 1;
+        routeDetailRequestId += 1;
+        sentRoutes.value = [];
+        routeListLoading.value = false;
+        pagination.value.current = 1;
+        pagination.value.total = 0;
+        routeDetailVisible.value = false;
+        routeDetailLoading.value = false;
+        routeDetail.value = null;
+    };
     onMounted(async () => {
         // 加载保存的配置
         const savedConfig = await window.bgpApi.loadIpv6UNCRouteConfig();
@@ -436,12 +450,6 @@
         } else {
             console.error('IPv6-UNC路由配置文件加载失败', savedConfig.msg);
         }
-    });
-
-    onActivated(async () => {
-        // 加载已生成的路由列表
-        pagination.value.current = 1;
-        await refreshRoutes();
     });
 
     const handleTableChange = (pag, _filters, _sorter) => {
@@ -481,6 +489,11 @@
             }
         }
     };
+
+    useBgpRouteRuntime(BGP_EVENT_PAGE_ID.PAGE_ID_ROUTE_IPV6, {
+        clearRoutes: clearRuntimeRoutes,
+        refreshRoutes
+    });
 
     const refreshRoutesAfterSingleDelete = async () => {
         const remainingTotal = Math.max(0, pagination.value.total - 1);
@@ -527,6 +540,7 @@
     };
 
     const showRouteDetail = async route => {
+        const requestId = ++routeDetailRequestId;
         routeDetailVisible.value = true;
         routeDetailLoading.value = true;
         routeDetail.value = null;
@@ -538,6 +552,8 @@
                 rd: route.rd,
                 pathId: route.pathId
             });
+            if (requestId !== routeDetailRequestId) return;
+
             if (result.status === 'success') {
                 routeDetail.value = result.data;
             } else {
@@ -545,10 +561,13 @@
                 notify.error(`路由详情查询失败: ${result.msg}`);
             }
         } catch (e) {
+            if (requestId !== routeDetailRequestId) return;
             routeDetailVisible.value = false;
             notify.error(`路由详情查询失败: ${e.message}`);
         } finally {
-            routeDetailLoading.value = false;
+            if (requestId === routeDetailRequestId) {
+                routeDetailLoading.value = false;
+            }
         }
     };
 

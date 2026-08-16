@@ -615,6 +615,38 @@ section('Reset snapshot timeout releases slow clients');
         })
     );
 }
+{
+    const { session, rpkiWorker } = makeMockSession(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+    let releaseFirstSend;
+    let firstSendStartedResolve;
+    const firstSendStarted = new Promise(resolve => {
+        firstSendStartedResolve = resolve;
+    });
+    const firstSendGate = new Promise(resolve => {
+        releaseFirstSend = resolve;
+    });
+    let snapshotsCreated = 0;
+    rpkiWorker.createDataSnapshot = () => {
+        snapshotsCreated += 1;
+        return { cacheSerial: 1, roas: [], aspas: [], routerKeys: [] };
+    };
+
+    session.enqueueSend(async () => {
+        firstSendStartedResolve();
+        await firstSendGate;
+    });
+    session.sendResetQueryResponse();
+    scheduleAsyncCheck(
+        'closing session seals pending Reset snapshot work',
+        (async () => {
+            await firstSendStarted;
+            const closePromise = session.closeSession();
+            releaseFirstSend();
+            await closePromise;
+            assertEq(snapshotsCreated, 0, 'pending Reset must not create a SQLite snapshot after close begins');
+        })()
+    );
+}
 
 section('Buffered message reassembly');
 {

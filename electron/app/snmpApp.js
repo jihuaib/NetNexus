@@ -1,17 +1,20 @@
-const fs = require('fs');
 const path = require('path');
-const snmp = require('net-snmp');
 const { app, BrowserWindow, dialog } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
-const WorkerWithPromise = require('../worker/core/workerWithPromise');
+const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPromise');
+const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../worker/core/protocolProcessServices');
 const SnmpConst = require('../const/snmpConst');
-const { LOG_REQ_TYPES } = require('../const/toolsConst');
 const EventDispatcher = require('../utils/eventDispatcher');
-const { formatSnmpValue } = require('../utils/snmpValueFormatter');
 
 const MAX_MIB_SOURCE_PREVIEW_BYTES = 16 * 1024 * 1024;
+const SNMP_RUNTIME_CHANGED_EVENT = 'snmp:runtimeChanged';
+const MIB_COMPILE_PROGRESS_EVENT = 'snmp:mibCompileProgress';
+
+function generateMessageId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
 
 class SnmpApp {
     constructor(ipcMain, store, options = {}) {
@@ -20,27 +23,35 @@ class SnmpApp {
         this.snmpConfigFileKey = 'snmp-config';
         this.snmpMibFilesKey = 'snmp-mib-files';
         this.worker = null;
-        this.mibWorker = null;
-
+        this.snmpReady = false;
+        this.snmpStarting = false;
+        this.snmpStopping = false;
+        this.snmpTrapRunning = false;
+        this.snmpStartGeneration = 0;
+        this.snmpStartPromise = null;
+        this.snmpStopPromise = null;
+        this.snmpTerminateOnlyWorker = null;
+        this.snmpRuntimeStateSignature = '';
         this.snmpTrapEventHandler = null;
+        this.snmpRuntimeEventHandler = null;
+        this.snmpMibProgressEventHandler = null;
+        this.mibProgressTargets = new Map();
         this.eventDispatcher = null;
-
         this.logLevel = null;
         this.closeMonitorWindowsHandler =
             typeof options.closeMonitorWindows === 'function' ? options.closeMonitorWindows : null;
 
-        // 注册IPC处理程序
         this.registerIpcHandlers();
     }
 
-    /**
-     * 注册IPC处理程序
-     */
     registerIpcHandlers() {
         this.ipcMain.handle('snmp:saveSnmpConfig', this.handleSaveSnmpConfig.bind(this));
         this.ipcMain.handle('snmp:getSnmpConfig', this.handleGetSnmpConfig.bind(this));
         this.ipcMain.handle('snmp:startSnmp', this.handleStartSnmp.bind(this));
         this.ipcMain.handle('snmp:stopSnmp', this.handleStopSnmp.bind(this));
+        this.ipcMain.handle('snmp:getSnmpRuntimeState', this.handleGetSnmpRuntimeState.bind(this));
+        this.ipcMain.handle('snmp:startSnmpTrap', this.handleStartSnmpTrap.bind(this));
+        this.ipcMain.handle('snmp:stopSnmpTrap', this.handleStopSnmpTrap.bind(this));
         this.ipcMain.handle('snmp:getTrapList', this.handleGetTrapList.bind(this));
         this.ipcMain.handle('snmp:clearTrapHistory', this.handleClearTrapHistory.bind(this));
         this.ipcMain.handle('snmp:selectMibFiles', this.handleSelectMibFiles.bind(this));
@@ -63,15 +74,9 @@ class SnmpApp {
 
     normalizeSupportedVersions(versions) {
         const list = Array.isArray(versions) ? versions : [versions].filter(Boolean);
-        if (list.includes('v2c')) {
-            return ['v2c'];
-        }
-        if (list.includes('v1')) {
-            return ['v1'];
-        }
-        if (list.includes('v3')) {
-            return ['v3'];
-        }
+        if (list.includes('v2c')) return ['v2c'];
+        if (list.includes('v1')) return ['v1'];
+        if (list.includes('v3')) return ['v3'];
         return ['v2c'];
     }
 
@@ -85,13 +90,10 @@ class SnmpApp {
         };
     }
 
-    /**
-     * 保存SNMP配置
-     */
     async handleSaveSnmpConfig(_event, config) {
         try {
             const normalizedConfig = this.normalizeSnmpConfig(config);
-            logger.info('handleSaveSnmpConfig', normalizedConfig);
+            logger.info('SNMP配置已保存');
             this.store.set(this.snmpConfigFileKey, normalizedConfig);
             return successResponse(null, '配置保存成功');
         } catch (error) {
@@ -100,15 +102,10 @@ class SnmpApp {
         }
     }
 
-    /**
-     * 获取SNMP配置
-     */
     async handleGetSnmpConfig() {
         try {
             const config = this.store.get(this.snmpConfigFileKey);
-            if (!config) {
-                return successResponse(null, '获取默认配置');
-            }
+            if (!config) return successResponse(null, '获取默认配置');
             return successResponse(this.normalizeSnmpConfig(config), '配置获取成功');
         } catch (error) {
             logger.error('获取SNMP配置失败:', error);
@@ -116,83 +113,282 @@ class SnmpApp {
         }
     }
 
-    /**
-     * 启动SNMP服务器
-     */
-    async handleStartSnmp(event, config) {
-        const webContents = event.sender;
+    getRuntimeStateSnapshot() {
+        return {
+            running: Boolean(this.worker),
+            ready: Boolean(this.worker && this.snmpReady && !this.snmpStopping),
+            trapRunning: Boolean(this.worker && this.snmpReady && !this.snmpStopping && this.snmpTrapRunning)
+        };
+    }
+
+    emitRuntimeChanged(dispatcher = this.eventDispatcher) {
+        const state = this.getRuntimeStateSnapshot();
+        const signature = JSON.stringify(state);
+        if (signature === this.snmpRuntimeStateSignature) return false;
+        this.snmpRuntimeStateSignature = signature;
+        dispatcher?.emit(SNMP_RUNTIME_CHANGED_EVENT, state);
+        return true;
+    }
+
+    getRuntimeError() {
+        if (!this.worker || !this.snmpReady || this.snmpStopping) {
+            return 'SNMP运行时未启动，请先启动SNMP服务';
+        }
+        return null;
+    }
+
+    async requestSnmp(op, data = null, options = undefined) {
+        const runtimeError = this.getRuntimeError();
+        if (runtimeError) throw new Error(runtimeError);
+        return this.worker.sendRequest(op, data, options);
+    }
+
+    createSnmpProcess(workerPath, options) {
+        return new ProtocolProcessWithPromise(workerPath, options).createLongRunningProcess();
+    }
+
+    cleanupSnmpRuntime(worker, options = {}) {
+        if (this.worker !== worker) return false;
+        const dispatcher = this.eventDispatcher;
+        worker?.removeEventListener?.(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, this.snmpTrapEventHandler);
+        worker?.removeEventListener?.(SnmpConst.SNMP_EVT_TYPES.RUNTIME_EVT, this.snmpRuntimeEventHandler);
+        worker?.removeEventListener?.(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, this.snmpMibProgressEventHandler);
+        this.worker = null;
+        this.snmpReady = false;
+        this.snmpStarting = false;
+        this.snmpStopping = false;
+        this.snmpTrapRunning = false;
+        if (this.snmpTerminateOnlyWorker === worker) this.snmpTerminateOnlyWorker = null;
+        this.emitRuntimeChanged(dispatcher);
+        dispatcher?.cleanup();
+        if (this.eventDispatcher === dispatcher) this.eventDispatcher = null;
+        this.snmpTrapEventHandler = null;
+        this.snmpRuntimeEventHandler = null;
+        this.snmpMibProgressEventHandler = null;
+        this.mibProgressTargets.clear();
+        if (options.closeMonitorWindows !== false) this.closeMonitorWindows();
+        return true;
+    }
+
+    async terminateSnmpWorker(worker) {
+        try {
+            await worker.terminate();
+        } catch (error) {
+            if (this.worker === worker) {
+                this.snmpReady = false;
+                this.snmpTrapRunning = false;
+                this.emitRuntimeChanged();
+            }
+            return error;
+        }
+        this.cleanupSnmpRuntime(worker, { closeMonitorWindows: false });
+        return null;
+    }
+
+    trackLifecycleOperation(propertyName, operation) {
+        let resolveTracked;
+        let rejectTracked;
+        const tracked = new Promise((resolve, reject) => {
+            resolveTracked = resolve;
+            rejectTracked = reject;
+        });
+        this[propertyName] = tracked;
+        let result;
+        try {
+            result = operation();
+        } catch (error) {
+            result = Promise.reject(error);
+        }
+        Promise.resolve(result).then(
+            value => {
+                if (this[propertyName] === tracked) this[propertyName] = null;
+                resolveTracked(value);
+            },
+            error => {
+                if (this[propertyName] === tracked) this[propertyName] = null;
+                rejectTracked(error);
+            }
+        );
+        return tracked;
+    }
+
+    cancelPendingStart() {
+        if (!this.snmpStarting && !this.snmpStartPromise) return false;
+        this.snmpStartGeneration++;
+        this.snmpStopping = true;
+        this.snmpReady = false;
+        this.snmpTrapRunning = false;
+        this.emitRuntimeChanged();
+        return true;
+    }
+
+    handleStartSnmp(event, config = {}) {
+        if (this.snmpStartPromise) return this.snmpStartPromise;
+        if (this.snmpStopPromise || this.snmpStopping) {
+            return Promise.resolve(errorResponse('SNMP运行时正在停止，请稍后重试'));
+        }
+        if (this.worker) return Promise.resolve(errorResponse('SNMP运行时已经启动或进程仍在回收'));
+        return this.trackLifecycleOperation('snmpStartPromise', () => this.startSnmpOperation(event, config));
+    }
+
+    async startSnmpOperation(event, config) {
+        const webContents = event?.sender || null;
+        const generation = ++this.snmpStartGeneration;
+        let worker = null;
+        let startSucceeded = false;
+        this.snmpStarting = true;
+        this.snmpStopping = false;
+        this.snmpReady = false;
+        this.snmpTrapRunning = false;
+        this.snmpRuntimeStateSignature = '';
         try {
             const runtimeConfig = this.normalizeSnmpConfig(config);
-            if (this.worker !== null) {
-                logger.error('SNMP协议已经启动');
-                return errorResponse('SNMP协议已经启动');
-            }
-
-            logger.info(`启动SNMP服务器: ${JSON.stringify(runtimeConfig)}`);
-
-            // 获取日志级别配置
-            if (this.logLevel) {
-                runtimeConfig.logLevel = this.logLevel;
-            }
+            if (this.logLevel) runtimeConfig.logLevel = this.logLevel;
             runtimeConfig.mibFiles = this.getStoredMibFilePaths();
             runtimeConfig.mibCacheFilePath = this.getMibCacheFilePath();
-
+            runtimeConfig.mibProjectRootDir = this.getMibProjectRootDir();
             const workerPath = resolveWorkerPath('snmp/snmpWorker.js');
-
-            const workerFactory = new WorkerWithPromise(workerPath);
-            this.worker = workerFactory.createLongRunningWorker();
-
+            worker = this.createSnmpProcess(workerPath, {
+                serviceName: PROTOCOL_PROCESS_SERVICES.SNMP,
+                onExit: (_code, client, exit = {}) =>
+                    this.cleanupSnmpRuntime(client, { closeMonitorWindows: !exit.expected })
+            });
+            this.worker = worker;
             this.eventDispatcher = new EventDispatcher();
-            this.eventDispatcher.setWebContents(webContents);
-            // 注册事件监听
-            this.snmpTrapEventHandler = data => this.handleSnmpWorkerEvent(data);
-
-            this.worker.addEventListener(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, this.snmpTrapEventHandler);
-
-            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.START_SNMP, runtimeConfig);
-
-            if (result.status === 'success') {
-                logger.info(`SNMP服务器启动成功: ${JSON.stringify(result)}`);
-                return successResponse(null, result.msg);
+            if (webContents) this.eventDispatcher.setWebContents(webContents);
+            this.snmpTrapEventHandler = data => {
+                if (this.worker === worker) this.handleSnmpWorkerEvent(data);
+            };
+            this.snmpRuntimeEventHandler = state => {
+                if (this.worker !== worker || !state) return;
+                this.snmpTrapRunning = Boolean(state.trapRunning);
+                this.emitRuntimeChanged();
+            };
+            this.snmpMibProgressEventHandler = payload => {
+                if (this.worker === worker) this.handleMibCompileProgress(payload);
+            };
+            worker.addEventListener(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, this.snmpTrapEventHandler);
+            worker.addEventListener(SnmpConst.SNMP_EVT_TYPES.RUNTIME_EVT, this.snmpRuntimeEventHandler);
+            worker.addEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, this.snmpMibProgressEventHandler);
+            const result = await worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.START_SNMP, runtimeConfig);
+            startSucceeded = true;
+            if (generation !== this.snmpStartGeneration || this.snmpStopping || this.worker !== worker) {
+                throw new Error('SNMP运行时启动已取消');
             }
-
-            logger.error(`SNMP服务器启动失败: ${result.msg}`);
-            await this.cleanupWorker();
-            return errorResponse(result.msg);
+            this.snmpReady = true;
+            this.emitRuntimeChanged();
+            return successResponse(this.getRuntimeStateSnapshot(), result.msg || 'SNMP运行时启动成功');
         } catch (error) {
-            logger.error('启动SNMP服务器失败:', error);
-            await this.cleanupWorker();
-            return errorResponse('启动SNMP服务器失败: ' + error.message);
+            let finalError = error;
+            this.snmpReady = false;
+            this.snmpTrapRunning = false;
+            this.emitRuntimeChanged();
+            if (worker && this.worker === worker) {
+                const gracefulStopOwnsWorker = startSucceeded && this.snmpStopping;
+                if (!gracefulStopOwnsWorker) {
+                    this.snmpTerminateOnlyWorker = worker;
+                    if (!this.snmpStopping) {
+                        const terminateError = await this.terminateSnmpWorker(worker);
+                        if (terminateError) {
+                            finalError = new Error(
+                                `${error.message}; SNMP进程终止失败，已保留进程句柄以便重试: ${terminateError.message}`
+                            );
+                        }
+                    }
+                }
+            }
+            logger.error('启动SNMP运行时失败:', finalError);
+            return errorResponse('启动SNMP运行时失败: ' + finalError.message);
+        } finally {
+            this.snmpStarting = false;
         }
     }
 
-    /**
-     * 停止SNMP服务器
-     */
-    async handleStopSnmp() {
+    handleStopSnmp() {
+        if (this.snmpStopPromise) return this.snmpStopPromise;
+        if (!this.worker && !this.snmpStarting && !this.snmpStartPromise) {
+            return Promise.resolve(errorResponse('SNMP运行时未启动'));
+        }
+        return this.trackLifecycleOperation('snmpStopPromise', () => this.stopSnmpOperation());
+    }
+
+    async stopSnmpOperation() {
+        const pendingStart = this.snmpStartPromise;
+        const cancelledStart = Boolean(this.snmpStarting || pendingStart);
+        this.closeMonitorWindows();
+        this.snmpStopping = true;
+        this.snmpReady = false;
+        this.snmpTrapRunning = false;
+        this.snmpStartGeneration++;
+        this.emitRuntimeChanged();
+        if (pendingStart) await pendingStart.catch(() => {});
+        const worker = this.worker;
+        if (!worker) {
+            this.snmpStopping = false;
+            return cancelledStart
+                ? successResponse(this.getRuntimeStateSnapshot(), 'SNMP运行时启动已取消')
+                : errorResponse('SNMP运行时未启动');
+        }
+
+        let stopError = null;
+        let stopMessage = cancelledStart ? 'SNMP运行时启动已取消' : 'SNMP运行时停止成功';
+        if (this.snmpTerminateOnlyWorker !== worker) {
+            try {
+                const result = await worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.STOP_SNMP, null, {
+                    timeoutMs: PROTOCOL_PROCESS_TIMEOUTS.STOP
+                });
+                stopMessage = result.msg || stopMessage;
+            } catch (error) {
+                stopError = error;
+                logger.error('停止SNMP运行时失败:', error);
+            }
+        }
+        this.snmpTerminateOnlyWorker = worker;
+        const terminateError = await this.terminateSnmpWorker(worker);
+        if (terminateError) {
+            if (this.worker === worker) this.snmpStopping = false;
+            const details = [stopError?.message, terminateError.message].filter(Boolean).join('; ');
+            return errorResponse(`SNMP进程终止失败，已保留进程句柄以便重试: ${details}`);
+        }
+        this.snmpStopping = false;
+        if (stopError) return errorResponse(stopError.message);
+        return successResponse(this.getRuntimeStateSnapshot(), stopMessage);
+    }
+
+    handleGetSnmpRuntimeState() {
+        return successResponse(this.getRuntimeStateSnapshot(), 'SNMP运行状态获取成功');
+    }
+
+    async handleStartSnmpTrap(_event, config = {}) {
+        try {
+            const result = await this.requestSnmp(SnmpConst.SNMP_REQ_TYPES.START_TRAP, {
+                port: config.port,
+                maxTrapHistory: config.maxTrapHistory
+            });
+            this.snmpTrapRunning = Boolean(result.data?.trapRunning);
+            this.emitRuntimeChanged();
+            return successResponse(this.getRuntimeStateSnapshot(), result.msg || 'SNMP Trap服务启动成功');
+        } catch (error) {
+            logger.error('启动SNMP Trap服务失败:', error);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleStopSnmpTrap() {
         this.closeMonitorWindows();
         try {
-            if (this.worker === null) {
-                logger.error('SNMP服务器未启动');
-                return errorResponse('SNMP服务器未启动');
-            }
-
-            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.STOP_SNMP, null);
-            logger.info(`SNMP服务器停止成功: ${JSON.stringify(result)}`);
-
-            return successResponse(null, result.msg);
+            const result = await this.requestSnmp(SnmpConst.SNMP_REQ_TYPES.STOP_TRAP);
+            this.snmpTrapRunning = false;
+            this.emitRuntimeChanged();
+            return successResponse(this.getRuntimeStateSnapshot(), result.msg || 'SNMP Trap服务停止成功');
         } catch (error) {
-            logger.error('停止SNMP服务器失败:', error);
-            return errorResponse('停止SNMP服务器失败: ' + error.message);
-        } finally {
-            await this.cleanupWorker();
+            logger.error('停止SNMP Trap服务失败:', error);
+            return errorResponse(error.message);
         }
     }
 
     closeMonitorWindows() {
-        if (!this.closeMonitorWindowsHandler) {
-            return;
-        }
+        if (!this.closeMonitorWindowsHandler) return;
         try {
             this.closeMonitorWindowsHandler();
         } catch (error) {
@@ -201,13 +397,8 @@ class SnmpApp {
     }
 
     handleSnmpWorkerEvent(data) {
-        if (!this.eventDispatcher || !data) {
-            return;
-        }
-
+        if (!this.eventDispatcher || !data) return;
         if (data.type === SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_BATCH_RECEIVED) {
-            // 批量变化只用于驱动独立 Trap 窗口刷新。未开窗时不会产生这份 renderer IPC；
-            // 配置页只接收同频率、无 Trap 明细的计数快照。
             this.eventDispatcher.emitToSubscribers('snmp:event', successResponse(data));
             this.eventDispatcher.emitToPrimary(
                 'snmp:event',
@@ -218,7 +409,6 @@ class SnmpApp {
             );
             return;
         }
-
         if (
             data.type === SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_RECEIVED ||
             data.type === SnmpConst.SNMP_SUB_EVT_TYPES.TRAP_PROCESSED ||
@@ -229,35 +419,12 @@ class SnmpApp {
             this.eventDispatcher.emitToSubscribers('snmp:event', successResponse(data));
             return;
         }
-
-        // 服务状态和清空历史属于低频控制事件，需要同步主配置页与已打开的监控窗口。
         this.eventDispatcher.emit('snmp:event', successResponse(data));
     }
 
-    /**
-     * 获取Trap历史列表
-     */
     async handleGetTrapList(_event, query = {}) {
         try {
-            if (this.worker === null) {
-                return successResponse(
-                    {
-                        list: [],
-                        page: Number(query.page) || 1,
-                        pageSize: Number(query.pageSize) || 20,
-                        total: 0,
-                        totalTraps: 0,
-                        historyCount: 0,
-                        todayTraps: 0,
-                        recentTraps: 0,
-                        onlineAgents: 0,
-                        maxTrapHistory: SnmpConst.DEFAULT_SNMP_SETTINGS.maxTrapHistory
-                    },
-                    'SNMP服务器未启动'
-                );
-            }
-
-            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.GET_TRAP_LIST, query);
+            const result = await this.requestSnmp(SnmpConst.SNMP_REQ_TYPES.GET_TRAP_LIST, query);
             return successResponse(result.data || [], result.msg || '获取Trap列表成功');
         } catch (error) {
             logger.error('获取Trap列表失败:', error);
@@ -265,16 +432,9 @@ class SnmpApp {
         }
     }
 
-    /**
-     * 清空Trap历史
-     */
     async handleClearTrapHistory() {
         try {
-            if (this.worker === null) {
-                return successResponse(null, 'SNMP服务器未启动');
-            }
-
-            const result = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.CLEAR_TRAP_HISTORY, null);
+            const result = await this.requestSnmp(SnmpConst.SNMP_REQ_TYPES.CLEAR_TRAP_HISTORY);
             return successResponse(null, result.msg || 'Trap历史已清空');
         } catch (error) {
             logger.error('清空Trap历史失败:', error);
@@ -298,11 +458,9 @@ class SnmpApp {
     async handleSelectMibFiles(event) {
         try {
             const result = await this.showMibOpenDialog(event);
-
             if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
                 return successResponse([], '已取消选择');
             }
-
             return successResponse(result.filePaths, 'MIB文件选择成功');
         } catch (error) {
             logger.error('选择MIB文件失败:', error);
@@ -312,17 +470,12 @@ class SnmpApp {
 
     async handleSelectMibDirectory(event) {
         try {
-            const options = {
-                title: '导入 MIB 目录',
-                properties: ['openDirectory']
-            };
+            const options = { title: '导入 MIB 目录', properties: ['openDirectory'] };
             const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
             const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
-
             if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
                 return successResponse(null, '已取消选择');
             }
-
             return successResponse(result.filePaths[0], 'MIB目录选择成功');
         } catch (error) {
             logger.error('选择MIB目录失败:', error);
@@ -340,37 +493,13 @@ class SnmpApp {
                   };
             const selectedFiles = this.normalizeFilePaths(request.filePaths);
             const requestedFiles = selectedFiles.length > 0 ? selectedFiles : this.getStoredMibFilePaths();
-            const result = await this.sendMibWorkerRequestWithProgress(
-                event,
-                SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS,
-                {
-                    filePaths: requestedFiles,
-                    cacheFilePath: this.getMibCacheFilePath(),
-                    force: request.force
-                },
-                async (workerResult, reportProgress) => {
-                    this.store.set(this.snmpMibFilesKey, requestedFiles);
-
-                    if (this.worker) {
-                        reportProgress({
-                            phase: 'syncing',
-                            percent: 99,
-                            filePath: '',
-                            fileName: '',
-                            fileStatus: '',
-                            message: '正在同步运行中的 SNMP 服务'
-                        });
-                        const workerSyncResult = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, {
-                            filePaths: requestedFiles,
-                            cacheFilePath: this.getMibCacheFilePath()
-                        });
-                        workerResult.data.worker = workerSyncResult.data;
-                    }
-                }
-            );
-            const summary = result.data;
-
-            return successResponse(summary, 'MIB编译完成');
+            const result = await this.requestMibWithProgress(event, SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS, {
+                filePaths: requestedFiles,
+                cacheFilePath: this.getMibCacheFilePath(),
+                force: request.force
+            });
+            this.store.set(this.snmpMibFilesKey, requestedFiles);
+            return successResponse(result.data, result.msg || 'MIB编译完成');
         } catch (error) {
             logger.error('MIB编译失败:', error);
             return errorResponse('MIB编译失败: ' + error.message);
@@ -379,15 +508,13 @@ class SnmpApp {
 
     async handleGetMibStatus(event) {
         try {
-            const storedFiles = this.getStoredMibFilePaths();
-            const result = await this.sendMibWorkerRequestWithProgress(
+            const result = await this.requestMibWithProgress(
                 event,
                 SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS,
                 {
-                    requestedFiles: storedFiles,
+                    requestedFiles: this.getStoredMibFilePaths(),
                     cacheFilePath: this.getMibCacheFilePath()
                 },
-                undefined,
                 { announceImmediately: false }
             );
             return successResponse(result.data, result.msg || '获取MIB状态成功');
@@ -399,21 +526,12 @@ class SnmpApp {
 
     async handleGetMibSource(_event, request = {}) {
         try {
-            const requestedPath = typeof request === 'string' ? request : request?.filePath;
-            const filePath = await this.resolveAllowedMibSourcePath(requestedPath);
-            const stat = await fs.promises.stat(filePath);
-            if (stat.size > MAX_MIB_SOURCE_PREVIEW_BYTES) {
-                throw new Error('MIB源码文件超过16MB，无法在界面中预览');
-            }
-
-            return successResponse(
-                {
-                    filePath,
-                    fileName: path.basename(filePath),
-                    source: await fs.promises.readFile(filePath, 'utf8')
-                },
-                '获取MIB源码成功'
-            );
+            const result = await this.requestSnmp(SnmpConst.MIB_REQ_TYPES.GET_MIB_SOURCE, {
+                filePath: typeof request === 'string' ? request : request?.filePath,
+                requestedFiles: this.getStoredMibFilePaths(),
+                maxBytes: MAX_MIB_SOURCE_PREVIEW_BYTES
+            });
+            return successResponse(result.data, result.msg || '获取MIB源码成功');
         } catch (error) {
             logger.error('获取MIB源码失败:', error);
             return errorResponse('获取MIB源码失败: ' + error.message);
@@ -421,188 +539,50 @@ class SnmpApp {
     }
 
     async handleGetMibTreeChildren(_event, parentOid = '') {
-        try {
-            const storedFiles = this.getStoredMibFilePaths();
-            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.GET_MIB_TREE_CHILDREN, {
+        return this.handleMibRequest(
+            SnmpConst.MIB_REQ_TYPES.GET_MIB_TREE_CHILDREN,
+            {
                 parentOid,
-                requestedFiles: storedFiles,
+                requestedFiles: this.getStoredMibFilePaths(),
                 cacheFilePath: this.getMibCacheFilePath()
-            });
-            return successResponse(result.data, result.msg || '获取MIB树节点成功');
-        } catch (error) {
-            logger.error('获取MIB树节点失败:', error);
-            return errorResponse('获取MIB树节点失败: ' + error.message);
-        }
+            },
+            '获取MIB树节点成功',
+            '获取MIB树节点失败'
+        );
     }
 
     async handleSaveMibProject(_event, payload = {}) {
-        let projectDir = '';
-        let createdProjectDir = false;
-
-        try {
-            const sourcePaths = this.getStoredMibFilePaths();
-            if (sourcePaths.length === 0) {
-                return errorResponse('请先导入并编译MIB文件');
-            }
-
-            const projectName = this.normalizeMibProjectName(payload.name);
-            if (!projectName) {
-                return errorResponse('请输入工程名');
-            }
-
-            const projectRootDir = this.getMibProjectRootDir();
-            fs.mkdirSync(projectRootDir, { recursive: true });
-            projectDir = path.join(projectRootDir, projectName);
-            if (fs.existsSync(projectDir)) {
-                return errorResponse('工程名已存在，请换一个名称');
-            }
-
-            fs.mkdirSync(projectDir);
-            createdProjectDir = true;
-
-            const summary = await this.ensureCurrentMibCache(sourcePaths);
-            const sourceCache = this.readJsonFile(this.getMibCacheFilePath());
-            if (!sourceCache?.snapshot) {
-                throw new Error('当前MIB编译缓存不可用');
-            }
-
-            const mibsDir = path.join(projectDir, 'mibs');
-            fs.mkdirSync(mibsDir, { recursive: true });
-            const copyResult = this.copyMibProjectSources(sourcePaths, mibsDir);
-            if (copyResult.requestedFiles.length === 0 || copyResult.copiedFileCount === 0) {
-                throw new Error('没有可保存的MIB源文件');
-            }
-
-            const now = new Date().toISOString();
-            const projectCachePath = path.join(projectDir, 'mib-cache.json');
-            const projectCache = this.buildProjectMibCache(sourceCache, copyResult, now);
-            fs.writeFileSync(projectCachePath, JSON.stringify(projectCache), 'utf8');
-
-            const manifest = {
-                version: 1,
-                name: projectName,
-                createdAt: now,
-                updatedAt: now,
-                sourceRoots: sourcePaths,
-                requestedFiles: copyResult.requestedFiles,
-                cacheFile: 'mib-cache.json',
-                fileCount: copyResult.copiedFileCount,
-                modules: Array.isArray(summary.modules) ? summary.modules : [],
-                totalObjects: Number(summary.totalObjects) || 0
-            };
-            fs.writeFileSync(path.join(projectDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
-
-            return successResponse(
-                {
-                    project: {
-                        ...manifest,
-                        directory: projectDir
-                    },
-                    summary
-                },
-                'MIB工程保存成功'
-            );
-        } catch (error) {
-            logger.error('保存MIB工程失败:', error);
-            if (createdProjectDir && projectDir) {
-                try {
-                    fs.rmSync(projectDir, { recursive: true, force: true });
-                } catch (cleanupError) {
-                    logger.warn('清理失败的MIB工程目录失败:', cleanupError.message);
-                }
-            }
-            return errorResponse('保存MIB工程失败: ' + error.message);
-        }
+        return this.handleMibRequest(
+            SnmpConst.MIB_REQ_TYPES.SAVE_MIB_PROJECT,
+            {
+                name: payload.name,
+                requestedFiles: this.getStoredMibFilePaths(),
+                cacheFilePath: this.getMibCacheFilePath(),
+                projectRootDir: this.getMibProjectRootDir()
+            },
+            'MIB工程保存成功',
+            '保存MIB工程失败'
+        );
     }
 
     async handleListMibProjects() {
-        try {
-            const rootDir = this.getMibProjectRootDir();
-            if (!fs.existsSync(rootDir)) {
-                return successResponse({ rootDir, projects: [] }, '暂无MIB工程');
-            }
-
-            const projects = fs
-                .readdirSync(rootDir, { withFileTypes: true })
-                .filter(entry => entry.isDirectory())
-                .map(entry => {
-                    const projectDir = path.join(rootDir, entry.name);
-                    try {
-                        const manifest = this.readMibProjectManifest(projectDir);
-                        return this.formatMibProjectRecord(manifest, projectDir);
-                    } catch (error) {
-                        logger.warn(`忽略无效MIB工程 ${projectDir}:`, error.message);
-                        return null;
-                    }
-                })
-                .filter(Boolean)
-                .sort((left, right) => {
-                    const leftTime = Date.parse(left.updatedAt || left.createdAt || '') || 0;
-                    const rightTime = Date.parse(right.updatedAt || right.createdAt || '') || 0;
-                    return rightTime - leftTime;
-                });
-
-            return successResponse({ rootDir, projects }, 'MIB工程列表获取成功');
-        } catch (error) {
-            logger.error('获取MIB工程列表失败:', error);
-            return errorResponse('获取MIB工程列表失败: ' + error.message);
-        }
+        return this.handleMibRequest(
+            SnmpConst.MIB_REQ_TYPES.LIST_MIB_PROJECTS,
+            { projectRootDir: this.getMibProjectRootDir() },
+            'MIB工程列表获取成功',
+            '获取MIB工程列表失败'
+        );
     }
 
     async handleImportMibProject(_event, payload = {}) {
         try {
-            const projectName = this.normalizeMibProjectName(payload.name || payload.projectName);
-            if (!projectName) {
-                return errorResponse('请选择要导入的工程');
-            }
-
-            const projectDir = path.join(this.getMibProjectRootDir(), projectName);
-            const manifest = this.readMibProjectManifest(projectDir);
-            const requestedFiles = this.normalizeFilePaths(manifest.requestedFiles).filter(filePath =>
-                fs.existsSync(filePath)
-            );
-            if (requestedFiles.length === 0) {
-                return errorResponse('工程内没有可用的MIB源文件');
-            }
-
-            const projectCachePath = path.join(projectDir, manifest.cacheFile || 'mib-cache.json');
-            if (!fs.existsSync(projectCachePath)) {
-                return errorResponse('工程编译缓存不存在');
-            }
-
-            const globalCachePath = this.getMibCacheFilePath();
-            fs.mkdirSync(path.dirname(globalCachePath), { recursive: true });
-            fs.copyFileSync(projectCachePath, globalCachePath);
-            this.store.set(this.snmpMibFilesKey, requestedFiles);
-
-            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS, {
-                requestedFiles,
-                cacheFilePath: globalCachePath
+            const result = await this.requestSnmp(SnmpConst.MIB_REQ_TYPES.IMPORT_MIB_PROJECT, {
+                name: payload.name || payload.projectName,
+                cacheFilePath: this.getMibCacheFilePath(),
+                projectRootDir: this.getMibProjectRootDir()
             });
-            if (result.status !== 'success') {
-                throw new Error(result.msg || '工程MIB缓存加载失败');
-            }
-
-            const summary = result.data || {};
-            if (!summary.cacheHit && fs.existsSync(globalCachePath)) {
-                fs.copyFileSync(globalCachePath, projectCachePath);
-            }
-
-            if (this.worker) {
-                const workerResult = await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, {
-                    filePaths: requestedFiles,
-                    cacheFilePath: globalCachePath
-                });
-                summary.worker = workerResult.data;
-            }
-
-            return successResponse(
-                {
-                    project: this.formatMibProjectRecord(manifest, projectDir),
-                    summary
-                },
-                'MIB工程导入成功'
-            );
+            this.store.set(this.snmpMibFilesKey, this.normalizeFilePaths(result.data?.requestedFiles));
+            return successResponse(result.data, result.msg || 'MIB工程导入成功');
         } catch (error) {
             logger.error('导入MIB工程失败:', error);
             return errorResponse('导入MIB工程失败: ' + error.message);
@@ -611,19 +591,10 @@ class SnmpApp {
 
     async handleClearMibs() {
         try {
-            this.store.set(this.snmpMibFilesKey, []);
-            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.CLEAR_MIBS, {
+            const result = await this.requestSnmp(SnmpConst.MIB_REQ_TYPES.CLEAR_MIBS, {
                 cacheFilePath: this.getMibCacheFilePath()
             });
-
-            if (this.worker) {
-                await this.worker.sendRequest(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, {
-                    filePaths: [],
-                    cacheFilePath: this.getMibCacheFilePath(),
-                    force: true
-                });
-            }
-
+            this.store.set(this.snmpMibFilesKey, []);
             return successResponse(result.data, result.msg || 'MIB配置已清空');
         } catch (error) {
             logger.error('清空MIB配置失败:', error);
@@ -632,947 +603,81 @@ class SnmpApp {
     }
 
     async handleTranslateOid(_event, oid) {
-        try {
-            const storedFiles = this.getStoredMibFilePaths();
-            const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.TRANSLATE_OID, {
+        return this.handleMibRequest(
+            SnmpConst.MIB_REQ_TYPES.TRANSLATE_OID,
+            {
                 oid,
-                requestedFiles: storedFiles,
+                requestedFiles: this.getStoredMibFilePaths(),
                 cacheFilePath: this.getMibCacheFilePath()
-            });
-            return successResponse(result.data, result.msg || 'OID解析成功');
-        } catch (error) {
-            logger.error('OID解析失败:', error);
-            return errorResponse('OID解析失败: ' + error.message);
-        }
+            },
+            'OID解析成功',
+            'OID解析失败'
+        );
     }
 
-    async handleSendGetRequest(_event, request = {}) {
-        let session = null;
+    async handleMibRequest(op, data, successMessage, errorMessage) {
         try {
-            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
-            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
-            const oid = String(request.oid || '').trim();
-            const version = this.getConfiguredSessionVersion(storedConfig);
-            const community = storedConfig.community || 'public';
-            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
-
-            if (!targetHost) {
-                return errorResponse('请输入目标地址');
-            }
-
-            if (!oid) {
-                return errorResponse('请输入GET OID');
-            }
-
-            const snmpVersion = this.getSessionVersion(version);
-            if (snmpVersion === null) {
-                return errorResponse('当前GET发送暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
-            }
-
-            session = snmp.createSession(targetHost, community, {
-                port,
-                version: snmpVersion,
-                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
-                retries: Number(request.retries) || 0
-            });
-
-            const varbinds = await this.sendGetOids(session, [oid]);
-            const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
-            if (firstError) {
-                return errorResponse('GET失败: ' + snmp.varbindError(firstError));
-            }
-
-            return successResponse(
-                {
-                    targetHost,
-                    targetPort: port,
-                    version,
-                    varbinds: varbinds.map(varbind => this.formatSessionVarbind(varbind))
-                },
-                'GET查询成功'
-            );
+            const result = await this.requestSnmp(op, data);
+            return successResponse(result.data, result.msg || successMessage);
         } catch (error) {
-            logger.error('发送SNMP GET失败:', error);
-            return errorResponse('发送SNMP GET失败: ' + error.message);
-        } finally {
-            if (session) {
-                try {
-                    session.close();
-                } catch (error) {
-                    logger.warn('关闭SNMP GET会话失败:', error.message);
-                }
-            }
+            logger.error(`${errorMessage}:`, error);
+            return errorResponse(`${errorMessage}: ${error.message}`);
         }
     }
 
-    async handleSendGetNextRequest(_event, request = {}) {
-        let session = null;
+    async handleQueryRequest(op, request, successMessage, errorMessage) {
         try {
-            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
-            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
-            const oid = String(request.oid || '').trim();
-            const version = this.getConfiguredSessionVersion(storedConfig);
-            const community = storedConfig.community || 'public';
-            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
-
-            if (!targetHost) {
-                return errorResponse('请输入目标地址');
-            }
-
-            if (!oid) {
-                return errorResponse('请输入GET-NEXT OID');
-            }
-
-            const snmpVersion = this.getSessionVersion(version);
-            if (snmpVersion === null) {
-                return errorResponse('当前GET-NEXT发送暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
-            }
-
-            session = snmp.createSession(targetHost, community, {
-                port,
-                version: snmpVersion,
-                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
-                retries: Number(request.retries) || 0
-            });
-
-            const varbinds = await this.sendGetNextOids(session, [oid]);
-            const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
-            if (firstError) {
-                return errorResponse('GET-NEXT失败: ' + snmp.varbindError(firstError));
-            }
-
-            return successResponse(
-                {
-                    targetHost,
-                    targetPort: port,
-                    version,
-                    varbinds: varbinds.map(varbind => this.formatSessionVarbind(varbind))
-                },
-                'GET-NEXT查询成功'
-            );
+            // 查询目标、版本和认证信息已经在 START_SNMP 时固化到 Utility Process；
+            // 单次调用只转发 OID、超时、重试等请求参数，主进程不再参与 session 配置。
+            const result = await this.requestSnmp(op, request);
+            return successResponse(result.data, result.msg || successMessage);
         } catch (error) {
-            logger.error('发送SNMP GET-NEXT失败:', error);
-            return errorResponse('发送SNMP GET-NEXT失败: ' + error.message);
-        } finally {
-            if (session) {
-                try {
-                    session.close();
-                } catch (error) {
-                    logger.warn('关闭SNMP GET-NEXT会话失败:', error.message);
-                }
-            }
+            logger.error(`${errorMessage}:`, error);
+            return errorResponse(`${errorMessage}: ${error.message}`);
         }
     }
 
-    async handleSendSetRequest(_event, request = {}) {
-        let session = null;
-        try {
-            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
-            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
-            const oid = String(request.oid || '').trim();
-            const version = this.getConfiguredSessionVersion(storedConfig);
-            const community = storedConfig.community || 'public';
-            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
-
-            if (!targetHost) {
-                return errorResponse('请输入目标地址');
-            }
-
-            if (!oid) {
-                return errorResponse('请输入SET OID');
-            }
-
-            const snmpVersion = this.getSessionVersion(version);
-            if (snmpVersion === null) {
-                return errorResponse('当前SET发送暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
-            }
-
-            const objectType = this.getSetObjectType(request.type);
-            const value = this.castSetValue(objectType, request.value);
-
-            session = snmp.createSession(targetHost, community, {
-                port,
-                version: snmpVersion,
-                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
-                retries: Number(request.retries) || 0
-            });
-
-            const varbinds = await this.sendSetVarbinds(session, [
-                {
-                    oid,
-                    type: objectType,
-                    value
-                }
-            ]);
-            const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
-            if (firstError) {
-                return errorResponse('SET失败: ' + snmp.varbindError(firstError));
-            }
-
-            return successResponse(
-                {
-                    targetHost,
-                    targetPort: port,
-                    version,
-                    varbinds: varbinds.map(varbind => this.formatSessionVarbind(varbind))
-                },
-                'SET发送成功'
-            );
-        } catch (error) {
-            logger.error('发送SNMP SET失败:', error);
-            return errorResponse('发送SNMP SET失败: ' + error.message);
-        } finally {
-            if (session) {
-                try {
-                    session.close();
-                } catch (error) {
-                    logger.warn('关闭SNMP SET会话失败:', error.message);
-                }
-            }
-        }
+    handleSendGetRequest(_event, request = {}) {
+        return this.handleQueryRequest(SnmpConst.SNMP_REQ_TYPES.SEND_GET_REQUEST, request, 'GET查询成功', '发送SNMP GET失败');
     }
 
-    async handleSendWalkRequest(_event, request = {}) {
-        let session = null;
-        try {
-            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
-            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
-            const baseOid = String(request.oid || '')
-                .trim()
-                .replace(/\.$/, '');
-            const version = this.getConfiguredSessionVersion(storedConfig);
-            const community = storedConfig.community || 'public';
-            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
-            const limit = Math.max(1, Math.min(Number(request.limit) || 100, 1000));
-            const maxRepetitions = Math.max(1, Math.min(Number(request.maxRepetitions) || 20, 50));
-
-            if (!targetHost) {
-                return errorResponse('请输入目标地址');
-            }
-
-            if (!baseOid) {
-                return errorResponse('请输入WALK起始OID');
-            }
-
-            const snmpVersion = this.getSessionVersion(version);
-            if (snmpVersion === null) {
-                return errorResponse('当前WALK暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
-            }
-
-            session = snmp.createSession(targetHost, community, {
-                port,
-                version: snmpVersion,
-                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
-                retries: Number(request.retries) || 0
-            });
-
-            const summary =
-                version === 'v2c'
-                    ? await this.listOidInstancesWithBulk(session, baseOid, limit, maxRepetitions)
-                    : await this.listOidInstancesWithGetNext(session, baseOid, limit);
-
-            return successResponse(
-                {
-                    targetHost,
-                    targetPort: port,
-                    version,
-                    baseOid,
-                    limit,
-                    maxRepetitions,
-                    ...summary
-                },
-                'WALK查询完成'
-            );
-        } catch (error) {
-            logger.error('发送SNMP WALK失败:', error);
-            return errorResponse('发送SNMP WALK失败: ' + error.message);
-        } finally {
-            if (session) {
-                try {
-                    session.close();
-                } catch (error) {
-                    logger.warn('关闭SNMP WALK会话失败:', error.message);
-                }
-            }
-        }
+    handleSendGetNextRequest(_event, request = {}) {
+        return this.handleQueryRequest(
+            SnmpConst.SNMP_REQ_TYPES.SEND_GET_NEXT_REQUEST,
+            request,
+            'GET-NEXT查询成功',
+            '发送SNMP GET-NEXT失败'
+        );
     }
 
-    async handleListOidInstances(_event, request = {}) {
-        let session = null;
-        try {
-            const storedConfig = this.normalizeSnmpConfig(this.store.get(this.snmpConfigFileKey) || {});
-            const targetHost = String(storedConfig.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
-            const baseOid = String(request.oid || '')
-                .trim()
-                .replace(/\.$/, '');
-            const version = this.getConfiguredSessionVersion(storedConfig);
-            const community = storedConfig.community || 'public';
-            const port = Number(storedConfig.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
-            const limit = Math.max(1, Math.min(Number(request.limit) || 100, 500));
-            const maxRepetitions = Math.max(1, Math.min(Number(request.maxRepetitions) || 20, 50));
-
-            if (!targetHost) {
-                return errorResponse('请输入目标地址');
-            }
-
-            if (!baseOid) {
-                return errorResponse('请输入实例枚举OID');
-            }
-
-            const snmpVersion = this.getSessionVersion(version);
-            if (snmpVersion === null) {
-                return errorResponse('当前实例枚举暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c');
-            }
-
-            session = snmp.createSession(targetHost, community, {
-                port,
-                version: snmpVersion,
-                timeout: Number(request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
-                retries: Number(request.retries) || 0
-            });
-
-            const summary =
-                version === 'v2c'
-                    ? await this.listOidInstancesWithBulk(session, baseOid, limit, maxRepetitions)
-                    : await this.listOidInstancesWithGetNext(session, baseOid, limit);
-
-            return successResponse(
-                {
-                    targetHost,
-                    targetPort: port,
-                    version,
-                    baseOid,
-                    limit,
-                    maxRepetitions,
-                    ...summary
-                },
-                '实例枚举完成'
-            );
-        } catch (error) {
-            logger.error('枚举SNMP实例失败:', error);
-            return errorResponse('枚举SNMP实例失败: ' + error.message);
-        } finally {
-            if (session) {
-                try {
-                    session.close();
-                } catch (error) {
-                    logger.warn('关闭SNMP实例枚举会话失败:', error.message);
-                }
-            }
-        }
+    handleSendWalkRequest(_event, request = {}) {
+        return this.handleQueryRequest(
+            SnmpConst.SNMP_REQ_TYPES.SEND_WALK_REQUEST,
+            request,
+            'WALK查询完成',
+            '发送SNMP WALK失败'
+        );
     }
 
-    sendGetOids(session, oids) {
-        return new Promise((resolve, reject) => {
-            session.get(oids, (error, result) => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
-                resolve(result || []);
-            });
-        });
+    handleSendSetRequest(_event, request = {}) {
+        return this.handleQueryRequest(SnmpConst.SNMP_REQ_TYPES.SEND_SET_REQUEST, request, 'SET发送成功', '发送SNMP SET失败');
     }
 
-    sendGetNextOids(session, oids) {
-        return new Promise((resolve, reject) => {
-            session.getNext(oids, (error, result) => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
-                resolve(result || []);
-            });
-        });
-    }
-
-    sendGetBulkOids(session, oids, nonRepeaters, maxRepetitions) {
-        return new Promise((resolve, reject) => {
-            session.getBulk(oids, nonRepeaters, maxRepetitions, (error, result) => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
-                resolve(result || []);
-            });
-        });
-    }
-
-    sendSetVarbinds(session, varbinds) {
-        return new Promise((resolve, reject) => {
-            session.set(varbinds, (error, result) => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
-                resolve(result || []);
-            });
-        });
-    }
-
-    async listOidInstancesWithGetNext(session, baseOid, limit) {
-        const rows = [];
-        let currentOid = baseOid;
-        let stoppedBy = 'endOfSubtree';
-
-        while (rows.length < limit) {
-            const varbinds = await this.sendGetNextOids(session, [currentOid]);
-            const varbind = varbinds[0];
-            const result = this.acceptInstanceVarbind(baseOid, currentOid, varbind);
-            if (!result.accepted) {
-                stoppedBy = result.reason;
-                break;
-            }
-
-            rows.push(result.row);
-            currentOid = varbind.oid;
-        }
-
-        return {
-            rows,
-            stoppedBy: rows.length >= limit ? 'limit' : stoppedBy,
-            limitReached: rows.length >= limit
-        };
-    }
-
-    async listOidInstancesWithBulk(session, baseOid, limit, maxRepetitions) {
-        const rows = [];
-        let currentOid = baseOid;
-        let stoppedBy = 'endOfSubtree';
-
-        while (rows.length < limit) {
-            const groups = await this.sendGetBulkOids(
-                session,
-                [currentOid],
-                0,
-                Math.min(maxRepetitions, limit - rows.length)
-            );
-            const varbinds = Array.isArray(groups[0]) ? groups[0] : groups;
-            if (!Array.isArray(varbinds) || varbinds.length === 0) {
-                stoppedBy = 'emptyResponse';
-                break;
-            }
-
-            let acceptedCount = 0;
-            for (const varbind of varbinds) {
-                const result = this.acceptInstanceVarbind(baseOid, currentOid, varbind);
-                if (!result.accepted) {
-                    stoppedBy = result.reason;
-                    return {
-                        rows,
-                        stoppedBy,
-                        limitReached: false
-                    };
-                }
-
-                rows.push(result.row);
-                currentOid = varbind.oid;
-                acceptedCount++;
-
-                if (rows.length >= limit) {
-                    break;
-                }
-            }
-
-            if (acceptedCount === 0) {
-                stoppedBy = 'emptyResponse';
-                break;
-            }
-        }
-
-        return {
-            rows,
-            stoppedBy: rows.length >= limit ? 'limit' : stoppedBy,
-            limitReached: rows.length >= limit
-        };
-    }
-
-    acceptInstanceVarbind(baseOid, previousOid, varbind) {
-        if (!varbind) {
-            return {
-                accepted: false,
-                reason: 'emptyResponse'
-            };
-        }
-
-        if (snmp.isVarbindError(varbind)) {
-            return {
-                accepted: false,
-                reason: snmp.varbindError(varbind) || 'varbindError'
-            };
-        }
-
-        if (!this.isOidInSubtree(baseOid, varbind.oid)) {
-            return {
-                accepted: false,
-                reason: 'endOfSubtree'
-            };
-        }
-
-        if (this.compareOids(varbind.oid, previousOid) <= 0) {
-            return {
-                accepted: false,
-                reason: 'nonIncreasingOid'
-            };
-        }
-
-        return {
-            accepted: true,
-            row: {
-                ...this.formatSessionVarbind(varbind),
-                instance: this.getOidInstanceSuffix(baseOid, varbind.oid)
-            }
-        };
-    }
-
-    isOidInSubtree(baseOid, oid) {
-        return oid === baseOid || String(oid || '').startsWith(`${baseOid}.`);
-    }
-
-    getOidInstanceSuffix(baseOid, oid) {
-        if (!this.isOidInSubtree(baseOid, oid) || oid === baseOid) {
-            return '';
-        }
-        return String(oid).slice(baseOid.length + 1);
-    }
-
-    compareOids(left, right) {
-        const leftParts = String(left || '')
-            .split('.')
-            .map(Number);
-        const rightParts = String(right || '')
-            .split('.')
-            .map(Number);
-        const length = Math.max(leftParts.length, rightParts.length);
-
-        for (let index = 0; index < length; index++) {
-            const leftValue = leftParts[index] ?? -1;
-            const rightValue = rightParts[index] ?? -1;
-            if (leftValue !== rightValue) {
-                return leftValue - rightValue;
-            }
-        }
-
-        return 0;
-    }
-
-    formatSessionVarbind(varbind) {
-        const shouldFormatValue = Buffer.isBuffer(varbind.value) || typeof varbind.value === 'bigint';
-        const formattedValue = shouldFormatValue ? formatSnmpValue(varbind.value) : { value: varbind.value };
-        return {
-            oid: varbind.oid,
-            type: snmp.ObjectType[varbind.type] || varbind.type,
-            ...formattedValue
-        };
-    }
-
-    getSessionVersion(version) {
-        const versionMap = {
-            v1: snmp.Version1,
-            v2c: snmp.Version2c
-        };
-        return versionMap[version] ?? null;
-    }
-
-    getConfiguredSessionVersion(config = {}) {
-        const versions = Array.isArray(config.supportedVersions) ? config.supportedVersions : [];
-        if (versions.length === 0 || !versions[0]) {
-            return 'v2c';
-        }
-        return ['v1', 'v2c'].includes(versions[0]) ? versions[0] : '';
-    }
-
-    getSetObjectType(type = '') {
-        const normalized = String(type || '')
-            .replace(/[\s_-]+/g, '')
-            .toLowerCase();
-        const typeMap = {
-            integer: snmp.ObjectType.Integer,
-            integer32: snmp.ObjectType.Integer,
-            boolean: snmp.ObjectType.Integer,
-            truthvalue: snmp.ObjectType.Integer,
-            rowstatus: snmp.ObjectType.Integer,
-            octetstring: snmp.ObjectType.OctetString,
-            displaystring: snmp.ObjectType.OctetString,
-            string: snmp.ObjectType.OctetString,
-            objectidentifier: snmp.ObjectType.OID,
-            oid: snmp.ObjectType.OID,
-            ipaddress: snmp.ObjectType.IpAddress,
-            counter: snmp.ObjectType.Counter,
-            counter32: snmp.ObjectType.Counter,
-            gauge: snmp.ObjectType.Gauge,
-            gauge32: snmp.ObjectType.Gauge,
-            unsigned32: snmp.ObjectType.Gauge,
-            timeticks: snmp.ObjectType.TimeTicks,
-            counter64: snmp.ObjectType.Counter64
-        };
-
-        const objectType = typeMap[normalized];
-        if (!objectType) {
-            throw new Error(`不支持的SET类型: ${type || '-'}`);
-        }
-        return objectType;
-    }
-
-    castSetValue(objectType, value) {
-        if (value === null || value === undefined || value === '') {
-            throw new Error('请输入SET值');
-        }
-
-        if (
-            [
-                snmp.ObjectType.Integer,
-                snmp.ObjectType.Counter,
-                snmp.ObjectType.Gauge,
-                snmp.ObjectType.TimeTicks,
-                snmp.ObjectType.Counter64
-            ].includes(objectType)
-        ) {
-            const numberValue = Number(value);
-            if (!Number.isFinite(numberValue)) {
-                throw new Error('数值类型必须输入数字');
-            }
-            return numberValue;
-        }
-
-        return String(value);
-    }
-
-    async ensureCurrentMibCache(sourcePaths) {
-        const result = await this.sendMibWorkerRequest(SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS, {
-            requestedFiles: sourcePaths,
-            cacheFilePath: this.getMibCacheFilePath()
-        });
-        if (result.status !== 'success') {
-            throw new Error(result.msg || '当前MIB缓存生成失败');
-        }
-        return result.data || {};
+    handleListOidInstances(_event, request = {}) {
+        return this.handleQueryRequest(
+            SnmpConst.SNMP_REQ_TYPES.LIST_OID_INSTANCES,
+            request,
+            '实例枚举完成',
+            '枚举SNMP实例失败'
+        );
     }
 
     getMibProjectRootDir() {
         return path.join(app.getPath('userData'), 'snmp-mib-projects');
     }
 
-    normalizeMibProjectName(name = '') {
-        return String(name || '')
-            .trim()
-            .replace(/[\\/:*?"<>|]/g, '_')
-            .replace(/\s+/g, '_')
-            .replace(/^\.+/, '')
-            .slice(0, 80);
-    }
-
-    sanitizePathName(name = '') {
-        const safeName = String(name || 'mib')
-            .trim()
-            .replace(/[\\/:*?"<>|]/g, '_')
-            .replace(/^\.+$/, '_');
-        return safeName || 'mib';
-    }
-
-    readJsonFile(filePath) {
-        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    }
-
-    readMibProjectManifest(projectDir) {
-        const manifestPath = path.join(projectDir, 'manifest.json');
-        if (!fs.existsSync(manifestPath)) {
-            throw new Error('工程清单不存在');
-        }
-
-        const manifest = this.readJsonFile(manifestPath);
-        if (!manifest || manifest.version !== 1 || !manifest.name) {
-            throw new Error('工程清单格式无效');
-        }
-
-        return manifest;
-    }
-
-    formatMibProjectRecord(manifest, projectDir) {
-        return {
-            name: manifest.name,
-            projectName: manifest.name,
-            directory: projectDir,
-            createdAt: manifest.createdAt || '',
-            updatedAt: manifest.updatedAt || manifest.createdAt || '',
-            fileCount: Number(manifest.fileCount) || 0,
-            moduleCount: Array.isArray(manifest.modules) ? manifest.modules.length : 0,
-            modules: Array.isArray(manifest.modules) ? manifest.modules : [],
-            totalObjects: Number(manifest.totalObjects) || 0
-        };
-    }
-
-    copyMibProjectSources(sourcePaths, mibsDir) {
-        const requestedFiles = [];
-        const filePathMap = new Map();
-        const usedRootNames = new Set();
-        let copiedFileCount = 0;
-
-        sourcePaths.forEach(sourcePath => {
-            const stat = fs.statSync(sourcePath);
-            const targetName = this.getUniqueTargetName(mibsDir, path.basename(sourcePath), usedRootNames);
-            const targetPath = path.join(mibsDir, targetName);
-
-            if (stat.isFile()) {
-                if (!this.isMibCandidateFile(sourcePath)) {
-                    return;
-                }
-
-                fs.copyFileSync(sourcePath, targetPath);
-                requestedFiles.push(targetPath);
-                filePathMap.set(sourcePath, targetPath);
-                copiedFileCount++;
-                return;
-            }
-
-            if (stat.isDirectory()) {
-                fs.mkdirSync(targetPath, { recursive: true });
-                const directoryFileCount = this.copyMibDirectoryFiles(sourcePath, targetPath, filePathMap);
-                if (directoryFileCount > 0) {
-                    requestedFiles.push(targetPath);
-                    copiedFileCount += directoryFileCount;
-                } else {
-                    fs.rmSync(targetPath, { recursive: true, force: true });
-                }
-                return;
-            }
-
-            throw new Error(`不是文件或目录: ${sourcePath}`);
-        });
-
-        return {
-            requestedFiles: this.normalizeFilePaths(requestedFiles),
-            filePathMap,
-            copiedFileCount
-        };
-    }
-
-    copyMibDirectoryFiles(sourceDir, targetDir, filePathMap) {
-        let copiedFileCount = 0;
-        const usedNames = new Set();
-        const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
-
-        entries.forEach(entry => {
-            if (entry.name.startsWith('.')) {
-                return;
-            }
-
-            const sourcePath = path.join(sourceDir, entry.name);
-            const targetName = this.getUniqueTargetName(targetDir, entry.name, usedNames);
-            const targetPath = path.join(targetDir, targetName);
-
-            if (entry.isDirectory()) {
-                fs.mkdirSync(targetPath, { recursive: true });
-                const directoryFileCount = this.copyMibDirectoryFiles(sourcePath, targetPath, filePathMap);
-                if (directoryFileCount === 0) {
-                    fs.rmSync(targetPath, { recursive: true, force: true });
-                    return;
-                }
-
-                copiedFileCount += directoryFileCount;
-                return;
-            }
-
-            if (!entry.isFile() || !this.isMibCandidateFile(sourcePath)) {
-                return;
-            }
-
-            fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-            fs.copyFileSync(sourcePath, targetPath);
-            filePathMap.set(sourcePath, targetPath);
-            copiedFileCount++;
-        });
-
-        return copiedFileCount;
-    }
-
-    getUniqueTargetName(parentDir, rawName, usedNames) {
-        const safeName = this.sanitizePathName(rawName);
-        const parsed = path.parse(safeName);
-        let candidate = safeName;
-        let counter = 2;
-
-        while (usedNames.has(candidate.toLowerCase()) || fs.existsSync(path.join(parentDir, candidate))) {
-            candidate = `${parsed.name}_${counter}${parsed.ext}`;
-            counter++;
-        }
-
-        usedNames.add(candidate.toLowerCase());
-        return candidate;
-    }
-
-    buildProjectMibCache(sourceCache, copyResult, createdAt) {
-        const snapshot = sourceCache.snapshot || {};
-        const requestedFiles = copyResult.requestedFiles;
-        const expandedFiles = this.expandMibInputPaths(requestedFiles);
-
-        return {
-            version: sourceCache.version || 1,
-            createdAt,
-            requestedFiles,
-            fileSignatures: this.getMibFileSignatures(expandedFiles),
-            snapshot: {
-                ...snapshot,
-                requestedFiles,
-                loadedFiles: this.remapMibFilePaths(snapshot.loadedFiles || [], copyResult.filePathMap),
-                failedFiles: this.remapMibFailedFiles(snapshot.failedFiles || [], copyResult.filePathMap)
-            }
-        };
-    }
-
-    remapMibFilePaths(filePaths = [], filePathMap) {
-        return this.normalizeFilePaths(filePaths.map(filePath => filePathMap.get(filePath) || filePath)).filter(
-            filePath => fs.existsSync(filePath)
-        );
-    }
-
-    remapMibFailedFiles(failedFiles = [], filePathMap) {
-        if (!Array.isArray(failedFiles)) {
-            return [];
-        }
-
-        return failedFiles.map(file => {
-            const sourcePath = typeof file === 'string' ? file : file.filePath;
-            if (!sourcePath) {
-                return {
-                    ...(typeof file === 'object' && file ? file : {}),
-                    filePath: '',
-                    fileName: ''
-                };
-            }
-            const filePath = filePathMap.get(sourcePath) || sourcePath;
-            return {
-                ...(typeof file === 'object' && file ? file : {}),
-                filePath,
-                fileName: path.basename(filePath)
-            };
-        });
-    }
-
-    expandMibInputPaths(inputPaths = []) {
-        const files = [];
-        const seen = new Set();
-
-        const addFile = filePath => {
-            if (seen.has(filePath) || !this.isMibCandidateFile(filePath)) {
-                return;
-            }
-
-            seen.add(filePath);
-            files.push(filePath);
-        };
-
-        const visitPath = inputPath => {
-            if (!inputPath || !fs.existsSync(inputPath)) {
-                return;
-            }
-
-            const stat = fs.statSync(inputPath);
-            if (stat.isFile()) {
-                addFile(inputPath);
-                return;
-            }
-
-            if (stat.isDirectory()) {
-                this.walkMibDirectory(inputPath, addFile);
-            }
-        };
-
-        this.normalizeFilePaths(inputPaths).forEach(visitPath);
-        return files;
-    }
-
-    walkMibDirectory(directoryPath, addFile) {
-        fs.readdirSync(directoryPath, { withFileTypes: true }).forEach(entry => {
-            if (entry.name.startsWith('.')) {
-                return;
-            }
-
-            const entryPath = path.join(directoryPath, entry.name);
-            if (entry.isDirectory()) {
-                this.walkMibDirectory(entryPath, addFile);
-                return;
-            }
-
-            if (entry.isFile()) {
-                addFile(entryPath);
-            }
-        });
-    }
-
-    getMibFileSignatures(filePaths = []) {
-        return filePaths
-            .map(filePath => {
-                try {
-                    const stat = fs.statSync(filePath);
-                    return {
-                        filePath,
-                        size: stat.size,
-                        mtimeMs: Math.trunc(stat.mtimeMs)
-                    };
-                } catch (error) {
-                    return null;
-                }
-            })
-            .filter(Boolean);
-    }
-
-    isMibCandidateFile(filePath) {
-        return ['.mib', '.txt', '.my', ''].includes(path.extname(filePath).toLowerCase());
-    }
-
-    isPathInsideDirectory(directoryPath, filePath) {
-        const relativePath = path.relative(directoryPath, filePath);
-        return (
-            relativePath === '' ||
-            (relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath))
-        );
-    }
-
-    async resolveAllowedMibSourcePath(filePath) {
-        const requestedPath = typeof filePath === 'string' ? filePath.trim() : '';
-        if (!requestedPath) {
-            throw new Error('缺少MIB文件路径');
-        }
-
-        const resolvedPath = path.resolve(requestedPath);
-        if (!this.isMibCandidateFile(resolvedPath)) {
-            throw new Error('该文件不是支持的MIB源码类型');
-        }
-
-        let sourceStat;
-        let sourceRealPath;
-        try {
-            sourceStat = await fs.promises.stat(resolvedPath);
-            sourceRealPath = await fs.promises.realpath(resolvedPath);
-        } catch (_error) {
-            throw new Error('MIB源码文件不存在或无法读取');
-        }
-        if (!sourceStat.isFile()) {
-            throw new Error('MIB源码路径不是普通文件');
-        }
-
-        for (const storedPath of this.getStoredMibFilePaths()) {
-            try {
-                const storedStat = await fs.promises.stat(storedPath);
-                const storedRealPath = await fs.promises.realpath(storedPath);
-                if (storedStat.isFile() && storedRealPath === sourceRealPath) {
-                    return sourceRealPath;
-                }
-                if (storedStat.isDirectory() && this.isPathInsideDirectory(storedRealPath, sourceRealPath)) {
-                    return sourceRealPath;
-                }
-            } catch (_error) {
-                // Ignore stale workspace entries and continue checking the remaining paths.
-            }
-        }
-
-        throw new Error('当前MIB编译工作区中不存在该文件');
-    }
-
     getStoredMibFilePaths() {
-        const stored = this.store.get(this.snmpMibFilesKey);
-        return this.normalizeFilePaths(stored);
+        return this.normalizeFilePaths(this.store.get(this.snmpMibFilesKey));
     }
 
     getMibCacheFilePath() {
@@ -1580,197 +685,98 @@ class SnmpApp {
     }
 
     normalizeFilePaths(filePaths) {
-        if (!Array.isArray(filePaths)) {
-            return [];
-        }
-
+        if (!Array.isArray(filePaths)) return [];
         const seen = new Set();
-        const normalized = [];
-        filePaths.forEach(filePath => {
-            if (!filePath || typeof filePath !== 'string') {
-                return;
-            }
-
+        return filePaths.filter(filePath => {
+            if (typeof filePath !== 'string') return false;
             const trimmed = filePath.trim();
-            if (!trimmed || seen.has(trimmed)) {
-                return;
-            }
-
+            if (!trimmed || seen.has(trimmed)) return false;
             seen.add(trimmed);
-            normalized.push(trimmed);
-        });
-
-        return normalized;
-    }
-
-    getMibWorker() {
-        if (this.mibWorker) {
-            return this.mibWorker;
-        }
-
-        const workerPath = resolveWorkerPath('snmp/mibWorker.js');
-        const workerFactory = new WorkerWithPromise(workerPath);
-        this.mibWorker = workerFactory.createLongRunningWorker();
-        this.mibWorker.worker.unref();
-        if (this.logLevel) {
-            this.mibWorker.sendRequest(LOG_REQ_TYPES.SET_LOG_LEVEL, this.logLevel).catch(error => {
-                logger.warn(`同步日志级别到 MIB worker 失败: ${error.message}`);
-            });
-        }
-        return this.mibWorker;
-    }
-
-    async sendMibWorkerRequest(op, data = null) {
-        try {
-            return await this.getMibWorker().sendRequest(op, data);
-        } catch (error) {
-            if (/Worker stopped|terminated|Cannot post message/i.test(error.message)) {
-                this.mibWorker = null;
-            }
-            throw error;
-        }
+            return true;
+        }).map(filePath => filePath.trim());
     }
 
     emitMibCompileProgress(target, progressId, progress = {}) {
-        if (!target || typeof target.send !== 'function') {
-            return;
-        }
-        if (typeof target.isDestroyed === 'function' && target.isDestroyed()) {
-            return;
-        }
-
+        if (!target || typeof target.send !== 'function') return;
+        if (typeof target.isDestroyed === 'function' && target.isDestroyed()) return;
         target.send('unified-event', {
-            type: 'snmp:mibCompileProgress',
-            data: successResponse(
-                {
-                    progressId,
-                    ...progress
-                },
-                'MIB编译进度'
-            )
+            type: MIB_COMPILE_PROGRESS_EVENT,
+            data: successResponse({ progressId, ...progress }, 'MIB编译进度')
         });
     }
 
-    async sendMibWorkerRequestWithProgress(event, op, data = {}, finalize, options = {}) {
+    handleMibCompileProgress(payload) {
+        if (!payload?.progressId) return;
+        const progressState = this.mibProgressTargets.get(payload.progressId);
+        if (!progressState) return;
+        const { progressId, ...progress } = payload;
+        progressState.latest = {
+            ...progressState.latest,
+            ...progress,
+            counts: progress.counts || progressState.latest.counts
+        };
+        if (progress.phase === 'completed') {
+            progressState.completed = true;
+            if (!progressState.visible) return;
+        } else {
+            progressState.visible = true;
+        }
+        this.emitMibCompileProgress(progressState.target, progressId, progressState.latest);
+    }
+
+    async requestMibWithProgress(event, op, data = {}, options = {}) {
         const target = event?.sender;
-        if (!target || typeof target.send !== 'function') {
-            const result = await this.sendMibWorkerRequest(op, data);
-            if (typeof finalize === 'function') {
-                await finalize(result, () => {});
-            }
-            return result;
-        }
-
-        const worker = this.getMibWorker();
-        const progressId = `${target.id || 'renderer'}-${WorkerWithPromise.generateMessageId()}`;
-        let latestProgress = {
-            phase: 'preparing',
-            completed: 0,
-            total: 0,
-            percent: 0,
-            counts: { compiled: 0, skipped: 0, failed: 0 },
-            message: '正在准备 MIB 编译'
-        };
-        let progressVisible = options.announceImmediately !== false;
-        const reportProgress = progress => {
-            progressVisible = true;
-            latestProgress = {
-                ...latestProgress,
-                ...progress,
-                counts: progress.counts || latestProgress.counts
-            };
-            this.emitMibCompileProgress(target, progressId, latestProgress);
-        };
-        const progressHandler = payload => {
-            if (!payload || payload.progressId !== progressId) {
-                return;
-            }
-
-            const { progressId: _workerProgressId, ...progress } = payload;
-            latestProgress = {
-                ...latestProgress,
-                ...progress,
-                counts: progress.counts || latestProgress.counts
-            };
-            if (progress.phase !== 'completed') {
-                progressVisible = true;
-                this.emitMibCompileProgress(target, progressId, latestProgress);
+        if (!target || typeof target.send !== 'function') return this.requestSnmp(op, data);
+        const progressId = `${target.id || 'renderer'}-${generateMessageId()}`;
+        const progressState = {
+            target,
+            visible: options.announceImmediately !== false,
+            completed: false,
+            latest: {
+                phase: 'preparing',
+                completed: 0,
+                total: 0,
+                percent: 0,
+                counts: { compiled: 0, skipped: 0, failed: 0 },
+                message: '正在准备 MIB 编译'
             }
         };
-
-        worker.addEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, progressHandler);
-        if (progressVisible) {
-            this.emitMibCompileProgress(target, progressId, latestProgress);
-        }
-
+        this.mibProgressTargets.set(progressId, progressState);
+        if (progressState.visible) this.emitMibCompileProgress(target, progressId, progressState.latest);
         try {
-            const result = await worker.sendRequest(op, {
-                ...data,
-                progressId
-            });
-            if (typeof finalize === 'function') {
-                await finalize(result, reportProgress);
-            }
-
-            const summary = result.data || {};
-            const counts = {
-                compiled: Array.isArray(summary.loadedFiles) ? summary.loadedFiles.length : 0,
-                skipped: Array.isArray(summary.skippedFiles) ? summary.skippedFiles.length : 0,
-                failed: Array.isArray(summary.failedFiles) ? summary.failedFiles.length : 0
-            };
-            const total = Number(summary.expandedFileCount) || counts.compiled + counts.skipped + counts.failed;
-            const completedProgress = {
-                phase: 'completed',
-                completed: total,
-                total,
-                percent: 100,
-                counts,
-                cacheHit: Boolean(summary.cacheHit),
-                filePath: '',
-                fileName: '',
-                fileStatus: '',
-                message: summary.cacheHit ? '已从缓存加载 MIB' : 'MIB 编译完成'
-            };
-            if (progressVisible) {
-                reportProgress(completedProgress);
+            const result = await this.requestSnmp(op, { ...data, progressId });
+            if (progressState.visible && !progressState.completed) {
+                const summary = result.data || {};
+                const counts = {
+                    compiled: Array.isArray(summary.loadedFiles) ? summary.loadedFiles.length : 0,
+                    skipped: Array.isArray(summary.skippedFiles) ? summary.skippedFiles.length : 0,
+                    failed: Array.isArray(summary.failedFiles) ? summary.failedFiles.length : 0
+                };
+                const total = Number(summary.expandedFileCount) || counts.compiled + counts.skipped + counts.failed;
+                this.emitMibCompileProgress(target, progressId, {
+                    ...progressState.latest,
+                    phase: 'completed',
+                    completed: total,
+                    total,
+                    percent: 100,
+                    counts,
+                    cacheHit: Boolean(summary.cacheHit),
+                    message: summary.cacheHit ? '已从缓存加载 MIB' : 'MIB 编译完成'
+                });
             }
             return result;
         } catch (error) {
-            reportProgress({
+            this.emitMibCompileProgress(target, progressId, {
+                ...progressState.latest,
                 phase: 'failed',
-                percent: latestProgress.percent || 0,
                 message: error.message || 'MIB编译失败'
             });
-            if (/Worker stopped|terminated|Cannot post message/i.test(error.message)) {
-                this.mibWorker = null;
-            }
             throw error;
         } finally {
-            worker.removeEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, progressHandler);
+            this.mibProgressTargets.delete(progressId);
         }
     }
 
-    async cleanupWorker() {
-        if (this.worker && this.snmpTrapEventHandler) {
-            this.worker.removeEventListener(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, this.snmpTrapEventHandler);
-        }
-
-        if (this.worker) {
-            await this.worker.terminate();
-            this.worker = null;
-        }
-
-        if (this.eventDispatcher) {
-            this.eventDispatcher.cleanup();
-            this.eventDispatcher = null;
-        }
-
-        this.snmpTrapEventHandler = null;
-    }
-
-    /**
-     * 获取SNMP服务运行状态
-     */
     getSnmpRunning() {
         return this.worker !== null;
     }

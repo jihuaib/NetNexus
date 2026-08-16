@@ -38,6 +38,8 @@ const BgpConst = require('../../electron/const/bgpConst');
 const BgpInstance = require('../../electron/worker/bgp/bgpInstance');
 const BgpRoute = require('../../electron/worker/bgp/bgpRoute');
 const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
+const ProtocolProcessWithPromise = require('../../electron/worker/core/protocolProcessWithPromise');
+const EventDispatcher = require('../../electron/utils/eventDispatcher');
 const { getAfiAndSafi } = require('../../electron/utils/bgpUtils');
 
 function makeStore() {
@@ -100,20 +102,20 @@ function instanceKey(addressFamily) {
     db.close();
 
     const stoppedPage = await app.handleGetRoutes(null, addressFamily, 1, 25);
-    assert.strictEqual(stoppedPage.status, 'success');
-    assert.strictEqual(stoppedPage.data.total, 2, 'stopped BGP must still expose persisted routes');
-    assert.deepStrictEqual(
-        stoppedPage.data.list.map(route => route.ip),
-        ['192.0.2.1', '192.0.2.2']
-    );
-    const stoppedDetail = await app.handleGetRouteDetail(null, addressFamily, stoppedPage.data.list[0]);
-    assert.strictEqual(stoppedDetail.status, 'success');
-    assert.strictEqual(stoppedDetail.data.asPath, '65000 65001');
-    assert.strictEqual(stoppedDetail.data.attrRefCount, 2);
+    assert.strictEqual(stoppedPage.status, 'error');
+    assert.strictEqual(stoppedPage.data, null, 'stopped BGP must not expose persisted routes');
+    assert.match(stoppedPage.msg, /没有运行/);
+    const stoppedDetail = await app.handleGetRouteDetail(null, addressFamily, {
+        ip: '192.0.2.1',
+        mask: 32,
+        rd: '0:0',
+        pathId: 0
+    });
+    assert.strictEqual(stoppedDetail.status, 'error');
+    assert.match(stoppedDetail.msg, /没有运行/);
     const stoppedLabelPage = await app.handleGetRoutes(null, labelFamily, 1, 25);
-    const stoppedLabelDetail = await app.handleGetRouteDetail(null, labelFamily, stoppedLabelPage.data.list[0]);
-    assert.strictEqual(stoppedLabelDetail.status, 'success');
-    assert.strictEqual(stoppedLabelDetail.data.label, 16000);
+    assert.strictEqual(stoppedLabelPage.status, 'error');
+    assert.strictEqual(stoppedLabelPage.data, null);
 
     const worker = makeWorkerRecorder((op, payload) => {
         if (op === BgpConst.BGP_REQ_TYPES.GENERATE_IPV4_ROUTES) {
@@ -141,7 +143,10 @@ function instanceKey(addressFamily) {
     app.worker = worker;
     app.startedAddressFamilies = new Set([addressFamily]);
     const disabledFamilyPage = await app.handleGetRoutes(null, labelFamily, 1, 25);
-    assert.strictEqual(disabledFamilyPage.data.total, 1, 'disabled family must remain visible from SQLite');
+    assert.strictEqual(disabledFamilyPage.status, 'error', 'disabled family must not expose persisted routes');
+    assert.strictEqual(disabledFamilyPage.data, null);
+    assert.match(disabledFamilyPage.msg, /地址族未启动/);
+    assert.strictEqual(worker.calls.length, 0, 'disabled family must not query the BGP process');
     const config = { addressFamily, prefix: '203.0.113.1', mask: 32, count: 3, customAttr: '', rt: '' };
     const generated = await app.handleGenerateIpv4Routes(null, config);
     assert.deepStrictEqual(generated.data, { added: 3, updated: 0, unchanged: 0, total: 5 });
@@ -166,6 +171,115 @@ function instanceKey(addressFamily) {
     assert.strictEqual(importResult.data.imported, 5);
     const mrtCall = worker.calls.find(call => call.op === BgpConst.BGP_REQ_TYPES.IMPORT_ROUTES);
     assert.ok(mrtCall.payload.routes.every(route => route.rd === '0:0' && route.pathId === 0));
+
+    const runtimeEvents = [];
+    let listenerRemoved = false;
+    let dispatcherCleaned = false;
+    const terminationError = new Error('synthetic BGP terminate failure');
+    const failingStopWorker = {
+        async sendRequest(op, data) {
+            assert.strictEqual(op, BgpConst.BGP_REQ_TYPES.STOP_BGP);
+            assert.strictEqual(data, null);
+            return { status: 'success', msg: 'bgp协议停止成功', data: null };
+        },
+        removeEventListener(eventName) {
+            assert.strictEqual(eventName, BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE);
+            listenerRemoved = true;
+        },
+        async terminate() {
+            throw terminationError;
+        }
+    };
+    app.worker = failingStopWorker;
+    app.startedAddressFamilies = new Set([addressFamily]);
+    app.eventDispatcher = {
+        emit(type, data) {
+            runtimeEvents.push({ type, data });
+        },
+        cleanup() {
+            dispatcherCleaned = true;
+        }
+    };
+
+    const failedStop = await app.handleStopBgp();
+    assert.strictEqual(failedStop.status, 'error');
+    assert.strictEqual(failedStop.data, null);
+    assert.match(failedStop.msg, /synthetic BGP terminate failure/);
+    assert.strictEqual(listenerRemoved, true);
+    assert.strictEqual(app.worker, null, 'terminate failure must not leave a stale BGP worker');
+    assert.strictEqual(app.getBgpRunning(), false);
+    assert.strictEqual(app.startedAddressFamilies.size, 0, 'terminate failure must clear started address families');
+    assert.deepStrictEqual(runtimeEvents, [
+        {
+            type: 'bgp:runtimeChanged',
+            data: { running: false, addressFamilies: [] }
+        }
+    ]);
+    assert.strictEqual(dispatcherCleaned, true, 'terminate failure must clean up the event dispatcher');
+    assert.strictEqual(app.eventDispatcher, null);
+
+    const startError = new Error('synthetic BGP start failure');
+    const startTerminationError = new Error('synthetic BGP start terminate failure');
+    const startRuntimeEvents = [];
+    let startDispatcherCleaned = false;
+    const failedStartWorker = {
+        addEventListener() {},
+        removeEventListener(eventName) {
+            assert.strictEqual(eventName, BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE);
+        },
+        async sendRequest(op) {
+            assert.strictEqual(op, BgpConst.BGP_REQ_TYPES.START_BGP);
+            throw startError;
+        },
+        async terminate() {
+            throw startTerminationError;
+        }
+    };
+    const originalCreateLongRunningProcess = ProtocolProcessWithPromise.prototype.createLongRunningProcess;
+    const originalDispatcherCleanup = EventDispatcher.prototype.cleanup;
+    ProtocolProcessWithPromise.prototype.createLongRunningProcess = () => failedStartWorker;
+    EventDispatcher.prototype.cleanup = function trackStartDispatcherCleanup() {
+        startDispatcherCleaned = true;
+        return originalDispatcherCleanup.call(this);
+    };
+    app.startedAddressFamilies = new Set([addressFamily]);
+    try {
+        const failedStart = await app.handleStartBgp(
+            {
+                sender: {
+                    send(channel, payload) {
+                        if (channel === 'unified-event') startRuntimeEvents.push(payload);
+                    },
+                    isDestroyed() {
+                        return false;
+                    }
+                }
+            },
+            {
+                localAs: '65000',
+                routerId: '192.0.2.1',
+                port: 1179,
+                addressFamily: [addressFamily]
+            }
+        );
+        assert.strictEqual(failedStart.status, 'error');
+        assert.strictEqual(failedStart.data, null);
+        assert.match(failedStart.msg, /synthetic BGP start terminate failure/);
+    } finally {
+        ProtocolProcessWithPromise.prototype.createLongRunningProcess = originalCreateLongRunningProcess;
+        EventDispatcher.prototype.cleanup = originalDispatcherCleanup;
+    }
+    assert.strictEqual(app.worker, null, 'start terminate failure must not leave a stale BGP worker');
+    assert.strictEqual(app.getBgpRunning(), false);
+    assert.strictEqual(app.startedAddressFamilies.size, 0, 'start terminate failure must clear address families');
+    assert.deepStrictEqual(startRuntimeEvents, [
+        {
+            type: 'bgp:runtimeChanged',
+            data: { running: false, addressFamilies: [] }
+        }
+    ]);
+    assert.strictEqual(startDispatcherCleaned, true, 'start terminate failure must clean up the event dispatcher');
+    assert.strictEqual(app.eventDispatcher, null, 'start terminate failure must clean up the event dispatcher');
 
     fs.rmSync(tempDir, { recursive: true, force: true });
     console.log('BGP SQLite route integration tests passed');

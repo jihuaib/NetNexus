@@ -642,7 +642,6 @@ class SyslogWorker {
     async stopSyslog(messageId) {
         await this.closeSockets();
         this.messageHistory = [];
-        this.messageHandler.sendSuccessResponse(messageId, null, 'Syslog服务器已停止');
         this.messageHandler.sendEvent(SyslogConst.SYSLOG_EVT_TYPES.SYSLOG_EVT, {
             type: SyslogConst.SYSLOG_SUB_EVT_TYPES.SERVER_STATUS,
             data: {
@@ -653,6 +652,7 @@ class SyslogWorker {
             }
         });
         this.syslogConfig = null;
+        this.messageHandler.sendSuccessResponse(messageId, null, 'Syslog服务器已停止');
     }
 
     closeServer(server) {

@@ -5,129 +5,138 @@
         @click="hideContextMenu"
     >
         <nn-card title="MIB 工作区" class="workspace-card">
-            <div class="workspace-toolbar">
-                <div class="workspace-status" aria-label="MIB 工作区状态">
-                    <nn-tag v-if="loading" color="processing">正在刷新</nn-tag>
-                    <nn-tag v-else-if="mibStatus.totalObjects" color="success">MIB 已就绪</nn-tag>
-                    <nn-tag v-else color="default">暂无 MIB</nn-tag>
-                    <nn-tag v-if="mibStatus.cacheHit" color="green">缓存命中</nn-tag>
-                    <nn-tag color="blue">用户模块 {{ mibStatus.modules.length }}</nn-tag>
-                    <nn-tag color="cyan">基础模块 {{ mibStatus.baseModules.length }}</nn-tag>
-                    <nn-tag color="green">OID {{ mibStatus.totalObjects }}</nn-tag>
-                    <nn-tag color="default">文件 {{ mibStatus.expandedFileCount }}</nn-tag>
-                </div>
-
-                <div class="workspace-actions">
-                    <div class="oid-query-row">
-                        <nn-input
-                            v-model:value="oidQuery"
-                            allow-clear
-                            aria-label="OID"
-                            placeholder="输入 OID 定位节点，例如 1.3.6.1.2.1.1.3.0"
-                            @press-enter="locateOidNode"
-                        />
-                        <nn-button :loading="oidTranslateLoading" @click="locateOidNode">定位节点</nn-button>
-                    </div>
-                    <nn-button :loading="loading" @click="loadMibStatus({ force: true })">
-                        <template #icon><ReloadOutlined /></template>
-                        刷新
-                    </nn-button>
-                    <nn-button
-                        v-if="canOpenMonitorWindow"
-                        data-testid="open-snmp-trap-monitor-window"
-                        :loading="monitorOpening"
-                        @click="openMonitorWindow"
-                    >
-                        <template #icon><ExternalLinkOutlined /></template>
-                        打开 Trap 监控
-                    </nn-button>
-                </div>
+            <div v-if="!runtimeReady" class="workspace-runtime-empty" data-testid="snmp-workspace-runtime-stopped">
+                <nn-empty description="请先在 SNMP 配置页启动 SNMP 进程" />
             </div>
 
-            <div ref="workspaceLayoutRef" class="workspace-layout" :style="workspaceLayoutStyle">
-                <section class="mib-tree-panel" aria-label="OID 树">
-                    <div class="panel-header">
-                        <div class="panel-heading">
-                            <span class="panel-title">OID 树</span>
-                            <span class="panel-meta">{{ mibStatus.totalObjects }} 个对象</span>
+            <template v-else>
+                <div class="workspace-toolbar">
+                    <div class="workspace-status" aria-label="MIB 工作区状态">
+                        <nn-tag v-if="loading" color="processing">正在刷新</nn-tag>
+                        <nn-tag v-else-if="mibStatus.totalObjects" color="success">MIB 已就绪</nn-tag>
+                        <nn-tag v-else color="default">暂无 MIB</nn-tag>
+                        <nn-tag v-if="mibStatus.cacheHit" color="green">缓存命中</nn-tag>
+                        <nn-tag color="blue">用户模块 {{ mibStatus.modules.length }}</nn-tag>
+                        <nn-tag color="cyan">基础模块 {{ mibStatus.baseModules.length }}</nn-tag>
+                        <nn-tag color="green">OID {{ mibStatus.totalObjects }}</nn-tag>
+                        <nn-tag color="default">文件 {{ mibStatus.expandedFileCount }}</nn-tag>
+                    </div>
+
+                    <div class="workspace-actions">
+                        <div class="oid-query-row">
+                            <nn-input
+                                v-model:value="oidQuery"
+                                allow-clear
+                                aria-label="OID"
+                                placeholder="输入 OID 定位节点，例如 1.3.6.1.2.1.1.3.0"
+                                @press-enter="locateOidNode"
+                            />
+                            <nn-button :loading="oidTranslateLoading" @click="locateOidNode">定位节点</nn-button>
                         </div>
+                        <nn-button :loading="loading" @click="loadMibStatus({ force: true })">
+                            <template #icon><ReloadOutlined /></template>
+                            刷新
+                        </nn-button>
+                        <nn-button
+                            v-if="canOpenMonitorWindow"
+                            data-testid="open-snmp-trap-monitor-window"
+                            :loading="monitorOpening"
+                            @click="openMonitorWindow"
+                        >
+                            <template #icon><ExternalLinkOutlined /></template>
+                            打开 Trap 监控
+                        </nn-button>
                     </div>
-                    <div ref="treeScrollRef" class="mib-tree-scroll">
-                        <nn-spin :spinning="loading && mibStatus.oidTree.length === 0">
-                            <nn-tree
-                                v-if="mibStatus.oidTree.length"
-                                ref="treeRef"
-                                v-model:expanded-keys="treeExpandedKeys"
-                                :selected-keys="treeSelectedKeys"
-                                :tree-data="mibStatus.oidTree"
-                                block-node
-                                @expand="handleTreeExpand"
-                                @right-click="handleTreeRightClick"
-                                @select="handleTreeSelect"
-                            >
-                                <template #title="node">
-                                    <span class="mib-node-title" :data-tree-oid="node.oid">
-                                        <span
-                                            class="mib-node-icon"
-                                            :class="`mib-node-icon-${mibNodeIconKind(node)}`"
-                                            :data-node-icon="mibNodeIconKind(node)"
-                                            aria-hidden="true"
-                                        >
-                                            <component
-                                                :is="mibNodeIconComponent(node)"
-                                                :spin="node.loading"
-                                                :stroke-width="1.8"
-                                            />
-                                        </span>
-                                        <span class="mib-node-name">{{ node.title }}</span>
-                                        <span class="mib-node-oid">{{ node.oid }}</span>
-                                        <span v-if="node.macro" class="mib-node-macro">{{ node.macro }}</span>
-                                        <span
-                                            v-if="getNodeRoleText(node)"
-                                            :class="['mib-node-role', getNodeRoleClass(node)]"
-                                        >
-                                            {{ getNodeRoleText(node) }}
-                                        </span>
-                                        <span v-if="node.moduleName" class="mib-node-module">
-                                            {{ node.moduleName }}
-                                        </span>
-                                    </span>
-                                </template>
-                            </nn-tree>
-                            <nn-empty v-else description="请先在 MIB 编译页导入并编译文件" />
-                        </nn-spin>
-                    </div>
-                </section>
-
-                <div
-                    class="workspace-column-resizer"
-                    role="separator"
-                    aria-label="调整 OID 树宽度"
-                    aria-orientation="vertical"
-                    :aria-valuemin="treePaneMinWidth"
-                    :aria-valuemax="treePaneMaxWidth"
-                    :aria-valuenow="treePaneWidth"
-                    tabindex="0"
-                    title="拖动调整 OID 树宽度；双击恢复默认宽度"
-                    @pointerdown="startTreePaneResize"
-                    @keydown="handleTreePaneResizeKeydown"
-                    @dblclick="resetTreePaneResize"
-                >
-                    <span class="pane-resizer-grip" aria-hidden="true" />
                 </div>
 
-                <section class="workspace-operation-panel" aria-label="SNMP 操作区">
-                    <SnmpMibOperations
-                        ref="operationsRef"
-                        :context-node="operationContext.node"
-                        :context-operation="operationContext.operation"
-                        :context-revision="operationContext.revision"
-                    />
-                </section>
-            </div>
+                <div ref="workspaceLayoutRef" class="workspace-layout" :style="workspaceLayoutStyle">
+                    <section class="mib-tree-panel" aria-label="OID 树">
+                        <div class="panel-header">
+                            <div class="panel-heading">
+                                <span class="panel-title">OID 树</span>
+                                <span class="panel-meta">{{ mibStatus.totalObjects }} 个对象</span>
+                            </div>
+                        </div>
+                        <div ref="treeScrollRef" class="mib-tree-scroll">
+                            <nn-spin :spinning="loading && mibStatus.oidTree.length === 0">
+                                <nn-tree
+                                    v-if="mibStatus.oidTree.length"
+                                    ref="treeRef"
+                                    v-model:expanded-keys="treeExpandedKeys"
+                                    :selected-keys="treeSelectedKeys"
+                                    :tree-data="mibStatus.oidTree"
+                                    block-node
+                                    @expand="handleTreeExpand"
+                                    @right-click="handleTreeRightClick"
+                                    @select="handleTreeSelect"
+                                >
+                                    <template #title="node">
+                                        <span class="mib-node-title" :data-tree-oid="node.oid">
+                                            <span
+                                                class="mib-node-icon"
+                                                :class="`mib-node-icon-${mibNodeIconKind(node)}`"
+                                                :data-node-icon="mibNodeIconKind(node)"
+                                                aria-hidden="true"
+                                            >
+                                                <component
+                                                    :is="mibNodeIconComponent(node)"
+                                                    :spin="node.loading"
+                                                    :stroke-width="1.8"
+                                                />
+                                            </span>
+                                            <span class="mib-node-name">{{ node.title }}</span>
+                                            <span class="mib-node-oid">{{ node.oid }}</span>
+                                            <span v-if="node.macro" class="mib-node-macro">{{ node.macro }}</span>
+                                            <span
+                                                v-if="getNodeRoleText(node)"
+                                                :class="['mib-node-role', getNodeRoleClass(node)]"
+                                            >
+                                                {{ getNodeRoleText(node) }}
+                                            </span>
+                                            <span v-if="node.moduleName" class="mib-node-module">
+                                                {{ node.moduleName }}
+                                            </span>
+                                        </span>
+                                    </template>
+                                </nn-tree>
+                                <nn-empty v-else description="请先在 MIB 编译页导入并编译文件" />
+                            </nn-spin>
+                        </div>
+                    </section>
+
+                    <div
+                        class="workspace-column-resizer"
+                        role="separator"
+                        aria-label="调整 OID 树宽度"
+                        aria-orientation="vertical"
+                        :aria-valuemin="treePaneMinWidth"
+                        :aria-valuemax="treePaneMaxWidth"
+                        :aria-valuenow="treePaneWidth"
+                        tabindex="0"
+                        title="拖动调整 OID 树宽度；双击恢复默认宽度"
+                        @pointerdown="startTreePaneResize"
+                        @keydown="handleTreePaneResizeKeydown"
+                        @dblclick="resetTreePaneResize"
+                    >
+                        <span class="pane-resizer-grip" aria-hidden="true" />
+                    </div>
+
+                    <section class="workspace-operation-panel" aria-label="SNMP 操作区">
+                        <SnmpMibOperations
+                            ref="operationsRef"
+                            :context-node="operationContext.node"
+                            :context-operation="operationContext.operation"
+                            :context-revision="operationContext.revision"
+                            :runtime-ready="runtimeReady"
+                            :runtime-revision="snmpRuntime.runtimeRevision"
+                        />
+                    </section>
+                </div>
+            </template>
         </nn-card>
 
         <nn-context-menu
+            v-if="runtimeReady"
             ref="contextMenuRef"
             v-model:open="contextMenu.visible"
             :width="224"
@@ -171,6 +180,7 @@
         </nn-context-menu>
 
         <nn-modal
+            v-if="runtimeReady"
             v-model:open="nodePropertyOpen"
             :title="nodePropertyTitle"
             :footer="null"
@@ -224,7 +234,17 @@
 </template>
 
 <script setup>
-    import { computed, nextTick, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from 'vue';
+    import {
+        computed,
+        nextTick,
+        onActivated,
+        onBeforeUnmount,
+        onDeactivated,
+        onMounted,
+        reactive,
+        ref,
+        watch
+    } from 'vue';
     import { notify } from '../../utils/notify';
     import {
         ApiOutlined,
@@ -245,6 +265,7 @@
     } from 'netnexus-ui/icons';
     import { usePaneResize } from '../yang/usePaneResize';
     import SnmpMibOperations from './SnmpMibOperations.vue';
+    import { useSnmpRuntime } from './useSnmpRuntime';
 
     defineOptions({ name: 'SnmpMibWorkspace' });
 
@@ -276,6 +297,8 @@
     const operationContext = reactive({ node: null, operation: '', revision: 0 });
     const nodePropertyOpen = ref(false);
     const detailNode = ref(null);
+    const snmpRuntime = useSnmpRuntime();
+    const runtimeReady = computed(() => snmpRuntime.ready);
     const workspaceLayoutRef = ref(null);
     const {
         paneSize: treePaneWidth,
@@ -304,6 +327,9 @@
     let statusRequestRevision = 0;
     let treeDataRevision = 0;
     let statusLoaded = false;
+    let pageActive = false;
+
+    const isCurrentRuntime = runtimeRevision => snmpRuntime.ready && runtimeRevision === snmpRuntime.runtimeRevision;
 
     function emptyMibStatus() {
         return {
@@ -326,20 +352,22 @@
     const canOpenMonitorWindow = computed(() => typeof window.windowApi?.openMonitor === 'function');
 
     const openMonitorWindow = async () => {
-        if (!canOpenMonitorWindow.value || monitorOpening.value) {
+        if (!runtimeReady.value || !canOpenMonitorWindow.value || monitorOpening.value) {
             return;
         }
 
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         monitorOpening.value = true;
         try {
             const result = await window.windowApi.openMonitor('snmp-trap');
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (result?.status !== 'success') {
                 notify.error(result?.msg || '打开 Trap 监控窗口失败');
             }
         } catch (error) {
-            notify.error('打开 Trap 监控窗口失败: ' + error.message);
+            if (isCurrentRuntime(runtimeRevision)) notify.error('打开 Trap 监控窗口失败: ' + error.message);
         } finally {
-            monitorOpening.value = false;
+            if (isCurrentRuntime(runtimeRevision)) monitorOpening.value = false;
         }
     };
 
@@ -431,6 +459,7 @@
     };
 
     const loadTreeNodeChildren = async node => {
+        if (!runtimeReady.value) return [];
         const key = node?.key || node?.eventKey || node?.dataRef?.key;
         if (!key) return [];
         const targetNode = findTreeNode(mibStatus.value.oidTree, key);
@@ -439,13 +468,14 @@
         if (treeLoadingPromises.has(key)) return treeLoadingPromises.get(key);
 
         const requestedTreeRevision = treeDataRevision;
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         let loadPromise;
         loadPromise = (async () => {
             targetNode.loading = true;
             refreshTreeData();
             try {
                 const result = await window.snmpApi.getMibTreeChildren(key);
-                if (requestedTreeRevision !== treeDataRevision) return [];
+                if (requestedTreeRevision !== treeDataRevision || !isCurrentRuntime(runtimeRevision)) return [];
                 if (result.status !== 'success') {
                     notify.error(result.msg || '获取 MIB 树节点失败');
                     return [];
@@ -456,13 +486,13 @@
                 refreshTreeData();
                 return children;
             } catch (error) {
-                if (requestedTreeRevision === treeDataRevision) {
+                if (requestedTreeRevision === treeDataRevision && isCurrentRuntime(runtimeRevision)) {
                     notify.error(`获取 MIB 树节点失败：${error.message}`);
                 }
                 return [];
             } finally {
                 targetNode.loading = false;
-                if (requestedTreeRevision === treeDataRevision) refreshTreeData();
+                if (requestedTreeRevision === treeDataRevision && isCurrentRuntime(runtimeRevision)) refreshTreeData();
                 if (treeLoadingPromises.get(key) === loadPromise) treeLoadingPromises.delete(key);
             }
         })();
@@ -528,6 +558,18 @@
         setOperationContext(null, '');
     };
 
+    const clearRuntimeDataset = () => {
+        statusRequestRevision += 1;
+        statusLoadPromise = null;
+        statusLoaded = false;
+        resetTreeState();
+        mibStatus.value = emptyMibStatus();
+        loading.value = false;
+        oidTranslateLoading.value = false;
+        monitorOpening.value = false;
+        oidQuery.value = '';
+    };
+
     const applyMibStatus = payload => {
         resetTreeState();
         mibStatus.value = normalizeMibStatus(payload);
@@ -535,27 +577,31 @@
     };
 
     const loadMibStatus = async ({ force = false } = {}) => {
+        if (!runtimeReady.value) return;
         if (!force && statusLoaded) return;
         if (statusLoadPromise) return statusLoadPromise;
 
         const requestRevision = ++statusRequestRevision;
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         let currentPromise;
         currentPromise = (async () => {
             loading.value = true;
             try {
                 const result = await window.snmpApi.getMibStatus();
-                if (requestRevision !== statusRequestRevision) return;
+                if (requestRevision !== statusRequestRevision || !isCurrentRuntime(runtimeRevision)) return;
                 if (result.status !== 'success') {
                     notify.error(result.msg || '获取 MIB 工作区失败');
                     return;
                 }
                 applyMibStatus(result.data);
             } catch (error) {
-                if (requestRevision === statusRequestRevision) {
+                if (requestRevision === statusRequestRevision && isCurrentRuntime(runtimeRevision)) {
                     notify.error(`获取 MIB 工作区失败：${error.message}`);
                 }
             } finally {
-                if (requestRevision === statusRequestRevision) loading.value = false;
+                if (requestRevision === statusRequestRevision && isCurrentRuntime(runtimeRevision)) {
+                    loading.value = false;
+                }
                 if (statusLoadPromise === currentPromise) statusLoadPromise = null;
             }
         })();
@@ -563,8 +609,8 @@
         return currentPromise;
     };
 
-    const canGetNode = node => Boolean(node?.canGet);
-    const canSetNode = node => Boolean(node?.canSet);
+    const canGetNode = node => runtimeReady.value && Boolean(node?.canGet);
+    const canSetNode = node => runtimeReady.value && Boolean(node?.canSet);
 
     const getNodeRoleText = node => {
         if (!node) return '';
@@ -646,15 +692,18 @@
     };
 
     const locateOidNode = async () => {
+        if (!runtimeReady.value) return;
         const oid = oidQuery.value.trim();
         if (!oid) {
             notify.warning('请输入 OID');
             return;
         }
         setOperationContext(null, '');
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         try {
             oidTranslateLoading.value = true;
             const result = await window.snmpApi.translateOid(oid);
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (result.status !== 'success') {
                 notify.error(result.msg || 'OID 定位失败');
                 return;
@@ -663,11 +712,12 @@
             const treeNode = translatedNode.matchedOid
                 ? await revealOidNode(translatedNode.matchedOid, translatedNode.treePath || [])
                 : null;
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (!treeNode) notify.info('未定位到 MIB 节点');
         } catch (error) {
-            notify.error(`OID 定位失败：${error.message}`);
+            if (isCurrentRuntime(runtimeRevision)) notify.error(`OID 定位失败：${error.message}`);
         } finally {
-            oidTranslateLoading.value = false;
+            if (isCurrentRuntime(runtimeRevision)) oidTranslateLoading.value = false;
         }
     };
 
@@ -713,6 +763,7 @@
     };
 
     const handleContextMenuClick = async ({ key }) => {
+        if (!runtimeReady.value) return;
         const node = contextMenu.node;
         hideContextMenu();
         if (!node) return;
@@ -741,22 +792,34 @@
         refresh: () => loadMibStatus({ force: true })
     });
 
-    onDeactivated(() => {
+    const activatePage = () => {
+        if (pageActive) return;
+        pageActive = true;
+        if (runtimeReady.value) void loadMibStatus();
+    };
+
+    const deactivatePage = () => {
+        pageActive = false;
         stopTreePaneResize();
         hideContextMenu();
         nodePropertyOpen.value = false;
-    });
+    };
 
-    onMounted(() => {
-        loadMibStatus({ force: true });
-    });
+    watch(
+        () => snmpRuntime.runtimeRevision,
+        () => {
+            clearRuntimeDataset();
+            if (runtimeReady.value && pageActive) void loadMibStatus();
+        }
+    );
+
+    onMounted(activatePage);
+    onActivated(activatePage);
+    onDeactivated(deactivatePage);
 
     onBeforeUnmount(() => {
-        statusRequestRevision += 1;
-        treeDataRevision += 1;
-        stopTreePaneResize();
-        clearPendingTreeReleases();
-        treeLoadingPromises.clear();
+        deactivatePage();
+        clearRuntimeDataset();
     });
 </script>
 
@@ -783,6 +846,14 @@
         flex: 1;
         flex-direction: column;
         overflow: hidden;
+    }
+
+    .workspace-runtime-empty {
+        display: flex;
+        min-height: 0;
+        flex: 1;
+        align-items: center;
+        justify-content: center;
     }
 
     .workspace-toolbar {

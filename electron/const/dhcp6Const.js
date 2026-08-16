@@ -1,6 +1,6 @@
 // DHCPv6 事件类型（worker -> app 推送）
 const DHCP6_EVT_TYPES = {
-    DHCP6_EVT: 1
+    DHCP6_EVT: 'dhcp6:event'
 };
 
 // DHCPv6 子事件类型
@@ -10,10 +10,10 @@ const DHCP6_SUB_EVT_TYPES = {
 
 // DHCPv6 请求-响应类型（app -> worker）
 const DHCP6_REQ_TYPES = {
-    START_DHCP6: 1,
-    STOP_DHCP6: 2,
-    GET_LEASE_LIST: 3,
-    RELEASE_LEASE: 4
+    START_DHCP6: 'dhcp6:start',
+    STOP_DHCP6: 'dhcp6:stop',
+    GET_LEASE_LIST: 'dhcp6:leases:get',
+    RELEASE_LEASE: 'dhcp6:lease:release'
 };
 
 // DHCPv6 消息类型（RFC 3315）

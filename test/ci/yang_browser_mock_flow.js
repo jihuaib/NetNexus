@@ -52,7 +52,8 @@ async function verifyBrowserBridge() {
         'getSchemaChildren',
         'getSchemaNode',
         'getModuleSource',
-        'getDiagnostics'
+        'getDiagnostics',
+        'getRuntimeState'
     ];
 
     requiredNetconfMethods.forEach(method => assert.equal(typeof window.netconfApi[method], 'function', method));
@@ -78,16 +79,42 @@ async function verifyControllerFlow() {
     let response = await controller.call('yang.netconf.getSessionState');
     assert.equal(response.status, 'success');
     assert.equal(response.data.connected, true);
+    assert.equal(response.data.processRunning, true);
     assert(response.data.capabilities.some(capability => capability.includes('yang-library')));
 
     response = await controller.call('yang.netconf.disconnect');
     assert.equal(response.data.connected, false);
+    const stoppedRuntimeEventIndex = events.findIndex(
+        event => event.type === 'yang:runtimeChanged' && event.data?.data?.running === false
+    );
+    const disconnectedSessionEventIndex = events.findIndex(
+        event => event.type === 'netconf:sessionEvent' && event.data?.data?.status === 'disconnected'
+    );
+    assert(stoppedRuntimeEventIndex >= 0, 'disconnect must emit a stopped YANG runtime event');
+    assert(disconnectedSessionEventIndex >= 0, 'disconnect must emit a disconnected NETCONF session event');
+    assert(
+        stoppedRuntimeEventIndex < disconnectedSessionEventIndex,
+        'the authoritative stopped runtime event must precede trailing session events'
+    );
+    response = await controller.call('yang.registry.getRuntimeState');
+    assert.deepEqual(response.data, {
+        running: false,
+        ready: false,
+        processRunning: false,
+        activeProfileId: null
+    });
+    response = await controller.call('yang.registry.listModules', { profileId: 'e2e-netconf-profile' });
+    assert.deepEqual(response.data, []);
+    response = await controller.call('yang.registry.getWorkspace', { profileId: 'e2e-netconf-profile' });
+    assert.equal(response.data.compileId, '');
+    assert.deepEqual(response.data.modules, []);
     response = await controller.call('yang.netconf.discoverModules');
     assert.equal(response.status, 'error');
 
     response = await controller.call('yang.netconf.connect', 'e2e-netconf-profile');
     assert.equal(response.status, 'success');
     assert.equal(response.data.connected, true);
+    assert.equal(controller.state.yang.processRunning, true);
 
     response = await controller.call('yang.netconf.saveProfile', {
         name: 'Second E2E Device',
@@ -218,6 +245,7 @@ async function verifyControllerFlow() {
     assert.match(response.data.reply, /<ok\/>/u);
 
     assert(events.some(event => event.type === 'netconf:sessionEvent'));
+    assert(events.some(event => event.type === 'yang:runtimeChanged'));
     const taskActions = events
         .filter(event => event.type === 'yang:taskProgress')
         .map(event => event.data?.data?.action);

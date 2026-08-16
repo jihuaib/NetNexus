@@ -35,7 +35,7 @@ function ipToBuffer(ip) {
 }
 
 class DhcpWorker {
-    constructor() {
+    constructor(options = {}) {
         this.server = null;
         this.config = null;
         this.leaseMap = new Map(); // macAddr -> DhcpLease
@@ -45,12 +45,15 @@ class DhcpWorker {
         this.poolEnd = 0;
         this.leaseTimer = null;
 
-        this.messageHandler = new WorkerMessageHandler();
-        this.messageHandler.init();
+        this.messageHandler = options.messageHandler || new WorkerMessageHandler();
         this.messageHandler.registerHandler(DhcpConst.DHCP_REQ_TYPES.START_DHCP, this.startDhcp.bind(this));
         this.messageHandler.registerHandler(DhcpConst.DHCP_REQ_TYPES.STOP_DHCP, this.stopDhcp.bind(this));
         this.messageHandler.registerHandler(DhcpConst.DHCP_REQ_TYPES.GET_LEASE_LIST, this.getLeaseList.bind(this));
         this.messageHandler.registerHandler(DhcpConst.DHCP_REQ_TYPES.RELEASE_LEASE, this.releaseLease.bind(this));
+
+        if (!options.messageHandler) {
+            this.messageHandler.init();
+        }
     }
 
     parseDhcpPacket(buffer) {
@@ -503,4 +506,8 @@ class DhcpWorker {
     }
 }
 
-new DhcpWorker();
+if (require.main === module) {
+    new DhcpWorker();
+}
+
+module.exports = DhcpWorker;

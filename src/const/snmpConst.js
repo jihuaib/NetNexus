@@ -75,6 +75,7 @@ export const SNMP_EVENT_PAGE_ID = {
 };
 
 export const MIB_COMPILE_PROGRESS_EVENT = 'snmp:mibCompileProgress';
+export const SNMP_RUNTIME_CHANGED_EVENT = 'snmp:runtimeChanged';
 
 export const SNMP_ROUTE = Object.freeze({
     BASE: '/snmp',

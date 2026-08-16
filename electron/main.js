@@ -18,8 +18,6 @@ let splashProgress = 0;
 let splashShownAt = 0;
 let splashReadyToShow = false;
 let startupComplete = false;
-let allowQuitAfterStorageClose = false;
-let storageCloseForQuitPromise = null;
 let monitorWindowManager = null;
 
 app.commandLine.appendSwitch('lang', 'zh-CN');
@@ -215,7 +213,13 @@ function createWindow() {
             return;
         }
 
-        const closeOk = await systemApp.handleWindowClose();
+        let closeOk = false;
+        try {
+            closeOk = await systemApp.handleWindowClose();
+        } catch (error) {
+            logger.error(`关闭 NetNexus 失败: ${error.message}`);
+            return;
+        }
         if (!closeOk) {
             return;
         }
@@ -438,33 +442,10 @@ if (!hasSingleInstanceLock) {
         });
 }
 
-app.on('before-quit', event => {
+app.on('before-quit', () => {
     if (tray) {
         tray.destroy();
         tray = null;
-    }
-
-    const rpkiApp = systemApp?.rpkiApp;
-    if (allowQuitAfterStorageClose) {
-        allowQuitAfterStorageClose = false;
-        storageCloseForQuitPromise = null;
-        return;
-    }
-    if (!rpkiApp?.closeStorage) {
-        return;
-    }
-
-    event.preventDefault();
-    if (!storageCloseForQuitPromise) {
-        storageCloseForQuitPromise = rpkiApp
-            .closeStorage()
-            .catch(error => {
-                logger.warn(`关闭RPKI SQLite存储失败: ${error.message}`);
-            })
-            .finally(() => {
-                allowQuitAfterStorageClose = true;
-                app.quit();
-            });
     }
 });
 

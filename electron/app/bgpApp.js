@@ -2,21 +2,20 @@ const { app } = require('electron');
 const path = require('path');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
-const WorkerWithPromise = require('../worker/core/workerWithPromise');
+const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPromise');
+const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../worker/core/protocolProcessServices');
 const logger = require('../log/logger');
 const BgpConst = require('../const/bgpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 const { getAfiAndSafi } = require('../utils/bgpUtils');
 const { shell } = require('electron');
 const { iterateMrtRoutes } = require('../utils/routeViewsUtils');
-const { fileExists } = require('../utils/rpkiRoaImport');
-const BgpInstance = require('../worker/bgp/bgpInstance');
 const BgpRoute = require('../worker/bgp/bgpRoute');
-const BgpRouteSqliteStore = require('../worker/bgp/bgpRouteSqliteStore');
 
 const BGP_DATA_DIRECTORY = 'bgp';
 const BGP_ROUTE_DATABASE_FILE = 'bgp.sqlite3';
 const BGP_ROUTE_IMPORT_BATCH_SIZE = 2000;
+const BGP_RUNTIME_CHANGED_EVENT = 'bgp:runtimeChanged';
 class BgpApp {
     constructor(ipc, store) {
         this.worker = null;
@@ -241,49 +240,6 @@ class BgpApp {
         return path.join(app.getPath('userData'), BGP_DATA_DIRECTORY, BGP_ROUTE_DATABASE_FILE);
     }
 
-    async withStoredRouteReader(callback) {
-        const dbPath = this.getBgpRouteDatabasePath();
-        if (!(await fileExists(dbPath))) {
-            return null;
-        }
-        const reader = new BgpRouteSqliteStore({ dbPath, readOnly: true });
-        try {
-            reader.open();
-            return callback(reader);
-        } finally {
-            reader.close();
-        }
-    }
-
-    getRouteInstanceKey(addressFamily) {
-        const { afi, safi } = getAfiAndSafi(Number(addressFamily));
-        return BgpInstance.makeKey(0, afi, safi);
-    }
-
-    async readStoredRoutePage(addressFamily, page, pageSize, options = {}) {
-        const result = await this.withStoredRouteReader(reader =>
-            reader.queryPage(this.getRouteInstanceKey(addressFamily), { page, pageSize, ...options })
-        );
-        if (!result) return { list: [], total: 0 };
-        return {
-            list: result.list.map(route => ({ ...route, addressFamily: Number(addressFamily) })),
-            total: result.total
-        };
-    }
-
-    async readStoredRouteDetail(addressFamily, route) {
-        return this.withStoredRouteReader(reader => {
-            const instanceKey = this.getRouteInstanceKey(addressFamily);
-            const detail = reader.queryDetail(instanceKey, route);
-            if (!detail) return null;
-            return {
-                ...detail,
-                addressFamily: Number(addressFamily),
-                attrRefCount: reader.getAttributeRefCount(instanceKey, detail.attrId)
-            };
-        });
-    }
-
     getRouteConfigStoreKey(addressFamily) {
         switch (addressFamily) {
             case BgpConst.BGP_ADDR_FAMILY.IPV4_UNC:
@@ -328,6 +284,24 @@ class BgpApp {
         }
 
         return null;
+    }
+
+    emitRuntimeChanged(running) {
+        this.eventDispatcher?.emit(BGP_RUNTIME_CHANGED_EVENT, {
+            running: Boolean(running),
+            addressFamilies: running ? Array.from(this.startedAddressFamilies) : []
+        });
+    }
+
+    cleanupBgpRuntime(worker) {
+        if (this.worker !== worker) return false;
+
+        this.worker = null;
+        this.startedAddressFamilies.clear();
+        this.emitRuntimeChanged(false);
+        this.eventDispatcher?.cleanup();
+        this.eventDispatcher = null;
+        return true;
     }
 
     async persistGeneratedRoutes(config, reqType, successMsg) {
@@ -460,8 +434,14 @@ class BgpApp {
 
             const workerPath = resolveWorkerPath('bgp/bgpWorker.js');
 
-            const workerFactory = new WorkerWithPromise(workerPath);
-            this.worker = workerFactory.createLongRunningWorker();
+            const processFactory = new ProtocolProcessWithPromise(workerPath, {
+                serviceName: PROTOCOL_PROCESS_SERVICES.BGP,
+                onExit: (_code, client, exit = {}) => {
+                    if (exit.expected) return;
+                    this.cleanupBgpRuntime(client);
+                }
+            });
+            this.worker = processFactory.createLongRunningProcess();
 
             // 设置事件发送器的 webContents
             this.eventDispatcher = new EventDispatcher();
@@ -480,47 +460,60 @@ class BgpApp {
                 routeDatabasePath: this.getBgpRouteDatabasePath()
             });
             this.startedAddressFamilies = startedAddressFamilies;
+            this.emitRuntimeChanged(true);
 
             // 这里肯定是启动成功了，如果失败，会抛出异常
             logger.info(`bgp启动成功 result: ${JSON.stringify(result)}`);
             return successResponse(null, result.msg);
         } catch (error) {
-            if (this.worker) {
-                this.worker.removeEventListener(BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE, this.peerChangeHandler);
-                await this.worker.terminate();
-                this.worker = null;
-            }
-            this.startedAddressFamilies.clear();
-            if (this.eventDispatcher) {
-                this.eventDispatcher.cleanup(); // 清理事件发送器
-            }
-            this.eventDispatcher = null;
             logger.error('Error starting BGP:', error.message);
-            return errorResponse(error.message);
+            const worker = this.worker;
+            let terminationError = null;
+            try {
+                if (worker) {
+                    worker.removeEventListener(BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE, this.peerChangeHandler);
+                    await worker.terminate();
+                }
+            } catch (cleanupError) {
+                terminationError = cleanupError;
+                logger.error('Error terminating BGP process after start failure:', cleanupError.message || cleanupError);
+            } finally {
+                this.cleanupBgpRuntime(worker);
+            }
+            return errorResponse((terminationError || error).message || terminationError || error);
         }
     }
 
     async handleStopBgp() {
-        if (null === this.worker) {
+        const worker = this.worker;
+        if (null === worker) {
             logger.error('BGP未启动');
             return errorResponse('BGP未启动');
         }
 
+        let response;
         try {
-            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.STOP_BGP, null);
-            return successResponse(null, result.msg);
+            const result = await worker.sendRequest(BgpConst.BGP_REQ_TYPES.STOP_BGP, null, {
+                timeoutMs: PROTOCOL_PROCESS_TIMEOUTS.STOP
+            });
+            response = successResponse(null, result.msg);
         } catch (error) {
             logger.error('Error stopping BGP:', error.message);
-            return errorResponse(error.message);
-        } finally {
-            // 移除事件监听器
-            this.worker.removeEventListener(BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE, this.peerChangeHandler);
-            await this.worker.terminate();
-            this.worker = null;
-            this.startedAddressFamilies.clear();
-            this.eventDispatcher.cleanup(); // 清理事件发送器
-            this.eventDispatcher = null;
+            response = errorResponse(error.message);
         }
+
+        let terminationError = null;
+        try {
+            // 移除事件监听器
+            worker.removeEventListener(BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE, this.peerChangeHandler);
+            await worker.terminate();
+        } catch (error) {
+            terminationError = error;
+            logger.error('Error terminating BGP process:', error.message || error);
+        } finally {
+            this.cleanupBgpRuntime(worker);
+        }
+        return terminationError ? errorResponse(terminationError.message || terminationError) : response;
     }
 
     async handleGetInstanceInfo() {
@@ -601,15 +594,8 @@ class BgpApp {
 
     async handleGetRoutes(event, addressFamily, page, pageSize, options = {}) {
         try {
-            if (null === this.worker) {
-                const stored = await this.readStoredRoutePage(addressFamily, page, pageSize, options);
-                return successResponse(stored, '获取已存储路由信息成功');
-            }
-
-            if (!this.isAddressFamilyStarted(addressFamily)) {
-                const stored = await this.readStoredRoutePage(addressFamily, page, pageSize, options);
-                return successResponse(stored, '地址族未启动，显示已存储路由');
-            }
+            const runtimeError = this.getRouteRuntimeError(addressFamily);
+            if (runtimeError) return errorResponse(runtimeError);
 
             logger.info(`addressFamily: ${addressFamily}, page: ${page}, pageSize: ${pageSize}`);
             const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.GET_ROUTES, {
@@ -628,17 +614,8 @@ class BgpApp {
 
     async handleGetRouteDetail(event, addressFamily, route) {
         try {
-            if (null === this.worker) {
-                const detail = await this.readStoredRouteDetail(addressFamily, route);
-                return detail ? successResponse(detail, '获取已存储路由详情成功') : errorResponse('路由不存在');
-            }
-
-            if (!this.isAddressFamilyStarted(addressFamily)) {
-                const detail = await this.readStoredRouteDetail(addressFamily, route);
-                return detail
-                    ? successResponse(detail, '地址族未启动，显示已存储路由详情')
-                    : errorResponse('路由不存在');
-            }
+            const runtimeError = this.getRouteRuntimeError(addressFamily);
+            if (runtimeError) return errorResponse(runtimeError);
 
             const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.GET_ROUTE_DETAIL, {
                 addressFamily,

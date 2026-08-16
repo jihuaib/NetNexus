@@ -2,8 +2,8 @@
 
 const fs = require('fs');
 const { randomUUID } = require('crypto');
-const { parentPort } = require('worker_threads');
 const { XMLBuilder, XMLParser } = require('fast-xml-parser');
+const { getParentMessageEndpoint } = require('../core/parentMessageEndpoint');
 const {
     NetconfClient,
     NetconfRpcCancelledError,
@@ -50,6 +50,7 @@ const MAX_RECONNECT_DELAY = 30000;
 const MAX_TIMER_DELAY = 0x7fffffff;
 const MAX_SUBSCRIPTION_HISTORY_PER_PROFILE = 256;
 const MAX_SUBSCRIPTION_HISTORY_BYTES_PER_PROFILE = 16 * 1024 * 1024;
+const parentEndpoint = getParentMessageEndpoint();
 const SUBSCRIBED_NOTIFICATION_STATE_EVENTS = new Set([
     'replay-completed',
     'subscription-completed',
@@ -710,7 +711,7 @@ function approximateJsonBytes(value) {
 }
 
 class NetconfWorkerService {
-    constructor(port = parentPort, options = {}) {
+    constructor(port = parentEndpoint, options = {}) {
         this.port = port;
         this.clientFactory = options.clientFactory || (clientOptions => new NetconfClient(clientOptions));
         this.sessions = new Map();
@@ -721,7 +722,7 @@ class NetconfWorkerService {
         this.activeConnectRequests = new Map();
         this.activeRpcRequests = new Map();
         this.closing = false;
-        if (this.port) this.port.on('message', message => this.handleMessage(message));
+        if (this.port && options.listen !== false) this.port.on('message', message => this.handleMessage(message));
     }
 
     sendResponse(messageId, status, data = null, msg = '', code = null) {
@@ -2287,16 +2288,16 @@ class NetconfWorkerService {
     requestUsesDatastore(request = {}) {
         return Boolean(
             request.targetType === 'datastore' ||
-            ['yang-push', 'rfc8641'].includes(request.subscriptionType) ||
-            request.datastore ||
-            request.datastoreFilter ||
-            request.datastoreFilterName ||
-            request.selectionFilterRef ||
-            request.updateTrigger ||
-            request.trigger ||
-            request.mode ||
-            request.period !== undefined ||
-            request.dampeningPeriod !== undefined
+                ['yang-push', 'rfc8641'].includes(request.subscriptionType) ||
+                request.datastore ||
+                request.datastoreFilter ||
+                request.datastoreFilterName ||
+                request.selectionFilterRef ||
+                request.updateTrigger ||
+                request.trigger ||
+                request.mode ||
+                request.period !== undefined ||
+                request.dampeningPeriod !== undefined
         );
     }
 
@@ -2804,6 +2805,6 @@ class NetconfWorkerService {
     }
 }
 
-if (parentPort) new NetconfWorkerService(parentPort);
+if (parentEndpoint && require.main === module) new NetconfWorkerService(parentEndpoint);
 
 module.exports = NetconfWorkerService;

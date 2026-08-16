@@ -1,5 +1,6 @@
 const os = require('node:os');
 const { performance } = require('node:perf_hooks');
+const { getProtocolProcessDisplayName } = require('../worker/core/protocolProcessServices');
 
 const GET_PROCESS_RESOURCE_SNAPSHOT_CHANNEL = 'process-resource:getSnapshot';
 
@@ -55,6 +56,12 @@ function getProcessDisplayName(metric, windowTitlesByPid, appName) {
         return windowTitles.join(' / ');
     }
 
+    const protocolProcessName =
+        getProtocolProcessDisplayName(metric.serviceName) || getProtocolProcessDisplayName(metric.name);
+    if (protocolProcessName) {
+        return protocolProcessName;
+    }
+
     const name = typeof metric.name === 'string' ? metric.name.trim() : '';
     if (metric.type === 'Browser') {
         return `${name || appName || 'NetNexus'} 主进程`;
@@ -77,12 +84,17 @@ function normalizeProcessMetric(metric, options = {}) {
     const type = typeof metric?.type === 'string' && metric.type ? metric.type : 'Unknown';
     const serviceName = typeof metric?.serviceName === 'string' ? metric.serviceName : '';
     const name = typeof metric?.name === 'string' ? metric.name : '';
+    const isProtocolProcess = Boolean(
+        getProtocolProcessDisplayName(serviceName) || getProtocolProcessDisplayName(name)
+    );
 
     return {
         key: `${pid}:${creationTime || 0}`,
         pid,
         type,
-        typeLabel: PROCESS_TYPE_DISPLAY_NAMES[type] || PROCESS_TYPE_DISPLAY_NAMES.Unknown,
+        typeLabel: isProtocolProcess
+            ? '协议进程'
+            : PROCESS_TYPE_DISPLAY_NAMES[type] || PROCESS_TYPE_DISPLAY_NAMES.Unknown,
         displayName: getProcessDisplayName({ ...metric, pid, type }, options.windowTitlesByPid, options.appName),
         name,
         serviceName,

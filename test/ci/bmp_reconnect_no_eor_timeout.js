@@ -4,9 +4,10 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { once } = require('node:events');
-const { Worker } = require('node:worker_threads');
 
 const BmpConst = require('../../electron/const/bmpConst');
+const ProtocolProcessHost = require('../../electron/worker/core/protocolProcessHost');
+const { PROTOCOL_PROCESS_SERVICES } = require('../../electron/worker/core/protocolProcessServices');
 const { buildScenario, parseArgs } = require('../../scripts/mockBmpClient');
 
 const workerPath = path.join(__dirname, '..', '..', 'electron', 'worker', 'bmp', 'bmpWorker.js');
@@ -147,7 +148,11 @@ async function main() {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-reconnect-no-eor-'));
     const dbPath = path.join(tempDir, 'bmp.sqlite3');
     const port = await getFreePort();
-    const worker = new Worker(workerPath);
+    const worker = new ProtocolProcessHost(workerPath, { serviceName: PROTOCOL_PROCESS_SERVICES.BMP });
+    assert.notEqual(worker.pid, process.pid, 'BMP must run in an independent process');
+    if (process.env.NETNEXUS_EXPECT_UTILITY_PROCESS === '1') {
+        assert.equal(worker.runtimeKind, 'utility-process');
+    }
     const harness = createWorkerHarness(worker);
     const options = parseArgs(['--routes', '1', '--interval', '0', '--once', '--no-dump-packets']);
     const scenario = buildScenario(options);
@@ -290,7 +295,11 @@ async function main() {
     }
 }
 
-main().catch(error => {
-    console.error(error);
-    process.exitCode = 1;
-});
+if (require.main === module) {
+    main().catch(error => {
+        console.error(error);
+        process.exitCode = 1;
+    });
+}
+
+module.exports = main;

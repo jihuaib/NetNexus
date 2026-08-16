@@ -12,35 +12,13 @@ const appPath = path.join(projectRoot, 'electron', 'app', 'rpkiApp.js');
 const importWorkerPath = path.join(projectRoot, 'electron', 'worker', 'rpki', 'rpkiImportWorker.js');
 const { RPKI_IMPORT_OP } = require(path.join(projectRoot, 'electron', 'worker', 'rpki', 'rpkiImportTask.js'));
 const RpkiSqliteStore = require(path.join(projectRoot, 'electron', 'worker', 'rpki', 'rpkiSqliteStore.js'));
-const RpkiApp = require(path.join(projectRoot, 'electron', 'app', 'rpkiApp.js'));
+const WorkerMessageHandler = require(path.join(projectRoot, 'electron', 'worker', 'core', 'workerMessageHandler.js'));
+WorkerMessageHandler.prototype.init = function initForUnitTest() {};
+const RpkiWorker = require(path.join(projectRoot, 'electron', 'worker', 'rpki', 'rpkiWorker.js'));
 
 const HEARTBEAT_INTERVAL_MS = 10;
 const HEARTBEAT_MAX_GAP_MS = 250;
 const HEARTBEAT_IMPORT_SIZE = 100000;
-
-class MemoryStore {
-    constructor() {
-        this.values = new Map();
-    }
-
-    get(key) {
-        return this.values.get(key);
-    }
-
-    set(key, value) {
-        this.values.set(key, value);
-    }
-}
-
-class FakeIpcMain {
-    constructor() {
-        this.handlers = new Map();
-    }
-
-    handle(name, handler) {
-        this.handlers.set(name, handler);
-    }
-}
 
 function makeRoa(index) {
     return {
@@ -77,18 +55,14 @@ function assertMainProcessImportBoundary() {
     const source = fs.readFileSync(appPath, 'utf8');
     assert.match(
         source,
-        /resolveWorkerPath\(['"]rpki\/rpkiImportWorker\.js['"]\)/,
-        'RpkiApp must delegate JSON imports to the dedicated RPKI import worker'
+        /requestRpki\(RpkiConst\.RPKI_REQ_TYPES\.IMPORT_ROA_JSON/,
+        'RpkiApp must delegate ROA imports to the RPKI utility process'
     );
+    assert.doesNotMatch(source, /\bRpkiSqliteStore\b/, 'Electron main must not open the RPKI SQLite store');
     assert.doesNotMatch(
         source,
-        /\bparse(?:Roa|Aspa)JsonFile\b/,
-        'Electron main must not parse large RPKI JSON files directly'
-    );
-    assert.doesNotMatch(
-        source,
-        /\.(?:begin|stage|commit|abort)(?:Roa|Aspa)Import(?:Batch)?\s*\(/,
-        'Electron main must not execute staged RPKI import transactions directly'
+        /rpkiImportWorker\.js|\bRequestWorkerClient\b/,
+        'Electron main must not own the import worker thread'
     );
 }
 
@@ -223,9 +197,11 @@ async function verifyWorkerImportsAndRollback(client, tempDir) {
 
 async function verifyMainThreadHeartbeat(tempDir) {
     const dbPath = path.join(tempDir, 'heartbeat', 'rpki.sqlite3');
+    const untrustedDbPath = path.join(tempDir, 'untrusted', 'rpki.sqlite3');
     const importPath = path.join(tempDir, 'heartbeat-roas.json');
-    const app = new RpkiApp(new FakeIpcMain(), new MemoryStore());
-    app.getRpkiDatabasePath = () => dbPath;
+    const worker = new RpkiWorker();
+    worker.rpkiConfigData = {};
+    worker.openRpkiStore(dbPath);
     await fs.promises.writeFile(
         importPath,
         JSON.stringify({ roas: Array.from({ length: HEARTBEAT_IMPORT_SIZE }, (_, index) => makeRoa(500000 + index)) }),
@@ -247,10 +223,14 @@ async function verifyMainThreadHeartbeat(tempDir) {
 
     const startedAt = performance.now();
     try {
-        const response = await app.handleImportRoaJson(null, { filePath: importPath });
+        const stats = await worker.importRoaJson('heartbeat-import', {
+            filePath: importPath,
+            dbPath: untrustedDbPath
+        });
         const elapsedMs = performance.now() - startedAt;
-        assert.equal(response.status, 'success');
-        assert.equal(response.data.imported, HEARTBEAT_IMPORT_SIZE);
+        assert.equal(stats.imported, HEARTBEAT_IMPORT_SIZE);
+        assert.ok(Number.isInteger(stats.importWorkerThreadId) && stats.importWorkerThreadId > 0);
+        assert.equal(fs.existsSync(untrustedDbPath), false, 'caller-supplied dbPath must not escape worker ownership');
         assert.ok(
             elapsedMs >= HEARTBEAT_INTERVAL_MS * 2,
             'heartbeat fixture must be large enough to exercise scheduling'
@@ -260,15 +240,15 @@ async function verifyMainThreadHeartbeat(tempDir) {
             maxGapMs < HEARTBEAT_MAX_GAP_MS,
             `RPKI import starved the main event loop for ${maxGapMs.toFixed(1)}ms`
         );
-        assertPrimitiveStats(response.data, 'large ROA import stats');
+        assertPrimitiveStats(stats, 'large ROA import stats');
         assert.ok(
-            Buffer.byteLength(JSON.stringify(response), 'utf8') < 8192,
+            Buffer.byteLength(JSON.stringify(stats), 'utf8') < 8192,
             'the renderer IPC response must not contain imported ROA rows'
         );
     } finally {
         importPending = false;
         clearInterval(heartbeat);
-        await app.closeStorage();
+        await worker.stopRpki('heartbeat-stop');
     }
 }
 

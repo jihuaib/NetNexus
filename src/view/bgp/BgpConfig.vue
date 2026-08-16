@@ -124,9 +124,15 @@
 </template>
 
 <script setup>
-    import { onMounted, onActivated, ref } from 'vue';
+    import { onBeforeUnmount, onMounted, onActivated, ref } from 'vue';
     import { notify } from '../../utils/notify';
-    import { BGP_ADDR_FAMILY, DEFAULT_VALUES } from '../../const/bgpConst';
+    import EventBus from '../../utils/eventBus';
+    import {
+        BGP_ADDR_FAMILY,
+        BGP_EVENT_PAGE_ID,
+        BGP_RUNTIME_CHANGED_EVENT,
+        DEFAULT_VALUES
+    } from '../../const/bgpConst';
     import { FormValidator, createBgpConfigValidationRules } from '../../utils/validationCommon';
 
     defineOptions({
@@ -174,6 +180,22 @@
     const bgpLoading = ref(false);
     const bgpRunning = ref(false);
     const instanceInfoList = ref([]);
+    let instanceInfoRequestId = 0;
+
+    const clearInstanceInfo = () => {
+        instanceInfoRequestId += 1;
+        instanceInfoList.value = [];
+    };
+
+    const handleRuntimeChanged = state => {
+        bgpRunning.value = Boolean(state?.running);
+        clearInstanceInfo();
+        if (bgpRunning.value) {
+            fetchInstanceInfo();
+            return;
+        }
+        bgpLoading.value = false;
+    };
 
     const instanceColumns = [
         { title: '地址族', dataIndex: 'addressFamily', key: 'addressFamily' },
@@ -183,9 +205,10 @@
 
     const fetchInstanceInfo = async () => {
         if (!bgpRunning.value) return;
+        const requestId = ++instanceInfoRequestId;
         try {
             const result = await window.bgpApi.getInstanceInfo();
-            if (result.status === 'success') {
+            if (requestId === instanceInfoRequestId && bgpRunning.value && result.status === 'success') {
                 instanceInfoList.value = result.data;
             }
         } catch (error) {
@@ -194,6 +217,7 @@
     };
 
     onMounted(async () => {
+        EventBus.on(BGP_RUNTIME_CHANGED_EVENT, BGP_EVENT_PAGE_ID.PAGE_ID_BGP_CONFIG, handleRuntimeChanged);
         // 加载Bgp保存的配置
         const savedBgpConfig = await window.bgpApi.loadBgpConfig();
         if (savedBgpConfig.status === 'success') {
@@ -208,6 +232,10 @@
         } else {
             console.error('BGP 配置文件加载失败', savedBgpConfig.msg);
         }
+    });
+
+    onBeforeUnmount(() => {
+        EventBus.off(BGP_RUNTIME_CHANGED_EVENT, BGP_EVENT_PAGE_ID.PAGE_ID_BGP_CONFIG);
     });
 
     onActivated(() => {
@@ -233,13 +261,15 @@
 
             bgpLoading.value = true;
             bgpRunning.value = false;
+            clearInstanceInfo();
 
             const result = await window.bgpApi.startBgp(payload);
             if (result.status === 'success') {
                 bgpLoading.value = false;
+                const wasRunning = bgpRunning.value;
                 bgpRunning.value = true;
                 notify.success('BGP 启动成功');
-                fetchInstanceInfo();
+                if (!wasRunning) fetchInstanceInfo();
             } else {
                 bgpLoading.value = false;
                 notify.error(result.msg || 'BGP启动失败');
@@ -255,7 +285,7 @@
         if (result.status === 'success') {
             notify.success(result.msg);
             bgpRunning.value = false;
-            instanceInfoList.value = [];
+            clearInstanceInfo();
         } else {
             notify.error(result.msg || 'BGP停止失败');
         }

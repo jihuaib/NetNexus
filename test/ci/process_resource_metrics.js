@@ -169,6 +169,17 @@ function verifyEmptyAndPlatformSpecificFields() {
     assert.equal(macProcess.privateBytes, null, 'private memory is not reported outside Windows');
     assert.equal(macProcess.idleWakeupsPerSecond, 2);
 
+    const protocolProcess = normalizeProcessMetric({
+        pid: 89,
+        type: 'Utility',
+        name: 'netnexus.protocol.bgp',
+        serviceName: 'node.mojom.NodeService',
+        cpu: { percentCPUUsage: 2.5 },
+        memory: { workingSetSize: 2048, peakWorkingSetSize: 4096 }
+    });
+    assert.equal(protocolProcess.typeLabel, '协议进程');
+    assert.equal(protocolProcess.displayName, 'BGP 协议进程');
+
     assert.deepEqual(normalizeSystemMemory({ total: 1024, free: 2048 }), {
         totalBytes: 1048576,
         freeBytes: 1048576,

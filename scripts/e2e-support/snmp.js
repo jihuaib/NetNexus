@@ -1,11 +1,14 @@
-const { successResponse } = require('./common');
+const { delay, errorResponse, successResponse } = require('./common');
 
 const snmpPageApiScript = `
     window.snmpApi = {
         saveSnmpConfig: config => call('snmp.saveSnmpConfig', config),
         getSnmpConfig: () => call('snmp.getSnmpConfig'),
+        getSnmpRuntimeState: () => call('snmp.getSnmpRuntimeState'),
         startSnmp: config => call('snmp.startSnmp', config),
         stopSnmp: () => call('snmp.stopSnmp'),
+        startSnmpTrap: config => call('snmp.startSnmpTrap', config),
+        stopSnmpTrap: () => call('snmp.stopSnmpTrap'),
         getTrapList: query => call('snmp.getTrapList', query),
         clearTrapHistory: () => call('snmp.clearTrapHistory'),
         selectMibFiles: () => call('snmp.selectMibFiles'),
@@ -89,9 +92,16 @@ function createSnmpPageState() {
         config: {
             targetHost: '192.0.2.10',
             queryPort: 161,
+            port: 162,
             community: 'public',
             supportedVersions: ['v2c']
         },
+        runtime: {
+            running: false,
+            ready: false,
+            trapRunning: false
+        },
+        mibStatusDelayMs: 0,
         traps: [
             {
                 id: 1,
@@ -267,9 +277,35 @@ function findMibNode(nodes, oid) {
     return flattenMibTree(nodes).find(node => node.oid === oid || node.key === oid);
 }
 
-function handlePageCall(controller, method, args) {
+async function handlePageCall(controller, method, args) {
     const snmp = controller.state.snmp;
     if (method === 'snmp.getSnmpConfig') return successResponse(snmp.config);
+    if (method === 'snmp.getSnmpRuntimeState') return successResponse({ ...snmp.runtime });
+    if (method === 'snmp.saveSnmpConfig') {
+        snmp.config = { ...snmp.config, ...(args?.[0] || {}) };
+        return successResponse(null, '配置保存成功');
+    }
+    if (method === 'snmp.startSnmp') {
+        snmp.runtime = { running: true, ready: true, trapRunning: false };
+        controller.emitEvent('snmp:runtimeChanged', { ...snmp.runtime });
+        return successResponse({ ...snmp.runtime }, 'SNMP进程启动成功');
+    }
+    if (method === 'snmp.stopSnmp') {
+        snmp.runtime = { running: false, ready: false, trapRunning: false };
+        controller.emitEvent('snmp:runtimeChanged', { ...snmp.runtime });
+        return successResponse({ ...snmp.runtime }, 'SNMP进程停止成功');
+    }
+    if (method === 'snmp.startSnmpTrap') {
+        if (!snmp.runtime.ready) return errorResponse('SNMP进程尚未就绪');
+        snmp.runtime = { ...snmp.runtime, trapRunning: true };
+        controller.emitEvent('snmp:runtimeChanged', { ...snmp.runtime });
+        return successResponse({ ...snmp.runtime }, 'Trap服务启动成功');
+    }
+    if (method === 'snmp.stopSnmpTrap') {
+        snmp.runtime = { ...snmp.runtime, trapRunning: false };
+        controller.emitEvent('snmp:runtimeChanged', { ...snmp.runtime });
+        return successResponse({ ...snmp.runtime }, 'Trap服务停止成功');
+    }
     if (method === 'snmp.getTrapList') {
         return successResponse({
             list: snmp.traps,
@@ -283,7 +319,10 @@ function handlePageCall(controller, method, args) {
         });
     }
     if (method === 'snmp.clearTrapHistory') return successResponse(null);
-    if (method === 'snmp.getMibStatus') return successResponse(snmp.mibStatus);
+    if (method === 'snmp.getMibStatus') {
+        if (snmp.mibStatusDelayMs > 0) await delay(snmp.mibStatusDelayMs);
+        return successResponse(snmp.mibStatus);
+    }
     if (method === 'snmp.getMibSource') {
         const request = args?.[0] || {};
         const filePath = typeof request === 'string' ? request : String(request.filePath || '');

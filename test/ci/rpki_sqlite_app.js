@@ -1,12 +1,17 @@
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const fs = require('node:fs');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+const { app } = require('electron');
 
 process.env.NODE_ENV = 'test';
 
 const RpkiApp = require('../../electron/app/rpkiApp');
 const RpkiConst = require('../../electron/const/rpkiConst');
+const RequestWorkerClient = require('../../electron/worker/core/requestWorkerClient');
+const RpkiSqliteStore = require('../../electron/worker/rpki/rpkiSqliteStore');
+const { PROTOCOL_PROCESS_SERVICES } = require('../../electron/worker/core/protocolProcessServices');
 
 class MemoryStore {
     constructor(initial = {}) {
@@ -20,10 +25,6 @@ class MemoryStore {
     set(key, value) {
         this.values.set(key, value);
     }
-
-    delete(key) {
-        this.values.delete(key);
-    }
 }
 
 class FakeIpcMain {
@@ -36,258 +37,399 @@ class FakeIpcMain {
     }
 }
 
-function makeRoa(index) {
-    return {
-        prefix: `10.${(index >>> 16) & 0xff}.${(index >>> 8) & 0xff}.${index & 0xff}/32`,
-        asn: `AS${64512 + (index % 1000)}`,
-        maxLength: 32
-    };
-}
-
-function makeAspa(index) {
-    return {
-        customerAsn: 100000 + index,
-        providerAsns: [200000 + index, 300000 + index, 300000 + index],
-        afiFlags: (index % 3) + 1
-    };
-}
-
-function configurePaths(rpkiApp, rootDir) {
-    rpkiApp.getRpkiDatabasePath = () => path.join(rootDir, 'rpki', 'rpki.sqlite3');
-}
-
-async function testCloseWaitsForImport(rootDir) {
-    const app = new RpkiApp(new FakeIpcMain(), new MemoryStore());
-    configurePaths(app, rootDir);
-    const importPath = path.join(rootDir, 'close-during-import.json');
-    await fs.promises.mkdir(rootDir, { recursive: true });
-    await fs.promises.writeFile(
-        importPath,
-        JSON.stringify({ roas: Array.from({ length: 5001 }, (_, index) => makeRoa(40000 + index)) }),
-        'utf8'
-    );
-
-    const sqliteStore = await app.ensureRpkiStorage();
-    const originalRunImportWorker = app.runImportWorker.bind(app);
-    let importWorkerStartedResolve;
-    const importWorkerStarted = new Promise(resolve => {
-        importWorkerStartedResolve = resolve;
+function getFreeTcpPort() {
+    return new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', () => {
+            const port = server.address().port;
+            server.close(error => (error ? reject(error) : resolve(port)));
+        });
     });
-    app.runImportWorker = (...args) => {
-        importWorkerStartedResolve();
-        return originalRunImportWorker(...args);
-    };
-    const importPromise = app.importRoaJsonFile(importPath);
-    await importWorkerStarted;
-    const closePromise = app.closeStorage();
-    const stats = await importPromise;
-    await closePromise;
-    assert.equal(stats.imported, 5001, 'closeStorage must drain an in-flight import');
-    assert.equal(sqliteStore.db, null, 'closeStorage must close SQLite after the mutation queue drains');
-    const reopened = await app.ensureRpkiStorage();
-    const reopenedInsert = await app.handleAddRoa(null, makeRoa(49999));
-    assert.equal(reopenedInsert.status, 'success', 'the same RpkiApp instance must accept CRUD after a macOS close');
-    assert.equal(reopened.hasRoa(makeRoa(49999)), true);
-    await app.closeStorage();
 }
 
-async function testWorkerSyncFailure(rootDir) {
-    const app = new RpkiApp(new FakeIpcMain(), new MemoryStore());
-    configurePaths(app, rootDir);
-    const sqliteStore = await app.ensureRpkiStorage();
-    let terminated = false;
-    app.worker = {
-        async sendRequest() {
-            throw new Error('synthetic worker failure');
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitFor(predicate, description, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    do {
+        const result = predicate();
+        if (result) return result;
+        await delay(25);
+    } while (Date.now() < deadline);
+    throw new Error(`Timed out waiting for ${description}`);
+}
+
+function assertNotRunning(response) {
+    assert.equal(response.status, 'error');
+    assert.equal(response.data, null);
+    assert.match(response.msg, /RPKI未运行/);
+}
+
+async function assertUtilityProcess(client) {
+    const host = client.process;
+    assert.equal(host.runtimeKind, 'utility-process', 'RPKI ownership CI must use a real Electron Utility process');
+    const pid = await waitFor(() => host.pid, 'RPKI Utility PID');
+    assert.notEqual(pid, process.pid, 'RPKI SQLite owner must not be the Electron main process');
+    const metric = await waitFor(
+        () => app.getAppMetrics().find(item => item.pid === pid),
+        `RPKI Utility PID ${pid} to appear in app metrics`
+    );
+    assert.equal(metric.type, 'Utility');
+    assert(
+        metric.name === PROTOCOL_PROCESS_SERVICES.RPKI || metric.serviceName === PROTOCOL_PROCESS_SERVICES.RPKI,
+        'RPKI Utility must retain its protocol service identity'
+    );
+    return { host, pid };
+}
+
+async function startRpki(rpkiApp, sender) {
+    const response = await rpkiApp.handleStartRpki(
+        { sender },
+        {
+            port: await getFreeTcpPort(),
+            maxProtocolVersion: RpkiConst.RPKI_MAX_SUPPORTED_VERSION
+        }
+    );
+    assert.equal(response.status, 'success', response.msg);
+    assert.equal(rpkiApp.rpkiReady, true, 'RPKI requests must only become available after START succeeds');
+    return rpkiApp.worker;
+}
+
+async function assertStoppedDataPlane(rpkiApp, roaPath, aspaPath) {
+    const roa = { prefix: '192.0.2.0/24', asn: 64512, maxLength: 24 };
+    const aspa = { customerAsn: 64512, providerAsns: [64513], afiFlags: 3 };
+
+    for (const response of [
+        await rpkiApp.handleAddRoa(null, roa),
+        await rpkiApp.handleDeleteRoa(null, roa),
+        await rpkiApp.handleDeleteAllRoa(),
+        await rpkiApp.handleGetRoaList(null, { page: 1, pageSize: 25 }),
+        await rpkiApp.handleImportRoaJson(null, { filePath: roaPath }),
+        await rpkiApp.handleAddAspa(null, aspa),
+        await rpkiApp.handleDeleteAspa(null, aspa),
+        await rpkiApp.handleDeleteAllAspa(),
+        await rpkiApp.handleGetAspaList(null, { page: 1, pageSize: 25 }),
+        await rpkiApp.handleImportAspaJson(null, { filePath: aspaPath })
+    ]) {
+        assertNotRunning(response);
+    }
+
+    await assert.rejects(rpkiApp.importRoaJsonFile(roaPath), /RPKI未运行/);
+    await assert.rejects(rpkiApp.importAspaJsonFile(aspaPath), /RPKI未运行/);
+}
+
+function createDeferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
+
+function createRendererTarget(events) {
+    return {
+        send(channel, payload) {
+            if (channel === 'unified-event') events.push(payload);
         },
-        removeEventListener() {},
-        async terminate() {
-            terminated = true;
+        isDestroyed() {
+            return false;
         }
     };
+}
 
-    try {
-        const result = await app.handleAddRoa(null, makeRoa(50000));
-        assert.equal(result.status, 'error');
-        assert.match(result.msg, /数据已写入SQLite/);
-        assert.equal(sqliteStore.hasRoa(makeRoa(50000)), true, 'committed data must survive worker sync failure');
-        assert.equal(app.worker, null, 'a stale worker must be removed after sync failure');
-        assert.equal(terminated, true, 'a stale worker must be terminated');
-    } finally {
-        app.worker = null;
-        await app.closeStorage();
-    }
+async function testConcurrentStartStopSingleFlight() {
+    const startResult = createDeferred();
+    const rendererEvents = [];
+    const sender = createRendererTarget(rendererEvents);
+    const calls = { start: 0, stop: 0, terminate: 0 };
+    let onExit = null;
+    const worker = {
+        addEventListener() {},
+        removeEventListener() {},
+        sendRequest(op) {
+            if (op === RpkiConst.RPKI_REQ_TYPES.START_RPKI) {
+                calls.start += 1;
+                return startResult.promise;
+            }
+            if (op === RpkiConst.RPKI_REQ_TYPES.STOP_RPKI) {
+                calls.stop += 1;
+                return Promise.resolve({ status: 'success', data: null, msg: 'stopped after pending start' });
+            }
+            throw new Error(`Unexpected fake RPKI operation: ${op}`);
+        },
+        async terminate() {
+            calls.terminate += 1;
+            onExit?.(0, worker, { expected: true });
+        }
+    };
+    const rpkiApp = new RpkiApp(new FakeIpcMain(), new MemoryStore());
+    rpkiApp.createRpkiProcess = (_workerPath, options) => {
+        onExit = options.onExit;
+        return worker;
+    };
+
+    const firstStart = rpkiApp.handleStartRpki({ sender }, { port: 8282 });
+    const secondStart = rpkiApp.handleStartRpki({ sender }, { port: 8283 });
+    assert.strictEqual(secondStart, firstStart, 'concurrent START calls must share one lifecycle operation');
+    assert.equal(calls.start, 1);
+
+    assert.equal(rpkiApp.cancelPendingStart(), true);
+    assert.equal(rpkiApp.rpkiStopping, true, 'an external shutdown cancellation must reserve graceful STOP');
+    const firstStop = rpkiApp.handleStopRpki();
+    const secondStop = rpkiApp.handleStopRpki();
+    assert.strictEqual(secondStop, firstStop, 'concurrent STOP calls must share one lifecycle operation');
+    assert.equal(calls.stop, 0, 'STOP must wait for the real START response before graceful shutdown');
+    assert.equal(calls.terminate, 0, 'the Utility process must not be killed while START is still settling');
+
+    startResult.resolve({ status: 'success', data: null, msg: 'late start success' });
+    const [startResponse, stopResponse] = await Promise.all([firstStart, firstStop]);
+    assert.equal(startResponse.status, 'error');
+    assert.match(startResponse.msg, /启动已取消/);
+    assert.equal(stopResponse.status, 'success', stopResponse.msg);
+    assert.equal(calls.stop, 1, 'a successfully initialized Utility must receive graceful STOP before termination');
+    assert.equal(calls.terminate, 1);
+    assert.equal(rpkiApp.worker, null);
+    assert.equal(rpkiApp.rpkiReady, false);
+
+    const runtimeStates = rendererEvents
+        .filter(event => event.type === 'rpki:runtimeChanged')
+        .map(event => event.data.running);
+    assert.deepEqual(runtimeStates, [false], 'a START response arriving during STOP must never emit running=true');
+}
+
+async function testTerminateFailureRetainsWorkerForRetry() {
+    const rendererEvents = [];
+    const sender = createRendererTarget(rendererEvents);
+    const calls = { start: 0, stop: 0, terminate: 0 };
+    let onExit = null;
+    const worker = {
+        addEventListener() {},
+        removeEventListener() {},
+        sendRequest(op) {
+            if (op === RpkiConst.RPKI_REQ_TYPES.START_RPKI) {
+                calls.start += 1;
+                return Promise.resolve({ status: 'success', data: null, msg: 'started' });
+            }
+            if (op === RpkiConst.RPKI_REQ_TYPES.STOP_RPKI) {
+                calls.stop += 1;
+                return Promise.resolve({ status: 'success', data: null, msg: 'stopped' });
+            }
+            throw new Error(`Unexpected fake RPKI operation: ${op}`);
+        },
+        async terminate() {
+            calls.terminate += 1;
+            if (calls.terminate === 1) throw new Error('synthetic terminate failure');
+            onExit?.(0, worker, { expected: true });
+        }
+    };
+    const rpkiApp = new RpkiApp(new FakeIpcMain(), new MemoryStore());
+    rpkiApp.createRpkiProcess = (_workerPath, options) => {
+        onExit = options.onExit;
+        return worker;
+    };
+
+    const started = await rpkiApp.handleStartRpki({ sender }, { port: 8282 });
+    assert.equal(started.status, 'success', started.msg);
+
+    const firstStop = await rpkiApp.handleStopRpki();
+    assert.equal(firstStop.status, 'error', 'terminate failure must never be reported as a successful STOP');
+    assert.match(firstStop.msg, /终止失败.*保留进程句柄/);
+    assert.strictEqual(rpkiApp.worker, worker, 'failed termination must retain the exact worker for a retry');
+    assert.equal(rpkiApp.rpkiReady, false);
+    assert.equal(rpkiApp.rpkiStopping, false, 'failed termination must leave STOP retryable');
+
+    const blockedRestart = await rpkiApp.handleStartRpki({ sender }, { port: 8283 });
+    assert.equal(blockedRestart.status, 'error', 'an uncollected Utility process must block a replacement START');
+
+    const retryStop = await rpkiApp.handleStopRpki();
+    assert.equal(retryStop.status, 'success', retryStop.msg);
+    assert.equal(calls.stop, 1, 'a termination-only retry must not resend STOP to an already stopped Utility');
+    assert.equal(calls.terminate, 2);
+    assert.equal(rpkiApp.worker, null);
+
+    const runtimeStates = rendererEvents
+        .filter(event => event.type === 'rpki:runtimeChanged')
+        .map(event => event.data.running);
+    assert.deepEqual(runtimeStates, [true, false], 'termination retry must not duplicate runtime state events');
 }
 
 async function main() {
-    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'netnexus-rpki-sqlite-app-'));
+    assert.equal(
+        process.env.NETNEXUS_EXPECT_UTILITY_PROCESS,
+        '1',
+        'RPKI ownership CI must run through the real Electron Utility-process wrapper'
+    );
+
+    await testConcurrentStartStopSingleFlight();
+    await testTerminateFailureRetainsWorkerForRetry();
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-rpki-process-ownership-'));
+    const dbPath = path.join(tempDir, 'rpki', 'rpki.sqlite3');
+    const roaPath = path.join(tempDir, 'roas.json');
+    const aspaPath = path.join(tempDir, 'aspas.json');
+    fs.writeFileSync(
+        roaPath,
+        JSON.stringify({
+            roas: [
+                { prefix: '198.51.100.0/24', asn: 65001, maxLength: 24 },
+                { prefix: '203.0.113.0/24', asn: 65002, maxLength: 24 }
+            ]
+        }),
+        'utf8'
+    );
+    fs.writeFileSync(
+        aspaPath,
+        JSON.stringify({
+            aspas: [
+                { customer_asid: 65001, providers: [65010, 65011] },
+                { customer_asid: 65002, providers: [65012] }
+            ]
+        }),
+        'utf8'
+    );
+
+    const rendererEvents = [];
+    const sender = createRendererTarget(rendererEvents);
     const rpkiApp = new RpkiApp(new FakeIpcMain(), new MemoryStore());
-    configurePaths(rpkiApp, tempDir);
-    let restartedRpkiApp = null;
+    rpkiApp.getRpkiDatabasePath = () => dbPath;
 
+    const originalSqliteOpen = RpkiSqliteStore.prototype.open;
+    const originalThreadStart = RequestWorkerClient.prototype.start;
+    RpkiSqliteStore.prototype.open = function forbidMainProcessSqliteOpen() {
+        throw new Error('MAIN_PROCESS_RPKI_SQLITE_ACCESS_FORBIDDEN');
+    };
+    RequestWorkerClient.prototype.start = function forbidMainProcessImportThread() {
+        throw new Error('MAIN_PROCESS_RPKI_IMPORT_THREAD_FORBIDDEN');
+    };
+
+    let firstProcess = null;
+    let secondProcess = null;
     try {
-        const sqliteStore = await rpkiApp.ensureRpkiStorage();
-        assert.equal(sqliteStore.getRoaCount(), 0, 'a new major-version SQLite store must start empty');
-        assert.equal(sqliteStore.getAspaCount(), 0, 'a new major-version SQLite store must start empty');
-        assert.equal(rpkiApp.roaQueryIndex, undefined, 'RpkiApp must not retain the old full-memory ROA index');
+        assert.equal(typeof rpkiApp.closeStorage, 'undefined', 'RpkiApp must not expose main-process SQLite lifecycle');
+        await assertStoppedDataPlane(rpkiApp, roaPath, aspaPath);
+        assert.equal(fs.existsSync(dbPath), false, 'stopped RPKI data-plane calls must not create the database');
 
-        sqliteStore.addRoa({ prefix: '192.0.2.99/24', asn: 'AS65000', maxLength: 24 });
-        sqliteStore.upsertAspa({ customerAsn: 65000, providerAsns: [65002, 65002], afiFlags: 3 });
+        const firstClient = await startRpki(rpkiApp, sender);
+        firstProcess = await assertUtilityProcess(firstClient);
+        assert.equal(fs.existsSync(dbPath), true, 'the RPKI Utility process must create its SQLite database on START');
 
-        const workerCalls = [];
-        rpkiApp.worker = {
-            async sendRequest(type, payload) {
-                workerCalls.push({ type, payload });
-                return { status: 'success', data: null, msg: '' };
-            }
+        const observedRequests = [];
+        const sendRequest = firstClient.sendRequest.bind(firstClient);
+        firstClient.sendRequest = async (op, data, options) => {
+            const result = await sendRequest(op, data, options);
+            observedRequests.push({ op, data, result });
+            return result;
         };
 
-        const addResult = await rpkiApp.handleAddRoa(null, {
-            prefix: '198.51.100.7/24',
-            asn: 'AS65010',
+        const addedRoa = await rpkiApp.handleAddRoa(null, {
+            prefix: '192.0.2.7/24',
+            asn: 'AS65000',
             maxLength: 24
         });
-        assert.equal(addResult.status, 'success');
-        assert.equal(sqliteStore.getRoaCount(), 2);
-        assert.equal(workerCalls.at(-1).type, RpkiConst.RPKI_REQ_TYPES.DATASET_CHANGED);
-        assert.equal(workerCalls.at(-1).payload.operations[0].action, 'announce');
+        assert.equal(addedRoa.status, 'success', addedRoa.msg);
 
-        const duplicateResult = await rpkiApp.handleAddRoa(null, {
-            prefix: '198.51.100.0/24',
-            asn: 65010,
+        const addedAspa = await rpkiApp.handleAddAspa(null, {
+            customerAsn: 65000,
+            providerAsns: [65020, 65021],
+            afiFlags: 3
+        });
+        assert.equal(addedAspa.status, 'success', addedAspa.msg);
+
+        const roaPage = await rpkiApp.handleGetRoaList(null, { page: 1, pageSize: 25 });
+        const aspaPage = await rpkiApp.handleGetAspaList(null, { page: 1, pageSize: 25 });
+        assert.equal(roaPage.status, 'success', roaPage.msg);
+        assert.equal(aspaPage.status, 'success', aspaPage.msg);
+        assert.equal(roaPage.data.storageTotal, 1);
+        assert.equal(aspaPage.data.storageTotal, 1);
+
+        const roaStats = await rpkiApp.importRoaJsonFile(roaPath);
+        const aspaStats = await rpkiApp.importAspaJsonFile(aspaPath);
+        assert.equal(roaStats.imported, 2);
+        assert.equal(aspaStats.imported, 2);
+        assert(Number.isInteger(roaStats.importWorkerThreadId) && roaStats.importWorkerThreadId > 0);
+        assert(Number.isInteger(aspaStats.importWorkerThreadId) && aspaStats.importWorkerThreadId > 0);
+
+        const roaImportRequest = observedRequests.find(entry => entry.op === RpkiConst.RPKI_REQ_TYPES.IMPORT_ROA_JSON);
+        const aspaImportRequest = observedRequests.find(
+            entry => entry.op === RpkiConst.RPKI_REQ_TYPES.IMPORT_ASPA_JSON
+        );
+        assert.deepEqual(Object.keys(roaImportRequest.data).sort(), ['filePath', 'limit']);
+        assert.deepEqual(Object.keys(aspaImportRequest.data).sort(), ['filePath', 'limit']);
+        assert.equal('dbPath' in roaImportRequest.data, false, 'main must not send or own the SQLite import path');
+
+        const rendererImport = await rpkiApp.handleImportRoaJson({ sender }, { filePath: roaPath, limit: 1 });
+        assert.equal(rendererImport.status, 'success', rendererImport.msg);
+        assert.equal(
+            Object.prototype.hasOwnProperty.call(rendererImport.data, 'importWorkerThreadId'),
+            false,
+            'the nested worker thread id is CI diagnostics and must not reach the renderer'
+        );
+
+        const deletedRoa = await rpkiApp.handleDeleteRoa(null, {
+            prefix: '192.0.2.0/24',
+            asn: 65000,
             maxLength: 24
         });
-        assert.equal(duplicateResult.status, 'error', 'canonical duplicate ROA should be rejected by SQLite');
+        const deletedAspa = await rpkiApp.handleDeleteAspa(null, { customerAsn: 65000 });
+        assert.equal(deletedRoa.status, 'success', deletedRoa.msg);
+        assert.equal(deletedAspa.status, 'success', deletedAspa.msg);
 
-        const replaceAspaResult = await rpkiApp.handleAddAspa(null, {
-            customerAsn: 65000,
-            providerAsns: [65003, 65003, 65004],
-            afiFlags: 2
-        });
-        assert.equal(replaceAspaResult.status, 'success');
-        assert.equal(workerCalls.at(-1).payload.operations[0].action, 'replace');
-        assert.deepEqual(workerCalls.at(-1).payload.operations[0].oldData.providerAsns, [65002, 65002]);
-        const callsBeforeIdenticalAspa = workerCalls.length;
-        const serialBeforeIdenticalAspa = sqliteStore.getCacheSerial();
-        const identicalAspaResult = await rpkiApp.handleAddAspa(null, {
-            customerAsn: 65000,
-            providerAsns: [65003, 65003, 65004],
-            afiFlags: 2
-        });
-        assert.equal(identicalAspaResult.status, 'success');
-        assert.equal(workerCalls.length, callsBeforeIdenticalAspa, 'identical ASPA must not notify the worker');
-        assert.equal(sqliteStore.getCacheSerial(), serialBeforeIdenticalAspa);
+        const clearedRoas = await rpkiApp.handleDeleteAllRoa();
+        const clearedAspas = await rpkiApp.handleDeleteAllAspa();
+        assert.equal(clearedRoas.status, 'success', clearedRoas.msg);
+        assert.equal(clearedAspas.status, 'success', clearedAspas.msg);
 
-        const roaImportPath = path.join(tempDir, 'import-roas.json');
-        const aspaImportPath = path.join(tempDir, 'import-aspas.json');
-        await fs.promises.writeFile(
-            roaImportPath,
-            JSON.stringify({ roas: Array.from({ length: 5001 }, (_, index) => makeRoa(index)) }),
-            'utf8'
-        );
-        await fs.promises.writeFile(
-            aspaImportPath,
-            JSON.stringify({ aspas: Array.from({ length: 5001 }, (_, index) => makeAspa(index)) }),
-            'utf8'
-        );
-
-        workerCalls.length = 0;
-        const roaStats = await rpkiApp.importRoaJsonFile(roaImportPath);
-        assert.equal(roaStats.imported, 5001);
-        assert.equal(roaStats.total, 5003);
-        assert.equal(workerCalls.length, 1, 'large ROA import should emit one cache boundary, not per-row IPC');
-        assert.equal(workerCalls[0].type, RpkiConst.RPKI_REQ_TYPES.DATASET_CHANGED);
-        assert.equal(workerCalls[0].payload.invalidate, true);
-
-        const malformedRoaPath = path.join(tempDir, 'malformed-roas.json');
-        const malformedAspaPath = path.join(tempDir, 'malformed-aspas.json');
-        await fs.promises.writeFile(
-            malformedRoaPath,
-            `{"roas":[${Array.from({ length: 5001 }, (_, index) => JSON.stringify(makeRoa(20000 + index))).join(',')}`,
-            'utf8'
-        );
-        await fs.promises.writeFile(
-            malformedAspaPath,
-            `{"aspas":[${Array.from({ length: 5001 }, (_, index) => JSON.stringify(makeAspa(20000 + index))).join(',')}`,
-            'utf8'
-        );
-        const beforeMalformed = {
-            roas: sqliteStore.getRoaCount(),
-            aspas: sqliteStore.getAspaCount(),
-            serial: sqliteStore.getCacheSerial(),
-            workerCalls: workerCalls.length
-        };
-        await assert.rejects(rpkiApp.importRoaJsonFile(malformedRoaPath), /ROA JSON文件不完整或格式错误/);
-        await assert.rejects(rpkiApp.importAspaJsonFile(malformedAspaPath), /ASPA JSON文件不完整或格式错误/);
-        assert.equal(sqliteStore.getRoaCount(), beforeMalformed.roas, 'malformed ROA import must be atomic');
-        assert.equal(sqliteStore.getAspaCount(), beforeMalformed.aspas, 'malformed ASPA import must be atomic');
-        assert.equal(sqliteStore.getCacheSerial(), beforeMalformed.serial, 'failed imports must not bump serial');
-        assert.equal(workerCalls.length, beforeMalformed.workerCalls, 'failed imports must not notify the worker');
-        assert.equal(workerCalls[0].payload.operations.length, 0);
-
-        const duplicateImportPath = path.join(tempDir, 'duplicate-roas.json');
-        await fs.promises.writeFile(
-            duplicateImportPath,
-            JSON.stringify({ roas: Array.from({ length: 10001 }, () => makeRoa(0)) }),
-            'utf8'
-        );
-        const duplicateStats = await rpkiApp.importRoaJsonFile(duplicateImportPath, { limit: 1 });
-        assert.equal(duplicateStats.imported, 0);
-        assert.equal(duplicateStats.duplicate, 10001);
-
-        workerCalls.length = 0;
-        const aspaStats = await rpkiApp.importAspaJsonFile(aspaImportPath);
-        assert.equal(aspaStats.imported, 5001);
-        assert.equal(aspaStats.total, 5002);
-        assert.equal(workerCalls.length, 1, 'large ASPA import should emit one cache boundary, not per-row IPC');
-        assert.equal(workerCalls[0].payload.invalidate, true);
-
-        const lastRoaPage = await rpkiApp.handleGetRoaList(null, { page: 501, pageSize: 10 });
-        assert.equal(lastRoaPage.status, 'success');
-        assert.equal(lastRoaPage.data.items.length, 3);
-        assert.equal(lastRoaPage.data.storageTotal, 5003);
-
-        const boundedDefaultList = await rpkiApp.handleGetRoaList(null);
-        assert.equal(boundedDefaultList.status, 'success');
-        assert.equal(boundedDefaultList.data.length, 1000, 'the default list response must remain bounded');
-
-        const deleteRoas = await rpkiApp.handleDeleteAllRoa();
-        const deleteAspas = await rpkiApp.handleDeleteAllAspa();
-        assert.equal(deleteRoas.data.deleted, 5003);
-        assert.equal(deleteAspas.data.deleted, 5002);
-        assert.equal(sqliteStore.getRoaCount(), 0);
-        assert.equal(sqliteStore.getAspaCount(), 0);
-
-        rpkiApp.worker = null;
-        const retainedRoa = makeRoa(60000);
-        const retainedAspa = makeAspa(60000);
+        const retainedRoa = { prefix: '10.0.0.0/24', asn: 65100, maxLength: 24 };
+        const retainedAspa = { customerAsn: 65100, providerAsns: [65101], afiFlags: 3 };
         assert.equal((await rpkiApp.handleAddRoa(null, retainedRoa)).status, 'success');
         assert.equal((await rpkiApp.handleAddAspa(null, retainedAspa)).status, 'success');
-        await rpkiApp.closeStorage();
-        restartedRpkiApp = new RpkiApp(new FakeIpcMain(), new MemoryStore());
-        configurePaths(restartedRpkiApp, tempDir);
-        const reopened = await restartedRpkiApp.ensureRpkiStorage();
-        assert.equal(reopened.getRoaCount(), 1, 'same-version restart must retain newly stored ROAs');
-        assert.equal(reopened.getAspaCount(), 1, 'same-version restart must retain newly stored ASPAs');
-        assert.equal(reopened.hasRoa(retainedRoa), true);
-        assert.deepEqual(reopened.getAspa(retainedAspa.customerAsn).providerAsns, retainedAspa.providerAsns);
 
-        await restartedRpkiApp.closeStorage();
-        restartedRpkiApp = null;
+        const firstStop = await rpkiApp.handleStopRpki();
+        assert.equal(firstStop.status, 'success', firstStop.msg);
+        assert.equal(rpkiApp.rpkiReady, false);
+        await waitFor(() => firstProcess.host.runtime === null, 'first RPKI Utility to exit');
+        await assertStoppedDataPlane(rpkiApp, roaPath, aspaPath);
 
-        await testCloseWaitsForImport(path.join(tempDir, 'close-drain'));
-        await testWorkerSyncFailure(path.join(tempDir, 'worker-failure'));
+        const secondClient = await startRpki(rpkiApp, sender);
+        secondProcess = await assertUtilityProcess(secondClient);
+        assert.notEqual(secondProcess.pid, firstProcess.pid, 'RPKI restart must create a new Utility process');
 
-        console.log('RPKI SQLite app integration tests passed');
+        const restoredRoas = await rpkiApp.handleGetRoaList(null, { page: 1, pageSize: 25 });
+        const restoredAspas = await rpkiApp.handleGetAspaList(null, { page: 1, pageSize: 25 });
+        assert.equal(restoredRoas.data.storageTotal, 1, 'ROA data must be restored by the restarted Utility process');
+        assert.equal(restoredAspas.data.storageTotal, 1, 'ASPA data must be restored by the restarted Utility process');
+
+        const secondStop = await rpkiApp.handleStopRpki();
+        assert.equal(secondStop.status, 'success', secondStop.msg);
+        await waitFor(() => secondProcess.host.runtime === null, 'second RPKI Utility to exit');
+
+        const runtimeStates = rendererEvents
+            .filter(event => event.type === 'rpki:runtimeChanged')
+            .map(event => event.data.running);
+        assert.deepEqual(runtimeStates, [true, false, true, false]);
+
+        console.log(
+            `RPKI Utility ownership passed: main=${process.pid}, first=${firstProcess.pid}, second=${secondProcess.pid}, ` +
+                `importThreads=${roaStats.importWorkerThreadId}/${aspaStats.importWorkerThreadId}`
+        );
     } finally {
-        rpkiApp.worker = null;
-        await restartedRpkiApp?.closeStorage();
-        await rpkiApp.closeStorage();
-        await fs.promises.rm(tempDir, { recursive: true, force: true });
+        if (rpkiApp.worker) await rpkiApp.handleStopRpki().catch(() => {});
+        RequestWorkerClient.prototype.start = originalThreadStart;
+        RpkiSqliteStore.prototype.open = originalSqliteOpen;
+        fs.rmSync(tempDir, { recursive: true, force: true });
     }
 }
 
-main().catch(error => {
-    console.error(error);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch(error => {
+        console.error(error);
+        process.exit(1);
+    });
+}
+
+module.exports = main;

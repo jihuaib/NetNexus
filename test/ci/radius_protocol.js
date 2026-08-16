@@ -7,8 +7,11 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const WorkerWithPromise = require(
-    path.join(__dirname, '..', '..', 'electron', 'worker', 'core', 'workerWithPromise.js')
+const ProtocolProcessWithPromise = require(
+    path.join(__dirname, '..', '..', 'electron', 'worker', 'core', 'protocolProcessWithPromise.js')
+);
+const { PROTOCOL_PROCESS_SERVICES } = require(
+    path.join(__dirname, '..', '..', 'electron', 'worker', 'core', 'protocolProcessServices.js')
 );
 const Radius = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'radiusUtils.js'));
 const { ensureRadiusDefaultConfigFile, loadRadiusRuntimeConfig } = require(
@@ -186,7 +189,13 @@ async function main() {
     assert.equal(runtimeConfig.clients.length, 2);
 
     const workerPath = path.join(__dirname, '..', '..', 'electron', 'worker', 'services', 'radiusWorker.js');
-    const worker = new WorkerWithPromise(workerPath).createLongRunningWorker();
+    const worker = new ProtocolProcessWithPromise(workerPath, {
+        serviceName: PROTOCOL_PROCESS_SERVICES.RADIUS
+    }).createLongRunningProcess();
+    assert.notEqual(worker.pid, process.pid, 'RADIUS must run in an independent process');
+    if (process.env.NETNEXUS_EXPECT_UTILITY_PROCESS === '1') {
+        assert.equal(worker.transport, 'utility-process');
+    }
 
     try {
         const start = await worker.sendRequest(RadiusConst.RADIUS_REQ_TYPES.START_RADIUS, runtimeConfig);
@@ -325,7 +334,11 @@ async function main() {
     console.log('radius_protocol tests passed');
 }
 
-main().catch(error => {
-    console.error(error);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch(error => {
+        console.error(error);
+        process.exit(1);
+    });
+}
+
+module.exports = main;

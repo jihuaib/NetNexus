@@ -16,6 +16,7 @@ const compilerStatus = ref({
 });
 
 let pendingRequest = null;
+let requestRevision = 0;
 
 const firstText = (...values) => values.find(value => typeof value === 'string' && value.trim())?.trim() || '';
 
@@ -69,28 +70,37 @@ const readCompilerStatus = async options => {
 
 export const refreshYangCompilerStatus = async ({ force = false } = {}) => {
     if (pendingRequest && !force) return pendingRequest;
+    const revision = ++requestRevision;
     compilerStatus.value = {
         ...compilerStatus.value,
         checking: true,
         message: compilerStatus.value.available ? compilerStatus.value.message : '正在检查 libyang/yanglint…'
     };
-    pendingRequest = readCompilerStatus({ force })
+    const request = readCompilerStatus({ force })
         .then(status => {
-            compilerStatus.value = status;
-            return status;
+            if (revision === requestRevision) {
+                compilerStatus.value = status;
+                return status;
+            }
+            return pendingRequest && pendingRequest !== request ? pendingRequest : compilerStatus.value;
         })
         .catch(error => {
-            compilerStatus.value = normalizeYangCompilerStatus({
+            const status = normalizeYangCompilerStatus({
                 available: false,
                 error: error?.message || String(error),
                 installHint: DEFAULT_INSTALL_HINT
             });
-            return compilerStatus.value;
+            if (revision === requestRevision) {
+                compilerStatus.value = status;
+                return status;
+            }
+            return pendingRequest && pendingRequest !== request ? pendingRequest : compilerStatus.value;
         })
         .finally(() => {
-            pendingRequest = null;
+            if (pendingRequest === request) pendingRequest = null;
         });
-    return pendingRequest;
+    pendingRequest = request;
+    return request;
 };
 
 export const useYangCompilerStatus = () => {

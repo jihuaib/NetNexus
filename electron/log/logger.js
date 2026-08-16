@@ -16,6 +16,14 @@ try {
 // 配置 electron-log
 log.transports.file.maxSize = 5 * 1024 * 1024; // 5MB
 log.transports.file.maxFiles = 3; // 最多保留3个日志文件
+const protocolServiceName = process.env.NETNEXUS_PROTOCOL_SERVICE;
+if (protocolServiceName) {
+    const logSuffix = protocolServiceName
+        .replace(/^netnexus\.protocol\./, '')
+        .replace(/[^a-z0-9_-]+/gi, '-')
+        .toLowerCase();
+    log.transports.file.fileName = `protocol-${logSuffix || process.pid}.log`;
+}
 log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}';
 log.transports.file.level = false;
 if (log.transports.console) {
@@ -74,6 +82,10 @@ class Logger {
 
     // 获取线程标识
     getThreadTag() {
+        if (process.parentPort || typeof process.send === 'function') {
+            const serviceName = process.env.NETNEXUS_PROTOCOL_SERVICE;
+            return serviceName ? `[Process-${process.pid}:${serviceName}]` : `[Process-${process.pid}]`;
+        }
         return isMainThread ? '[Main]' : `[Worker-${threadId}]`;
     }
 

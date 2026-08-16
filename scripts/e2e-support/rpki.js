@@ -1,4 +1,4 @@
-const { errorResponse, successResponse } = require('./common');
+const { delay, errorResponse, successResponse } = require('./common');
 
 const rpkiBrowserMockScript =
     "(function installRpkiApiMocks() {\n    const unifiedCallbacks = [];\n\n    window.__rpkiE2eEmit = (type, data) => {\n        unifiedCallbacks.forEach(callback => callback({ type, data }));\n    };\n\n    window.commonApi = {\n        onUnifiedEvent: callback => {\n            unifiedCallbacks.push(callback);\n            return () => {\n                const index = unifiedCallbacks.indexOf(callback);\n                if (index >= 0) {\n                    unifiedCallbacks.splice(index, 1);\n                }\n            };\n        },\n        notifyRendererReady: () => {},\n        openDeveloperOptions: () => {},\n        openSoftwareInfo: () => {}\n    };\n\n    window.rpkiApi = {\n        saveRpkiConfig: config => window.__rpkiE2eCall('saveRpkiConfig', config),\n        loadRpkiConfig: () => window.__rpkiE2eCall('loadRpkiConfig'),\n        startRpki: config => window.__rpkiE2eCall('startRpki', config),\n        stopRpki: () => window.__rpkiE2eCall('stopRpki'),\n        addRoa: roa => window.__rpkiE2eCall('addRoa', roa),\n        deleteRoa: roa => window.__rpkiE2eCall('deleteRoa', roa),\n        deleteAllRoa: () => window.__rpkiE2eCall('deleteAllRoa'),\n        getRoaList: query => window.__rpkiE2eCall('getRoaList', query),\n        selectRoaJsonFile: () => window.__rpkiE2eCall('selectRoaJsonFile'),\n        importRoaJson: options => window.__rpkiE2eCall('importRoaJson', options),\n        getClientList: () => window.__rpkiE2eCall('getClientList'),\n        addRouterKey: routerKey => window.__rpkiE2eCall('addRouterKey', routerKey),\n        deleteRouterKey: routerKey => window.__rpkiE2eCall('deleteRouterKey', routerKey),\n        getRouterKeyList: () => window.__rpkiE2eCall('getRouterKeyList'),\n        addAspa: aspa => window.__rpkiE2eCall('addAspa', aspa),\n        deleteAspa: aspa => window.__rpkiE2eCall('deleteAspa', aspa),\n        deleteAllAspa: () => window.__rpkiE2eCall('deleteAllAspa'),\n        selectAspaJsonFile: () => window.__rpkiE2eCall('selectAspaJsonFile'),\n        importAspaJson: options => window.__rpkiE2eCall('importAspaJson', options),\n        getAspaList: query => window.__rpkiE2eCall('getAspaList', query)\n    };\n})();\n";
@@ -8,6 +8,7 @@ const rpkiPageApiScript =
 
 function createRpkiPageState() {
     return {
+        running: true,
         config: { port: '1280', maxProtocolVersion: 2 },
         clients: [
             {
@@ -20,6 +21,9 @@ function createRpkiPageState() {
             }
         ],
         roas: [{ ipType: 1, asn: '65000', ip: '203.0.113.0', mask: '24', maxLength: '24' }],
+        roaListCalls: 0,
+        roaListDelayMs: 0,
+        roaListError: '',
         routerKeys: [
             {
                 ski: '0123456789ABCDEF0123456789ABCDEF01234567',
@@ -27,35 +31,57 @@ function createRpkiPageState() {
                 spki: '3059301306072A8648CE3D020106082A8648CE3D03010703420004'
             }
         ],
-        aspas: [{ customerAsn: '65010', providerAsns: [65011, 65012], afiFlags: 3, format: 'latest' }]
+        aspas: [{ customerAsn: '65010', providerAsns: [65011, 65012], afiFlags: 3, format: 'latest' }],
+        aspaListCalls: 0,
+        aspaListDelayMs: 0,
+        aspaListError: ''
     };
 }
 
-function handlePageCall(controller, method, args) {
+async function handlePageCall(controller, method, args) {
     const rpki = controller.state.rpki;
     if (method === 'rpki.loadRpkiConfig') return successResponse(rpki.config);
     if (method === 'rpki.saveRpkiConfig') {
         rpki.config = args[0];
         return successResponse(null);
     }
-    if (method === 'rpki.startRpki') return successResponse(null, 'RPKI启动成功');
-    if (method === 'rpki.stopRpki') return successResponse(null, 'RPKI停止成功');
-    if (method === 'rpki.getClientList') return successResponse(rpki.clients);
+    if (method === 'rpki.startRpki') {
+        rpki.running = true;
+        controller.emitEvent('rpki:runtimeChanged', { running: true });
+        return successResponse(null, 'RPKI启动成功');
+    }
+    if (method === 'rpki.stopRpki') {
+        rpki.running = false;
+        controller.emitEvent('rpki:runtimeChanged', { running: false });
+        return successResponse(null, 'RPKI停止成功');
+    }
+    if (method === 'rpki.getClientList') return successResponse(rpki.running ? rpki.clients : []);
     if (method === 'rpki.getRoaList') {
-        return successResponse({
-            items: rpki.roas,
-            page: 1,
-            pageSize: 20,
-            total: rpki.roas.length,
-            storageTotal: rpki.roas.length
-        });
+        rpki.roaListCalls += 1;
+        const response =
+            !rpki.running || rpki.roaListError
+                ? errorResponse(rpki.roaListError || 'RPKI未启动')
+                : successResponse({
+                      items: rpki.roas.map(roa => ({ ...roa })),
+                      page: 1,
+                      pageSize: 20,
+                      total: rpki.roas.length,
+                      storageTotal: rpki.roas.length
+                  });
+        if (rpki.roaListDelayMs > 0) await delay(rpki.roaListDelayMs);
+        return response;
     }
     if (method === 'rpki.addRoa') {
+        if (!rpki.running) return errorResponse('RPKI未启动');
         rpki.roas.push(args[0]);
         return successResponse(null);
     }
-    if (method === 'rpki.deleteRoa') return successResponse(null);
+    if (method === 'rpki.deleteRoa') {
+        if (!rpki.running) return errorResponse('RPKI未启动');
+        return successResponse(null);
+    }
     if (method === 'rpki.deleteAllRoa') {
+        if (!rpki.running) return errorResponse('RPKI未启动');
         const deleted = rpki.roas.length;
         rpki.roas = [];
         return successResponse({ deleted });
@@ -67,20 +93,38 @@ function handlePageCall(controller, method, args) {
     }
     if (method === 'rpki.deleteRouterKey') return successResponse(null);
     if (method === 'rpki.getAspaList') {
-        return successResponse({
-            items: rpki.aspas,
-            page: 1,
-            pageSize: 20,
-            total: rpki.aspas.length,
-            storageTotal: rpki.aspas.length
-        });
+        rpki.aspaListCalls += 1;
+        const response =
+            !rpki.running || rpki.aspaListError
+                ? errorResponse(rpki.aspaListError || 'RPKI未启动')
+                : successResponse({
+                      items: rpki.aspas.map(aspa => ({ ...aspa, providerAsns: [...aspa.providerAsns] })),
+                      page: 1,
+                      pageSize: 20,
+                      total: rpki.aspas.length,
+                      storageTotal: rpki.aspas.length
+                  });
+        if (rpki.aspaListDelayMs > 0) await delay(rpki.aspaListDelayMs);
+        return response;
     }
     if (method === 'rpki.addAspa') {
+        if (!rpki.running) return errorResponse('RPKI未启动');
         rpki.aspas.push(args[0]);
         return successResponse(null);
     }
-    if (method === 'rpki.deleteAspa') return successResponse(null);
-    if (method === 'rpki.deleteAllAspa') return successResponse({ deleted: rpki.aspas.length });
+    if (method === 'rpki.deleteAspa') {
+        if (!rpki.running) return errorResponse('RPKI未启动');
+        return successResponse(null);
+    }
+    if (method === 'rpki.deleteAllAspa') {
+        if (!rpki.running) return errorResponse('RPKI未启动');
+        const deleted = rpki.aspas.length;
+        rpki.aspas = [];
+        return successResponse({ deleted });
+    }
+    if (method === 'rpki.importRoaJson' || method === 'rpki.importAspaJson') {
+        return rpki.running ? successResponse(null) : errorResponse('RPKI未启动');
+    }
     return successResponse(null);
 }
 
@@ -171,6 +215,9 @@ const RpkiE2eController = (() => {
             worker.serialHistoryOperationCount = 0;
             worker.maxSerialHistoryEntries = 1024;
             worker.maxSerialHistoryOperations = 200000;
+            worker.storageMutationQueue = Promise.resolve();
+            worker.storageStopping = false;
+            worker.activeImportClients = new Set();
             worker.messageHandler = new CaptureMessageHandler(event => this.emitEvent(event));
 
             return worker;
@@ -309,6 +356,7 @@ const RpkiE2eController = (() => {
                 this.server = server;
                 this.worker.server = server;
                 this.record('RPKI TCP server started', { port: this.savedConfig.port });
+                this.emitEvent({ type: 'rpki:runtimeChanged', data: { running: true } });
                 return successResponse(null, 'rpki协议启动成功');
             } catch (error) {
                 this.server = null;
@@ -327,6 +375,7 @@ const RpkiE2eController = (() => {
             const response = this.worker.messageHandler.responses.get(messageId);
             this.worker.messageHandler.responses.delete(messageId);
             this.server = null;
+            this.emitEvent({ type: 'rpki:runtimeChanged', data: { running: false } });
             return response || errorResponse('stopRpki did not return a response');
         }
 

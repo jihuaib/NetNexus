@@ -20,6 +20,9 @@ function makeWorker() {
     const notifications = [];
     const directPayloadPushes = [];
 
+    worker.rpkiConfigData = {};
+    worker.openRpkiStore(':memory:');
+
     worker.messageHandler.sendSuccessResponse = (messageId, data, msg) => {
         responses.push({ messageId, data, msg });
     };
@@ -58,244 +61,283 @@ function makeSocket(localAddress, localPort) {
     };
 }
 
-{
-    const rollbackWorker = new RpkiWorker();
-    rollbackWorker.messageHandler.sendSuccessResponse = () => {};
-    rollbackWorker.recordSerialDeltaAndNotify = () => {
-        throw new Error('synthetic serial failure');
+async function main() {
+    {
+        const rollbackWorker = new RpkiWorker();
+        const rollbackErrors = [];
+        rollbackWorker.rpkiConfigData = {};
+        rollbackWorker.openRpkiStore(':memory:');
+        rollbackWorker.messageHandler.sendSuccessResponse = () => {};
+        rollbackWorker.messageHandler.sendErrorResponse = (_messageId, message) => rollbackErrors.push(message);
+        rollbackWorker.recordSerialDeltaAndNotify = () => {
+            throw new Error('synthetic serial failure');
+        };
+        const routerKey = { ski: '00'.repeat(20), asn: 65000, spki: '01' };
+        await rollbackWorker.addRouterKey('add-rk', routerKey);
+        assert.match(rollbackErrors.at(-1), /synthetic serial failure/);
+        assert.strictEqual(rollbackWorker.rpkiRouterKeyMap.size, 0, 'failed serial bump must roll back Router Key add');
+
+        rollbackWorker.restoreInitialRouterKeys([routerKey]);
+        await rollbackWorker.deleteRouterKey('delete-rk', routerKey);
+        assert.match(rollbackErrors.at(-1), /synthetic serial failure/);
+        assert.strictEqual(
+            rollbackWorker.rpkiRouterKeyMap.size,
+            1,
+            'failed serial bump must roll back Router Key delete'
+        );
+        rollbackWorker.closeRpkiStore();
+    }
+
+    {
+        class FakeSnapshotStore {
+            open() {
+                return this;
+            }
+            beginReadSnapshot() {
+                return { cacheSerial: 7, roaCount: 1, aspaCount: 1 };
+            }
+            endReadSnapshot() {}
+            close() {}
+        }
+
+        const snapshotWorker = new RpkiWorker();
+        snapshotWorker.rpkiDatabasePath = '/fake/rpki.sqlite3';
+        snapshotWorker.maxConcurrentDataSnapshots = 1;
+        snapshotWorker.getRpkiSqliteStoreClass = () => FakeSnapshotStore;
+        const snapshot = snapshotWorker.createDataSnapshot();
+        assert.strictEqual(snapshotWorker.activeDataSnapshots, 1);
+        assert.throws(() => snapshotWorker.createDataSnapshot(), /并发数据快照已达到上限/);
+        snapshotWorker.closeDataSnapshot(snapshot);
+        assert.strictEqual(
+            snapshotWorker.activeDataSnapshots,
+            0,
+            'closing a snapshot must release its concurrency slot'
+        );
+
+        class FailingSnapshotStore {
+            open() {
+                throw new Error('synthetic snapshot open failure');
+            }
+        }
+        snapshotWorker.getRpkiSqliteStoreClass = () => FailingSnapshotStore;
+        assert.throws(() => snapshotWorker.createDataSnapshot(), /synthetic snapshot open failure/);
+        assert.strictEqual(
+            snapshotWorker.activeDataSnapshots,
+            0,
+            'failed snapshot open must release its concurrency slot'
+        );
+
+        class FailingCloseSnapshotStore extends FakeSnapshotStore {
+            close() {
+                throw new Error('synthetic snapshot close failure');
+            }
+        }
+        snapshotWorker.getRpkiSqliteStoreClass = () => FailingCloseSnapshotStore;
+        const closeFailureSnapshot = snapshotWorker.createDataSnapshot();
+        assert.throws(() => snapshotWorker.closeDataSnapshot(closeFailureSnapshot), /synthetic snapshot close failure/);
+        assert.strictEqual(
+            snapshotWorker.activeDataSnapshots,
+            0,
+            'failed snapshot close must release its concurrency slot'
+        );
+    }
+
+    {
+        const worker = new RpkiWorker();
+        const events = [];
+        worker.rpkiConfigData = { aspaFormat: RpkiConst.RPKI_ASPA_FORMAT.LEGACY };
+        worker.messageHandler.sendEvent = (type, payload) => events.push({ type, payload });
+
+        const v1Session = worker.createRpkiSession(makeSocket('127.0.0.1', 8282), '10.0.0.1', 10001);
+        const v2Session = worker.createRpkiSession(makeSocket('127.0.0.1', 8282), '10.0.0.2', 10002);
+        v1Session.negotiateVersion(RpkiConst.RPKI_PROTOCOL_VERSION.V1);
+        v2Session.negotiateVersion(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
+
+        assert.strictEqual(v1Session.protocolVersion, 1, 'one RPKI client should keep its negotiated v1');
+        assert.strictEqual(v2Session.protocolVersion, 2, 'another RPKI client should keep its negotiated v2');
+        assert.strictEqual(v1Session.aspaFormat, RpkiConst.RPKI_ASPA_FORMAT.LEGACY);
+        assert.strictEqual(v2Session.aspaFormat, RpkiConst.RPKI_ASPA_FORMAT.LEGACY);
+
+        const oldSocket = makeSocket('127.0.0.1', 8282);
+        const oldSession = worker.createRpkiSession(oldSocket, '10.0.0.3', 10003);
+        oldSession.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V2;
+        oldSession.sessionId = 0xabcd;
+        oldSession.messageBuffer = Buffer.from([0xff]);
+
+        const newSession = worker.createRpkiSession(makeSocket('127.0.0.1', 8282), '10.0.0.3', 10003);
+
+        assert.notStrictEqual(newSession, oldSession, 'same-key reconnect should create a fresh RPKI session object');
+        assert.strictEqual(oldSocket.destroyed, true, 'same-key reconnect should close the old socket');
+        assert.strictEqual(newSession.protocolVersion, RpkiConst.RPKI_PROTOCOL_VERSION.V0);
+        assert.strictEqual(newSession.sessionId, null);
+        assert.strictEqual(newSession.messageBuffer.length, 0);
+        assert.deepStrictEqual(
+            events.map(event => event.payload.opType),
+            ['add', 'add', 'add', 'delete', 'add'],
+            'same-key reconnect should emit delete for the old session before add for the fresh one'
+        );
+    }
+
+    const { worker, responses, errors, notifications, directPayloadPushes } = makeWorker();
+
+    const roa = {
+        ip: '192.0.2.0',
+        mask: 24,
+        asn: 65001,
+        maxLength: 24,
+        ipType: BgpConst.IP_TYPE.IPV4
     };
-    const routerKey = { ski: '00'.repeat(20), asn: 65000, spki: '01' };
-    assert.throws(() => rollbackWorker.addRouterKey('add-rk', routerKey), /synthetic serial failure/);
-    assert.strictEqual(rollbackWorker.rpkiRouterKeyMap.size, 0, 'failed serial bump must roll back Router Key add');
+    await worker.addRoa('add-roa', roa);
 
-    rollbackWorker.restoreInitialRouterKeys([routerKey]);
-    assert.throws(() => rollbackWorker.deleteRouterKey('delete-rk', routerKey), /synthetic serial failure/);
-    assert.strictEqual(rollbackWorker.rpkiRouterKeyMap.size, 1, 'failed serial bump must roll back Router Key delete');
-}
+    assert.strictEqual(worker.cacheSerial, 2, 'addRoa should increment cache serial');
+    assert.deepStrictEqual(notifications, [2], 'addRoa should send Serial Notify for the new serial');
+    assert.strictEqual(worker.getDeltaOperationsSince(2).length, 0, 'current serial should have an empty delta');
 
-{
-    class FakeSnapshotStore {
-        open() {
-            return this;
-        }
-        beginReadSnapshot() {
-            return { cacheSerial: 7, roaCount: 1, aspaCount: 1 };
-        }
-        endReadSnapshot() {}
-        close() {}
-    }
+    let deltas = worker.getDeltaOperationsSince(1);
+    assert.strictEqual(deltas.length, 1, 'stale serial should get the ROA delta');
+    assert.strictEqual(deltas[0].type, 'roa');
+    assert.strictEqual(deltas[0].action, 'announce');
+    assert.strictEqual(deltas[0].data.asn, '65001');
 
-    const snapshotWorker = new RpkiWorker();
-    snapshotWorker.rpkiDatabasePath = '/fake/rpki.sqlite3';
-    snapshotWorker.maxConcurrentDataSnapshots = 1;
-    snapshotWorker.getRpkiSqliteStoreClass = () => FakeSnapshotStore;
-    const snapshot = snapshotWorker.createDataSnapshot();
-    assert.strictEqual(snapshotWorker.activeDataSnapshots, 1);
-    assert.throws(() => snapshotWorker.createDataSnapshot(), /并发数据快照已达到上限/);
-    snapshotWorker.closeDataSnapshot(snapshot);
-    assert.strictEqual(snapshotWorker.activeDataSnapshots, 0, 'closing a snapshot must release its concurrency slot');
+    await worker.addRoa('duplicate-roa', roa);
+    assert.strictEqual(worker.cacheSerial, 2, 'duplicate ROA must not increment cache serial');
+    assert.deepStrictEqual(notifications, [2], 'duplicate ROA must not send Serial Notify');
+    assert.match(errors.at(-1).msg, /已经存在/);
 
-    class FailingSnapshotStore {
-        open() {
-            throw new Error('synthetic snapshot open failure');
-        }
-    }
-    snapshotWorker.getRpkiSqliteStoreClass = () => FailingSnapshotStore;
-    assert.throws(() => snapshotWorker.createDataSnapshot(), /synthetic snapshot open failure/);
-    assert.strictEqual(snapshotWorker.activeDataSnapshots, 0, 'failed snapshot open must release its concurrency slot');
-
-    class FailingCloseSnapshotStore extends FakeSnapshotStore {
-        close() {
-            throw new Error('synthetic snapshot close failure');
-        }
-    }
-    snapshotWorker.getRpkiSqliteStoreClass = () => FailingCloseSnapshotStore;
-    const closeFailureSnapshot = snapshotWorker.createDataSnapshot();
-    assert.throws(() => snapshotWorker.closeDataSnapshot(closeFailureSnapshot), /synthetic snapshot close failure/);
-    assert.strictEqual(
-        snapshotWorker.activeDataSnapshots,
-        0,
-        'failed snapshot close must release its concurrency slot'
-    );
-}
-
-{
-    const worker = new RpkiWorker();
-    const events = [];
-    worker.rpkiConfigData = { aspaFormat: RpkiConst.RPKI_ASPA_FORMAT.LEGACY };
-    worker.messageHandler.sendEvent = (type, payload) => events.push({ type, payload });
-
-    const v1Session = worker.createRpkiSession(makeSocket('127.0.0.1', 8282), '10.0.0.1', 10001);
-    const v2Session = worker.createRpkiSession(makeSocket('127.0.0.1', 8282), '10.0.0.2', 10002);
-    v1Session.negotiateVersion(RpkiConst.RPKI_PROTOCOL_VERSION.V1);
-    v2Session.negotiateVersion(RpkiConst.RPKI_PROTOCOL_VERSION.V2);
-
-    assert.strictEqual(v1Session.protocolVersion, 1, 'one RPKI client should keep its negotiated v1');
-    assert.strictEqual(v2Session.protocolVersion, 2, 'another RPKI client should keep its negotiated v2');
-    assert.strictEqual(v1Session.aspaFormat, RpkiConst.RPKI_ASPA_FORMAT.LEGACY);
-    assert.strictEqual(v2Session.aspaFormat, RpkiConst.RPKI_ASPA_FORMAT.LEGACY);
-
-    const oldSocket = makeSocket('127.0.0.1', 8282);
-    const oldSession = worker.createRpkiSession(oldSocket, '10.0.0.3', 10003);
-    oldSession.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V2;
-    oldSession.sessionId = 0xabcd;
-    oldSession.messageBuffer = Buffer.from([0xff]);
-
-    const newSession = worker.createRpkiSession(makeSocket('127.0.0.1', 8282), '10.0.0.3', 10003);
-
-    assert.notStrictEqual(newSession, oldSession, 'same-key reconnect should create a fresh RPKI session object');
-    assert.strictEqual(oldSocket.destroyed, true, 'same-key reconnect should close the old socket');
-    assert.strictEqual(newSession.protocolVersion, RpkiConst.RPKI_PROTOCOL_VERSION.V0);
-    assert.strictEqual(newSession.sessionId, null);
-    assert.strictEqual(newSession.messageBuffer.length, 0);
-    assert.deepStrictEqual(
-        events.map(event => event.payload.opType),
-        ['add', 'add', 'add', 'delete', 'add'],
-        'same-key reconnect should emit delete for the old session before add for the fresh one'
-    );
-}
-
-const { worker, responses, errors, notifications, directPayloadPushes } = makeWorker();
-
-worker.addRoa('add-roa', {
-    ip: '192.0.2.0',
-    mask: 24,
-    asn: 65001,
-    maxLength: 24,
-    ipType: BgpConst.IP_TYPE.IPV4
-});
-
-assert.strictEqual(worker.cacheSerial, 2, 'addRoa should increment cache serial');
-assert.deepStrictEqual(notifications, [2], 'addRoa should send Serial Notify for the new serial');
-assert.strictEqual(worker.getDeltaOperationsSince(2).length, 0, 'current serial should have an empty delta');
-
-let deltas = worker.getDeltaOperationsSince(1);
-assert.strictEqual(deltas.length, 1, 'stale serial should get the ROA delta');
-assert.strictEqual(deltas[0].type, 'roa');
-assert.strictEqual(deltas[0].action, 'announce');
-assert.strictEqual(deltas[0].data.asn, 65001);
-
-worker.addAspa('add-aspa', {
-    customerAsn: 65000,
-    providerAsns: [65002, 65001, 65001],
-    afiFlags: RpkiConst.RPKI_ASPA_AFI_FLAGS.BOTH
-});
-
-assert.strictEqual(worker.cacheSerial, 3, 'addAspa should increment cache serial');
-deltas = worker.getDeltaOperationsSince(2);
-assert.strictEqual(deltas.length, 1, 'ASPA add should be recorded as one delta');
-assert.strictEqual(deltas[0].type, 'aspa');
-assert.strictEqual(deltas[0].action, 'announce');
-assert.deepStrictEqual(
-    deltas[0].data.providerAsns,
-    [65002, 65001, 65001],
-    'ASPA history should preserve Provider ASN order and duplicates'
-);
-
-deltas = worker.getDeltaOperationsSince(1);
-assert.strictEqual(deltas.length, 2, 'history should replay all operations since the requested serial');
-
-worker.addAspa('replace-aspa', {
-    aspa: {
-        customerAsn: 65000,
-        providerAsns: [65003],
-        afiFlags: RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4
-    },
-    previousAspa: {
+    const aspa = {
         customerAsn: 65000,
         providerAsns: [65002, 65001, 65001],
         afiFlags: RpkiConst.RPKI_ASPA_AFI_FLAGS.BOTH
-    }
-});
+    };
+    await worker.addAspa('add-aspa', aspa);
 
-assert.strictEqual(worker.cacheSerial, 4, 'ASPA overwrite should increment cache serial');
-deltas = worker.getDeltaOperationsSince(3);
-assert.strictEqual(deltas.length, 1, 'ASPA overwrite should be recorded as one replacement delta');
-assert.strictEqual(deltas[0].action, 'replace');
-assert.deepStrictEqual(deltas[0].oldData.providerAsns, [65002, 65001, 65001]);
-assert.deepStrictEqual(deltas[0].newData.providerAsns, [65003]);
+    assert.strictEqual(worker.cacheSerial, 3, 'addAspa should increment cache serial');
+    deltas = worker.getDeltaOperationsSince(2);
+    assert.strictEqual(deltas.length, 1, 'ASPA add should be recorded as one delta');
+    assert.strictEqual(deltas[0].type, 'aspa');
+    assert.strictEqual(deltas[0].action, 'announce');
+    assert.deepStrictEqual(
+        deltas[0].data.providerAsns,
+        [65002, 65001, 65001],
+        'ASPA history should preserve Provider ASN order and duplicates'
+    );
 
-worker.deleteAspaBatch('delete-all-aspa', { all: true });
+    deltas = worker.getDeltaOperationsSince(1);
+    assert.strictEqual(deltas.length, 2, 'history should replay all operations since the requested serial');
 
-assert.strictEqual(worker.cacheSerial, 5, 'delete all ASPA should increment cache serial');
-deltas = worker.getDeltaOperationsSince(4);
-assert.strictEqual(
-    deltas,
-    null,
-    'delete all ASPA should create a Cache Reset boundary instead of retaining withdrawals'
-);
-assert.strictEqual(worker.serialHistory.length, 0, 'delete all ASPA should not retain ASPA payloads in memory');
-assert.strictEqual(
-    Object.prototype.hasOwnProperty.call(worker, 'rpkiAspaMap'),
-    false,
-    'worker must not maintain an ASPA Map'
-);
-assert.strictEqual(
-    Object.prototype.hasOwnProperty.call(worker, 'rpkiRoaMap'),
-    false,
-    'worker must not maintain a ROA Map'
-);
+    await worker.addAspa('unchanged-aspa', aspa);
+    assert.strictEqual(worker.cacheSerial, 3, 'unchanged ASPA must not increment cache serial');
+    assert.deepStrictEqual(notifications, [2, 3], 'unchanged ASPA must not send Serial Notify');
 
-assert.deepStrictEqual(
-    directPayloadPushes,
-    [],
-    'data mutations should only notify serial changes and should not directly push payload PDUs'
-);
-assert.deepStrictEqual(notifications, [2, 3, 4, 5], 'each announced mutation should send one Serial Notify');
-assert.strictEqual(errors.length, 0, 'serial history operations should not produce handler errors');
-assert.strictEqual(responses.length, 4, 'mutating requests should still send success responses');
-
-const serialBeforeNonAnnouncedBatch = worker.cacheSerial;
-worker.addRoaBatch('batch-no-announce', {
-    announce: false,
-    roas: [
-        {
-            ip: '198.51.100.0',
-            mask: 24,
-            asn: 65002,
-            maxLength: 24,
-            ipType: BgpConst.IP_TYPE.IPV4
+    await worker.addAspa('replace-aspa', {
+        aspa: {
+            customerAsn: 65000,
+            providerAsns: [65003],
+            afiFlags: RpkiConst.RPKI_ASPA_AFI_FLAGS.IPV4
+        },
+        previousAspa: {
+            customerAsn: 65000,
+            providerAsns: [65002, 65001, 65001],
+            afiFlags: RpkiConst.RPKI_ASPA_AFI_FLAGS.BOTH
         }
-    ]
-});
-assert.strictEqual(
-    worker.cacheSerial,
-    serialBeforeNonAnnouncedBatch,
-    'non-announced batch loads should not create serial history'
-);
-
-const serialBeforeTrim = worker.cacheSerial;
-worker.maxSerialHistoryEntries = 2;
-worker.recordSerialDeltaAndNotify([{ type: 'manual', action: 'one', data: { id: 1 } }]);
-worker.recordSerialDeltaAndNotify([{ type: 'manual', action: 'two', data: { id: 2 } }]);
-worker.recordSerialDeltaAndNotify([{ type: 'manual', action: 'three', data: { id: 3 } }]);
-
-assert.strictEqual(worker.serialHistory.length, 2, 'serial history should be trimmed by entry count');
-assert.strictEqual(
-    worker.getDeltaOperationsSince(serialBeforeTrim),
-    null,
-    'old serials outside retained history should require Cache Reset'
-);
-deltas = worker.getDeltaOperationsSince(worker.cacheSerial - 1);
-assert.strictEqual(deltas.length, 1, 'recent retained history should still be replayable');
-assert.strictEqual(deltas[0].action, 'three');
-
-worker.maxSerialHistoryEntries = 1024;
-worker.maxSerialHistoryBytes = 32;
-worker.recordSerialDeltaAndNotify([{ type: 'manual', action: 'oversized', data: { payload: 'x'.repeat(256) } }]);
-assert.strictEqual(worker.serialHistory.length, 0, 'oversized serial payloads must create a reset boundary');
-assert.strictEqual(worker.serialHistoryBytes, 0, 'reset boundaries must release retained serial payload bytes');
-
-worker
-    .stopRpki('stop')
-    .then(() => {
-        assert.strictEqual(worker.serialHistory.length, 0, 'stopRpki should clear serial history');
-        assert.strictEqual(worker.serialHistoryOperationCount, 0, 'stopRpki should reset history operation count');
-        assert.strictEqual(worker.serialHistoryBytes, 0, 'stopRpki should reset history byte accounting');
-
-        console.log('RPKI serial history tests passed');
-    })
-    .catch(error => {
-        console.error(error);
-        process.exit(1);
     });
+
+    assert.strictEqual(worker.cacheSerial, 4, 'ASPA overwrite should increment cache serial');
+    deltas = worker.getDeltaOperationsSince(3);
+    assert.strictEqual(deltas.length, 1, 'ASPA overwrite should be recorded as one replacement delta');
+    assert.strictEqual(deltas[0].action, 'replace');
+    assert.deepStrictEqual(deltas[0].oldData.providerAsns, [65002, 65001, 65001]);
+    assert.deepStrictEqual(deltas[0].newData.providerAsns, [65003]);
+
+    await worker.deleteAspaBatch('delete-all-aspa');
+
+    assert.strictEqual(worker.cacheSerial, 5, 'delete all ASPA should increment cache serial');
+    deltas = worker.getDeltaOperationsSince(4);
+    assert.strictEqual(
+        deltas,
+        null,
+        'delete all ASPA should create a Cache Reset boundary instead of retaining withdrawals'
+    );
+    assert.strictEqual(worker.serialHistory.length, 0, 'delete all ASPA should not retain ASPA payloads in memory');
+    assert.strictEqual(
+        Object.prototype.hasOwnProperty.call(worker, 'rpkiAspaMap'),
+        false,
+        'worker must not maintain an ASPA Map'
+    );
+    assert.strictEqual(
+        Object.prototype.hasOwnProperty.call(worker, 'rpkiRoaMap'),
+        false,
+        'worker must not maintain a ROA Map'
+    );
+
+    assert.deepStrictEqual(
+        directPayloadPushes,
+        [],
+        'data mutations should only notify serial changes and should not directly push payload PDUs'
+    );
+    assert.deepStrictEqual(notifications, [2, 3, 4, 5], 'each announced mutation should send one Serial Notify');
+    assert.strictEqual(errors.length, 1, 'only the duplicate ROA should produce a handler error');
+    assert.strictEqual(responses.length, 5, 'successful and no-op mutations should send success responses');
+
+    const serialBeforeNonAnnouncedBatch = worker.cacheSerial;
+    await worker.addRoaBatch('batch-no-announce', {
+        announce: false,
+        roas: [
+            {
+                ip: '198.51.100.0',
+                mask: 24,
+                asn: 65002,
+                maxLength: 24,
+                ipType: BgpConst.IP_TYPE.IPV4
+            }
+        ]
+    });
+    assert.strictEqual(
+        worker.cacheSerial,
+        serialBeforeNonAnnouncedBatch + 1,
+        'a stored batch must increment serial regardless of the legacy announce hint'
+    );
+    assert.strictEqual(worker.getDeltaOperationsSince(serialBeforeNonAnnouncedBatch), null);
+
+    await worker.getRoaList('get-roas', { page: 1, pageSize: 10 });
+    assert.strictEqual(responses.at(-1).data.total, 2, 'worker-side queries should read the worker-owned store');
+
+    const serialBeforeTrim = worker.cacheSerial;
+    worker.maxSerialHistoryEntries = 2;
+    worker.recordSerialDeltaAndNotify([{ type: 'manual', action: 'one', data: { id: 1 } }]);
+    worker.recordSerialDeltaAndNotify([{ type: 'manual', action: 'two', data: { id: 2 } }]);
+    worker.recordSerialDeltaAndNotify([{ type: 'manual', action: 'three', data: { id: 3 } }]);
+
+    assert.strictEqual(worker.serialHistory.length, 2, 'serial history should be trimmed by entry count');
+    assert.strictEqual(
+        worker.getDeltaOperationsSince(serialBeforeTrim),
+        null,
+        'old serials outside retained history should require Cache Reset'
+    );
+    deltas = worker.getDeltaOperationsSince(worker.cacheSerial - 1);
+    assert.strictEqual(deltas.length, 1, 'recent retained history should still be replayable');
+    assert.strictEqual(deltas[0].action, 'three');
+
+    worker.maxSerialHistoryEntries = 1024;
+    worker.maxSerialHistoryBytes = 32;
+    worker.recordSerialDeltaAndNotify([{ type: 'manual', action: 'oversized', data: { payload: 'x'.repeat(256) } }]);
+    assert.strictEqual(worker.serialHistory.length, 0, 'oversized serial payloads must create a reset boundary');
+    assert.strictEqual(worker.serialHistoryBytes, 0, 'reset boundaries must release retained serial payload bytes');
+
+    await worker.stopRpki('stop');
+    assert.strictEqual(worker.serialHistory.length, 0, 'stopRpki should clear serial history');
+    assert.strictEqual(worker.serialHistoryOperationCount, 0, 'stopRpki should reset history operation count');
+    assert.strictEqual(worker.serialHistoryBytes, 0, 'stopRpki should reset history byte accounting');
+
+    const stoppedErrors = [];
+    worker.messageHandler.sendErrorResponse = (_messageId, message) => stoppedErrors.push(message);
+    await worker.getRoaList('get-after-stop', { page: 1, pageSize: 10 });
+    assert.match(stoppedErrors.at(-1), /未启动/, 'DB requests after STOP must be rejected');
+
+    console.log('RPKI serial history tests passed');
+}
+
+main().catch(error => {
+    console.error(error);
+    process.exit(1);
+});

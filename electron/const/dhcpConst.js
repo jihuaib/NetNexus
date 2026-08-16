@@ -1,6 +1,6 @@
 // DHCP事件类型（worker -> app 推送）
 const DHCP_EVT_TYPES = {
-    DHCP_EVT: 1
+    DHCP_EVT: 'dhcp:event'
 };
 
 // DHCP子事件类型
@@ -11,10 +11,10 @@ const DHCP_SUB_EVT_TYPES = {
 
 // DHCP请求-响应类型（app -> worker）
 const DHCP_REQ_TYPES = {
-    START_DHCP: 1,
-    STOP_DHCP: 2,
-    GET_LEASE_LIST: 3,
-    RELEASE_LEASE: 4
+    START_DHCP: 'dhcp:start',
+    STOP_DHCP: 'dhcp:stop',
+    GET_LEASE_LIST: 'dhcp:leases:get',
+    RELEASE_LEASE: 'dhcp:lease:release'
 };
 
 // DHCP消息类型（RFC 2132）

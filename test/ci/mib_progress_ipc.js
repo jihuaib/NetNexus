@@ -2,7 +2,7 @@ const assert = require('assert');
 const SnmpApp = require('../../electron/app/snmpApp');
 const SnmpConst = require('../../electron/const/snmpConst');
 
-class FakeMibWorker {
+class FakeSnmpProcessClient {
     constructor(summary, progressEvents = []) {
         this.summary = summary;
         this.progressEvents = progressEvents;
@@ -44,7 +44,7 @@ async function run() {
         failedFiles: [],
         cacheHit: false
     };
-    const worker = new FakeMibWorker(summary, [
+    const worker = new FakeSnmpProcessClient(summary, [
         {
             phase: 'compiling',
             completed: 1,
@@ -62,8 +62,13 @@ async function run() {
         }
     ]);
     const app = Object.create(SnmpApp.prototype);
-    app.mibWorker = worker;
-    app.getMibWorker = () => worker;
+    app.worker = worker;
+    app.snmpReady = true;
+    app.snmpStopping = false;
+    app.mibProgressTargets = new Map();
+    worker.addEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, payload =>
+        app.handleMibCompileProgress(payload)
+    );
 
     const sent = [];
     const sender = {
@@ -71,13 +76,10 @@ async function run() {
         isDestroyed: () => false,
         send: (channel, payload) => sent.push({ channel, payload })
     };
-    const result = await app.sendMibWorkerRequestWithProgress(
+    const result = await app.requestMibWithProgress(
         { sender },
         SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS,
-        { filePaths: ['/tmp'] },
-        async (_workerResult, reportProgress) => {
-            reportProgress({ phase: 'syncing', percent: 99, message: 'syncing' });
-        }
+        { filePaths: ['/tmp'] }
     );
 
     assert.equal(result.data, summary);
@@ -88,12 +90,11 @@ async function run() {
     const progressPayloads = sent.map(event => event.payload.data.data);
     assert(progressPayloads.some(progress => progress.phase === 'preparing'));
     assert(progressPayloads.some(progress => progress.phase === 'compiling'));
-    assert(progressPayloads.some(progress => progress.phase === 'syncing'));
     assert.equal(progressPayloads.filter(progress => progress.phase === 'completed').length, 1);
     assert.deepEqual(progressPayloads.at(-1).counts, { compiled: 1, skipped: 1, failed: 0 });
-    assert.equal(worker.listeners.get(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS).size, 0);
+    assert.equal(app.mibProgressTargets.size, 0);
 
-    const cachedWorker = new FakeMibWorker({ ...summary, cacheHit: true }, [
+    const cachedWorker = new FakeSnmpProcessClient({ ...summary, cacheHit: true }, [
         {
             phase: 'completed',
             completed: 2,
@@ -103,10 +104,12 @@ async function run() {
             counts: { compiled: 1, skipped: 1, failed: 0 }
         }
     ]);
-    app.mibWorker = cachedWorker;
-    app.getMibWorker = () => cachedWorker;
+    app.worker = cachedWorker;
+    cachedWorker.addEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, payload =>
+        app.handleMibCompileProgress(payload)
+    );
     const cachedEvents = [];
-    await app.sendMibWorkerRequestWithProgress(
+    await app.requestMibWithProgress(
         {
             sender: {
                 id: 18,
@@ -116,7 +119,6 @@ async function run() {
         },
         SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS,
         {},
-        undefined,
         { announceImmediately: false }
     );
     assert.equal(cachedEvents.length, 0, '缓存命中时不应闪烁进度浮层');

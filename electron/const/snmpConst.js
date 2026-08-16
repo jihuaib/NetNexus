@@ -1,6 +1,7 @@
 // SNMP事件类型
 const SNMP_EVT_TYPES = {
-    TRAP_EVT: 1
+    TRAP_EVT: 1,
+    RUNTIME_EVT: 2
 };
 
 const SNMP_SUB_EVT_TYPES = {
@@ -23,7 +24,15 @@ const SNMP_REQ_TYPES = {
     GET_TRAP_DETAIL: 4,
     CLEAR_TRAP_HISTORY: 5,
     UPDATE_CONFIG: 6,
-    COMPILE_MIBS: 7
+    COMPILE_MIBS: 7,
+    START_TRAP: 8,
+    STOP_TRAP: 9,
+    GET_RUNTIME_STATE: 10,
+    SEND_GET_REQUEST: 11,
+    SEND_GET_NEXT_REQUEST: 12,
+    SEND_WALK_REQUEST: 13,
+    SEND_SET_REQUEST: 14,
+    LIST_OID_INSTANCES: 15
 };
 
 const MIB_REQ_TYPES = {
@@ -31,7 +40,11 @@ const MIB_REQ_TYPES = {
     GET_MIB_STATUS: 'getMibStatus',
     GET_MIB_TREE_CHILDREN: 'getMibTreeChildren',
     CLEAR_MIBS: 'clearMibs',
-    TRANSLATE_OID: 'translateOid'
+    TRANSLATE_OID: 'translateOid',
+    GET_MIB_SOURCE: 'getMibSource',
+    SAVE_MIB_PROJECT: 'saveMibProject',
+    LIST_MIB_PROJECTS: 'listMibProjects',
+    IMPORT_MIB_PROJECT: 'importMibProject'
 };
 
 const MIB_EVT_TYPES = {

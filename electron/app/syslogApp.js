@@ -1,7 +1,8 @@
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
-const WorkerWithPromise = require('../worker/core/workerWithPromise');
+const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPromise');
+const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../worker/core/protocolProcessServices');
 const SyslogConst = require('../const/syslogConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 
@@ -78,8 +79,20 @@ class SyslogApp {
 
             const workerPath = resolveWorkerPath('services/syslogWorker.js');
 
-            const workerFactory = new WorkerWithPromise(workerPath);
-            this.worker = workerFactory.createLongRunningWorker();
+            const processFactory = new ProtocolProcessWithPromise(workerPath, {
+                serviceName: PROTOCOL_PROCESS_SERVICES.SYSLOG,
+                onExit: (_code, client, exit = {}) => {
+                    if (this.worker !== client) return;
+                    if (exit.expected) return;
+                    this.worker = null;
+                    this.cancelPendingStatsUpdate();
+                    this.closeMonitorWindows();
+                    this.eventDispatcher?.cleanup();
+                    this.eventDispatcher = null;
+                    this.syslogEventHandler = null;
+                }
+            });
+            this.worker = processFactory.createLongRunningProcess();
 
             this.eventDispatcher = new EventDispatcher();
             this.eventDispatcher.setWebContents(webContents);
@@ -111,7 +124,9 @@ class SyslogApp {
                 return errorResponse('Syslog服务器未启动');
             }
 
-            const result = await this.worker.sendRequest(SyslogConst.SYSLOG_REQ_TYPES.STOP_SYSLOG, null);
+            const result = await this.worker.sendRequest(SyslogConst.SYSLOG_REQ_TYPES.STOP_SYSLOG, null, {
+                timeoutMs: PROTOCOL_PROCESS_TIMEOUTS.STOP
+            });
             logger.info(`Syslog服务器停止成功: ${result.msg}`);
             return successResponse(null, result.msg);
         } catch (error) {

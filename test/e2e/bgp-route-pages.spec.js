@@ -77,6 +77,154 @@ test.describe('BGP route pages', () => {
         }
     });
 
+    test('reuses route data across tabs and clears cached pages when BGP stops', async ({ page }) => {
+        const ipv4Prefix = '203.0.113.77/32';
+        const ipv6Prefix = '2001:db8::77/128';
+        const getRoutesCallCount = () =>
+            harness.controller.timeline.filter(item => item.message === 'renderer API call: bgp.getRoutes').length;
+
+        harness.controller.state.bgp.routes.set(1, [
+            {
+                ip: '203.0.113.77',
+                mask: 32,
+                rd: '0:0',
+                pathId: 0,
+                nextHop: '192.0.2.1',
+                asPath: '65000',
+                rt: '',
+                addressFamily: 1
+            }
+        ]);
+        harness.controller.state.bgp.routes.set(2, [
+            {
+                ip: '2001:db8::77',
+                mask: 128,
+                rd: '0:0',
+                pathId: 0,
+                nextHop: '2001:db8::1',
+                asPath: '65000',
+                rt: '',
+                addressFamily: 2
+            }
+        ]);
+
+        await page.goto('/#/bgp/route-ipv4');
+        const routeTabs = page.locator('.fixed-tabs');
+        const ipv4Table = page.getByTestId('bgp-ipv4-route-table');
+        const ipv6Table = page.getByTestId('bgp-ipv6-route-table');
+
+        await expect(ipv4Table).toContainText(ipv4Prefix);
+        expect(getRoutesCallCount()).toBe(1);
+
+        await routeTabs.getByRole('tab', { name: 'IPv6路由', exact: true }).click();
+        await expect(page.getByTestId('bgp-route-ipv6-page')).toBeVisible();
+        await expect(ipv6Table).toContainText(ipv6Prefix);
+        expect(getRoutesCallCount()).toBe(2);
+
+        await routeTabs.getByRole('tab', { name: 'IPv4路由', exact: true }).click();
+        await expect(page.getByTestId('bgp-route-ipv4-page')).toBeVisible();
+        await expect(ipv4Table).toContainText(ipv4Prefix);
+        expect(getRoutesCallCount()).toBe(2);
+
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('bgp:runtimeChanged', {
+                running: false,
+                addressFamilies: []
+            });
+        });
+
+        await expect(ipv4Table).not.toContainText(ipv4Prefix);
+        expect(getRoutesCallCount()).toBe(2);
+
+        await routeTabs.getByRole('tab', { name: 'IPv6路由', exact: true }).click();
+        await expect(page.getByTestId('bgp-route-ipv6-page')).toBeVisible();
+        await expect(ipv6Table).not.toContainText(ipv6Prefix);
+        expect(getRoutesCallCount()).toBe(2);
+
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('bgp:runtimeChanged', {
+                running: true,
+                addressFamilies: [1, 2]
+            });
+        });
+
+        await expect(ipv6Table).toContainText(ipv6Prefix);
+        expect(getRoutesCallCount()).toBe(3);
+
+        await routeTabs.getByRole('tab', { name: 'IPv4路由', exact: true }).click();
+        await expect(page.getByTestId('bgp-route-ipv4-page')).toBeVisible();
+        await expect(ipv4Table).toContainText(ipv4Prefix);
+        expect(getRoutesCallCount()).toBe(4);
+
+        await routeTabs.getByRole('tab', { name: 'IPv6路由', exact: true }).click();
+        await expect(ipv6Table).toContainText(ipv6Prefix);
+        expect(getRoutesCallCount()).toBe(4);
+    });
+
+    test('clears the previous runtime before loading routes for a new BGP start', async ({ page }) => {
+        const previousPrefix = '203.0.113.77/32';
+        const currentPrefix = '198.51.100.88/32';
+
+        harness.controller.state.bgp.routes.set(1, [
+            {
+                ip: '203.0.113.77',
+                mask: 32,
+                rd: '0:0',
+                pathId: 0,
+                nextHop: '192.0.2.1',
+                asPath: '65000',
+                rt: '',
+                addressFamily: 1
+            }
+        ]);
+
+        await page.goto('/#/bgp/route-ipv4');
+        const ipv4Table = page.getByTestId('bgp-ipv4-route-table');
+        await expect(ipv4Table).toContainText(previousPrefix);
+
+        await page.evaluate(() => {
+            const originalGetRoutes = window.bgpApi.getRoutes.bind(window.bgpApi);
+            window.__bgpRuntimeRefreshPending = false;
+            window.__resolveBgpRuntimeRefresh = null;
+            window.bgpApi.getRoutes = (...args) =>
+                new Promise(resolve => {
+                    window.__bgpRuntimeRefreshPending = true;
+                    window.__resolveBgpRuntimeRefresh = async () => {
+                        const result = await originalGetRoutes(...args);
+                        resolve(result);
+                    };
+                });
+        });
+
+        harness.controller.state.bgp.routes.set(1, [
+            {
+                ip: '198.51.100.88',
+                mask: 32,
+                rd: '0:0',
+                pathId: 0,
+                nextHop: '192.0.2.2',
+                asPath: '65100',
+                rt: '',
+                addressFamily: 1
+            }
+        ]);
+
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('bgp:runtimeChanged', {
+                running: true,
+                addressFamilies: [1]
+            });
+        });
+
+        await expect.poll(() => page.evaluate(() => window.__bgpRuntimeRefreshPending)).toBe(true);
+        await expect(ipv4Table).not.toContainText(previousPrefix);
+        await expect(ipv4Table).not.toContainText(currentPrefix);
+
+        await page.evaluate(() => window.__resolveBgpRuntimeRefresh?.());
+        await expect(ipv4Table).toContainText(currentPrefix);
+        await expect(ipv4Table).not.toContainText(previousPrefix);
+    });
+
     test('uses the orange card-header palette for the RouteViews action', async ({ page }) => {
         for (const route of ['/#/bgp/route-ipv4', '/#/bgp/route-ipv6']) {
             await page.goto(route);

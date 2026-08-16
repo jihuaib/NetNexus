@@ -3,15 +3,15 @@ const { app, BrowserWindow, dialog } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
-const WorkerWithPromise = require('../worker/core/workerWithPromise');
-const RequestWorkerClient = require('../worker/core/requestWorkerClient');
+const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPromise');
+const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../worker/core/protocolProcessServices');
 const RpkiConst = require('../const/rpkiConst');
 const RpkiAspa = require('../worker/rpki/rpkiAspa');
-const RPKI_IMPORT_OP = require('../worker/rpki/rpkiImportConst');
-const RpkiSqliteStore = require('../worker/rpki/rpkiSqliteStore');
 const EventDispatcher = require('../utils/eventDispatcher');
 const { normalizeRoaObject } = require('../utils/rpkiRoaImport');
 const { normalizeAspaObject } = require('../utils/rpkiAspaImport');
+
+const RPKI_RUNTIME_CHANGED_EVENT = 'rpki:runtimeChanged';
 
 class RpkiApp {
     constructor(ipcMain, store) {
@@ -20,14 +20,18 @@ class RpkiApp {
         this.rpkiConfigFileKey = 'rpki-config';
         this.rpkiRouterKeyFileKey = 'rpki-router-key';
         this.worker = null;
+        this.rpkiReady = false;
+        this.rpkiStopping = false;
         this.eventDispatcher = null;
         this.logLevel = null;
         this.rpkiClientConnectionHandler = null;
-        this.rpkiSqliteStore = null;
-        this.rpkiStoragePromise = null;
-        this.storageMutationQueue = Promise.resolve();
-        this.storageClosing = false;
-        this.storageClosePromise = null;
+        this.rpkiStarting = false;
+        this.rpkiStartGeneration = 0;
+        this.rpkiStartPromise = null;
+        this.rpkiStopPromise = null;
+        this.rpkiTerminateOnlyWorker = null;
+        this.rpkiRuntimeState = null;
+        this.routerKeyMutationQueue = Promise.resolve();
 
         this.registerHandlers();
     }
@@ -85,169 +89,242 @@ class RpkiApp {
         return path.join(app.getPath('userData'), 'rpki', 'rpki.sqlite3');
     }
 
-    async ensureRpkiStorage() {
-        if (this.storageClosing) {
-            throw new Error('RPKI SQLite存储正在关闭');
+    getRuntimeError() {
+        if (!this.worker || !this.rpkiReady || this.rpkiStopping) {
+            return 'RPKI未运行，请先启动RPKI服务';
         }
-        if (this.rpkiSqliteStore) {
-            return this.rpkiSqliteStore;
-        }
-        if (this.rpkiStoragePromise) {
-            return this.rpkiStoragePromise;
+        return null;
+    }
+
+    emitRuntimeChanged(running, dispatcher = this.eventDispatcher) {
+        const normalizedRunning = Boolean(running);
+        if (this.rpkiRuntimeState === normalizedRunning) return false;
+        this.rpkiRuntimeState = normalizedRunning;
+        dispatcher?.emit(RPKI_RUNTIME_CHANGED_EVENT, { running: normalizedRunning });
+        return true;
+    }
+
+    cleanupRpkiRuntime(worker) {
+        if (this.worker !== worker) return false;
+
+        const dispatcher = this.eventDispatcher;
+        worker?.removeEventListener?.(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, this.rpkiClientConnectionHandler);
+        this.worker = null;
+        this.rpkiReady = false;
+        this.rpkiStopping = false;
+        if (this.rpkiTerminateOnlyWorker === worker) this.rpkiTerminateOnlyWorker = null;
+        this.emitRuntimeChanged(false, dispatcher);
+        dispatcher?.cleanup();
+        if (this.eventDispatcher === dispatcher) this.eventDispatcher = null;
+        this.rpkiClientConnectionHandler = null;
+        return true;
+    }
+
+    createRpkiProcess(workerPath, options) {
+        return new ProtocolProcessWithPromise(workerPath, options).createLongRunningProcess();
+    }
+
+    async terminateRpkiWorker(worker) {
+        try {
+            await worker.terminate();
+        } catch (error) {
+            if (this.worker === worker) {
+                this.rpkiReady = false;
+                this.emitRuntimeChanged(false);
+            }
+            return error;
         }
 
-        this.rpkiStoragePromise = this.initializeRpkiStorage();
-        try {
-            return await this.rpkiStoragePromise;
-        } catch (error) {
-            this.rpkiStoragePromise = null;
+        this.cleanupRpkiRuntime(worker);
+        if (this.rpkiTerminateOnlyWorker === worker) this.rpkiTerminateOnlyWorker = null;
+        return null;
+    }
+
+    async requestRpki(reqType, payload = null, options = undefined) {
+        const runtimeError = this.getRuntimeError();
+        if (runtimeError) {
+            const error = new Error(runtimeError);
+            error.code = 'RPKI_NOT_RUNNING';
             throw error;
         }
+
+        const worker = this.worker;
+        return worker.sendRequest(reqType, payload, options);
     }
 
-    async initializeRpkiStorage() {
-        const sqliteStore = new RpkiSqliteStore({ dbPath: this.getRpkiDatabasePath() }).open();
-        this.rpkiSqliteStore = sqliteStore;
-        return sqliteStore;
-    }
-
-    runStorageMutation(task) {
-        if (this.storageClosing) {
-            return Promise.reject(new Error('RPKI SQLite存储正在关闭'));
-        }
-        const pending = this.storageMutationQueue.then(task, task);
-        this.storageMutationQueue = pending.catch(() => {});
+    runRouterKeyMutation(task) {
+        const pending = this.routerKeyMutationQueue.then(task, task);
+        this.routerKeyMutationQueue = pending.catch(() => {});
         return pending;
     }
 
-    async runImportWorker(operation, importOptions) {
-        const workerPath = resolveWorkerPath('rpki/rpkiImportWorker.js');
-        const client = new RequestWorkerClient(workerPath, { defaultTimeoutMs: 0 }).start();
-        try {
-            const result = await client.sendRequest(operation, importOptions, { timeoutMs: 0 });
-            return result.data;
-        } finally {
-            try {
-                await client.terminate();
-            } catch (error) {
-                logger.warn(`停止RPKI导入worker失败: ${error.message}`);
-            }
-        }
-    }
+    trackLifecycleOperation(propertyName, operation) {
+        let resolveTracked;
+        let rejectTracked;
+        const trackedPromise = new Promise((resolve, reject) => {
+            resolveTracked = resolve;
+            rejectTracked = reject;
+        });
+        this[propertyName] = trackedPromise;
 
-    async notifyDatasetChanged(cacheSerial, operations = [], invalidate = false) {
-        const worker = this.worker;
-        if (!worker) {
-            return;
-        }
+        let operationResult;
         try {
-            const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DATASET_CHANGED, {
-                cacheSerial,
-                operations,
-                invalidate
-            });
-            if (result.status !== 'success') {
-                throw new Error(result.msg || 'worker拒绝了数据版本更新');
-            }
+            operationResult = operation();
         } catch (error) {
-            await this.handleWorkerSyncFailure(error, worker);
+            operationResult = Promise.reject(error);
         }
-    }
-
-    async handleWorkerSyncFailure(error, worker = this.worker) {
-        if (this.worker === worker) {
-            this.worker = null;
-        }
-        if (worker) {
-            try {
-                worker.removeEventListener?.(
-                    RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION,
-                    this.rpkiClientConnectionHandler
-                );
-                await worker.terminate?.();
-            } catch (terminateError) {
-                logger.warn(`停止失步的RPKI worker失败: ${terminateError.message}`);
+        Promise.resolve(operationResult).then(
+            value => {
+                if (this[propertyName] === trackedPromise) this[propertyName] = null;
+                resolveTracked(value);
+            },
+            error => {
+                if (this[propertyName] === trackedPromise) this[propertyName] = null;
+                rejectTracked(error);
             }
-        }
-        this.eventDispatcher?.cleanup();
-        this.eventDispatcher = null;
-        const message = `数据已写入SQLite，但运行中的RPKI服务同步失败并已停止: ${error.message}`;
-        logger.error(message);
-        throw new Error(message);
+        );
+        return trackedPromise;
     }
 
-    async handleStartRpki(event, config) {
-        const webContents = event.sender;
+    handleStartRpki(event, config) {
+        if (this.rpkiStartPromise) return this.rpkiStartPromise;
+        if (this.rpkiStopPromise || this.rpkiStopping) {
+            return Promise.resolve(errorResponse('RPKI正在停止，请稍后重试'));
+        }
+        if (this.worker) {
+            logger.error('rpki协议已经启动或进程仍在回收');
+            return Promise.resolve(errorResponse('rpki协议已经启动或进程仍在回收'));
+        }
+
+        return this.trackLifecycleOperation('rpkiStartPromise', () => this.startRpkiOperation(event, config));
+    }
+
+    async startRpkiOperation(event, config) {
+        const webContents = event?.sender || null;
         let worker = null;
+        this.rpkiStarting = true;
+        this.rpkiReady = false;
+        this.rpkiStopping = false;
+        this.rpkiRuntimeState = null;
+        const startGeneration = ++this.rpkiStartGeneration;
+        let startRequestSucceeded = false;
         try {
-            if (this.worker) {
-                logger.error('rpki协议已经启动');
-                return errorResponse('rpki协议已经启动');
-            }
-
-            const sqliteStore = await this.ensureRpkiStorage();
             const rpkiConfigData = {
                 ...config,
-                rpkiDatabasePath: sqliteStore.dbPath,
+                rpkiDatabasePath: this.getRpkiDatabasePath(),
                 initialRouterKeys: this.store.get(this.rpkiRouterKeyFileKey) || []
             };
             if (this.logLevel) {
                 rpkiConfigData.logLevel = this.logLevel;
             }
             logger.info(`${JSON.stringify({ ...rpkiConfigData, initialRouterKeys: undefined })}`);
+
             const workerPath = resolveWorkerPath('rpki/rpkiWorker.js');
-            worker = new WorkerWithPromise(workerPath).createLongRunningWorker();
+            worker = this.createRpkiProcess(workerPath, {
+                serviceName: PROTOCOL_PROCESS_SERVICES.RPKI,
+                onExit: (_code, client) => {
+                    this.cleanupRpkiRuntime(client);
+                }
+            });
             this.worker = worker;
             this.eventDispatcher = new EventDispatcher();
-            this.eventDispatcher.setWebContents(webContents);
+            if (webContents) this.eventDispatcher.setWebContents(webContents);
             this.rpkiClientConnectionHandler = data => {
-                this.eventDispatcher.emit('rpki:clientConnection', successResponse(data));
+                this.eventDispatcher?.emit('rpki:clientConnection', successResponse(data));
             };
             worker.addEventListener(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, this.rpkiClientConnectionHandler);
 
             const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.START_RPKI, rpkiConfigData);
+            startRequestSucceeded = true;
+            if (startGeneration !== this.rpkiStartGeneration || this.rpkiStopping || this.worker !== worker) {
+                throw new Error('RPKI启动已取消');
+            }
+            this.rpkiReady = true;
+            this.emitRuntimeChanged(true);
             logger.info(`rpki启动成功 result: ${JSON.stringify(result)}`);
             return successResponse(null, result.msg);
         } catch (error) {
-            if (worker) {
-                worker.removeEventListener(
-                    RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION,
-                    this.rpkiClientConnectionHandler
-                );
-                await worker.terminate();
-                if (this.worker === worker) {
-                    this.worker = null;
+            let finalError = error;
+            this.rpkiReady = false;
+            this.emitRuntimeChanged(false);
+            if (worker && this.worker === worker) {
+                const gracefulStopOwnsWorker = startRequestSucceeded && this.rpkiStopping;
+                if (!gracefulStopOwnsWorker) {
+                    this.rpkiTerminateOnlyWorker = worker;
+                    if (!this.rpkiStopping) {
+                        const terminateError = await this.terminateRpkiWorker(worker);
+                        if (terminateError) {
+                            finalError = new Error(
+                                `${error.message}; RPKI进程终止失败，已保留进程句柄以便重试: ${terminateError.message}`
+                            );
+                        }
+                    }
                 }
             }
-            this.eventDispatcher?.cleanup();
-            this.eventDispatcher = null;
-            logger.error('Error starting RPKI:', error.message);
-            return errorResponse(error.message);
+            logger.error('Error starting RPKI:', finalError.message);
+            return errorResponse(finalError.message);
+        } finally {
+            this.rpkiStarting = false;
+            if (this.rpkiStopping && !this.worker && !this.rpkiStopPromise) this.rpkiStopping = false;
         }
     }
 
-    async handleStopRpki() {
-        const worker = this.worker;
-        if (!worker) {
+    handleStopRpki() {
+        if (this.rpkiStopPromise) return this.rpkiStopPromise;
+        if (!this.worker && !this.rpkiStarting && !this.rpkiStartPromise) {
             logger.error('RPKI未启动');
-            return errorResponse('RPKI未启动');
+            return Promise.resolve(errorResponse('RPKI未启动'));
         }
 
-        try {
-            const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.STOP_RPKI, null);
-            return successResponse(null, result.msg);
-        } catch (error) {
-            logger.error('Error stopping RPKI:', error.message);
-            return errorResponse(error.message);
-        } finally {
-            worker.removeEventListener(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, this.rpkiClientConnectionHandler);
-            await worker.terminate();
-            if (this.worker === worker) {
-                this.worker = null;
-                this.eventDispatcher?.cleanup();
-                this.eventDispatcher = null;
+        return this.trackLifecycleOperation('rpkiStopPromise', () => this.stopRpkiOperation());
+    }
+
+    async stopRpkiOperation() {
+        const pendingStart = this.rpkiStartPromise;
+        const cancelledPendingStart = Boolean(this.rpkiStarting || pendingStart);
+        this.rpkiStopping = true;
+        this.rpkiReady = false;
+        this.emitRuntimeChanged(false);
+        this.cancelPendingStart();
+        if (pendingStart) await pendingStart.catch(() => {});
+
+        const worker = this.worker;
+        if (!worker) {
+            this.rpkiStopping = false;
+            return cancelledPendingStart ? successResponse(null, 'RPKI启动已取消') : errorResponse('RPKI未启动');
+        }
+
+        let stopError = null;
+        let stopMessage = cancelledPendingStart ? 'RPKI启动已取消' : 'rpki协议停止成功';
+        const terminateOnly = this.rpkiTerminateOnlyWorker === worker;
+        if (!terminateOnly) {
+            try {
+                const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.STOP_RPKI, null, {
+                    timeoutMs: PROTOCOL_PROCESS_TIMEOUTS.STOP
+                });
+                stopMessage = result.msg || stopMessage;
+            } catch (error) {
+                stopError = error;
+                logger.error('Error stopping RPKI:', error.message);
             }
         }
+
+        this.rpkiTerminateOnlyWorker = worker;
+        const terminateError = await this.terminateRpkiWorker(worker);
+        if (terminateError) {
+            if (this.worker === worker) {
+                this.rpkiStopping = false;
+                this.rpkiReady = false;
+            }
+            const details = [stopError?.message, terminateError.message].filter(Boolean).join('; ');
+            const message = `RPKI进程终止失败，已保留进程句柄以便重试: ${details}`;
+            logger.error(message);
+            return errorResponse(message);
+        }
+
+        this.rpkiStopping = false;
+        if (stopError) return errorResponse(stopError.message);
+        return successResponse(null, stopMessage);
     }
 
     async handleAddRoa(event, roa) {
@@ -256,18 +333,8 @@ class RpkiApp {
             if (!normalizedRoa) {
                 return errorResponse('RPKI ROA配置格式无效');
             }
-
-            return await this.runStorageMutation(async () => {
-                const sqliteStore = await this.ensureRpkiStorage();
-                const result = sqliteStore.addRoa(normalizedRoa);
-                if (!(result.inserted || result.added)) {
-                    return errorResponse('RPKI ROA配置已经存在');
-                }
-                await this.notifyDatasetChanged(result.cacheSerial, [
-                    { type: 'roa', action: 'announce', data: result.current || result.roa || normalizedRoa }
-                ]);
-                return successResponse(null, 'RPKI ROA配置保存成功');
-            });
+            const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.ADD_ROA, normalizedRoa);
+            return successResponse(result.data, result.msg || 'RPKI ROA配置保存成功');
         } catch (error) {
             logger.error('Error adding ROA:', error.message);
             return errorResponse(error.message);
@@ -280,22 +347,8 @@ class RpkiApp {
             if (!normalizedRoa) {
                 return errorResponse('RPKI ROA配置格式无效');
             }
-
-            return await this.runStorageMutation(async () => {
-                const sqliteStore = await this.ensureRpkiStorage();
-                const result = sqliteStore.deleteRoa(normalizedRoa);
-                if (!result.deleted) {
-                    return errorResponse('RPKI ROA配置不存在');
-                }
-                await this.notifyDatasetChanged(result.cacheSerial, [
-                    {
-                        type: 'roa',
-                        action: 'withdraw',
-                        data: result.previous || result.deletedItem || result.roa || normalizedRoa
-                    }
-                ]);
-                return successResponse(null, 'RPKI ROA配置删除成功');
-            });
+            const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA, normalizedRoa);
+            return successResponse(result.data, result.msg || 'RPKI ROA配置删除成功');
         } catch (error) {
             logger.error('Error deleting ROA:', error.message);
             return errorResponse(error.message);
@@ -304,14 +357,8 @@ class RpkiApp {
 
     async handleDeleteAllRoa() {
         try {
-            return await this.runStorageMutation(async () => {
-                const sqliteStore = await this.ensureRpkiStorage();
-                const result = sqliteStore.clearRoas();
-                if (result.deleted > 0) {
-                    await this.notifyDatasetChanged(result.cacheSerial, [], true);
-                }
-                return successResponse({ deleted: result.deleted }, 'RPKI ROA批量删除成功');
-            });
+            const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.DELETE_ALL_ROA);
+            return successResponse(result.data, result.msg || 'RPKI ROA批量删除成功');
         } catch (error) {
             logger.error('Error deleting all ROA:', error.message);
             return errorResponse(error.message);
@@ -320,13 +367,14 @@ class RpkiApp {
 
     async handleGetRoaList(event, options = null) {
         try {
-            const sqliteStore = await this.ensureRpkiStorage();
-            const queryOptions = options && typeof options === 'object' ? options : { page: 1, pageSize: 1000 };
-            const result = sqliteStore.queryRoaPage(queryOptions);
-            if (!options || typeof options !== 'object') {
-                return successResponse(result.items, 'RPKI ROA配置加载成功');
-            }
-            return successResponse(result, 'RPKI ROA配置加载成功');
+            const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.GET_ROA_LIST, options);
+            const data =
+                (!options || typeof options !== 'object') &&
+                !Array.isArray(result.data) &&
+                Array.isArray(result.data?.items)
+                    ? result.data.items
+                    : result.data;
+            return successResponse(data, result.msg || 'RPKI ROA配置加载成功');
         } catch (error) {
             logger.error('Error getting ROA list:', error.message);
             return errorResponse(error.message);
@@ -342,11 +390,13 @@ class RpkiApp {
                 { name: 'All Files', extensions: ['*'] }
             ]
         };
-        const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
+        const win = BrowserWindow.fromWebContents(event?.sender) || BrowserWindow.getFocusedWindow();
         return win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options);
     }
 
     async handleSelectRoaJsonFile(event) {
+        const runtimeError = this.getRuntimeError();
+        if (runtimeError) return errorResponse(runtimeError);
         try {
             const result = await this.showRoaJsonOpenDialog(event);
             if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
@@ -365,6 +415,8 @@ class RpkiApp {
     }
 
     async handleImportRoaJson(event, importOptions = {}) {
+        const runtimeError = this.getRuntimeError();
+        if (runtimeError) return errorResponse(runtimeError);
         try {
             let importFilePath = importOptions?.filePath;
             if (!importFilePath) {
@@ -374,9 +426,10 @@ class RpkiApp {
                 }
                 importFilePath = result.filePaths[0];
             }
-            const stats = await this.importRoaJsonFile(importFilePath, {
+            const workerStats = await this.importRoaJsonFile(importFilePath, {
                 limit: this.normalizeRoaImportLimit(importOptions?.limit)
             });
+            const { importWorkerThreadId: _importWorkerThreadId, ...stats } = workerStats || {};
             return successResponse(stats, 'ROA JSON导入完成');
         } catch (error) {
             logger.error('Error importing ROA JSON:', error.message);
@@ -384,42 +437,35 @@ class RpkiApp {
         }
     }
 
-    importRoaJsonFile(importFilePath, options = {}) {
-        return this.runStorageMutation(async () => {
-            const sqliteStore = await this.ensureRpkiStorage();
-            const importLimit = this.normalizeRoaImportLimit(options.limit);
-            const workerStats = await this.runImportWorker(RPKI_IMPORT_OP.IMPORT_ROA_JSON, {
-                filePath: importFilePath,
-                dbPath: sqliteStore.dbPath,
-                limit: importLimit
-            });
-            const { cacheSerial, changed, ...stats } = workerStats;
-            if (changed > 0) {
-                await this.notifyDatasetChanged(cacheSerial, [], true);
-            }
-            logger.info(`ROA JSON导入完成: ${JSON.stringify(stats)}`);
-            return stats;
+    async importRoaJsonFile(importFilePath, options = {}) {
+        const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.IMPORT_ROA_JSON, {
+            filePath: importFilePath,
+            limit: this.normalizeRoaImportLimit(options.limit)
         });
+        logger.info(`ROA JSON导入完成: ${JSON.stringify(result.data)}`);
+        return result.data || {};
     }
 
     async handleAddRouterKey(event, rk) {
         try {
-            return await this.runStorageMutation(async () => {
+            return await this.runRouterKeyMutation(async () => {
+                if (this.worker && !this.rpkiReady) {
+                    return errorResponse('RPKI正在启动或停止，请稍后重试');
+                }
+
                 const currentList = this.store.get(this.rpkiRouterKeyFileKey) || [];
                 if (currentList.some(item => item.ski === rk.ski && item.asn === rk.asn)) {
                     return errorResponse('RouterKey已存在');
                 }
                 currentList.push(rk);
                 this.store.set(this.rpkiRouterKeyFileKey, currentList);
+
                 const worker = this.worker;
-                if (worker) {
+                if (worker && this.rpkiReady) {
                     try {
-                        const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY, rk);
-                        if (result.status !== 'success') {
-                            throw new Error(result.msg || 'worker拒绝RouterKey更新');
-                        }
+                        await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.ADD_ROUTER_KEY, rk);
                     } catch (workerError) {
-                        await this.handleWorkerSyncFailure(workerError, worker);
+                        await this.handleRouterKeySyncFailure(workerError, worker);
                     }
                 }
                 return successResponse(null, 'RouterKey保存成功');
@@ -432,22 +478,22 @@ class RpkiApp {
 
     async handleDeleteRouterKey(event, rk) {
         try {
-            return await this.runStorageMutation(async () => {
+            return await this.runRouterKeyMutation(async () => {
+                if (this.worker && !this.rpkiReady) {
+                    return errorResponse('RPKI正在启动或停止，请稍后重试');
+                }
+
                 const currentList = this.store.get(this.rpkiRouterKeyFileKey) || [];
                 const index = currentList.findIndex(item => item.ski === rk.ski && item.asn === rk.asn);
-                if (index !== -1) {
-                    currentList.splice(index, 1);
-                }
+                if (index !== -1) currentList.splice(index, 1);
                 this.store.set(this.rpkiRouterKeyFileKey, currentList);
+
                 const worker = this.worker;
-                if (worker && index !== -1) {
+                if (worker && this.rpkiReady && index !== -1) {
                     try {
-                        const result = await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROUTER_KEY, rk);
-                        if (result.status !== 'success') {
-                            throw new Error(result.msg || 'worker拒绝RouterKey删除');
-                        }
+                        await worker.sendRequest(RpkiConst.RPKI_REQ_TYPES.DELETE_ROUTER_KEY, rk);
                     } catch (workerError) {
-                        await this.handleWorkerSyncFailure(workerError, worker);
+                        await this.handleRouterKeySyncFailure(workerError, worker);
                     }
                 }
                 return successResponse(null, 'RouterKey删除成功');
@@ -456,6 +502,21 @@ class RpkiApp {
             logger.error('Error deleting RouterKey:', error.message);
             return errorResponse(error.message);
         }
+    }
+
+    async handleRouterKeySyncFailure(error, worker) {
+        if (this.worker === worker) {
+            this.rpkiReady = false;
+        }
+        this.rpkiTerminateOnlyWorker = worker;
+        const terminateError = await this.terminateRpkiWorker(worker);
+        if (terminateError && this.worker === worker) this.rpkiStopping = false;
+        const terminationDetails = terminateError
+            ? `；RPKI进程终止失败，已保留进程句柄以便重试: ${terminateError.message}`
+            : '';
+        const message = `RouterKey已保存，但运行中的RPKI服务同步失败并已停止: ${error.message}${terminationDetails}`;
+        logger.error(message);
+        throw new Error(message);
     }
 
     async handleGetRouterKeyList() {
@@ -476,25 +537,12 @@ class RpkiApp {
 
     async handleAddAspa(event, aspa) {
         try {
-            const storedAspa = this.normalizeStoredAspa(aspa);
-            if (!storedAspa) {
+            const normalizedAspa = this.normalizeStoredAspa(aspa);
+            if (!normalizedAspa) {
                 return errorResponse('ASPA配置无效');
             }
-
-            return await this.runStorageMutation(async () => {
-                const sqliteStore = await this.ensureRpkiStorage();
-                const result = sqliteStore.upsertAspa(storedAspa);
-                const previous = result.previous || result.oldAspa || null;
-                const current = result.current || result.newAspa || result.aspa || storedAspa;
-                if (!result.changed) {
-                    return successResponse(null, 'ASPA配置未变化');
-                }
-                const operation = previous
-                    ? { type: 'aspa', action: 'replace', oldData: previous, newData: current }
-                    : { type: 'aspa', action: 'announce', data: current };
-                await this.notifyDatasetChanged(result.cacheSerial, [operation]);
-                return successResponse(null, previous ? 'ASPA覆盖成功' : 'ASPA保存成功');
-            });
+            const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.ADD_ASPA, normalizedAspa);
+            return successResponse(result.data, result.msg || 'ASPA保存成功');
         } catch (error) {
             logger.error('Error adding ASPA:', error.message);
             return errorResponse(error.message);
@@ -503,21 +551,8 @@ class RpkiApp {
 
     async handleDeleteAspa(event, aspa) {
         try {
-            return await this.runStorageMutation(async () => {
-                const sqliteStore = await this.ensureRpkiStorage();
-                const result = sqliteStore.deleteAspa(aspa?.customerAsn);
-                if (!result.deleted) {
-                    return errorResponse('ASPA不存在');
-                }
-                await this.notifyDatasetChanged(result.cacheSerial, [
-                    {
-                        type: 'aspa',
-                        action: 'withdraw',
-                        data: result.previous || result.deletedItem || result.oldAspa || result.aspa
-                    }
-                ]);
-                return successResponse({ deleted: result.deleted }, 'ASPA删除成功');
-            });
+            const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.DELETE_ASPA, aspa);
+            return successResponse(result.data, result.msg || 'ASPA删除成功');
         } catch (error) {
             logger.error('Error deleting ASPA:', error.message);
             return errorResponse(error.message);
@@ -526,14 +561,8 @@ class RpkiApp {
 
     async handleDeleteAllAspa() {
         try {
-            return await this.runStorageMutation(async () => {
-                const sqliteStore = await this.ensureRpkiStorage();
-                const result = sqliteStore.clearAspas();
-                if (result.deleted > 0) {
-                    await this.notifyDatasetChanged(result.cacheSerial, [], true);
-                }
-                return successResponse({ deleted: result.deleted }, 'ASPA批量删除成功');
-            });
+            const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.DELETE_ALL_ASPA);
+            return successResponse(result.data, result.msg || 'ASPA批量删除成功');
         } catch (error) {
             logger.error('Error deleting all ASPA:', error.message);
             return errorResponse(error.message);
@@ -549,11 +578,13 @@ class RpkiApp {
                 { name: 'All Files', extensions: ['*'] }
             ]
         };
-        const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
+        const win = BrowserWindow.fromWebContents(event?.sender) || BrowserWindow.getFocusedWindow();
         return win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options);
     }
 
     async handleSelectAspaJsonFile(event) {
+        const runtimeError = this.getRuntimeError();
+        if (runtimeError) return errorResponse(runtimeError);
         try {
             const result = await this.showAspaJsonOpenDialog(event);
             if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
@@ -572,6 +603,8 @@ class RpkiApp {
     }
 
     async handleImportAspaJson(event, importOptions = {}) {
+        const runtimeError = this.getRuntimeError();
+        if (runtimeError) return errorResponse(runtimeError);
         try {
             let importFilePath = importOptions?.filePath;
             if (!importFilePath) {
@@ -581,9 +614,10 @@ class RpkiApp {
                 }
                 importFilePath = result.filePaths[0];
             }
-            const stats = await this.importAspaJsonFile(importFilePath, {
+            const workerStats = await this.importAspaJsonFile(importFilePath, {
                 limit: this.normalizeAspaImportLimit(importOptions?.limit)
             });
+            const { importWorkerThreadId: _importWorkerThreadId, ...stats } = workerStats || {};
             return successResponse(stats, 'ASPA JSON导入完成');
         } catch (error) {
             logger.error('Error importing ASPA JSON:', error.message);
@@ -591,33 +625,25 @@ class RpkiApp {
         }
     }
 
-    importAspaJsonFile(importFilePath, options = {}) {
-        return this.runStorageMutation(async () => {
-            const sqliteStore = await this.ensureRpkiStorage();
-            const importLimit = this.normalizeAspaImportLimit(options.limit);
-            const workerStats = await this.runImportWorker(RPKI_IMPORT_OP.IMPORT_ASPA_JSON, {
-                filePath: importFilePath,
-                dbPath: sqliteStore.dbPath,
-                limit: importLimit
-            });
-            const { cacheSerial, changed, ...stats } = workerStats;
-            if (changed > 0) {
-                await this.notifyDatasetChanged(cacheSerial, [], true);
-            }
-            logger.info(`ASPA JSON导入完成: ${JSON.stringify(stats)}`);
-            return stats;
+    async importAspaJsonFile(importFilePath, options = {}) {
+        const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.IMPORT_ASPA_JSON, {
+            filePath: importFilePath,
+            limit: this.normalizeAspaImportLimit(options.limit)
         });
+        logger.info(`ASPA JSON导入完成: ${JSON.stringify(result.data)}`);
+        return result.data || {};
     }
 
     async handleGetAspaList(event, options = null) {
         try {
-            const sqliteStore = await this.ensureRpkiStorage();
-            const queryOptions = options && typeof options === 'object' ? options : { page: 1, pageSize: 1000 };
-            const result = sqliteStore.queryAspaPage(queryOptions);
-            if (!options || typeof options !== 'object') {
-                return successResponse(result.items, 'ASPA列表加载成功');
-            }
-            return successResponse(result, 'ASPA列表加载成功');
+            const result = await this.requestRpki(RpkiConst.RPKI_REQ_TYPES.GET_ASPA_LIST, options);
+            const data =
+                (!options || typeof options !== 'object') &&
+                !Array.isArray(result.data) &&
+                Array.isArray(result.data?.items)
+                    ? result.data.items
+                    : result.data;
+            return successResponse(data, result.msg || 'ASPA列表加载成功');
         } catch (error) {
             logger.error('Error getting ASPA list:', error.message);
             return errorResponse(error.message);
@@ -625,7 +651,7 @@ class RpkiApp {
     }
 
     async handleGetClientList() {
-        if (!this.worker) {
+        if (!this.worker || !this.rpkiReady || this.rpkiStopping) {
             return successResponse([], 'RPKI未启动');
         }
         try {
@@ -637,41 +663,16 @@ class RpkiApp {
         }
     }
 
-    closeStorage() {
-        if (this.storageClosePromise) {
-            return this.storageClosePromise;
-        }
-        this.storageClosing = true;
-        this.storageClosePromise = (async () => {
-            try {
-                try {
-                    await this.storageMutationQueue;
-                } catch (error) {
-                    logger.warn(`等待RPKI SQLite写入队列失败: ${error.message}`);
-                }
-
-                if (this.rpkiStoragePromise) {
-                    try {
-                        await this.rpkiStoragePromise;
-                    } catch (_) {
-                        // Initialization already reports the original error to its caller.
-                    }
-                }
-
-                const sqliteStore = this.rpkiSqliteStore;
-                this.rpkiSqliteStore = null;
-                this.rpkiStoragePromise = null;
-                sqliteStore?.close();
-            } finally {
-                this.storageClosing = false;
-                this.storageClosePromise = null;
-            }
-        })();
-        return this.storageClosePromise;
+    getRpkiRunning() {
+        return this.worker !== null || this.rpkiStarting;
     }
 
-    getRpkiRunning() {
-        return this.worker !== null;
+    cancelPendingStart() {
+        if (!this.rpkiStarting && !this.rpkiStartPromise) return false;
+        this.rpkiStopping = true;
+        this.rpkiReady = false;
+        this.rpkiStartGeneration += 1;
+        return true;
     }
 }
 

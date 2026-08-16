@@ -1,8 +1,12 @@
+const path = require('node:path');
 const snmp = require('net-snmp');
 const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
+const WorkerWithPromise = require('../core/workerWithPromise');
 const SnmpConst = require('../../const/snmpConst');
 const MibRegistry = require('../../utils/mibRegistry');
+const { formatSnmpValue } = require('../../utils/snmpValueFormatter');
+const { LOG_REQ_TYPES } = require('../../const/toolsConst');
 
 const SNMP_TRAP_OID = '1.3.6.1.6.3.1.1.4.1.0';
 const GENERIC_TRAP_OIDS = {
@@ -17,8 +21,17 @@ const GENERIC_TRAP_OIDS = {
 class SnmpWorker {
     constructor() {
         this.receiver = null;
+        this.receiverClosePromises = new WeakMap();
         this.snmpConfig = null;
-        this.sessionMap = new Map(); // SNMP会话映射
+        this.trapConfig = null;
+        this.runtimeReady = false;
+        this.runtimeStopping = false;
+        this.runtimeGeneration = 0;
+        this.trapRunning = false;
+        this.trapStopping = false;
+        this.trapGeneration = 0;
+        this.trapStopPromise = null;
+        this.activeSessions = new Set();
         this.agentMap = new Map(); // 代理映射
         this.trapCounter = 0;
         this.trapHistory = [];
@@ -29,20 +42,60 @@ class SnmpWorker {
         this.trapUpdateFlushTimer = null;
         this.trapUpdateFlushIntervalMs = 1000;
         this.mibRegistry = new MibRegistry();
+        this.mibWorker = null;
+        this.mibProgressHandler = null;
 
         // 创建消息处理器
-        this.messageHandler = new WorkerMessageHandler();
+        this.messageHandler = new WorkerMessageHandler({
+            onLogLevelChange: logLevel => this.handleLogLevelChange(logLevel)
+        });
         // 初始化消息处理器
         this.messageHandler.init();
         // 注册消息处理器
         this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.START_SNMP, this.startSnmp.bind(this));
         this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.STOP_SNMP, this.stopSnmp.bind(this));
+        this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.START_TRAP, this.startTrap.bind(this));
+        this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.STOP_TRAP, this.stopTrap.bind(this));
+        this.messageHandler.registerHandler(
+            SnmpConst.SNMP_REQ_TYPES.GET_RUNTIME_STATE,
+            this.getRuntimeStateRequest.bind(this)
+        );
         this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.GET_TRAP_LIST, this.getTrapList.bind(this));
         this.messageHandler.registerHandler(
             SnmpConst.SNMP_REQ_TYPES.CLEAR_TRAP_HISTORY,
             this.clearTrapHistory.bind(this)
         );
         this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, this.compileMibs.bind(this));
+        this.messageHandler.registerHandler(
+            SnmpConst.SNMP_REQ_TYPES.SEND_GET_REQUEST,
+            this.sendGetRequest.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            SnmpConst.SNMP_REQ_TYPES.SEND_GET_NEXT_REQUEST,
+            this.sendGetNextRequest.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            SnmpConst.SNMP_REQ_TYPES.SEND_WALK_REQUEST,
+            this.sendWalkRequest.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            SnmpConst.SNMP_REQ_TYPES.SEND_SET_REQUEST,
+            this.sendSetRequest.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            SnmpConst.SNMP_REQ_TYPES.LIST_OID_INSTANCES,
+            this.listOidInstances.bind(this)
+        );
+        Object.values(SnmpConst.MIB_REQ_TYPES).forEach(op => {
+            this.messageHandler.registerHandler(op, (messageId, data) => this.forwardMibRequest(messageId, op, data));
+        });
+    }
+
+    async handleLogLevelChange(logLevel) {
+        if (this.snmpConfig) this.snmpConfig.logLevel = logLevel;
+        if (this.mibWorker) {
+            await this.mibWorker.sendRequest(LOG_REQ_TYPES.SET_LOG_LEVEL, logLevel);
+        }
     }
 
     enqueueTrapUpdateEvent(trapData) {
@@ -105,75 +158,165 @@ class SnmpWorker {
         this.pendingTrapSourceIps.clear();
     }
 
-    /**
-     * 启动SNMP服务器
-     */
+    getRuntimeState() {
+        const ready = this.runtimeReady && !this.runtimeStopping;
+        return {
+            running: ready,
+            ready,
+            trapRunning: ready && this.trapRunning && !this.trapStopping
+        };
+    }
+
+    requireRuntime(messageId) {
+        if (this.runtimeReady && !this.runtimeStopping) return true;
+        this.messageHandler.sendErrorResponse(messageId, 'SNMP运行时未启动，请先启动SNMP服务');
+        return false;
+    }
+
+    emitRuntimeState() {
+        this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.RUNTIME_EVT, this.getRuntimeState());
+    }
+
+    getRuntimeStateRequest(messageId) {
+        this.messageHandler.sendSuccessResponse(messageId, this.getRuntimeState(), 'SNMP运行状态获取成功');
+    }
+
     async startSnmp(messageId, config = {}) {
         try {
-            this.snmpConfig = config;
-            this.maxTrapHistory = Number(config.maxTrapHistory) || SnmpConst.DEFAULT_SNMP_SETTINGS.maxTrapHistory;
-            this.trapHistory = [];
-            this.trapCounter = 0;
-            this.clearTrapUpdateAggregation();
-
+            if (this.runtimeReady || this.runtimeStopping) {
+                this.messageHandler.sendErrorResponse(messageId, 'SNMP运行时已经启动');
+                return;
+            }
+            this.runtimeGeneration++;
+            this.runtimeStopping = false;
+            this.snmpConfig = {
+                ...config,
+                supportedVersions: Array.isArray(config.supportedVersions)
+                    ? [...config.supportedVersions]
+                    : [],
+                mibFiles: Array.isArray(config.mibFiles) ? [...config.mibFiles] : []
+            };
+            this.trapConfig = null;
             if (this.snmpConfig.logLevel) {
                 logger.setLevel(this.snmpConfig.logLevel);
                 logger.info(`Worker log level set to: ${this.snmpConfig.logLevel}`);
             }
+            this.runtimeReady = true;
+            this.trapRunning = false;
+            this.emitRuntimeState();
+            this.messageHandler.sendSuccessResponse(messageId, this.getRuntimeState(), 'SNMP运行时启动成功');
+        } catch (error) {
+            this.runtimeReady = false;
+            this.runtimeStopping = false;
+            this.trapRunning = false;
+            this.trapStopping = false;
+            this.snmpConfig = null;
+            this.trapConfig = null;
+            logger.error('启动SNMP运行时失败:', error);
+            this.messageHandler.sendErrorResponse(messageId, 'SNMP运行时启动失败: ' + error.message);
+        }
+    }
 
-            const mibSummary = this.mibRegistry.loadOrCompileMibFiles(config.mibFiles || [], {
-                cacheFilePath: config.mibCacheFilePath || ''
-            });
-            if (mibSummary.failedFiles.length > 0) {
-                logger.warn(`部分MIB编译失败: ${JSON.stringify(mibSummary.failedFiles)}`);
+    async startTrap(messageId, config = {}) {
+        if (!this.requireRuntime(messageId)) return;
+        if (this.receiver || this.trapRunning || this.trapStopping) {
+            this.messageHandler.sendErrorResponse(messageId, 'SNMP Trap服务已经启动');
+            return;
+        }
+        const runtimeGeneration = this.runtimeGeneration;
+        const trapGeneration = ++this.trapGeneration;
+        let receiver = null;
+        try {
+            // Trap 控制只能改变 Trap 自身参数。查询目标、版本与认证始终以
+            // START_SNMP 时的运行快照为准，避免 Trap 启动污染 manager session 配置。
+            const requestedPort = Number(config.port ?? this.snmpConfig?.port ?? SnmpConst.DEFAULT_SNMP_SETTINGS.port);
+            if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
+                throw new Error('SNMP Trap端口必须是1到65535之间的整数');
             }
-
-            this.receiver = snmp.createReceiver(
-                this.buildReceiverOptions(config),
-                this.handleReceiverCallback.bind(this)
+            const requestedHistory = Number(
+                config.maxTrapHistory ??
+                    this.snmpConfig?.maxTrapHistory ??
+                    SnmpConst.DEFAULT_SNMP_SETTINGS.maxTrapHistory
             );
-            this.configureAuthorizer(this.receiver.getAuthorizer(), config);
-            await this.waitForReceiverSockets();
-
-            logger.info(`SNMP Trap服务器启动成功，监听端口: ${config.port}`);
+            const maxTrapHistory =
+                Number.isFinite(requestedHistory) && requestedHistory > 0
+                    ? Math.min(100000, Math.floor(requestedHistory))
+                    : SnmpConst.DEFAULT_SNMP_SETTINGS.maxTrapHistory;
+            const trapConfig = {
+                ...(this.snmpConfig || {}),
+                port: requestedPort,
+                maxTrapHistory
+            };
+            this.trapConfig = {
+                port: trapConfig.port,
+                maxTrapHistory: trapConfig.maxTrapHistory
+            };
+            this.maxTrapHistory = maxTrapHistory;
+            this.trapHistory = [];
+            this.trapCounter = 0;
+            this.agentMap.clear();
+            this.clearTrapUpdateAggregation();
+            receiver = snmp.createReceiver(this.buildReceiverOptions(trapConfig), (error, notification) => {
+                this.handleReceiverCallback(error, notification, {
+                    receiver,
+                    runtimeGeneration,
+                    trapGeneration
+                });
+            });
+            this.receiver = receiver;
+            this.configureAuthorizer(receiver.getAuthorizer(), trapConfig);
+            await this.waitForReceiverSockets(receiver);
+            if (
+                !this.runtimeReady ||
+                this.runtimeStopping ||
+                runtimeGeneration !== this.runtimeGeneration ||
+                trapGeneration !== this.trapGeneration ||
+                this.receiver !== receiver
+            ) {
+                await this.closeReceiver(receiver);
+                throw new Error('SNMP Trap服务启动已取消');
+            }
+            this.trapRunning = true;
+            logger.info(`SNMP Trap服务器启动成功，监听端口: ${trapConfig.port}`);
             this.messageHandler.sendSuccessResponse(
                 messageId,
-                {
-                    mib: mibSummary
-                },
+                this.getRuntimeState(),
                 'SNMP Trap服务启动成功'
             );
-
             this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
                 type: SnmpConst.SNMP_SUB_EVT_TYPES.SERVER_STATUS,
                 data: {
                     status: 'running',
-                    port: config.port,
-                    supportedVersions: config.supportedVersions,
-                    mib: mibSummary
+                    port: trapConfig.port,
+                    supportedVersions: trapConfig.supportedVersions
                 }
             });
+            this.emitRuntimeState();
         } catch (error) {
-            logger.error('启动SNMP服务器失败:', error);
-            await this.closeReceiver();
-            this.messageHandler.sendErrorResponse(messageId, 'SNMP协议启动失败: ' + error.message);
+            logger.error('启动SNMP Trap服务器失败:', error);
+            if (receiver) await this.closeReceiver(receiver);
+            if (trapGeneration === this.trapGeneration) {
+                this.trapRunning = false;
+                this.trapConfig = null;
+                this.emitRuntimeState();
+            }
+            this.messageHandler.sendErrorResponse(messageId, 'SNMP Trap服务启动失败: ' + error.message);
         }
     }
 
     buildReceiverOptions(config) {
-        const port = Number(config.port) || SnmpConst.DEFAULT_SNMP_SETTINGS.port;
         return {
             includeAuthentication: true,
             disableAuthorization: false,
             sockets: [
-                { transport: 'udp4', address: '0.0.0.0', port },
-                { transport: 'udp6', address: '::', port }
+                { transport: 'udp4', address: '0.0.0.0', port: config.port },
+                { transport: 'udp6', address: '::', port: config.port }
             ]
         };
     }
 
-    waitForReceiverSockets() {
-        const sockets = Object.values(this.receiver?.listener?.sockets || {});
+    waitForReceiverSockets(receiver = this.receiver) {
+        const sockets = Object.values(receiver?.listener?.sockets || {});
         if (sockets.length === 0) {
             return Promise.resolve();
         }
@@ -271,7 +414,17 @@ class SnmpWorker {
         return user;
     }
 
-    handleReceiverCallback(error, notification) {
+    handleReceiverCallback(error, notification, context = {}) {
+        if (
+            context.receiver &&
+            (this.receiver !== context.receiver ||
+                context.runtimeGeneration !== this.runtimeGeneration ||
+                context.trapGeneration !== this.trapGeneration ||
+                this.runtimeStopping ||
+                this.trapStopping)
+        ) {
+            return;
+        }
         if (error) {
             logger.error('SNMP接收器错误:', error);
             this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
@@ -503,6 +656,7 @@ class SnmpWorker {
     }
 
     getTrapList(messageId, query = {}) {
+        if (!this.requireRuntime(messageId)) return;
         const pageSize = Math.max(1, Number(query.pageSize) || 20);
         const totalList = this.filterTrapHistory(query);
         const total = totalList.length;
@@ -527,6 +681,7 @@ class SnmpWorker {
     }
 
     clearTrapHistory(messageId) {
+        if (!this.requireRuntime(messageId)) return;
         this.trapHistory = [];
         this.trapCounter = 0;
         this.clearTrapUpdateAggregation();
@@ -541,23 +696,7 @@ class SnmpWorker {
     }
 
     compileMibs(messageId, data = []) {
-        try {
-            const request = this.normalizeMibCompileRequest(data);
-            const summary = this.mibRegistry.loadOrCompileMibFiles(request.filePaths, {
-                cacheFilePath: request.cacheFilePath,
-                force: request.force
-            });
-            this.trapHistory = this.trapHistory.map(trap =>
-                this.enrichTrapData({
-                    ...trap,
-                    varbinds: (trap.varbinds || []).map(varbind => this.mibRegistry.enrichVarbind(varbind))
-                })
-            );
-            this.messageHandler.sendSuccessResponse(messageId, summary, 'MIB编译完成');
-        } catch (error) {
-            logger.error('MIB编译失败:', error);
-            this.messageHandler.sendErrorResponse(messageId, 'MIB编译失败: ' + error.message);
-        }
+        return this.forwardMibRequest(messageId, SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS, data);
     }
 
     normalizeMibCompileRequest(data = []) {
@@ -576,43 +715,542 @@ class SnmpWorker {
         };
     }
 
-    /**
-     * 停止SNMP服务器
-     */
-    async stopSnmp(messageId) {
-        try {
-            this.flushTrapUpdateEvents();
-            await this.closeReceiver();
+    getMibWorker() {
+        if (this.mibWorker && this.mibWorker.worker.threadId >= 0) return this.mibWorker;
+        this.mibWorker = null;
+        const workerPath = path.join(__dirname, 'mibWorker.js');
+        const worker = new WorkerWithPromise(workerPath).createLongRunningWorker();
+        this.mibWorker = worker;
+        this.mibProgressHandler = payload => {
+            this.messageHandler.sendEvent(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, payload);
+        };
+        worker.addEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, this.mibProgressHandler);
+        const cleanupExitedWorker = () => {
+            if (this.mibWorker !== worker) return;
+            worker.removeEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, this.mibProgressHandler);
+            this.mibWorker = null;
+            this.mibProgressHandler = null;
+        };
+        worker.worker.once('error', cleanupExitedWorker);
+        worker.worker.once('exit', cleanupExitedWorker);
+        if (this.snmpConfig?.logLevel) {
+            worker.sendRequest(LOG_REQ_TYPES.SET_LOG_LEVEL, this.snmpConfig.logLevel).catch(error => {
+                logger.warn(`同步日志级别到 MIB worker 失败: ${error.message}`);
+            });
+        }
+        return worker;
+    }
 
+    async terminateMibWorker() {
+        const worker = this.mibWorker;
+        if (!worker) return;
+        this.mibWorker = null;
+        if (this.mibProgressHandler) {
+            worker.removeEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, this.mibProgressHandler);
+        }
+        this.mibProgressHandler = null;
+        await worker.worker.terminate();
+    }
+
+    syncTrapMibRegistry(op, data, workerData) {
+        if (op === SnmpConst.MIB_REQ_TYPES.CLEAR_MIBS) {
+            this.mibRegistry.reset();
+            if (this.snmpConfig) this.snmpConfig.mibFiles = [];
+        } else if (
+            op === SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS ||
+            op === SnmpConst.MIB_REQ_TYPES.GET_MIB_STATUS ||
+            op === SnmpConst.MIB_REQ_TYPES.IMPORT_MIB_PROJECT
+        ) {
+            const requestedFiles =
+                workerData?.requestedFiles || data?.filePaths || data?.requestedFiles || this.snmpConfig?.mibFiles || [];
+            const cacheFilePath = data?.cacheFilePath || this.snmpConfig?.mibCacheFilePath || '';
+            if (this.snmpConfig && Array.isArray(requestedFiles)) {
+                this.snmpConfig.mibFiles = [...requestedFiles];
+            }
+            this.mibRegistry.loadOrCompileMibFiles(requestedFiles, { cacheFilePath });
+        } else {
+            return;
+        }
+        this.trapHistory = this.trapHistory.map(trap =>
+            this.enrichTrapData({
+                ...trap,
+                varbinds: (trap.varbinds || []).map(varbind => this.mibRegistry.enrichVarbind(varbind))
+            })
+        );
+    }
+
+    buildMibWorkerRequest(op, data = {}) {
+        const request = data && typeof data === 'object' && !Array.isArray(data) ? { ...data } : {};
+        const runtimeFiles = Array.isArray(this.snmpConfig?.mibFiles) ? this.snmpConfig.mibFiles : [];
+
+        // 缓存和工程目录是运行时启动时由主进程注入的固定 capability，
+        // 不允许后续 renderer 请求替换为任意文件系统路径。
+        request.cacheFilePath = this.snmpConfig?.mibCacheFilePath || '';
+        request.projectRootDir = this.snmpConfig?.mibProjectRootDir || '';
+
+        if (op === SnmpConst.MIB_REQ_TYPES.GET_MIB_SOURCE) {
+            request.requestedFiles = [...runtimeFiles];
+        } else if (!Array.isArray(request.filePaths) && !Array.isArray(request.requestedFiles)) {
+            request.requestedFiles = [...runtimeFiles];
+        }
+        return request;
+    }
+
+    async forwardMibRequest(messageId, op, data = {}) {
+        if (!this.requireRuntime(messageId)) return;
+        try {
+            const worker = this.getMibWorker();
+            const request = this.buildMibWorkerRequest(op, data);
+            const result = await worker.sendRequest(op, request);
+            this.syncTrapMibRegistry(op, request, result.data);
+            const threadId = worker.worker.threadId;
+            const responseData =
+                result.data && typeof result.data === 'object' && !Array.isArray(result.data)
+                    ? { ...result.data, mibWorkerThreadId: threadId }
+                    : result.data;
+            this.messageHandler.sendSuccessResponse(messageId, responseData, result.msg);
+        } catch (error) {
+            logger.error(`MIB请求失败 (${op}):`, error);
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
+    }
+
+    normalizeQueryPayload(payload = {}) {
+        const request = payload && typeof payload.request === 'object' ? payload.request : payload;
+        return {
+            config: this.snmpConfig || {},
+            request: request && typeof request === 'object' ? request : {}
+        };
+    }
+
+    createQueryContext(payload, oidLabel) {
+        const { config, request } = this.normalizeQueryPayload(payload);
+        const targetHost = String(config.targetHost || SnmpConst.DEFAULT_SNMP_SETTINGS.targetHost).trim();
+        const oid = String(request.oid || '')
+            .trim()
+            .replace(/\.$/, '');
+        const version = this.getConfiguredSessionVersion(config);
+        const community = config.community || 'public';
+        const port = Number(config.queryPort) || SnmpConst.DEFAULT_SNMP_SETTINGS.queryPort;
+        if (!targetHost) throw new Error('请输入目标地址');
+        if (!oid) throw new Error(`请输入${oidLabel}`);
+        const snmpVersion = this.getSessionVersion(version);
+        if (snmpVersion === null) {
+            throw new Error(`当前${oidLabel}暂支持SNMPv1/v2c，请在SNMP配置中启用SNMPv1或SNMPv2c`);
+        }
+        return { config, request, targetHost, oid, version, community, port, snmpVersion };
+    }
+
+    createSession(context) {
+        const session = snmp.createSession(context.targetHost, context.community, {
+            port: context.port,
+            version: context.snmpVersion,
+            timeout: Number(context.request.timeout) || SnmpConst.DEFAULT_SNMP_SETTINGS.timeout,
+            retries: Number(context.request.retries) || 0
+        });
+        this.activeSessions.add(session);
+        return session;
+    }
+
+    closeSession(session) {
+        if (!session) return;
+        this.activeSessions.delete(session);
+        try {
+            session.close();
+        } catch (error) {
+            logger.warn(`关闭SNMP查询会话失败: ${error.message}`);
+        }
+    }
+
+    closeActiveSessions() {
+        Array.from(this.activeSessions).forEach(session => this.closeSession(session));
+        this.activeSessions.clear();
+    }
+
+    async sendGetRequest(messageId, payload = {}) {
+        if (!this.requireRuntime(messageId)) return;
+        let session = null;
+        try {
+            const context = this.createQueryContext(payload, 'GET OID');
+            session = this.createSession(context);
+            const varbinds = await this.sendGetOids(session, [context.oid]);
+            const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
+            if (firstError) throw new Error('GET失败: ' + snmp.varbindError(firstError));
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                {
+                    targetHost: context.targetHost,
+                    targetPort: context.port,
+                    version: context.version,
+                    varbinds: varbinds.map(varbind => this.formatSessionVarbind(varbind))
+                },
+                'GET查询成功'
+            );
+        } catch (error) {
+            logger.error('发送SNMP GET失败:', error);
+            this.messageHandler.sendErrorResponse(messageId, '发送SNMP GET失败: ' + error.message);
+        } finally {
+            this.closeSession(session);
+        }
+    }
+
+    async sendGetNextRequest(messageId, payload = {}) {
+        if (!this.requireRuntime(messageId)) return;
+        let session = null;
+        try {
+            const context = this.createQueryContext(payload, 'GET-NEXT OID');
+            session = this.createSession(context);
+            const varbinds = await this.sendGetNextOids(session, [context.oid]);
+            const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
+            if (firstError) throw new Error('GET-NEXT失败: ' + snmp.varbindError(firstError));
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                {
+                    targetHost: context.targetHost,
+                    targetPort: context.port,
+                    version: context.version,
+                    varbinds: varbinds.map(varbind => this.formatSessionVarbind(varbind))
+                },
+                'GET-NEXT查询成功'
+            );
+        } catch (error) {
+            logger.error('发送SNMP GET-NEXT失败:', error);
+            this.messageHandler.sendErrorResponse(messageId, '发送SNMP GET-NEXT失败: ' + error.message);
+        } finally {
+            this.closeSession(session);
+        }
+    }
+
+    async sendSetRequest(messageId, payload = {}) {
+        if (!this.requireRuntime(messageId)) return;
+        let session = null;
+        try {
+            const context = this.createQueryContext(payload, 'SET OID');
+            const objectType = this.getSetObjectType(context.request.type);
+            const value = this.castSetValue(objectType, context.request.value);
+            session = this.createSession(context);
+            const varbinds = await this.sendSetVarbinds(session, [
+                { oid: context.oid, type: objectType, value }
+            ]);
+            const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
+            if (firstError) throw new Error('SET失败: ' + snmp.varbindError(firstError));
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                {
+                    targetHost: context.targetHost,
+                    targetPort: context.port,
+                    version: context.version,
+                    varbinds: varbinds.map(varbind => this.formatSessionVarbind(varbind))
+                },
+                'SET发送成功'
+            );
+        } catch (error) {
+            logger.error('发送SNMP SET失败:', error);
+            this.messageHandler.sendErrorResponse(messageId, '发送SNMP SET失败: ' + error.message);
+        } finally {
+            this.closeSession(session);
+        }
+    }
+
+    async runWalk(messageId, payload, instanceMode) {
+        if (!this.requireRuntime(messageId)) return;
+        let session = null;
+        try {
+            const label = instanceMode ? '实例枚举OID' : 'WALK起始OID';
+            const context = this.createQueryContext(payload, label);
+            const limitMax = instanceMode ? 500 : 1000;
+            const limit = Math.max(1, Math.min(Number(context.request.limit) || 100, limitMax));
+            const maxRepetitions = Math.max(1, Math.min(Number(context.request.maxRepetitions) || 20, 50));
+            session = this.createSession(context);
+            const summary =
+                context.version === 'v2c'
+                    ? await this.listOidInstancesWithBulk(session, context.oid, limit, maxRepetitions)
+                    : await this.listOidInstancesWithGetNext(session, context.oid, limit);
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                {
+                    targetHost: context.targetHost,
+                    targetPort: context.port,
+                    version: context.version,
+                    baseOid: context.oid,
+                    limit,
+                    maxRepetitions,
+                    ...summary
+                },
+                instanceMode ? '实例枚举完成' : 'WALK查询完成'
+            );
+        } catch (error) {
+            const action = instanceMode ? '枚举SNMP实例' : '发送SNMP WALK';
+            logger.error(`${action}失败:`, error);
+            this.messageHandler.sendErrorResponse(messageId, `${action}失败: ${error.message}`);
+        } finally {
+            this.closeSession(session);
+        }
+    }
+
+    sendWalkRequest(messageId, payload = {}) {
+        return this.runWalk(messageId, payload, false);
+    }
+
+    listOidInstances(messageId, payload = {}) {
+        return this.runWalk(messageId, payload, true);
+    }
+
+    sendGetOids(session, oids) {
+        return new Promise((resolve, reject) => {
+            session.get(oids, (error, result) => (error ? reject(error) : resolve(result || [])));
+        });
+    }
+
+    sendGetNextOids(session, oids) {
+        return new Promise((resolve, reject) => {
+            session.getNext(oids, (error, result) => (error ? reject(error) : resolve(result || [])));
+        });
+    }
+
+    sendGetBulkOids(session, oids, nonRepeaters, maxRepetitions) {
+        return new Promise((resolve, reject) => {
+            session.getBulk(oids, nonRepeaters, maxRepetitions, (error, result) =>
+                error ? reject(error) : resolve(result || [])
+            );
+        });
+    }
+
+    sendSetVarbinds(session, varbinds) {
+        return new Promise((resolve, reject) => {
+            session.set(varbinds, (error, result) => (error ? reject(error) : resolve(result || [])));
+        });
+    }
+
+    async listOidInstancesWithGetNext(session, baseOid, limit) {
+        const rows = [];
+        let currentOid = baseOid;
+        let stoppedBy = 'endOfSubtree';
+        while (rows.length < limit) {
+            const varbind = (await this.sendGetNextOids(session, [currentOid]))[0];
+            const result = this.acceptInstanceVarbind(baseOid, currentOid, varbind);
+            if (!result.accepted) {
+                stoppedBy = result.reason;
+                break;
+            }
+            rows.push(result.row);
+            currentOid = varbind.oid;
+        }
+        return { rows, stoppedBy: rows.length >= limit ? 'limit' : stoppedBy, limitReached: rows.length >= limit };
+    }
+
+    async listOidInstancesWithBulk(session, baseOid, limit, maxRepetitions) {
+        const rows = [];
+        let currentOid = baseOid;
+        let stoppedBy = 'endOfSubtree';
+        while (rows.length < limit) {
+            const groups = await this.sendGetBulkOids(
+                session,
+                [currentOid],
+                0,
+                Math.min(maxRepetitions, limit - rows.length)
+            );
+            const varbinds = Array.isArray(groups[0]) ? groups[0] : groups;
+            if (!Array.isArray(varbinds) || varbinds.length === 0) {
+                stoppedBy = 'emptyResponse';
+                break;
+            }
+            let acceptedCount = 0;
+            for (const varbind of varbinds) {
+                const result = this.acceptInstanceVarbind(baseOid, currentOid, varbind);
+                if (!result.accepted) {
+                    return { rows, stoppedBy: result.reason, limitReached: false };
+                }
+                rows.push(result.row);
+                currentOid = varbind.oid;
+                acceptedCount++;
+                if (rows.length >= limit) break;
+            }
+            if (acceptedCount === 0) {
+                stoppedBy = 'emptyResponse';
+                break;
+            }
+        }
+        return { rows, stoppedBy: rows.length >= limit ? 'limit' : stoppedBy, limitReached: rows.length >= limit };
+    }
+
+    acceptInstanceVarbind(baseOid, previousOid, varbind) {
+        if (!varbind) return { accepted: false, reason: 'emptyResponse' };
+        if (snmp.isVarbindError(varbind)) {
+            return { accepted: false, reason: snmp.varbindError(varbind) || 'varbindError' };
+        }
+        if (!this.isOidInSubtree(baseOid, varbind.oid)) return { accepted: false, reason: 'endOfSubtree' };
+        if (this.compareOids(varbind.oid, previousOid) <= 0) {
+            return { accepted: false, reason: 'nonIncreasingOid' };
+        }
+        return {
+            accepted: true,
+            row: { ...this.formatSessionVarbind(varbind), instance: this.getOidInstanceSuffix(baseOid, varbind.oid) }
+        };
+    }
+
+    isOidInSubtree(baseOid, oid) {
+        return oid === baseOid || String(oid || '').startsWith(`${baseOid}.`);
+    }
+
+    getOidInstanceSuffix(baseOid, oid) {
+        return !this.isOidInSubtree(baseOid, oid) || oid === baseOid ? '' : String(oid).slice(baseOid.length + 1);
+    }
+
+    compareOids(left, right) {
+        const leftParts = String(left || '').split('.').map(Number);
+        const rightParts = String(right || '').split('.').map(Number);
+        for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index++) {
+            const delta = (leftParts[index] ?? -1) - (rightParts[index] ?? -1);
+            if (delta !== 0) return delta;
+        }
+        return 0;
+    }
+
+    formatSessionVarbind(varbind) {
+        const shouldFormatValue = Buffer.isBuffer(varbind.value) || typeof varbind.value === 'bigint';
+        const formattedValue = shouldFormatValue ? formatSnmpValue(varbind.value) : { value: varbind.value };
+        return { oid: varbind.oid, type: snmp.ObjectType[varbind.type] || varbind.type, ...formattedValue };
+    }
+
+    getSessionVersion(version) {
+        return { v1: snmp.Version1, v2c: snmp.Version2c }[version] ?? null;
+    }
+
+    getConfiguredSessionVersion(config = {}) {
+        const versions = Array.isArray(config.supportedVersions) ? config.supportedVersions : [];
+        if (versions.length === 0 || !versions[0]) return 'v2c';
+        return ['v1', 'v2c'].includes(versions[0]) ? versions[0] : '';
+    }
+
+    getSetObjectType(type = '') {
+        const normalized = String(type || '').replace(/[\s_-]+/g, '').toLowerCase();
+        const typeMap = {
+            integer: snmp.ObjectType.Integer,
+            integer32: snmp.ObjectType.Integer,
+            boolean: snmp.ObjectType.Integer,
+            truthvalue: snmp.ObjectType.Integer,
+            rowstatus: snmp.ObjectType.Integer,
+            octetstring: snmp.ObjectType.OctetString,
+            displaystring: snmp.ObjectType.OctetString,
+            string: snmp.ObjectType.OctetString,
+            objectidentifier: snmp.ObjectType.OID,
+            oid: snmp.ObjectType.OID,
+            ipaddress: snmp.ObjectType.IpAddress,
+            counter: snmp.ObjectType.Counter,
+            counter32: snmp.ObjectType.Counter,
+            gauge: snmp.ObjectType.Gauge,
+            gauge32: snmp.ObjectType.Gauge,
+            unsigned32: snmp.ObjectType.Gauge,
+            timeticks: snmp.ObjectType.TimeTicks,
+            counter64: snmp.ObjectType.Counter64
+        };
+        const objectType = typeMap[normalized];
+        if (!objectType) throw new Error(`不支持的SET类型: ${type || '-'}`);
+        return objectType;
+    }
+
+    castSetValue(objectType, value) {
+        if (value === null || value === undefined || value === '') throw new Error('请输入SET值');
+        if (
+            [
+                snmp.ObjectType.Integer,
+                snmp.ObjectType.Counter,
+                snmp.ObjectType.Gauge,
+                snmp.ObjectType.TimeTicks,
+                snmp.ObjectType.Counter64
+            ].includes(objectType)
+        ) {
+            const numberValue = Number(value);
+            if (!Number.isFinite(numberValue)) throw new Error('数值类型必须输入数字');
+            return numberValue;
+        }
+        return String(value);
+    }
+
+    stopTrapInternal() {
+        if (this.trapStopPromise) return this.trapStopPromise;
+        let currentPromise;
+        currentPromise = (async () => {
+            this.trapStopping = true;
+            this.trapGeneration++;
+            this.flushTrapUpdateEvents();
+            try {
+                await this.closeReceiver();
+                this.trapRunning = false;
+                this.trapConfig = null;
+                this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
+                    type: SnmpConst.SNMP_SUB_EVT_TYPES.SERVER_STATUS,
+                    data: { status: 'stopped' }
+                });
+            } finally {
+                this.trapStopping = false;
+                this.emitRuntimeState();
+            }
+        })().finally(() => {
+            if (this.trapStopPromise === currentPromise) this.trapStopPromise = null;
+        });
+        this.trapStopPromise = currentPromise;
+        return currentPromise;
+    }
+
+    async stopTrap(messageId) {
+        if (!this.requireRuntime(messageId)) return;
+        if (this.trapStopping) {
+            this.messageHandler.sendErrorResponse(messageId, 'SNMP Trap服务正在停止');
+            return;
+        }
+        if (!this.receiver && !this.trapRunning) {
+            this.messageHandler.sendErrorResponse(messageId, 'SNMP Trap服务未启动');
+            return;
+        }
+        try {
+            await this.stopTrapInternal();
+            this.messageHandler.sendSuccessResponse(messageId, this.getRuntimeState(), 'SNMP Trap服务停止成功');
+        } catch (error) {
+            logger.error('停止SNMP Trap服务失败:', error);
+            this.messageHandler.sendErrorResponse(messageId, 'SNMP Trap服务停止失败: ' + error.message);
+        }
+    }
+
+    async stopSnmp(messageId) {
+        if (!this.requireRuntime(messageId)) return;
+        this.runtimeStopping = true;
+        this.runtimeGeneration++;
+        this.emitRuntimeState();
+        try {
+            if (this.receiver || this.trapRunning) await this.stopTrapInternal();
+            this.closeActiveSessions();
+            await this.terminateMibWorker();
             this.snmpConfig = null;
-            this.sessionMap.clear();
+            this.runtimeReady = false;
+            this.runtimeStopping = false;
+            this.trapRunning = false;
+            this.trapStopping = false;
+            this.trapConfig = null;
             this.agentMap.clear();
             this.trapHistory = [];
             this.trapCounter = 0;
             this.clearTrapUpdateAggregation();
-
-            logger.info('SNMP服务器停止成功');
-            this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
-                type: SnmpConst.SNMP_SUB_EVT_TYPES.SERVER_STATUS,
-                data: {
-                    status: 'stopped'
-                }
-            });
-            // 先通知所有 renderer，再完成请求；主进程收到响应后会释放 worker 监听。
-            this.messageHandler.sendSuccessResponse(messageId, null, 'SNMP协议停止成功');
+            this.mibRegistry.reset();
+            this.emitRuntimeState();
+            logger.info('SNMP运行时停止成功');
+            this.messageHandler.sendSuccessResponse(messageId, this.getRuntimeState(), 'SNMP运行时停止成功');
         } catch (error) {
-            logger.error('停止SNMP服务器失败:', error);
-            this.messageHandler.sendErrorResponse(messageId, 'SNMP协议停止失败: ' + error.message);
+            this.runtimeStopping = false;
+            logger.error('停止SNMP运行时失败:', error);
+            this.messageHandler.sendErrorResponse(messageId, 'SNMP运行时停止失败: ' + error.message);
         }
     }
 
-    closeReceiver() {
-        if (!this.receiver) {
+    closeReceiver(receiver = this.receiver) {
+        if (!receiver) {
             return Promise.resolve();
         }
+        const existingClose = this.receiverClosePromises.get(receiver);
+        if (existingClose) return existingClose;
 
-        return new Promise(resolve => {
-            const receiver = this.receiver;
+        const closePromise = new Promise(resolve => {
             const sockets = Object.values(receiver.listener?.sockets || {});
             const socketCount = sockets.length;
             let closedCount = 0;
@@ -623,7 +1261,10 @@ class SnmpWorker {
                     return;
                 }
                 resolved = true;
-                this.receiver = null;
+                if (this.receiver === receiver) {
+                    this.receiver = null;
+                    this.trapRunning = false;
+                }
                 resolve();
             };
 
@@ -633,14 +1274,26 @@ class SnmpWorker {
             }
 
             const timer = setTimeout(finish, 500);
-            receiver.close(() => {
+            const markClosed = () => {
                 closedCount++;
                 if (closedCount >= socketCount) {
                     clearTimeout(timer);
                     finish();
                 }
+            };
+            sockets.forEach(socket => {
+                try {
+                    socket.close(() => {
+                        markClosed();
+                    });
+                } catch (error) {
+                    logger.warn(`关闭SNMP Trap socket失败: ${error.message}`);
+                    markClosed();
+                }
             });
         });
+        this.receiverClosePromises.set(receiver, closePromise);
+        return closePromise;
     }
 }
 

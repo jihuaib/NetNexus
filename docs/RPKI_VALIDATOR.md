@@ -38,7 +38,8 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
 
 ### ROA
 
-ROA 页面用于维护本地 ROA 数据。
+ROA 页面用于维护当前运行中的 RPKI 服务所使用的本地 ROA 数据。服务未启动时页面不查询或展示 SQLite
+中的历史记录；停止服务会立即清空页面缓存，但不会删除 SQLite 中的数据。重新启动后，首次进入该页面时会重新加载。
 
 ![RPKI ROA 记录](images/rpki/rpki-roa.png)
 
@@ -79,11 +80,13 @@ JSON 导入支持常见 ROA/VRP 结构：
 - Prefix：`prefix`、`IP Prefix`。
 - Max Length：`maxLength`、`max_length`、`maxPrefixLength`。
 
-导入时会跳过重复 ROA，并将主机地址归一化为网络地址。ROA 与 ASPA 数据统一保存在 SQLite 中，分页、精确 Prefix、ASN 和 IP 类型查询直接使用数据库索引，不再为全部记录维护运行时内存索引。
+导入时会跳过重复 ROA，并将主机地址归一化为网络地址。ROA 与 ASPA 数据统一保存在 SQLite 中，分页、精确 Prefix、ASN 和 IP 类型查询直接使用数据库索引，不再为全部记录维护运行时内存索引。SQLite 数据会跨运行周期保留，但 ROA/ASPA 页面只展示当前已启动服务的数据视图；同一运行周期内切换标签页会复用已加载的页面缓存。
 
 ### Router Key
 
 Router Key 页面用于维护 RPKI-RTR v1+ 的 Router Key PDU 数据。
+
+Router Key 是持久化配置，不采用 ROA/ASPA 的运行周期列表清理规则，服务停止时仍可查看和维护。
 
 ![RPKI Router Key 记录](images/rpki/rpki-router-key.png)
 
@@ -104,7 +107,7 @@ Router Key 页面用于维护 RPKI-RTR v1+ 的 Router Key PDU 数据。
 
 ### ASPA
 
-ASPA 页面用于维护 RPKI-RTR v2 的 ASPA PDU 数据。
+ASPA 页面用于维护当前运行中的 RPKI-RTR v2 服务所使用的 ASPA PDU 数据。与 ROA 页面相同，停止服务会清空页面列表缓存，重新启动后的首次访问会从 SQLite 重新加载。
 
 ![RPKI ASPA 记录](images/rpki/rpki-aspa.png)
 
@@ -140,7 +143,7 @@ ASPA JSON 导入：
 - JSON 导入先写入磁盘临时表，解析完整成功后才原子合并到正式表；截断或无效文件不会留下半批数据。
 - 大批量导入或清空会建立新的 cache 边界，客户端通过 Cache Reset 获取 SQLite 一致性快照。
 - SQLite 多写连接使用即时事务；全量响应最多同时保持 4 个只读快照，单快照默认最长 120 秒且使用 4 MiB page cache，避免慢客户端无限钉住 WAL 或放大内存。
-- 主版本升级按不兼容升级处理：用户确认清理后会删除已有 RPKI SQLite 数据，不迁移旧版 JSONL 或旧数据库 schema；同一主版本内的正常重启会保留当前数据。
+- 主版本升级按不兼容升级处理：用户确认清理后会删除已有 RPKI SQLite 数据，不迁移旧版 JSONL 或旧数据库 schema；同一主版本内的正常重启会保留当前数据。服务停止时页面隐藏 ROA/ASPA 不代表数据已删除。
 - 一条 ASPA 记录包含大量 Provider AS 时，发送和日志量都会随 Provider 数增长。
 - 如果只是日常调试，不建议在 debug/info 日志下反复发送超大 ASPA 记录。
 
@@ -149,15 +152,16 @@ ASPA JSON 导入：
 ## 使用步骤
 
 1. 进入 `RPKI`。
-2. 在 `RPKI配置` 中设置端口和最高协议版本。
-3. 选择 ASPA 编码格式。
-4. 在 ROA、Router Key、ASPA 页面维护数据。
-5. 启动 RPKI 服务。
+2. 在 `RPKI配置` 中设置端口、最高协议版本和 ASPA 编码格式。
+3. 如有需要，可在启动前维护持久化的 Router Key 配置。
+4. 启动 RPKI 服务。
+5. 在 ROA、ASPA 页面查看、导入或维护当前服务的数据；首次进入页面时会加载一次，同一运行周期内切换标签页不会重复查询。
 6. 路由器通过 RPKI-RTR 连接本机服务。
 
 ## 注意事项
 
 - 当前数据来源是用户手工维护或 JSON 导入，不会自动同步公网 RPKI repository。
 - 启动服务后新增或删除 ROA/Router Key/ASPA，会向已连接 client 发送相应更新。
+- RPKI 服务停止或异常退出后，ROA/ASPA 页面会立即清空；底层 SQLite 数据仍会保留到下一个运行周期。
 - 标准或低位端口在部分系统上可能需要管理员/root 权限。
-- 重启应用后，RPKI 服务不会自动恢复启动，需要手动启动。
+- 重启应用后，RPKI 服务不会自动恢复启动，需要手动启动；启动前 ROA/ASPA 页面不会展示上一次运行的数据。

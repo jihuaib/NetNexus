@@ -51,6 +51,7 @@
 
 export const YANG_EVENT = Object.freeze({
     TASK_PROGRESS: 'yang:taskProgress',
+    RUNTIME_CHANGED: 'yang:runtimeChanged',
     PROFILE_DATA_REFRESH: 'yang:profileDataRefresh',
     SESSION_EVENT: 'netconf:sessionEvent',
     NOTIFICATION: 'netconf:notification',

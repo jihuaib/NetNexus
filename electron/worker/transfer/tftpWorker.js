@@ -276,7 +276,6 @@ class TftpWorker {
         await this.closeSockets();
         this.transferHistory = [];
         this.transferMap.clear();
-        this.messageHandler.sendSuccessResponse(messageId, null, 'TFTP服务器已停止');
         this.messageHandler.sendEvent(TftpConst.TFTP_EVT_TYPES.TFTP_EVT, {
             type: TftpConst.TFTP_SUB_EVT_TYPES.SERVER_STATUS,
             data: {
@@ -285,6 +284,7 @@ class TftpWorker {
             }
         });
         this.tftpConfig = null;
+        this.messageHandler.sendSuccessResponse(messageId, null, 'TFTP服务器已停止');
     }
 
     async closeSockets() {

@@ -35,14 +35,14 @@
                                 <nn-input
                                     v-model:value="form.oid"
                                     allow-clear
-                                    :disabled="executing"
+                                    :disabled="executing || !runtimeReady"
                                     placeholder="请输入数字 OID"
                                     @press-enter="executeOperation"
                                 />
                                 <nn-button
                                     v-if="supportsInstanceSelection"
                                     :loading="instanceLoading"
-                                    :disabled="executing"
+                                    :disabled="executing || !runtimeReady"
                                     @click="loadInstances"
                                 >
                                     实例
@@ -51,7 +51,11 @@
                         </nn-form-item>
 
                         <nn-form-item v-if="instanceRows.length" label="实例列表">
-                            <nn-select v-model:value="form.oid" :disabled="executing" placeholder="选择设备返回的实例">
+                            <nn-select
+                                v-model:value="form.oid"
+                                :disabled="executing || !runtimeReady"
+                                placeholder="选择设备返回的实例"
+                            >
                                 <nn-select-option
                                     v-for="instance in instanceRows"
                                     :key="instance.oid"
@@ -73,7 +77,7 @@
                                             v-model:value="form.limit"
                                             :min="1"
                                             :max="1000"
-                                            :disabled="executing"
+                                            :disabled="executing || !runtimeReady"
                                             style="width: 100%"
                                         />
                                     </nn-form-item>
@@ -84,7 +88,7 @@
                                             v-model:value="form.maxRepetitions"
                                             :min="1"
                                             :max="50"
-                                            :disabled="executing || config.version !== 'v2c'"
+                                            :disabled="executing || !runtimeReady || config.version !== 'v2c'"
                                             style="width: 100%"
                                         />
                                     </nn-form-item>
@@ -96,7 +100,7 @@
                             <nn-row :gutter="12">
                                 <nn-col :span="10">
                                     <nn-form-item label="类型" required>
-                                        <nn-select v-model:value="form.type" :disabled="executing">
+                                        <nn-select v-model:value="form.type" :disabled="executing || !runtimeReady">
                                             <nn-select-option
                                                 v-for="option in SET_TYPE_OPTIONS"
                                                 :key="option.value"
@@ -111,7 +115,7 @@
                                     <nn-form-item label="值" required>
                                         <nn-input
                                             v-model:value="form.value"
-                                            :disabled="executing"
+                                            :disabled="executing || !runtimeReady"
                                             placeholder="请输入 SET 值"
                                             @press-enter="executeOperation"
                                         />
@@ -124,13 +128,13 @@
                             <nn-button
                                 type="primary"
                                 :loading="executing"
-                                :disabled="!form.oid"
+                                :disabled="!runtimeReady || !form.oid"
                                 @click="executeOperation"
                             >
                                 <template #icon><SendOutlined /></template>
                                 {{ executeButtonText }}
                             </nn-button>
-                            <nn-button :disabled="executing" @click="resetCurrentOperation">
+                            <nn-button :disabled="executing || !runtimeReady" @click="resetCurrentOperation">
                                 <template #icon><ReloadOutlined /></template>
                                 重置
                             </nn-button>
@@ -211,7 +215,7 @@
 </template>
 
 <script setup>
-    import { computed, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+    import { computed, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
     import { DEFAULT_VALUES } from '../../const/snmpConst';
     import { ReloadOutlined, SendOutlined } from 'netnexus-ui/icons';
     import { notify } from '../../utils/notify';
@@ -229,6 +233,14 @@
             default: ''
         },
         contextRevision: {
+            type: Number,
+            default: 0
+        },
+        runtimeReady: {
+            type: Boolean,
+            default: false
+        },
+        runtimeRevision: {
             type: Number,
             default: 0
         }
@@ -280,6 +292,9 @@
     });
     let executionRevision = 0;
     let instanceRequestRevision = 0;
+    let configRequestRevision = 0;
+
+    const isCurrentRuntime = runtimeRevision => props.runtimeReady && runtimeRevision === props.runtimeRevision;
 
     const {
         paneSize: requestPaneHeight,
@@ -411,8 +426,12 @@
     };
 
     const loadConfig = async () => {
+        if (!props.runtimeReady) return false;
+        const requestRevision = ++configRequestRevision;
+        const runtimeRevision = props.runtimeRevision;
         try {
             const response = await window.snmpApi.getSnmpConfig();
+            if (requestRevision !== configRequestRevision || !isCurrentRuntime(runtimeRevision)) return false;
             const next = response?.status === 'success' && response.data ? response.data : {};
             const versions = Array.isArray(next.supportedVersions) ? next.supportedVersions : [];
             config.targetHost = next.targetHost || DEFAULT_VALUES.DEFAULT_SNMP_TARGET_HOST;
@@ -425,8 +444,10 @@
                 : ['v1', 'v2c'].includes(next.version)
                   ? next.version
                   : 'v2c';
+            return true;
         } catch (_error) {
             // Defaults keep the request editor useful when configuration cannot be loaded.
+            return requestRevision === configRequestRevision && isCurrentRuntime(runtimeRevision);
         }
     };
 
@@ -456,6 +477,7 @@
     };
 
     const executeOperation = async () => {
+        if (!props.runtimeReady) return;
         const oid = normalizeOid(form.oid);
         if (!oid) {
             notify.warning('请输入 OID');
@@ -467,12 +489,13 @@
         }
 
         const requestRevision = ++executionRevision;
+        const runtimeRevision = props.runtimeRevision;
         const startedAt = performance.now();
         clearResult();
         executing.value = true;
         try {
-            await loadConfig();
-            if (requestRevision !== executionRevision) return;
+            const configLoaded = await loadConfig();
+            if (!configLoaded || requestRevision !== executionRevision || !isCurrentRuntime(runtimeRevision)) return;
             if (!config.targetHost || !config.targetPort || !config.version) {
                 throw new Error('请先在 SNMP 配置中填写查询目标并启用 SNMPv1/v2c');
             }
@@ -480,12 +503,12 @@
             if (activeOperation.value === 'get') {
                 data = ensureSuccessfulResponse(await window.snmpApi.sendGetRequest({ oid }));
                 const row = normalizeVarbind(unwrapVarbind(data));
-                if (requestRevision !== executionRevision) return;
+                if (requestRevision !== executionRevision || !isCurrentRuntime(runtimeRevision)) return;
                 varbindResult.value = row || { oid };
             } else if (activeOperation.value === 'getNext') {
                 data = ensureSuccessfulResponse(await window.snmpApi.sendGetNextRequest({ oid }));
                 const row = normalizeVarbind(unwrapVarbind(data));
-                if (requestRevision !== executionRevision) return;
+                if (requestRevision !== executionRevision || !isCurrentRuntime(runtimeRevision)) return;
                 varbindResult.value = row || { oid };
             } else if (activeOperation.value === 'walk') {
                 data = ensureSuccessfulResponse(
@@ -496,7 +519,7 @@
                     })
                 );
                 const rows = unwrapRows(data).map(normalizeVarbind);
-                if (requestRevision !== executionRevision) return;
+                if (requestRevision !== executionRevision || !isCurrentRuntime(runtimeRevision)) return;
                 walkRows.value = rows;
                 walkMeta.value = data && typeof data === 'object' && !Array.isArray(data) ? data : { rows };
             } else if (activeOperation.value === 'set') {
@@ -508,44 +531,51 @@
                     })
                 );
                 const row = normalizeVarbind(unwrapVarbind(data));
-                if (requestRevision !== executionRevision) return;
+                if (requestRevision !== executionRevision || !isCurrentRuntime(runtimeRevision)) return;
                 varbindResult.value = row || { oid, type: form.type, value: form.value };
             }
 
-            if (requestRevision !== executionRevision) return;
+            if (requestRevision !== executionRevision || !isCurrentRuntime(runtimeRevision)) return;
             resultStatus.value = 'success';
             lastDuration.value = Math.max(0, Math.round(performance.now() - startedAt));
         } catch (error) {
-            if (requestRevision !== executionRevision) return;
+            if (requestRevision !== executionRevision || !isCurrentRuntime(runtimeRevision)) return;
             resultStatus.value = 'error';
             resultError.value = error.message || String(error);
             lastDuration.value = Math.max(0, Math.round(performance.now() - startedAt));
         } finally {
-            if (requestRevision === executionRevision) executing.value = false;
+            if (requestRevision === executionRevision && isCurrentRuntime(runtimeRevision)) executing.value = false;
         }
     };
 
     const loadInstances = async () => {
-        if (!targetNode.value?.oid || instanceLoading.value) return;
+        if (!props.runtimeReady || !targetNode.value?.oid || instanceLoading.value) return;
         const requestRevision = ++instanceRequestRevision;
+        const runtimeRevision = props.runtimeRevision;
         instanceLoading.value = true;
         try {
-            await loadConfig();
-            if (requestRevision !== instanceRequestRevision) return;
+            const configLoaded = await loadConfig();
+            if (!configLoaded || requestRevision !== instanceRequestRevision || !isCurrentRuntime(runtimeRevision)) {
+                return;
+            }
             const data = ensureSuccessfulResponse(
                 await window.snmpApi.listOidInstances({
                     oid: targetNode.value.oid,
                     limit: 100
                 })
             );
-            if (requestRevision !== instanceRequestRevision) return;
+            if (requestRevision !== instanceRequestRevision || !isCurrentRuntime(runtimeRevision)) return;
             instanceRows.value = unwrapRows(data).filter(row => row?.oid);
             instanceMeta.value = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
             if (!instanceRows.value.length) notify.info('设备未返回当前字段的实例');
         } catch (error) {
-            if (requestRevision === instanceRequestRevision) notify.error(`加载实例失败：${error.message}`);
+            if (requestRevision === instanceRequestRevision && isCurrentRuntime(runtimeRevision)) {
+                notify.error(`加载实例失败：${error.message}`);
+            }
         } finally {
-            if (requestRevision === instanceRequestRevision) instanceLoading.value = false;
+            if (requestRevision === instanceRequestRevision && isCurrentRuntime(runtimeRevision)) {
+                instanceLoading.value = false;
+            }
         }
     };
 
@@ -554,20 +584,45 @@
         return value === '-' ? instance.oid : `${instance.oid} · ${value}`;
     };
 
-    watch(
-        () => props.contextRevision,
-        () => applyOperationContext(props.contextOperation, props.contextNode),
-        { immediate: true }
-    );
-
-    onMounted(loadConfig);
-    onDeactivated(() => {
+    const cancelPendingRequests = () => {
         executionRevision += 1;
         instanceRequestRevision += 1;
+        configRequestRevision += 1;
         executing.value = false;
         instanceLoading.value = false;
         stopRequestPaneResize();
+    };
+
+    const invalidateRuntimeRequests = () => {
+        cancelPendingRequests();
+        instanceRows.value = [];
+        instanceMeta.value = null;
+        clearResult();
+    };
+
+    watch(
+        () => props.contextRevision,
+        () => {
+            if (props.runtimeReady) applyOperationContext(props.contextOperation, props.contextNode);
+            else applyOperationContext('', null);
+        },
+        { immediate: true }
+    );
+
+    watch(
+        () => [props.runtimeReady, props.runtimeRevision],
+        () => {
+            invalidateRuntimeRequests();
+            if (props.runtimeReady) void loadConfig();
+            else applyOperationContext('', null);
+        }
+    );
+
+    onMounted(() => {
+        if (props.runtimeReady) void loadConfig();
     });
+    onDeactivated(cancelPendingRequests);
+    onBeforeUnmount(invalidateRuntimeRequests);
 
     defineExpose({
         openOperation: (operation, node) => applyOperationContext(operation, node),

@@ -7,9 +7,10 @@ const logger = require('../log/logger');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const EventDispatcher = require('../utils/eventDispatcher');
 const SecureCredentialStore = require('../utils/secureCredentialStore');
-const TaskManager = require('../utils/taskManager');
-const RequestWorkerClient = require('../worker/core/requestWorkerClient');
+const RequestProcessClient = require('../worker/core/requestProcessClient');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
+const { PROTOCOL_PROCESS_SERVICES } = require('../worker/core/protocolProcessServices');
+const { YANG_PROCESS_REQ_TYPES } = require('../worker/yang/yangProcessProtocol');
 const { NETCONF_REQ_TYPES, YANG_EVT_TYPES, DEFAULT_NETCONF_PROFILE, NETCONF_LIMITS } = require('../const/yangConst');
 
 const PROFILE_STORE_KEY = 'netconf-profiles';
@@ -17,7 +18,6 @@ const RPC_TIMEOUT_MIGRATION_STORE_KEY = 'netconf-rpc-timeout-default-v2';
 const LEGACY_DEFAULT_RPC_TIMEOUT = 30000;
 const ALLOWED_AUTH_METHODS = new Set(['password', 'privateKey', 'agent']);
 const ALLOWED_HOST_KEY_POLICIES = new Set(['ask', 'strict', 'accept-new']);
-const INITIAL_PASSWORD_CHANGE_REQUIRED_CODE = 'NETCONF_INITIAL_PASSWORD_CHANGE_REQUIRED';
 const MAX_SUBSCRIPTION_SNAPSHOTS_PER_PROFILE = 256;
 const MAX_SUBSCRIPTION_SNAPSHOT_BYTES_PER_PROFILE = 16 * 1024 * 1024;
 const MAX_NOTIFICATION_HISTORY_RECORDS = 500;
@@ -171,13 +171,19 @@ class NetconfApp {
         this.closeMonitorWindowsHandler =
             typeof options.closeMonitorWindows === 'function' ? options.closeMonitorWindows : null;
         this.workerClient = null;
+        this.workerReadyPromise = null;
+        this.workerTerminationPromise = null;
+        this.lifecycleQueue = Promise.resolve();
+        this.lifecycleSequence = 0;
+        this.latestLifecycleOperation = null;
+        this.activeLifecycleOperation = null;
+        this.disconnectingProfiles = new Set();
         this.eventDispatcher = new EventDispatcher();
         if (this.primaryWebContents && !this.primaryWebContents.isDestroyed?.()) {
             this.eventDispatcher.setWebContents(this.primaryWebContents);
         }
         this.credentialStore = options.credentialStore || new SecureCredentialStore();
         this.transientSecrets = new Map();
-        this.inventories = new Map();
         this.deletingProfiles = new Set();
         this.profileGenerations = new Map();
         this.profileDeletionPromises = new Map();
@@ -205,13 +211,6 @@ class NetconfApp {
         this.activeProfileId = null;
         this.yangApp?.setActiveProfileId?.(null);
         this.logLevel = null;
-        this.taskManager = new TaskManager({
-            onProgress: progress => {
-                if (this.eventDispatcher.canEmit(YANG_EVT_TYPES.TASK_PROGRESS)) {
-                    this.eventDispatcher.emit(YANG_EVT_TYPES.TASK_PROGRESS, successResponse(progress, 'YANG任务进度'));
-                }
-            }
-        });
         this.migrateLegacyRpcTimeouts();
         this.registerIpcHandlers();
     }
@@ -1046,8 +1045,23 @@ class NetconfApp {
         }
     }
 
-    relayWorkerEvent(eventName, data) {
+    relayWorkerEvent(eventName, data, sourceClient = null) {
+        if (sourceClient && sourceClient !== this.workerClient) return;
+        if (
+            ![YANG_EVT_TYPES.SESSION_EVENT, YANG_EVT_TYPES.SUBSCRIPTION_EVENT, YANG_EVT_TYPES.NOTIFICATION].includes(
+                eventName
+            )
+        ) {
+            return;
+        }
         const state = data && typeof data === 'object' ? data : null;
+        const terminateAfterEvent =
+            eventName === YANG_EVT_TYPES.SESSION_EVENT &&
+            state?.profileId &&
+            ['disconnected', 'error'].includes(String(state.status || '').toLowerCase()) &&
+            !this.pendingProfileConnections.size &&
+            !this.disconnectingProfiles.has(String(state.profileId)) &&
+            String(this.activeProfileId || '') === String(state.profileId);
         if (eventName === YANG_EVT_TYPES.SESSION_EVENT) {
             this.rememberSessionSnapshot(state);
             if (state?.profileId && !this.closing && !this.deletingProfiles.has(state.profileId)) {
@@ -1074,8 +1088,21 @@ class NetconfApp {
             eventName === YANG_EVT_TYPES.SUBSCRIPTION_EVENT
                 ? YANG_EVT_TYPES.SUBSCRIPTION_EVENT
                 : YANG_EVT_TYPES.SESSION_EVENT;
-        if (!this.eventDispatcher.canEmit(relayEventType)) return;
-        this.eventDispatcher.emit(relayEventType, successResponse(data));
+        if (this.eventDispatcher.canEmit(relayEventType)) {
+            this.eventDispatcher.emit(relayEventType, successResponse(data));
+        }
+        if (terminateAfterEvent) {
+            const client = this.workerClient;
+            this.detachYangProcessClient(client);
+            void this.enqueueLifecycleOperation(
+                'remote-disconnect',
+                async lifecycle => {
+                    lifecycle.client = client;
+                    await this.terminateYangProcess(client, 'remote-disconnect');
+                },
+                { nonSupersedable: true }
+            ).catch(error => logger.warn(`远端断开后的YANG进程清理失败: ${error.message}`));
+        }
     }
 
     handleWorkerExit(client, code) {
@@ -1139,7 +1166,9 @@ class NetconfApp {
             }
         }
         this.workerClient = null;
+        this.workerReadyPromise = null;
         this.activeProfileId = null;
+        this.yangApp?.detachProcessClient?.(client);
         this.yangApp?.setActiveProfileId?.(null);
     }
 
@@ -1227,6 +1256,103 @@ class NetconfApp {
         return runtime;
     }
 
+    lifecycleSupersededError(type = 'operation') {
+        const error = new Error(`NETCONF ${type} lifecycle operation was superseded`);
+        error.code = 'NETCONF_LIFECYCLE_SUPERSEDED';
+        return error;
+    }
+
+    assertLifecycleCurrent(lifecycle) {
+        if (!lifecycle || lifecycle.controller.signal.aborted) {
+            throw this.lifecycleSupersededError(lifecycle?.type);
+        }
+    }
+
+    cancelLifecycleOperation(lifecycle, reason = 'superseded') {
+        if (!lifecycle || lifecycle.controller.signal.aborted) return;
+        lifecycle.controller.abort();
+        const client = lifecycle.client;
+        if (lifecycle.running && client) {
+            void this.terminateYangProcess(client, `lifecycle-${reason}`).catch(() => {});
+        }
+    }
+
+    cancelPendingLifecycle(reason = 'superseded', options = {}) {
+        const cancel = lifecycle => {
+            if (options.preserveNonSupersedable && lifecycle?.nonSupersedable) return;
+            this.cancelLifecycleOperation(lifecycle, reason);
+        };
+        cancel(this.latestLifecycleOperation);
+        if (this.activeLifecycleOperation !== this.latestLifecycleOperation) {
+            cancel(this.activeLifecycleOperation);
+        }
+    }
+
+    enqueueLifecycleOperation(type, operation, options = {}) {
+        const protectedLifecycle = [this.activeLifecycleOperation, this.latestLifecycleOperation].find(
+            lifecycle => lifecycle?.nonSupersedable && !lifecycle.controller.signal.aborted
+        );
+        if (protectedLifecycle) {
+            if (
+                this.latestLifecycleOperation !== protectedLifecycle &&
+                !this.latestLifecycleOperation?.nonSupersedable
+            ) {
+                this.cancelLifecycleOperation(this.latestLifecycleOperation, type);
+            }
+            if (
+                this.activeLifecycleOperation &&
+                this.activeLifecycleOperation !== protectedLifecycle &&
+                this.activeLifecycleOperation !== this.latestLifecycleOperation &&
+                !this.activeLifecycleOperation.nonSupersedable
+            ) {
+                this.cancelLifecycleOperation(this.activeLifecycleOperation, type);
+            }
+        } else {
+            this.cancelPendingLifecycle(type);
+        }
+        const lifecycle = {
+            id: ++this.lifecycleSequence,
+            type,
+            controller: new AbortController(),
+            client: null,
+            running: false,
+            nonSupersedable: options.nonSupersedable === true
+        };
+        this.latestLifecycleOperation = lifecycle;
+        const queued = this.lifecycleQueue.then(async () => {
+            lifecycle.running = true;
+            this.activeLifecycleOperation = lifecycle;
+            try {
+                this.assertLifecycleCurrent(lifecycle);
+                return await operation(lifecycle);
+            } finally {
+                lifecycle.running = false;
+                if (this.activeLifecycleOperation === lifecycle) this.activeLifecycleOperation = null;
+            }
+        });
+        this.lifecycleQueue = queued.catch(() => {});
+        return queued;
+    }
+
+    async ensureLifecycleWorkerReady(event, lifecycle) {
+        this.assertLifecycleCurrent(lifecycle);
+        const client = this.ensureWorker(event);
+        lifecycle.client = client;
+        const ready = this.workerReadyPromise;
+        if (lifecycle.controller.signal.aborted) {
+            await this.terminateYangProcess(client, `lifecycle-${lifecycle.type}-cancelled`).catch(() => {});
+            throw this.lifecycleSupersededError(lifecycle.type);
+        }
+        await ready;
+        this.assertLifecycleCurrent(lifecycle);
+        if (this.workerClient !== client) {
+            const error = new Error('YANG进程已退出');
+            error.code = 'YANG_PROCESS_NOT_RUNNING';
+            throw error;
+        }
+        return client;
+    }
+
     ensureWorker(event) {
         if (this.closing) {
             const error = new Error('NETCONF 服务正在关闭');
@@ -1235,13 +1361,88 @@ class NetconfApp {
         }
         this.setWebContents(event);
         if (this.workerClient) return this.workerClient;
-        const client = new RequestWorkerClient(resolveWorkerPath('yang/netconfWorker.js'), {
-            defaultTimeoutMs: NETCONF_LIMITS.DEFAULT_RPC_TIMEOUT + 5000
+        const client = new RequestProcessClient(resolveWorkerPath('yang/yangProcess.js'), {
+            defaultTimeoutMs: NETCONF_LIMITS.DEFAULT_RPC_TIMEOUT + 5000,
+            serviceName: PROTOCOL_PROCESS_SERVICES.YANG
         });
         this.workerClient = client;
-        client.on('event', (eventName, data) => this.relayWorkerEvent(eventName, data));
+        client.on('event', (eventName, data) => this.relayWorkerEvent(eventName, data, client));
         client.on('exit', code => this.handleWorkerExit(client, code));
+        this.workerReadyPromise = Promise.resolve(this.yangApp?.attachProcessClient?.(client)).catch(async error => {
+            if (this.workerClient === client) {
+                this.workerClient = null;
+                this.workerReadyPromise = null;
+                this.yangApp?.detachProcessClient?.(client);
+            }
+            await client.terminate().catch(() => {});
+            throw error;
+        });
         return client;
+    }
+
+    async ensureWorkerReady(event) {
+        const client = this.ensureWorker(event);
+        await this.workerReadyPromise;
+        if (this.workerClient !== client) {
+            const error = new Error('YANG进程已退出');
+            error.code = 'YANG_PROCESS_NOT_RUNNING';
+            throw error;
+        }
+        return client;
+    }
+
+    async requireWorker(event) {
+        if (!this.workerClient) {
+            const error = new Error('YANG进程未启动，请先连接NETCONF设备');
+            error.code = 'YANG_PROCESS_NOT_RUNNING';
+            throw error;
+        }
+        this.setWebContents(event);
+        const client = this.workerClient;
+        await this.workerReadyPromise;
+        if (this.workerClient !== client) {
+            const error = new Error('YANG进程已退出');
+            error.code = 'YANG_PROCESS_NOT_RUNNING';
+            throw error;
+        }
+        return client;
+    }
+
+    async terminateYangProcess(client = this.workerClient, reason = 'disconnect') {
+        if (!client) return;
+        if (this.workerTerminationPromise?.client === client) return this.workerTerminationPromise.promise;
+        this.detachYangProcessClient(client);
+        const promise = (async () => {
+            // Let the YANG runtime abort active compile/import tasks first so an external
+            // libyang process cannot outlive its owning utility process.
+            if (client.processPath) {
+                try {
+                    await client.sendRequest(YANG_PROCESS_REQ_TYPES.CLOSE, { reason }, { timeoutMs: 30000 });
+                } catch (error) {
+                    logger.warn(`关闭YANG运行时失败 (${reason}): ${error.message}`);
+                }
+            }
+            await client.terminate();
+        })().catch(error => {
+            logger.warn(`终止YANG进程失败 (${reason}): ${error.message}`);
+            throw error;
+        });
+        this.workerTerminationPromise = { client, promise };
+        try {
+            await promise;
+        } finally {
+            if (this.workerTerminationPromise?.client === client) this.workerTerminationPromise = null;
+        }
+    }
+
+    detachYangProcessClient(client = this.workerClient) {
+        if (!client || this.workerClient !== client) return false;
+        this.workerClient = null;
+        this.workerReadyPromise = null;
+        this.activeProfileId = null;
+        this.yangApp?.detachProcessClient?.(client);
+        this.yangApp?.setActiveProfileId?.(null);
+        return true;
     }
 
     async handleListProfiles() {
@@ -1283,34 +1484,11 @@ class NetconfApp {
         if (this.deletingProfiles.has(id)) return errorResponse('连接 Profile 正在删除');
         this.closeProfileMonitorWindows(id);
         this.beginProfileDeletion(id);
-        const deletionPromise = (async () => {
-            const pending = [];
-            for (const task of this.taskManager.tasks.values()) {
-                if (task.status === 'running' && task.metadata?.profileId === id) {
-                    this.taskManager.cancel(task.taskId);
-                    if (task.promise) pending.push(task.promise);
-                }
-            }
-            await Promise.allSettled(pending);
-            if (this.workerClient) {
-                await this.disconnectProfile(event, id);
-                await this.workerClient.sendRequest(
-                    NETCONF_REQ_TYPES.PURGE_PROFILE,
-                    { profileId: id },
-                    { timeoutMs: 10000 }
-                );
-            }
-            await this.yangApp?.deleteProfileWorkspace?.(id, event);
-            this.saveStoredProfiles(this.getStoredProfiles().filter(profile => profile.id !== id));
-            this.transientSecrets.delete(id);
-            this.inventories.delete(id);
-            this.profileRpcTimeouts.delete(id);
-            this.sessionSnapshots.delete(id);
-            for (const [subscriptionId, subscription] of this.subscriptionSnapshots.entries()) {
-                if (String(subscription.profileId || '') === id) this.subscriptionSnapshots.delete(subscriptionId);
-            }
-            return successResponse(null, '连接配置已删除');
-        })();
+        const deletionPromise = this.enqueueLifecycleOperation(
+            'delete-profile',
+            lifecycle => this.performDeleteProfile(event, id, lifecycle),
+            { nonSupersedable: true }
+        );
         this.profileDeletionPromises.set(id, deletionPromise);
         try {
             return await deletionPromise;
@@ -1320,6 +1498,56 @@ class NetconfApp {
             if (this.profileDeletionPromises.get(id) === deletionPromise) this.profileDeletionPromises.delete(id);
             this.deletingProfiles.delete(id);
         }
+    }
+
+    async performDeleteProfile(event, id, lifecycle) {
+        this.assertLifecycleCurrent(lifecycle);
+        const worker = this.workerClient;
+        lifecycle.client = worker;
+        const deletingActiveProfile = Boolean(
+            worker && this.workerClient === worker && String(this.activeProfileId || '') === id
+        );
+        if (deletingActiveProfile) {
+            this.disconnectingProfiles.add(id);
+            this.detachYangProcessClient(worker);
+        }
+        try {
+            if (deletingActiveProfile) {
+                try {
+                    await worker.sendRequest(
+                        YANG_PROCESS_REQ_TYPES.DELETE_PROFILE_WORKSPACE,
+                        { profileId: id },
+                        { timeoutMs: 120000 }
+                    );
+                    this.yangApp?.persistProfileWorkspaceDeletion?.(id, { pending: false });
+                } catch (error) {
+                    this.yangApp?.persistProfileWorkspaceDeletion?.(id, { pending: true });
+                    throw error;
+                }
+            } else if (this.yangApp) {
+                await this.yangApp.deleteProfileWorkspace(id, event);
+            } else if (worker) {
+                await worker.sendRequest(
+                    YANG_PROCESS_REQ_TYPES.DELETE_PROFILE_WORKSPACE,
+                    { profileId: id },
+                    { timeoutMs: 120000 }
+                );
+            }
+            this.assertLifecycleCurrent(lifecycle);
+        } finally {
+            if (deletingActiveProfile) {
+                this.disconnectingProfiles.delete(id);
+                await this.terminateYangProcess(worker, 'profile-delete').catch(() => {});
+            }
+        }
+        this.saveStoredProfiles(this.getStoredProfiles().filter(profile => profile.id !== id));
+        this.transientSecrets.delete(id);
+        this.profileRpcTimeouts.delete(id);
+        this.sessionSnapshots.delete(id);
+        for (const [subscriptionId, subscription] of this.subscriptionSnapshots.entries()) {
+            if (String(subscription.profileId || '') === id) this.subscriptionSnapshots.delete(subscriptionId);
+        }
+        return successResponse(null, '连接配置已删除');
     }
 
     async handleSelectPrivateKey(event) {
@@ -1337,27 +1565,49 @@ class NetconfApp {
         }
     }
 
-    async handleTestConnection(event, profile) {
+    handleTestConnection(event, profile) {
+        return this.enqueueLifecycleOperation('test-connection', lifecycle =>
+            this.performTestConnection(event, profile, lifecycle)
+        );
+    }
+
+    async performTestConnection(event, profile, lifecycle) {
         const startedAt = Date.now();
+        const existingClient = this.workerClient;
+        let client = null;
         try {
             const requestedId = profile && typeof profile === 'object' ? profile.id : profile || this.activeProfileId;
             const requestedGeneration = requestedId ? this.assertProfileAvailable(requestedId) : undefined;
             const runtime = this.resolveRuntimeProfile(profile);
             const generation = this.assertProfileAvailable(runtime.id, requestedGeneration);
             if (runtime.privateKeyPath && !fs.existsSync(runtime.privateKeyPath)) throw new Error('私钥文件不存在');
-            const result = await this.ensureWorker(event).sendRequest(NETCONF_REQ_TYPES.TEST_CONNECTION, runtime, {
-                timeoutMs: runtime.connectTimeout + runtime.rpcTimeout + 5000
+            client = await this.ensureLifecycleWorkerReady(event, lifecycle);
+            const result = await client.sendRequest(NETCONF_REQ_TYPES.TEST_CONNECTION, runtime, {
+                timeoutMs: runtime.connectTimeout + runtime.rpcTimeout + 5000,
+                signal: lifecycle.controller.signal
             });
+            this.assertLifecycleCurrent(lifecycle);
             this.assertProfileAvailable(runtime.id, generation);
             return successResponse({ ...result.data, latency: Date.now() - startedAt }, 'NETCONF连接测试成功');
         } catch (error) {
             logger.error('NETCONF连接测试失败:', error.message);
             return errorResponse('连接测试失败: ' + error.message, { code: error.code });
+        } finally {
+            if (!existingClient && client) {
+                await this.terminateYangProcess(client, 'connection-test').catch(() => {});
+            }
         }
     }
 
-    async handleConnect(event, profileOrId) {
+    handleConnect(event, profileOrId) {
+        return this.enqueueLifecycleOperation('connect', lifecycle =>
+            this.performConnect(event, profileOrId, lifecycle)
+        );
+    }
+
+    async performConnect(event, profileOrId, lifecycle) {
         let pendingProfileId = '';
+        let client = null;
         const previousProfileId = this.activeProfileId ? String(this.activeProfileId) : '';
         try {
             const requestedId =
@@ -1368,10 +1618,12 @@ class NetconfApp {
             this.profileRpcTimeouts.set(runtime.id, runtime.rpcTimeout);
             pendingProfileId = String(runtime.id);
             this.pendingProfileConnections.add(pendingProfileId);
-            const client = this.ensureWorker(event);
+            client = await this.ensureLifecycleWorkerReady(event, lifecycle);
             const result = await client.sendRequest(NETCONF_REQ_TYPES.CONNECT, runtime, {
-                timeoutMs: runtime.connectTimeout + runtime.rpcTimeout + 5000
+                timeoutMs: runtime.connectTimeout + runtime.rpcTimeout + 5000,
+                signal: lifecycle.controller.signal
             });
+            this.assertLifecycleCurrent(lifecycle);
             try {
                 this.assertProfileAvailable(runtime.id, generation);
             } catch (error) {
@@ -1393,6 +1645,7 @@ class NetconfApp {
             return successResponse(result.data, 'NETCONF连接成功');
         } catch (error) {
             logger.error('NETCONF连接失败:', error.message);
+            if (client) await this.terminateYangProcess(client, 'connect-failure').catch(() => {});
             return errorResponse('NETCONF连接失败: ' + error.message, { code: error.code, details: error.data });
         } finally {
             if (pendingProfileId) this.pendingProfileConnections.delete(pendingProfileId);
@@ -1411,21 +1664,32 @@ class NetconfApp {
     async disconnectProfile(event, profileId) {
         if (!this.workerClient) return { profileId, status: 'disconnected' };
         this.setWebContents(event);
-        const result = await this.workerClient.sendRequest(
-            NETCONF_REQ_TYPES.DISCONNECT,
-            { profileId },
-            { timeoutMs: 10000 }
-        );
-        if (this.activeProfileId === profileId) this.activeProfileId = null;
-        if (!this.activeProfileId) this.yangApp?.setActiveProfileId?.(null);
-        return result.data;
+        const client = this.workerClient;
+        this.disconnectingProfiles.add(String(profileId || ''));
+        this.detachYangProcessClient(client);
+        try {
+            const result = await client.sendRequest(NETCONF_REQ_TYPES.DISCONNECT, { profileId }, { timeoutMs: 10000 });
+            this.relayWorkerEvent(YANG_EVT_TYPES.SESSION_EVENT, result.data);
+            return result.data;
+        } finally {
+            this.disconnectingProfiles.delete(String(profileId || ''));
+            await this.terminateYangProcess(client, 'disconnect').catch(() => {});
+        }
     }
 
-    async handleDisconnect(event, profileId) {
+    handleDisconnect(event, profileId) {
+        return this.enqueueLifecycleOperation('disconnect', lifecycle =>
+            this.performDisconnect(event, profileId, lifecycle)
+        );
+    }
+
+    async performDisconnect(event, profileId, lifecycle) {
         try {
+            this.assertLifecycleCurrent(lifecycle);
             const id = String(profileId || this.activeProfileId || '');
             if (!id) return successResponse({ status: 'disconnected' }, '当前没有活动连接');
             this.closeProfileMonitorWindows(id);
+            lifecycle.client = this.workerClient;
             return successResponse(await this.disconnectProfile(event, id), 'NETCONF连接已断开');
         } catch (error) {
             return errorResponse('断开NETCONF连接失败: ' + error.message);
@@ -1472,14 +1736,21 @@ class NetconfApp {
                     activeSubscriptions: [],
                     subscriptionActive: false,
                     activeSubscriptionCount: 0,
-                    activeProfileId: this.activeProfileId
+                    activeProfileId: this.activeProfileId,
+                    processRunning: false
                 });
             }
-            const result = await this.ensureWorker(event).sendRequest(NETCONF_REQ_TYPES.GET_SESSION_STATE, {
+            const result = await (
+                await this.requireWorker(event)
+            ).sendRequest(NETCONF_REQ_TYPES.GET_SESSION_STATE, {
                 profileId: id
             });
             this.rememberSessionSnapshot(result.data);
-            return successResponse({ ...result.data, activeProfileId: this.activeProfileId });
+            return successResponse({
+                ...result.data,
+                activeProfileId: this.activeProfileId,
+                processRunning: true
+            });
         } catch (error) {
             return errorResponse('获取NETCONF状态失败: ' + error.message);
         }
@@ -1491,7 +1762,9 @@ class NetconfApp {
             if (!this.workerClient) {
                 return successResponse(this.subscriptionSnapshot(profileId));
             }
-            const result = await this.ensureWorker(event).sendRequest(NETCONF_REQ_TYPES.GET_SUBSCRIPTIONS, {
+            const result = await (
+                await this.requireWorker(event)
+            ).sendRequest(NETCONF_REQ_TYPES.GET_SUBSCRIPTIONS, {
                 profileId: profileId ? String(profileId) : null
             });
             for (const subscription of result.data?.subscriptions || []) {
@@ -1513,18 +1786,11 @@ class NetconfApp {
         return String(profileId);
     }
 
-    async discoverModules(event, profileId, expectedGeneration = undefined) {
-        const id = this.resolveProfileId(profileId);
-        const generation = this.assertProfileAvailable(id, expectedGeneration);
-        const result = await this.ensureWorker(event).sendRequest(
-            NETCONF_REQ_TYPES.DISCOVER_MODULES,
-            { profileId: id },
-            { timeoutMs: 120000 }
-        );
-        this.assertProfileAvailable(id, generation);
-        const inventory = result.data || { modules: [] };
-        this.inventories.set(id, inventory);
-        return inventory;
+    async discoverModules(event, profileId) {
+        const result = await (
+            await this.requireWorker(event)
+        ).sendRequest(NETCONF_REQ_TYPES.DISCOVER_MODULES, profileId, { timeoutMs: 120000 });
+        return result.data || { modules: [] };
     }
 
     async handleDiscoverModules(event, profileId) {
@@ -1536,325 +1802,17 @@ class NetconfApp {
         }
     }
 
-    selectInventoryModules(inventory, requested = []) {
-        const modules = Array.isArray(inventory?.modules) ? inventory.modules : [];
-        if (!Array.isArray(requested) || requested.length === 0) return modules;
-        const keys = new Set(
-            requested.map(item => {
-                if (typeof item === 'string') return item;
-                return `${item.name || item.identifier || ''}@${item.revision || item.version || ''}`;
-            })
-        );
-        return modules.filter(module => {
-            const name = module.name || module.identifier || '';
-            const revision = module.revision || module.version || '';
-            return keys.has(name) || keys.has(`${name}@${revision}`);
-        });
-    }
-
-    async downloadOne(profileId, module, signal) {
-        const result = await this.workerClient.sendRequest(
-            NETCONF_REQ_TYPES.GET_SCHEMA,
-            { profileId, module },
-            { timeoutMs: 120000, signal }
-        );
-        const content = result.data?.content ?? result.data?.schema ?? result.data;
-        if (typeof content !== 'string' || !content.trim()) throw new Error('设备返回了空的YANG模型');
-        if (Buffer.byteLength(content, 'utf8') > NETCONF_LIMITS.MAX_SCHEMA_BYTES) {
-            throw new Error('设备返回的YANG模型超过大小限制');
-        }
-        return {
-            content,
-            expectedName: module.name || module.identifier,
-            revision: module.revision || module.version || '',
-            fileName: `${module.name || module.identifier}${module.revision || module.version ? `@${module.revision || module.version}` : ''}.yang`,
-            source: result.data?.source || `netconf://${profileId}/${module.name || module.identifier}`,
-            dependencies: Array.isArray(result.data?.dependencies) ? result.data.dependencies : []
-        };
-    }
-
-    moduleKey(module) {
-        const name = module?.name || module?.identifier || '';
-        const revision = module?.revision || module?.version || '';
-        return `${name}@${revision}`;
-    }
-
-    inventoryDependencyCandidates(inventory, name, kind = '') {
-        const candidates = [];
-        for (const module of inventory?.modules || []) {
-            const moduleName = module.name || module.identifier;
-            const moduleKind = module.kind || (module.submodule || module.isSubmodule ? 'submodule' : 'module');
-            if (moduleName === name && (!kind || moduleKind === kind)) candidates.push(module);
-            for (const submodule of module.submodules || []) {
-                const descriptor = {
-                    ...submodule,
-                    kind: 'submodule',
-                    submodule: true,
-                    parentModule: moduleName
-                };
-                if ((descriptor.name || descriptor.identifier) === name && (!kind || kind === 'submodule')) {
-                    candidates.push(descriptor);
-                }
-            }
-        }
-        return candidates;
-    }
-
-    findInventoryDependency(inventory, name, revision = '', kind = '') {
-        const candidates = this.inventoryDependencyCandidates(inventory, name, kind);
-        if (revision) {
-            const exact = candidates.find(module => (module.revision || module.version || '') === revision);
-            return exact;
-        }
-        return candidates.sort((left, right) =>
-            (right.revision || right.version || '').localeCompare(left.revision || left.version || '')
-        )[0];
-    }
-
-    dependencyDescriptor(item, fallbackKind = 'module') {
-        const descriptor = typeof item === 'string' ? { name: item } : item || {};
-        const name = descriptor.name || descriptor.identifier || '';
-        if (!name) return null;
-        const kind = descriptor.kind || fallbackKind;
-        const revision = descriptor.revision || descriptor.version || descriptor.revisionDate || '';
-        return {
-            name,
-            revision,
-            format: descriptor.format || 'yang',
-            kind,
-            submodule: kind === 'submodule'
-        };
-    }
-
-    resolveDependency(inventory, item, fallbackKind = 'module') {
-        const descriptor = this.dependencyDescriptor(item, fallbackKind);
-        if (!descriptor) return null;
-        return (
-            this.findInventoryDependency(inventory, descriptor.name, descriptor.revision, descriptor.kind) || descriptor
-        );
-    }
-
-    inventoryDeclaredDependencies(inventory, module) {
-        const dependencies = [];
-        const add = (item, kind) => {
-            const target = this.resolveDependency(inventory, item, kind);
-            if (target) dependencies.push(target);
-        };
-        (module.submodules || []).forEach(item => add(item, 'submodule'));
-        (module.deviations || []).forEach(item => add(item, 'module'));
-        return dependencies;
-    }
-
-    parsedDependencies(inventory, downloaded) {
-        return (downloaded.dependencies || [])
-            .map(item => this.resolveDependency(inventory, item, item.kind === 'submodule' ? 'submodule' : 'module'))
-            .filter(Boolean);
-    }
-
-    downloadErrorText(error) {
-        const rpcErrors = Array.isArray(error?.data?.errors) ? error.data.errors : [];
-        return [
-            error?.message,
-            error?.data?.message,
-            ...rpcErrors.flatMap(item => [item?.message, item?.tag, item?.appTag, item?.path])
-        ]
-            .map(value => String(value || '').trim())
-            .filter(Boolean)
-            .join(' ');
-    }
-
-    isInitialPasswordChangeError(error) {
-        const text = this.downloadErrorText(error);
-        return (
-            error?.code === INITIAL_PASSWORD_CHANGE_REQUIRED_CODE ||
-            (/initial\s+password/iu.test(text) && /change/iu.test(text)) ||
-            (/初始密码/u.test(text) && /(修改|更改|变更)/u.test(text))
-        );
-    }
-
-    downloadFailure(module, error) {
-        const initialPassword = this.isInitialPasswordChangeError(error);
-        const details = Array.isArray(error?.data?.errors)
-            ? error.data.errors.map(item => ({
-                  type: item?.type || '',
-                  tag: item?.tag || '',
-                  severity: item?.severity || '',
-                  appTag: item?.appTag || '',
-                  path: item?.path || '',
-                  message: item?.message || ''
-              }))
-            : [];
-        return {
-            name: module.name || module.identifier,
-            revision: module.revision || module.version || '',
-            error: initialPassword
-                ? '设备要求先修改初始密码；已停止后续下载，请通过 STelnet 或 Console 修改密码后重试'
-                : error?.message || String(error),
-            code: initialPassword ? INITIAL_PASSWORD_CHANGE_REQUIRED_CODE : error?.code || 'YANG_DOWNLOAD_FAILED',
-            ...(details.length ? { details } : {})
-        };
-    }
-
     async handleDownloadModules(event, request = {}) {
         try {
-            this.setWebContents(event);
-            const profileId = this.resolveProfileId(request);
-            const profileGeneration = this.assertProfileAvailable(profileId);
-            const workspaceGeneration = this.yangApp?.getWorkspaceGeneration?.({ profileId });
-            const task = this.taskManager.start(
-                'download',
-                async ({ signal, report }) => {
-                    this.assertProfileAvailable(profileId, profileGeneration);
-                    let inventory = this.inventories.get(profileId);
-                    if (!inventory) {
-                        report({ phase: 'discovering', percent: 5, message: '正在读取设备YANG列表' });
-                        inventory = await this.discoverModules(event, profileId, profileGeneration);
-                    }
-                    const selected = this.selectInventoryModules(inventory, request.modules);
-                    if (selected.length === 0) throw new Error('没有匹配的YANG模型可下载');
-                    const downloaded = [];
-                    const failed = [];
-                    let stopReason = null;
-                    const queuedKeys = new Set();
-                    const queue = [];
-                    const enqueue = module => {
-                        const key = this.moduleKey(module);
-                        if (!key || queuedKeys.has(key)) return;
-                        queuedKeys.add(key);
-                        queue.push(module);
-                    };
-                    selected.forEach(enqueue);
-                    if (request.includeDependencies !== false) {
-                        selected
-                            .flatMap(module => this.inventoryDeclaredDependencies(inventory, module))
-                            .forEach(enqueue);
-                    }
-                    for (let index = 0; index < queue.length; index += 1) {
-                        if (signal.aborted) break;
-                        const module = queue[index];
-                        report({
-                            phase: 'downloading',
-                            percent: 10 + Math.round((index / Math.max(1, queue.length)) * 70),
-                            completed: index,
-                            total: queue.length,
-                            module: module.name || module.identifier,
-                            counts: { downloaded: downloaded.length, failed: failed.length }
-                        });
-                        try {
-                            const item = await this.downloadOne(profileId, module, signal);
-                            downloaded.push(item);
-                            if (request.includeDependencies !== false) {
-                                this.parsedDependencies(inventory, item).forEach(enqueue);
-                                this.inventoryDeclaredDependencies(inventory, module).forEach(enqueue);
-                            }
-                        } catch (error) {
-                            const failure = this.downloadFailure(module, error);
-                            failed.push(failure);
-                            if (failure.code === INITIAL_PASSWORD_CHANGE_REQUIRED_CODE) {
-                                stopReason = failure;
-                                break;
-                            }
-                        }
-                    }
-                    if (signal.aborted) {
-                        throw new Error('YANG 下载已取消');
-                    }
-                    this.assertProfileAvailable(profileId, profileGeneration);
-                    if (downloaded.length === 0) {
-                        const initialPasswordRequired = stopReason?.code === INITIAL_PASSWORD_CHANGE_REQUIRED_CODE;
-                        const detail = initialPasswordRequired
-                            ? '设备要求先修改初始密码；本次 get-schema 没有返回任何模型。请先通过 STelnet 或 Console 修改密码，再更新连接 Profile 后重试'
-                            : failed[0]?.error || '设备未返回模型内容';
-                        report({
-                            phase: 'downloading',
-                            percent: 100,
-                            completed: failed.length,
-                            total: queue.length,
-                            message: detail,
-                            counts: { downloaded: 0, failed: failed.length }
-                        });
-                        const error = new Error(`YANG下载失败: ${detail}`);
-                        error.code = stopReason?.code || 'YANG_DOWNLOAD_FAILED';
-                        throw error;
-                    }
-                    report({
-                        phase: 'importing',
-                        percent: 85,
-                        message: '正在写入本地YANG仓库',
-                        counts: { downloaded: downloaded.length, failed: failed.length }
-                    });
-                    const imported = this.yangApp
-                        ? await this.yangApp.importDownloadedContents(
-                              downloaded,
-                              {
-                                  profileId,
-                                  inventory,
-                                  workspaceGeneration
-                              },
-                              event
-                          )
-                        : { downloaded };
-                    this.assertProfileAvailable(profileId, profileGeneration);
-                    const importFailures = Array.isArray(imported?.failed)
-                        ? imported.failed.map(item => ({
-                              name: item.expectedName || item.name || '未知模型',
-                              revision: item.revision || '',
-                              error: item.error || item.message || '写入本地YANG仓库失败',
-                              code: item.code || 'YANG_IMPORT_FAILED'
-                          }))
-                        : [];
-                    failed.push(...importFailures);
-                    const persisted = Math.max(
-                        0,
-                        Number(imported?.summary?.imported ?? downloaded.length - importFailures.length) || 0
-                    );
-                    if (persisted === 0) {
-                        const error = new Error('YANG下载成功，但没有模型能够写入本地YANG仓库');
-                        error.code = 'YANG_DOWNLOAD_PERSIST_FAILED';
-                        throw error;
-                    }
-                    const attempted = downloaded.length + failed.length - importFailures.length;
-                    const unattempted = Math.max(0, queue.length - attempted);
-                    const partial = failed.length > 0;
-                    const finalMessage = stopReason
-                        ? [
-                              `已保存 ${persisted} 个模型`,
-                              `${failed.length} 个失败`,
-                              unattempted ? `${unattempted} 个未尝试` : '',
-                              '请先修改设备初始密码后重试'
-                          ]
-                              .filter(Boolean)
-                              .join('，')
-                        : partial
-                          ? `已保存 ${persisted} 个模型，${failed.length} 个失败`
-                          : `已保存 ${persisted} 个模型`;
-                    report({
-                        phase: 'importing',
-                        percent: 99,
-                        completed: attempted,
-                        total: queue.length,
-                        message: finalMessage,
-                        counts: { downloaded: persisted, failed: failed.length }
-                    });
-                    return {
-                        profileId,
-                        downloaded: downloaded.length,
-                        persisted,
-                        attempted,
-                        unattempted,
-                        total: queue.length,
-                        partial,
-                        stoppedEarly: Boolean(stopReason),
-                        stopReason,
-                        failed,
-                        imported
-                    };
-                },
-                { profileId }
-            );
-            return successResponse(task, 'YANG下载任务已开始');
+            const result = await (
+                await this.requireWorker(event)
+            ).sendRequest(YANG_PROCESS_REQ_TYPES.DOWNLOAD_MODULES, request, { timeoutMs: 120000 });
+            return successResponse(result.data, 'YANG下载任务已开始');
         } catch (error) {
-            return errorResponse('启动YANG下载失败: ' + error.message);
+            return errorResponse('启动YANG下载失败: ' + error.message, {
+                code: error.code,
+                details: error.data
+            });
         }
     }
 
@@ -1865,7 +1823,9 @@ class NetconfApp {
             const generation = this.assertProfileAvailable(profileId);
             activeOperation = this.registerRpcOperation(event, request, profileId);
             const timeoutMs = this.operationWorkerTimeoutMs(profileId, request.timeout);
-            const result = await this.ensureWorker(event).sendRequest(
+            const result = await (
+                await this.requireWorker(event)
+            ).sendRequest(
                 NETCONF_REQ_TYPES.EXECUTE_OPERATION,
                 { ...request, profileId },
                 { timeoutMs, signal: activeOperation?.controller.signal }
@@ -1894,7 +1854,9 @@ class NetconfApp {
             const generation = this.assertProfileAvailable(profileId);
             activeOperation = this.registerRpcOperation(event, request, profileId);
             const timeoutMs = this.operationWorkerTimeoutMs(profileId, request.timeout);
-            const result = await this.ensureWorker(event).sendRequest(
+            const result = await (
+                await this.requireWorker(event)
+            ).sendRequest(
                 NETCONF_REQ_TYPES.SEND_RPC,
                 { ...request, profileId },
                 { timeoutMs, signal: activeOperation?.controller.signal }
@@ -1942,22 +1904,28 @@ class NetconfApp {
         }
     }
 
-    async handleGetTask(_event, taskId) {
-        const task = this.taskManager.get(taskId);
-        return task ? successResponse(task) : errorResponse('任务不存在');
+    async handleGetTask(event, taskId) {
+        try {
+            const result = await (await this.requireWorker(event)).sendRequest(YANG_PROCESS_REQ_TYPES.GET_TASK, taskId);
+            return result.data ? successResponse(result.data) : errorResponse('任务不存在');
+        } catch (error) {
+            return errorResponse('读取任务失败: ' + error.message, { code: error.code, details: error.data });
+        }
     }
 
-    async handleCancelTask(_event, taskId) {
-        return this.taskManager.cancel(taskId)
-            ? successResponse(null, '任务已取消')
-            : errorResponse('任务不存在或已经结束');
+    async handleCancelTask(event, taskId) {
+        try {
+            const result = await (
+                await this.requireWorker(event)
+            ).sendRequest(YANG_PROCESS_REQ_TYPES.CANCEL_TASK, taskId);
+            return result.data ? successResponse(null, '任务已取消') : errorResponse('任务不存在或已经结束');
+        } catch (error) {
+            return errorResponse('取消任务失败: ' + error.message, { code: error.code, details: error.data });
+        }
     }
 
     getRunning() {
-        return Boolean(
-            (this.workerClient && this.activeProfileId) ||
-            this.taskManager.list().some(task => task.status === 'running')
-        );
+        return Boolean(this.workerClient);
     }
 
     async handleLogLevelChange(logLevel) {
@@ -1968,6 +1936,8 @@ class NetconfApp {
         if (this.closePromise) return this.closePromise;
         const closePromise = (async () => {
             this.closing = true;
+            this.cancelPendingLifecycle('application-close', { preserveNonSupersedable: true });
+            await this.lifecycleQueue.catch(() => {});
             if (this.notificationSummaryTimer) {
                 clearTimeout(this.notificationSummaryTimer);
                 this.notificationSummaryTimer = null;
@@ -1977,13 +1947,6 @@ class NetconfApp {
                 operation.controller.abort();
                 this.finishRpcOperation(operation);
             }
-            const pendingTasks = [];
-            for (const task of this.taskManager.tasks.values()) {
-                if (task.status !== 'running') continue;
-                this.taskManager.cancel(task.taskId);
-                if (task.promise) pendingTasks.push(task.promise);
-            }
-            await Promise.allSettled(pendingTasks);
             await Promise.allSettled([...this.profileDeletionPromises.values()]);
 
             const worker = this.workerClient;
@@ -1993,12 +1956,12 @@ class NetconfApp {
                 } catch (error) {
                     logger.warn('关闭NETCONF会话失败:', error.message);
                 } finally {
-                    await worker.terminate().catch(error => logger.warn('终止 NETCONF Worker 失败:', error.message));
-                    if (this.workerClient === worker) this.workerClient = null;
+                    await this.terminateYangProcess(worker, 'application-close').catch(() => {});
                 }
             }
             await this.cleanupRpcReplyArtifacts();
             this.activeProfileId = null;
+            this.workerReadyPromise = null;
             this.yangApp?.setActiveProfileId?.(null);
             this.deletingProfiles.clear();
             this.pendingProfileConnections.clear();

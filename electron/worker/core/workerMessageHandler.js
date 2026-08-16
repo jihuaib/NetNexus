@@ -1,11 +1,12 @@
-const { parentPort } = require('worker_threads');
 const logger = require('../../log/logger');
 const { LOG_REQ_TYPES } = require('../../const/toolsConst');
+const { getParentMessageEndpoint } = require('./parentMessageEndpoint');
 
 class WorkerMessageHandler {
     constructor(options = {}) {
         this.handlers = new Map();
         this.onLogLevelChange = typeof options.onLogLevelChange === 'function' ? options.onLogLevelChange : null;
+        this.parentEndpoint = options.parentEndpoint || getParentMessageEndpoint();
     }
 
     /**
@@ -27,11 +28,11 @@ class WorkerMessageHandler {
 
     // 初始化消息处理, 用于监听app发送给worker的消息
     init() {
-        if (!parentPort) {
-            throw new Error('This function must be called in a worker thread');
+        if (!this.parentEndpoint) {
+            throw new Error('This function must be called in a worker thread or child process');
         }
 
-        parentPort.on('message', message => {
+        this.parentEndpoint.on('message', message => {
             const { messageId, op, data } = message;
             logger.info(`recv msg: ${JSON.stringify(this.summarizeMessage(message))}`);
 
@@ -57,7 +58,10 @@ class WorkerMessageHandler {
             if (this.handlers.has(op)) {
                 try {
                     const handler = this.handlers.get(op);
-                    handler(messageId, data);
+                    Promise.resolve(handler(messageId, data)).catch(error => {
+                        logger.error(`Error handling asynchronous operation ${op}:`, error);
+                        this.sendErrorResponse(messageId, `Error handling operation ${op}: ${error.message}`);
+                    });
                 } catch (error) {
                     logger.error(`Error handling operation ${op}:`, error);
                     this.sendErrorResponse(messageId, `Error handling operation ${op}: ${error.message}`);
@@ -70,14 +74,22 @@ class WorkerMessageHandler {
     }
 
     summarizeMessage(message) {
-        const summarize = value => {
+        const sensitiveKey = /(?:password|passphrase|secret|community|authKey|privKey)/iu;
+        const summarize = (value, key = '', depth = 0) => {
+            if (sensitiveKey.test(key)) {
+                return '[REDACTED]';
+            }
             if (Array.isArray(value)) {
                 return `[Array(${value.length})]`;
             }
+            if (Buffer.isBuffer(value)) {
+                return `[Buffer(${value.length})]`;
+            }
             if (value && typeof value === 'object') {
+                if (depth >= 3) return '[Object]';
                 const summary = {};
                 for (const [key, item] of Object.entries(value)) {
-                    summary[key] = Array.isArray(item) ? `[Array(${item.length})]` : item;
+                    summary[key] = summarize(item, key, depth + 1);
                 }
                 return summary;
             }
@@ -86,7 +98,7 @@ class WorkerMessageHandler {
 
         return {
             ...message,
-            data: summarize(message.data)
+            data: summarize(message.data, 'data')
         };
     }
 
@@ -97,23 +109,23 @@ class WorkerMessageHandler {
 
     // worker发送成功响应
     sendSuccessResponse(messageId, data = null, msg = '') {
-        if (!parentPort) return;
+        if (!this.parentEndpoint) return;
 
-        parentPort.postMessage(WorkerMessageHandler.createMessageResponse(messageId, 'success', msg, data));
+        this.parentEndpoint.postMessage(WorkerMessageHandler.createMessageResponse(messageId, 'success', msg, data));
     }
 
     // worker发送错误响应
     sendErrorResponse(messageId, msg = '', data = null) {
-        if (!parentPort) return;
+        if (!this.parentEndpoint) return;
 
-        parentPort.postMessage(WorkerMessageHandler.createMessageResponse(messageId, 'error', msg, data));
+        this.parentEndpoint.postMessage(WorkerMessageHandler.createMessageResponse(messageId, 'error', msg, data));
     }
 
     // worker发送事件通知（不需要messageId，不是响应）
     sendEvent(eventName, data = null) {
-        if (!parentPort) return;
+        if (!this.parentEndpoint) return;
 
-        parentPort.postMessage({
+        this.parentEndpoint.postMessage({
             eventName,
             data
         });

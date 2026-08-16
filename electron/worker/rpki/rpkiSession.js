@@ -26,6 +26,8 @@ class RpkiSession {
         this.sendQueue = Promise.resolve();
         this.closing = false;
         this.closed = false;
+        this.closePromise = null;
+        this.pendingDrainCancels = new Set();
     }
 
     static makeKey(localIp, localPort, remoteIp, remotePort) {
@@ -102,28 +104,72 @@ class RpkiSession {
 
     closeSession(options = {}) {
         const { destroySocket = true, graceful = false } = options;
-        if (this.closed) {
-            if (destroySocket) {
-                return this.closeSocket({ graceful });
-            }
-            return Promise.resolve();
+        if (this.closePromise) {
+            return this.closePromise;
         }
 
         this.closed = true;
         this.closing = true;
         this.messageBuffer = Buffer.alloc(0);
+        for (const cancelDrain of this.pendingDrainCancels) {
+            cancelDrain();
+        }
+
+        let resolveClose;
+        let rejectClose;
+        const closePromise = new Promise((resolve, reject) => {
+            resolveClose = resolve;
+            rejectClose = reject;
+        });
+        this.closePromise = closePromise;
+        if (typeof this.rpkiWorker?.trackClosingRpkiSession === 'function') {
+            this.rpkiWorker.trackClosingRpkiSession(this, closePromise);
+        }
         if (typeof this.rpkiWorker?.removeRpkiSession === 'function') {
             this.rpkiWorker.removeRpkiSession(this);
         }
-        this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
-            opType: 'delete',
-            data: this.getClientInfo()
-        });
-
-        if (destroySocket) {
-            return this.closeSocket({ graceful });
+        try {
+            this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
+                opType: 'delete',
+                data: this.getClientInfo()
+            });
+        } catch (error) {
+            logger.warn(`RPKI session关闭事件发送失败: ${error.message}`);
         }
-        return Promise.resolve();
+
+        const finishClose = async () => {
+            let closeError = null;
+            try {
+                if (destroySocket) {
+                    await this.closeSocket({ graceful });
+                }
+            } catch (error) {
+                closeError = error;
+            }
+
+            try {
+                await this.awaitQuiescence();
+            } catch (error) {
+                closeError ||= error;
+            }
+
+            if (closeError) {
+                throw closeError;
+            }
+        };
+        finishClose().then(resolveClose, rejectClose);
+        return closePromise;
+    }
+
+    async awaitQuiescence() {
+        let queue = this.sendQueue;
+        while (queue) {
+            await queue;
+            if (queue === this.sendQueue) {
+                return;
+            }
+            queue = this.sendQueue;
+        }
     }
 
     closeSocket(options = {}) {
@@ -150,7 +196,13 @@ class RpkiSession {
         }
 
         if (typeof socket.once !== 'function') {
-            socket.end();
+            try {
+                socket.end();
+            } catch (_error) {
+                if (!socket.destroyed && typeof socket.destroy === 'function') {
+                    socket.destroy();
+                }
+            }
             return Promise.resolve();
         }
 
@@ -185,6 +237,7 @@ class RpkiSession {
                 if (!socket.destroyed && typeof socket.destroy === 'function') {
                     socket.destroy();
                 }
+                finish();
             }, 1000);
             if (typeof fallbackTimer.unref === 'function') {
                 fallbackTimer.unref();
@@ -250,6 +303,9 @@ class RpkiSession {
             let snapshot = null;
             let snapshotTimeout = null;
             try {
+                if (this.closing || this.closed) {
+                    return;
+                }
                 snapshot =
                     typeof this.rpkiWorker?.createDataSnapshot === 'function'
                         ? await this.rpkiWorker.createDataSnapshot()
@@ -367,9 +423,19 @@ class RpkiSession {
     }
 
     enqueueSend(task) {
-        this.sendQueue = this.sendQueue.then(task).catch(error => {
-            logger.error(`RPKI send queue error: ${error.message}`);
-        });
+        if (this.closing || this.closed) {
+            return this.sendQueue;
+        }
+        this.sendQueue = this.sendQueue
+            .then(() => {
+                if (this.closing || this.closed) {
+                    return undefined;
+                }
+                return task();
+            })
+            .catch(error => {
+                logger.error(`RPKI send queue error: ${error.message}`);
+            });
         return this.sendQueue;
     }
 
@@ -408,6 +474,7 @@ class RpkiSession {
                 socket.removeListener('drain', onDrain);
                 socket.removeListener('close', onClose);
                 socket.removeListener('error', onError);
+                this.pendingDrainCancels.delete(onClose);
             };
             const onDrain = () => {
                 cleanup();
@@ -422,9 +489,13 @@ class RpkiSession {
                 reject(error);
             };
 
+            this.pendingDrainCancels.add(onClose);
             socket.once('drain', onDrain);
             socket.once('close', onClose);
             socket.once('error', onError);
+            if (this.closing || this.closed) {
+                onClose();
+            }
         });
     }
 

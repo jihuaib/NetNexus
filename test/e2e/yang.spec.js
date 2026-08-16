@@ -505,7 +505,15 @@ test.describe('NETCONF/YANG workbench', () => {
                 }
             };
         };
-        await harness.controller.call('yang.netconf.disconnect', 'e2e-netconf-profile');
+        const reconnectingSession = {
+            ...harness.controller.state.yang.session,
+            status: 'reconnecting',
+            state: 'reconnecting',
+            connected: false
+        };
+        harness.controller.state.yang.session = reconnectingSession;
+        harness.controller.state.yang.sessions['e2e-netconf-profile'] = reconnectingSession;
+        harness.controller.state.yang.connected = false;
 
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.goto('/#/yang/yang-workspace');
@@ -743,8 +751,142 @@ test.describe('NETCONF/YANG workbench', () => {
         await page.locator('.session-card').getByRole('button', { name: '断开连接', exact: true }).click();
         await page.goto('/#/yang/yang-modules');
         await expect(moduleCurrentProfile).toContainText('NETCONF E2E 备用设备');
-        await expect(page.getByText('vendor-system', { exact: true })).toBeVisible();
+        await expect(page.getByText('vendor-system', { exact: true })).toHaveCount(0);
+        await expect(page.getByText('YANG进程未启动', { exact: true })).toBeVisible();
+        await expect(page.getByText('共 0', { exact: true })).toBeVisible();
         await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeDisabled();
+
+        await page.goto('/#/yang/yang-workspace');
+        const stoppedWorkspace = page.locator('.yang-workspace-page:visible');
+        await expect(stoppedWorkspace.getByText('暂无 Schema', { exact: true })).toBeVisible();
+        await expect(stoppedWorkspace.getByText('模块 0', { exact: true })).toBeVisible();
+        await expect(stoppedWorkspace.getByText('节点 0', { exact: true })).toBeVisible();
+        await expect(schemaTreeItems(page)).toHaveCount(0);
+    });
+
+    test('clears runtime data and ignores stale reads after the YANG process stops', async ({ page }) => {
+        const profileId = 'e2e-netconf-profile';
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        let heldMethod = '';
+        let releaseHeldResponse = null;
+        harness.controller.call = async (method, ...args) => {
+            const response = await originalControllerCall(method, ...args);
+            if (method !== heldMethod) return response;
+            heldMethod = '';
+            return new Promise(resolve => {
+                releaseHeldResponse = () => resolve(response);
+            });
+        };
+
+        try {
+            await page.goto('/#/yang/yang-modules');
+            await expect(page.getByText('ietf-interfaces', { exact: true })).toBeVisible();
+
+            heldMethod = 'yang.registry.listModules';
+            await page.locator('.module-refresh-action').click();
+            await expect.poll(() => Boolean(releaseHeldResponse)).toBe(true);
+
+            await originalControllerCall('yang.netconf.disconnect', profileId);
+            await expect(page.getByText('ietf-interfaces', { exact: true })).toHaveCount(0);
+            await expect(page.getByText('共 0', { exact: true })).toBeVisible();
+
+            const releaseModules = releaseHeldResponse;
+            releaseHeldResponse = null;
+            releaseModules();
+            await page.waitForTimeout(50);
+            await expect(page.getByText('ietf-interfaces', { exact: true })).toHaveCount(0);
+
+            await originalControllerCall('yang.netconf.connect', profileId);
+            await expect(page.getByText('ietf-interfaces', { exact: true })).toBeVisible();
+
+            await page.goto('/#/yang/yang-workspace');
+            await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
+
+            heldMethod = 'yang.registry.getWorkspace';
+            await page.locator('.workspace-actions').getByRole('button', { name: '刷新', exact: true }).click();
+            await expect.poll(() => Boolean(releaseHeldResponse)).toBe(true);
+
+            await originalControllerCall('yang.netconf.disconnect', profileId);
+            const stoppedWorkspace = page.locator('.yang-workspace-page:visible');
+            await expect(stoppedWorkspace.getByText('暂无 Schema', { exact: true })).toBeVisible();
+            await expect(stoppedWorkspace.getByText('模块 0', { exact: true })).toBeVisible();
+            await expect(stoppedWorkspace.getByText('节点 0', { exact: true })).toBeVisible();
+            await expect(schemaTreeItems(page)).toHaveCount(0);
+
+            const releaseWorkspace = releaseHeldResponse;
+            releaseHeldResponse = null;
+            releaseWorkspace();
+            await page.waitForTimeout(50);
+            await expect(stoppedWorkspace.getByText('暂无 Schema', { exact: true })).toBeVisible();
+            await expect(stoppedWorkspace.getByText('模块 0', { exact: true })).toBeVisible();
+            await expect(stoppedWorkspace.getByText('节点 0', { exact: true })).toBeVisible();
+            await expect(schemaTreeItems(page)).toHaveCount(0);
+        } finally {
+            releaseHeldResponse?.();
+        }
+    });
+
+    test('keeps runtime stop authoritative over late session updates and reads', async ({ page }) => {
+        const profileId = 'e2e-netconf-profile';
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        const heldSessionReads = [];
+        let holdStoppedSessionReads = false;
+        harness.controller.call = async (method, ...args) => {
+            const response = await originalControllerCall(method, ...args);
+            if (method !== 'yang.netconf.getSessionState' || !holdStoppedSessionReads) return response;
+            return new Promise(resolve => {
+                heldSessionReads.push(() => resolve(response));
+            });
+        };
+
+        try {
+            await page.goto('/#/yang/yang-modules');
+            await expect(page.getByText('ietf-interfaces', { exact: true })).toBeVisible();
+
+            await originalControllerCall('yang.netconf.disconnect', profileId);
+            harness.controller.emitEvent('netconf:sessionEvent', {
+                status: 'success',
+                data: {
+                    profileId,
+                    status: 'disconnecting',
+                    state: 'disconnecting',
+                    connected: false
+                }
+            });
+            await expect(page.getByText('YANG进程未启动', { exact: true })).toBeVisible();
+            await expect(page.locator('.module-refresh-action')).toBeDisabled();
+            await expect(page.getByText('共 0', { exact: true })).toBeVisible();
+
+            holdStoppedSessionReads = true;
+            await page.goto('/#/yang/yang-workspace');
+            const workspace = page.locator('.yang-workspace-page:visible');
+            await expect.poll(() => heldSessionReads.length).toBeGreaterThanOrEqual(2);
+            harness.controller.emitEvent('netconf:sessionEvent', {
+                status: 'success',
+                data: {
+                    profileId,
+                    status: 'disconnecting',
+                    state: 'disconnecting',
+                    connected: false
+                }
+            });
+            await expect(workspace.getByRole('button', { name: '刷新', exact: true })).toBeDisabled();
+            await expect(workspace.getByText('暂无 Schema', { exact: true })).toBeVisible();
+
+            holdStoppedSessionReads = false;
+            await originalControllerCall('yang.netconf.connect', profileId);
+            await expect(workspace.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
+            await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
+
+            heldSessionReads.splice(0).forEach(release => release());
+            await page.waitForTimeout(50);
+            await expect(workspace.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
+            await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
+            await expect(workspace.getByText('模块 2', { exact: true })).toBeVisible();
+        } finally {
+            holdStoppedSessionReads = false;
+            heldSessionReads.splice(0).forEach(release => release());
+        }
     });
 
     test('keeps inactive Profile progress overlays out of the active YANG page', async ({ page }) => {

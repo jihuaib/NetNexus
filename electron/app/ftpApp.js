@@ -2,7 +2,8 @@ const { DEFAULT_TOOLS_SETTINGS } = require('../const/toolsConst');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
-const WorkerWithPromise = require('../worker/core/workerWithPromise');
+const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPromise');
+const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../worker/core/protocolProcessServices');
 const FtpConst = require('../const/ftpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 class FtpApp {
@@ -112,6 +113,7 @@ class FtpApp {
      */
     async handleStartFtp(event, config, user) {
         const webContents = event.sender;
+        let worker = null;
         try {
             if (null !== this.worker) {
                 logger.error(`ftp协议已经启动`);
@@ -128,8 +130,18 @@ class FtpApp {
 
             const workerPath = resolveWorkerPath('transfer/ftpWorker.js');
 
-            const workerFactory = new WorkerWithPromise(workerPath);
-            this.worker = workerFactory.createLongRunningWorker();
+            const processFactory = new ProtocolProcessWithPromise(workerPath, {
+                serviceName: PROTOCOL_PROCESS_SERVICES.FTP,
+                onExit: (_code, client, exit = {}) => {
+                    if (this.worker !== client) return;
+                    if (exit.expected) return;
+                    this.worker = null;
+                    this.eventDispatcher?.cleanup();
+                    this.eventDispatcher = null;
+                }
+            });
+            worker = processFactory.createLongRunningProcess();
+            this.worker = worker;
 
             // 设置事件发送器的 webContents
             this.eventDispatcher = new EventDispatcher();
@@ -157,10 +169,12 @@ class FtpApp {
             logger.info(`ftp启动成功 result: ${JSON.stringify(result)}`);
             return successResponse(null, result.msg);
         } catch (error) {
-            this.worker.removeEventListener(FtpConst.FTP_EVT_TYPES.FTP_EVT, this.ftpEvtHandler);
-            await this.worker.terminate();
-            this.worker = null;
-            this.eventDispatcher.cleanup(); // 清理事件发送器
+            if (worker) {
+                worker.removeEventListener(FtpConst.FTP_EVT_TYPES.FTP_EVT, this.ftpEvtHandler);
+                await worker.terminate();
+                if (this.worker === worker) this.worker = null;
+            }
+            this.eventDispatcher?.cleanup(); // 清理事件发送器
             this.eventDispatcher = null;
             logger.error('Error starting FTP:', error.message);
             return errorResponse(error.message);
@@ -172,13 +186,16 @@ class FtpApp {
      * @returns {Promise<object>} 操作结果
      */
     async handleStopFtp() {
-        try {
-            if (null === this.worker) {
-                logger.error('FTP未启动');
-                return errorResponse('FTP未启动');
-            }
+        const worker = this.worker;
+        if (null === worker) {
+            logger.error('FTP未启动');
+            return errorResponse('FTP未启动');
+        }
 
-            const result = await this.worker.sendRequest(FtpConst.FTP_REQ_TYPES.STOP_FTP, null);
+        try {
+            const result = await worker.sendRequest(FtpConst.FTP_REQ_TYPES.STOP_FTP, null, {
+                timeoutMs: PROTOCOL_PROCESS_TIMEOUTS.STOP
+            });
             logger.info(`ftp停止成功 result: ${JSON.stringify(result)}`);
             return successResponse(null, result.msg);
         } catch (error) {
@@ -186,10 +203,10 @@ class FtpApp {
             return errorResponse(error.message);
         } finally {
             // 移除事件监听器
-            this.worker.removeEventListener(FtpConst.FTP_EVT_TYPES.FTP_EVT, this.ftpEvtHandler);
-            await this.worker.terminate();
-            this.worker = null;
-            this.eventDispatcher.cleanup(); // 清理事件发送器
+            worker.removeEventListener(FtpConst.FTP_EVT_TYPES.FTP_EVT, this.ftpEvtHandler);
+            await worker.terminate();
+            if (this.worker === worker) this.worker = null;
+            this.eventDispatcher?.cleanup(); // 清理事件发送器
             this.eventDispatcher = null;
         }
     }

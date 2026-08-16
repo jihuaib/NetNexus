@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const YangApp = require('../../electron/app/yangApp');
+const YangApp = require('../../electron/worker/yang/yangRuntimeService');
 const { profileWorkspaceId, STATE_STORE_KEY } = YangApp;
 const { YANG_REQ_TYPES: WORKER_REQ_TYPES } = require('../../electron/utils/yang');
 const { getReleaseManifest } = require('../../scripts/libyang-runtime-config');
@@ -242,17 +242,32 @@ async function main() {
     let rejectRestore;
     let signalRestoreStarted;
     let terminateCount = 0;
+    let restoreSignal = null;
+    let restoreSettled = false;
+    let terminateBeforeRestoreSettled = false;
     let ensureWithoutWorker = 0;
     const restoreStarted = new Promise(resolve => {
         signalRestoreStarted = resolve;
     });
-    const restoreBlocked = new Promise((_resolve, reject) => {
-        rejectRestore = reject;
-    });
+    let restoreBlocked = null;
     restoreCloseApp.workerClient = {
-        async sendRequest(operation) {
+        async sendRequest(operation, _data, options = {}) {
             if (operation === WORKER_REQ_TYPES.GET_WORKSPACE) return { data: restoreWorkspace };
             if (operation === WORKER_REQ_TYPES.COMPILE) {
+                restoreSignal = options.signal;
+                restoreBlocked = new Promise((_resolve, reject) => {
+                    rejectRestore = error => {
+                        restoreSettled = true;
+                        reject(error);
+                    };
+                    const cancel = () => {
+                        const error = new Error('Worker request cancelled');
+                        error.code = 'WORKER_CANCELLED';
+                        rejectRestore(error);
+                    };
+                    if (restoreSignal?.aborted) cancel();
+                    else restoreSignal?.addEventListener('abort', cancel, { once: true });
+                });
                 signalRestoreStarted();
                 return restoreBlocked;
             }
@@ -260,9 +275,7 @@ async function main() {
         },
         async terminate() {
             terminateCount += 1;
-            const error = new Error('Worker client terminated');
-            error.code = 'WORKER_TERMINATED';
-            rejectRestore(error);
+            terminateBeforeRestoreSettled = !restoreSettled;
         }
     };
     restoreCloseApp.configurePromise = Promise.resolve();
@@ -277,6 +290,9 @@ async function main() {
     const interruptedRestore = await restoringWorkspace;
     assert.equal(interruptedRestore.status, 'error');
     assert.equal(terminateCount, 1);
+    assert.equal(restoreSignal?.aborted, true, 'close must abort the persisted compilation restore signal');
+    assert.equal(restoreSettled, true, 'close must wait for the aborted restore request to settle');
+    assert.equal(terminateBeforeRestoreSettled, false, 'restore cancellation must settle before compiler termination');
     assert.equal(ensureWithoutWorker, 0, 'a closing request must not start a replacement worker');
     assert.equal(
         restoreCloseStore.get(STATE_STORE_KEY).workspaces[restoreWorkspaceId].compileId,
@@ -858,7 +874,7 @@ async function main() {
         fs.rmSync(temporaryRoot, { recursive: true, force: true });
     }
 
-    console.log('YANG Electron app real libyang Schema, dependency compilation, and workspace cleanup tests passed');
+    console.log('YANG process runtime real libyang Schema, dependency compilation, and workspace cleanup tests passed');
 }
 
 main().catch(error => {

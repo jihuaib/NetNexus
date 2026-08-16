@@ -3,8 +3,8 @@
         <nn-card title="YANG 模型库" class="modules-card">
             <template #extra>
                 <nn-space>
-                    <nn-tag :color="connected ? 'success' : 'default'">
-                        {{ connected ? '设备已连接' : '设备未连接' }}
+                    <nn-tag :color="connected ? 'success' : runtimeRunning ? 'processing' : 'default'">
+                        {{ !runtimeRunning ? 'YANG进程未启动' : connected ? '设备已连接' : '设备未连接' }}
                     </nn-tag>
                     <nn-tag color="blue">共 {{ modules.length }}</nn-tag>
                     <nn-tag color="cyan">本地 {{ localModuleCount }}</nn-tag>
@@ -36,7 +36,7 @@
                         <nn-button
                             class="module-action-button"
                             :loading="importing"
-                            :disabled="!selectedProfileId || clearingWorkspace"
+                            :disabled="!runtimeRunning || !selectedProfileId || clearingWorkspace"
                             @click="importFiles"
                         >
                             <template #icon><FileSearchOutlined /></template>
@@ -45,7 +45,7 @@
                         <nn-button
                             class="module-action-button"
                             :loading="importing"
-                            :disabled="!selectedProfileId || clearingWorkspace"
+                            :disabled="!runtimeRunning || !selectedProfileId || clearingWorkspace"
                             @click="importDirectory"
                         >
                             <template #icon><FolderOpenOutlined /></template>
@@ -81,7 +81,7 @@
                         <nn-button
                             class="module-action-button module-refresh-action"
                             :loading="loading"
-                            :disabled="clearingWorkspace"
+                            :disabled="!runtimeRunning || clearingWorkspace"
                             @click="loadModules"
                         >
                             <template #icon><ReloadOutlined /></template>
@@ -183,7 +183,11 @@
                             </nn-tooltip>
                         </template>
                         <template v-else-if="column.key === 'action'">
-                            <nn-button size="small" :disabled="!record.isLocal" @click="openSource(record)">
+                            <nn-button
+                                size="small"
+                                :disabled="!runtimeRunning || !record.isLocal"
+                                @click="openSource(record)"
+                            >
                                 源码
                             </nn-button>
                         </template>
@@ -235,7 +239,12 @@
                             <span v-if="compileContext.compileId" class="compile-log-summary">
                                 错误 {{ diagnosticErrorCount }} · 警告 {{ diagnosticWarningCount }}
                             </span>
-                            <nn-button size="small" :loading="diagnosticLoading" @click="loadDiagnostics">
+                            <nn-button
+                                size="small"
+                                :loading="diagnosticLoading"
+                                :disabled="!runtimeRunning"
+                                @click="loadDiagnostics"
+                            >
                                 <template #icon><ReloadOutlined /></template>
                                 刷新
                             </nn-button>
@@ -553,6 +562,7 @@
     const importing = ref(false);
     const compiling = ref(false);
     const connected = ref(false);
+    const runtimeRunning = ref(false);
     const activeTasks = ref({ discover: '', download: '', import: '', compile: '' });
     const taskProgress = ref(null);
     const sourceDrawerOpen = ref(false);
@@ -590,6 +600,8 @@
     let compileContextRequestRevision = 0;
     let sourceRequestRevision = 0;
     let profileRequestRevision = 0;
+    let runtimeRequestRevision = 0;
+    let sessionRequestRevision = 0;
     let clearWorkspaceRequestRevision = 0;
     let profileContextReady = false;
     let liveCompileLogFrame = 0;
@@ -883,6 +895,7 @@
     );
     const compileDisabledReason = computed(() => {
         if (clearingWorkspace.value) return '正在清空 YANG 工作区';
+        if (!runtimeRunning.value) return 'YANG进程未启动，请先建立NETCONF连接';
         if (!selectedProfileId.value) return '请先选择连接 Profile';
         if (!compilerAvailable.value) return 'YANG 编译暂不可用，请在“设置 → 运行时”中检查';
         if (selectedLocalModules.value.length === 0) return '请先选择已下载或已导入的本地模块';
@@ -897,6 +910,7 @@
             Object.values(activeTasks.value).some(Boolean)
     );
     const clearWorkspaceDisabledReason = computed(() => {
+        if (!runtimeRunning.value) return 'YANG进程未启动，请先建立NETCONF连接';
         if (!selectedProfileId.value) return '请先选择连接 Profile';
         if (clearingWorkspace.value) return '正在清空 YANG 工作区';
         if (workspaceTaskInProgress.value) return '模型任务执行中，请等待任务结束后再清空工作区';
@@ -973,7 +987,7 @@
     const loadModules = async () => {
         const profileId = selectedProfileId.value;
         const requestRevision = profileRequestRevision;
-        if (!profileId) {
+        if (!profileId || !runtimeRunning.value) {
             modules.value = [];
             loading.value = false;
             return;
@@ -1019,7 +1033,7 @@
     };
 
     const fetchCompileContext = async (profileId = selectedProfileId.value) => {
-        if (!profileId) return normalizeCompileContext(null);
+        if (!profileId || !runtimeRunning.value) return normalizeCompileContext(null);
         const { data } = await invokeBridge('yangApi', 'getWorkspace', { profileId });
         return normalizeCompileContext(data);
     };
@@ -1133,20 +1147,55 @@
         }
     };
 
+    const runtimeAvailable = data =>
+        data?.ready === true ||
+        (data?.ready === undefined && (data?.running === true || data?.processRunning === true));
+
+    const loadRuntimeState = async () => {
+        const requestRevision = ++runtimeRequestRevision;
+        try {
+            const { data } = await invokeBridge('yangApi', 'getRuntimeState');
+            if (requestRevision !== runtimeRequestRevision) return runtimeRunning.value;
+            sessionRequestRevision += 1;
+            runtimeRunning.value = runtimeAvailable(data);
+            if (!runtimeRunning.value) resetProfileState();
+            return runtimeRunning.value;
+        } catch (_error) {
+            if (requestRevision !== runtimeRequestRevision) return runtimeRunning.value;
+            sessionRequestRevision += 1;
+            resetProfileState();
+            return false;
+        }
+    };
+
     const loadSession = async () => {
         const profileId = selectedProfileId.value;
-        const requestRevision = profileRequestRevision;
+        const profileRevision = profileRequestRevision;
+        const runtimeRevision = runtimeRequestRevision;
+        const requestRevision = ++sessionRequestRevision;
         if (!profileId) {
             connected.value = false;
             return;
         }
         try {
             const { data } = await invokeBridge('netconfApi', 'getSessionState', profileId);
-            if (requestRevision !== profileRequestRevision || profileId !== selectedProfileId.value) return;
+            if (
+                requestRevision !== sessionRequestRevision ||
+                runtimeRevision !== runtimeRequestRevision ||
+                profileRevision !== profileRequestRevision ||
+                profileId !== selectedProfileId.value
+            ) {
+                return;
+            }
             const status = data?.status || data?.state;
             connected.value = data?.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
         } catch (_error) {
-            if (requestRevision === profileRequestRevision && profileId === selectedProfileId.value) {
+            if (
+                requestRevision === sessionRequestRevision &&
+                runtimeRevision === runtimeRequestRevision &&
+                profileRevision === profileRequestRevision &&
+                profileId === selectedProfileId.value
+            ) {
                 connected.value = false;
             }
         }
@@ -1268,7 +1317,7 @@
     const runImport = async method => {
         const profileId = selectedProfileId.value;
         const requestRevision = profileRequestRevision;
-        if (!profileId) return;
+        if (!profileId || !runtimeRunning.value) return;
         importing.value = true;
         try {
             const target = await selectImportTarget(method);
@@ -1419,6 +1468,7 @@
     };
 
     const openSource = async module => {
+        if (!runtimeRunning.value) return;
         const requestRevision = ++sourceRequestRevision;
         sourceModule.value = module;
         sourceDrawerOpen.value = true;
@@ -1592,6 +1642,7 @@
     };
 
     const handleTaskProgress = payload => {
+        if (!runtimeRunning.value) return;
         if (payload?.status === 'error') return;
         const data = payload?.status === 'success' ? payload.data : payload?.data || payload;
         if (!data || typeof data !== 'object') return;
@@ -1664,10 +1715,34 @@
         const status = data?.status || data?.state;
         const isConnected = data?.connected === true || status === NETCONF_SESSION_STATUS.CONNECTED;
         if (data?.profileId && data.profileId !== selectedProfileId.value) return;
+        sessionRequestRevision += 1;
+        if (['disconnected', 'error'].includes(String(status || '').toLowerCase())) {
+            runtimeRequestRevision += 1;
+            resetProfileState();
+            void refreshCompilerStatus({ force: true });
+            return;
+        }
+        if (!runtimeRunning.value) return;
         connected.value = isConnected;
+        if (isConnected && profileContextReady) void Promise.all([loadModules(), loadDiagnostics({ quiet: true })]);
+    };
+
+    const handleRuntimeChanged = payload => {
+        const data = payload?.status === 'success' ? payload.data : payload?.data || payload || {};
+        runtimeRequestRevision += 1;
+        sessionRequestRevision += 1;
+        runtimeRunning.value = runtimeAvailable(data);
+        if (!runtimeRunning.value) {
+            resetProfileState();
+            void refreshCompilerStatus({ force: true });
+            return;
+        }
+        void refreshCompilerStatus({ force: true });
+        if (profileContextReady) void reloadCurrentProfile({ runtimeKnown: true });
     };
 
     const handleProfileDataRefresh = payload => {
+        if (!runtimeRunning.value) return;
         const profileId = String(payload?.profileId || '');
         if (!profileId) return;
         if (profileId !== selectedProfileId.value) return;
@@ -1696,6 +1771,7 @@
         clearLiveCompileLogs();
         compileContext.value = { compileId: '', success: null, compiledAt: null, summary: {}, modules: [] };
         connected.value = false;
+        runtimeRunning.value = false;
         activeTasks.value = { discover: '', download: '', import: '', compile: '' };
         taskProgress.value = null;
         loading.value = false;
@@ -1712,7 +1788,13 @@
         sourceText.value = '';
     };
 
-    const reloadCurrentProfile = () => Promise.all([loadModules(), loadSession(), loadDiagnostics({ quiet: true })]);
+    const reloadCurrentProfile = async ({ runtimeKnown = false } = {}) => {
+        if (!runtimeKnown) await loadRuntimeState();
+        const runtimeRevision = runtimeRequestRevision;
+        await loadSession();
+        if (runtimeRevision !== runtimeRequestRevision || !runtimeRunning.value) return;
+        await Promise.all([loadModules(), loadDiagnostics({ quiet: true })]);
+    };
 
     watch(selectedProfileId, (profileId, previousProfileId) => {
         if (profileId === previousProfileId) return;
@@ -1743,6 +1825,7 @@
     onMounted(async () => {
         EventBus.on(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.MODULES, handleTaskProgress);
         EventBus.on(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.MODULES}-session`, handleSessionEvent);
+        EventBus.on(YANG_EVENT.RUNTIME_CHANGED, `${YANG_EVENT_PAGE_ID.MODULES}-runtime`, handleRuntimeChanged);
         EventBus.on(
             YANG_EVENT.PROFILE_DATA_REFRESH,
             `${YANG_EVENT_PAGE_ID.MODULES}-profile-data`,
@@ -1770,6 +1853,7 @@
         clearLiveCompileLogs();
         EventBus.off(YANG_EVENT.TASK_PROGRESS, YANG_EVENT_PAGE_ID.MODULES);
         EventBus.off(YANG_EVENT.SESSION_EVENT, `${YANG_EVENT_PAGE_ID.MODULES}-session`);
+        EventBus.off(YANG_EVENT.RUNTIME_CHANGED, `${YANG_EVENT_PAGE_ID.MODULES}-runtime`);
         EventBus.off(YANG_EVENT.PROFILE_DATA_REFRESH, `${YANG_EVENT_PAGE_ID.MODULES}-profile-data`);
     });
 </script>

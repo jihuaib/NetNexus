@@ -190,5 +190,13 @@ export const BGP_MVPN_ROUTE_TYPE = {
 };
 
 export const BGP_EVENT_PAGE_ID = {
-    PAGE_ID_BGP_PEER_INFO: 1
+    PAGE_ID_BGP_PEER_INFO: 1,
+    PAGE_ID_BGP_CONFIG: 'bgp-config-runtime',
+    PAGE_ID_ROUTE_IPV4: 'bgp-route-ipv4-runtime',
+    PAGE_ID_ROUTE_IPV6: 'bgp-route-ipv6-runtime',
+    PAGE_ID_ROUTE_MVPN: 'bgp-route-mvpn-runtime',
+    PAGE_ID_ROUTE_IPV4_QP: 'bgp-route-ipv4-qp-runtime',
+    PAGE_ID_ROUTE_IPV6_QP: 'bgp-route-ipv6-qp-runtime'
 };
+
+export const BGP_RUNTIME_CHANGED_EVENT = 'bgp:runtimeChanged';

@@ -65,7 +65,8 @@ const yangPageApiScript = `
         getSchemaNode: request => call('yang.registry.getSchemaNode', request),
         validateRpc: request => call('yang.registry.validateRpc', request),
         getModuleSource: request => call('yang.registry.getModuleSource', request),
-        getDiagnostics: request => call('yang.registry.getDiagnostics', request)
+        getDiagnostics: request => call('yang.registry.getDiagnostics', request),
+        getRuntimeState: () => call('yang.registry.getRuntimeState')
     };`;
 
 const capabilities = Object.freeze([
@@ -565,6 +566,7 @@ function createYangPageState() {
         notificationSequence: 0,
         notificationActionRequests: [],
         connected: true,
+        processRunning: true,
         rpcSequence: 100,
         nextPublisherSubscriptionId: 51,
         compileSequence: 0,
@@ -723,6 +725,19 @@ function emitSessionState(controller, state) {
 
 function emitSession(controller, yang) {
     emitSessionState(controller, yang.session);
+}
+
+function runtimeSnapshot(yang) {
+    return {
+        running: yang.processRunning === true,
+        ready: yang.processRunning === true,
+        processRunning: yang.processRunning === true,
+        activeProfileId: yang.activeProfileId || null
+    };
+}
+
+function emitRuntime(controller, yang) {
+    controller.emitEvent('yang:runtimeChanged', successResponse(runtimeSnapshot(yang), 'YANG运行时状态更新'));
 }
 
 function emitSubscription(controller, subscription) {
@@ -894,6 +909,8 @@ function connectSession(controller, yang, target) {
             ? yang.profiles.find(item => item.id === target)
             : normalizeProfile(yang, target || {});
     if (!profile) return errorResponse('连接 Profile 不存在');
+    yang.processRunning = true;
+    emitRuntime(controller, yang);
     activateProfileWorkspace(yang, { profileId: profile.id });
     yang.connected = true;
     yang.session = {
@@ -953,6 +970,7 @@ function handleNetconfCall(controller, yang, method, args) {
         if (yang.activeProfileId === profileId) {
             yang.activeProfileId = null;
             yang.connected = false;
+            yang.processRunning = false;
             yang.session = {
                 profileId,
                 status: 'disconnected',
@@ -961,11 +979,17 @@ function handleNetconfCall(controller, yang, method, args) {
                 capabilities: []
             };
             emitSession(controller, yang);
+            emitRuntime(controller, yang);
         }
         return successResponse(null, '连接 Profile 已删除');
     }
     if (method === 'yang.netconf.testConnection') {
-        return successResponse({
+        const startedForTest = !yang.processRunning;
+        if (startedForTest) {
+            yang.processRunning = true;
+            emitRuntime(controller, yang);
+        }
+        const response = successResponse({
             success: true,
             latency: 12,
             baseVersion: '1.1',
@@ -973,6 +997,11 @@ function handleNetconfCall(controller, yang, method, args) {
             hostKeyFingerprint: args[0]?.hostKeyFingerprint || 'SHA256:NetNexusE2EHostKey',
             capabilities: [...capabilities]
         });
+        if (startedForTest) {
+            yang.processRunning = false;
+            emitRuntime(controller, yang);
+        }
+        return response;
     }
     if (method === 'yang.netconf.connect') return connectSession(controller, yang, args[0]);
     if (method === 'yang.netconf.disconnect') {
@@ -989,6 +1018,9 @@ function handleNetconfCall(controller, yang, method, args) {
                 emitSubscription(controller, subscription);
             });
         yang.connected = false;
+        yang.processRunning = false;
+        if (yang.activeProfileId === profileId) yang.activeProfileId = null;
+        emitRuntime(controller, yang);
         yang.session = {
             status: 'disconnected',
             state: 'disconnected',
@@ -997,13 +1029,12 @@ function handleNetconfCall(controller, yang, method, args) {
             capabilities: []
         };
         yang.sessions[profileId] = yang.session;
-        if (yang.activeProfileId === profileId) yang.activeProfileId = null;
         emitSession(controller, yang);
         return successResponse(clone(yang.session), 'NETCONF 连接已断开');
     }
     if (method === 'yang.netconf.getSessionState') {
         const profileId = requestProfileId(yang, args[0], { stringIsProfileId: true });
-        return successResponse(clone(sessionForProfile(yang, profileId)));
+        return successResponse({ ...clone(sessionForProfile(yang, profileId)), processRunning: yang.processRunning });
     }
     if (method === 'yang.netconf.getSubscriptions') {
         const profileId = requestProfileId(yang, args[0], { stringIsProfileId: true });
@@ -1363,6 +1394,40 @@ function sendRawRpc(yang, request) {
 }
 
 function handleRegistryCall(controller, yang, method, args) {
+    if (method === 'yang.registry.getRuntimeState') return successResponse(runtimeSnapshot(yang));
+    if (!yang.processRunning) {
+        if (method === 'yang.registry.listModules') return successResponse([]);
+        if (method === 'yang.registry.getWorkspace') {
+            return successResponse({
+                profileId: requestProfileId(yang, args[0]),
+                compileId: '',
+                compiledAt: null,
+                success: null,
+                schemaAvailable: false,
+                partialSchema: false,
+                modules: [],
+                diagnostics: [],
+                summary: { moduleCount: 0, nodeCount: 0, cacheHit: false },
+                schemaTree: null,
+                processRunning: false
+            });
+        }
+        if (method === 'yang.registry.getCompilerStatus') {
+            return successResponse({
+                available: false,
+                checking: false,
+                required: true,
+                engine: 'libyang',
+                source: 'stopped',
+                message: 'YANG进程未启动，请先连接NETCONF设备'
+            });
+        }
+        if (method.startsWith('yang.registry.')) {
+            return errorResponse('YANG进程未启动，请先连接NETCONF设备', {
+                code: 'YANG_PROCESS_NOT_RUNNING'
+            });
+        }
+    }
     if (
         [
             'yang.registry.listModules',

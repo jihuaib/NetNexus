@@ -404,10 +404,9 @@ class NtpWorker {
         });
     }
 
-    stopNtp(messageId) {
-        this.closeSockets();
+    async stopNtp(messageId) {
+        await this.closeSockets();
         this.requestHistory = [];
-        this.messageHandler.sendSuccessResponse(messageId, null, 'NTP服务器已停止');
         this.messageHandler.sendEvent(NtpConst.NTP_EVT_TYPES.NTP_EVT, {
             type: NtpConst.NTP_SUB_EVT_TYPES.SERVER_STATUS,
             data: {
@@ -420,6 +419,7 @@ class NtpWorker {
             }
         });
         this.ntpConfig = null;
+        this.messageHandler.sendSuccessResponse(messageId, null, 'NTP服务器已停止');
     }
 
     async closeSockets() {

@@ -312,6 +312,7 @@ test.describe('Custom UI component interactions', () => {
 
     test.beforeEach(async ({ page }) => {
         harness = await setupFeaturePagesE2e(page);
+        await harness.controller.call('snmp.startSnmp', {});
     });
 
     test.afterEach(async () => {

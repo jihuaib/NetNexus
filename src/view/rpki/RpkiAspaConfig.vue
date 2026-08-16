@@ -78,6 +78,7 @@
                         </nn-button>
                     </template>
                     <nn-table
+                        data-testid="rpki-aspa-table"
                         :columns="aspaColumns"
                         :data-source="aspaList"
                         :row-key="record => `${record.customerAsn}`"
@@ -113,13 +114,14 @@
 </template>
 
 <script setup>
-    import { computed, ref, onMounted } from 'vue';
+    import { computed, ref } from 'vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
     import { UploadOutlined } from 'netnexus-ui/icons';
     import RpkiAspaImportModal from '../../components/RpkiAspaImportModal.vue';
     import { FormValidator, createRpkiAspaValidationRules } from '../../utils/validationCommon';
-    import { DEFAULT_VALUES, RPKI_ASPA_AFI_FLAGS } from '../../const/rpkiConst';
+    import { DEFAULT_VALUES, RPKI_ASPA_AFI_FLAGS, RPKI_EVENT_PAGE_ID } from '../../const/rpkiConst';
+    import { useRpkiDatasetRuntime } from './useRpkiDatasetRuntime';
 
     defineOptions({ name: 'RpkiAspaConfig' });
 
@@ -137,6 +139,7 @@
     const tableLoading = ref(false);
     const aspaImportModalVisible = ref(false);
     const ASPA_PAGE_SIZE = 20;
+    let aspaListRequestId = 0;
     const aspaList = ref([]);
     const aspaStorageTotal = ref(0);
     const aspaPagination = ref({
@@ -288,13 +291,27 @@
         fetchList(pagination.current);
     };
 
+    const clearAspaList = () => {
+        aspaListRequestId += 1;
+        aspaList.value = [];
+        aspaStorageTotal.value = 0;
+        aspaPagination.value = {
+            ...aspaPagination.value,
+            current: 1,
+            total: 0
+        };
+        tableLoading.value = false;
+    };
+
     const fetchList = async (page = aspaPagination.value.current) => {
+        const requestId = ++aspaListRequestId;
         tableLoading.value = true;
         try {
             const result = await window.rpkiApi.getAspaList({
                 page,
                 pageSize: ASPA_PAGE_SIZE
             });
+            if (requestId !== aspaListRequestId) return;
             if (result.status === 'success') {
                 if (Array.isArray(result.data)) {
                     aspaList.value = result.data;
@@ -316,16 +333,24 @@
                     pageSize: ASPA_PAGE_SIZE,
                     total: result.data.total || 0
                 };
+            } else {
+                console.warn('获取ASPA列表失败:', result.msg);
+                clearAspaList();
             }
         } catch (e) {
+            if (requestId !== aspaListRequestId) return;
             console.error(e);
+            clearAspaList();
         } finally {
-            tableLoading.value = false;
+            if (requestId === aspaListRequestId) {
+                tableLoading.value = false;
+            }
         }
     };
 
-    onMounted(() => {
-        fetchList();
+    useRpkiDatasetRuntime(RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_ASPA_CONFIG, {
+        clearDataset: clearAspaList,
+        refreshDataset: () => fetchList()
     });
 </script>
 

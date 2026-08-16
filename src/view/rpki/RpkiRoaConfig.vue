@@ -127,6 +127,7 @@
                             </nn-space>
                         </div>
                         <nn-table
+                            data-testid="rpki-roa-table"
                             class="roa-table adaptive-table"
                             :columns="roaColumns"
                             :data-source="roaList"
@@ -159,14 +160,15 @@
 </template>
 
 <script setup>
-    import { computed, ref, onMounted, watch } from 'vue';
+    import { computed, ref, watch } from 'vue';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
     import { UploadOutlined } from 'netnexus-ui/icons';
     import RpkiRoaImportModal from '../../components/RpkiRoaImportModal.vue';
     import { FormValidator, createRpkiRoaConfigValidationRules } from '../../utils/validationCommon';
-    import { DEFAULT_VALUES } from '../../const/rpkiConst';
+    import { DEFAULT_VALUES, RPKI_EVENT_PAGE_ID } from '../../const/rpkiConst';
     import { IP_TYPE } from '../../const/bgpConst';
+    import { useRpkiDatasetRuntime } from './useRpkiDatasetRuntime';
 
     defineOptions({
         name: 'RpkiRoaConfig'
@@ -188,6 +190,7 @@
     const tableLoading = ref(false);
     const roaImportModalVisible = ref(false);
     const ROA_PAGE_SIZE = 20;
+    let roaListRequestId = 0;
 
     // ROA列表
     const roaList = ref([]);
@@ -425,8 +428,21 @@
         fetchRoaList(pagination.current);
     };
 
+    const clearRoaList = () => {
+        roaListRequestId += 1;
+        roaList.value = [];
+        roaStorageTotal.value = 0;
+        roaPagination.value = {
+            ...roaPagination.value,
+            current: 1,
+            total: 0
+        };
+        tableLoading.value = false;
+    };
+
     // 获取ROA列表
     const fetchRoaList = async (page = roaPagination.value.current) => {
+        const requestId = ++roaListRequestId;
         tableLoading.value = true;
         try {
             const result = await window.rpkiApi.getRoaList({
@@ -434,6 +450,7 @@
                 pageSize: ROA_PAGE_SIZE,
                 ...appliedRoaQuery.value
             });
+            if (requestId !== roaListRequestId) return;
             if (result.status === 'success') {
                 if (Array.isArray(result.data)) {
                     roaList.value = result.data;
@@ -456,17 +473,23 @@
                     total: result.data.total || 0
                 };
             } else {
-                console.error('获取ROA列表失败:', result.msg);
+                console.warn('获取ROA列表失败:', result.msg);
+                clearRoaList();
             }
         } catch (error) {
+            if (requestId !== roaListRequestId) return;
             console.error('获取ROA列表失败:', error);
+            clearRoaList();
         } finally {
-            tableLoading.value = false;
+            if (requestId === roaListRequestId) {
+                tableLoading.value = false;
+            }
         }
     };
 
-    onMounted(async () => {
-        fetchRoaList();
+    useRpkiDatasetRuntime(RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_ROA_CONFIG, {
+        clearDataset: clearRoaList,
+        refreshDataset: () => fetchRoaList()
     });
 </script>
 

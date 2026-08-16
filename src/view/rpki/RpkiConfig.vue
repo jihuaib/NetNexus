@@ -124,10 +124,16 @@
 </template>
 
 <script setup>
-    import { ref, onMounted, onActivated, onDeactivated } from 'vue';
+    import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue';
     import { notify } from '../../utils/notify';
     import { FormValidator, createRpkiConfigValidationRules } from '../../utils/validationCommon';
-    import { DEFAULT_VALUES, RPKI_EVENT_PAGE_ID, RPKI_PROTOCOL_VERSION, RPKI_ASPA_FORMAT } from '../../const/rpkiConst';
+    import {
+        DEFAULT_VALUES,
+        RPKI_EVENT_PAGE_ID,
+        RPKI_PROTOCOL_VERSION,
+        RPKI_ASPA_FORMAT,
+        RPKI_RUNTIME_CHANGED_EVENT
+    } from '../../const/rpkiConst';
     import EventBus from '../../utils/eventBus';
 
     defineOptions({
@@ -155,6 +161,8 @@
 
     // 客户端列表
     const clientList = ref([]);
+    let clientListRequestId = 0;
+    let configActive = false;
     const clientColumns = [
         {
             title: '本地IP',
@@ -214,6 +222,14 @@
     const detailsDrawerTitle = ref('');
     const currentDetails = ref(null);
 
+    const clearClientRuntimeState = () => {
+        clientListRequestId += 1;
+        clientList.value = [];
+        detailsDrawerVisible.value = false;
+        detailsDrawerTitle.value = '';
+        currentDetails.value = null;
+    };
+
     const startRpki = async () => {
         const hasErrors = validator.validate(rpkiConfig.value);
         if (hasErrors) {
@@ -234,8 +250,7 @@
             const result = await window.rpkiApi.startRpki(payload);
             if (result.status === 'success') {
                 serverRunning.value = true;
-                // 清空客户端列表
-                clientList.value = [];
+                clearClientRuntimeState();
                 notify.success(`${result.msg}`);
             } else {
                 notify.error(result.msg || 'RPKI服务器启动失败');
@@ -252,8 +267,7 @@
             const result = await window.rpkiApi.stopRpki();
             if (result.status === 'success') {
                 serverRunning.value = false;
-                // 清空客户端列表
-                clientList.value = [];
+                clearClientRuntimeState();
                 notify.success(`${result.msg}`);
             } else {
                 notify.error(result.msg || 'RPKI服务器停止失败');
@@ -274,7 +288,23 @@
         currentDetails.value = null;
     };
 
+    const handleRuntimeChanged = state => {
+        const wasRunning = serverRunning.value;
+        serverRunning.value = Boolean(state?.running);
+        if (!serverRunning.value) {
+            serverLoading.value = false;
+            clearClientRuntimeState();
+            return;
+        }
+
+        if (!wasRunning) {
+            clearClientRuntimeState();
+            if (configActive) void loadClientList();
+        }
+    };
+
     const onClientConnection = result => {
+        if (!serverRunning.value) return;
         if (result.status === 'success') {
             const data = result.data;
             const matchClient = item =>
@@ -302,27 +332,36 @@
     };
 
     const loadClientList = async () => {
+        const requestId = ++clientListRequestId;
         try {
             const clientListResult = await window.rpkiApi.getClientList();
+            if (requestId !== clientListRequestId) return;
             if (clientListResult.status === 'success') {
-                clientList.value = clientListResult.data;
+                clientList.value = Array.isArray(clientListResult.data) ? clientListResult.data : [];
+            } else {
+                clearClientRuntimeState();
             }
         } catch (error) {
+            if (requestId !== clientListRequestId) return;
             console.error(error);
+            clearClientRuntimeState();
             notify.error('加载数据失败');
         }
     };
 
     onActivated(async () => {
+        configActive = true;
         EventBus.on('rpki:clientConnection', RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG, onClientConnection);
         await loadClientList();
     });
 
     onDeactivated(() => {
+        configActive = false;
         EventBus.off('rpki:clientConnection', RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG);
     });
 
     onMounted(async () => {
+        EventBus.on(RPKI_RUNTIME_CHANGED_EVENT, RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG, handleRuntimeChanged);
         try {
             // 加载配置
             const result = await window.rpkiApi.loadRpkiConfig();
@@ -340,6 +379,10 @@
         } catch (error) {
             console.error('初始化RPKI配置出错:', error);
         }
+    });
+
+    onBeforeUnmount(() => {
+        EventBus.off(RPKI_RUNTIME_CHANGED_EVENT, RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG);
     });
 </script>
 

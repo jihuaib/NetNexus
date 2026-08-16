@@ -48,9 +48,9 @@
 
             <div class="resource-summary">
                 <div class="summary-tile" data-testid="process-resource-process-count">
-                    <span class="summary-label">Electron 进程</span>
+                    <span class="summary-label">应用进程</span>
                     <strong class="summary-value">{{ snapshot.summary.processCount }}</strong>
-                    <span class="summary-detail">主进程、渲染、GPU 与辅助进程</span>
+                    <span class="summary-detail">主进程、协议、渲染与辅助进程</span>
                 </div>
                 <div class="summary-tile" data-testid="process-resource-total-cpu">
                     <span class="summary-label">CPU 合计</span>
@@ -164,7 +164,7 @@
         </nn-card>
 
         <div class="resource-footnote">
-            工作集合计包含进程间共享页，因此是近似值；BGP、BMP 等 worker_threads 的消耗会计入主进程。
+            工作集合计包含进程间共享页，因此是近似值；协议服务以独立进程显示，其内部辅助线程计入所属进程。
         </div>
     </div>
 </template>
@@ -252,7 +252,7 @@
         const platform = [snapshot.value.runtime.platform, snapshot.value.runtime.arch].filter(Boolean).join(' / ');
         if (platform) parts.push(platform);
         if (snapshot.value.runtime.electronVersion) parts.push(`Electron ${snapshot.value.runtime.electronVersion}`);
-        return parts.join(' · ') || '实时查看 NetNexus 关联的 Electron 进程';
+        return parts.join(' · ') || '实时查看 NetNexus 关联的应用进程';
     });
     const totalCpuText = computed(() =>
         snapshot.value.warmingUp ? '采样中…' : formatPercent(snapshot.value.summary.totalCpuPercent)

@@ -30,6 +30,7 @@ const YANG_REQ_TYPES = Object.freeze({
 
 const YANG_EVT_TYPES = Object.freeze({
     TASK_PROGRESS: 'yang:taskProgress',
+    RUNTIME_CHANGED: 'yang:runtimeChanged',
     SESSION_EVENT: 'netconf:sessionEvent',
     SUBSCRIPTION_EVENT: 'netconf:subscriptionEvent',
     NOTIFICATION: 'netconf:notification',

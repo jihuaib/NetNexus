@@ -307,7 +307,12 @@ async function verifyMonitorWindowLifecycleCallbacks() {
 
     await app.closeAll();
     assert.equal(allCloseCalls, 1, 'closeAll must close every NETCONF detached window');
-    assert(workerOperations.some(([operation]) => operation === NETCONF_REQ_TYPES.DISCONNECT_ALL));
+    assert.equal(app.workerClient, null, 'explicit disconnect must already terminate the shared YANG process');
+    assert.equal(
+        workerOperations.some(([operation]) => operation === NETCONF_REQ_TYPES.DISCONNECT_ALL),
+        false,
+        'closeAll must not recreate or address a YANG process after explicit disconnect'
+    );
 }
 
 async function main() {

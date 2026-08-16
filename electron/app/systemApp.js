@@ -33,6 +33,10 @@ const createBmpApiRoutes = require('./bmpApiRoutes');
 const CliAccessServer = require('./cli');
 const WiresharkPluginInstaller = require('./wiresharkPluginInstaller');
 const { clearMajorVersionData } = require('../utils/majorVersionDataCleanup');
+
+const DEFAULT_SHUTDOWN_STEP_TIMEOUT_MS = 45000;
+const BMP_SHUTDOWN_STEP_TIMEOUT_MS = 6 * 60 * 1000;
+const PENDING_START_WAIT_TIMEOUT_MS = 15000;
 /**
  * 用于系统菜单处理
  */
@@ -99,6 +103,20 @@ class SystemApp {
         });
         this.wiresharkPluginInstaller = new WiresharkPluginInstaller();
         this.externalApiRoutesLoaded = false;
+        this.windowClosePromise = null;
+        this.shutdownPromise = null;
+        this.shutdownStepTimeoutMs = Math.max(
+            100,
+            Number(options.shutdownStepTimeoutMs) || DEFAULT_SHUTDOWN_STEP_TIMEOUT_MS
+        );
+        this.bmpShutdownStepTimeoutMs = Math.max(
+            this.shutdownStepTimeoutMs,
+            Number(options.bmpShutdownStepTimeoutMs) || BMP_SHUTDOWN_STEP_TIMEOUT_MS
+        );
+        this.pendingStartWaitTimeoutMs = Math.max(
+            100,
+            Number(options.pendingStartWaitTimeoutMs) || PENDING_START_WAIT_TIMEOUT_MS
+        );
     }
 
     loadExternalApiRoutes() {
@@ -605,7 +623,7 @@ class SystemApp {
                     logger.warn(`同步日志级别到应用组件失败: ${error.message}`);
                 });
         }
-        [appInstance.worker, appInstance.worker6, appInstance.mibWorker].forEach(worker => {
+        [appInstance.worker, appInstance.worker6].forEach(worker => {
             if (!worker || typeof worker.sendRequest !== 'function') {
                 return;
             }
@@ -710,36 +728,138 @@ class SystemApp {
         this.updateStartupProgress(80, '设置加载完成');
     }
 
-    async handleWindowClose() {
-        const isBgpRunning = this.bgpApp.getBgpRunning();
-        const isBmpRunning = this.bmpApp.getBmpRunning();
-        const isRpkiRunning = this.rpkiApp.getRpkiRunning();
-        const isFtpRunning = this.ftpApp.getFtpRunning();
-        const isSnmpRunning = this.snmpApp.getSnmpRunning();
-        const isNtpRunning = this.ntpApp.getNtpRunning();
-        const isRadiusRunning = this.radiusApp.getRadiusRunning();
-        const isTftpRunning = this.tftpApp.getTftpRunning();
-        const isSyslogRunning = this.syslogApp.getSyslogRunning();
-        const isNetconfRunning = this.netconfApp.getRunning();
-        const isYangRunning = this.yangApp.getRunning();
-        const isApiRunning = this.externalApiServer.getRunning();
-        const isCliRunning = this.cliAccessServer.getRunning();
+    getRuntimeState() {
+        return {
+            bgp: this.bgpApp.getBgpRunning(),
+            bmp: this.bmpApp.getBmpRunning(),
+            rpki: this.rpkiApp.getRpkiRunning(),
+            ftp: this.ftpApp.getFtpRunning(),
+            snmp: this.snmpApp.getSnmpRunning(),
+            dhcp: this.dhcpApp.getDhcpRunning(),
+            ntp: this.ntpApp.getNtpRunning(),
+            radius: this.radiusApp.getRadiusRunning(),
+            tftp: this.tftpApp.getTftpRunning(),
+            syslog: this.syslogApp.getSyslogRunning(),
+            netconf: this.netconfApp.getRunning(),
+            yang: this.yangApp.getRunning(),
+            api: this.externalApiServer.getRunning(),
+            cli: this.cliAccessServer.getRunning()
+        };
+    }
 
-        if (
-            isBgpRunning ||
-            isBmpRunning ||
-            isRpkiRunning ||
-            isFtpRunning ||
-            isSnmpRunning ||
-            isNtpRunning ||
-            isRadiusRunning ||
-            isTftpRunning ||
-            isSyslogRunning ||
-            isNetconfRunning ||
-            isYangRunning ||
-            isApiRunning ||
-            isCliRunning
+    hasRunningService(state = this.getRuntimeState()) {
+        return Object.values(state).some(Boolean);
+    }
+
+    async runShutdownStep(name, action, timeoutMs = this.shutdownStepTimeoutMs) {
+        let timeout = null;
+        try {
+            await Promise.race([
+                Promise.resolve().then(action),
+                new Promise((_, reject) => {
+                    timeout = setTimeout(() => {
+                        const error = new Error(`${name}关闭超时（${timeoutMs}ms）`);
+                        error.code = 'SHUTDOWN_TIMEOUT';
+                        reject(error);
+                    }, timeoutMs);
+                })
+            ]);
+            return null;
+        } catch (error) {
+            logger.warn(`${name}关闭失败: ${error.message}`);
+            return error;
+        } finally {
+            if (timeout) clearTimeout(timeout);
+        }
+    }
+
+    async waitForPendingProtocolStarts() {
+        const deadline = Date.now() + this.pendingStartWaitTimeoutMs;
+        while (
+            this.bmpApp.bmpStarting ||
+            this.rpkiApp.rpkiStarting ||
+            this.radiusApp.radiusStarting ||
+            this.snmpApp.snmpStarting
         ) {
+            if (Date.now() >= deadline) {
+                throw new Error('等待协议启动取消超时');
+            }
+            await new Promise(resolve => setTimeout(resolve, 25));
+        }
+    }
+
+    async shutdownServices() {
+        if (this.shutdownPromise) return this.shutdownPromise;
+
+        const shutdownPromise = (async () => {
+            const errors = [];
+            const run = async (name, action, timeoutMs) => {
+                const error = await this.runShutdownStep(name, action, timeoutMs);
+                if (error) errors.push({ name, error });
+            };
+
+            // First close the external control plane so it cannot start another protocol
+            // while the shutdown sequence is already in progress.
+            await run('HTTP API', async () => {
+                try {
+                    if (this.externalApiServer.getRunning()) await this.externalApiServer.stop();
+                } finally {
+                    this.unloadExternalApiRoutes();
+                }
+            });
+            await run('Telnet CLI', async () => {
+                if (this.cliAccessServer.getRunning()) await this.cliAccessServer.stop();
+            });
+
+            this.bmpApp.cancelPendingStart?.();
+            this.rpkiApp.cancelPendingStart?.();
+            this.radiusApp.cancelPendingStart?.();
+            this.snmpApp.cancelPendingStart?.();
+            await run('协议启动任务', () => this.waitForPendingProtocolStarts(), this.pendingStartWaitTimeoutMs + 100);
+
+            const protocolSteps = [
+                ['BGP', () => this.bgpApp.getBgpRunning(), () => this.bgpApp.handleStopBgp()],
+                [
+                    'BMP',
+                    () => this.bmpApp.getBmpRunning(),
+                    () => this.bmpApp.handleStopBmp(),
+                    this.bmpShutdownStepTimeoutMs
+                ],
+                ['RPKI', () => this.rpkiApp.getRpkiRunning(), () => this.rpkiApp.handleStopRpki()],
+                ['FTP', () => this.ftpApp.getFtpRunning(), () => this.ftpApp.handleStopFtp()],
+                ['SNMP', () => this.snmpApp.getSnmpRunning(), () => this.snmpApp.handleStopSnmp()],
+                ['DHCP', () => this.dhcpApp.getDhcpRunning(), () => this.dhcpApp.handleStopDhcp()],
+                ['NTP', () => this.ntpApp.getNtpRunning(), () => this.ntpApp.handleStopNtp()],
+                ['RADIUS', () => this.radiusApp.getRadiusRunning(), () => this.radiusApp.handleStopRadius()],
+                ['TFTP', () => this.tftpApp.getTftpRunning(), () => this.tftpApp.handleStopTftp()],
+                ['Syslog', () => this.syslogApp.getSyslogRunning(), () => this.syslogApp.handleStopSyslog()]
+            ];
+            for (const [name, isRunning, stop, timeoutMs] of protocolSteps) {
+                await run(
+                    name,
+                    async () => {
+                        if (isRunning()) await stop();
+                    },
+                    timeoutMs
+                );
+            }
+
+            await run('NETCONF', () => this.netconfApp.closeAll());
+            await run('BMP离线存储', () => this.bmpApp.closeOfflinePersistenceReader());
+            await run('YANG', () => this.yangApp.close());
+            return errors;
+        })();
+
+        this.shutdownPromise = shutdownPromise;
+        try {
+            return await shutdownPromise;
+        } finally {
+            if (this.shutdownPromise === shutdownPromise) this.shutdownPromise = null;
+        }
+    }
+
+    async performWindowClose() {
+        if (this.hasRunningService()) {
             const { response } = await dialog.showMessageBox(this.win, {
                 type: 'warning',
                 title: '确认关闭',
@@ -749,62 +869,24 @@ class SystemApp {
                 cancelId: 1,
                 icon: getIconPath()
             });
-
-            if (response === 0) {
-                // 用户点击确定，先停止 NetNexus 然后关闭窗口
-                if (isBgpRunning) {
-                    await this.bgpApp.handleStopBgp();
-                }
-                if (isBmpRunning) {
-                    await this.bmpApp.handleStopBmp();
-                }
-                if (isRpkiRunning) {
-                    await this.rpkiApp.handleStopRpki();
-                }
-                if (isFtpRunning) {
-                    await this.ftpApp.handleStopFtp();
-                }
-                if (isSnmpRunning) {
-                    await this.snmpApp.handleStopSnmp();
-                }
-                if (isNtpRunning) {
-                    await this.ntpApp.handleStopNtp();
-                }
-                if (isRadiusRunning) {
-                    await this.radiusApp.handleStopRadius();
-                }
-                if (isTftpRunning) {
-                    await this.tftpApp.handleStopTftp();
-                }
-                if (isSyslogRunning) {
-                    await this.syslogApp.handleStopSyslog();
-                }
-                if (isApiRunning) {
-                    await this.externalApiServer.stop();
-                    this.unloadExternalApiRoutes();
-                }
-                if (isCliRunning) {
-                    await this.cliAccessServer.stop();
-                }
-
-                await this.netconfApp.closeAll();
-                await this.bmpApp.closeOfflinePersistenceReader();
-                await this.rpkiApp.closeStorage();
-                await this.yangApp.close();
-
-                return true;
-            }
-            return false;
+            if (response !== 0) return false;
         }
 
-        if (isCliRunning) {
-            await this.cliAccessServer.stop();
-        }
-        await this.bmpApp.closeOfflinePersistenceReader();
-        await this.rpkiApp.closeStorage();
-        await this.netconfApp.closeAll();
-        await this.yangApp.close();
+        // Runtime state is deliberately read inside shutdownServices instead of reusing
+        // the pre-dialog snapshot; a protocol may finish starting while the dialog is open.
+        await this.shutdownServices();
         return true;
+    }
+
+    async handleWindowClose() {
+        if (this.windowClosePromise) return this.windowClosePromise;
+        const closePromise = this.performWindowClose();
+        this.windowClosePromise = closePromise;
+        try {
+            return await closePromise;
+        } finally {
+            if (this.windowClosePromise === closePromise) this.windowClosePromise = null;
+        }
     }
 
     async handleSelectDirectory() {

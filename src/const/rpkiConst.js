@@ -22,8 +22,12 @@ export const DEFAULT_VALUES = {
 };
 
 export const RPKI_EVENT_PAGE_ID = {
-    PAGE_ID_RPKI_CONFIG: 1
+    PAGE_ID_RPKI_CONFIG: 1,
+    PAGE_ID_RPKI_ROA_CONFIG: 'rpki-roa-config-runtime',
+    PAGE_ID_RPKI_ASPA_CONFIG: 'rpki-aspa-config-runtime'
 };
+
+export const RPKI_RUNTIME_CHANGED_EVENT = 'rpki:runtimeChanged';
 
 // RPKI Protocol Version（与后端 RPKI_PROTOCOL_VERSION 对齐）
 export const RPKI_PROTOCOL_VERSION = {

@@ -2,7 +2,8 @@ const { app } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const logger = require('../log/logger');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
-const WorkerWithPromise = require('../worker/core/workerWithPromise');
+const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPromise');
+const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../worker/core/protocolProcessServices');
 const RadiusConst = require('../const/radiusConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 const { ensureRadiusDefaultConfigFile, loadRadiusRuntimeConfig } = require('../utils/radiusConfigLoader');
@@ -13,6 +14,8 @@ class RadiusApp {
         this.store = store;
         this.radiusConfigFileKey = 'radius-config';
         this.worker = null;
+        this.radiusStarting = false;
+        this.radiusStartGeneration = 0;
         this.logLevel = null;
         this.eventDispatcher = null;
         this.radiusEventHandler = null;
@@ -66,14 +69,17 @@ class RadiusApp {
 
     async handleStartRadius(event, config) {
         const webContents = event.sender;
+        if (this.worker !== null || this.radiusStarting) {
+            logger.error('RADIUS服务器已经启动或正在启动');
+            return errorResponse('RADIUS服务器已经启动或正在启动');
+        }
+        this.radiusStarting = true;
+        const startGeneration = ++this.radiusStartGeneration;
         try {
-            if (this.worker !== null) {
-                logger.error('RADIUS服务器已经启动');
-                return errorResponse('RADIUS服务器已经启动');
-            }
-
             const configFilePath = await ensureRadiusDefaultConfigFile(app.getPath('userData'));
+            if (startGeneration !== this.radiusStartGeneration) throw new Error('RADIUS服务器启动已取消');
             const workerConfig = await loadRadiusRuntimeConfig(config, { configFilePath });
+            if (startGeneration !== this.radiusStartGeneration) throw new Error('RADIUS服务器启动已取消');
             logger.info(`启动RADIUS服务器: ${JSON.stringify(workerConfig)}`);
 
             if (this.logLevel) {
@@ -81,8 +87,18 @@ class RadiusApp {
             }
 
             const workerPath = resolveWorkerPath('services/radiusWorker.js');
-            const workerFactory = new WorkerWithPromise(workerPath);
-            this.worker = workerFactory.createLongRunningWorker();
+            const processFactory = new ProtocolProcessWithPromise(workerPath, {
+                serviceName: PROTOCOL_PROCESS_SERVICES.RADIUS,
+                onExit: (_code, client, exit = {}) => {
+                    if (this.worker !== client) return;
+                    if (exit.expected) return;
+                    this.worker = null;
+                    this.eventDispatcher?.cleanup();
+                    this.eventDispatcher = null;
+                    this.radiusEventHandler = null;
+                }
+            });
+            this.worker = processFactory.createLongRunningProcess();
 
             this.eventDispatcher = new EventDispatcher();
             this.eventDispatcher.setWebContents(webContents);
@@ -93,6 +109,7 @@ class RadiusApp {
             this.worker.addEventListener(RadiusConst.RADIUS_EVT_TYPES.RADIUS_EVT, this.radiusEventHandler);
 
             const result = await this.worker.sendRequest(RadiusConst.RADIUS_REQ_TYPES.START_RADIUS, workerConfig);
+            if (startGeneration !== this.radiusStartGeneration) throw new Error('RADIUS服务器启动已取消');
             if (result.status === 'success') {
                 logger.info(`RADIUS服务器启动成功: ${result.msg}`);
                 return successResponse(result.data, result.msg);
@@ -105,6 +122,8 @@ class RadiusApp {
             logger.error('启动RADIUS服务器失败:', error);
             await this.cleanupWorker();
             return errorResponse('启动RADIUS服务器失败: ' + error.message);
+        } finally {
+            this.radiusStarting = false;
         }
     }
 
@@ -115,7 +134,9 @@ class RadiusApp {
                 return errorResponse('RADIUS服务器未启动');
             }
 
-            const result = await this.worker.sendRequest(RadiusConst.RADIUS_REQ_TYPES.STOP_RADIUS, null);
+            const result = await this.worker.sendRequest(RadiusConst.RADIUS_REQ_TYPES.STOP_RADIUS, null, {
+                timeoutMs: PROTOCOL_PROCESS_TIMEOUTS.STOP
+            });
             logger.info(`RADIUS服务器停止成功: ${result.msg}`);
             return successResponse(null, result.msg);
         } catch (error) {
@@ -184,7 +205,11 @@ class RadiusApp {
     }
 
     getRadiusRunning() {
-        return this.worker !== null;
+        return this.worker !== null || this.radiusStarting;
+    }
+
+    cancelPendingStart() {
+        if (this.radiusStarting) this.radiusStartGeneration += 1;
     }
 }
 

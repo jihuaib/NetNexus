@@ -66,8 +66,12 @@ async function main() {
     if (result.error) {
         throw result.error;
     }
+    if (!Number.isInteger(result.status)) {
+        console.error(`[test:ci:minified] Electron runner terminated by signal ${result.signal || 'unknown'}`);
+        process.exit(1);
+    }
 
-    process.exit(result.status || 0);
+    process.exit(result.status);
 }
 
 main().catch(error => {

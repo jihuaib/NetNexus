@@ -253,6 +253,9 @@ contextBridge.exposeInMainWorld('snmpApi', {
     // snmp服务
     startSnmp: config => ipcRenderer.invoke('snmp:startSnmp', config),
     stopSnmp: () => ipcRenderer.invoke('snmp:stopSnmp'),
+    getSnmpRuntimeState: () => ipcRenderer.invoke('snmp:getSnmpRuntimeState'),
+    startSnmpTrap: config => ipcRenderer.invoke('snmp:startSnmpTrap', config),
+    stopSnmpTrap: () => ipcRenderer.invoke('snmp:stopSnmpTrap'),
     getTrapList: query => ipcRenderer.invoke('snmp:getTrapList', query),
     clearTrapHistory: () => ipcRenderer.invoke('snmp:clearTrapHistory'),
     selectMibFiles: () => ipcRenderer.invoke('snmp:selectMibFiles'),
@@ -318,7 +321,8 @@ contextBridge.exposeInMainWorld('yangApi', {
     getSchemaNode: request => ipcRenderer.invoke('yang:getSchemaNode', request),
     validateRpc: request => ipcRenderer.invoke('yang:validateRpc', request),
     getModuleSource: request => ipcRenderer.invoke('yang:getModuleSource', request),
-    getDiagnostics: query => ipcRenderer.invoke('yang:getDiagnostics', query)
+    getDiagnostics: query => ipcRenderer.invoke('yang:getDiagnostics', query),
+    getRuntimeState: () => ipcRenderer.invoke('yang:getRuntimeState')
 });
 
 // ntp模块

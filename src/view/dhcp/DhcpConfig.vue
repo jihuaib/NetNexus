@@ -5,13 +5,13 @@
             <nn-col :span="24">
                 <nn-card title="DHCP服务器配置">
                     <nn-form :model="dhcpConfig" :label-col="labelCol" :wrapper-col="wrapperCol">
-                        <nn-row>
-                            <nn-col :span="6">
+                        <nn-row :gutter="[24, 0]">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="服务器IP">
                                     <nn-input v-model:value="dhcpConfig.serverIp" placeholder="留空自动探测" />
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="6">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="监听端口">
                                     <nn-tooltip
                                         :title="validationErrors.serverPort"
@@ -27,7 +27,7 @@
                                     </nn-tooltip>
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="6">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="子网掩码">
                                     <nn-tooltip
                                         :title="validationErrors.subnetMask"
@@ -41,14 +41,14 @@
                                     </nn-tooltip>
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="6">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="网关">
                                     <nn-input v-model:value="dhcpConfig.gateway" placeholder="192.168.1.1" />
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <nn-row>
-                            <nn-col :span="8">
+                        <nn-row :gutter="[24, 0]">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="IP池起始">
                                     <nn-tooltip
                                         :title="validationErrors.poolStart"
@@ -62,7 +62,7 @@
                                     </nn-tooltip>
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="8">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="IP池结束">
                                     <nn-tooltip :title="validationErrors.poolEnd" :open="!!validationErrors.poolEnd">
                                         <nn-input
@@ -73,7 +73,7 @@
                                     </nn-tooltip>
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="8">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="租约时间(秒)">
                                     <nn-tooltip
                                         :title="validationErrors.leaseTime"
@@ -90,13 +90,13 @@
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <nn-row>
-                            <nn-col :span="8">
+                        <nn-row :gutter="[24, 0]">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="DNS服务器1">
                                     <nn-input v-model:value="dhcpConfig.dns1" placeholder="8.8.8.8" />
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="8">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="DNS服务器2">
                                     <nn-input v-model:value="dhcpConfig.dns2" placeholder="8.8.4.4" />
                                 </nn-form-item>
@@ -112,18 +112,18 @@
             <nn-col :span="24">
                 <nn-card title="DHCPv6配置" class="adaptive-config-fill-card">
                     <nn-form :model="dhcp6Config" :label-col="labelCol" :wrapper-col="wrapperCol">
-                        <nn-row>
-                            <nn-col :span="6">
+                        <nn-row :gutter="[24, 0]">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="IPv6池起始">
                                     <nn-input v-model:value="dhcp6Config.poolStart" placeholder="2001:db8::100" />
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="6">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="IPv6池结束">
                                     <nn-input v-model:value="dhcp6Config.poolEnd" placeholder="2001:db8::1ff" />
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="6">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="监听端口">
                                     <nn-tooltip
                                         :title="validationErrors.v6ServerPort"
@@ -139,7 +139,7 @@
                                     </nn-tooltip>
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="6">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="首选生命周期">
                                     <nn-input-number
                                         v-model:value="dhcp6Config.preferredLifetime"
@@ -150,8 +150,8 @@
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <nn-row>
-                            <nn-col :span="8">
+                        <nn-row :gutter="[24, 0]">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="有效生命周期">
                                     <nn-input-number
                                         v-model:value="dhcp6Config.validLifetime"
@@ -161,12 +161,12 @@
                                     />
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="8">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="DNS服务器1">
                                     <nn-input v-model:value="dhcp6Config.dns1" placeholder="2001:4860:4860::8888" />
                                 </nn-form-item>
                             </nn-col>
-                            <nn-col :span="8">
+                            <nn-col class="dhcp-field" :xs="24" :md="12">
                                 <nn-form-item label="DNS服务器2">
                                     <nn-input v-model:value="dhcp6Config.dns2" placeholder="2001:4860:4860::8844" />
                                 </nn-form-item>
@@ -205,7 +205,7 @@
     defineOptions({ name: 'DhcpConfig' });
 
     const labelCol = { style: { width: '100px' } };
-    const wrapperCol = { span: 40 };
+    const wrapperCol = { style: { flex: '1 1 0', minWidth: 0 } };
 
     const dhcpConfig = ref({
         serverPort: DEFAULT_VALUES.DEFAULT_SERVER_PORT,
@@ -400,5 +400,17 @@
         flex: 1;
         min-height: 0;
         overflow: auto;
+    }
+
+    @media (min-width: 1200px) {
+        .dhcp-field {
+            --nn-col-xl: 33.333333%;
+        }
+    }
+
+    @media (min-width: 1440px) {
+        .dhcp-field {
+            --nn-col-xl: 25%;
+        }
     }
 </style>

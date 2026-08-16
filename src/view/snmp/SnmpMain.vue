@@ -20,6 +20,7 @@
     import { ref, watch } from 'vue';
     import { useRoute, useRouter } from 'vue-router';
     import { SNMP_ROUTE, SNMP_TABS } from '../../const/snmpConst';
+    import { useSnmpRuntime } from './useSnmpRuntime';
 
     defineOptions({ name: 'SnmpMain' });
 
@@ -29,6 +30,7 @@
     const defaultTab = mainTabs[0];
     const activeTabKey = ref(defaultTab.key);
     const currentTab = ref(null);
+    useSnmpRuntime();
 
     defineExpose({
         clearValidationErrors: () => {

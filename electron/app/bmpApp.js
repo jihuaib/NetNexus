@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
-const WorkerWithPromise = require('../worker/core/workerWithPromise');
+const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPromise');
+const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../worker/core/protocolProcessServices');
 const logger = require('../log/logger');
 const BmpConst = require('../const/bmpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
@@ -30,6 +31,7 @@ class BmpApp {
         );
         this.worker = null;
         this.bmpStarting = false;
+        this.bmpStartGeneration = 0;
         this.persistenceDatabaseDeleting = false;
         this.eventDispatcher = null;
         this.runningPersistenceEnabled = false;
@@ -552,6 +554,7 @@ class BmpApp {
         }
 
         this.bmpStarting = true;
+        const startGeneration = ++this.bmpStartGeneration;
         try {
             bmpConfigData = {
                 ...bmpConfigData,
@@ -572,6 +575,9 @@ class BmpApp {
                 persistenceMaxDbBytes: Number(bmpConfigData.persistenceMaxDbBytes) || 20 * 1024 * 1024 * 1024
             };
             await this.closeOfflinePersistenceReader();
+            if (startGeneration !== this.bmpStartGeneration) {
+                throw new Error('BMP启动已取消');
+            }
             this.runningPersistenceEnabled = true;
             logger.info('BMP config:', { ...bmpConfigData, persistenceDbPath: '[user-data]/bmp/bmp.sqlite3' });
 
@@ -582,8 +588,19 @@ class BmpApp {
 
             const workerPath = resolveWorkerPath('bmp/bmpWorker.js');
 
-            const workerFactory = new WorkerWithPromise(workerPath);
-            this.worker = workerFactory.createLongRunningWorker();
+            const processFactory = new ProtocolProcessWithPromise(workerPath, {
+                serviceName: PROTOCOL_PROCESS_SERVICES.BMP,
+                onExit: (_code, client, exit = {}) => {
+                    if (this.worker !== client) return;
+                    if (exit.expected) return;
+                    this.worker = null;
+                    this.runningPersistenceEnabled = false;
+                    this.closeMonitorWindows();
+                    this.eventDispatcher?.cleanup();
+                    this.eventDispatcher = null;
+                }
+            });
+            this.worker = processFactory.createLongRunningProcess();
 
             // 设置事件发送器的 webContents
             this.eventDispatcher = new EventDispatcher();
@@ -632,6 +649,9 @@ class BmpApp {
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
 
             const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.START_BMP, bmpConfigData);
+            if (startGeneration !== this.bmpStartGeneration) {
+                throw new Error('BMP启动已取消');
+            }
 
             // 这里肯定是启动成功了，如果失败，会抛出异常
             logger.info('bmp启动成功 result:', result);
@@ -675,7 +695,9 @@ class BmpApp {
 
         const worker = this.worker;
         try {
-            const result = await worker.sendRequest(BmpConst.BMP_REQ_TYPES.STOP_BMP, null);
+            const result = await worker.sendRequest(BmpConst.BMP_REQ_TYPES.STOP_BMP, null, {
+                timeoutMs: PROTOCOL_PROCESS_TIMEOUTS.BMP_STOP
+            });
             return successResponse(null, result.msg);
         } catch (error) {
             logger.error('Error stopping BMP:', error.message);
@@ -1017,7 +1039,11 @@ class BmpApp {
     }
 
     getBmpRunning() {
-        return null !== this.worker;
+        return null !== this.worker || this.bmpStarting;
+    }
+
+    cancelPendingStart() {
+        if (this.bmpStarting) this.bmpStartGeneration += 1;
     }
 }
 

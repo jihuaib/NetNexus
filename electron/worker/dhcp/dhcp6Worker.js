@@ -178,7 +178,7 @@ function buildDhcp6Response(msgType, txId, optionList) {
 
 // ========== DHCPv6 Worker ==========
 class Dhcp6Worker {
-    constructor() {
+    constructor(options = {}) {
         this.server = null;
         this.config = null;
         this.serverDuid = generateServerDuid();
@@ -188,12 +188,43 @@ class Dhcp6Worker {
         this.poolEndBuf = null;
         this.leaseTimer = null;
 
-        this.messageHandler = new WorkerMessageHandler();
-        this.messageHandler.init();
+        this.messageHandler = options.messageHandler || new WorkerMessageHandler();
         this.messageHandler.registerHandler(Dhcp6Const.DHCP6_REQ_TYPES.START_DHCP6, this.startDhcp6.bind(this));
         this.messageHandler.registerHandler(Dhcp6Const.DHCP6_REQ_TYPES.STOP_DHCP6, this.stopDhcp6.bind(this));
         this.messageHandler.registerHandler(Dhcp6Const.DHCP6_REQ_TYPES.GET_LEASE_LIST, this.getLeaseList.bind(this));
         this.messageHandler.registerHandler(Dhcp6Const.DHCP6_REQ_TYPES.RELEASE_LEASE, this.releaseLease.bind(this));
+
+        if (!options.messageHandler) {
+            this.messageHandler.init();
+        }
+    }
+
+    cleanupFailedStart(server) {
+        if (this.leaseTimer) {
+            clearInterval(this.leaseTimer);
+            this.leaseTimer = null;
+        }
+
+        if (this.server === server) {
+            this.server = null;
+        }
+        if (server) {
+            server.removeAllListeners('message');
+            try {
+                server.close(() => server.removeAllListeners());
+            } catch (error) {
+                server.removeAllListeners();
+                if (error.code !== 'ERR_SOCKET_DGRAM_NOT_RUNNING') {
+                    logger.warn(`DHCPv6: 清理启动失败的套接字时出错: ${error.message}`);
+                }
+            }
+        }
+
+        this.leaseMap.clear();
+        this.ipToClient.clear();
+        this.config = null;
+        this.poolStartBuf = null;
+        this.poolEndBuf = null;
     }
 
     allocateIp(clientDuid) {
@@ -371,14 +402,17 @@ class Dhcp6Worker {
         const listenPort = Number.isInteger(Number(this.config.serverPort))
             ? Number(this.config.serverPort)
             : Dhcp6Const.DEFAULT_DHCP6_CONFIG.serverPort;
-        this.poolStartBuf = ipv6ToBuffer(config.poolStart);
-        this.poolEndBuf = ipv6ToBuffer(config.poolEnd);
+        let server = null;
+        let started = false;
 
         try {
-            this.server = dgram.createSocket({ type: 'udp6', reuseAddr: true });
+            this.poolStartBuf = ipv6ToBuffer(config.poolStart);
+            this.poolEndBuf = ipv6ToBuffer(config.poolEnd);
+            server = dgram.createSocket({ type: 'udp6', reuseAddr: true });
+            this.server = server;
 
-            let started = false;
-            this.server.on('error', err => {
+            server.on('error', err => {
+                if (this.server !== server) return;
                 logger.error(`DHCPv6服务器错误: ${err.message}`);
                 if (!started) {
                     let hint = '';
@@ -387,12 +421,12 @@ class Dhcp6Worker {
                     } else if (err.code === 'EADDRINUSE') {
                         hint = `（UDP ${listenPort} 端口已被占用，可修改监听端口后重试）`;
                     }
+                    this.cleanupFailedStart(server);
                     this.messageHandler.sendErrorResponse(messageId, `DHCPv6服务器启动失败: ${err.message}${hint}`);
-                    this.server = null;
                 }
             });
 
-            this.server.on('message', (msg, rinfo) => {
+            server.on('message', (msg, rinfo) => {
                 try {
                     const packet = parseDhcp6Packet(msg);
                     if (!packet) return;
@@ -419,7 +453,8 @@ class Dhcp6Worker {
                 }
             });
 
-            this.server.bind({ port: listenPort, address: '::' }, () => {
+            server.bind({ port: listenPort, address: '::' }, () => {
+                if (this.server !== server) return;
                 started = true;
                 // 加入所有非回环 IPv6 接口的多播组
                 const ifaces = os.networkInterfaces();
@@ -427,7 +462,7 @@ class Dhcp6Worker {
                     for (const addr of addrs) {
                         if (addr.family === 'IPv6' && !addr.internal) {
                             try {
-                                this.server.addMembership('ff02::1:2', addr.address);
+                                server.addMembership('ff02::1:2', addr.address);
                                 logger.info(`DHCPv6: 加入多播组 ff02::1:2 on ${addr.address}`);
                             } catch (e) {
                                 logger.warn(`DHCPv6: 多播组加入失败(${addr.address}): ${e.message}`);
@@ -446,6 +481,7 @@ class Dhcp6Worker {
                 this.leaseTimer = setInterval(() => this.checkExpiredLeases(), 60000);
             });
         } catch (err) {
+            this.cleanupFailedStart(server);
             logger.error(`DHCPv6服务器启动失败: ${err.message}`);
             this.messageHandler.sendErrorResponse(messageId, `DHCPv6服务器启动失败: ${err.message}`);
         }
@@ -463,6 +499,8 @@ class Dhcp6Worker {
         this.leaseMap.clear();
         this.ipToClient.clear();
         this.config = null;
+        this.poolStartBuf = null;
+        this.poolEndBuf = null;
         this.messageHandler.sendSuccessResponse(messageId, null, 'DHCPv6服务器已停止');
     }
 
@@ -507,4 +545,8 @@ class Dhcp6Worker {
     }
 }
 
-new Dhcp6Worker();
+if (require.main === module) {
+    new Dhcp6Worker();
+}
+
+module.exports = Dhcp6Worker;

@@ -2,7 +2,7 @@
     <div class="nn-container snmp-mib-page">
         <nn-card title="MIB 编译" class="mib-card">
             <template #extra>
-                <nn-space wrap class="mib-status-group">
+                <nn-space v-if="runtimeReady" wrap class="mib-status-group">
                     <nn-tag v-if="mibCompileLoading || showMibCompileProgress" color="processing">
                         {{ mibCompileProgressTag }}
                     </nn-tag>
@@ -15,7 +15,11 @@
                 </nn-space>
             </template>
 
-            <div class="mib-compiler">
+            <div v-if="!runtimeReady" class="mib-runtime-empty" data-testid="snmp-mib-runtime-stopped">
+                <nn-empty description="请先在 SNMP 配置页启动 SNMP 进程" />
+            </div>
+
+            <div v-else class="mib-compiler">
                 <div class="mib-toolbar">
                     <nn-button type="primary" :loading="mibCompileLoading" @click="selectMibFiles">
                         <template #icon><FileSearchOutlined /></template>
@@ -220,7 +224,7 @@
 </template>
 
 <script setup>
-    import { computed, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+    import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
     import { MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID } from '../../const/snmpConst';
     import {
         CheckCircleOutlined,
@@ -235,6 +239,7 @@
     } from 'netnexus-ui/icons';
     import EventBus from '../../utils/eventBus';
     import { notify } from '../../utils/notify';
+    import { useSnmpRuntime } from './useSnmpRuntime';
 
     defineOptions({ name: 'SnmpMibCompiler' });
 
@@ -378,9 +383,15 @@
     const projectForm = reactive({
         name: ''
     });
+    const snmpRuntime = useSnmpRuntime();
+    const runtimeReady = computed(() => snmpRuntime.ready);
     let mibStatusLoaded = false;
     let mibStatusLoadPromise = null;
+    let mibStatusRequestRevision = 0;
     let mibSourceRequestRevision = 0;
+    let pageActive = false;
+
+    const isCurrentRuntime = runtimeRevision => snmpRuntime.ready && runtimeRevision === snmpRuntime.runtimeRevision;
 
     const normalizeSelectionPaths = payload => {
         const candidates = [];
@@ -455,6 +466,33 @@
         ];
         mibFilePage.value = 1;
         mibStatusLoaded = true;
+    };
+
+    const clearRuntimeDataset = () => {
+        mibStatusRequestRevision += 1;
+        mibSourceRequestRevision += 1;
+        mibStatusLoaded = false;
+        mibStatusLoadPromise = null;
+        mibStatus.value = createEmptyMibStatus();
+        mibFiles.value = [];
+        mibFileStatusFilter.value = 'all';
+        mibFilePage.value = 1;
+        mibCompileProgress.value = null;
+        mibCompileLoading.value = false;
+        statusLoading.value = false;
+        mibSourceDrawerOpen.value = false;
+        mibSourceLoading.value = false;
+        mibSourceText.value = '';
+        mibSourceFile.value = null;
+        projectSaveOpen.value = false;
+        projectSaving.value = false;
+        projectImportOpen.value = false;
+        projectLoading.value = false;
+        projectImporting.value = false;
+        importingProjectName.value = '';
+        projectRootDir.value = '';
+        mibProjects.value = [];
+        projectForm.name = '';
     };
 
     const getCurrentMibPaths = () => {
@@ -539,7 +577,9 @@
     };
 
     const openMibSource = async record => {
+        if (!runtimeReady.value) return;
         const requestRevision = ++mibSourceRequestRevision;
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         mibSourceFile.value = record;
         mibSourceDrawerOpen.value = true;
         mibSourceLoading.value = true;
@@ -550,16 +590,16 @@
             if (result?.status !== 'success') {
                 throw new Error(result?.msg || 'MIB 源码读取失败');
             }
-            if (requestRevision === mibSourceRequestRevision) {
+            if (requestRevision === mibSourceRequestRevision && isCurrentRuntime(runtimeRevision)) {
                 const data = result.data;
                 mibSourceText.value = typeof data === 'string' ? data : data?.source || data?.content || '';
             }
         } catch (error) {
-            if (requestRevision === mibSourceRequestRevision) {
+            if (requestRevision === mibSourceRequestRevision && isCurrentRuntime(runtimeRevision)) {
                 mibSourceText.value = `-- 读取源码失败：${error.message}`;
             }
         } finally {
-            if (requestRevision === mibSourceRequestRevision) {
+            if (requestRevision === mibSourceRequestRevision && isCurrentRuntime(runtimeRevision)) {
                 mibSourceLoading.value = false;
             }
         }
@@ -570,6 +610,7 @@
     });
 
     const loadMibStatus = async ({ force = false } = {}) => {
+        if (!runtimeReady.value) return;
         if (!force && mibStatusLoaded) {
             return;
         }
@@ -577,52 +618,67 @@
             return mibStatusLoadPromise;
         }
 
-        mibStatusLoadPromise = (async () => {
+        const requestRevision = ++mibStatusRequestRevision;
+        const runtimeRevision = snmpRuntime.runtimeRevision;
+        let pending;
+        pending = (async () => {
             try {
                 statusLoading.value = true;
                 const result = await window.snmpApi.getMibStatus();
+                if (requestRevision !== mibStatusRequestRevision || !isCurrentRuntime(runtimeRevision)) return;
                 if (result.status === 'success') {
                     setMibStatus(result.data?.summary || result.data);
                 } else {
                     notify.error(result.msg || '获取MIB状态失败');
                 }
             } catch (error) {
-                notify.error('获取MIB状态失败: ' + error.message);
+                if (requestRevision === mibStatusRequestRevision && isCurrentRuntime(runtimeRevision)) {
+                    notify.error('获取MIB状态失败: ' + error.message);
+                }
             } finally {
-                statusLoading.value = false;
-                mibStatusLoadPromise = null;
+                if (requestRevision === mibStatusRequestRevision && isCurrentRuntime(runtimeRevision)) {
+                    statusLoading.value = false;
+                }
+                if (mibStatusLoadPromise === pending) mibStatusLoadPromise = null;
             }
         })();
+        mibStatusLoadPromise = pending;
 
         return mibStatusLoadPromise;
     };
 
     const compileMibFiles = async (filePaths, { force = false } = {}) => {
+        if (!runtimeReady.value) return;
         const plainFilePaths = normalizeSelectionPaths(filePaths);
         if (plainFilePaths.length === 0) {
             notify.warning('请先导入 MIB 文件或目录');
             return;
         }
 
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         try {
             mibCompileLoading.value = true;
             mibCompileProgress.value = null;
             const result = await window.snmpApi.compileMibs([...plainFilePaths], { force });
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (result.status === 'success') {
                 setMibStatus(result.data?.summary || result.data);
             } else {
                 notify.error(result.msg || 'MIB编译失败');
             }
         } catch (error) {
-            notify.error('MIB编译失败: ' + error.message);
+            if (isCurrentRuntime(runtimeRevision)) notify.error('MIB编译失败: ' + error.message);
         } finally {
-            mibCompileLoading.value = false;
+            if (isCurrentRuntime(runtimeRevision)) mibCompileLoading.value = false;
         }
     };
 
     const selectMibFiles = async () => {
+        if (!runtimeReady.value) return;
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         try {
             const result = await window.snmpApi.selectMibFiles();
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (result.status !== 'success') {
                 notify.error(result.msg || '选择MIB文件失败');
                 return;
@@ -635,13 +691,16 @@
 
             await compileMibFiles([...getCurrentMibPaths(), ...selectedFiles]);
         } catch (error) {
-            notify.error('选择MIB文件失败: ' + error.message);
+            if (isCurrentRuntime(runtimeRevision)) notify.error('选择MIB文件失败: ' + error.message);
         }
     };
 
     const selectMibDirectory = async () => {
+        if (!runtimeReady.value) return;
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         try {
             const result = await window.snmpApi.selectMibDirectory();
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (result.status !== 'success') {
                 notify.error(result.msg || '选择MIB目录失败');
                 return;
@@ -654,7 +713,7 @@
 
             await compileMibFiles([...getCurrentMibPaths(), ...selectedDirectories]);
         } catch (error) {
-            notify.error('选择MIB目录失败: ' + error.message);
+            if (isCurrentRuntime(runtimeRevision)) notify.error('选择MIB目录失败: ' + error.message);
         }
     };
 
@@ -702,20 +761,24 @@
     };
 
     const showSaveProject = () => {
+        if (!runtimeReady.value) return;
         projectForm.name = getDefaultProjectName();
         projectSaveOpen.value = true;
     };
 
     const saveMibProject = async () => {
+        if (!runtimeReady.value) return;
         const name = projectForm.name.trim();
         if (!name) {
             notify.warning('请输入工程名');
             return;
         }
 
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         try {
             projectSaving.value = true;
             const result = await window.snmpApi.saveMibProject({ name });
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (result.status !== 'success') {
                 notify.error(result.msg || '保存MIB工程失败');
                 return;
@@ -730,16 +793,19 @@
                 await loadMibProjects();
             }
         } catch (error) {
-            notify.error('保存MIB工程失败: ' + error.message);
+            if (isCurrentRuntime(runtimeRevision)) notify.error('保存MIB工程失败: ' + error.message);
         } finally {
-            projectSaving.value = false;
+            if (isCurrentRuntime(runtimeRevision)) projectSaving.value = false;
         }
     };
 
     const loadMibProjects = async () => {
+        if (!runtimeReady.value) return;
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         try {
             projectLoading.value = true;
             const result = await window.snmpApi.listMibProjects();
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (result.status !== 'success') {
                 notify.error(result.msg || '获取MIB工程列表失败');
                 return;
@@ -749,28 +815,31 @@
             projectRootDir.value = data?.rootDir || '';
             mibProjects.value = Array.isArray(data) ? data : Array.isArray(data?.projects) ? data.projects : [];
         } catch (error) {
-            notify.error('获取MIB工程列表失败: ' + error.message);
+            if (isCurrentRuntime(runtimeRevision)) notify.error('获取MIB工程列表失败: ' + error.message);
         } finally {
-            projectLoading.value = false;
+            if (isCurrentRuntime(runtimeRevision)) projectLoading.value = false;
         }
     };
 
     const showImportProject = async () => {
+        if (!runtimeReady.value) return;
         projectImportOpen.value = true;
         await loadMibProjects();
     };
 
     const importMibProject = async record => {
         const projectName = String(record?.name || record?.projectName || '');
-        if (!projectName || projectImporting.value) {
+        if (!runtimeReady.value || !projectName || projectImporting.value) {
             return;
         }
 
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         try {
             projectImporting.value = true;
             mibCompileLoading.value = true;
             importingProjectName.value = projectName;
             const result = await window.snmpApi.importMibProject({ name: projectName });
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (result.status !== 'success') {
                 notify.error(result.msg || '导入MIB工程失败');
                 return;
@@ -780,17 +849,22 @@
             projectImportOpen.value = false;
             notify.success(result.msg || 'MIB工程导入成功');
         } catch (error) {
-            notify.error('导入MIB工程失败: ' + error.message);
+            if (isCurrentRuntime(runtimeRevision)) notify.error('导入MIB工程失败: ' + error.message);
         } finally {
-            projectImporting.value = false;
-            importingProjectName.value = '';
-            mibCompileLoading.value = false;
+            if (isCurrentRuntime(runtimeRevision)) {
+                projectImporting.value = false;
+                importingProjectName.value = '';
+                mibCompileLoading.value = false;
+            }
         }
     };
 
     const clearMibs = async () => {
+        if (!runtimeReady.value) return;
+        const runtimeRevision = snmpRuntime.runtimeRevision;
         try {
             const result = await window.snmpApi.clearMibs();
+            if (!isCurrentRuntime(runtimeRevision)) return;
             if (result.status === 'success') {
                 setMibStatus(result.data);
                 mibCompileProgress.value = null;
@@ -799,12 +873,12 @@
                 notify.error(result.msg || '清空MIB配置失败');
             }
         } catch (error) {
-            notify.error('清空MIB配置失败: ' + error.message);
+            if (isCurrentRuntime(runtimeRevision)) notify.error('清空MIB配置失败: ' + error.message);
         }
     };
 
     const handleMibCompileProgress = response => {
-        if (response?.status !== 'success' || !response.data?.progressId) {
+        if (!runtimeReady.value || response?.status !== 'success' || !response.data?.progressId) {
             return;
         }
 
@@ -836,21 +910,41 @@
         clearValidationErrors: () => {}
     });
 
-    onMounted(() => {
-        EventBus.on(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB_COMPILER, handleMibCompileProgress);
-        loadMibStatus();
-    });
+    const activatePage = () => {
+        if (pageActive) return;
+        pageActive = true;
+        if (runtimeReady.value) void loadMibStatus();
+    };
 
-    onBeforeUnmount(() => {
-        mibSourceRequestRevision += 1;
-        EventBus.off(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB_COMPILER);
-    });
-
-    onDeactivated(() => {
+    const deactivatePage = () => {
+        pageActive = false;
         mibSourceRequestRevision += 1;
         mibSourceDrawerOpen.value = false;
         mibSourceLoading.value = false;
+    };
+
+    watch(
+        () => snmpRuntime.runtimeRevision,
+        () => {
+            clearRuntimeDataset();
+            if (runtimeReady.value && pageActive) void loadMibStatus();
+        }
+    );
+
+    onMounted(() => {
+        EventBus.on(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB_COMPILER, handleMibCompileProgress);
+        activatePage();
     });
+
+    onActivated(activatePage);
+
+    onBeforeUnmount(() => {
+        deactivatePage();
+        clearRuntimeDataset();
+        EventBus.off(MIB_COMPILE_PROGRESS_EVENT, SNMP_EVENT_PAGE_ID.PAGE_ID_SNMP_MIB_COMPILER);
+    });
+
+    onDeactivated(deactivatePage);
 </script>
 
 <style scoped>
@@ -874,6 +968,14 @@
 
     .mib-status-group {
         justify-content: flex-end;
+    }
+
+    .mib-runtime-empty {
+        display: flex;
+        height: 100%;
+        min-height: 0;
+        align-items: center;
+        justify-content: center;
     }
 
     .mib-compiler {

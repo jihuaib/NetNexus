@@ -31,6 +31,103 @@ test.describe('RPKI pages', () => {
             await verifyPage(test, page, pageCase);
         }
     });
+
+    test('caches ROA and ASPA once per RPKI runtime and clears both on stop', async ({ page }) => {
+        const rpki = harness.controller.state.rpki;
+        const routeTabs = page.locator('.fixed-tabs');
+        const roaTable = page.getByTestId('rpki-roa-table');
+        const aspaTable = page.getByTestId('rpki-aspa-table');
+
+        await page.goto('/#/rpki/rpki-roa-config');
+        await expect(roaTable).toContainText('203.0.113.0');
+        expect(rpki.roaListCalls).toBe(1);
+
+        await routeTabs.getByRole('tab', { name: 'ASPA (v2)', exact: true }).click();
+        await expect(aspaTable).toContainText('65010');
+        expect(rpki.aspaListCalls).toBe(1);
+
+        await routeTabs.getByRole('tab', { name: 'RPKI ROA配置', exact: true }).click();
+        await expect(roaTable).toContainText('203.0.113.0');
+        expect(rpki.roaListCalls).toBe(1);
+
+        rpki.running = false;
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('rpki:runtimeChanged', { running: false });
+        });
+        await expect(roaTable).not.toContainText('203.0.113.0');
+
+        await routeTabs.getByRole('tab', { name: 'ASPA (v2)', exact: true }).click();
+        await expect(aspaTable).not.toContainText('65010');
+        expect(rpki.roaListCalls).toBe(1);
+        expect(rpki.aspaListCalls).toBe(1);
+
+        rpki.running = true;
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('rpki:runtimeChanged', { running: true });
+        });
+        await expect(aspaTable).toContainText('65010');
+        expect(rpki.aspaListCalls).toBe(2);
+        expect(rpki.roaListCalls).toBe(1);
+
+        await routeTabs.getByRole('tab', { name: 'RPKI ROA配置', exact: true }).click();
+        await expect(roaTable).toContainText('203.0.113.0');
+        expect(rpki.roaListCalls).toBe(2);
+
+        await routeTabs.getByRole('tab', { name: 'ASPA (v2)', exact: true }).click();
+        await expect(aspaTable).toContainText('65010');
+        expect(rpki.aspaListCalls).toBe(2);
+    });
+
+    test('does not restore ROA rows from a request that finishes after stop', async ({ page }) => {
+        const rpki = harness.controller.state.rpki;
+        rpki.roaListDelayMs = 1000;
+
+        await page.goto('/#/rpki/rpki-roa-config');
+        await expect.poll(() => rpki.roaListCalls).toBe(1);
+
+        rpki.running = false;
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('rpki:runtimeChanged', { running: false });
+        });
+
+        await page.waitForTimeout(1100);
+        await expect(page.getByTestId('rpki-roa-table')).not.toContainText('203.0.113.0');
+        expect(rpki.roaListCalls).toBe(1);
+    });
+
+    test('clears cached ROA data when a runtime refresh returns an error', async ({ page }) => {
+        const rpki = harness.controller.state.rpki;
+        const roaTable = page.getByTestId('rpki-roa-table');
+
+        await page.goto('/#/rpki/rpki-roa-config');
+        await expect(roaTable).toContainText('203.0.113.0');
+
+        rpki.roaListError = 'synthetic ROA query failure';
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('rpki:runtimeChanged', { running: true });
+        });
+
+        await expect(roaTable).not.toContainText('203.0.113.0');
+        expect(rpki.roaListCalls).toBe(2);
+    });
+
+    test('keeps the config runtime state and client list in sync with process exit', async ({ page }) => {
+        await page.goto('/#/rpki/rpki-config');
+        await expect(page.getByTestId('rpki-config-page')).toBeVisible();
+
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('rpki:runtimeChanged', { running: true });
+        });
+        await expect(page.getByTestId('rpki-stop-button')).toBeEnabled();
+        await expect(page.getByTestId('rpki-client-table')).toContainText('192.0.2.10');
+
+        harness.controller.state.rpki.running = false;
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('rpki:runtimeChanged', { running: false });
+        });
+        await expect(page.getByTestId('rpki-stop-button')).toBeDisabled();
+        await expect(page.getByTestId('rpki-client-table')).not.toContainText('192.0.2.10');
+    });
 });
 
 test.describe('RPKI stop lifecycle', () => {
