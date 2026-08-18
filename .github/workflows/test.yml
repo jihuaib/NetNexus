@@ -42,7 +42,14 @@ jobs:
               run: npm run test:e2e:frr
 
             - name: Install Playwright Chromium
-              run: npx playwright install --with-deps chromium
+              timeout-minutes: 10
+              run: |
+                  for apt_source in /etc/apt/apt-mirrors.txt /etc/apt/sources.list; do
+                      if [ -f "$apt_source" ]; then
+                          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$apt_source"
+                      fi
+                  done
+                  npx playwright install --with-deps chromium
 
             - name: Run BGP/FRR route and page parity E2E
               run: npm run test:e2e:bgp-frr
