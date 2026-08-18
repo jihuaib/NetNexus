@@ -124,6 +124,37 @@ function clone(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
+async function expectRawJsonUsesPanelScroll(panel) {
+    const geometry = await panel.evaluate(element => {
+        const jsonContent = element.querySelector('.nn-json-viewer-content');
+        if (!jsonContent) return null;
+
+        return {
+            panelOverflow: element.scrollHeight - element.clientHeight,
+            jsonOverflow: jsonContent.scrollHeight - jsonContent.clientHeight
+        };
+    });
+
+    expect(geometry).not.toBeNull();
+    expect(geometry.panelOverflow).toBeGreaterThan(0);
+    expect(geometry.jsonOverflow).toBeLessThanOrEqual(1);
+
+    const bottomGeometry = await panel.evaluate(element => {
+        const viewer = element.querySelector('.nn-json-viewer');
+        element.scrollTop = element.scrollHeight - element.clientHeight;
+        const panelRect = element.getBoundingClientRect();
+        const viewerRect = viewer.getBoundingClientRect();
+
+        return {
+            remainingScroll: element.scrollHeight - element.clientHeight - element.scrollTop,
+            viewerBottomGap: panelRect.bottom - viewerRect.bottom
+        };
+    });
+
+    expect(Math.abs(bottomGeometry.remainingScroll)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bottomGeometry.viewerBottomGap)).toBeLessThanOrEqual(1);
+}
+
 function updateInstanceTopology(instance, scopeUpdate, routeSummary) {
     const nextInstance = clone(instance);
     nextInstance.routeScopes = nextInstance.routeScopes.map(scope =>
@@ -323,6 +354,7 @@ test('shows categorized Loc-RIB Instance details in a fixed-height modal and pre
     await expect(rawJson).toBeVisible();
     await expect(rawJson).toContainText('diagnosticMarker');
     await expect(rawJson).toContainText(INSTANCE.diagnosticMarker);
+    await expectRawJsonUsesPanelScroll(advanced);
 
     await dialog.getByRole('tab', { name: '实例概览', exact: true }).click();
     await expect.poll(modalHeight).toBe(fixedModalHeight);

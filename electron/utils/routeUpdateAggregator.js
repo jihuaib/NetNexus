@@ -10,17 +10,23 @@ class RouteUpdateAggregator {
         );
     }
 
+    getConnectionId(update) {
+        return update.client?.persistentConnectionId || update.client?.connectionId || null;
+    }
+
     getScopeId(update, entity) {
         return update.scopeId || update.persistentScopeId || entity?.scopeId || entity?.persistentScopeId || null;
     }
 
     makeRouteUpdateKey(update) {
         const sourceId = this.getSourceId(update);
+        const connectionId = this.getConnectionId(update);
         const scopeId = this.getScopeId(update, update.session);
         if (scopeId) {
-            return ['scope', sourceId || '', scopeId].join('|');
+            return ['scope', sourceId || '', connectionId || '', scopeId].join('|');
         }
         return [
+            connectionId || '',
             update.client?.localIp,
             update.client?.localPort,
             update.client?.remoteIp,
@@ -36,11 +42,13 @@ class RouteUpdateAggregator {
 
     makeInstanceRouteUpdateKey(update) {
         const sourceId = this.getSourceId(update);
+        const connectionId = this.getConnectionId(update);
         const scopeId = this.getScopeId(update, update.instance);
         if (scopeId) {
-            return ['scope', sourceId || '', scopeId].join('|');
+            return ['scope', sourceId || '', connectionId || '', scopeId].join('|');
         }
         return [
+            connectionId || '',
             update.client?.localIp,
             update.client?.localPort,
             update.client?.remoteIp,

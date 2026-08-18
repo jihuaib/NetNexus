@@ -125,6 +125,7 @@ async function main() {
         updatedAt: '2026-07-15T00:00:03.000Z'
     };
     const liveBmpSession = {
+        persistenceConnectionId: client.persistentConnectionId,
         getPersistentSourceId: () => sourceId,
         getClientInfo: () => ({ ...client, remotePort: 50001, connectionState: 'open', isOnline: true }),
         bgpStatisticsReportMap: new Map([['session', liveSessionReport]]),

@@ -35,6 +35,7 @@ bmpSession.localPort = 11019;
 bmpSession.remoteIp = '192.0.2.10';
 bmpSession.remotePort = 49152;
 bmpSession.sysName = 'incremental-router';
+bmpSession.persistenceConnectionId = 'incremental-connection';
 
 const discoveredPeer = new BmpBgpSession(bmpSession);
 discoveredPeer.sessionType = BmpConst.BMP_PEER_TYPE.GLOBAL;
@@ -86,6 +87,7 @@ assert.equal(routeUpdates[0].persistentSourceId, sessionEvent.payload.data.clien
 assert.equal(routeUpdates[0].persistentOwnerKey, sessionEvent.payload.data.session.persistentOwnerKey);
 assert.equal(routeUpdates[0].persistentScopeId, sessionEvent.payload.data.session.routeScopes[0].persistentScopeId);
 assert.equal(routeUpdates[0].session.persistentScopeId, routeUpdates[0].persistentScopeId);
+assert.equal(routeUpdates[0].client.persistentConnectionId, bmpSession.persistenceConnectionId);
 
 const instance = new BmpBgpInstance(bmpSession);
 instance.instanceType = BmpConst.BMP_PEER_TYPE.LOCAL_RIB;
@@ -172,6 +174,21 @@ assert.deepEqual(primaryScopeUpdate.types, [
 assert.equal(primaryScopeUpdate.reason, 'reconnect-refresh-timeout');
 assert.equal(primaryScopeUpdate.projectionReset, true);
 
+const connectionScopedAggregator = new RouteUpdateAggregator();
+connectionScopedAggregator.enqueueRouteUpdate({
+    ...routeUpdates[0],
+    client: { ...routeUpdates[0].client, persistentConnectionId: 'old-connection' }
+});
+connectionScopedAggregator.enqueueRouteUpdate({
+    ...routeUpdates[0],
+    client: { ...routeUpdates[0].client, persistentConnectionId: 'new-connection' }
+});
+assert.equal(
+    connectionScopedAggregator.flushRouteUpdates().length,
+    2,
+    'route aggregation must not merge different live connections for the same persistent scope'
+);
+
 aggregator.enqueueInstanceRouteUpdate({
     ...instanceRouteUpdates[0],
     changedCount: 1,
@@ -190,6 +207,20 @@ assert.deepEqual(aggregatedInstanceRoutes[0].types, [
     BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_DELETE,
     BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_UPDATE
 ]);
+
+connectionScopedAggregator.enqueueInstanceRouteUpdate({
+    ...instanceRouteUpdates[0],
+    client: { ...instanceRouteUpdates[0].client, persistentConnectionId: 'old-connection' }
+});
+connectionScopedAggregator.enqueueInstanceRouteUpdate({
+    ...instanceRouteUpdates[0],
+    client: { ...instanceRouteUpdates[0].client, persistentConnectionId: 'new-connection' }
+});
+assert.equal(
+    connectionScopedAggregator.flushInstanceRouteUpdates().length,
+    2,
+    'Loc-RIB aggregation must not merge different live connections for the same persistent scope'
+);
 
 const flushedEvents = [];
 const worker = Object.create(BmpWorker.prototype);

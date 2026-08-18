@@ -1078,6 +1078,10 @@ class BmpWorker {
         return value?.persistentSourceId || value?.sourceId || null;
     }
 
+    getPersistentConnectionId(value = {}) {
+        return value?.persistentConnectionId || value?.connectionId || value?.persistenceConnectionId || null;
+    }
+
     makeClientEndpointKey(value = {}) {
         return [value.localIp, value.localPort, value.remoteIp, value.remotePort]
             .map(item => String(item ?? ''))
@@ -1085,21 +1089,42 @@ class BmpWorker {
     }
 
     findLiveBmpSession(client = {}) {
+        const liveSessions = Array.from(this.bmpSessionMap.values()).filter(
+            bmpSession => bmpSession?.persistenceConnectionClosed !== true && bmpSession?.socket?.destroyed !== true
+        );
         const sourceId = this.getPersistentSourceId(client);
-        if (sourceId) {
-            for (const bmpSession of this.bmpSessionMap.values()) {
-                if (bmpSession.getPersistentSourceId?.() === sourceId) {
-                    return bmpSession;
-                }
-            }
+        const candidateSessions = sourceId
+            ? liveSessions.filter(bmpSession => bmpSession.getPersistentSourceId?.() === sourceId)
+            : liveSessions;
+        const connectionId = this.getPersistentConnectionId(client);
+        if (connectionId) {
+            return (
+                candidateSessions.find(bmpSession => this.getPersistentConnectionId(bmpSession) === connectionId) ||
+                null
+            );
         }
-        const key = this.makeClientEndpointKey(client);
-        for (const bmpSession of this.bmpSessionMap.values()) {
-            if (this.makeClientEndpointKey(bmpSession) === key) {
-                return bmpSession;
-            }
+
+        const hasCompleteEndpoint = [client.localIp, client.localPort, client.remoteIp, client.remotePort].every(
+            value => value !== null && value !== undefined && value !== ''
+        );
+        if (hasCompleteEndpoint) {
+            const key = this.makeClientEndpointKey(client);
+            return candidateSessions.find(bmpSession => this.makeClientEndpointKey(bmpSession) === key) || null;
         }
-        return null;
+
+        return (sourceId ? candidateSessions : []).reduce((latest, candidate) => {
+            if (!latest) {
+                return candidate;
+            }
+            const latestGeneration = Number(latest.persistenceConnectionGeneration) || 0;
+            const candidateGeneration = Number(candidate.persistenceConnectionGeneration) || 0;
+            if (candidateGeneration !== latestGeneration) {
+                return candidateGeneration > latestGeneration ? candidate : latest;
+            }
+            const latestOpenedAt = Number(latest.persistenceOpenedAtMs) || 0;
+            const candidateOpenedAt = Number(candidate.persistenceOpenedAtMs) || 0;
+            return candidateOpenedAt >= latestOpenedAt ? candidate : latest;
+        }, null);
     }
 
     findTopologyClient(topology, client = {}) {
@@ -1580,7 +1605,7 @@ class BmpWorker {
         const bmpSessionKey = BmpSession.makeKey(client.localIp, client.localPort, client.remoteIp, client.remotePort);
         return {
             bmpSessionKey,
-            bmpSession: this.findLiveBmpSession(client) || this.bmpSessionMap.get(bmpSessionKey)
+            bmpSession: this.findLiveBmpSession(client)
         };
     }
 

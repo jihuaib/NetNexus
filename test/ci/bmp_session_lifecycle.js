@@ -2,7 +2,10 @@ const assert = require('assert');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
 const BmpConst = require('../../electron/const/bmpConst');
+const BgpConst = require('../../electron/const/bgpConst');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
+const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
+const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 
 function makeSocket(localAddress, localPort) {
     return {
@@ -87,5 +90,149 @@ assert.strictEqual(terminationEvents.length, 2, 'BMP session removal should be i
 assert.strictEqual(terminationEvents[1].payload.data.connectionState, 'closed');
 assert.strictEqual(terminationEvents[1].payload.data.isOnline, false);
 assert.strictEqual(worker.bmpSessionMap.has(replacementKey), false, 'removed BMP session should be deleted from map');
+
+const sharedSourceId = 'shared-live-source';
+const oldSourceSession = worker.createBmpSession(makeSocket('127.0.0.1', 1790), '10.0.0.4', 50004);
+oldSourceSession.persistenceSourceKey = { keyHex: sharedSourceId };
+oldSourceSession.persistenceConnectionId = 'old-connection';
+oldSourceSession.persistenceConnectionGeneration = 100;
+oldSourceSession.persistenceOpenedAtMs = 100;
+const oldPeer = new BmpBgpSession(oldSourceSession);
+oldPeer.addPathMap.set('1|1', true);
+oldSourceSession.bgpSessionMap.set('old-peer', oldPeer);
+const oldInstance = new BmpBgpInstance(oldSourceSession);
+oldInstance.afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
+oldInstance.safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST;
+oldInstance.addPathReceiveMap.set('1|1', true);
+oldInstance.isAddPath = true;
+oldSourceSession.bgpInstanceMap.set('old-instance', oldInstance);
+
+const newSourceSession = worker.createBmpSession(makeSocket('127.0.0.1', 1790), '10.0.0.4', 50005);
+newSourceSession.persistenceSourceKey = { keyHex: sharedSourceId };
+newSourceSession.persistenceConnectionId = 'new-connection';
+newSourceSession.persistenceConnectionGeneration = 200;
+newSourceSession.persistenceOpenedAtMs = 200;
+const newPeer = new BmpBgpSession(newSourceSession);
+newSourceSession.bgpSessionMap.set('new-peer', newPeer);
+const newInstance = new BmpBgpInstance(newSourceSession);
+newInstance.afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
+newInstance.safi = BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST;
+newSourceSession.bgpInstanceMap.set('new-instance', newInstance);
+assert.equal(
+    newSourceSession.getClientRouteEventInfo().persistentConnectionId,
+    newSourceSession.persistenceConnectionId,
+    'incremental route events must carry the live connection identity'
+);
+
+assert.strictEqual(
+    worker.findLiveBmpSession({
+        persistentSourceId: sharedSourceId,
+        persistentConnectionId: newSourceSession.persistenceConnectionId
+    }),
+    newSourceSession,
+    'a detail request must use the requested live connection instead of an older connection for the same source'
+);
+assert.strictEqual(
+    worker.findLiveBmpSession({
+        persistentSourceId: sharedSourceId,
+        persistentConnectionId: oldSourceSession.persistenceConnectionId
+    }),
+    oldSourceSession,
+    'an explicit connection ID must win even when another connection for the source is newer'
+);
+assert.strictEqual(
+    worker.findLiveBmpSession({
+        persistentSourceId: sharedSourceId,
+        persistentConnectionId: 'missing-connection'
+    }),
+    null,
+    'a stale connection selector must not borrow ADD-PATH state from another connection for the source'
+);
+assert.strictEqual(
+    worker.findLiveBmpSession({
+        persistentSourceId: sharedSourceId,
+        persistentConnectionId: 'missing-connection',
+        localIp: newSourceSession.localIp,
+        localPort: newSourceSession.localPort,
+        remoteIp: newSourceSession.remoteIp,
+        remotePort: newSourceSession.remotePort
+    }),
+    null,
+    'a stale connection ID must not fall through to a different connection at the same endpoint'
+);
+assert.strictEqual(
+    worker.findLiveBmpSession({
+        persistentSourceId: 'different-source',
+        persistentConnectionId: newSourceSession.persistenceConnectionId
+    }),
+    null,
+    'a connection ID must not select a live session from a different persistent source'
+);
+assert.strictEqual(
+    worker.findLiveBmpSession({
+        persistentSourceId: 'different-source',
+        localIp: newSourceSession.localIp,
+        localPort: newSourceSession.localPort,
+        remoteIp: newSourceSession.remoteIp,
+        remotePort: newSourceSession.remotePort
+    }),
+    null,
+    'an endpoint must not select a live session from a different persistent source'
+);
+assert.strictEqual(
+    worker.findLiveBmpSession({
+        persistentSourceId: sharedSourceId,
+        localIp: newSourceSession.localIp,
+        localPort: newSourceSession.localPort,
+        remoteIp: newSourceSession.remoteIp,
+        remotePort: newSourceSession.remotePort
+    }),
+    newSourceSession,
+    'the transport endpoint must select the matching live connection before the source fallback'
+);
+assert.strictEqual(
+    worker.getBmpSessionByClient({
+        persistentSourceId: sharedSourceId,
+        persistentConnectionId: 'missing-connection',
+        localIp: newSourceSession.localIp,
+        localPort: newSourceSession.localPort,
+        remoteIp: newSourceSession.remoteIp,
+        remotePort: newSourceSession.remotePort
+    }).bmpSession,
+    null,
+    'route queries must not bypass a stale connection ID with a direct endpoint lookup'
+);
+
+assert.strictEqual(
+    worker.findLiveBmpSession({ persistentSourceId: sharedSourceId }),
+    newSourceSession,
+    'a source-only request must prefer the highest connection generation when the older session was inserted first'
+);
+
+worker.bmpSessionMap = new Map([
+    ['new-source-session', newSourceSession],
+    ['old-source-session', oldSourceSession]
+]);
+assert.strictEqual(
+    worker.findLiveBmpSession({ persistentSourceId: sharedSourceId }),
+    newSourceSession,
+    'a source-only request must select the newest live connection regardless of map insertion order'
+);
+const selectedCurrentSession = worker.findLiveBmpSession({
+    persistentSourceId: sharedSourceId,
+    persistentConnectionId: newSourceSession.persistenceConnectionId
+});
+assert.equal(
+    Object.values(Array.from(selectedCurrentSession.bgpSessionMap.values())[0].getSessionInfo().addPathMap).some(
+        Boolean
+    ),
+    false,
+    'the selected Session detail DTO must retain the current ADD-PATH disabled state'
+);
+assert.equal(
+    Array.from(selectedCurrentSession.bgpInstanceMap.values())[0].getInstanceInfo().isAddPath,
+    false,
+    'the selected Loc-RIB detail DTO must retain the current ADD-PATH disabled state'
+);
 
 console.log('BMP session lifecycle tests passed');

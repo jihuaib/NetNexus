@@ -1127,7 +1127,14 @@ const expectedSplitPeerUpAfKeys = [
     );
 });
 splitPeerUpSession.processMessage(
-    bmpMessage(BmpConst.BMP_VERSION.V4, BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION, peerUpPayload())
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        peerUpPayloadForAddressFamilies(0, {
+            recvAddressFamilies: [],
+            sendAddressFamilies: []
+        })
+    )
 );
 splitPeerUpIpv4Routes = queryBgpRoutes(
     splitPeerUpSession,
@@ -1162,13 +1169,37 @@ assert.ok(
         `refreshing IPv4 must retain the accumulated IPv6 ${field}`
     );
 });
+splitPeerUpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, bgpUpdate('203.0.132.0'))
+        ])
+    )
+);
+splitPeerUpIpv4Routes = queryBgpRoutes(
+    splitPeerUpSession,
+    splitPeerUpBgpSession,
+    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
+    BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN
+);
+assert.ok(
+    splitPeerUpIpv4Routes.some(route => route.ip === '203.0.132.0' && route.pathId === 0),
+    'the first UPDATE after disabling ADD-PATH must persist a normal path ID'
+);
 
 const { session: splitLocRibPeerUpSession } = makeSession();
 splitLocRibPeerUpSession.processMessage(
     bmpMessage(
         BmpConst.BMP_VERSION.V4,
         BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
-        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED)
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, {
+            recvAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.SEND_ONLY,
+            sendAddPathMode: BgpConst.BGP_ADD_PATH_TYPE.RECEIVE_ONLY
+        })
     )
 );
 const splitLocRibIpv4 = addLocRibRoute(
@@ -1179,6 +1210,9 @@ const splitLocRibIpv4 = addLocRibRoute(
     24
 );
 const splitLocRibIpv4Epoch = splitLocRibIpv4.instance.getRibEpoch();
+const splitLocRibIpv4AddPathKey = `${BgpConst.BGP_AFI_TYPE.AFI_IPV4}|${BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST}`;
+assert.equal(splitLocRibIpv4.instance.isAddPath, true);
+assert.equal(splitLocRibIpv4.instance.addPathReceiveMap.get(splitLocRibIpv4AddPathKey), true);
 const splitLocRibIpv6Families = [
     {
         afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
@@ -1204,6 +1238,11 @@ assert.equal(
 );
 assert.equal(splitLocRibIpv4.instance.instanceState, BmpConst.BMP_SESSION_STATE.PEER_UP);
 assert.equal(splitLocRibIpv4.instance.getRibEpoch(), splitLocRibIpv4Epoch);
+assert.equal(
+    splitLocRibIpv4.instance.isAddPath,
+    true,
+    'an IPv6-only Loc-RIB Peer Up must retain the existing IPv4 ADD-PATH state'
+);
 assert.ok(
     Array.from(splitLocRibPeerUpSession.bgpInstanceMap.values()).some(
         instance =>
@@ -1212,6 +1251,38 @@ assert.ok(
     ),
     'the later IPv6 Loc-RIB Peer Up must still create its own instance'
 );
+
+splitLocRibPeerUpSession.processMessage(
+    bmpMessage(
+        BmpConst.BMP_VERSION.V4,
+        BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
+        locRibPeerUpPayload(BmpConst.BMP_LOC_RIB_FLAGS.FILTERED, {
+            recvAddressFamilies: [],
+            sendAddressFamilies: []
+        })
+    )
+);
+assert.equal(
+    queryLocRibRoutes(splitLocRibPeerUpSession, splitLocRibIpv4.instance)[0].routeState,
+    BmpConst.BMP_ROUTE_STATE.STALE,
+    'a base IPv4 Loc-RIB Peer Up without MP capability must refresh the existing IPv4 instance'
+);
+['recvAddPathMap', 'sendAddPathMap', 'addPathReceiveMap', 'addPathSendMap'].forEach(field => {
+    assert.equal(
+        splitLocRibIpv4.instance[field].has(splitLocRibIpv4AddPathKey),
+        false,
+        `a base IPv4 Loc-RIB Peer Up without ADD-PATH must clear ${field}`
+    );
+});
+assert.equal(splitLocRibIpv4.instance.isAddPath, false);
+assert.equal(splitLocRibIpv4.instance.getInstanceInfo().isAddPath, false);
+['instAddPathMap', 'instAddPathReceiveMap', 'instAddPathSendMap'].forEach(field => {
+    assert.equal(
+        splitLocRibPeerUpSession[field].has(splitLocRibIpv4AddPathKey),
+        false,
+        `a base IPv4 Loc-RIB Peer Up without ADD-PATH must clear ${field}`
+    );
+});
 
 const { session: lazyLocRibPeerUpSession } = makeSession();
 const lazyLocRibIpv4 = addLocRibRoute(

@@ -1863,6 +1863,30 @@ class BmpSession {
         target.splice(0, target.length, ...next);
     }
 
+    addImplicitBaseIpv4UnicastAddressFamily(
+        parsedRecvBgpOpen,
+        parsedSendBgpOpen,
+        recvAddressFamilies,
+        sentAddressFamilies
+    ) {
+        if (
+            parsedRecvBgpOpen?.valid !== true ||
+            parsedSendBgpOpen?.valid !== true ||
+            recvAddressFamilies.length > 0 ||
+            sentAddressFamilies.length > 0
+        ) {
+            return false;
+        }
+
+        const baseIpv4Unicast = {
+            afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+            safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+        };
+        recvAddressFamilies.push({ ...baseIpv4Unicast });
+        sentAddressFamilies.push({ ...baseIpv4Unicast });
+        return true;
+    }
+
     markSessionRoutesStale(bgpSession, addressFamilies, ribTypes, reason) {
         if (!bgpSession || !Array.isArray(addressFamilies)) {
             return [];
@@ -2017,6 +2041,8 @@ class BmpSession {
         return {
             persistentSourceId,
             sourceId: persistentSourceId,
+            persistentConnectionId: this.persistenceConnectionId || null,
+            connectionId: this.persistenceConnectionId || null,
             localIp: this.localIp,
             localPort: this.localPort,
             remoteIp: this.remoteIp,
@@ -2665,6 +2691,16 @@ class BmpSession {
                 });
             }
 
+            // IPv4 unicast is the base BGP address family and does not require an
+            // MP capability. Infer it only when both valid OPEN messages contain
+            // no MP families so split IPv6-only Peer Up messages stay isolated.
+            this.addImplicitBaseIpv4UnicastAddressFamily(
+                parsedRecvBgpOpen,
+                parsedSendBgpOpen,
+                recvAddressFamilies,
+                sentAddressFamilies
+            );
+
             // Only include address families that appear in both received and sent capabilities
             recvAddressFamilies.forEach(recvAF => {
                 const matchingSentAF = sentAddressFamilies.find(
@@ -2943,6 +2979,13 @@ class BmpSession {
                     }
                 });
             }
+
+            this.addImplicitBaseIpv4UnicastAddressFamily(
+                parsedRecvBgpOpen,
+                parsedSendBgpOpen,
+                recvAddressFamilies,
+                sentAddressFamilies
+            );
 
             // Only include address families that appear in both received and sent capabilities
             recvAddressFamilies.forEach(recvAF => {

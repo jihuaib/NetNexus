@@ -269,6 +269,24 @@
 
     const getClientConnectionId = client => client?.persistentConnectionId || client?.connectionId || '';
 
+    const hasCompleteClientTransport = client =>
+        [client?.localIp, client?.localPort, client?.remoteIp, client?.remotePort].every(
+            value => value !== null && value !== undefined && value !== ''
+        );
+
+    const isSameClientConnection = (left, right) => {
+        if (!isSameClient(left, right)) return false;
+        const leftConnectionId = getClientConnectionId(left);
+        const rightConnectionId = getClientConnectionId(right);
+        if (leftConnectionId && rightConnectionId) {
+            return leftConnectionId === rightConnectionId;
+        }
+        if (hasCompleteClientTransport(left) && hasCompleteClientTransport(right)) {
+            return getClientTransportKey(left) === getClientTransportKey(right);
+        }
+        return true;
+    };
+
     const getClientRequestIdentity = client => {
         if (!client) return '';
         return `${getClientKey(client)}|${getClientConnectionId(client) || getClientTransportKey(client)}`;
@@ -651,6 +669,7 @@
         const activeScopeId = getInstanceScopeId(activeInstance);
         const shouldRefresh = updates.some(update => {
             if (!update) return false;
+            if (update.client && !isSameClientConnection(update.client, activeClient)) return false;
             const updateSourceId =
                 update.sourceId ||
                 update.persistentSourceId ||
@@ -686,7 +705,7 @@
         if (result.status !== 'success' || !result.data) return;
         const { client, instance } = result.data;
 
-        if (!client || !instance || !isSameClient(client, monitoredClient.value)) return;
+        if (!client || !instance || !isSameClientConnection(client, monitoredClient.value)) return;
 
         const shouldRefreshInstanceDetail =
             instanceDetailModalVisible.value &&
@@ -896,7 +915,7 @@
 
     const routeUpdateMatchesInstanceDetail = (update, instance) => {
         if (!update || !instance) return false;
-        if (update.client && !isSameClient(update.client, monitoredClient.value)) return false;
+        if (update.client && !isSameClientConnection(update.client, monitoredClient.value)) return false;
 
         const updateSourceId =
             update.persistentSourceId ||

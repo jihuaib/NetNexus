@@ -20,6 +20,11 @@ const OTHER_CLIENT = {
     remotePort: 49200,
     sysName: 'other-incremental-router'
 };
+const STALE_CONNECTION_CLIENT = {
+    ...CLIENT,
+    persistentConnectionId: 'stale-incremental-connection',
+    remotePort: 49153
+};
 const CLIENT_KEY = encodeURIComponent(`source:${CLIENT.persistentSourceId}`);
 const SESSION_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=session`;
 const LOC_RIB_MONITOR_ROUTE = `/#/monitor/bmp-client?clientKey=${CLIENT_KEY}&view=loc-rib`;
@@ -99,6 +104,12 @@ const OTHER_SESSION = session(
 const INSTANCE_A = instance('instance-owner-a', 'instance-scope-a', 'global');
 const INSTANCE_B = instance('instance-owner-b', 'instance-scope-b', 'blue');
 const OTHER_INSTANCE = instance('other-instance-owner', 'other-instance-scope', 'other', OTHER_CLIENT);
+const STALE_CONNECTION_INSTANCE = instance(
+    'stale-connection-instance-owner',
+    'stale-connection-instance-scope',
+    'stale-connection',
+    STALE_CONNECTION_CLIENT
+);
 
 function route(scopeId, page) {
     const index = (page - 1) * 25;
@@ -310,6 +321,35 @@ test.describe('BMP incremental route pages', () => {
 
         const instanceCallsBefore = calls.filter(call => call.method === 'getBgpInstances').length;
         const routeCallsBefore = calls.filter(call => call.method === 'getBgpInstanceRoutes').length;
+
+        await page.evaluate(
+            ({ staleClient, staleInstance, activeInstance }) => {
+                window.__bmpE2eEmit('bmp:instanceUpdate', {
+                    status: 'success',
+                    data: { client: staleClient, instance: staleInstance }
+                });
+                window.__bmpE2eEmit('bmp:instanceRouteUpdate', {
+                    status: 'success',
+                    data: {
+                        client: staleClient,
+                        sourceId: staleClient.persistentSourceId,
+                        instance: activeInstance,
+                        scopeId: activeInstance.persistentScopeId,
+                        af: 1,
+                        projectionReset: true
+                    }
+                });
+            },
+            {
+                staleClient: STALE_CONNECTION_CLIENT,
+                staleInstance: STALE_CONNECTION_INSTANCE,
+                activeInstance: INSTANCE_A
+            }
+        );
+        await page.waitForTimeout(150);
+        await expect(page.getByRole('tab', { name: /stale-connection/ })).toHaveCount(0);
+        expect(calls.filter(call => call.method === 'getBgpInstances').length).toBe(instanceCallsBefore);
+        expect(calls.filter(call => call.method === 'getBgpInstanceRoutes').length).toBe(routeCallsBefore);
 
         await page.evaluate(
             ({ client, nextInstance }) => {

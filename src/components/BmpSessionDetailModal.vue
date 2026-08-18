@@ -287,12 +287,7 @@
                         </nn-descriptions>
                         <div v-if="activeTabKey === 'advanced'" class="raw-json-section">
                             <div class="section-title">完整原始 JSON</div>
-                            <nn-json-viewer
-                                :value="session"
-                                :max-height="520"
-                                wrap
-                                data-testid="bmp-session-detail-raw-json"
-                            />
+                            <nn-json-viewer :value="session" wrap data-testid="bmp-session-detail-raw-json" />
                         </div>
                     </div>
                 </nn-tab-pane>
@@ -574,18 +569,26 @@
         height: min(620px, calc(92vh - 82px)) !important;
         min-height: min(620px, calc(92vh - 82px)) !important;
         max-height: min(620px, calc(92vh - 82px)) !important;
+        display: flex !important;
+        flex-direction: column !important;
         overflow: hidden !important;
     }
 
     .session-detail-tabs {
-        height: 100%;
+        flex: 1 1 0;
         min-height: 0;
     }
 
-    .session-detail-loading,
-    .session-detail-loading :deep(.nn-spin-nested-loading),
+    .session-detail-loading {
+        display: flex;
+        flex: 1 1 0;
+        min-height: 0;
+    }
+
     .session-detail-loading :deep(.nn-spin-container) {
-        height: 100%;
+        display: flex;
+        flex: 1 1 0;
+        flex-direction: column;
         min-height: 0;
     }
 
@@ -594,7 +597,8 @@
     }
 
     .session-detail-tabs :deep(.nn-tabs-content-holder) {
-        flex: 1 1 auto;
+        height: 0;
+        flex: 1 1 0;
         min-height: 0;
         overflow: hidden;
     }

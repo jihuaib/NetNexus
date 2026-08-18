@@ -121,6 +121,37 @@ function clone(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
+async function expectRawJsonUsesPanelScroll(panel) {
+    const geometry = await panel.evaluate(element => {
+        const jsonContent = element.querySelector('.nn-json-viewer-content');
+        if (!jsonContent) return null;
+
+        return {
+            panelOverflow: element.scrollHeight - element.clientHeight,
+            jsonOverflow: jsonContent.scrollHeight - jsonContent.clientHeight
+        };
+    });
+
+    expect(geometry).not.toBeNull();
+    expect(geometry.panelOverflow).toBeGreaterThan(0);
+    expect(geometry.jsonOverflow).toBeLessThanOrEqual(1);
+
+    const bottomGeometry = await panel.evaluate(element => {
+        const viewer = element.querySelector('.nn-json-viewer');
+        element.scrollTop = element.scrollHeight - element.clientHeight;
+        const panelRect = element.getBoundingClientRect();
+        const viewerRect = viewer.getBoundingClientRect();
+
+        return {
+            remainingScroll: element.scrollHeight - element.clientHeight - element.scrollTop,
+            viewerBottomGap: panelRect.bottom - viewerRect.bottom
+        };
+    });
+
+    expect(Math.abs(bottomGeometry.remainingScroll)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bottomGeometry.viewerBottomGap)).toBeLessThanOrEqual(1);
+}
+
 function updateSessionScopes(session, scopeUpdates, routeSummary) {
     const nextSession = clone(session);
     nextSession.routeScopes = nextSession.routeScopes.map(scope => {
@@ -292,6 +323,7 @@ test('shows categorized BGP Session details in a modal and keeps raw JSON under 
     await expect(advanced).toContainText('session-detail-source');
     await expect(rawJson).toBeVisible();
     await expect(rawJson).toContainText('persistentSourceId');
+    await expectRawJsonUsesPanelScroll(advanced);
 
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(dialog).toBeHidden();
