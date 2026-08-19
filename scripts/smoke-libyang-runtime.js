@@ -228,6 +228,14 @@ async function run() {
 }`,
         'utf8'
     );
+    fs.writeFileSync(
+        path.join(directRoot, 'priority-types@2026-07-18.yang'),
+        `module priority-types {
+  yang-version 1.1; namespace "urn:priority:types"; prefix pt; revision 2026-07-18;
+  feature extra; grouping fields { leaf parent-marker { type string; } leaf extra-marker { if-feature extra; type string; } }
+}`,
+        'utf8'
+    );
     const directMainPath = path.join(
         directRoot,
         process.platform === 'win32' ? '意外-模型文件.yang' : 'unexpected-file-name.yang'
@@ -263,6 +271,7 @@ async function run() {
     const selectedMainNames = new Set(Object.values(selectedMainTree.nodes).map(node => node.name));
     assert(selectedMainNames.has('workspace-marker'), 'workspace search path must override the fallback module');
     assert(!selectedMainNames.has('fallback-marker'));
+    assert(!selectedMainNames.has('parent-marker'));
     assert(selectedMainNames.has('local-marker'), 'feature selection must use the parsed module name, not filename');
     assert(!selectedMainNames.has('extra-marker'), 'features in unspecified imported modules must be disabled');
 

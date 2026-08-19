@@ -1467,7 +1467,7 @@ main(int argc, char **argv)
     const char *value;
     char *directory = NULL, *initial_search_path = NULL;
     uint16_t context_options;
-    size_t index;
+    size_t explicit_search_path_count = 0, index;
     int argument, exit_code = EXIT_FAILURE;
 
 #ifdef _WIN32
@@ -1521,6 +1521,7 @@ main(int argc, char **argv)
         print_usage(stderr);
         goto cleanup;
     }
+    explicit_search_path_count = search_paths.count;
 
     for (index = 0; index < schema_paths.count; ++index) {
         directory = path_directory(schema_paths.items[index]);
@@ -1564,6 +1565,23 @@ main(int argc, char **argv)
         LY_ERR result = ly_ctx_set_searchdir(context, search_paths.items[index]);
         if ((result != LY_SUCCESS) && (result != LY_EEXIST)) {
             fprintf(stderr, "Unable to add schema search directory '%s'.\n", search_paths.items[index]);
+            goto cleanup;
+        }
+    }
+    /* libyang recursively searches the most recently added directory first. Schema input
+     * directories are discovered after the explicit -p arguments and may contain the same
+     * module in unordered sibling subdirectories. Move every explicit directory to the end,
+     * preserving CLI order, so the last -p path has deterministic highest priority. Unsetting
+     * through libyang also handles textually different paths that resolve to the same directory. */
+    for (index = 0; index < explicit_search_path_count; ++index) {
+        LY_ERR result = ly_ctx_unset_searchdir(context, search_paths.items[index]);
+        if (result != LY_SUCCESS) {
+            fprintf(stderr, "Unable to prioritize schema search directory '%s'.\n", search_paths.items[index]);
+            goto cleanup;
+        }
+        result = ly_ctx_set_searchdir(context, search_paths.items[index]);
+        if (result != LY_SUCCESS) {
+            fprintf(stderr, "Unable to prioritize schema search directory '%s'.\n", search_paths.items[index]);
             goto cleanup;
         }
     }
