@@ -75,7 +75,7 @@ async function main() {
             handlers.set(channel, handler);
         }
     };
-    const updater = new AppUpdater(ipc, { webContents: {} });
+    const updater = new AppUpdater(ipc, { webContents: {} }, { platform: 'linux' });
 
     assert.deepStrictEqual([...handlers.keys()].sort(), [
         'updater:checkForUpdates',

@@ -32,12 +32,12 @@ function getUpdatePolicy(platform = process.platform) {
 }
 
 class AppUpdater {
-    constructor(ipc, mainWindow) {
+    constructor(ipc, mainWindow, { platform = process.platform } = {}) {
         this.mainWindow = mainWindow;
         this.ipc = ipc;
         this.updateDownloaded = false;
         this.isDev = !app.isPackaged;
-        this.updatePolicy = getUpdatePolicy();
+        this.updatePolicy = getUpdatePolicy(platform);
         this.updateSettingsConfig = DEFAULT_UPDATE_SETTINGS;
 
         // 保存事件监听器引用，便于后续清理
