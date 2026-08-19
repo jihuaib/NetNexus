@@ -1677,17 +1677,28 @@ function testCiRuntimeInstallOrdering() {
     );
     assert.match(linuxReleaseJobSource, /dpkg-deb --field/);
     assert.match(linuxReleaseJobSource, /dpkg-deb --ctrl-tarfile/);
+    assert.match(
+        linuxReleaseJobSource,
+        /debs=\(\.\/release\/NetNexus-\*-linux-\$\{\{ matrix\.arch \}\}\.deb\)/,
+        'Release CI must pass the Debian artifact as an explicit local path to apt-get'
+    );
     assert.match(linuxReleaseJobSource, /chmod 4755/);
     assert.match(linuxReleaseJobSource, /chrome-sandbox/);
     assert.match(linuxReleaseJobSource, /setcap 'cap_net_bind_service=ep'/);
     assert.match(linuxReleaseJobSource, /getcap/);
-    assert.match(linuxReleaseJobSource, /sudo apt-get install --yes "\$\{debs\[0\]\}"/);
+    assert.match(linuxReleaseJobSource, /deb_path="\$\(realpath -- "\$\{debs\[0\]\}"\)"/);
+    assert.match(linuxReleaseJobSource, /sudo apt-get install --yes "\$deb_path"/);
     assert.match(linuxReleaseJobSource, /root:root:755/);
     assert.match(linuxReleaseJobSource, /patchelf --print-rpath \/opt\/NetNexus\/net-nexus/);
     assert.match(linuxReleaseJobSource, /\/opt\/NetNexus\/net-nexus cap_net_bind_service=ep/);
     assert.match(linuxReleaseJobSource, /server\.listen\(179,'127\.0\.0\.1'/);
     assert.match(linuxReleaseJobSource, /sudo setcap -r \/opt\/NetNexus\/net-nexus/);
-    assert.match(linuxReleaseJobSource, /sudo apt-get install --reinstall --yes "\$\{debs\[0\]\}"/);
+    assert.match(linuxReleaseJobSource, /sudo apt-get install --reinstall --yes "\$deb_path"/);
+    assert.doesNotMatch(
+        linuxReleaseJobSource,
+        /sudo apt-get install(?: --reinstall)? --yes "\$\{debs\[0\]\}"/,
+        'Release CI must not pass a repository-relative Debian artifact to apt-get'
+    );
     assert.match(linuxReleaseJobSource, /E2E_APP_EXECUTABLE=\/opt\/NetNexus\/net-nexus/);
     assert.match(linuxReleaseJobSource, /xvfb-run -a node scripts\/installed-bgp-port179-smoke\.js/);
     assert.match(linuxReleaseJobSource, /-rwsr-xr-x/);

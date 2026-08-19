@@ -109,14 +109,18 @@ function collectMacAppExecutables(executableNames) {
         .filter(fileExists);
 }
 
-function isLikelyLinuxAppExecutable(filePath, fileName) {
-    const normalized = filePath.split(path.sep).join('/');
-    if (!normalized.includes('/linux-unpacked/') || fileName.includes('.') || fileName === 'chrome-sandbox') {
+function isLikelyLinuxAppExecutable(filePath, fileName, fsApi = fs) {
+    const unpackedDirectory = path.basename(path.dirname(filePath));
+    if (
+        !/^linux(?:-[A-Za-z0-9_-]+)?-unpacked$/.test(unpackedDirectory) ||
+        fileName.includes('.') ||
+        fileName === 'chrome-sandbox'
+    ) {
         return false;
     }
 
     try {
-        return (fs.statSync(filePath).mode & 0o111) !== 0;
+        return (fsApi.statSync(filePath).mode & 0o111) !== 0;
     } catch {
         return false;
     }
@@ -238,5 +242,6 @@ module.exports = {
     findPackagedAppRoot,
     findPackagedElectronRoot,
     findPackagedElectronExecutable,
+    isLikelyLinuxAppExecutable,
     projectRoot
 };

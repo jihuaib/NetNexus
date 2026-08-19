@@ -178,8 +178,9 @@ jobs:
                   PACKAGED_SQLITE_EXPECTED_ARCH="${{ matrix.arch }}" npm run test:packaged:sqlite
 
                   shopt -s nullglob
-                  debs=(release/NetNexus-*-linux-${{ matrix.arch }}.deb)
+                  debs=(./release/NetNexus-*-linux-${{ matrix.arch }}.deb)
                   test "${#debs[@]}" -eq 1
+                  deb_path="$(realpath -- "${debs[0]}")"
                   test "$(dpkg-deb --field "${debs[0]}" Architecture)" = "${{ matrix.deb_arch }}"
 
                   postinstall_script="$(dpkg-deb --ctrl-tarfile "${debs[0]}" | tar --extract --to-stdout --wildcards --no-anchored postinst)"
@@ -212,7 +213,7 @@ jobs:
                   done
 
                   test "$(id -u)" -ne 0
-                  sudo apt-get install --yes "${debs[0]}"
+                  sudo apt-get install --yes "$deb_path"
                   test "$(stat --format='%U:%G:%a' /opt/NetNexus/net-nexus)" = 'root:root:755'
                   test "$(patchelf --print-rpath /opt/NetNexus/net-nexus)" = '/opt/NetNexus'
                   test "$(getcap /opt/NetNexus/net-nexus)" = '/opt/NetNexus/net-nexus cap_net_bind_service=ep'
@@ -220,7 +221,7 @@ jobs:
 
                   sudo setcap -r /opt/NetNexus/net-nexus
                   test -z "$(getcap /opt/NetNexus/net-nexus)"
-                  sudo apt-get install --reinstall --yes "${debs[0]}"
+                  sudo apt-get install --reinstall --yes "$deb_path"
                   test "$(stat --format='%U:%G:%a' /opt/NetNexus/net-nexus)" = 'root:root:755'
                   test "$(patchelf --print-rpath /opt/NetNexus/net-nexus)" = '/opt/NetNexus'
                   test "$(getcap /opt/NetNexus/net-nexus)" = '/opt/NetNexus/net-nexus cap_net_bind_service=ep'
