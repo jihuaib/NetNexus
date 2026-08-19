@@ -112,6 +112,8 @@ test.describe('RPKI pages', () => {
     });
 
     test('keeps the config runtime state and client list in sync with process exit', async ({ page }) => {
+        const runtimeFailureReason = 'TCP-AO发送密钥已过期且没有可用的后继密钥，RPKI服务已安全停止';
+
         await page.goto('/#/rpki/rpki-config');
         await expect(page.getByTestId('rpki-config-page')).toBeVisible();
 
@@ -122,11 +124,102 @@ test.describe('RPKI pages', () => {
         await expect(page.getByTestId('rpki-client-table')).toContainText('192.0.2.10');
 
         harness.controller.state.rpki.running = false;
-        await page.evaluate(() => {
-            window.__featureE2eEmit?.('rpki:runtimeChanged', { running: false });
-        });
+        await page.evaluate(reason => {
+            window.__featureE2eEmit?.('rpki:runtimeChanged', {
+                running: false,
+                unexpected: true,
+                code: 'TCP_AO_KEYS_EXPIRED',
+                reason
+            });
+        }, runtimeFailureReason);
         await expect(page.getByTestId('rpki-stop-button')).toBeDisabled();
         await expect(page.getByTestId('rpki-client-table')).not.toContainText('192.0.2.10');
+
+        const runtimeFailureAlert = page.getByTestId('rpki-runtime-failure');
+        await expect(runtimeFailureAlert).toBeVisible();
+        await expect(runtimeFailureAlert).toContainText('RPKI服务已安全停止');
+        await expect(runtimeFailureAlert).toContainText(runtimeFailureReason);
+
+        harness.controller.state.rpki.running = true;
+        await page.evaluate(() => {
+            window.__featureE2eEmit?.('rpki:runtimeChanged', { running: true });
+        });
+        await expect(runtimeFailureAlert).toBeHidden();
+        await expect(page.getByTestId('rpki-stop-button')).toBeEnabled();
+    });
+
+    test('starts with a TCP-AO profile reference without sending key material', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            window.rpkiApi = new Proxy(window.rpkiApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpAoSettings') {
+                        return async () => ({
+                            status: 'success',
+                            data: {
+                                profiles: [
+                                    {
+                                        id: 'edge-cache',
+                                        name: '边缘 Cache',
+                                        peer: '198.51.100.10/32',
+                                        keys: [
+                                            {
+                                                id: 'edge-current',
+                                                algorithm: 'hmac(sha256)',
+                                                sndId: 7,
+                                                rcvId: 8,
+                                                macLength: 16,
+                                                hasSavedKey: true,
+                                                acceptStart: null,
+                                                sendStart: null,
+                                                sendEnd: null,
+                                                acceptEnd: null
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        });
+                    }
+                    if (property === 'saveTcpAoSettings') {
+                        return async settings => ({ status: 'success', data: settings });
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+        });
+
+        await page
+            .locator('.main-menu')
+            .getByRole('menuitem', { name: /^RPKI(?:服务器)?$/u })
+            .click();
+        await expect(page).toHaveURL(/#\/rpki\/rpki-config$/u);
+        await expect(page.getByTestId('rpki-config-page')).toBeVisible();
+        await page.getByRole('radio', { name: 'TCP-AO', exact: true }).check({ force: true });
+        await expect(page.getByTestId('rpki-tcp-ao-profile-select')).toBeVisible();
+
+        await page.getByTestId('rpki-open-tcp-ao-settings').click();
+        const settingsDialog = page.getByRole('dialog', { name: '设置' });
+        await expect(settingsDialog).toBeVisible();
+        await expect(settingsDialog.getByRole('tab', { name: 'TCP-AO', exact: true })).toHaveAttribute(
+            'aria-selected',
+            'true'
+        );
+        await settingsDialog.getByRole('button', { name: '关闭' }).click();
+        await expect(settingsDialog).toBeHidden();
+
+        await page.getByTestId('rpki-tcp-ao-profile-select').click();
+        await page.getByRole('option').filter({ hasText: '边缘 Cache' }).click();
+        await expect(page.getByText('当前 Send ID 7 / Receive ID 8', { exact: false })).toBeVisible();
+        await page.getByTestId('rpki-start-button').click();
+
+        await expect(page.getByTestId('rpki-stop-button')).toBeEnabled();
+        const savedConfig = harness.controller.state.rpki.config;
+        expect(savedConfig.authType).toBe('tcp-ao');
+        expect(savedConfig.tcpAoProfileId).toBe('edge-cache');
+        expect(savedConfig).not.toHaveProperty('tcpAo');
+        expect(JSON.stringify(savedConfig)).not.toContain('edge-current');
+        expect(JSON.stringify(savedConfig)).not.toContain('key');
     });
 });
 

@@ -1,6 +1,9 @@
 const net = require('net');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('path');
-const util = require('util');
+const ipaddr = require('ipaddr.js');
 const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
 const RequestWorkerClient = require('../core/requestWorkerClient');
@@ -8,13 +11,32 @@ const RpkiSession = require('./rpkiSession');
 const RpkiRouterKey = require('./rpkiRouterKey');
 const RPKI_IMPORT_OP = require('./rpkiImportConst');
 const RpkiConst = require('../../const/rpkiConst');
+const TcpAoProxy = require('./tcpAoProxy');
+const {
+    TCP_AO_FORWARD_CAPABILITY_BYTES,
+    TCP_AO_FORWARD_HEADER_BYTES,
+    TCP_AO_FORWARD_HEADER_TIMEOUT_MS,
+    TCP_AO_UNIX_PATH_MAX_BYTES,
+    decodeTcpAoForwardHeader
+} = require('./tcpAoForwardProtocol');
+const { RPKI_AUTH_TYPES, redactTcpAoConfig } = require('../../utils/tcpAoConfig');
 
 const DEFAULT_SNAPSHOT_SHUTDOWN_TIMEOUT_MS = 2000;
+const MAX_PENDING_TCP_AO_HEADERS = 256;
 
 class RpkiWorker {
     constructor() {
         this.server = null;
         this.ipv6Server = null;
+        this.tcpAoProxy = null;
+        this.tcpAoSocketDirectory = null;
+        this.tcpAoDirectoryIdentity = null;
+        this.tcpAoSocketPath = null;
+        this.tcpAoSocketIdentity = null;
+        this.tcpAoForwardCapability = null;
+        this.tcpAoForwardHeaderTimeoutMs = TCP_AO_FORWARD_HEADER_TIMEOUT_MS;
+        this.tcpAoExitCleanup = null;
+        this.pendingTcpAoSockets = new Set();
         this.socket = null;
 
         this.rpkiConfigData = null; // rpki配置数据
@@ -259,13 +281,19 @@ class RpkiWorker {
         }
     }
 
-    createRpkiSession(socket, clientAddress, clientPort) {
+    createRpkiSession(
+        socket,
+        clientAddress,
+        clientPort,
+        localAddress = socket.localAddress,
+        localPort = socket.localPort
+    ) {
         if (this.storageStopping) {
             socket?.destroy?.();
             return null;
         }
 
-        const sessionKey = RpkiSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
+        const sessionKey = RpkiSession.makeKey(localAddress, localPort, clientAddress, clientPort);
         const existingSession = this.rpkiSessionMap.get(sessionKey);
         if (existingSession) {
             existingSession.closeSession();
@@ -276,8 +304,8 @@ class RpkiWorker {
         this.rpkiSessionMap.set(sessionKey, rpkiSession);
 
         rpkiSession.socket = socket;
-        rpkiSession.localIp = socket.localAddress;
-        rpkiSession.localPort = socket.localPort;
+        rpkiSession.localIp = localAddress;
+        rpkiSession.localPort = localPort;
         rpkiSession.remoteIp = clientAddress;
         rpkiSession.remotePort = clientPort;
         rpkiSession.aspaFormat = this.rpkiConfigData?.aspaFormat || RpkiConst.RPKI_ASPA_FORMAT.LATEST;
@@ -350,6 +378,231 @@ class RpkiWorker {
         });
     }
 
+    ensurePendingTcpAoSockets() {
+        if (!this.pendingTcpAoSockets) this.pendingTcpAoSockets = new Set();
+        return this.pendingTcpAoSockets;
+    }
+
+    destroyPendingTcpAoSockets() {
+        const pending = this.ensurePendingTcpAoSockets();
+        for (const socket of pending) socket.destroy?.();
+        pending.clear();
+    }
+
+    isOwnedTcpAoDirectory(directoryPath, expectedIdentity = null) {
+        try {
+            const stats = fs.lstatSync(directoryPath);
+            const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+            return (
+                stats.isDirectory() &&
+                !stats.isSymbolicLink() &&
+                (stats.mode & 0o777) === 0o700 &&
+                (uid === null || stats.uid === uid) &&
+                (!expectedIdentity || (stats.dev === expectedIdentity.dev && stats.ino === expectedIdentity.ino))
+            );
+        } catch (_error) {
+            return false;
+        }
+    }
+
+    createTcpAoForwardEndpoint() {
+        this.cleanupTcpAoForwardEndpoint();
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nn-rpki-ao-'));
+        this.tcpAoSocketDirectory = directory;
+        const exitCleanup = () => this.cleanupTcpAoForwardEndpoint();
+        this.tcpAoExitCleanup = exitCleanup;
+        process.once('exit', exitCleanup);
+        try {
+            fs.chmodSync(directory, 0o700);
+            const directoryStats = fs.lstatSync(directory);
+            const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+            if (
+                !directoryStats.isDirectory() ||
+                directoryStats.isSymbolicLink() ||
+                (directoryStats.mode & 0o777) !== 0o700 ||
+                (uid !== null && directoryStats.uid !== uid)
+            ) {
+                throw new Error('TCP-AO内部Unix socket目录权限无效');
+            }
+            this.tcpAoDirectoryIdentity = { dev: directoryStats.dev, ino: directoryStats.ino };
+            const socketPath = path.join(directory, 'r.sock');
+            if (Buffer.byteLength(socketPath, 'utf8') > TCP_AO_UNIX_PATH_MAX_BYTES) {
+                throw new Error(`TCP-AO内部Unix socket路径超过${TCP_AO_UNIX_PATH_MAX_BYTES}字节`);
+            }
+            this.tcpAoSocketPath = socketPath;
+            this.tcpAoForwardCapability = crypto.randomBytes(TCP_AO_FORWARD_CAPABILITY_BYTES);
+            return { socketPath, capability: this.tcpAoForwardCapability };
+        } catch (error) {
+            this.cleanupTcpAoForwardEndpoint();
+            throw error;
+        }
+    }
+
+    secureTcpAoSocketFile() {
+        const socketPath = this.tcpAoSocketPath;
+        if (!socketPath || !this.isOwnedTcpAoDirectory(this.tcpAoSocketDirectory, this.tcpAoDirectoryIdentity)) {
+            throw new Error('TCP-AO内部Unix socket目录无效');
+        }
+        const initialStats = fs.lstatSync(socketPath);
+        const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+        if (!initialStats.isSocket() || initialStats.isSymbolicLink() || (uid !== null && initialStats.uid !== uid)) {
+            throw new Error('TCP-AO内部Unix socket文件无效');
+        }
+        this.tcpAoSocketIdentity = { dev: initialStats.dev, ino: initialStats.ino };
+        fs.chmodSync(socketPath, 0o600);
+        const stats = fs.lstatSync(socketPath);
+        if (
+            !stats.isSocket() ||
+            stats.isSymbolicLink() ||
+            (stats.mode & 0o777) !== 0o600 ||
+            (uid !== null && stats.uid !== uid) ||
+            stats.dev !== this.tcpAoSocketIdentity.dev ||
+            stats.ino !== this.tcpAoSocketIdentity.ino
+        ) {
+            throw new Error('TCP-AO内部Unix socket文件权限无效');
+        }
+    }
+
+    cleanupTcpAoForwardEndpoint() {
+        this.destroyPendingTcpAoSockets();
+        const exitCleanup = this.tcpAoExitCleanup;
+        this.tcpAoExitCleanup = null;
+        if (typeof exitCleanup === 'function') process.removeListener('exit', exitCleanup);
+        if (Buffer.isBuffer(this.tcpAoForwardCapability)) this.tcpAoForwardCapability.fill(0);
+        this.tcpAoForwardCapability = null;
+
+        const directory = this.tcpAoSocketDirectory;
+        const directoryIdentity = this.tcpAoDirectoryIdentity;
+        const socketPath = this.tcpAoSocketPath;
+        const identity = this.tcpAoSocketIdentity;
+        this.tcpAoSocketDirectory = null;
+        this.tcpAoDirectoryIdentity = null;
+        this.tcpAoSocketPath = null;
+        this.tcpAoSocketIdentity = null;
+        if (!directory || !this.isOwnedTcpAoDirectory(directory, directoryIdentity)) return;
+
+        if (socketPath) {
+            try {
+                const stats = fs.lstatSync(socketPath);
+                const sameSocket =
+                    stats.isSocket() &&
+                    !stats.isSymbolicLink() &&
+                    (!identity || (stats.dev === identity.dev && stats.ino === identity.ino));
+                if (sameSocket) fs.unlinkSync(socketPath);
+            } catch (error) {
+                if (error.code !== 'ENOENT') logger.debug(`清理TCP-AO Unix socket失败: ${error.message}`);
+            }
+        }
+        try {
+            fs.rmdirSync(directory);
+        } catch (error) {
+            if (error.code !== 'ENOENT') logger.debug(`清理TCP-AO Unix socket目录失败: ${error.message}`);
+        }
+    }
+
+    validateTcpAoPeerMetadata(metadata) {
+        if (metadata.localPort !== Number(this.rpkiConfigData?.port)) {
+            throw new Error('TCP-AO转发头本地端口与服务配置不匹配');
+        }
+        const peer = this.rpkiConfigData?.tcpAo?.peer;
+        let network;
+        let prefixLength;
+        let remote;
+        try {
+            [network, prefixLength] = ipaddr.parseCIDR(peer);
+            remote = ipaddr.parse(metadata.remoteAddress);
+        } catch (_error) {
+            throw new Error('TCP-AO转发头远端地址无效');
+        }
+        if (network.kind() !== remote.kind() || !remote.match(network, prefixLength)) {
+            throw new Error('TCP-AO转发头远端地址不属于已认证profile');
+        }
+        return metadata;
+    }
+
+    acceptTcpAoInternalSocket(socket) {
+        const pending = this.ensurePendingTcpAoSockets();
+        const capability = this.tcpAoForwardCapability;
+        if (
+            this.storageStopping ||
+            !Buffer.isBuffer(capability) ||
+            capability.length !== TCP_AO_FORWARD_CAPABILITY_BYTES ||
+            pending.size >= MAX_PENDING_TCP_AO_HEADERS
+        ) {
+            socket.destroy();
+            return;
+        }
+
+        const header = Buffer.alloc(TCP_AO_FORWARD_HEADER_BYTES);
+        let received = 0;
+        let finished = false;
+        pending.add(socket);
+        const configuredTimeout = Number(this.tcpAoForwardHeaderTimeoutMs);
+        const headerTimeoutMs =
+            Number.isFinite(configuredTimeout) && configuredTimeout > 0
+                ? Math.min(configuredTimeout, TCP_AO_FORWARD_HEADER_TIMEOUT_MS)
+                : TCP_AO_FORWARD_HEADER_TIMEOUT_MS;
+        const timer = setTimeout(() => rejectHeader(), headerTimeoutMs);
+        timer.unref?.();
+
+        const cleanup = () => {
+            clearTimeout(timer);
+            pending.delete(socket);
+            socket.removeListener('data', onData);
+            socket.removeListener('end', onEnd);
+            socket.removeListener('close', onClose);
+            socket.removeListener('error', onError);
+            header.fill(0);
+        };
+        const rejectHeader = () => {
+            if (finished) return;
+            finished = true;
+            cleanup();
+            socket.destroy();
+        };
+        const onEnd = () => rejectHeader();
+        const onClose = () => rejectHeader();
+        const onError = () => rejectHeader();
+        const onData = chunk => {
+            if (finished || !Buffer.isBuffer(chunk)) return;
+            const copyLength = Math.min(TCP_AO_FORWARD_HEADER_BYTES - received, chunk.length);
+            chunk.copy(header, received, 0, copyLength);
+            received += copyLength;
+            if (received < TCP_AO_FORWARD_HEADER_BYTES) return;
+
+            socket.pause();
+            let metadata;
+            try {
+                metadata = this.validateTcpAoPeerMetadata(
+                    decodeTcpAoForwardHeader(header, this.tcpAoForwardCapability)
+                );
+                if (this.storageStopping) throw new Error('RPKI正在停止');
+            } catch (_error) {
+                rejectHeader();
+                return;
+            }
+            const initialData = chunk.subarray(copyLength);
+            finished = true;
+            cleanup();
+            try {
+                const session = this.attachClientSocket(socket, 'tcp-ao', metadata, initialData);
+                if (!session) {
+                    socket.destroy();
+                    return;
+                }
+                socket.resume();
+            } catch (error) {
+                logger.warn(`TCP-AO内部连接初始化失败: ${error.message}`);
+                socket.destroy();
+            }
+        };
+        socket.on('data', onData);
+        socket.once('end', onEnd);
+        socket.once('close', onClose);
+        socket.once('error', onError);
+        socket.resume();
+    }
+
     async waitForActiveDataSnapshots(timeoutMs = DEFAULT_SNAPSHOT_SHUTDOWN_TIMEOUT_MS) {
         const deadline = Date.now() + Math.max(1, Number(timeoutMs) || DEFAULT_SNAPSHOT_SHUTDOWN_TIMEOUT_MS);
         while ((Number(this.activeDataSnapshots) || 0) > 0 && Date.now() < deadline) {
@@ -363,176 +616,177 @@ class RpkiWorker {
         }
     }
 
+    attachClientSocket(socket, transportLabel, endpoint = {}, initialData = null) {
+        const clientAddress = endpoint.remoteAddress ?? socket.remoteAddress;
+        const clientPort = endpoint.remotePort ?? socket.remotePort;
+        const localAddress = endpoint.localAddress ?? socket.localAddress;
+        const localPort = endpoint.localPort ?? socket.localPort;
+        const sessionKey = RpkiSession.makeKey(localAddress, localPort, clientAddress, clientPort);
+        logger.info(`${transportLabel} Client connected from ${clientAddress}:${clientPort}`);
+        logger.info(`${transportLabel} localAddress: ${localAddress}:${localPort}`);
+
+        const rpkiSession = this.createRpkiSession(socket, clientAddress, clientPort, localAddress, localPort);
+        if (!rpkiSession) return null;
+
+        socket.on('data', data => {
+            if (this.rpkiSessionMap.get(sessionKey) !== rpkiSession) {
+                logger.error(`${transportLabel} Client ${clientAddress}:${clientPort} not found in rpkiSessionMap`);
+                socket.destroy();
+                return;
+            }
+            rpkiSession.recvMsg(data);
+        });
+
+        const closeSession = (eventName, error = null) => {
+            if (rpkiSession.closed) {
+                logger.debug(`${transportLabel} Client ${clientAddress}:${clientPort} already removed on ${eventName}`);
+                return;
+            }
+            rpkiSession.closeSession();
+            if (error) {
+                logger.error(`${transportLabel} TCP Error from ${clientAddress}:${clientPort}: ${error.message}`);
+            } else {
+                logger.info(`${transportLabel} Client ${clientAddress}:${clientPort} ${eventName}`);
+            }
+        };
+        socket.on('end', () => closeSession('end'));
+        socket.on('close', () => closeSession('close'));
+        socket.on('error', error => closeSession('error', error));
+        if (Buffer.isBuffer(initialData) && initialData.length > 0) rpkiSession.recvMsg(initialData);
+        return rpkiSession;
+    }
+
+    createTcpServer(transportLabel) {
+        return net.createServer(socket => this.attachClientSocket(socket, transportLabel));
+    }
+
+    listenTcpServer(server, port, host, options = {}) {
+        return new Promise((resolve, reject) => {
+            const onError = error => {
+                server.removeListener('listening', onListening);
+                reject(error);
+            };
+            const onListening = () => {
+                server.removeListener('error', onError);
+                resolve(server.address());
+            };
+            server.once('error', onError);
+            server.once('listening', onListening);
+            server.listen({ port, host, ...options });
+        });
+    }
+
+    listenUnixServer(server, socketPath) {
+        return new Promise((resolve, reject) => {
+            const onError = error => {
+                server.removeListener('listening', onListening);
+                reject(error);
+            };
+            const onListening = () => {
+                server.removeListener('error', onError);
+                resolve(server.address());
+            };
+            server.once('error', onError);
+            server.once('listening', onListening);
+            server.listen(socketPath);
+        });
+    }
+
+    createTcpAoProxy() {
+        return new TcpAoProxy();
+    }
+
+    scheduleFatalExit() {
+        setImmediate(() => process.exit(1));
+    }
+
+    handleTcpAoUnexpectedExit(error) {
+        if (this.storageStopping) return;
+        logger.error(`TCP-AO helper异常退出，RPKI协议进程将停止: ${error.message}`);
+        const failure = error?.runtimeFailure || {
+            code: 'TCP_AO_HELPER_EXIT',
+            reason: 'TCP-AO认证进程异常退出，RPKI服务已安全停止'
+        };
+        try {
+            this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.RUNTIME_FAILURE, failure);
+        } catch (eventError) {
+            logger.warn(`TCP-AO运行时故障事件发送失败: ${eventError.message}`);
+        } finally {
+            this.scheduleFatalExit();
+        }
+    }
+
+    async startPlainTcpServers() {
+        this.server = this.createTcpServer('ipv4');
+        await this.listenTcpServer(this.server, this.rpkiConfigData.port, '0.0.0.0');
+        logger.info(`TCP Server listening on port ${this.rpkiConfigData.port} at 0.0.0.0`);
+
+        this.ipv6Server = this.createTcpServer('ipv6');
+        await this.listenTcpServer(this.ipv6Server, this.rpkiConfigData.port, '::', { ipv6Only: true });
+        logger.info(`TCP Server listening on port ${this.rpkiConfigData.port} at ::`);
+    }
+
+    async startTcpAoServer() {
+        if (!this.rpkiConfigData?.tcpAo) throw new Error('缺少TCP-AO运行配置');
+        const { socketPath, capability } = this.createTcpAoForwardEndpoint();
+        this.server = net.createServer({ pauseOnConnect: true }, socket => this.acceptTcpAoInternalSocket(socket));
+        this.server.maxConnections = MAX_PENDING_TCP_AO_HEADERS;
+        await this.listenUnixServer(this.server, socketPath);
+        this.secureTcpAoSocketFile();
+
+        const proxy = this.createTcpAoProxy();
+        this.tcpAoProxy = proxy;
+        proxy.once('unexpectedExit', error => this.handleTcpAoUnexpectedExit(error));
+        const runtimeProfile = this.rpkiConfigData.tcpAo;
+        let startup;
+        try {
+            // TcpAoProxy serializes the helper configuration synchronously. Remove
+            // every worker-owned plaintext key reference immediately afterwards;
+            // the helper owns the rotation schedule from this point onward.
+            startup = proxy.start({
+                listenPort: this.rpkiConfigData.port,
+                forwardSocket: socketPath,
+                forwardCapability: capability,
+                profiles: [runtimeProfile]
+            });
+        } finally {
+            this.rpkiConfigData.tcpAo = redactTcpAoConfig(runtimeProfile);
+            for (const key of Array.isArray(runtimeProfile?.keys) ? runtimeProfile.keys : []) {
+                if (Object.prototype.hasOwnProperty.call(key, 'key')) key.key = '<redacted>';
+            }
+        }
+        const status = await startup;
+        logger.info(`TCP-AO helper ready on port ${status.listenPort}; families=${(status.families || []).join(',')}`);
+    }
+
     async startTcpServer(messageId) {
         try {
-            this.server = net.createServer(socket => {
-                const clientAddress = socket.remoteAddress;
-                const clientPort = socket.remotePort;
+            const tcpAoEnabled = this.rpkiConfigData?.authType === RPKI_AUTH_TYPES.TCP_AO;
+            if (tcpAoEnabled) await this.startTcpAoServer();
+            else await this.startPlainTcpServers();
 
-                logger.info(`ipv4 Client connected from ${clientAddress}:${clientPort}`);
-                logger.info(`ipv4 localAddress: ${socket.localAddress}:${socket.localPort}`);
-
-                // 当接收到数据时处理数据
-                socket.on('data', data => {
-                    const rpkiSession = this.rpkiSessionMap.get(
-                        RpkiSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort)
-                    );
-                    if (!rpkiSession) {
-                        logger.error(`ipv4 Client ${clientAddress}:${clientPort} not found in rpkiSessionMap`);
-                        socket.destroy();
-                        return;
-                    }
-                    rpkiSession.recvMsg(data);
-                });
-
-                socket.on('end', () => {
-                    const sessionKey = RpkiSession.makeKey(
-                        socket.localAddress,
-                        socket.localPort,
-                        clientAddress,
-                        clientPort
-                    );
-                    const rpkiSession = this.rpkiSessionMap.get(sessionKey);
-                    if (!rpkiSession) {
-                        logger.debug(`ipv4 Client ${clientAddress}:${clientPort} already removed on end`);
-                        return;
-                    }
-                    rpkiSession.closeSession();
-                    this.rpkiSessionMap.delete(sessionKey);
-                    logger.info(`ipv4 Client ${clientAddress}:${clientPort} end`);
-                });
-
-                socket.on('close', () => {
-                    const sessionKey = RpkiSession.makeKey(
-                        socket.localAddress,
-                        socket.localPort,
-                        clientAddress,
-                        clientPort
-                    );
-                    const rpkiSession = this.rpkiSessionMap.get(sessionKey);
-                    if (!rpkiSession) {
-                        logger.debug(`ipv4 Client ${clientAddress}:${clientPort} already removed on close`);
-                        return;
-                    }
-                    rpkiSession.closeSession();
-                    this.rpkiSessionMap.delete(sessionKey);
-                    logger.info(`ipv4 Client ${clientAddress}:${clientPort} close`);
-                });
-
-                socket.on('error', err => {
-                    const sessionKey = RpkiSession.makeKey(
-                        socket.localAddress,
-                        socket.localPort,
-                        clientAddress,
-                        clientPort
-                    );
-                    const rpkiSession = this.rpkiSessionMap.get(sessionKey);
-                    if (!rpkiSession) {
-                        logger.debug(`ipv4 Client ${clientAddress}:${clientPort} already removed on error`);
-                        return;
-                    }
-                    rpkiSession.closeSession();
-                    this.rpkiSessionMap.delete(sessionKey);
-                    logger.error(`ipv4 TCP Error from ${clientAddress}:${clientPort}: ${err.message}`);
-                });
-
-                // 创建RPKI会话
-                this.createRpkiSession(socket, clientAddress, clientPort);
-            });
-
-            this.ipv6Server = net.createServer(socket => {
-                const clientAddress = socket.remoteAddress;
-                const clientPort = socket.remotePort;
-
-                logger.info(`ipv6 Client connected from ${clientAddress}:${clientPort}`);
-                logger.info(`ipv6 localAddress: ${socket.localAddress}:${socket.localPort}`);
-
-                // 当接收到数据时处理数据
-                socket.on('data', data => {
-                    const rpkiSession = this.rpkiSessionMap.get(
-                        RpkiSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort)
-                    );
-                    if (!rpkiSession) {
-                        logger.error(`ipv6 Client ${clientAddress}:${clientPort} not found in rpkiSessionMap`);
-                        socket.destroy();
-                        return;
-                    }
-                    rpkiSession.recvMsg(data);
-                });
-
-                socket.on('end', () => {
-                    const sessionKey = RpkiSession.makeKey(
-                        socket.localAddress,
-                        socket.localPort,
-                        clientAddress,
-                        clientPort
-                    );
-                    const rpkiSession = this.rpkiSessionMap.get(sessionKey);
-                    if (!rpkiSession) {
-                        logger.debug(`ipv6 Client ${clientAddress}:${clientPort} already removed on end`);
-                        return;
-                    }
-                    rpkiSession.closeSession();
-                    this.rpkiSessionMap.delete(sessionKey);
-                    logger.info(`ipv6 Client ${clientAddress}:${clientPort} end`);
-                });
-
-                socket.on('close', () => {
-                    const sessionKey = RpkiSession.makeKey(
-                        socket.localAddress,
-                        socket.localPort,
-                        clientAddress,
-                        clientPort
-                    );
-                    const rpkiSession = this.rpkiSessionMap.get(sessionKey);
-                    if (!rpkiSession) {
-                        logger.debug(`ipv6 Client ${clientAddress}:${clientPort} already removed on close`);
-                        return;
-                    }
-                    rpkiSession.closeSession();
-                    this.rpkiSessionMap.delete(sessionKey);
-                    logger.info(`ipv6 Client ${clientAddress}:${clientPort} close`);
-                });
-
-                socket.on('error', err => {
-                    const sessionKey = RpkiSession.makeKey(
-                        socket.localAddress,
-                        socket.localPort,
-                        clientAddress,
-                        clientPort
-                    );
-                    const rpkiSession = this.rpkiSessionMap.get(sessionKey);
-                    if (!rpkiSession) {
-                        logger.debug(`ipv6 Client ${clientAddress}:${clientPort} already removed on error`);
-                        return;
-                    }
-                    rpkiSession.closeSession();
-                    this.rpkiSessionMap.delete(sessionKey);
-                    logger.error(`ipv6 TCP Error from ${clientAddress}:${clientPort}: ${err.message}`);
-                });
-
-                // 创建RPKI会话
-                this.createRpkiSession(socket, clientAddress, clientPort);
-            });
-
-            // 启动ipv4服务器并监听端口
-            const listenPormise = util.promisify(this.server.listen).bind(this.server);
-            await listenPormise(this.rpkiConfigData.port, '0.0.0.0');
-            logger.info(`TCP Server listening on port ${this.rpkiConfigData.port} at 0.0.0.0`);
-
-            // 启动ipv6服务器并监听端口
-            const ipv6ListenPormise = util.promisify(this.ipv6Server.listen).bind(this.ipv6Server);
-            await ipv6ListenPormise(this.rpkiConfigData.port, '::');
-            logger.info(`TCP Server listening on port ${this.rpkiConfigData.port} at ::`);
-
-            logger.info(`rpki协议启动成功`);
-            this.messageHandler.sendSuccessResponse(messageId, null, 'rpki协议启动成功');
+            const suffix = tcpAoEnabled ? '（TCP-AO认证）' : '';
+            logger.info(`rpki协议启动成功${suffix}`);
+            this.messageHandler.sendSuccessResponse(messageId, null, `rpki协议启动成功${suffix}`);
         } catch (err) {
             logger.error(`Error starting TCP server: ${err.message}`);
+            const proxy = this.tcpAoProxy;
+            this.tcpAoProxy = null;
+            const ipv4Server = this.server;
+            const ipv6Server = this.ipv6Server;
+            this.server = null;
+            this.ipv6Server = null;
+            this.destroyPendingTcpAoSockets();
+            await Promise.allSettled([
+                proxy?.stop?.(),
+                this.closeTcpServer(ipv4Server, 'RPKI TCP server'),
+                this.closeTcpServer(ipv6Server, 'RPKI IPv6 TCP server')
+            ]);
+            this.cleanupTcpAoForwardEndpoint();
             this.closeRpkiStore();
             this.rpkiConfigData = null;
             this.rpkiRouterKeyMap.clear();
-            this.messageHandler.sendErrorResponse(messageId, 'rpki协议启动失败');
+            this.messageHandler.sendErrorResponse(messageId, `rpki协议启动失败: ${err.message}`);
         }
     }
 
@@ -581,10 +835,14 @@ class RpkiWorker {
         let stopError = null;
         const ipv4Server = this.server;
         const ipv6Server = this.ipv6Server;
+        const tcpAoProxy = this.tcpAoProxy;
         this.server = null;
         this.ipv6Server = null;
+        this.tcpAoProxy = null;
+        this.destroyPendingTcpAoSockets();
 
         const serverClosePromises = [
+            tcpAoProxy?.stop?.() || Promise.resolve(),
             this.closeTcpServer(ipv4Server, 'RPKI IPv4 TCP server'),
             this.closeTcpServer(ipv6Server, 'RPKI IPv6 TCP server')
         ];
@@ -619,6 +877,7 @@ class RpkiWorker {
             stopError = error;
             logger.error(`停止RPKI协议失败: ${error.message}`);
         } finally {
+            this.cleanupTcpAoForwardEndpoint();
             this.rpkiConfigData = null;
             this.rpkiSessionMap.clear();
             this.closingRpkiSessions?.clear();

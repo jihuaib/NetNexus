@@ -2,6 +2,7 @@
 const util = require('util');
 const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
+const TcpAoForwardingServer = require('../core/tcpAoForwardingServer');
 const BmpSession = require('./bmpSession');
 const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgpUtils');
 const BmpBgpSession = require('./bmpBgpSession');
@@ -21,11 +22,16 @@ const {
     parseRouteLensQuery
 } = require('../../utils/bmpRouteLens');
 const BmpPersistenceClient = require('./bmpPersistenceClient');
+const { BMP_AUTH_TYPES, redactTcpAoConfig } = require('../../utils/tcpAoConfig');
 
 class BmpWorker {
     constructor() {
         this.server = null;
         this.ipv6Server = null;
+        this.tcpAoForwardingServer = null;
+        this.tcpAoRuntimeFailure = null;
+        this.bmpStopping = false;
+        this.bmpShutdownPromise = null;
         this.socket = null;
 
         this.bmpConfigData = null; // bmp配置数据
@@ -120,7 +126,13 @@ class BmpWorker {
         );
     }
 
-    createBmpSession(socket, clientAddress, clientPort) {
+    createBmpSession(
+        socket,
+        clientAddress,
+        clientPort,
+        localAddress = socket.localAddress,
+        localPort = socket.localPort
+    ) {
         if (this.clientDeleteRemoteIpGates.has(String(clientAddress || ''))) {
             socket.destroy();
             return null;
@@ -129,15 +141,15 @@ class BmpWorker {
             socket.destroy();
             return null;
         }
-        const sessionKey = BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
+        const sessionKey = BmpSession.makeKey(localAddress, localPort, clientAddress, clientPort);
         this.removeBmpSessionByKey(sessionKey);
 
         const bmpSession = new BmpSession(this.messageHandler, this);
         this.bmpSessionMap.set(sessionKey, bmpSession);
 
         bmpSession.socket = socket;
-        bmpSession.localIp = socket.localAddress;
-        bmpSession.localPort = socket.localPort;
+        bmpSession.localIp = localAddress;
+        bmpSession.localPort = localPort;
         bmpSession.remoteIp = clientAddress;
         bmpSession.remotePort = clientPort;
 
@@ -148,9 +160,9 @@ class BmpWorker {
         return bmpSession;
     }
 
-    removeBmpSessionByKey(sessionKey) {
+    removeBmpSessionByKey(sessionKey, expectedSession = null) {
         const bmpSession = this.bmpSessionMap.get(sessionKey);
-        if (!bmpSession) {
+        if (!bmpSession || (expectedSession && bmpSession !== expectedSession)) {
             return null;
         }
 
@@ -295,25 +307,8 @@ class BmpWorker {
         logger.error(`BMP persistence failed closed: ${this.persistenceFailure.message}`);
         this.clearPersistenceSweepTimer();
         this.pauseBmpSockets();
-        const servers = [this.server, this.ipv6Server];
-        this.server = null;
-        this.ipv6Server = null;
-        servers.forEach(server => {
-            if (server) {
-                try {
-                    server.close(closeError => {
-                        if (closeError && closeError.code !== 'ERR_SERVER_NOT_RUNNING') {
-                            logger.error(
-                                `Failed to close BMP listener after persistence failure: ${closeError.message}`
-                            );
-                        }
-                    });
-                } catch (closeError) {
-                    if (closeError.code !== 'ERR_SERVER_NOT_RUNNING') {
-                        logger.error(`Failed to close BMP listener after persistence failure: ${closeError.message}`);
-                    }
-                }
-            }
+        this.closeTcpServers().catch(closeError => {
+            logger.error(`Failed to close BMP listener after persistence failure: ${closeError.message}`);
         });
         this.bmpSessionMap.forEach(session => {
             if (session.socket && !session.socket.destroyed) {
@@ -786,109 +781,151 @@ class BmpWorker {
         });
     }
 
+    attachClientSocket(socket, transportLabel, endpoint = {}, initialData = null) {
+        const clientAddress = endpoint.remoteAddress ?? socket.remoteAddress;
+        const clientPort = endpoint.remotePort ?? socket.remotePort;
+        const localAddress = endpoint.localAddress ?? socket.localAddress;
+        const localPort = endpoint.localPort ?? socket.localPort;
+        const sessionKey = BmpSession.makeKey(localAddress, localPort, clientAddress, clientPort);
+
+        logger.info(`${transportLabel} Client connected from ${clientAddress}:${clientPort}`);
+        logger.info(`${transportLabel} localAddress: ${localAddress}:${localPort}`);
+        const bmpSession = this.createBmpSession(socket, clientAddress, clientPort, localAddress, localPort);
+        if (!bmpSession) return null;
+        bmpSession.transport = transportLabel;
+        bmpSession.authentication = transportLabel === 'tcp-ao' ? 'tcp-ao' : 'none';
+        bmpSession.tcpAoProfileId = endpoint.tcpAoProfileId || null;
+        bmpSession.tcpAoProfileName = endpoint.tcpAoProfileName || null;
+        bmpSession.tcpAoPeer = endpoint.tcpAoPeer || null;
+
+        socket.on('data', data => {
+            if (this.bmpSessionMap.get(sessionKey) !== bmpSession) {
+                logger.error(`${transportLabel} Client ${clientAddress}:${clientPort} not found in bmpSessionMap`);
+                socket.destroy();
+                return;
+            }
+            bmpSession.recvMsg(data);
+        });
+
+        const closeSession = (eventName, error = null) => {
+            if (error) {
+                logger.error(`${transportLabel} TCP Error from ${clientAddress}:${clientPort}: ${error.message}`);
+            } else {
+                logger.info(`${transportLabel} Client ${clientAddress}:${clientPort} ${eventName}`);
+            }
+            this.removeBmpSessionByKey(sessionKey, bmpSession);
+        };
+        socket.on('end', () => closeSession('end'));
+        socket.on('close', () => closeSession('close'));
+        socket.on('error', error => closeSession('error', error));
+        if (Buffer.isBuffer(initialData) && initialData.length > 0) bmpSession.recvMsg(initialData);
+        return bmpSession;
+    }
+
+    async startPlainTcpServers() {
+        this.server = net.createServer(socket => this.attachClientSocket(socket, 'ipv4'));
+        this.ipv6Server = net.createServer(socket => this.attachClientSocket(socket, 'ipv6'));
+
+        const listenPromise = util.promisify(this.server.listen).bind(this.server);
+        await listenPromise({ port: this.bmpConfigData.port, host: '0.0.0.0' });
+        logger.info(`TCP Server listening on port ${this.bmpConfigData.port} at 0.0.0.0`);
+
+        const ipv6ListenPromise = util.promisify(this.ipv6Server.listen).bind(this.ipv6Server);
+        await ipv6ListenPromise({ port: this.bmpConfigData.port, host: '::', ipv6Only: true });
+        logger.info(`TCP Server listening on port ${this.bmpConfigData.port} at ::`);
+    }
+
+    createTcpAoForwardingServer() {
+        return new TcpAoForwardingServer({ serviceName: 'BMP', directoryPrefix: 'nn-bmp-ao-' });
+    }
+
+    scheduleFatalExit() {
+        setImmediate(() => process.exit(1));
+    }
+
+    handleTcpAoUnexpectedExit(error) {
+        if (this.bmpStopping || this.tcpAoRuntimeFailure) return;
+        const failure = error?.runtimeFailure || {
+            code: 'TCP_AO_HELPER_EXIT',
+            reason: 'TCP-AO认证进程异常退出，BMP服务已安全停止'
+        };
+        this.tcpAoRuntimeFailure = failure;
+        logger.error(`TCP-AO helper异常退出，BMP协议进程将停止: ${error.message}`);
+        try {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, failure);
+        } catch (eventError) {
+            logger.warn(`TCP-AO运行时故障事件发送失败: ${eventError.message}`);
+        }
+        this.shutdownBmpRuntime()
+            .catch(shutdownError => logger.error(`TCP-AO故障后停止BMP失败: ${shutdownError.message}`))
+            .finally(() => this.scheduleFatalExit());
+    }
+
+    async startTcpAoServer() {
+        const runtimeProfiles = this.bmpConfigData?.tcpAoProfiles;
+        if (!Array.isArray(runtimeProfiles) || runtimeProfiles.length === 0) {
+            throw new Error('缺少BMP TCP-AO运行配置');
+        }
+        const forwardingServer = this.createTcpAoForwardingServer();
+        this.tcpAoForwardingServer = forwardingServer;
+        let profilesRedacted = false;
+        const redactRuntimeProfiles = () => {
+            if (profilesRedacted) return;
+            profilesRedacted = true;
+            this.bmpConfigData.tcpAoProfiles = runtimeProfiles.map(profile => redactTcpAoConfig(profile));
+            for (const profile of runtimeProfiles) {
+                for (const key of Array.isArray(profile?.keys) ? profile.keys : []) {
+                    if (Object.prototype.hasOwnProperty.call(key, 'key')) key.key = '<redacted>';
+                }
+            }
+        };
+        try {
+            const status = await forwardingServer.start({
+                listenPort: this.bmpConfigData.port,
+                profiles: runtimeProfiles,
+                onConnection: (socket, metadata, initialData) => {
+                    const session = this.attachClientSocket(socket, 'tcp-ao', metadata, initialData);
+                    if (!session) return null;
+                    return {
+                        session,
+                        resume: !(this.bmpSocketsPaused || this.persistence?.paused)
+                    };
+                },
+                onUnexpectedExit: error => this.handleTcpAoUnexpectedExit(error),
+                onProfilesConsumed: redactRuntimeProfiles
+            });
+            logger.info(
+                `BMP TCP-AO helper ready on port ${status.listenPort}; families=${(status.families || []).join(',')}`
+            );
+        } finally {
+            redactRuntimeProfiles();
+        }
+    }
+
     async startTcpServer(messageId) {
         try {
-            this.server = net.createServer(socket => {
-                const clientAddress = socket.remoteAddress;
-                const clientPort = socket.remotePort;
+            const tcpAoEnabled = this.bmpConfigData?.authType === BMP_AUTH_TYPES.TCP_AO;
+            if (tcpAoEnabled) await this.startTcpAoServer();
+            else await this.startPlainTcpServers();
 
-                logger.info(`ipv4 Client connected from ${clientAddress}:${clientPort}`);
-                logger.info(`ipv4 localAddress: ${socket.localAddress}:${socket.localPort}`);
-                const sessionKey = BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
-
-                // 当接收到数据时处理数据
-                socket.on('data', data => {
-                    const bmpSession = this.bmpSessionMap.get(sessionKey);
-                    if (!bmpSession) {
-                        logger.error(`ipv4 Client ${clientAddress}:${clientPort} not found in bmpSessionMap`);
-                        socket.destroy();
-                        return;
-                    }
-                    bmpSession.recvMsg(data);
-                });
-
-                socket.on('end', () => {
-                    logger.info(`ipv4 Client ${clientAddress}:${clientPort} end`);
-                    this.removeBmpSessionByKey(sessionKey);
-                });
-
-                socket.on('close', () => {
-                    logger.info(`ipv4 Client ${clientAddress}:${clientPort} close`);
-                    this.removeBmpSessionByKey(sessionKey);
-                });
-
-                socket.on('error', err => {
-                    logger.error(`ipv4 TCP Error from ${clientAddress}:${clientPort}: ${err.message}`);
-                    this.removeBmpSessionByKey(sessionKey);
-                });
-
-                // 创建BMP会话
-                this.createBmpSession(socket, clientAddress, clientPort);
-            });
-
-            this.ipv6Server = net.createServer(socket => {
-                const clientAddress = socket.remoteAddress;
-                const clientPort = socket.remotePort;
-
-                logger.info(`ipv6 Client connected from ${clientAddress}:${clientPort}`);
-                logger.info(`ipv6 localAddress: ${socket.localAddress}:${socket.localPort}`);
-                const sessionKey = BmpSession.makeKey(socket.localAddress, socket.localPort, clientAddress, clientPort);
-
-                // 当接收到数据时处理数据
-                socket.on('data', data => {
-                    const bmpSession = this.bmpSessionMap.get(sessionKey);
-                    if (!bmpSession) {
-                        logger.error(`ipv6 Client ${clientAddress}:${clientPort} not found in bmpSessionMap`);
-                        socket.destroy();
-                        return;
-                    }
-                    bmpSession.recvMsg(data);
-                });
-
-                socket.on('end', () => {
-                    logger.info(`ipv6 Client ${clientAddress}:${clientPort} end`);
-                    this.removeBmpSessionByKey(sessionKey);
-                });
-
-                socket.on('close', () => {
-                    logger.info(`ipv6 Client ${clientAddress}:${clientPort} close`);
-                    this.removeBmpSessionByKey(sessionKey);
-                });
-
-                socket.on('error', err => {
-                    logger.error(`ipv6 TCP Error from ${clientAddress}:${clientPort}: ${err.message}`);
-                    this.removeBmpSessionByKey(sessionKey);
-                });
-
-                // 创建BMP会话
-                this.createBmpSession(socket, clientAddress, clientPort);
-            });
-
-            // 启动ipv4服务器并监听端口
-            const listenPormise = util.promisify(this.server.listen).bind(this.server);
-            await listenPormise({ port: this.bmpConfigData.port, host: '0.0.0.0' });
-            logger.info(`TCP Server listening on port ${this.bmpConfigData.port} at 0.0.0.0`);
-
-            // 启动ipv6服务器并监听端口
-            const ipv6ListenPormise = util.promisify(this.ipv6Server.listen).bind(this.ipv6Server);
-            await ipv6ListenPormise({ port: this.bmpConfigData.port, host: '::', ipv6Only: true });
-            logger.info(`TCP Server listening on port ${this.bmpConfigData.port} at ::`);
-
-            logger.info(`bmp协议启动成功`);
-            this.messageHandler.sendSuccessResponse(messageId, null, 'bmp协议启动成功');
+            const suffix = tcpAoEnabled ? '（TCP-AO认证）' : '';
+            logger.info(`bmp协议启动成功${suffix}`);
+            this.messageHandler.sendSuccessResponse(messageId, null, `bmp协议启动成功${suffix}`);
         } catch (err) {
-            await this.closeTcpServers();
+            await this.shutdownBmpRuntime({ emitTermination: false }).catch(() => {});
             logger.error(`Error starting TCP server: ${err.message}`);
-            this.messageHandler.sendErrorResponse(messageId, 'bmp协议启动失败');
+            this.messageHandler.sendErrorResponse(messageId, `bmp协议启动失败: ${err.message}`);
         }
     }
 
     async closeTcpServers() {
         const servers = [this.server, this.ipv6Server];
+        const tcpAoForwardingServer = this.tcpAoForwardingServer;
         this.server = null;
         this.ipv6Server = null;
-        await Promise.all(
-            servers.map(
+        this.tcpAoForwardingServer = null;
+        await Promise.all([
+            ...servers.map(
                 server =>
                     new Promise(resolve => {
                         if (!server || !server.listening) {
@@ -909,12 +946,36 @@ class BmpWorker {
                             resolve();
                         }
                     })
-            )
-        );
+            ),
+            tcpAoForwardingServer?.stop?.() || Promise.resolve()
+        ]);
     }
 
     async startBmp(messageId, bmpConfigData) {
+        if (this.bmpStopping || this.bmpShutdownPromise || this.bmpConfigData) {
+            this.messageHandler.sendErrorResponse(messageId, 'bmp协议已经启动或正在停止');
+            return;
+        }
+        this.tcpAoRuntimeFailure = null;
         this.bmpConfigData = bmpConfigData;
+        const authType = String(this.bmpConfigData?.authType || BMP_AUTH_TYPES.NONE)
+            .trim()
+            .toLowerCase();
+        if (!Object.values(BMP_AUTH_TYPES).includes(authType)) {
+            this.bmpConfigData = null;
+            this.messageHandler.sendErrorResponse(messageId, '不支持的BMP认证方式');
+            return;
+        }
+        this.bmpConfigData.authType = authType;
+        if (
+            authType === BMP_AUTH_TYPES.TCP_AO &&
+            (!Array.isArray(this.bmpConfigData.tcpAoProfiles) || this.bmpConfigData.tcpAoProfiles.length === 0)
+        ) {
+            this.bmpConfigData = null;
+            this.messageHandler.sendErrorResponse(messageId, 'BMP TCP-AO至少需要一个运行时Profile');
+            return;
+        }
+        if (authType !== BMP_AUTH_TYPES.TCP_AO) this.bmpConfigData.tcpAoProfiles = [];
         this.bmpConfigData.bmpV4TlvDraft =
             Number(this.bmpConfigData.bmpV4TlvDraft) === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
                 ? BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
@@ -949,6 +1010,7 @@ class BmpWorker {
                 await this.persistence.close().catch(() => {});
                 this.persistence = null;
             }
+            this.bmpConfigData = null;
             this.messageHandler.sendErrorResponse(messageId, `BMP持久化初始化失败: ${error.message}`);
             return;
         }
@@ -956,61 +1018,71 @@ class BmpWorker {
         await this.startTcpServer(messageId);
     }
 
-    async stopBmp(messageId) {
-        logger.info('Stopping BMP server...');
-        this.clearRouteUpdateAggregation();
-        this.clearPersistenceSweepTimer();
-        this.pauseBmpSockets();
-
-        // Stop accepting new connections immediately, but do not wait for the
-        // listeners to close until the existing long-lived BMP sockets have
-        // been destroyed below. net.Server.close() only completes after all
-        // active connections are closed.
-        const tcpServersClosed = this.closeTcpServers();
-
-        // 发送全局终止事件通知前端
-        this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: null });
-
-        // 清空会话
-        this.bmpSessionMap.forEach((session, _) => {
-            session.closeSession();
-        });
-        this.bmpSessionMap.clear();
-        await tcpServersClosed;
-        this.routeAssuranceService?.setEnabled?.(false);
-
-        let persistenceError = null;
-        const persistenceWriter = this.persistence;
-        const persistenceReader = this.persistenceReader;
-        try {
-            if (persistenceWriter) {
-                await persistenceWriter.drain();
-                await this.runPersistenceSweep();
-            }
-        } catch (error) {
-            persistenceError = error;
-            logger.error(`BMP persistence drain failed: ${error.message}`);
-        } finally {
-            this.clearPersistenceSweepTimer();
+    shutdownBmpRuntime(options = {}) {
+        if (this.bmpShutdownPromise) return this.bmpShutdownPromise;
+        this.bmpStopping = true;
+        const emitTermination = options.emitTermination !== false;
+        this.bmpShutdownPromise = (async () => {
+            logger.info('Stopping BMP server...');
             this.clearRouteUpdateAggregation();
-            this.persistenceReader = null;
-            this.persistence = null;
-            if (persistenceReader) {
-                await persistenceReader.close({ suppressErrors: true }).catch(() => {});
-            }
-            if (persistenceWriter) {
-                await persistenceWriter.close({ suppressErrors: true }).catch(() => {});
-            }
-            this.bmpConfigData = null;
-        }
+            this.clearPersistenceSweepTimer();
+            this.pauseBmpSockets();
 
-        if (!persistenceError) {
+            // Stop accepting new connections immediately, but destroy all
+            // protocol sessions before awaiting net.Server.close().
+            let listenerError = null;
+            const tcpServersClosed = this.closeTcpServers().catch(error => {
+                listenerError = error;
+                logger.error(`BMP listener close failed: ${error.message}`);
+            });
+
+            if (emitTermination) {
+                this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: null });
+            }
+            this.bmpSessionMap.forEach(session => session.closeSession());
+            this.bmpSessionMap.clear();
+            await tcpServersClosed;
+            this.routeAssuranceService?.setEnabled?.(false);
+
+            let persistenceError = null;
+            const persistenceWriter = this.persistence;
+            const persistenceReader = this.persistenceReader;
+            try {
+                if (persistenceWriter) {
+                    await persistenceWriter.drain();
+                    await this.runPersistenceSweep();
+                }
+            } catch (error) {
+                persistenceError = error;
+                logger.error(`BMP persistence drain failed: ${error.message}`);
+            } finally {
+                this.clearPersistenceSweepTimer();
+                this.clearRouteUpdateAggregation();
+                this.persistenceReader = null;
+                this.persistence = null;
+                if (persistenceReader) {
+                    await persistenceReader.close({ suppressErrors: true }).catch(() => {});
+                }
+                if (persistenceWriter) {
+                    await persistenceWriter.close({ suppressErrors: true }).catch(() => {});
+                }
+                this.bmpConfigData = null;
+                this.bmpSocketsPaused = false;
+            }
+            return { error: persistenceError || listenerError };
+        })().finally(() => {
+            this.bmpStopping = false;
+            this.bmpShutdownPromise = null;
+        });
+        return this.bmpShutdownPromise;
+    }
+
+    async stopBmp(messageId) {
+        const { error } = await this.shutdownBmpRuntime();
+        if (!error) {
             this.messageHandler.sendSuccessResponse(messageId, null, 'bmp协议停止成功，持久化队列已落盘');
         } else {
-            this.messageHandler.sendErrorResponse(
-                messageId,
-                `BMP已停止，但持久化队列未能确认安全落盘: ${persistenceError.message}`
-            );
+            this.messageHandler.sendErrorResponse(messageId, `BMP已停止，但清理过程失败: ${error.message}`);
         }
     }
 

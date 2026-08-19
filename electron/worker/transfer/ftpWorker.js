@@ -223,7 +223,7 @@ class FtpWorker {
 
             // 启动ipv6服务器并监听端口
             const ipv6ListenPormise = util.promisify(this.ipv6Server.listen).bind(this.ipv6Server);
-            await ipv6ListenPormise(this.ftpConfig.port, '::');
+            await ipv6ListenPormise({ port: this.ftpConfig.port, host: '::', ipv6Only: true });
             logger.info(`TCP Server listening on port ${this.ftpConfig.port} at ::`);
 
             logger.info(`ftp协议启动成功`);

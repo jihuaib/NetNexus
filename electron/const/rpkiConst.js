@@ -83,7 +83,8 @@ const RPKI_DEFAULT_PORT = 8282;
 
 // 事件类型
 const RPKI_EVT_TYPES = {
-    CLIENT_CONNECTION: 1
+    CLIENT_CONNECTION: 1,
+    RUNTIME_FAILURE: 2
 };
 
 // RPKI请求-响应类型

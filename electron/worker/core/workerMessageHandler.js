@@ -74,7 +74,7 @@ class WorkerMessageHandler {
     }
 
     summarizeMessage(message) {
-        const sensitiveKey = /(?:password|passphrase|secret|community|authKey|privKey)/iu;
+        const sensitiveKey = /(?:password|passphrase|secret|community|authKey|privKey|keyEncrypted|^key$)/iu;
         const summarize = (value, key = '', depth = 0) => {
             if (sensitiveKey.test(key)) {
                 return '[REDACTED]';

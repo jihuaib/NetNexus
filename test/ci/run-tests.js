@@ -68,7 +68,9 @@ for (const scriptPath of testScripts) {
             if (key.toUpperCase() === 'ELECTRON_RUN_AS_NODE') delete childEnv[key];
         }
         childEnv.NETNEXUS_UTILITY_TEST_TARGET = scriptPath;
-        args = ['--disable-gpu', utilityProcessRunner];
+        // CI and source checkouts do not install chrome-sandbox as root. The
+        // production .deb verifies and installs its SUID sandbox separately.
+        args = ['--no-sandbox', '--disable-gpu', utilityProcessRunner];
     }
 
     const result = spawnSync(process.execPath, args, {

@@ -3,6 +3,16 @@
         <nn-row class="adaptive-form-row">
             <nn-col :span="24">
                 <nn-card title="RPKI服务器配置">
+                    <nn-alert
+                        v-if="runtimeFailureMessage"
+                        type="error"
+                        message="RPKI服务已安全停止"
+                        :description="runtimeFailureMessage"
+                        show-icon
+                        variant="subtle"
+                        data-testid="rpki-runtime-failure"
+                        class="rpki-runtime-alert"
+                    />
                     <nn-form :model="rpkiConfig" :label-col="labelCol" :wrapper-col="wrapperCol" @finish="startRpki">
                         <nn-row>
                             <nn-col :span="24">
@@ -47,6 +57,81 @@
                                         中携带 Flags、AFI Flags 和 Provider AS Count，适用于华为 VRP
                                         等老旧设备。仅在协议 v2 协商成功时生效。
                                     </div>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="认证方式" name="authType">
+                                    <nn-radio-group
+                                        v-model:value="rpkiConfig.authType"
+                                        aria-label="RPKI认证方式"
+                                        data-testid="rpki-auth-type-group"
+                                        @change="clearAuthenticationError"
+                                    >
+                                        <nn-radio value="none">无认证</nn-radio>
+                                        <nn-radio value="tcp-ao">TCP-AO</nn-radio>
+                                    </nn-radio-group>
+                                    <div class="nn-helper-text">
+                                        TCP-AO 仅在支持该能力的 Linux 内核上生效；密钥统一在“设置 → TCP-AO”中保存到本机。
+                                    </div>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row v-if="rpkiConfig.authType === 'tcp-ao'">
+                            <nn-col :span="24">
+                                <nn-form-item label="TCP-AO Profile" name="tcpAoProfileId">
+                                    <template v-if="configuredTcpAoProfiles.length > 0">
+                                        <nn-tooltip
+                                            :title="validationErrors.tcpAoProfileId"
+                                            :open="!!validationErrors.tcpAoProfileId"
+                                        >
+                                            <nn-select
+                                                v-model:value="rpkiConfig.tcpAoProfileId"
+                                                aria-label="TCP-AO Profile"
+                                                data-testid="rpki-tcp-ao-profile-select"
+                                                :status="validationErrors.tcpAoProfileId ? 'error' : ''"
+                                                placeholder="请选择已保存密钥的 Profile"
+                                                style="width: min(520px, 100%)"
+                                                @change="clearAuthenticationError"
+                                            >
+                                                <nn-select-option
+                                                    v-for="profile in configuredTcpAoProfiles"
+                                                    :key="profile.id"
+                                                    :value="profile.id"
+                                                >
+                                                    {{ profile.name }} · {{ profile.peer }} ·
+                                                    {{ profile.keys.length }} 把密钥
+                                                </nn-select-option>
+                                            </nn-select>
+                                        </nn-tooltip>
+                                        <div v-if="selectedTcpAoProfile" class="tcp-ao-profile-summary">
+                                            <nn-tag color="green">当前可发送</nn-tag>
+                                            <span>
+                                                当前 Send ID {{ selectedTcpAoProfile.currentSendKey.sndId }} / Receive
+                                                ID {{ selectedTcpAoProfile.currentSendKey.rcvId }}；共
+                                                {{ selectedTcpAoProfile.keys.length }} 把轮换密钥
+                                            </span>
+                                        </div>
+                                    </template>
+                                    <nn-alert
+                                        v-else
+                                        type="warning"
+                                        message="尚无可用的 TCP-AO Profile"
+                                        description="请先在设置中添加 Profile 并保存密钥，然后返回此处选择。"
+                                        show-icon
+                                        variant="subtle"
+                                        data-testid="rpki-tcp-ao-profile-empty"
+                                        class="tcp-ao-profile-alert"
+                                    />
+                                    <nn-button
+                                        type="link"
+                                        data-testid="rpki-open-tcp-ao-settings"
+                                        class="tcp-ao-settings-link"
+                                        @click="openTcpAoSettings"
+                                    >
+                                        前往 TCP-AO 设置
+                                    </nn-button>
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
@@ -124,7 +209,7 @@
 </template>
 
 <script setup>
-    import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue';
+    import { computed, ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue';
     import { notify } from '../../utils/notify';
     import { FormValidator, createRpkiConfigValidationRules } from '../../utils/validationCommon';
     import {
@@ -140,17 +225,53 @@
         name: 'RpkiConfig'
     });
 
+    const emit = defineEmits(['open-settings']);
+
+    const RPKI_AUTH_TYPE = Object.freeze({
+        NONE: 'none',
+        TCP_AO: 'tcp-ao'
+    });
+    const TCP_AO_SETTINGS_CHANGED_EVENT = 'rpki:tcpAoSettingsChanged';
+    const TCP_AO_SETTINGS_LISTENER_ID = 'rpki-config-tcp-ao-settings';
+
     const labelCol = { style: { width: '100px' } };
     const wrapperCol = { span: 40 };
 
     const rpkiConfig = ref({
         port: DEFAULT_VALUES.DEFAULT_RPKI_PORT,
         maxProtocolVersion: DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION,
-        aspaFormat: RPKI_ASPA_FORMAT.LATEST
+        aspaFormat: RPKI_ASPA_FORMAT.LATEST,
+        authType: RPKI_AUTH_TYPE.NONE,
+        tcpAoProfileId: ''
     });
+
+    const tcpAoProfiles = ref([]);
+    const currentTimeMs = ref(Date.now());
+    const configuredTcpAoProfiles = computed(() =>
+        tcpAoProfiles.value
+            .map(profile => {
+                const currentSendKeys = profile.keys.filter(keyItem =>
+                    isKeyCurrentlySendable(keyItem, currentTimeMs.value)
+                );
+                return {
+                    ...profile,
+                    currentSendKey:
+                        profile.keys.length > 0 &&
+                        profile.keys.every(keyItem => keyItem.hasSavedKey) &&
+                        currentSendKeys.length === 1
+                            ? currentSendKeys[0]
+                            : null
+                };
+            })
+            .filter(profile => Boolean(profile.currentSendKey))
+    );
+    const selectedTcpAoProfile = computed(
+        () => configuredTcpAoProfiles.value.find(profile => profile.id === rpkiConfig.value.tcpAoProfileId) || null
+    );
 
     const serverLoading = ref(false);
     const serverRunning = ref(false);
+    const runtimeFailureMessage = ref('');
 
     const normalizeMaxProtocolVersion = version => {
         const maxProtocolVersion = Number(version);
@@ -163,6 +284,7 @@
     const clientList = ref([]);
     let clientListRequestId = 0;
     let configActive = false;
+    let tcpAoClockTimer = null;
     const clientColumns = [
         {
             title: '本地IP',
@@ -203,10 +325,127 @@
         }
     ];
 
-    const validationErrors = ref({ port: '' });
+    const validationErrors = ref({ port: '', tcpAoProfileId: '' });
 
     let validator = new FormValidator(validationErrors);
     validator.addRules(createRpkiConfigValidationRules());
+
+    const normalizeAuthType = value => (value === RPKI_AUTH_TYPE.TCP_AO ? RPKI_AUTH_TYPE.TCP_AO : RPKI_AUTH_TYPE.NONE);
+
+    const normalizeTcpAoTimestamp = value => {
+        if (value === '' || value === null || value === undefined || value === 0 || value === '0') return null;
+        if (typeof value === 'number' || /^\d+$/.test(String(value).trim())) {
+            const numeric = Number(value);
+            return numeric > 10_000_000_000 ? numeric : numeric * 1000;
+        }
+        const timestamp = Date.parse(String(value));
+        return Number.isNaN(timestamp) ? Number.NaN : timestamp;
+    };
+
+    const sanitizeTcpAoKey = keyItem => ({
+        id: String(keyItem?.id || ''),
+        algorithm: String(keyItem?.algorithm || ''),
+        sndId: Number(keyItem?.sndId),
+        rcvId: Number(keyItem?.rcvId),
+        macLength: Number(keyItem?.macLength),
+        hasSavedKey: keyItem?.hasSavedKey === true,
+        acceptStart: normalizeTcpAoTimestamp(keyItem?.acceptStart),
+        sendStart: normalizeTcpAoTimestamp(keyItem?.sendStart),
+        sendEnd: normalizeTcpAoTimestamp(keyItem?.sendEnd),
+        acceptEnd: normalizeTcpAoTimestamp(keyItem?.acceptEnd)
+    });
+
+    const isKeyCurrentlySendable = (keyItem, now = Date.now()) =>
+        keyItem.hasSavedKey &&
+        !Number.isNaN(keyItem.sendStart) &&
+        !Number.isNaN(keyItem.sendEnd) &&
+        (keyItem.sendStart === null || keyItem.sendStart <= now) &&
+        (keyItem.sendEnd === null || now < keyItem.sendEnd);
+
+    const sanitizeTcpAoProfile = profile => {
+        const keys = (Array.isArray(profile?.keys) ? profile.keys : []).map(sanitizeTcpAoKey);
+        return {
+            id: String(profile?.id || ''),
+            name: String(profile?.name || ''),
+            peer: String(profile?.peer || ''),
+            keys
+        };
+    };
+
+    const applyTcpAoProfiles = source => {
+        tcpAoProfiles.value = (Array.isArray(source) ? source : [])
+            .map(sanitizeTcpAoProfile)
+            .filter(profile => profile.id && profile.name);
+
+        if (
+            rpkiConfig.value.tcpAoProfileId &&
+            !configuredTcpAoProfiles.value.some(profile => profile.id === rpkiConfig.value.tcpAoProfileId)
+        ) {
+            rpkiConfig.value.tcpAoProfileId = '';
+        }
+    };
+
+    const loadTcpAoProfiles = async () => {
+        if (typeof window.rpkiApi?.loadTcpAoSettings !== 'function') {
+            applyTcpAoProfiles([]);
+            return;
+        }
+        try {
+            const result = await window.rpkiApi.loadTcpAoSettings();
+            if (result?.status === 'success') {
+                applyTcpAoProfiles(result.data?.profiles);
+            } else {
+                applyTcpAoProfiles([]);
+                console.error('TCP-AO配置加载失败', result?.msg);
+            }
+        } catch (error) {
+            applyTcpAoProfiles([]);
+            console.error('TCP-AO配置加载失败', error);
+        }
+    };
+
+    const clearAuthenticationError = () => {
+        validationErrors.value.tcpAoProfileId = '';
+    };
+
+    const validateAuthentication = () => {
+        clearAuthenticationError();
+        if (rpkiConfig.value.authType !== RPKI_AUTH_TYPE.TCP_AO) return false;
+
+        if (!rpkiConfig.value.tcpAoProfileId) {
+            validationErrors.value.tcpAoProfileId = '请选择 TCP-AO Profile';
+            return true;
+        }
+        const selectedProfile = tcpAoProfiles.value.find(
+            profile => profile.id === String(rpkiConfig.value.tcpAoProfileId)
+        );
+        const currentSendKeys = selectedProfile?.keys.filter(keyItem => isKeyCurrentlySendable(keyItem)) || [];
+        if (
+            !selectedProfile ||
+            selectedProfile.keys.length === 0 ||
+            !selectedProfile.keys.every(keyItem => keyItem.hasSavedKey) ||
+            currentSendKeys.length !== 1
+        ) {
+            validationErrors.value.tcpAoProfileId = '所选 TCP-AO Profile 不存在或当前没有可发送的已保存密钥';
+            return true;
+        }
+        return false;
+    };
+
+    const buildConfigPayload = () => {
+        const authType = normalizeAuthType(rpkiConfig.value.authType);
+        return {
+            port: rpkiConfig.value.port,
+            maxProtocolVersion: normalizeMaxProtocolVersion(rpkiConfig.value.maxProtocolVersion),
+            aspaFormat: rpkiConfig.value.aspaFormat || RPKI_ASPA_FORMAT.LATEST,
+            authType,
+            tcpAoProfileId: authType === RPKI_AUTH_TYPE.TCP_AO ? String(rpkiConfig.value.tcpAoProfileId || '') : ''
+        };
+    };
+
+    const openTcpAoSettings = () => {
+        emit('open-settings', 'tcp-ao');
+    };
 
     // 暴露清空验证错误的方法给父组件
     defineExpose({
@@ -231,14 +470,17 @@
     };
 
     const startRpki = async () => {
-        const hasErrors = validator.validate(rpkiConfig.value);
-        if (hasErrors) {
+        const hasConfigErrors = validator.validate(rpkiConfig.value);
+        const hasAuthenticationErrors = validateAuthentication();
+        if (hasConfigErrors || hasAuthenticationErrors) {
             notify.error('请检查配置信息是否正确');
             return;
         }
 
         try {
-            const payload = JSON.parse(JSON.stringify(rpkiConfig.value));
+            runtimeFailureMessage.value = '';
+            // RPKI 启动和普通配置持久化只引用已保存的 Profile；密钥明文永不进入该 payload。
+            const payload = buildConfigPayload();
             const saveResult = await window.rpkiApi.saveRpkiConfig(payload);
             if (saveResult.status !== 'success') {
                 notify.error(saveResult.msg || '配置文件保存失败');
@@ -294,9 +536,15 @@
         if (!serverRunning.value) {
             serverLoading.value = false;
             clearClientRuntimeState();
+            const failureReason = state?.unexpected ? String(state.reason || '').trim() : '';
+            if (failureReason) {
+                runtimeFailureMessage.value = failureReason;
+                notify.error(failureReason);
+            }
             return;
         }
 
+        runtimeFailureMessage.value = '';
         if (!wasRunning) {
             clearClientRuntimeState();
             if (configActive) void loadClientList();
@@ -351,17 +599,27 @@
 
     onActivated(async () => {
         configActive = true;
+        currentTimeMs.value = Date.now();
+        if (tcpAoClockTimer !== null) clearInterval(tcpAoClockTimer);
+        tcpAoClockTimer = setInterval(() => {
+            currentTimeMs.value = Date.now();
+        }, 1000);
         EventBus.on('rpki:clientConnection', RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG, onClientConnection);
-        await loadClientList();
+        await Promise.all([loadClientList(), loadTcpAoProfiles()]);
     });
 
     onDeactivated(() => {
         configActive = false;
+        if (tcpAoClockTimer !== null) {
+            clearInterval(tcpAoClockTimer);
+            tcpAoClockTimer = null;
+        }
         EventBus.off('rpki:clientConnection', RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG);
     });
 
     onMounted(async () => {
         EventBus.on(RPKI_RUNTIME_CHANGED_EVENT, RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG, handleRuntimeChanged);
+        EventBus.on(TCP_AO_SETTINGS_CHANGED_EVENT, TCP_AO_SETTINGS_LISTENER_ID, applyTcpAoProfiles);
         try {
             // 加载配置
             const result = await window.rpkiApi.loadRpkiConfig();
@@ -372,6 +630,8 @@
                         result.data.maxProtocolVersion ?? DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION
                     );
                     rpkiConfig.value.aspaFormat = result.data.aspaFormat || RPKI_ASPA_FORMAT.LATEST;
+                    rpkiConfig.value.authType = normalizeAuthType(result.data.authType);
+                    rpkiConfig.value.tcpAoProfileId = String(result.data.tcpAoProfileId || '');
                 }
             } else {
                 console.error('配置文件加载失败', result.msg);
@@ -379,14 +639,22 @@
         } catch (error) {
             console.error('初始化RPKI配置出错:', error);
         }
+        await loadTcpAoProfiles();
     });
 
     onBeforeUnmount(() => {
+        if (tcpAoClockTimer !== null) clearInterval(tcpAoClockTimer);
         EventBus.off(RPKI_RUNTIME_CHANGED_EVENT, RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG);
+        EventBus.off(TCP_AO_SETTINGS_CHANGED_EVENT, TCP_AO_SETTINGS_LISTENER_ID);
+        EventBus.off('rpki:clientConnection', RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG);
     });
 </script>
 
 <style scoped>
+    .rpki-runtime-alert {
+        margin-bottom: 12px;
+    }
+
     .adaptive-list-page {
         height: 100%;
         min-height: 0;
@@ -398,6 +666,25 @@
 
     .adaptive-form-row {
         flex: 0 0 auto;
+    }
+
+    .tcp-ao-profile-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-top: 8px;
+        color: var(--nn-color-text-secondary);
+        font-size: 12px;
+    }
+
+    .tcp-ao-profile-alert {
+        max-width: 620px;
+    }
+
+    .tcp-ao-settings-link {
+        margin-top: 4px;
+        padding-inline: 0;
     }
 
     .adaptive-list-row {

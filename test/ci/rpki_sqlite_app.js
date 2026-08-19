@@ -258,6 +258,71 @@ async function testTerminateFailureRetainsWorkerForRetry() {
     assert.deepEqual(runtimeStates, [true, false], 'termination retry must not duplicate runtime state events');
 }
 
+async function testUnexpectedRuntimeFailurePropagation() {
+    const rendererEvents = [];
+    const sender = createRendererTarget(rendererEvents);
+    const listeners = new Map();
+    let onExit = null;
+    const worker = {
+        addEventListener(type, handler) {
+            if (!listeners.has(type)) listeners.set(type, new Set());
+            listeners.get(type).add(handler);
+        },
+        removeEventListener(type, handler) {
+            listeners.get(type)?.delete(handler);
+        },
+        sendRequest(op) {
+            if (op === RpkiConst.RPKI_REQ_TYPES.START_RPKI) {
+                return Promise.resolve({ status: 'success', data: null, msg: 'started' });
+            }
+            throw new Error(`Unexpected fake RPKI operation: ${op}`);
+        }
+    };
+    const rpkiApp = new RpkiApp(new FakeIpcMain(), new MemoryStore());
+    rpkiApp.createRpkiProcess = (_workerPath, options) => {
+        onExit = options.onExit;
+        return worker;
+    };
+
+    const started = await rpkiApp.handleStartRpki({ sender }, { port: 8282 });
+    assert.equal(started.status, 'success', started.msg);
+    assert.equal(rpkiApp.rpkiReady, true);
+
+    const failure = {
+        code: 'TCP_AO_KEYS_EXPIRED',
+        reason: 'TCP-AO发送密钥已过期且没有可用的后继密钥，RPKI服务已安全停止'
+    };
+    const failureHandlers = listeners.get(RpkiConst.RPKI_EVT_TYPES.RUNTIME_FAILURE);
+    assert.equal(failureHandlers?.size, 1, 'main must subscribe to structured RPKI runtime failures');
+    failureHandlers.forEach(handler => handler(failure));
+    assert.equal(rpkiApp.rpkiReady, false, 'a runtime failure must close the RPKI data plane immediately');
+    assert.deepEqual(rpkiApp.rpkiRuntimeFailure, failure);
+
+    onExit(20, worker, { expected: false });
+    assert.equal(rpkiApp.worker, null);
+
+    const runtimeEvents = rendererEvents.filter(event => event.type === 'rpki:runtimeChanged');
+    assert.deepEqual(
+        runtimeEvents.map(event => event.data),
+        [
+            { running: true },
+            {
+                running: false,
+                unexpected: true,
+                code: failure.code,
+                reason: failure.reason
+            }
+        ]
+    );
+
+    onExit(20, worker, { expected: false });
+    assert.equal(
+        rendererEvents.filter(event => event.type === 'rpki:runtimeChanged').length,
+        2,
+        'a repeated process-exit callback must not duplicate the runtime failure'
+    );
+}
+
 async function main() {
     assert.equal(
         process.env.NETNEXUS_EXPECT_UTILITY_PROCESS,
@@ -267,6 +332,7 @@ async function main() {
 
     await testConcurrentStartStopSingleFlight();
     await testTerminateFailureRetainsWorkerForRetry();
+    await testUnexpectedRuntimeFailurePropagation();
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-rpki-process-ownership-'));
     const dbPath = path.join(tempDir, 'rpki', 'rpki.sqlite3');

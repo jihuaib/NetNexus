@@ -91,6 +91,19 @@ assert.strictEqual(terminationEvents[1].payload.data.connectionState, 'closed');
 assert.strictEqual(terminationEvents[1].payload.data.isOnline, false);
 assert.strictEqual(worker.bmpSessionMap.has(replacementKey), false, 'removed BMP session should be deleted from map');
 
+const { worker: packetTerminationWorker, events: packetTerminationEvents } = makeWorker();
+const packetTerminationSession = packetTerminationWorker.createBmpSession(
+    makeSocket('127.0.0.1', 1790),
+    '10.0.0.30',
+    50300
+);
+packetTerminationSession.processTermination(Buffer.alloc(0));
+assert.strictEqual(
+    packetTerminationEvents.filter(event => event.type === BmpConst.BMP_EVT_TYPES.TERMINATION).length,
+    1,
+    'one BMP Termination message must emit exactly one termination event'
+);
+
 const sharedSourceId = 'shared-live-source';
 const oldSourceSession = worker.createBmpSession(makeSocket('127.0.0.1', 1790), '10.0.0.4', 50004);
 oldSourceSession.persistenceSourceKey = { keyHex: sharedSourceId };

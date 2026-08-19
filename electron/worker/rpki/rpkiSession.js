@@ -5,6 +5,7 @@ const { ipToBytes } = require('../../utils/ipUtils');
 
 const ROA_WRITE_CHUNK_SIZE = 1024 * 1024;
 const DEFAULT_RESET_SNAPSHOT_TIMEOUT_MS = 120000;
+const MAX_RPKI_PDU_BYTES = 16 * 1024 * 1024;
 
 function yieldToIoLoop() {
     return new Promise(resolve => setImmediate(resolve));
@@ -74,7 +75,12 @@ class RpkiSession {
             return;
         }
 
-        this.messageBuffer = Buffer.concat([this.messageBuffer, buffer]);
+        if (!Buffer.isBuffer(buffer) || this.messageBuffer.length + buffer.length > MAX_RPKI_PDU_BYTES) {
+            logger.warn(`Rejecting oversized RPKI input from ${this.remoteIp}:${this.remotePort}`);
+            Promise.resolve(this.closeSession()).catch(error => logger.debug(`关闭非法RPKI会话失败: ${error.message}`));
+            return;
+        }
+        this.messageBuffer = Buffer.concat([this.messageBuffer, buffer], this.messageBuffer.length + buffer.length);
         this.processBufferedMessages();
     }
 
@@ -89,6 +95,15 @@ class RpkiSession {
     processBufferedMessages() {
         while (this.messageBuffer.length >= RpkiConst.RPKI_HEADER_LENGTH) {
             const header = this.parseRpkiHeader(this.messageBuffer);
+            if (header.length < RpkiConst.RPKI_HEADER_LENGTH || header.length > MAX_RPKI_PDU_BYTES) {
+                logger.warn(
+                    `Rejecting invalid RPKI PDU length ${header.length} from ${this.remoteIp}:${this.remotePort}`
+                );
+                Promise.resolve(this.closeSession()).catch(error =>
+                    logger.debug(`关闭非法RPKI会话失败: ${error.message}`)
+                );
+                return;
+            }
             if (this.messageBuffer.length < header.length) {
                 logger.info(
                     `Waiting for more data. Have ${this.messageBuffer.length} bytes, need ${header.length} bytes`
@@ -1066,5 +1081,7 @@ class RpkiSession {
         };
     }
 }
+
+RpkiSession.MAX_RPKI_PDU_BYTES = MAX_RPKI_PDU_BYTES;
 
 module.exports = RpkiSession;

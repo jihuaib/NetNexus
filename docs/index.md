@@ -14,9 +14,6 @@ hero:
         - theme: alt
           text: 开发与运行
           link: /DEVELOPMENT
-        - theme: alt
-          text: 下载 PDF 手册
-          link: /NetNexus/netnexus-docs.pdf
 
 features:
     - icon: ⇄
@@ -53,7 +50,7 @@ features:
 
 ## 统一、清晰的桌面体验
 
-NetNexus 将常用协议实验、数据查看和开发工具集中在同一个桌面界面中。文档中的页面截图由项目脚本基于当前实现生成，并与 PDF 手册共用同一套内容。
+NetNexus 将常用协议实验、数据查看和开发工具集中在同一个桌面界面中。文档中的页面截图由项目脚本基于当前实现生成。
 
 ![NetNexus 扁平化启动界面](images/startup/startup-banner.png)
 

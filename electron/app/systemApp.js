@@ -33,6 +33,7 @@ const createBmpApiRoutes = require('./bmpApiRoutes');
 const CliAccessServer = require('./cli');
 const WiresharkPluginInstaller = require('./wiresharkPluginInstaller');
 const { clearMajorVersionData } = require('../utils/majorVersionDataCleanup');
+const SecureCredentialStore = require('../utils/secureCredentialStore');
 
 const DEFAULT_SHUTDOWN_STEP_TIMEOUT_MS = 45000;
 const BMP_SHUTDOWN_STEP_TIMEOUT_MS = 6 * 60 * 1000;
@@ -68,11 +69,23 @@ class SystemApp {
             cwd: app.getPath('userData')
         });
 
+        const primaryWebContents = win?.webContents || null;
+        // BMP/RPKI TCP-AO and NETCONF share one automatically managed local key.
+        this.credentialStore =
+            options.credentialStore ||
+            new SecureCredentialStore({
+                localKeyFilePath: path.join(app.getPath('userData'), 'secure-credentials', 'master-key-v1')
+            });
         this.bgpApp = new BgpApp(ipc, this.programStore);
         this.bmpApp = new BmpApp(ipc, this.programStore, {
+            primaryWebContents,
+            credentialStore: this.credentialStore,
             closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('bmp')
         });
-        this.rpkiApp = new RpkiApp(ipc, this.programStore);
+        this.rpkiApp = new RpkiApp(ipc, this.programStore, {
+            primaryWebContents,
+            credentialStore: this.credentialStore
+        });
         this.ftpApp = new FtpApp(ipc, this.programStore);
         this.snmpApp = new SnmpApp(ipc, this.programStore, {
             closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('snmp')
@@ -84,11 +97,11 @@ class SystemApp {
         this.syslogApp = new SyslogApp(ipc, this.programStore, {
             closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('syslog')
         });
-        const primaryWebContents = win?.webContents || null;
         this.yangApp = new YangApp(ipc, this.programStore, { primaryWebContents });
         this.netconfApp = new NetconfApp(ipc, this.programStore, {
             yangApp: this.yangApp,
             primaryWebContents,
+            credentialStore: this.credentialStore,
             closeProfileMonitorWindows: profileId =>
                 this.monitorWindowManager?.closeByProtocolProfile('netconf', profileId),
             closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('netconf')

@@ -80,14 +80,14 @@ function sendScenario(port, messages, options = {}) {
     });
 }
 
-async function waitForRoutes(request, minimum = 1) {
+async function waitForRoutes(request, minimum = 1, predicate = () => true) {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
         const response = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES, {
             routeState: 'all',
             pageSize: 5000
         });
-        if (response.data.total >= minimum) {
+        if (response.data.total >= minimum && predicate(response.data.list)) {
             return response;
         }
         await new Promise(resolve => setTimeout(resolve, 25));
@@ -148,7 +148,12 @@ async function main() {
         const liveStatus = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTENCE_STATUS);
         assert.equal(liveStatus.data.ready, true);
         assert.equal(liveStatus.data.journalMode, 'wal');
-        const liveRoutes = await waitForRoutes(request, 10);
+        const liveRoutes = await waitForRoutes(
+            request,
+            10,
+            routes =>
+                routes.some(route => route.scopeKind === 'peer') && routes.some(route => route.scopeKind === 'loc-rib')
+        );
         assert.ok(liveRoutes.data.total > 10, `expected persisted routes, got ${liveRoutes.data.total}`);
         assert.equal(
             liveRoutes.data.list.every(route => route.persistentRouteId.length === 64),

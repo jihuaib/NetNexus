@@ -18,6 +18,7 @@ const RPC_TIMEOUT_MIGRATION_STORE_KEY = 'netconf-rpc-timeout-default-v2';
 const LEGACY_DEFAULT_RPC_TIMEOUT = 30000;
 const ALLOWED_AUTH_METHODS = new Set(['password', 'privateKey', 'agent']);
 const ALLOWED_HOST_KEY_POLICIES = new Set(['ask', 'strict', 'accept-new']);
+const CREDENTIAL_FIELDS = Object.freeze(['password', 'passphrase', 'privateKey']);
 const MAX_SUBSCRIPTION_SNAPSHOTS_PER_PROFILE = 256;
 const MAX_SUBSCRIPTION_SNAPSHOT_BYTES_PER_PROFILE = 16 * 1024 * 1024;
 const MAX_NOTIFICATION_HISTORY_RECORDS = 500;
@@ -1228,7 +1229,7 @@ class NetconfApp {
         if (!profile?.id) return;
         const previous = this.transientSecrets.get(profile.id) || {};
         const secrets = { ...previous };
-        ['password', 'passphrase', 'privateKey'].forEach(field => {
+        CREDENTIAL_FIELDS.forEach(field => {
             if (!Object.prototype.hasOwnProperty.call(profile, field)) return;
             if (profile[field]) secrets[field] = String(profile[field]);
             else delete secrets[field];
@@ -1254,6 +1255,29 @@ class NetconfApp {
             throw new Error('请选择私钥文件');
         }
         return runtime;
+    }
+
+    async initializeCredentialStore() {
+        if (typeof this.credentialStore.initialize === 'function') {
+            await this.credentialStore.initialize();
+        }
+    }
+
+    runtimeProfileNeedsCredentialStore(profileOrId) {
+        const provided = profileOrId && typeof profileOrId === 'object' ? profileOrId : null;
+        const profileId = provided?.id || profileOrId || this.activeProfileId;
+        const stored = profileId ? this.findStoredProfile(String(profileId)) : null;
+        if (!stored) return false;
+
+        const transient = { ...(this.transientSecrets.get(String(profileId)) || {}) };
+        if (provided) {
+            CREDENTIAL_FIELDS.forEach(field => {
+                if (!Object.prototype.hasOwnProperty.call(provided, field)) return;
+                if (provided[field]) transient[field] = String(provided[field]);
+                else delete transient[field];
+            });
+        }
+        return CREDENTIAL_FIELDS.some(field => !transient[field] && Boolean(stored[`${field}Encrypted`]));
     }
 
     lifecycleSupersededError(type = 'operation') {
@@ -1458,6 +1482,12 @@ class NetconfApp {
 
     async handleSaveProfile(_event, input = {}) {
         try {
+            const initialExisting = input.id ? this.findStoredProfile(String(input.id)) : null;
+            const willEncryptCredential =
+                Boolean(input.rememberCredentials ?? initialExisting?.rememberCredentials) &&
+                CREDENTIAL_FIELDS.some(field => Boolean(input[field]));
+            if (willEncryptCredential) await this.initializeCredentialStore();
+
             if (this.closing) this.assertProfileAvailable(input.id);
             const requestedGeneration = input.id ? this.assertProfileAvailable(input.id) : undefined;
             const profiles = this.getStoredProfiles();
@@ -1578,6 +1608,9 @@ class NetconfApp {
         try {
             const requestedId = profile && typeof profile === 'object' ? profile.id : profile || this.activeProfileId;
             const requestedGeneration = requestedId ? this.assertProfileAvailable(requestedId) : undefined;
+            if (this.runtimeProfileNeedsCredentialStore(profile)) {
+                await this.initializeCredentialStore();
+            }
             const runtime = this.resolveRuntimeProfile(profile);
             const generation = this.assertProfileAvailable(runtime.id, requestedGeneration);
             if (runtime.privateKeyPath && !fs.existsSync(runtime.privateKeyPath)) throw new Error('私钥文件不存在');
@@ -1613,6 +1646,9 @@ class NetconfApp {
             const requestedId =
                 profileOrId && typeof profileOrId === 'object' ? profileOrId.id : profileOrId || this.activeProfileId;
             const requestedGeneration = requestedId ? this.assertProfileAvailable(requestedId) : undefined;
+            if (this.runtimeProfileNeedsCredentialStore(profileOrId)) {
+                await this.initializeCredentialStore();
+            }
             const runtime = this.resolveRuntimeProfile(profileOrId);
             const generation = this.assertProfileAvailable(runtime.id, requestedGeneration);
             this.profileRpcTimeouts.set(runtime.id, runtime.rpcTimeout);

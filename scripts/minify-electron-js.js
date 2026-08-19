@@ -1,6 +1,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const { transform } = require('esbuild');
+const { verifyPackagedBetterSqliteRuntime } = require('./smoke-better-sqlite3-runtime');
 
 async function pathExists(filePath) {
     try {
@@ -109,15 +110,18 @@ async function minifyElectronRoot(electronRoot) {
     console.log(`[minify-electron-js] minified ${files.length} files, saved ${savedBytes} bytes (${savedPercent}%)`);
 }
 
-async function minifyElectronJs(context) {
+async function minifyElectronJs(context, dependencies = {}) {
     const electronRoot = await findElectronRoot(context);
 
     if (!electronRoot) {
         console.log('[minify-electron-js] electron output directory not found, skipped');
-        return;
+    } else {
+        await minifyElectronRoot(electronRoot);
     }
-
-    await minifyElectronRoot(electronRoot);
+    if (context.electronPlatformName === 'linux') {
+        const verifier = dependencies.verifyPackagedBetterSqliteRuntime || verifyPackagedBetterSqliteRuntime;
+        verifier({ ...context, archName: process.arch }, dependencies.sqliteDependencies || {});
+    }
 }
 
 module.exports = minifyElectronJs;

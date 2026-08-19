@@ -1,6 +1,13 @@
 <template>
     <nn-settings class="update-settings">
-        <nn-settings-section title="版本与安装" description="查看当前版本，检查、下载并安装可用更新。">
+        <nn-settings-section
+            title="版本与安装"
+            :description="
+                automaticUpdatesSupported
+                    ? '查看当前版本，检查、下载并安装可用更新。'
+                    : 'Linux 使用 GitHub Releases 发布的 .deb 安装包手动更新。'
+            "
+        >
             <nn-row class="version-info">
                 <nn-col :span="12">
                     <nn-statistic title="当前版本" :value="currentVersion" />
@@ -10,9 +17,21 @@
                 </nn-col>
             </nn-row>
 
+            <nn-alert
+                v-if="!automaticUpdatesSupported"
+                class="manual-update-notice"
+                type="info"
+                show-icon
+                :message="updatePolicy.message"
+            />
+
             <nn-settings-item
                 title="更新操作"
-                description="手动检查版本，发现更新后可下载并重启安装"
+                :description="
+                    automaticUpdatesSupported
+                        ? '手动检查版本，发现更新后可下载并重启安装'
+                        : '打开版本发布页下载匹配架构的 .deb 安装包'
+                "
                 class="update-actions"
             >
                 <template #actions>
@@ -20,10 +39,13 @@
                         <nn-button
                             type="primary"
                             :loading="isChecking"
-                            :disabled="isDownloading"
+                            :disabled="!automaticUpdatesSupported || isDownloading"
                             @click="checkForUpdates"
                         >
                             检查更新
+                        </nn-button>
+                        <nn-button v-if="!automaticUpdatesSupported" type="primary" @click="openReleasesPage">
+                            打开 GitHub Releases
                         </nn-button>
                         <nn-button
                             v-if="updateAvailable && !isDownloading && !updateDownloaded"
@@ -40,7 +62,11 @@
 
         <nn-settings-section
             title="自动更新"
-            description="自动检查和下载更新，安装仍由用户确认。"
+            :description="
+                automaticUpdatesSupported
+                    ? '自动检查和下载更新，安装仍由用户确认。'
+                    : 'Linux .deb 不启用应用内自动检查、下载或安装。'
+            "
             class="auto-update-settings"
         >
             <nn-settings-item title="启动时检查更新" description="启用后，应用启动时会自动检查更新" align="center">
@@ -48,6 +74,7 @@
                     <nn-switch
                         v-model:checked="updateSettings.autoCheckOnStartup"
                         aria-label="启动时检查更新"
+                        :disabled="!automaticUpdatesSupported"
                         @change="saveAutoUpdateSettings"
                     />
                 </template>
@@ -61,6 +88,7 @@
                     <nn-switch
                         v-model:checked="updateSettings.autoDownload"
                         aria-label="自动下载更新"
+                        :disabled="!automaticUpdatesSupported"
                         @change="saveAutoUpdateSettings"
                     />
                 </template>
@@ -70,7 +98,7 @@
 </template>
 
 <script setup>
-    import { ref, onMounted, onActivated, onDeactivated } from 'vue';
+    import { computed, ref, onMounted, onActivated, onDeactivated } from 'vue';
     import { notify } from '../../utils/notify';
     import EventBus from '../../utils/eventBus';
     import { TOOLS_EVENT_PAGE_ID } from '../../const/toolsConst';
@@ -87,11 +115,36 @@
     const isDownloading = ref(false);
     const downloadProgress = ref({});
     const updateStatusText = ref('未检查');
+    const updatePolicy = ref({
+        platform: '',
+        mode: 'automatic',
+        automaticUpdatesSupported: true,
+        message: '',
+        releasesUrl: ''
+    });
+    const automaticUpdatesSupported = computed(() => updatePolicy.value.automaticUpdatesSupported !== false);
 
     const updateSettings = ref({
         autoCheckOnStartup: true,
         autoDownload: false
     });
+
+    const loadUpdatePolicy = async () => {
+        if (!window.updaterApi?.getUpdatePolicy) return;
+
+        try {
+            const policy = await window.updaterApi.getUpdatePolicy();
+            if (policy && typeof policy.automaticUpdatesSupported === 'boolean') {
+                updatePolicy.value = policy;
+            }
+            if (!automaticUpdatesSupported.value) {
+                updateStatusText.value = '手动安装 .deb';
+                updateSettings.value = { autoCheckOnStartup: false, autoDownload: false };
+            }
+        } catch (error) {
+            console.error('获取更新策略失败:', error);
+        }
+    };
 
     // 获取当前版本
     const getCurrentVersion = async () => {
@@ -107,6 +160,11 @@
 
     // 检查更新
     const checkForUpdates = async () => {
+        if (!automaticUpdatesSupported.value) {
+            notify.info(updatePolicy.value.message);
+            return;
+        }
+
         if (!window.updaterApi) {
             notify.warning('更新功能仅在生产环境中可用');
             return;
@@ -134,6 +192,11 @@
 
     // 下载更新
     const downloadUpdate = async () => {
+        if (!automaticUpdatesSupported.value) {
+            notify.info(updatePolicy.value.message);
+            return;
+        }
+
         if (!window.updaterApi) {
             notify.warning('更新功能仅在生产环境中可用');
             return;
@@ -152,6 +215,11 @@
 
     // 安装更新
     const installUpdate = async () => {
+        if (!automaticUpdatesSupported.value) {
+            notify.info(updatePolicy.value.message);
+            return;
+        }
+
         if (!window.updaterApi) {
             notify.warning('更新功能仅在生产环境中可用');
             return;
@@ -162,6 +230,23 @@
         } catch (error) {
             console.error('安装更新失败:', error);
             notify.error('安装更新失败: ' + error.message);
+        }
+    };
+
+    const openReleasesPage = async () => {
+        if (!window.updaterApi?.openReleasesPage) {
+            notify.warning(updatePolicy.value.message);
+            return;
+        }
+
+        try {
+            const result = await window.updaterApi.openReleasesPage();
+            if (result?.success === false) {
+                notify.error('打开 GitHub Releases 失败: ' + result.error);
+            }
+        } catch (error) {
+            console.error('打开 GitHub Releases 失败:', error);
+            notify.error('打开 GitHub Releases 失败: ' + error.message);
         }
     };
 
@@ -211,6 +296,12 @@
 
     // 保存自动更新设置
     const saveAutoUpdateSettings = async () => {
+        if (!automaticUpdatesSupported.value) {
+            updateSettings.value = { autoCheckOnStartup: false, autoDownload: false };
+            notify.info(updatePolicy.value.message);
+            return;
+        }
+
         try {
             if (!updateSettings.value.autoCheckOnStartup) {
                 updateSettings.value.autoDownload = false;
@@ -234,7 +325,9 @@
         try {
             const resp = await window.commonApi.getUpdateSettings();
             if (resp.status === 'success') {
-                updateSettings.value = resp.data;
+                updateSettings.value = automaticUpdatesSupported.value
+                    ? resp.data
+                    : { autoCheckOnStartup: false, autoDownload: false };
             }
         } catch (error) {
             console.error('加载设置失败:', error);
@@ -251,9 +344,9 @@
     });
 
     // 组件挂载时初始化
-    onMounted(() => {
-        getCurrentVersion();
-        loadAutoUpdateSettings();
+    onMounted(async () => {
+        await loadUpdatePolicy();
+        await Promise.all([getCurrentVersion(), loadAutoUpdateSettings()]);
     });
 </script>
 
@@ -264,6 +357,10 @@
 
     .version-info {
         margin-bottom: 24px;
+    }
+
+    .manual-update-notice {
+        margin-bottom: 16px;
     }
 
     .update-info {

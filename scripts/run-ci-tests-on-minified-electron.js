@@ -23,7 +23,12 @@ function prepareWorkspace() {
 
     copyDirectory(path.join(projectRoot, 'electron'), path.join(tempRoot, 'electron'));
     copyDirectory(path.join(projectRoot, 'test', 'ci'), path.join(tempRoot, 'test', 'ci'));
+    copyDirectory(path.join(projectRoot, '.github', 'workflows'), path.join(tempRoot, '.github', 'workflows'));
+    copyDirectory(path.join(projectRoot, 'docs'), path.join(tempRoot, 'docs'));
     fs.copyFileSync(path.join(projectRoot, 'package.json'), path.join(tempRoot, 'package.json'));
+    fs.copyFileSync(path.join(projectRoot, 'package-lock.json'), path.join(tempRoot, 'package-lock.json'));
+    fs.copyFileSync(path.join(projectRoot, 'README.md'), path.join(tempRoot, 'README.md'));
+    fs.copyFileSync(path.join(projectRoot, 'vite.config.js'), path.join(tempRoot, 'vite.config.js'));
 
     linkDirectory(path.join(projectRoot, 'node_modules'), path.join(tempRoot, 'node_modules'));
 

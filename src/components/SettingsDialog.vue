@@ -10,14 +10,14 @@
         @cancel="onClose"
     >
         <keep-alive>
-            <component :is="currentSettingComponent" />
+            <component :is="currentSettingComponent" ref="currentSettingRef" />
         </keep-alive>
     </nn-navigation-modal>
 </template>
 
 <script setup>
-    import { ref, computed, watch } from 'vue';
-    import { settingsNavigationIcons } from '../const/navigationIcons';
+    import { ref, computed, nextTick, watch } from 'vue';
+    import { moduleNavigationIcons, settingsNavigationIcons } from '../const/navigationIcons';
 
     import GeneralSettings from '../view/settings/GeneralSettings.vue';
     import ToolsSettings from '../view/settings/ToolsSettings.vue';
@@ -26,6 +26,7 @@
     import ApiSettings from '../view/settings/ApiSettings.vue';
     import BmpDataSettings from '../view/settings/BmpDataSettings.vue';
     import RuntimeSettings from '../view/settings/RuntimeSettings.vue';
+    import TcpAoSettings from '../view/settings/TcpAoSettings.vue';
 
     const props = defineProps({
         open: {
@@ -51,6 +52,12 @@
     watch(
         () => isOpen.value,
         newValue => {
+            if (!newValue) {
+                currentSettingRef.value?.wipePlaintextKeys?.();
+                currentSettingRef.value?.pauseBackgroundWork?.();
+            } else {
+                nextTick(() => currentSettingRef.value?.resumeBackgroundWork?.());
+            }
             emit('update:open', newValue);
         }
     );
@@ -93,6 +100,12 @@
             icon: settingsNavigationIcons.runtime
         },
         {
+            key: 'tcp-ao',
+            label: 'TCP-AO',
+            description: 'RPKI TCP-AO 密钥与轮换 Profile',
+            icon: moduleNavigationIcons.rpki
+        },
+        {
             key: 'update',
             label: '更新',
             description: '版本检查、下载与安装',
@@ -107,14 +120,21 @@
         api: ApiSettings,
         'data-management': BmpDataSettings,
         runtime: RuntimeSettings,
+        'tcp-ao': TcpAoSettings,
         update: UpdateSettings
     });
 
     const activeKey = ref('general');
+    const currentSettingRef = ref(null);
 
     const currentSettingComponent = computed(() => settingComponents[activeKey.value] || GeneralSettings);
 
+    const wipeCurrentPlaintext = () => {
+        currentSettingRef.value?.wipePlaintextKeys?.();
+    };
+
     const onClose = () => {
+        wipeCurrentPlaintext();
         isOpen.value = false;
         emit('close');
     };

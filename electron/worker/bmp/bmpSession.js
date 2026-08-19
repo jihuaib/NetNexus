@@ -44,6 +44,11 @@ class BmpSession {
         this.localPort = null;
         this.remoteIp = null;
         this.remotePort = null;
+        this.transport = 'tcp';
+        this.authentication = 'none';
+        this.tcpAoProfileId = null;
+        this.tcpAoProfileName = null;
+        this.tcpAoPeer = null;
         this.sysName = null;
         this.sysDesc = null;
         this.receivedAt = null;
@@ -2026,6 +2031,11 @@ class BmpSession {
             localPort: this.localPort,
             remoteIp: this.remoteIp,
             remotePort: this.remotePort,
+            transport: this.transport,
+            authentication: this.authentication,
+            tcpAoProfileId: this.tcpAoProfileId,
+            tcpAoProfileName: this.tcpAoProfileName,
+            tcpAoPeer: this.tcpAoPeer,
             sysName: this.sysName,
             sysDesc: this.sysDesc,
             bmpVersion: this.bmpVersion,
@@ -3145,12 +3155,8 @@ class BmpSession {
         const tlvResult = parseBmpTlvs(message);
         this.logTlvWarnings('Termination TLV', tlvResult.warnings);
         this.terminationTlvs = tlvResult.tlvs;
-        this.closeSession();
-        const clientInfo = this.getClientInfo();
-        this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: clientInfo });
-
         const key = BmpSession.makeKey(this.localIp, this.localPort, this.remoteIp, this.remotePort);
-        this.bmpWorker.bmpSessionMap.delete(key);
+        this.bmpWorker.removeBmpSessionByKey(key, this);
     }
 
     processStatisticsReportGlobal(message, version = BmpConst.BMP_VERSION.V3) {

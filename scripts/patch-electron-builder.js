@@ -33,19 +33,18 @@ if (content.includes('// PATCHED FOR SYMLINK FIX')) {
     process.exit(0);
 }
 
-// 查找并替换 ensureSymlink 调用
+// electron-builder 24 uses Bluebird for this copy pass. Keep the replacement
+// exact so an upstream implementation change cannot be patched silently.
 const oldCode = `await bluebird_lst_1.default.map(links, it => (0, fs_extra_1.ensureSymlink)(it.link, it.file), fs_1.CONCURRENCY);`;
-const newCode = `// PATCHED FOR SYMLINK FIX - use symlink instead of ensureSymlink
+const newCode = `// PATCHED FOR SYMLINK FIX - preserve relative link targets without resolving them against cwd
         await bluebird_lst_1.default.map(links, async (it) => {
             try {
-                // 确保父目录存在
                 const parentDir = require('path').dirname(it.file);
                 await require('fs').promises.mkdir(parentDir, { recursive: true });
-                // 直接创建符号链接，不检查目标是否存在
                 await require('fs').promises.symlink(it.link, it.file);
-            } catch (err) {
-                if (err.code !== 'EEXIST') {
-                    throw err;
+            } catch (error) {
+                if (error.code !== 'EEXIST') {
+                    throw error;
                 }
             }
         }, fs_1.CONCURRENCY);`;

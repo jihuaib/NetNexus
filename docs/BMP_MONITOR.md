@@ -21,6 +21,7 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 
 - BMP v3 / v4 报文接收。
 - BMPv4 TLV draft-19 / draft-20 可配置。
+- Linux 6.7+ 上的 TCP-AO 双向认证，可同时选择多个对端 Profile 并按 IPv4/IPv6 CIDR 匹配密钥。
 - Initiation、Termination、Peer Up、Peer Down、Route Monitoring、Statistics Report 处理。
 - 客户端连接列表。
 - BGP session 列表和 session RIB 路由列表。
@@ -53,7 +54,7 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 
 ### BMP 配置和客户端
 
-配置 BMP 监听端口、BMPv4 TLV draft 和 Path Marking TLV 类型。页面下方展示当前 BMP 客户端。
+配置 BMP 监听端口、认证方式、BMPv4 TLV draft 和 Path Marking TLV 类型。页面下方展示当前 BMP 客户端及其认证状态。
 
 ![BMP 配置和客户端信息](images/bmp/bmp-config-and-client-info.png)
 
@@ -61,8 +62,9 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 
 | 按钮 | 功能 |
 | --- | --- |
-| 启动BMP / BMP已启动 | 按监听端口和 TLV draft 启动 BMP 服务；启动后显示运行状态。 |
+| 启动BMP / BMP已启动 | 按监听端口、认证方式和 TLV draft 启动 BMP 服务；启动后显示运行状态。 |
 | 停止BMP | 停止 BMP 服务、断开当前客户端连接，并关闭所有 BMP Client 独立监控窗口。 |
+| 前往 TCP-AO 设置 | 打开 BMP、RPKI-RTR 共享的 TCP-AO Profile 和密钥轮换设置。 |
 | Client 监控 | 为当前客户端打开或切换到唯一的独立监控窗口；窗口内可查看会话、Loc-RIB 和两类统计。 |
 | 详情 | 打开当前 BMP 客户端的连接、Initiation TLV 和 Termination 信息。 |
 
@@ -75,6 +77,21 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 - `draft-20` 的 Route Monitoring `BGP Message TLV` 类型为 `7`。
 - `draft-19` 的 Route Monitoring `BGP Message TLV` 类型为 `4`。
 - 如果发送端的 draft 与页面配置不一致，日志可能出现 `does not contain mandatory BGP Message TLV`。
+
+#### TCP-AO 认证
+
+TCP-AO 只支持 Ubuntu 24.04+、Linux kernel 6.7+ 且 `CONFIG_TCP_AO=y` 的桌面环境，并要求应用包含与当前 CPU 架构匹配的原生 helper。首次配置时先到“设置 → TCP-AO”保存 Profile 和轮换密钥；完整的 Key ID、算法、时间边界和密钥轮换规则见 [TCP-AO 设置](SETTINGS.md#tcp-ao-设置)。
+
+BMP 的选择和验证规则如下：
+
+- 认证方式为“无认证”时，服务使用普通 IPv4/IPv6 TCP 监听；认证方式为“TCP-AO”时，整个监听器强制使用 TCP-AO，不会同时开放普通 TCP 入口，也不会在认证失败时回退。
+- 一次可选择 1–32 个 Profile。每个 Profile 的地址或 CIDR 既是允许连接的对端范围，也是该范围使用的密钥计划；IPv4 和 IPv6 可同时选择。
+- helper 按连接的真实对端地址匹配 Profile。为了避免同一地址对应多套密钥，同一 BMP 监听器所选范围不能重叠；未落入所选范围的对端不会进入 BMP Worker。
+- 启动前会验证所有所选 Profile 均存在、密钥可解密、当前恰好有一把发送有效密钥、后续发送窗口连续，并核对 helper 报告的地址族、Profile 数和密钥数。任一项失败时 BMP 不会启动。
+- BMP 配置仅保存 Profile ID，渲染层不会取得密钥明文。主进程在启动时解密密钥并一次性交给 helper；运行期间修改 Profile 后，需要停止并重新启动 BMP 才会加载新计划。
+- TCP-AO 由 Linux 内核双向执行：入站段必须通过对端密钥和 `RcvID` 验证，NetNexus 发出的 ACK/数据段使用当前 `SndID` 签名。客户端列表的“认证”列会显示 `TCP-AO · Profile 名称`，详情中可核对允许的对端范围。
+
+如果最后一把发送密钥到期且没有后继密钥、系统时钟不可用或回拨、发生全局轮换失败，或者 helper 异常退出，BMP 会安全停止监听并断开全部客户端；选择多个 Profile 时，其中任一 Profile 的发送计划耗尽都会停止整个 BMP 服务。配置页会保留明确的红色运行时故障提示，不会改用未认证 TCP。修正密钥计划、系统时间或运行环境后，重新启动 BMP 即可清除提示。
 
 ### Client 独立监控窗口
 

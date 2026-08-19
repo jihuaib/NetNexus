@@ -6,14 +6,12 @@ on:
             - master
         paths:
             - 'docs/**'
-            - 'output/pdf/netnexus-docs.pdf'
             - '.github/workflows/pages.yml'
     pull_request:
         branches:
             - master
         paths:
             - 'docs/**'
-            - 'output/pdf/netnexus-docs.pdf'
             - '.github/workflows/pages.yml'
     workflow_dispatch:
 
@@ -50,9 +48,6 @@ jobs:
 
             - name: Build VitePress site
               run: npm --prefix docs run build
-
-            - name: Add PDF manual
-              run: cp output/pdf/netnexus-docs.pdf docs/.vitepress/dist/netnexus-docs.pdf
 
             - name: Configure GitHub Pages
               if: github.event_name != 'pull_request'

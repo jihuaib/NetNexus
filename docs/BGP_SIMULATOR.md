@@ -34,7 +34,7 @@ BGP 模拟器用于在本机启动 BGP 服务，配置对等体并生成测试�
 
 - Local AS。
 - Router ID。
-- 监听端口，默认 `179`，本地联调可改用高位端口。
+- 监听端口，默认 `179`。Linux `.deb` 安装/升级时会自动授予 NetNexus `CAP_NET_BIND_SERVICE`，因此普通用户可以直接监听标准 BGP 端口；源码运行需要按[开发与运行](DEVELOPMENT.md#安装和启动)完成一次 capability 配置。
 - 地址族能力。
 
 ### 对等体配置

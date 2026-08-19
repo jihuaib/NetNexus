@@ -69,6 +69,7 @@ function prepareE2eRelease() {
 
     const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     if (process.platform === 'linux') {
+        runCommand(npmCommand, ['run', 'tcp-ao:build']);
         runCommand(npmCommand, ['run', 'build']);
     }
 

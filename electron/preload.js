@@ -54,7 +54,9 @@ contextBridge.exposeInMainWorld('updaterApi', {
     checkForUpdates: () => ipcRenderer.invoke('updater:checkForUpdates'),
     downloadUpdate: () => ipcRenderer.invoke('updater:downloadUpdate'),
     quitAndInstall: () => ipcRenderer.invoke('updater:quitAndInstall'),
-    getCurrentVersion: () => ipcRenderer.invoke('updater:getCurrentVersion')
+    getCurrentVersion: () => ipcRenderer.invoke('updater:getCurrentVersion'),
+    getUpdatePolicy: () => ipcRenderer.invoke('updater:getUpdatePolicy'),
+    openReleasesPage: () => ipcRenderer.invoke('updater:openReleasesPage')
 });
 
 // 工具模块
@@ -144,6 +146,7 @@ contextBridge.exposeInMainWorld('bmpApi', {
     // 配置相关
     saveBmpConfig: config => ipcRenderer.invoke('bmp:saveBmpConfig', config),
     loadBmpConfig: () => ipcRenderer.invoke('bmp:loadBmpConfig'),
+    loadTcpAoSettings: () => ipcRenderer.invoke('bmp:loadTcpAoSettings'),
 
     // bmp操作
     startBmp: config => ipcRenderer.invoke('bmp:startBmp', config),
@@ -189,6 +192,8 @@ contextBridge.exposeInMainWorld('rpkiApi', {
     // 配置相关
     saveRpkiConfig: config => ipcRenderer.invoke('rpki:saveRpkiConfig', config),
     loadRpkiConfig: () => ipcRenderer.invoke('rpki:loadRpkiConfig'),
+    saveTcpAoSettings: settings => ipcRenderer.invoke('rpki:saveTcpAoSettings', settings),
+    loadTcpAoSettings: () => ipcRenderer.invoke('rpki:loadTcpAoSettings'),
 
     // rpki操作
     startRpki: config => ipcRenderer.invoke('rpki:startRpki', config),

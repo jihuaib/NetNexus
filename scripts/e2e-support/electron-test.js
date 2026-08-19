@@ -88,9 +88,14 @@ if (process.env.E2E_TARGET === 'browser') {
                 : testInfo.title || 'unknown e2e test';
             const appEnvironment = { ...process.env };
             delete appEnvironment.ELECTRON_RUN_AS_NODE;
+            // An unpacked Linux tree cannot receive root-owned SUID sandbox
+            // permissions until the .deb is installed. Keep this test-only
+            // bypass explicit so production launches still require sandboxing.
+            const launchArgs = process.env.E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : [];
 
             const electronApp = await electron.launch({
                 executablePath,
+                args: launchArgs,
                 cwd: projectRoot,
                 env: {
                     ...appEnvironment,

@@ -83,9 +83,29 @@ jobs:
                   if-no-files-found: error
                   retention-days: 7
 
-    build-macos:
-        name: Build macOS arm64 and x64
-        runs-on: macos-15
+    # macOS 发布打包已停用；macOS lint、测试和打包 E2E 继续由 test.yml 的 e2e-macos job 验证。
+
+    build-linux:
+        name: Build Linux ${{ matrix.arch }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - arch: x64
+                      runner: ubuntu-24.04
+                      dist_script: dist:linux:x64
+                      unpacked_dir: linux-unpacked
+                      machine: x86_64
+                      deb_arch: amd64
+                      file_arch: x86-64
+                    - arch: arm64
+                      runner: ubuntu-24.04-arm
+                      dist_script: dist:linux:arm64
+                      unpacked_dir: linux-arm64-unpacked
+                      machine: aarch64
+                      deb_arch: arm64
+                      file_arch: ARM aarch64
+        runs-on: ${{ matrix.runner }}
         steps:
             - name: Checkout
               uses: actions/checkout@v4
@@ -96,102 +116,129 @@ jobs:
               uses: actions/setup-node@v4
               with:
                   node-version: ${{ env.NODE_VERSION }}
-                  architecture: arm64
+                  architecture: ${{ matrix.arch }}
                   cache: npm
 
-            - name: Verify arm64 runner and Node.js
+            - name: Verify native runner and Node.js
               run: |
-                  test "$(uname -m)" = "arm64"
-                  node -e "if (process.version !== 'v' + process.env.NODE_VERSION || process.arch !== 'arm64') { throw new Error('Expected arm64 Node.js v' + process.env.NODE_VERSION + ', got ' + process.arch + ' ' + process.version); }"
+                  test "$(uname -m)" = "${{ matrix.machine }}"
+                  node -e "if (process.version !== 'v' + process.env.NODE_VERSION || process.arch !== '${{ matrix.arch }}') { throw new Error('Expected ${{ matrix.arch }} Node.js v' + process.env.NODE_VERSION + ', got ' + process.arch + ' ' + process.version); }"
 
             - name: Setup Python for native modules
               uses: actions/setup-python@v5
               with:
                   python-version: '3.11'
 
-            - name: Install libyang build dependencies
-              run: brew install cmake
+            - name: Install Linux build dependencies
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install --yes build-essential cmake linux-libc-dev patchelf xvfb
 
             - name: Install dependencies
               run: npm ci
 
-            - name: Run macOS lint
+            - name: Run Linux lint
               run: npm run lint
 
             - name: Test bundled libyang runtime
               run: npm run libyang:smoke
 
-            - name: Run macOS tests
-              run: npm test
+            - name: Test native TCP-AO helper
+              run: |
+                  test "$(id -u)" -ne 0
+                  npm run tcp-ao:test:native
+
+            - name: Run Linux tests
+              run: xvfb-run -a npm test
               env:
                   BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS: '20000'
 
-            - name: Run macOS minified CI tests
-              run: npm run test:ci:minified
+            - name: Run Linux minified CI tests
+              run: xvfb-run -a npm run test:ci:minified
               env:
                   BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS: '20000'
 
-            - name: Build on macOS
-              run: npm run build
+            - name: Build Linux Debian package
+              run: npm run ${{ matrix.dist_script }} -- --publish never
 
-            - name: Build macOS arm64 packages
-              run: npm run dist:mac:arm64 -- --publish never
+            - name: Verify packaged native runtimes and artifacts
+              run: |
+                  helper_path="release/${{ matrix.unpacked_dir }}/resources/tcp-ao/linux-${{ matrix.arch }}/tcp-ao-helper"
+                  libyang_path="release/${{ matrix.unpacked_dir }}/resources/libyang/linux-${{ matrix.arch }}/bin/yanglint"
+                  sqlite_path="release/${{ matrix.unpacked_dir }}/resources/app/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+                  test -x "$helper_path"
+                  test -x "$libyang_path"
+                  test -f "$sqlite_path"
+                  file "$helper_path" | grep --fixed-strings "${{ matrix.file_arch }}"
+                  file "$libyang_path" | grep --fixed-strings "${{ matrix.file_arch }}"
+                  file "$sqlite_path" | grep --fixed-strings "${{ matrix.file_arch }}"
+                  "$helper_path" --version
+                  "$libyang_path" --version
+                  readelf --version-info "$libyang_path" | grep --fixed-strings GLIBC_2.38
+                  PACKAGED_SQLITE_EXPECTED_ARCH="${{ matrix.arch }}" npm run test:packaged:sqlite
 
-            - name: Verify packaged arm64 BMP SQLite
+                  shopt -s nullglob
+                  debs=(release/NetNexus-*-linux-${{ matrix.arch }}.deb)
+                  test "${#debs[@]}" -eq 1
+                  test "$(dpkg-deb --field "${debs[0]}" Architecture)" = "${{ matrix.deb_arch }}"
+
+                  postinstall_script="$(dpkg-deb --ctrl-tarfile "${debs[0]}" | tar --extract --to-stdout --wildcards --no-anchored postinst)"
+                  preremove_script="$(dpkg-deb --ctrl-tarfile "${debs[0]}" | tar --extract --to-stdout --wildcards --no-anchored prerm)"
+                  postremove_script="$(dpkg-deb --ctrl-tarfile "${debs[0]}" | tar --extract --to-stdout --wildcards --no-anchored postrm)"
+                  grep --fixed-strings --quiet "chmod 4755" <<<"$postinstall_script"
+                  grep --fixed-strings --quiet "chrome-sandbox" <<<"$postinstall_script"
+                  ! grep --fixed-strings --quiet "chmod 4755 '/opt/NetNexus/chrome-sandbox' || true" <<<"$postinstall_script"
+                  grep --fixed-strings --quiet "app_binary='/opt/NetNexus/net-nexus'" <<<"$postinstall_script"
+                  grep --fixed-strings --quiet 'chown root:root "$app_binary"' <<<"$postinstall_script"
+                  grep --fixed-strings --quiet 'chmod 0755 "$app_binary"' <<<"$postinstall_script"
+                  grep --fixed-strings --quiet "setcap 'cap_net_bind_service=ep'" <<<"$postinstall_script"
+                  grep --fixed-strings --quiet 'getcap "$app_binary"' <<<"$postinstall_script"
+                  ! grep --extended-regexp --quiet 'setcap.*\|\|[[:space:]]*true' <<<"$postinstall_script"
+                  grep --fixed-strings --quiet 'remove|deconfigure)' <<<"$preremove_script"
+                  grep --fixed-strings --quiet 'purge)' <<<"$postremove_script"
+                  ! grep --fixed-strings --quiet 'setcap' <<<"$preremove_script"
+                  ! grep --fixed-strings --quiet 'setcap' <<<"$postremove_script"
+
+                  deb_contents="$(dpkg-deb --contents "${debs[0]}")"
+                  chrome_archive_entry="$(awk '$6 == "./opt/NetNexus/chrome-sandbox" { print; found=1 } END { exit !found }' <<<"$deb_contents")"
+                  grep --extended-regexp --quiet '^-rwsr-xr-x[[:space:]]+root/root' <<<"$chrome_archive_entry"
+                  grep --fixed-strings --quiet "./opt/NetNexus/resources/tcp-ao/linux-${{ matrix.arch }}/tcp-ao-helper" <<<"$deb_contents"
+                  grep --fixed-strings --quiet "./opt/NetNexus/resources/libyang/linux-${{ matrix.arch }}/bin/netnexus-libyang-schema" <<<"$deb_contents"
+
+                  deb_depends="$(dpkg-deb --field "${debs[0]}" Depends)"
+                  echo "$deb_depends"
+                  for package_name in libc6 libstdc++6 libgcc-s1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libcups2 libdbus-1-3 libcairo2 libpango-1.0-0 libx11-6 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 libdrm2 libexpat1 libxcb1 libxkbcommon0 libudev1 libasound2 libuuid1 libcap2-bin libxss1 libxtst6 fonts-noto-cjk libnotify4 libayatana-appindicator3-1 xdg-utils; do
+                      grep --fixed-strings --quiet "$package_name" <<<"$deb_depends"
+                  done
+
+                  test "$(id -u)" -ne 0
+                  sudo apt-get install --yes "${debs[0]}"
+                  test "$(stat --format='%U:%G:%a' /opt/NetNexus/net-nexus)" = 'root:root:755'
+                  test "$(patchelf --print-rpath /opt/NetNexus/net-nexus)" = '/opt/NetNexus'
+                  test "$(getcap /opt/NetNexus/net-nexus)" = '/opt/NetNexus/net-nexus cap_net_bind_service=ep'
+                  ELECTRON_RUN_AS_NODE=1 /opt/NetNexus/net-nexus -e "const net=require('node:net'); const server=net.createServer(); const timer=setTimeout(()=>{ console.error('Timed out binding TCP/179'); process.exit(1); },5000); server.once('error',error=>{ console.error(error); process.exit(1); }); server.listen(179,'127.0.0.1',()=>{ clearTimeout(timer); server.close(error=>{ if(error) throw error; }); });"
+
+                  sudo setcap -r /opt/NetNexus/net-nexus
+                  test -z "$(getcap /opt/NetNexus/net-nexus)"
+                  sudo apt-get install --reinstall --yes "${debs[0]}"
+                  test "$(stat --format='%U:%G:%a' /opt/NetNexus/net-nexus)" = 'root:root:755'
+                  test "$(patchelf --print-rpath /opt/NetNexus/net-nexus)" = '/opt/NetNexus'
+                  test "$(getcap /opt/NetNexus/net-nexus)" = '/opt/NetNexus/net-nexus cap_net_bind_service=ep'
+
+                  E2E_APP_EXECUTABLE=/opt/NetNexus/net-nexus \
+                      xvfb-run -a node scripts/installed-bgp-port179-smoke.js
+
+            - name: Verify packaged BMP SQLite
               run: npm run test:packaged:sqlite
               env:
-                  PACKAGED_SQLITE_EXPECTED_ARCH: arm64
+                  PACKAGED_SQLITE_EXPECTED_ARCH: ${{ matrix.arch }}
 
-            - name: Ensure Rosetta 2 is available
-              run: |
-                  if ! /usr/bin/arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
-                      sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license
-                  fi
-                  /usr/bin/arch -x86_64 /usr/bin/true
-                  /usr/bin/pgrep oahd >/dev/null
-
-            - name: Build bundled x64 libyang runtime
-              run: |
-                  npm run libyang:ensure -- --platform darwin --arch x64
-                  node scripts/verify-libyang-runtime.js --platform darwin --arch x64 >/dev/null
-                  /usr/bin/lipo resources/libyang/darwin-x64/bin/yanglint -verify_arch x86_64
-                  /usr/bin/lipo resources/libyang/darwin-x64/bin/netnexus-libyang-schema -verify_arch x86_64
-
-            - name: Setup x64 Node.js under Rosetta
-              uses: actions/setup-node@v4
-              with:
-                  node-version: ${{ env.NODE_VERSION }}
-                  architecture: x64
-                  cache: npm
-
-            - name: Verify x64 Node.js
-              run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION || process.arch !== 'x64') { throw new Error('Expected x64 Node.js v' + process.env.NODE_VERSION + ', got ' + process.arch + ' ' + process.version); }"
-
-            - name: Install x64 dependencies
-              run: npm ci
-              env:
-                  npm_config_arch: x64
-
-            - name: Verify bundled x64 libyang runtime
-              run: npm run libyang:smoke
-
-            - name: Build macOS x64 packages
-              run: npm run dist:mac -- --publish never
-
-            - name: Verify packaged x64 BMP SQLite
-              run: npm run test:packaged:sqlite
-              env:
-                  PACKAGED_SQLITE_EXPECTED_ARCH: x64
-                  E2E_APP_EXECUTABLE: release/mac/NetNexus.app/Contents/MacOS/NetNexus
-
-            - name: Upload macOS artifacts
+            - name: Upload Linux artifacts
               uses: actions/upload-artifact@v4
               with:
-                  name: macos
+                  name: linux-${{ matrix.arch }}
                   path: |
-                      release/*.dmg
-                      release/*.zip
-                      release/*.blockmap
+                      release/*.deb
                   if-no-files-found: error
                   retention-days: 7
 
@@ -199,8 +246,8 @@ jobs:
         name: Publish GitHub Release
         needs:
             - build-windows
-            - build-macos
-        runs-on: macos-latest
+            - build-linux
+        runs-on: ubuntu-24.04
         permissions:
             contents: write
         env:
@@ -218,16 +265,17 @@ jobs:
                   path: release-assets
                   merge-multiple: true
 
-            - name: Setup Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: ${{ env.NODE_VERSION }}
-
-            - name: Generate combined macOS update manifest
-              run: node scripts/generate-mac-update-manifest.js release-assets
-
             - name: List release assets
-              run: ls -lah release-assets
+              run: |
+                  ls -lah release-assets
+                  version="${RELEASE_TAG#v}"
+                  package_version="$(node -p "require('./package.json').version")"
+                  test "$RELEASE_TAG" = "v${package_version}"
+                  test "$version" = "$package_version"
+                  test -f "release-assets/NetNexus-Setup-${version}-win-x64.exe"
+                  test -f "release-assets/latest.yml"
+                  test -f "release-assets/NetNexus-${version}-linux-x64.deb"
+                  test -f "release-assets/NetNexus-${version}-linux-arm64.deb"
 
             - name: Verify release token
               run: |
@@ -236,13 +284,25 @@ jobs:
                     exit 1
                   fi
 
-            - name: Create or update release
+            - name: Stage, verify, and publish release
               run: |
                   if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-                    gh release upload "$RELEASE_TAG" release-assets/* --clobber
+                    is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+                    if [ "$is_draft" != "true" ]; then
+                      echo "Release $RELEASE_TAG is already public; refusing to mutate it"
+                      exit 1
+                    fi
                   else
-                    gh release create "$RELEASE_TAG" release-assets/* \
+                    gh release create "$RELEASE_TAG" \
+                      --verify-tag \
+                      --draft \
                       --title "NetNexus $RELEASE_TAG" \
                       --notes "自动发布 $RELEASE_TAG" \
                       --target "$GITHUB_SHA"
                   fi
+
+                  gh release upload "$RELEASE_TAG" release-assets/* --clobber
+                  diff -u \
+                    <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort) \
+                    <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort)
+                  gh release edit "$RELEASE_TAG" --draft=false

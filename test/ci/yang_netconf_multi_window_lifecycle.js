@@ -80,6 +80,7 @@ function verifySystemAppInjection() {
     const originalLoad = Module._load;
     let capturedYangOptions = null;
     let capturedNetconfOptions = null;
+    let capturedRpkiOptions = null;
 
     class DummyDependency {}
     class StoreStub extends MemoryStore {}
@@ -93,11 +94,15 @@ function verifySystemAppInjection() {
             capturedNetconfOptions = options;
         }
     }
+    class RpkiStub {
+        constructor(_ipc, _store, options) {
+            capturedRpkiOptions = options;
+        }
+    }
     const stubbedDependencies = new Set([
         './bgpApp',
         './toolsApp',
         './bmpApp',
-        './rpkiApp',
         './ftpApp',
         './snmpApp',
         './dhcpApp',
@@ -126,6 +131,7 @@ function verifySystemAppInjection() {
         if (request === 'electron-store') return StoreStub;
         if (request === './yangApp') return YangStub;
         if (request === './netconfApp') return NetconfStub;
+        if (request === './rpkiApp') return RpkiStub;
         if (request === './bmpApiRoutes') return () => [];
         if (stubbedDependencies.has(request)) return DummyDependency;
         return originalLoad.call(this, request, parent, isMain);
@@ -155,6 +161,8 @@ function verifySystemAppInjection() {
     assert.equal(capturedYangOptions.primaryWebContents, primary);
     assert.equal(capturedNetconfOptions.primaryWebContents, primary);
     assert.equal(capturedNetconfOptions.yangApp, app.yangApp);
+    assert.equal(capturedRpkiOptions.credentialStore, app.credentialStore);
+    assert.equal(capturedNetconfOptions.credentialStore, app.credentialStore);
     capturedNetconfOptions.closeProfileMonitorWindows('router-a');
     capturedNetconfOptions.closeMonitorWindows();
     assert.deepEqual(closeCalls, [

@@ -145,7 +145,12 @@ function buildSource(bmpSession) {
         sysDesc: bmpSession.sysDesc || null,
         metadata: {
             bmpVersion: bmpSession.bmpVersion || null,
-            bmpV4TlvDraft: bmpSession.getBmpV4TlvDraft?.() || null
+            bmpV4TlvDraft: bmpSession.getBmpV4TlvDraft?.() || null,
+            transport: bmpSession.transport || 'tcp',
+            authentication: bmpSession.authentication || 'none',
+            tcpAoProfileId: bmpSession.tcpAoProfileId || null,
+            tcpAoProfileName: bmpSession.tcpAoProfileName || null,
+            tcpAoPeer: bmpSession.tcpAoPeer || null
         }
     };
 }

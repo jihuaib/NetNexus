@@ -68,6 +68,8 @@ export const BMP_ROUTE_STATE_NAME = {
     [BMP_ROUTE_STATE.STALE]: '过期'
 };
 
+export const BMP_RUNTIME_CHANGED_EVENT = 'bmp:runtimeChanged';
+
 export const BMP_ROUTE_PARSE_STATUS = {
     OK: 0,
     WARNING: 0x01,

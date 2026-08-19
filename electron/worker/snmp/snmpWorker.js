@@ -6,6 +6,7 @@ const WorkerWithPromise = require('../core/workerWithPromise');
 const SnmpConst = require('../../const/snmpConst');
 const MibRegistry = require('../../utils/mibRegistry');
 const { formatSnmpValue } = require('../../utils/snmpValueFormatter');
+const { createIpv6OnlyDgramModule } = require('../../utils/ipv6OnlyDgram');
 const { LOG_REQ_TYPES } = require('../../const/toolsConst');
 
 const SNMP_TRAP_OID = '1.3.6.1.6.3.1.1.4.1.0';
@@ -66,10 +67,7 @@ class SnmpWorker {
             this.clearTrapHistory.bind(this)
         );
         this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.COMPILE_MIBS, this.compileMibs.bind(this));
-        this.messageHandler.registerHandler(
-            SnmpConst.SNMP_REQ_TYPES.SEND_GET_REQUEST,
-            this.sendGetRequest.bind(this)
-        );
+        this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.SEND_GET_REQUEST, this.sendGetRequest.bind(this));
         this.messageHandler.registerHandler(
             SnmpConst.SNMP_REQ_TYPES.SEND_GET_NEXT_REQUEST,
             this.sendGetNextRequest.bind(this)
@@ -78,10 +76,7 @@ class SnmpWorker {
             SnmpConst.SNMP_REQ_TYPES.SEND_WALK_REQUEST,
             this.sendWalkRequest.bind(this)
         );
-        this.messageHandler.registerHandler(
-            SnmpConst.SNMP_REQ_TYPES.SEND_SET_REQUEST,
-            this.sendSetRequest.bind(this)
-        );
+        this.messageHandler.registerHandler(SnmpConst.SNMP_REQ_TYPES.SEND_SET_REQUEST, this.sendSetRequest.bind(this));
         this.messageHandler.registerHandler(
             SnmpConst.SNMP_REQ_TYPES.LIST_OID_INSTANCES,
             this.listOidInstances.bind(this)
@@ -191,9 +186,7 @@ class SnmpWorker {
             this.runtimeStopping = false;
             this.snmpConfig = {
                 ...config,
-                supportedVersions: Array.isArray(config.supportedVersions)
-                    ? [...config.supportedVersions]
-                    : [],
+                supportedVersions: Array.isArray(config.supportedVersions) ? [...config.supportedVersions] : [],
                 mibFiles: Array.isArray(config.mibFiles) ? [...config.mibFiles] : []
             };
             this.trapConfig = null;
@@ -278,11 +271,7 @@ class SnmpWorker {
             }
             this.trapRunning = true;
             logger.info(`SNMP Trap服务器启动成功，监听端口: ${trapConfig.port}`);
-            this.messageHandler.sendSuccessResponse(
-                messageId,
-                this.getRuntimeState(),
-                'SNMP Trap服务启动成功'
-            );
+            this.messageHandler.sendSuccessResponse(messageId, this.getRuntimeState(), 'SNMP Trap服务启动成功');
             this.messageHandler.sendEvent(SnmpConst.SNMP_EVT_TYPES.TRAP_EVT, {
                 type: SnmpConst.SNMP_SUB_EVT_TYPES.SERVER_STATUS,
                 data: {
@@ -308,6 +297,7 @@ class SnmpWorker {
         return {
             includeAuthentication: true,
             disableAuthorization: false,
+            dgramModule: createIpv6OnlyDgramModule(),
             sockets: [
                 { transport: 'udp4', address: '0.0.0.0', port: config.port },
                 { transport: 'udp6', address: '::', port: config.port }
@@ -762,7 +752,11 @@ class SnmpWorker {
             op === SnmpConst.MIB_REQ_TYPES.IMPORT_MIB_PROJECT
         ) {
             const requestedFiles =
-                workerData?.requestedFiles || data?.filePaths || data?.requestedFiles || this.snmpConfig?.mibFiles || [];
+                workerData?.requestedFiles ||
+                data?.filePaths ||
+                data?.requestedFiles ||
+                this.snmpConfig?.mibFiles ||
+                [];
             const cacheFilePath = data?.cacheFilePath || this.snmpConfig?.mibCacheFilePath || '';
             if (this.snmpConfig && Array.isArray(requestedFiles)) {
                 this.snmpConfig.mibFiles = [...requestedFiles];
@@ -929,9 +923,7 @@ class SnmpWorker {
             const objectType = this.getSetObjectType(context.request.type);
             const value = this.castSetValue(objectType, context.request.value);
             session = this.createSession(context);
-            const varbinds = await this.sendSetVarbinds(session, [
-                { oid: context.oid, type: objectType, value }
-            ]);
+            const varbinds = await this.sendSetVarbinds(session, [{ oid: context.oid, type: objectType, value }]);
             const firstError = varbinds.find(varbind => snmp.isVarbindError(varbind));
             if (firstError) throw new Error('SET失败: ' + snmp.varbindError(firstError));
             this.messageHandler.sendSuccessResponse(
@@ -1098,8 +1090,12 @@ class SnmpWorker {
     }
 
     compareOids(left, right) {
-        const leftParts = String(left || '').split('.').map(Number);
-        const rightParts = String(right || '').split('.').map(Number);
+        const leftParts = String(left || '')
+            .split('.')
+            .map(Number);
+        const rightParts = String(right || '')
+            .split('.')
+            .map(Number);
         for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index++) {
             const delta = (leftParts[index] ?? -1) - (rightParts[index] ?? -1);
             if (delta !== 0) return delta;
@@ -1124,7 +1120,9 @@ class SnmpWorker {
     }
 
     getSetObjectType(type = '') {
-        const normalized = String(type || '').replace(/[\s_-]+/g, '').toLowerCase();
+        const normalized = String(type || '')
+            .replace(/[\s_-]+/g, '')
+            .toLowerCase();
         const typeMap = {
             integer: snmp.ObjectType.Integer,
             integer32: snmp.ObjectType.Integer,

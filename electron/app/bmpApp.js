@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const { fileURLToPath } = require('node:url');
+const { app, BrowserWindow } = require('electron');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const { resolveWorkerPath } = require('../worker/core/workerPathResolver');
 const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPromise');
@@ -9,8 +11,20 @@ const BmpConst = require('../const/bmpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 const BmpPersistenceClient = require('../worker/bmp/bmpPersistenceClient');
 const { normalizeBmpClientKey } = require('../window/monitorWindowManager');
+const SecureCredentialStore = require('../utils/secureCredentialStore');
+const TcpAoSettingsStore = require('../utils/tcpAoSettingsStore');
+const {
+    BMP_AUTH_TYPES,
+    normalizeBmpAuthSelection,
+    assertNonOverlappingTcpAoProfiles,
+    redactTcpAoConfig
+} = require('../utils/tcpAoConfig');
 
 const BMP_ANALYSIS_INVALIDATION_EVENTS = Object.freeze(['bmp:routeAssuranceInvalidated', 'bmp:routeLensInvalidated']);
+const BMP_RUNTIME_CHANGED_EVENT = 'bmp:runtimeChanged';
+const PACKAGED_RENDERER_PATH = path.resolve(__dirname, '../../dist/index.html');
+const MAX_RUNTIME_FAILURE_CODE_LENGTH = 64;
+const MAX_RUNTIME_FAILURE_REASON_LENGTH = 512;
 
 const BMP_PERSISTENCE_ARTIFACTS = Object.freeze([
     { kind: 'database', suffix: '' },
@@ -19,10 +33,78 @@ const BMP_PERSISTENCE_ARTIFACTS = Object.freeze([
     { kind: 'journal', suffix: '-journal' }
 ]);
 
+function normalizeRuntimeFailure(failure, fallback = null) {
+    const source = failure && typeof failure === 'object' ? failure : fallback;
+    if (!source || typeof source !== 'object') return null;
+    const code = String(source.code || 'BMP_PROCESS_EXIT')
+        .trim()
+        .slice(0, MAX_RUNTIME_FAILURE_CODE_LENGTH);
+    const reason = String(source.reason || 'BMP协议进程异常退出，服务已停止')
+        .trim()
+        .slice(0, MAX_RUNTIME_FAILURE_REASON_LENGTH);
+    return { code: code || 'BMP_PROCESS_EXIT', reason: reason || 'BMP协议进程异常退出，服务已停止' };
+}
+
+function isTrustedBmpRendererUrl(senderUrl, options = {}) {
+    let parsed;
+    try {
+        parsed = new URL(String(senderUrl || ''));
+    } catch (_error) {
+        return false;
+    }
+    const isPackaged = options.isPackaged ?? app.isPackaged;
+    if (!isPackaged) return parsed.origin === 'http://127.0.0.1:3000';
+    if (parsed.protocol !== 'file:') return false;
+    try {
+        return (
+            path.resolve(fileURLToPath(parsed)) === path.resolve(options.packagedRendererPath || PACKAGED_RENDERER_PATH)
+        );
+    } catch (_error) {
+        return false;
+    }
+}
+
+function normalizeBmpConfig(config = {}) {
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        throw new Error('BMP配置格式无效');
+    }
+    const port = Number(config.port ?? 1790);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error('BMP服务端口必须是1-65535之间的整数');
+    }
+    const bmpV4TlvDraft =
+        Number(config.bmpV4TlvDraft) === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+            ? BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+            : BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20;
+    const defaultPathMarkingTlvType =
+        bmpV4TlvDraft === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
+            ? BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE_LEGACY.PATH_MARKING
+            : BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.PATH_MARKING;
+    const pathMarkingTlvType = Number(config.pathMarkingTlvType ?? defaultPathMarkingTlvType);
+    if (!Number.isInteger(pathMarkingTlvType) || pathMarkingTlvType < 1 || pathMarkingTlvType > 0x3fff) {
+        throw new Error('BMP Path TLV类型必须是1-16383之间的整数');
+    }
+    return {
+        port: String(port),
+        bmpV4TlvDraft,
+        pathMarkingTlvType,
+        persistenceEnabled: true,
+        ...normalizeBmpAuthSelection(config)
+    };
+}
+
 class BmpApp {
     constructor(ipcMain, store, options = {}) {
         this.ipcMain = ipcMain;
         this.store = store;
+        this.primaryWebContents = options.primaryWebContents || null;
+        this.browserWindow = options.browserWindow || BrowserWindow;
+        this.appIsPackaged = options.appIsPackaged;
+        this.platform = options.platform || process.platform;
+        this.packagedRendererPath = options.packagedRendererPath || PACKAGED_RENDERER_PATH;
+        this.credentialStore = options.credentialStore || new SecureCredentialStore();
+        this.tcpAoSettingsStore =
+            options.tcpAoSettingsStore || new TcpAoSettingsStore(this.store, this.credentialStore);
         this.bmpConfigFileKey = 'bmp-config';
         this.persistenceDbPath = path.join(
             this.store?.path ? path.dirname(this.store.path) : process.cwd(),
@@ -31,7 +113,12 @@ class BmpApp {
         );
         this.worker = null;
         this.bmpStarting = false;
+        this.bmpStopping = false;
+        this.bmpStartPromise = null;
+        this.bmpStopPromise = null;
         this.bmpStartGeneration = 0;
+        this.bmpRuntimeState = null;
+        this.bmpRuntimeFailure = null;
         this.persistenceDatabaseDeleting = false;
         this.eventDispatcher = null;
         this.runningPersistenceEnabled = false;
@@ -47,6 +134,7 @@ class BmpApp {
         this.bmpRouteUpdateHandler = null;
         this.bmpTerminationHandler = null;
         this.bmpStatisticsReportHandler = null;
+        this.bmpRuntimeFailureHandler = null;
 
         this.logLevel = null;
 
@@ -54,10 +142,11 @@ class BmpApp {
     }
 
     registerHandlers() {
-        this.ipcMain.handle('bmp:saveBmpConfig', this.handleSaveBmpConfig.bind(this));
-        this.ipcMain.handle('bmp:loadBmpConfig', this.handleLoadBmpConfig.bind(this));
-        this.ipcMain.handle('bmp:startBmp', this.handleStartBmp.bind(this));
-        this.ipcMain.handle('bmp:stopBmp', this.handleStopBmp.bind(this));
+        this.registerTrustedHandler('bmp:saveBmpConfig', this.handleSaveBmpConfig);
+        this.registerTrustedHandler('bmp:loadBmpConfig', this.handleLoadBmpConfig);
+        this.registerTrustedHandler('bmp:loadTcpAoSettings', this.handleLoadTcpAoSettings);
+        this.registerTrustedHandler('bmp:startBmp', this.handleStartBmp);
+        this.registerTrustedHandler('bmp:stopBmp', this.handleStopBmp);
         this.ipcMain.handle('bmp:getClientList', this.handleGetClientList.bind(this));
         this.ipcMain.handle('bmp:getClient', this.handleGetClient.bind(this));
         this.ipcMain.handle('bmp:deleteClientData', this.handleDeleteClientData.bind(this));
@@ -84,6 +173,40 @@ class BmpApp {
         this.ipcMain.handle('bmp:getPersistedRouteEvents', this.handleGetPersistedRouteEvents.bind(this));
     }
 
+    registerTrustedHandler(channel, handler) {
+        this.ipcMain.handle(channel, (event, ...args) => {
+            this.assertTrustedSender(event);
+            return handler.call(this, event, ...args);
+        });
+    }
+
+    assertTrustedSender(event) {
+        const sender = event?.sender;
+        const senderFrame = event?.senderFrame;
+        const ownerWindow = sender ? this.browserWindow?.fromWebContents?.(sender) : null;
+        const senderUrl = String(senderFrame?.url || sender?.getURL?.() || '');
+        if (
+            !sender ||
+            sender !== this.primaryWebContents ||
+            !senderFrame ||
+            senderFrame !== sender.mainFrame ||
+            !ownerWindow ||
+            ownerWindow.isDestroyed?.() ||
+            !senderUrl
+        ) {
+            throw new Error('拒绝来自未知窗口的BMP请求');
+        }
+        if (
+            isTrustedBmpRendererUrl(senderUrl, {
+                isPackaged: this.appIsPackaged ?? app.isPackaged,
+                packagedRendererPath: this.packagedRendererPath
+            })
+        ) {
+            return;
+        }
+        throw new Error('拒绝来自非应用页面的BMP请求');
+    }
+
     emitDetailedMonitorUpdate(eventType, data) {
         if (!this.eventDispatcher) {
             return;
@@ -103,7 +226,7 @@ class BmpApp {
 
     async handleSaveBmpConfig(event, config) {
         try {
-            this.store.set(this.bmpConfigFileKey, { ...config, persistenceEnabled: true });
+            this.store.set(this.bmpConfigFileKey, normalizeBmpConfig(config));
             return successResponse(null, 'BMP配置文件保存成功');
         } catch (error) {
             logger.error('Error saving BMP config:', error.message);
@@ -130,11 +253,82 @@ class BmpApp {
             if (!config) {
                 return successResponse(null, 'BMP配置文件不存在');
             }
-            return successResponse({ ...config, persistenceEnabled: true }, 'BMP配置文件加载成功');
+            return successResponse(normalizeBmpConfig(config), 'BMP配置文件加载成功');
         } catch (error) {
             logger.error('Error loading BMP config:', error.message);
             return errorResponse(error.message);
         }
+    }
+
+    getTcpAoSettingsStore() {
+        // SystemApp replaces protocol stores after a major-version cleanup.
+        this.tcpAoSettingsStore.store = this.store;
+        return this.tcpAoSettingsStore;
+    }
+
+    async initializeCredentialStore() {
+        if (typeof this.credentialStore.initialize === 'function') {
+            await this.credentialStore.initialize();
+        }
+    }
+
+    async handleLoadTcpAoSettings() {
+        try {
+            await this.initializeCredentialStore();
+            return successResponse(this.getTcpAoSettingsStore().listProfiles(), 'TCP-AO配置加载成功');
+        } catch (error) {
+            logger.error('Error loading BMP TCP-AO settings:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    emitRuntimeChanged(running, dispatcher = this.eventDispatcher, failure = null) {
+        const normalizedRunning = Boolean(running);
+        const normalizedFailure = normalizedRunning ? null : normalizeRuntimeFailure(failure);
+        const nextStateKey = normalizedFailure
+            ? `${normalizedRunning}|${normalizedFailure.code}|${normalizedFailure.reason}`
+            : String(normalizedRunning);
+        if (this.bmpRuntimeState === nextStateKey) return false;
+        this.bmpRuntimeState = nextStateKey;
+        dispatcher?.emit(BMP_RUNTIME_CHANGED_EVENT, {
+            running: normalizedRunning,
+            ...(normalizedFailure
+                ? { unexpected: true, code: normalizedFailure.code, reason: normalizedFailure.reason }
+                : {})
+        });
+        return true;
+    }
+
+    createBmpProcess(workerPath, options) {
+        return new ProtocolProcessWithPromise(workerPath, options).createLongRunningProcess();
+    }
+
+    trackLifecycleOperation(propertyName, operation) {
+        let resolveTracked;
+        let rejectTracked;
+        const trackedPromise = new Promise((resolve, reject) => {
+            resolveTracked = resolve;
+            rejectTracked = reject;
+        });
+        this[propertyName] = trackedPromise;
+
+        let operationResult;
+        try {
+            operationResult = operation();
+        } catch (error) {
+            operationResult = Promise.reject(error);
+        }
+        Promise.resolve(operationResult).then(
+            value => {
+                if (this[propertyName] === trackedPromise) this[propertyName] = null;
+                resolveTracked(value);
+            },
+            error => {
+                if (this[propertyName] === trackedPromise) this[propertyName] = null;
+                rejectTracked(error);
+            }
+        );
+        return trackedPromise;
     }
 
     async sendWorkerQuery(reqType, data, notRunningData = null) {
@@ -540,46 +734,72 @@ class BmpApp {
         );
     }
 
-    async handleStartBmp(event, bmpConfigData) {
-        const webContents = event.sender;
-        if (null !== this.worker) {
-            logger.error(`bmp协议已经启动`);
-            return errorResponse('bmp协议已经启动');
+    handleStartBmp(event, bmpConfigData) {
+        if (this.bmpStartPromise) return this.bmpStartPromise;
+        if (this.bmpStopPromise || this.bmpStopping) {
+            return Promise.resolve(errorResponse('BMP正在停止，请稍后重试'));
         }
-        if (this.bmpStarting) {
-            return errorResponse('bmp协议正在启动');
+        if (this.worker) {
+            logger.error('bmp协议已经启动或进程仍在回收');
+            return Promise.resolve(errorResponse('bmp协议已经启动或进程仍在回收'));
         }
         if (this.persistenceDatabaseDeleting) {
-            return errorResponse('BMP数据库正在删除，请稍后重试');
+            return Promise.resolve(errorResponse('BMP数据库正在删除，请稍后重试'));
         }
 
+        return this.trackLifecycleOperation('bmpStartPromise', () => this.startBmpOperation(event, bmpConfigData));
+    }
+
+    async startBmpOperation(event, bmpConfigData) {
+        const webContents = event?.sender || null;
         this.bmpStarting = true;
+        this.bmpStopping = false;
+        this.bmpRuntimeState = null;
+        this.bmpRuntimeFailure = null;
         const startGeneration = ++this.bmpStartGeneration;
         try {
+            const inputConfig = bmpConfigData;
+            const normalizedConfig = normalizeBmpConfig(inputConfig);
+            const auth = normalizeBmpAuthSelection(normalizedConfig);
+            let tcpAoProfiles = [];
+            if (auth.authType === BMP_AUTH_TYPES.TCP_AO) {
+                if (this.platform !== 'linux') {
+                    throw new Error('TCP-AO认证仅支持Linux 6.7及以上系统');
+                }
+                await this.initializeCredentialStore();
+                tcpAoProfiles = auth.tcpAoProfileIds.map(profileId =>
+                    this.getTcpAoSettingsStore().getRuntimeProfile(profileId)
+                );
+                assertNonOverlappingTcpAoProfiles(tcpAoProfiles);
+            }
             bmpConfigData = {
-                ...bmpConfigData,
+                ...normalizedConfig,
+                tcpAoProfiles,
                 // SQLite now is the BMP RIB rather than an optional history sink.
                 persistenceEnabled: true,
                 persistenceDbPath: this.persistenceDbPath,
-                persistenceBatchSize: Number(bmpConfigData.persistenceBatchSize) || 2000,
-                persistenceBatchBytes: Number(bmpConfigData.persistenceBatchBytes) || 2 * 1024 * 1024,
-                persistenceFlushMs: Number(bmpConfigData.persistenceFlushMs) || 20,
-                persistenceHighWatermarkBytes: Number(bmpConfigData.persistenceHighWatermarkBytes) || 64 * 1024 * 1024,
-                persistenceLowWatermarkBytes: Number(bmpConfigData.persistenceLowWatermarkBytes) || 32 * 1024 * 1024,
+                persistenceBatchSize: Number(inputConfig.persistenceBatchSize) || 2000,
+                persistenceBatchBytes: Number(inputConfig.persistenceBatchBytes) || 2 * 1024 * 1024,
+                persistenceFlushMs: Number(inputConfig.persistenceFlushMs) || 20,
+                persistenceHighWatermarkBytes: Number(inputConfig.persistenceHighWatermarkBytes) || 64 * 1024 * 1024,
+                persistenceLowWatermarkBytes: Number(inputConfig.persistenceLowWatermarkBytes) || 32 * 1024 * 1024,
                 // Offline current RIB data is persistent state. It may only be
                 // reconciled by that source's lifecycle or removed explicitly.
                 persistencePurgeExpiredStaleRoutes: false,
-                persistenceRefreshTimeoutMs: Number(bmpConfigData.persistenceRefreshTimeoutMs) || 30 * 60 * 1000,
-                persistenceEventRetentionMs:
-                    Number(bmpConfigData.persistenceEventRetentionMs) || 7 * 24 * 60 * 60 * 1000,
-                persistenceMaxDbBytes: Number(bmpConfigData.persistenceMaxDbBytes) || 20 * 1024 * 1024 * 1024
+                persistenceRefreshTimeoutMs: Number(inputConfig.persistenceRefreshTimeoutMs) || 30 * 60 * 1000,
+                persistenceEventRetentionMs: Number(inputConfig.persistenceEventRetentionMs) || 7 * 24 * 60 * 60 * 1000,
+                persistenceMaxDbBytes: Number(inputConfig.persistenceMaxDbBytes) || 20 * 1024 * 1024 * 1024
             };
             await this.closeOfflinePersistenceReader();
-            if (startGeneration !== this.bmpStartGeneration) {
+            if (startGeneration !== this.bmpStartGeneration || this.bmpStopping) {
                 throw new Error('BMP启动已取消');
             }
             this.runningPersistenceEnabled = true;
-            logger.info('BMP config:', { ...bmpConfigData, persistenceDbPath: '[user-data]/bmp/bmp.sqlite3' });
+            logger.info('BMP config:', {
+                ...bmpConfigData,
+                tcpAoProfiles: tcpAoProfiles.map(profile => redactTcpAoConfig(profile)),
+                persistenceDbPath: '[user-data]/bmp/bmp.sqlite3'
+            });
 
             // 获取日志级别配置
             if (this.logLevel) {
@@ -588,23 +808,31 @@ class BmpApp {
 
             const workerPath = resolveWorkerPath('bmp/bmpWorker.js');
 
-            const processFactory = new ProtocolProcessWithPromise(workerPath, {
+            this.worker = this.createBmpProcess(workerPath, {
                 serviceName: PROTOCOL_PROCESS_SERVICES.BMP,
-                onExit: (_code, client, exit = {}) => {
+                onExit: (code, client, exit = {}) => {
                     if (this.worker !== client) return;
                     if (exit.expected) return;
+                    const failure =
+                        this.bmpRuntimeFailure ||
+                        normalizeRuntimeFailure({
+                            code: 'BMP_PROCESS_EXIT',
+                            reason: `BMP协议进程异常退出（退出码 ${Number.isInteger(code) ? code : '-'}），服务已停止`
+                        });
+                    this.emitRuntimeChanged(false, this.eventDispatcher, failure);
                     this.worker = null;
                     this.runningPersistenceEnabled = false;
                     this.closeMonitorWindows();
                     this.eventDispatcher?.cleanup();
                     this.eventDispatcher = null;
+                    this.bmpRuntimeFailureHandler = null;
                 }
             });
-            this.worker = processFactory.createLongRunningProcess();
+            const activeWorker = this.worker;
 
             // 设置事件发送器的 webContents
             this.eventDispatcher = new EventDispatcher();
-            this.eventDispatcher.setWebContents(webContents);
+            if (webContents) this.eventDispatcher.setWebContents(webContents);
 
             // 定义事件处理函数
             this.bmpInitiationHandler = data => {
@@ -636,6 +864,12 @@ class BmpApp {
                 this.eventDispatcher.emitToSubscribers('bmp:statisticsReport', successResponse(data.data));
             };
 
+            this.bmpRuntimeFailureHandler = failure => {
+                if (this.worker !== activeWorker) return;
+                this.bmpRuntimeFailure = normalizeRuntimeFailure(failure);
+                this.emitRuntimeChanged(false, this.eventDispatcher, this.bmpRuntimeFailure);
+            };
+
             // 注册事件监听器，处理来自worker的事件通知
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.INITIATION, this.bmpInitiationHandler);
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.SESSION_UPDATE, this.bmpSessionUpdateHandler);
@@ -647,13 +881,18 @@ class BmpApp {
             );
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
+            this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, this.bmpRuntimeFailureHandler);
 
             const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.START_BMP, bmpConfigData);
-            if (startGeneration !== this.bmpStartGeneration) {
+            if (this.bmpRuntimeFailure) {
+                throw new Error(this.bmpRuntimeFailure.reason);
+            }
+            if (startGeneration !== this.bmpStartGeneration || this.bmpStopping || this.worker !== activeWorker) {
                 throw new Error('BMP启动已取消');
             }
 
             // 这里肯定是启动成功了，如果失败，会抛出异常
+            this.emitRuntimeChanged(true);
             logger.info('bmp启动成功 result:', result);
             return successResponse(null, result.msg);
         } catch (error) {
@@ -669,12 +908,14 @@ class BmpApp {
                 );
                 worker.removeEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
                 worker.removeEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
+                worker.removeEventListener(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, this.bmpRuntimeFailureHandler);
                 await worker.terminate().catch(() => {});
                 if (this.worker === worker) {
                     this.worker = null;
                 }
             }
             this.runningPersistenceEnabled = false;
+            this.emitRuntimeChanged(false);
             if (this.eventDispatcher) {
                 this.eventDispatcher.cleanup(); // 清理事件发送器
                 this.eventDispatcher = null;
@@ -683,14 +924,32 @@ class BmpApp {
             return errorResponse(error.message);
         } finally {
             this.bmpStarting = false;
+            if (this.bmpStopping && !this.worker && !this.bmpStopPromise) this.bmpStopping = false;
         }
     }
 
-    async handleStopBmp() {
-        this.closeMonitorWindows();
-        if (null === this.worker) {
+    handleStopBmp() {
+        if (this.bmpStopPromise) return this.bmpStopPromise;
+        if (!this.worker && !this.bmpStarting && !this.bmpStartPromise) {
             logger.error('BMP未启动');
-            return errorResponse('BMP未启动');
+            return Promise.resolve(errorResponse('BMP未启动'));
+        }
+
+        return this.trackLifecycleOperation('bmpStopPromise', () => this.stopBmpOperation());
+    }
+
+    async stopBmpOperation() {
+        this.closeMonitorWindows();
+        const pendingStart = this.bmpStartPromise;
+        const cancelledPendingStart = Boolean(this.bmpStarting || pendingStart);
+        this.bmpStopping = true;
+        this.emitRuntimeChanged(false);
+        this.cancelPendingStart();
+        if (pendingStart) await pendingStart.catch(() => {});
+
+        if (!this.worker) {
+            this.bmpStopping = false;
+            return cancelledPendingStart ? successResponse(null, 'BMP启动已取消') : errorResponse('BMP未启动');
         }
 
         const worker = this.worker;
@@ -715,6 +974,7 @@ class BmpApp {
             );
             worker.removeEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
             worker.removeEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
+            worker.removeEventListener(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, this.bmpRuntimeFailureHandler);
             await worker.terminate().catch(() => {});
             if (this.worker === worker) {
                 this.worker = null;
@@ -724,6 +984,9 @@ class BmpApp {
                 this.eventDispatcher.cleanup(); // 清理事件发送器
                 this.eventDispatcher = null;
             }
+            this.bmpRuntimeFailure = null;
+            this.bmpRuntimeFailureHandler = null;
+            this.bmpStopping = false;
         }
     }
 
@@ -1039,12 +1302,18 @@ class BmpApp {
     }
 
     getBmpRunning() {
-        return null !== this.worker || this.bmpStarting;
+        return null !== this.worker || this.bmpStarting || Boolean(this.bmpStartPromise);
     }
 
     cancelPendingStart() {
-        if (this.bmpStarting) this.bmpStartGeneration += 1;
+        if (!this.bmpStarting && !this.bmpStartPromise) return false;
+        this.bmpStopping = true;
+        this.bmpStartGeneration += 1;
+        return true;
     }
 }
 
 module.exports = BmpApp;
+module.exports.PACKAGED_RENDERER_PATH = PACKAGED_RENDERER_PATH;
+module.exports.isTrustedBmpRendererUrl = isTrustedBmpRendererUrl;
+module.exports.normalizeBmpConfig = normalizeBmpConfig;

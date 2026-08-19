@@ -21,6 +21,14 @@ const {
     getGeneratedRandomAsPath
 } = require('../../utils/bgpRouteGenerator');
 
+function formatBgpListenError(error, port, platform = process.platform) {
+    if (error?.code === 'EADDRINUSE') return `BGP监听端口${port}已被其他进程占用`;
+    if (platform === 'linux' && (error?.code === 'EACCES' || error?.code === 'EPERM')) {
+        return `BGP监听端口${port}权限不足；请安装正式Linux .deb，或为当前Electron可执行文件配置CAP_NET_BIND_SERVICE`;
+    }
+    return `BGP协议启动失败: ${error?.message || '未知监听错误'}`;
+}
+
 function makeRouteLookupKey(addressFamily, route) {
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC) {
         return BgpRoute.makeUnicastKey(route?.pathId, route?.rd, route?.ip, route?.mask);
@@ -213,8 +221,8 @@ class BgpWorker {
     }
 
     async startTcpServer(messageId) {
+        const listenPort = this.getListenPort();
         try {
-            const listenPort = this.getListenPort();
             this.server = net.createServer(socket => {
                 const clientAddress = socket.remoteAddress;
                 const clientPort = socket.remotePort;
@@ -305,14 +313,16 @@ class BgpWorker {
             logger.info(`TCP Server listening on port ${listenPort} at 0.0.0.0`);
             // 启动ipv6服务器并监听端口
             const listenIpv6Pormise = util.promisify(this.ipv6Server.listen).bind(this.ipv6Server);
-            await listenIpv6Pormise(listenPort, '::');
+            await listenIpv6Pormise({ port: listenPort, host: '::', ipv6Only: true });
             logger.info(`TCP Server listening on port ${listenPort} at ::`);
 
             logger.info(`bgp协议启动成功`);
             this.messageHandler.sendSuccessResponse(messageId, null, 'bgp协议启动成功');
         } catch (err) {
             logger.error(`Error starting TCP server: ${err.message}`);
-            this.messageHandler.sendErrorResponse(messageId, 'bgp协议启动失败');
+            if (this.server?.listening) this.server.close();
+            if (this.ipv6Server?.listening) this.ipv6Server.close();
+            this.messageHandler.sendErrorResponse(messageId, formatBgpListenError(err, listenPort));
         }
     }
 
@@ -1542,3 +1552,4 @@ if (require.main === module) {
 }
 
 module.exports = BgpWorker;
+module.exports.formatBgpListenError = formatBgpListenError;

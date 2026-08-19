@@ -546,13 +546,14 @@ test.describe('Custom UI component interactions', () => {
         await expect(settingsDialog).toBeVisible();
         const settingsIconShapes = await getMenuIconShapes(
             settingsDialog.locator('.nn-navigation-modal-nav'),
-            ['通用', '工具', 'FTP', 'API', '数据', '运行时', '更新'],
+            ['通用', '工具', 'FTP', 'API', '数据', '运行时', 'TCP-AO', '更新'],
             'tab'
         );
         expect(new Set(Object.values(settingsIconShapes)).size).toBe(Object.keys(settingsIconShapes).length);
         expect(settingsIconShapes['通用']).toBe(quickIconShapes['设置']);
         expect(settingsIconShapes['工具']).toBe(mainIconShapes['工具']);
         expect(settingsIconShapes.FTP).toBe(mainIconShapes.FTP);
+        expect(settingsIconShapes['TCP-AO']).toBe(mainIconShapes.RPKI);
     });
 
     test('keeps configuration labels compact, radio buttons joined and selected sidebar text emphasized', async ({
@@ -1257,6 +1258,39 @@ test.describe('Custom UI component interactions', () => {
                     return property in fallbacks ? fallbacks[property] : Reflect.get(target, property, receiver);
                 }
             });
+            window.rpkiApi = new Proxy(window.rpkiApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpAoSettings') {
+                        return async () => ({
+                            status: 'success',
+                            data: {
+                                profiles: [
+                                    {
+                                        id: 'layout-profile',
+                                        name: 'Layout Profile',
+                                        peer: '192.0.2.1/32',
+                                        keys: [
+                                            {
+                                                id: 'layout-key',
+                                                algorithm: 'hmac(sha1)',
+                                                sndId: 1,
+                                                rcvId: 1,
+                                                macLength: 12,
+                                                hasSavedKey: true,
+                                                acceptStart: null,
+                                                sendStart: null,
+                                                sendEnd: null,
+                                                acceptEnd: null
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        });
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
         });
         const settingsDialog = await openSettingsDialog(page);
         const categories = [
@@ -1307,6 +1341,14 @@ test.describe('Custom UI component interactions', () => {
                 layout: '.runtime-details',
                 items: 0,
                 sections: ['YANG 编译器']
+            },
+            {
+                tab: 'TCP-AO',
+                description: 'RPKI TCP-AO 密钥与轮换 Profile',
+                root: '.tcp-ao-settings',
+                layout: '.tcp-ao-profile-list',
+                items: 0,
+                sections: ['TCP-AO Profiles']
             },
             {
                 tab: '更新',
@@ -1396,14 +1438,213 @@ test.describe('Custom UI component interactions', () => {
         const automaticUpdates = updateSettings.getByRole('region', { name: '自动更新' });
         await expect(automaticUpdates).toBeVisible();
         await expect(automaticUpdates.locator('[data-nn-settings-item]')).toHaveCount(2);
-        await expect(automaticUpdates.getByRole('switch', { name: '启动时检查更新' })).toBeVisible();
+        const automaticCheck = automaticUpdates.getByRole('switch', { name: '启动时检查更新' });
         const automaticDownload = automaticUpdates.getByRole('switch', { name: '自动下载更新' });
-        await expect(automaticDownload).toHaveAttribute('aria-checked', 'false');
-        await automaticDownload.click();
-        await expect(automaticDownload).toHaveAttribute('aria-checked', 'true');
-        await expect
-            .poll(() => page.evaluate(() => window.__settingsLayoutSaveCalls.at(-1)))
-            .toEqual({ autoCheckOnStartup: true, autoDownload: true });
+        await expect(automaticCheck).toBeVisible();
+
+        const linuxReleasesButton = updateSettings.getByRole('button', {
+            name: '打开 GitHub Releases',
+            exact: true
+        });
+        if (await linuxReleasesButton.isVisible()) {
+            await expect(updateSettings.getByText('Linux 请从 GitHub Releases 下载并用 apt 安装 .deb')).toBeVisible();
+            await expect(updateSettings.getByRole('button', { name: '检查更新', exact: true })).toBeDisabled();
+            await expect(automaticCheck).toBeDisabled();
+            await expect(automaticDownload).toBeDisabled();
+            await expect(automaticCheck).toHaveAttribute('aria-checked', 'false');
+            await expect(automaticDownload).toHaveAttribute('aria-checked', 'false');
+            expect(await page.evaluate(() => window.__settingsLayoutSaveCalls)).toEqual([]);
+        } else {
+            await expect(automaticDownload).toHaveAttribute('aria-checked', 'false');
+            await automaticDownload.click();
+            await expect(automaticDownload).toHaveAttribute('aria-checked', 'true');
+            await expect
+                .poll(() => page.evaluate(() => window.__settingsLayoutSaveCalls.at(-1)))
+                .toEqual({ autoCheckOnStartup: true, autoDownload: true });
+        }
+    });
+
+    test('shows the manual deb update policy and disables automatic updates on Linux', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            window.__linuxUpdateCalls = [];
+            window.commonApi = new Proxy(window.commonApi, {
+                get(target, property, receiver) {
+                    if (property === 'getUpdateSettings') {
+                        return async () => ({
+                            status: 'success',
+                            data: { autoCheckOnStartup: true, autoDownload: true }
+                        });
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+            window.updaterApi = {
+                getCurrentVersion: async () => '5.0.2-test',
+                getUpdatePolicy: async () => ({
+                    platform: 'linux',
+                    mode: 'manual-deb',
+                    automaticUpdatesSupported: false,
+                    message: 'Linux 请从 GitHub Releases 下载并用 apt 安装 .deb',
+                    releasesUrl: 'https://github.com/jihuaib/NetNexus/releases'
+                }),
+                checkForUpdates: async () => window.__linuxUpdateCalls.push('check'),
+                downloadUpdate: async () => window.__linuxUpdateCalls.push('download'),
+                quitAndInstall: async () => window.__linuxUpdateCalls.push('install'),
+                openReleasesPage: async () => {
+                    window.__linuxUpdateCalls.push('open-releases');
+                    return { success: true };
+                }
+            };
+        });
+
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: '更新', exact: true }).click();
+        const updateSettings = settingsDialog.locator('.update-settings');
+
+        await expect(updateSettings.getByText('Linux 请从 GitHub Releases 下载并用 apt 安装 .deb')).toBeVisible();
+        await expect(updateSettings.getByText('手动安装 .deb', { exact: true })).toBeVisible();
+        await expect(updateSettings.getByRole('button', { name: '检查更新', exact: true })).toBeDisabled();
+        await expect(updateSettings.getByRole('switch', { name: '启动时检查更新' })).toBeDisabled();
+        await expect(updateSettings.getByRole('switch', { name: '自动下载更新' })).toBeDisabled();
+        await expect(updateSettings.getByRole('switch', { name: '启动时检查更新' })).toHaveAttribute(
+            'aria-checked',
+            'false'
+        );
+        await expect(updateSettings.getByRole('switch', { name: '自动下载更新' })).toHaveAttribute(
+            'aria-checked',
+            'false'
+        );
+
+        await updateSettings.getByRole('button', { name: '打开 GitHub Releases', exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__linuxUpdateCalls)).toEqual(['open-releases']);
+    });
+
+    test('manages nested TCP-AO rotation keys without restoring plaintext secrets', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            window.__tcpAoSettingsSaveCalls = [];
+            const loadedSettings = {
+                profiles: [
+                    {
+                        id: 'core-router',
+                        name: '核心路由器',
+                        peer: '192.0.2.1/32',
+                        keys: [
+                            {
+                                id: 'current-key',
+                                algorithm: 'hmac(sha1)',
+                                sndId: 1,
+                                rcvId: 1,
+                                macLength: 12,
+                                key: 'plaintext-must-not-load',
+                                hasSavedKey: true,
+                                acceptStart: null,
+                                sendStart: null,
+                                sendEnd: null,
+                                acceptEnd: null
+                            }
+                        ]
+                    }
+                ]
+            };
+            window.rpkiApi = new Proxy(window.rpkiApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpAoSettings') {
+                        return async () => ({ status: 'success', data: structuredClone(loadedSettings) });
+                    }
+                    if (property === 'saveTcpAoSettings') {
+                        return async settings => {
+                            window.__tcpAoSettingsSaveCalls.push(structuredClone(settings));
+                            return {
+                                status: 'success',
+                                data: {
+                                    profiles: settings.profiles.map(profile => ({
+                                        id: profile.id,
+                                        name: profile.name,
+                                        peer: profile.peer,
+                                        keys: profile.keys.map(keyItem => {
+                                            const { key, ...metadata } = keyItem;
+                                            return { ...metadata, hasSavedKey: keyItem.hasSavedKey || Boolean(key) };
+                                        })
+                                    }))
+                                }
+                            };
+                        };
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+        });
+
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: 'TCP-AO', exact: true }).click();
+        await expect(settingsDialog.getByTestId('tcp-ao-profile-0')).toBeVisible();
+        await expect(settingsDialog.getByTestId('tcp-ao-key-secret-0-0')).toHaveValue('');
+
+        await settingsDialog.getByTestId('tcp-ao-key-secret-0-0').fill('unsaved-secret-must-be-wiped');
+        await settingsDialog.getByRole('button', { name: '关闭' }).click();
+        await expect(settingsDialog).toBeHidden();
+        await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: 'TCP-AO', exact: true }).click();
+        await expect(settingsDialog.getByTestId('tcp-ao-key-secret-0-0')).toHaveValue('');
+
+        await settingsDialog.getByTestId('tcp-ao-profile-peer-0').fill('192.0.2.1/24');
+        await settingsDialog.getByTestId('tcp-ao-save-button').click();
+        await expect(
+            settingsDialog.getByText('CIDR 前缀必须使用网络地址，主机位应为 0', { exact: true })
+        ).toBeVisible();
+        expect(await page.evaluate(() => window.__tcpAoSettingsSaveCalls.length)).toBe(0);
+        await settingsDialog.getByTestId('tcp-ao-profile-peer-0').fill('192.0.2.0/24');
+
+        await settingsDialog.getByTestId('tcp-ao-key-send-end-0-0').fill('2099-01-01T00:00');
+        await settingsDialog.getByTestId('tcp-ao-key-accept-end-0-0').fill('2098-12-31T23:59');
+        await settingsDialog.getByTestId('tcp-ao-save-button').click();
+        await expect(settingsDialog.getByText('接收结束不能早于发送结束', { exact: true })).toBeVisible();
+        expect(await page.evaluate(() => window.__tcpAoSettingsSaveCalls.length)).toBe(0);
+
+        await settingsDialog.getByTestId('tcp-ao-key-accept-end-0-0').fill('2099-01-01T00:00');
+        await settingsDialog.getByTestId('tcp-ao-save-button').click();
+        await expect.poll(() => page.evaluate(() => window.__tcpAoSettingsSaveCalls.length)).toBe(1);
+        await page.evaluate(() => {
+            window.__tcpAoSettingsSaveCalls = [];
+        });
+
+        await settingsDialog.getByTestId('tcp-ao-add-key-0').click();
+        await settingsDialog.getByTestId('tcp-ao-key-snd-id-0-1').fill('2');
+        await settingsDialog.getByTestId('tcp-ao-key-rcv-id-0-1').fill('2');
+        await settingsDialog.getByTestId('tcp-ao-key-secret-0-1').fill('rotation-secret');
+        await settingsDialog.getByTestId('tcp-ao-save-button').click();
+        await expect(
+            settingsDialog.getByText('当前时间只能有一把发送有效的密钥，请修正重叠窗口', { exact: true })
+        ).toBeVisible();
+        expect(await page.evaluate(() => window.__tcpAoSettingsSaveCalls.length)).toBe(0);
+
+        await settingsDialog.getByTestId('tcp-ao-key-send-start-0-1').fill('2098-12-31T23:59');
+        await settingsDialog.getByTestId('tcp-ao-save-button').click();
+        await expect(settingsDialog.getByText('发送有效期与第 1 把密钥重叠', { exact: true })).toBeVisible();
+        expect(await page.evaluate(() => window.__tcpAoSettingsSaveCalls.length)).toBe(0);
+
+        await settingsDialog.getByTestId('tcp-ao-key-send-start-0-1').fill('2099-01-01T00:01');
+        await settingsDialog.getByTestId('tcp-ao-save-button').click();
+        await expect(
+            settingsDialog.getByText('未来发送窗口必须紧接第 1 把密钥，不能留有空档', { exact: true })
+        ).toBeVisible();
+        expect(await page.evaluate(() => window.__tcpAoSettingsSaveCalls.length)).toBe(0);
+
+        await settingsDialog.getByTestId('tcp-ao-key-send-start-0-1').fill('2099-01-01T00:00');
+        await settingsDialog.getByTestId('tcp-ao-save-button').click();
+
+        await expect.poll(() => page.evaluate(() => window.__tcpAoSettingsSaveCalls.length)).toBe(1);
+        const payload = await page.evaluate(() => window.__tcpAoSettingsSaveCalls[0]);
+        expect(payload.profiles).toHaveLength(1);
+        expect(payload.profiles[0]).not.toHaveProperty('key');
+        expect(payload.profiles[0]).not.toHaveProperty('algorithm');
+        expect(payload.profiles[0].keys).toHaveLength(2);
+        expect(payload.profiles[0].keys[0].key).toBe('');
+        expect(payload.profiles[0].keys[1].key).toBe('rotation-secret');
+        expect(payload.profiles[0].keys[1].sendStart).toMatch(/^2099-01-01T/u);
+        await expect(settingsDialog.getByTestId('tcp-ao-key-secret-0-1')).toHaveValue('');
     });
 
     test('deletes the stopped BMP database from data management after confirmation', async ({ page }) => {

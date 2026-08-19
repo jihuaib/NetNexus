@@ -32,6 +32,21 @@ const {
     resolveBuildCommand
 } = require('../../scripts/ensure-libyang-runtime');
 const beforePack = require('../../scripts/verify-libyang-runtime');
+const packagingBeforePack = require('../../scripts/verify-packaging-runtime');
+const { ensureTcpAoHelper, getBuildReason, resolveHelperPaths } = require('../../scripts/ensure-tcp-ao-helper');
+const {
+    assertNativeLinuxBuild,
+    optionValue: linuxOptionValue,
+    prepareLinuxPackage
+} = require('../../scripts/prepare-linux-package');
+const {
+    patchPackagedElectronRpath,
+    renderControl,
+    renderPostInstall,
+    renderPostRemove,
+    renderPreRemove
+} = require('../../scripts/build-linux-deb');
+const { builderArguments: linuxDistributionBuilderArguments } = require('../../scripts/build-linux-distribution');
 
 const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.resolve(__dirname, '..', '..'));
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-libyang-packaging-'));
@@ -187,9 +202,20 @@ function assertUserInstalledVcpkgContract(powershellSource) {
 function verifyScriptSyntax() {
     const javascriptScripts = [
         'scripts/ensure-libyang-runtime.js',
+        'scripts/ensure-tcp-ao-helper.js',
+        'scripts/build-linux-deb.js',
+        'scripts/build-linux-distribution.js',
+        'scripts/installed-bgp-port179-smoke.js',
         'scripts/libyang-runtime-config.js',
+        'scripts/prepare-e2e-release.js',
+        'scripts/prepare-linux-package.js',
+        'scripts/release.js',
+        'scripts/better-sqlite3-rebuild-lock.js',
+        'scripts/rebuild-better-sqlite3.js',
+        'scripts/smoke-better-sqlite3-runtime.js',
         'scripts/verify-libyang-iana-modules.js',
         'scripts/verify-libyang-runtime.js',
+        'scripts/verify-packaging-runtime.js',
         'scripts/write-libyang-runtime-manifest.js',
         'scripts/smoke-libyang-runtime.js'
     ];
@@ -492,25 +518,120 @@ function testPinnedReleaseAndPackageContract() {
     );
 
     const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
-    assert.equal(packageJson.build.beforePack, 'scripts/verify-libyang-runtime.js');
+    assert.equal(packageJson.build.beforePack, 'scripts/verify-packaging-runtime.js');
+    assert.equal(
+        packageJson.build.buildDependenciesFromSource,
+        true,
+        'electron-builder must not restore prebuilt native modules after Linux packaging preparation'
+    );
     assert(
         packageJson.build.extraResources.some(
             resource => resource.from === 'resources/libyang' && resource.to === 'libyang'
         ),
         'electron-builder must copy the bundled libyang runtime into the application resources'
     );
+    assert.deepEqual(packageJson.build.linux.target, ['deb']);
+    assert(
+        packageJson.build.linux.extraResources.some(
+            resource => resource.from === 'resources/tcp-ao/linux-${arch}' && resource.to === 'tcp-ao/linux-${arch}'
+        ),
+        'Linux packages must copy only the target-architecture TCP-AO helper into application resources'
+    );
+    for (const dependency of [
+        'libc6 (>= 2.38)',
+        'libstdc++6 (>= 13.1)',
+        'libglib2.0-0 | libglib2.0-0t64',
+        'libgtk-3-0 | libgtk-3-0t64',
+        'libnspr4',
+        'libnss3',
+        'libatk1.0-0 | libatk1.0-0t64',
+        'libcups2 | libcups2t64',
+        'libdbus-1-3',
+        'libcairo2',
+        'libpango-1.0-0',
+        'libx11-6',
+        'libxcomposite1',
+        'libxdamage1',
+        'libxext6',
+        'libxfixes3',
+        'libxrandr2',
+        'libgbm1',
+        'libexpat1',
+        'libxcb1',
+        'libudev1',
+        'libasound2 | libasound2t64',
+        'libuuid1',
+        'libcap2-bin',
+        'fonts-noto-cjk'
+    ]) {
+        assert(packageJson.build.deb.depends.includes(dependency), `Debian package must depend on ${dependency}`);
+    }
+    const debControl = renderControl(packageJson, 'arm64', 1024);
+    assert.match(debControl, /^Depends: .*libcap2-bin/mu);
+    assert.match(debControl, /^Depends: .*fonts-noto-cjk/mu);
+    assert.doesNotMatch(debControl, /^Recommends:/mu);
+    assert.equal(packageJson.scripts['tcp-ao:build'], 'bash scripts/build-tcp-ao-helper.sh');
+    assert.equal(packageJson.scripts['tcp-ao:ensure'], 'node scripts/ensure-tcp-ao-helper.js');
+    assert.equal(packageJson.scripts['tcp-ao:test:native'], 'bash scripts/test-tcp-ao-helper.sh');
+    assert.equal(packageJson.scripts['better-sqlite3:rebuild'], 'node scripts/rebuild-better-sqlite3.js');
+    assert.equal(packageJson.scripts['better-sqlite3:smoke'], 'node scripts/smoke-better-sqlite3-runtime.js');
+    assert.equal(packageJson.scripts['pack:linux:x64'], 'electron-builder --linux --x64 --dir');
+    assert.equal(packageJson.scripts['pack:linux:arm64'], 'electron-builder --linux --arm64 --dir');
+    assert.equal(packageJson.scripts['dist:linux'], 'node scripts/build-linux-distribution.js');
+    assert.equal(packageJson.scripts['dist:linux:x64'], 'node scripts/build-linux-distribution.js --arch x64');
+    assert.equal(packageJson.scripts['dist:linux:arm64'], 'node scripts/build-linux-distribution.js --arch arm64');
+    assert.equal(packageJson.scripts['prepack:linux:x64'], 'node scripts/prepare-linux-package.js --arch x64');
+    assert.equal(packageJson.scripts['prepack:linux:arm64'], 'node scripts/prepare-linux-package.js --arch arm64');
+    assert.equal(packageJson.scripts['predist:linux:x64'], 'node scripts/prepare-linux-package.js --arch x64');
+    assert.equal(packageJson.scripts['predist:linux:arm64'], 'node scripts/prepare-linux-package.js --arch arm64');
+    assert.equal(packageJson.scripts['release:mac'], undefined, 'macOS must not expose a release command');
+    assert.equal(packageJson.scripts['prerelease:mac'], undefined, 'macOS must not expose a release lifecycle hook');
+    for (const scriptName of ['dist:mac', 'dist:mac:arm64', 'dist:mac:all', 'dist:mac:universal']) {
+        assert.match(
+            packageJson.scripts[scriptName],
+            /--publish never$/u,
+            `${scriptName} may build a local validation artifact but must never publish it`
+        );
+    }
+    for (const scriptPath of [
+        'scripts/ensure-tcp-ao-helper.js',
+        'scripts/build-linux-deb.js',
+        'scripts/build-linux-distribution.js',
+        'scripts/installed-bgp-port179-smoke.js',
+        'scripts/prepare-linux-package.js',
+        'scripts/better-sqlite3-rebuild-lock.js',
+        'scripts/rebuild-better-sqlite3.js',
+        'scripts/smoke-better-sqlite3-runtime.js',
+        'scripts/verify-packaging-runtime.js'
+    ]) {
+        assert(fs.statSync(path.join(projectRoot, scriptPath)).isFile(), `${scriptPath} must exist`);
+    }
+    const e2ePrepareSource = fs.readFileSync(path.join(projectRoot, 'scripts', 'prepare-e2e-release.js'), 'utf8');
+    const e2eHelperBuildIndex = e2ePrepareSource.indexOf("runCommand(npmCommand, ['run', 'tcp-ao:build'])");
+    const e2ePackIndex = e2ePrepareSource.indexOf('const { command, args, shell } = getPackCommand()');
+    assert(
+        e2eHelperBuildIndex >= 0 && e2eHelperBuildIndex < e2ePackIndex,
+        'Linux E2E packaging must build the native TCP-AO helper before invoking electron-builder'
+    );
     assert.equal(packageJson.scripts['libyang:verify'], 'node scripts/verify-libyang-runtime.js');
     assert.equal(packageJson.scripts['libyang:ensure'], 'node scripts/ensure-libyang-runtime.js');
     assert.equal(packageJson.scripts['libyang:build'], 'node scripts/ensure-libyang-runtime.js --force');
     assert.equal(
         packageJson.scripts.predev,
-        'npm run libyang:ensure',
-        'development startup must rebuild a stale native Schema helper before Electron launches'
+        'npm run libyang:ensure && npm run tcp-ao:ensure',
+        'development startup must ensure both native runtime helpers before Electron launches'
     );
     assert.match(
         packageJson.scripts.postinstall,
         /(?:^|&&\s*)node scripts\/ensure-libyang-runtime\.js\s*$/,
         'npm install/npm ci must ensure the bundled libyang runtime automatically after existing install work'
+    );
+    const postinstallSourceRebuildIndex = packageJson.scripts.postinstall.indexOf('npm run better-sqlite3:rebuild');
+    const postinstallSmokeIndex = packageJson.scripts.postinstall.indexOf('npm run better-sqlite3:smoke');
+    assert(postinstallSourceRebuildIndex >= 0, 'npm install/npm ci must rebuild better-sqlite3 from source');
+    assert(
+        postinstallSmokeIndex > postinstallSourceRebuildIndex,
+        'npm install/npm ci must smoke-test better-sqlite3 after its source rebuild'
     );
     assert.equal(packageJson.scripts['libyang:build:unix'], 'bash scripts/build-libyang-runtime.sh');
     assert.match(packageJson.scripts['libyang:build:windows'], /build-libyang-runtime\.ps1/);
@@ -1073,6 +1194,316 @@ async function testBeforePackHook() {
     );
 }
 
+function testLinuxPackagingPreparation() {
+    assert.equal(linuxOptionValue('--arch', ['--arch', 'arm64']), 'arm64');
+    assert.throws(() => linuxOptionValue('--arch', ['--arch']), /--arch requires a value/);
+    assert.deepEqual(assertNativeLinuxBuild({ platform: 'linux', hostArch: 'aarch64', targetArch: 'arm64' }), {
+        platform: 'linux',
+        hostArch: 'arm64',
+        targetArch: 'arm64'
+    });
+    assert.throws(
+        () => assertNativeLinuxBuild({ platform: 'darwin', hostArch: 'arm64', targetArch: 'arm64' }),
+        /must be built on Linux/
+    );
+    assert.throws(
+        () => assertNativeLinuxBuild({ platform: 'linux', hostArch: 'arm64', targetArch: 'x64' }),
+        /cross-architecture packaging is not supported/
+    );
+
+    const checkMessages = [];
+    prepareLinuxPackage(
+        { platform: 'linux', hostArch: 'arm64', targetArch: 'arm64', checkOnly: true },
+        {
+            write: message => checkMessages.push(message),
+            spawnSync() {
+                assert.fail('check-only preparation must not execute build commands');
+            }
+        }
+    );
+    assert.match(checkMessages.join(''), /native arm64 configuration/);
+
+    const invocations = [];
+    prepareLinuxPackage(
+        { platform: 'linux', hostArch: 'arm64', targetArch: 'arm64' },
+        {
+            spawnSync(command, args) {
+                invocations.push([command, args]);
+                return { status: 0 };
+            }
+        }
+    );
+    assert.deepEqual(invocations, [
+        ['npm', ['run', 'better-sqlite3:rebuild']],
+        ['npm', ['run', 'better-sqlite3:smoke']],
+        ['npm', ['run', 'build']],
+        ['npm', ['run', 'tcp-ao:build']],
+        ['npm', ['run', 'libyang:ensure', '--', '--platform', 'linux', '--arch', 'arm64']]
+    ]);
+    assert.deepEqual(linuxDistributionBuilderArguments(['--arch', 'arm64', '--publish', 'never'], 'arm64'), [
+        '--linux',
+        '--arm64',
+        '--dir'
+    ]);
+    assert.deepEqual(linuxDistributionBuilderArguments(['--publish=never'], 'x64'), ['--linux', '--x64', '--dir']);
+    assert.throws(
+        () => linuxDistributionBuilderArguments(['AppImage'], 'arm64'),
+        /Unsupported Linux distribution argument: AppImage/
+    );
+
+    const postInstall = renderPostInstall('net-nexus', 'NetNexus');
+    assert.match(postInstall, /chmod 4755 '\/opt\/NetNexus\/chrome-sandbox'/);
+    assert.doesNotMatch(postInstall, /chmod 4755[^\n]+\|\| true/);
+    assert.match(postInstall, /PATH='\/usr\/sbin:\/usr\/bin:\/sbin:\/bin'/);
+    assert.match(postInstall, /app_binary='\/opt\/NetNexus\/net-nexus'/);
+    assert.match(postInstall, /chown root:root "\$app_binary"/);
+    assert.match(postInstall, /chmod 0755 "\$app_binary"/);
+    assert.match(postInstall, /if ! setcap 'cap_net_bind_service=ep' "\$app_binary"; then/);
+    assert.match(postInstall, /if \[ "\$\(getcap "\$app_binary"\)" != "\$app_binary cap_net_bind_service=ep" \]; then/);
+    assert.doesNotMatch(postInstall, /setcap[^\n]+\|\| true/);
+
+    const preRemove = renderPreRemove('net-nexus', 'NetNexus');
+    assert.match(preRemove, /remove\|deconfigure\)/);
+    assert.match(preRemove, /--remove 'net-nexus' '\/opt\/NetNexus\/net-nexus'/);
+    assert.doesNotMatch(preRemove, /purge\)/);
+    assert.doesNotMatch(preRemove, /setcap/);
+
+    const postRemove = renderPostRemove('net-nexus', 'NetNexus');
+    assert.match(postRemove, /purge\)/);
+    assert.doesNotMatch(postRemove, /remove\|deconfigure\)/);
+    assert.doesNotMatch(postRemove, /setcap/);
+
+    const patchelfCalls = [];
+    assert.equal(
+        patchPackagedElectronRpath('/fixture/staging/opt/NetNexus/net-nexus', '/opt/NetNexus', {
+            cwd: '/fixture/project',
+            env: { PATH: '/usr/bin' },
+            spawnSync(command, args, options) {
+                patchelfCalls.push({ command, args, options });
+                return args[0] === '--print-rpath'
+                    ? { status: 0, stdout: '/opt/NetNexus\n' }
+                    : { status: 0, stdout: '' };
+            }
+        }),
+        '/opt/NetNexus'
+    );
+    assert.deepEqual(
+        patchelfCalls.map(call => [call.command, call.args]),
+        [
+            ['patchelf', ['--force-rpath', '--set-rpath', '/opt/NetNexus', '/fixture/staging/opt/NetNexus/net-nexus']],
+            ['patchelf', ['--print-rpath', '/fixture/staging/opt/NetNexus/net-nexus']]
+        ]
+    );
+    assert.throws(
+        () =>
+            patchPackagedElectronRpath('/fixture/net-nexus', '/opt/NetNexus', {
+                spawnSync() {
+                    return { error: new Error('ENOENT') };
+                }
+            }),
+        /install the patchelf build dependency/
+    );
+    assert.throws(
+        () => patchPackagedElectronRpath('/fixture/net-nexus', 'relative/path'),
+        /must be an absolute installation directory/
+    );
+
+    const debBuilderSource = fs.readFileSync(path.join(projectRoot, 'scripts', 'build-linux-deb.js'), 'utf8');
+    assert.match(debBuilderSource, /chmodSync\(path\.join\(installRoot, 'chrome-sandbox'\), 0o4755\)/);
+    assert.match(debBuilderSource, /'--root-owner-group'/);
+}
+
+function testTcpAoHelperEnsure() {
+    let touched = false;
+    assert.equal(
+        ensureTcpAoHelper(
+            { projectRoot: '/unused', platform: 'darwin', arch: 'arm64' },
+            {
+                spawnSync() {
+                    touched = true;
+                },
+                verifyTcpAoHelper() {
+                    touched = true;
+                }
+            }
+        ),
+        null
+    );
+    assert.equal(touched, false, 'non-Linux TCP-AO setup must skip without touching build dependencies');
+
+    const helperProjectRoot = path.join(tempDir, 'tcp-ao-ensure-fixture');
+    const paths = resolveHelperPaths({ projectRoot: helperProjectRoot, platform: 'linux', arch: 'aarch64' });
+    fs.mkdirSync(path.dirname(paths.sourceFile), { recursive: true });
+    fs.mkdirSync(path.dirname(paths.helperPath), { recursive: true });
+    fs.writeFileSync(paths.sourceFile, '/* fixture */\n');
+    fs.writeFileSync(paths.buildScript, '#!/usr/bin/env bash\n');
+    fs.writeFileSync(paths.helperPath, 'fixture\n', { mode: 0o755 });
+    const older = new Date(Date.now() - 20_000);
+    const newer = new Date(Date.now() - 10_000);
+    fs.utimesSync(paths.sourceFile, older, older);
+    fs.utimesSync(paths.buildScript, older, older);
+    fs.utimesSync(paths.helperPath, newer, newer);
+    assert.equal(getBuildReason(paths), '');
+
+    const currentMessages = [];
+    const currentStatus = { versionOutput: 'netnexus-tcp-ao-helper 1.0.0' };
+    assert.equal(
+        ensureTcpAoHelper(
+            { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
+            {
+                spawnSync() {
+                    assert.fail('a current TCP-AO helper must not be rebuilt');
+                },
+                verifyTcpAoHelper(options) {
+                    assert.deepEqual(options, {
+                        projectRoot: helperProjectRoot,
+                        platform: 'linux',
+                        arch: 'arm64'
+                    });
+                    return currentStatus;
+                },
+                write: message => currentMessages.push(message)
+            }
+        ),
+        currentStatus
+    );
+    assert.match(currentMessages.join(''), /is current; skipping rebuild/);
+
+    const latest = new Date();
+    fs.utimesSync(paths.sourceFile, latest, latest);
+    assert.match(getBuildReason(paths), /tcp-ao-helper\.c is newer/);
+    const buildCalls = [];
+    ensureTcpAoHelper(
+        { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
+        {
+            spawnSync(command, args, options) {
+                buildCalls.push({ command, args, options });
+                return { status: 0 };
+            },
+            verifyTcpAoHelper: () => currentStatus,
+            write() {}
+        }
+    );
+    assert.equal(buildCalls.length, 1);
+    assert.equal(buildCalls[0].command, 'bash');
+    assert.deepEqual(buildCalls[0].args, [paths.buildScript]);
+    assert.equal(buildCalls[0].options.cwd, helperProjectRoot);
+
+    fs.utimesSync(paths.helperPath, new Date(Date.now() + 10_000), new Date(Date.now() + 10_000));
+    let verificationCount = 0;
+    let rebuildCount = 0;
+    ensureTcpAoHelper(
+        { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
+        {
+            spawnSync() {
+                rebuildCount++;
+                return { status: 0 };
+            },
+            verifyTcpAoHelper() {
+                verificationCount++;
+                if (verificationCount === 1) throw new Error('fixture validation failure');
+                return currentStatus;
+            },
+            write() {}
+        }
+    );
+    assert.equal(rebuildCount, 1, 'a helper that fails validation must be rebuilt once');
+    assert.equal(verificationCount, 2, 'a rebuilt helper must be verified again');
+}
+
+async function testPackagingBeforePackHook() {
+    const calls = [];
+    const messages = [];
+    await packagingBeforePack(
+        {
+            electronPlatformName: 'linux',
+            arch: Arch.arm64,
+            packager: { projectDir: '/fixture/project' }
+        },
+        {
+            async verifyLibyangBeforePack() {
+                calls.push('libyang');
+            },
+            verifyTcpAoHelper(options) {
+                calls.push('tcp-ao');
+                assert.deepEqual(options, {
+                    projectRoot: '/fixture/project',
+                    platform: 'linux',
+                    arch: 'arm64'
+                });
+                return {
+                    platform: 'linux',
+                    arch: 'arm64',
+                    helpers: ['/fixture/project/resources/tcp-ao/linux-arm64/tcp-ao-helper']
+                };
+            },
+            write: message => messages.push(message)
+        }
+    );
+    assert.deepEqual(calls, ['libyang', 'tcp-ao']);
+    assert.match(messages.join(''), /Verified bundled TCP-AO helper for linux-arm64/);
+
+    calls.length = 0;
+    await packagingBeforePack(
+        { electronPlatformName: 'darwin', arch: Arch.arm64 },
+        {
+            async verifyLibyangBeforePack() {
+                calls.push('libyang');
+            },
+            verifyTcpAoHelper() {
+                calls.push('tcp-ao');
+            }
+        }
+    );
+    assert.deepEqual(calls, ['libyang'], 'non-Linux packaging must retain only the libyang verifier');
+
+    if (process.platform !== 'win32') {
+        const helperProjectRoot = path.join(tempDir, 'tcp-ao-helper-fixture');
+        const helperDirectory = path.join(helperProjectRoot, 'resources', 'tcp-ao', 'linux-arm64');
+        const helperPath = path.join(helperDirectory, 'tcp-ao-helper');
+        fs.mkdirSync(helperDirectory, { recursive: true });
+        const elfHeader = Buffer.alloc(64);
+        Buffer.from([0x7f, 0x45, 0x4c, 0x46]).copy(elfHeader);
+        elfHeader[4] = 2;
+        elfHeader[5] = 1;
+        elfHeader.writeUInt16LE(packagingBeforePack.ELF_MACHINE_BY_ARCH.arm64, 18);
+        fs.writeFileSync(helperPath, elfHeader, { mode: 0o755 });
+
+        const helperStatus = packagingBeforePack.verifyTcpAoHelper(
+            { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
+            {
+                spawnSync(executable, args) {
+                    assert.equal(executable, helperPath);
+                    assert.deepEqual(args, ['--version']);
+                    return { status: 0, stdout: 'netnexus-tcp-ao-helper 1.0.0\n', stderr: '' };
+                }
+            }
+        );
+        assert.equal(helperStatus.versionOutput, 'netnexus-tcp-ao-helper 1.0.0');
+        assert.deepEqual(helperStatus.helpers, [helperPath]);
+
+        fs.chmodSync(helperPath, 0o775);
+        assert.throws(
+            () =>
+                packagingBeforePack.verifyTcpAoHelper(
+                    { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
+                    { spawnSync: () => ({ status: 0, stdout: 'version' }) }
+                ),
+            /must not be group-writable or world-writable/
+        );
+
+        fs.chmodSync(helperPath, 0o757);
+        assert.throws(
+            () =>
+                packagingBeforePack.verifyTcpAoHelper(
+                    { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
+                    { spawnSync: () => ({ status: 0, stdout: 'version' }) }
+                ),
+            /must not be group-writable or world-writable/
+        );
+    }
+}
+
 function getWorkflowJobSource(workflowFile, jobName, nextJobName) {
     const workflowSource = fs.readFileSync(path.join(projectRoot, workflowFile), 'utf8');
     const jobStart = workflowSource.indexOf(`    ${jobName}:`);
@@ -1085,8 +1516,8 @@ function assertRuntimeEnsuredBeforeTests(workflowFile, jobName, nextJobName, { m
     const jobSource = getWorkflowJobSource(workflowFile, jobName, nextJobName);
     const installIndex = jobSource.indexOf('run: npm ci');
     const smokeIndex = jobSource.indexOf('run: npm run libyang:smoke');
-    const testIndex = jobSource.indexOf('run: npm test');
-    const minifiedIndex = jobSource.indexOf('run: npm run test:ci:minified');
+    const testIndex = jobSource.indexOf('npm test');
+    const minifiedIndex = jobSource.indexOf('npm run test:ci:minified');
     assert(
         installIndex >= 0 && installIndex < smokeIndex && smokeIndex < testIndex && testIndex < minifiedIndex,
         `${workflowFile} ${jobName} must install/ensure and smoke-test bundled libyang before YANG CI tests`
@@ -1107,8 +1538,8 @@ function assertRuntimeEnsuredBeforeTests(workflowFile, jobName, nextJobName, { m
 function testCiRuntimeInstallOrdering() {
     assertRuntimeEnsuredBeforeTests('.github/workflows/test.yml', 'e2e-macos', 'e2e-windows', { macos: true });
     assertRuntimeEnsuredBeforeTests('.github/workflows/test.yml', 'e2e-windows', null);
-    assertRuntimeEnsuredBeforeTests('.github/workflows/release.yml', 'build-windows', 'build-macos');
-    assertRuntimeEnsuredBeforeTests('.github/workflows/release.yml', 'build-macos', 'publish', { macos: true });
+    assertRuntimeEnsuredBeforeTests('.github/workflows/release.yml', 'build-windows', 'build-linux');
+    assertRuntimeEnsuredBeforeTests('.github/workflows/release.yml', 'build-linux', 'publish');
 
     const frrJobSource = getWorkflowJobSource('.github/workflows/test.yml', 'frr-bmp-e2e', 'e2e-macos');
     assert.match(
@@ -1122,17 +1553,14 @@ function testCiRuntimeInstallOrdering() {
     const windowsReleaseJobSource = getWorkflowJobSource(
         '.github/workflows/release.yml',
         'build-windows',
-        'build-macos'
+        'build-linux'
     );
+    const linuxReleaseJobSource = getWorkflowJobSource('.github/workflows/release.yml', 'build-linux', 'publish');
     for (const [jobSource, workflowFile, platformName] of [
         [macTestJobSource, '.github/workflows/test.yml', 'macOS'],
-        [
-            getWorkflowJobSource('.github/workflows/release.yml', 'build-macos', 'publish'),
-            '.github/workflows/release.yml',
-            'macOS'
-        ],
         [windowsJobSource, '.github/workflows/test.yml', 'Windows'],
-        [windowsReleaseJobSource, '.github/workflows/release.yml', 'Windows']
+        [windowsReleaseJobSource, '.github/workflows/release.yml', 'Windows'],
+        [linuxReleaseJobSource, '.github/workflows/release.yml', 'Linux']
     ]) {
         assert.equal(
             Array.from(jobSource.matchAll(/BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS:\s*['"]20000['"]/g)).length,
@@ -1142,7 +1570,7 @@ function testCiRuntimeInstallOrdering() {
         assert.match(
             jobSource,
             new RegExp(
-                `- name: Run ${platformName} tests\\s+run: npm test\\s+env:\\s+` +
+                `- name: Run ${platformName} tests\\s+run: (?:xvfb-run -a )?npm test\\s+env:\\s+` +
                     `BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS:\\s*['"]20000['"]`
             ),
             `${workflowFile} must scope the hosted-runner budget to the normal ${platformName} test step`
@@ -1150,7 +1578,7 @@ function testCiRuntimeInstallOrdering() {
         assert.match(
             jobSource,
             new RegExp(
-                `- name: Run ${platformName} minified CI tests\\s+run: npm run test:ci:minified\\s+env:\\s+` +
+                `- name: Run ${platformName} minified CI tests\\s+run: (?:xvfb-run -a )?npm run test:ci:minified\\s+env:\\s+` +
                     `BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS:\\s*['"]20000['"]`
             ),
             `${workflowFile} must scope the hosted-runner budget to the minified ${platformName} test step`
@@ -1178,38 +1606,108 @@ function testCiRuntimeInstallOrdering() {
         'local/default runs must retain the 15-second performance budget'
     );
 
-    const macReleaseJobSource = getWorkflowJobSource('.github/workflows/release.yml', 'build-macos', 'publish');
-    assert.match(macReleaseJobSource, /name:\s*Build macOS arm64 and x64/);
-    assert.match(macReleaseJobSource, /runs-on:\s*macos-15/);
-    assert.doesNotMatch(macReleaseJobSource, /macos-15-intel|matrix\./);
-    assert.match(macReleaseJobSource, /architecture:\s*arm64/);
-    assert.match(macReleaseJobSource, /architecture:\s*x64/);
-    assert.match(macReleaseJobSource, /npm_config_arch:\s*x64/);
-    assert.match(macReleaseJobSource, /npm run libyang:ensure -- --platform darwin --arch x64/);
-    assert.match(macReleaseJobSource, /E2E_APP_EXECUTABLE:\s*release\/mac\/NetNexus\.app\/Contents\/MacOS\/NetNexus/);
-    assert.match(macReleaseJobSource, /name:\s*macos(?:\s|$)/);
+    assert.match(macTestJobSource, /name:\s*macOS arm64 Tests and Packaged E2E/);
+    assert.match(macTestJobSource, /runs-on:\s*macos-15/);
+    assert.match(macTestJobSource, /run:\s*npm run test:e2e/);
+    assert.match(macTestJobSource, /run:\s*npm run test:packaged:sqlite/);
+    assert.match(macTestJobSource, /name:\s*playwright-report-macos-arm64/);
 
-    const armPackageIndex = macReleaseJobSource.indexOf('run: npm run dist:mac:arm64 -- --publish never');
-    const armSmokeIndex = macReleaseJobSource.indexOf('PACKAGED_SQLITE_EXPECTED_ARCH: arm64');
-    const rosettaIndex = macReleaseJobSource.indexOf('- name: Ensure Rosetta 2 is available');
-    const x64RuntimeBuildIndex = macReleaseJobSource.indexOf('- name: Build bundled x64 libyang runtime');
-    const x64InstallIndex = macReleaseJobSource.indexOf('- name: Install x64 dependencies');
-    const x64RuntimeVerifyIndex = macReleaseJobSource.indexOf('- name: Verify bundled x64 libyang runtime');
-    const x64PackageIndex = macReleaseJobSource.indexOf('run: npm run dist:mac -- --publish never');
-    const x64SmokeIndex = macReleaseJobSource.indexOf('PACKAGED_SQLITE_EXPECTED_ARCH: x64');
-    const uploadIndex = macReleaseJobSource.indexOf('- name: Upload macOS artifacts');
+    const releaseWorkflowSource = fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8');
+    const publishJobSource = getWorkflowJobSource('.github/workflows/release.yml', 'publish', null);
+    assert.match(releaseWorkflowSource, /macOS 发布打包已停用.*test\.yml.*e2e-macos/u);
+    assert.doesNotMatch(releaseWorkflowSource, /^\s{4}build-macos:/mu);
+    assert.doesNotMatch(releaseWorkflowSource, /^\s*- build-macos\s*$/mu);
+    assert.doesNotMatch(releaseWorkflowSource, /npm run dist:mac|release\/\*\.(?:dmg|zip)/u);
+    assert.doesNotMatch(releaseWorkflowSource, /generate-mac-update-manifest/u);
+    assert.match(publishJobSource, /runs-on:\s*ubuntu-24\.04/);
+    assert.match(publishJobSource, /test "\$RELEASE_TAG" = "v\$\{package_version\}"/);
+    assert.match(publishJobSource, /NetNexus-Setup-\$\{version\}-win-x64\.exe/);
+    assert.match(publishJobSource, /NetNexus-\$\{version\}-linux-x64\.deb/);
+    assert.match(publishJobSource, /NetNexus-\$\{version\}-linux-arm64\.deb/);
+    const draftCreateIndex = publishJobSource.indexOf('gh release create "$RELEASE_TAG"');
+    const assetUploadIndex = publishJobSource.indexOf('gh release upload "$RELEASE_TAG"');
+    const assetVerifyIndex = publishJobSource.indexOf("<(gh release view \"$RELEASE_TAG\" --json assets");
+    const publishReleaseIndex = publishJobSource.indexOf('gh release edit "$RELEASE_TAG" --draft=false');
     assert(
-        armPackageIndex >= 0 &&
-            armPackageIndex < armSmokeIndex &&
-            armSmokeIndex < rosettaIndex &&
-            rosettaIndex < x64RuntimeBuildIndex &&
-            x64RuntimeBuildIndex < x64InstallIndex &&
-            x64InstallIndex < x64RuntimeVerifyIndex &&
-            x64RuntimeVerifyIndex < x64PackageIndex &&
-            x64PackageIndex < x64SmokeIndex &&
-            x64SmokeIndex < uploadIndex,
-        'the single Apple Silicon release job must pass arm64 before rebuilding, packaging and verifying x64'
+        draftCreateIndex >= 0 &&
+            draftCreateIndex < assetUploadIndex &&
+            assetUploadIndex < assetVerifyIndex &&
+            assetVerifyIndex < publishReleaseIndex,
+        'release workflow must keep the release draft until every uploaded asset is verified'
     );
+    assert.match(publishJobSource, /gh release create "\$RELEASE_TAG"\s+\\\s+--verify-tag\s+\\\s+--draft/u);
+    assert.match(publishJobSource, /is already public; refusing to mutate it/u);
+    assert.doesNotMatch(
+        publishJobSource,
+        /gh release create "\$RELEASE_TAG" release-assets/u,
+        'release creation must not publish while assets are still uploading'
+    );
+
+    const releaseScriptSource = fs.readFileSync(path.join(projectRoot, 'scripts/release.js'), 'utf8');
+    assert.match(releaseScriptSource, /if \(isMac\) \{\s*throw new Error\(MAC_RELEASE_DISABLED_MESSAGE\);/u);
+    assert.match(releaseScriptSource, /已停用：不再发布 macOS 版本/u);
+    assert.doesNotMatch(releaseScriptSource, /file\.endsWith\(['"]\.(?:dmg|zip)['"]\)/u);
+    assert.doesNotMatch(releaseScriptSource, /platform\s*=\s*['"]--mac['"]/u);
+
+    assert.match(linuxReleaseJobSource, /runner:\s*ubuntu-24\.04(?:\s|$)/);
+    assert.match(linuxReleaseJobSource, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(linuxReleaseJobSource, /arch:\s*x64/);
+    assert.match(linuxReleaseJobSource, /arch:\s*arm64/);
+    assert.match(
+        linuxReleaseJobSource,
+        /sudo apt-get install --yes build-essential cmake linux-libc-dev patchelf xvfb/
+    );
+    assert.match(linuxReleaseJobSource, /test "\$\(id -u\)" -ne 0/);
+    assert.match(linuxReleaseJobSource, /npm run tcp-ao:test:native/);
+    assert.match(linuxReleaseJobSource, /run:\s*xvfb-run -a npm test/);
+    assert.match(linuxReleaseJobSource, /run:\s*xvfb-run -a npm run test:ci:minified/);
+    assert.match(linuxReleaseJobSource, /dist_script:\s*dist:linux:x64/);
+    assert.match(linuxReleaseJobSource, /dist_script:\s*dist:linux:arm64/);
+    assert.match(linuxReleaseJobSource, /resources\/tcp-ao\/linux-\$\{\{ matrix\.arch \}\}\/tcp-ao-helper/);
+    assert.match(linuxReleaseJobSource, /resources\/libyang\/linux-\$\{\{ matrix\.arch \}\}\/bin\/yanglint/);
+    assert.match(linuxReleaseJobSource, /node_modules\/better-sqlite3\/build\/Release\/better_sqlite3\.node/);
+    assert.match(
+        linuxReleaseJobSource,
+        /PACKAGED_SQLITE_EXPECTED_ARCH="\$\{\{ matrix\.arch \}\}" npm run test:packaged:sqlite/
+    );
+    assert.doesNotMatch(
+        linuxReleaseJobSource,
+        /readelf[^\n]+better_sqlite3|GLIBCXX_3\.4\.31/,
+        'packaged SQLite compatibility must be proven by architecture and runtime smoke, not an exact referenced symbol'
+    );
+    assert.match(linuxReleaseJobSource, /dpkg-deb --field/);
+    assert.match(linuxReleaseJobSource, /dpkg-deb --ctrl-tarfile/);
+    assert.match(linuxReleaseJobSource, /chmod 4755/);
+    assert.match(linuxReleaseJobSource, /chrome-sandbox/);
+    assert.match(linuxReleaseJobSource, /setcap 'cap_net_bind_service=ep'/);
+    assert.match(linuxReleaseJobSource, /getcap/);
+    assert.match(linuxReleaseJobSource, /sudo apt-get install --yes "\$\{debs\[0\]\}"/);
+    assert.match(linuxReleaseJobSource, /root:root:755/);
+    assert.match(linuxReleaseJobSource, /patchelf --print-rpath \/opt\/NetNexus\/net-nexus/);
+    assert.match(linuxReleaseJobSource, /\/opt\/NetNexus\/net-nexus cap_net_bind_service=ep/);
+    assert.match(linuxReleaseJobSource, /server\.listen\(179,'127\.0\.0\.1'/);
+    assert.match(linuxReleaseJobSource, /sudo setcap -r \/opt\/NetNexus\/net-nexus/);
+    assert.match(linuxReleaseJobSource, /sudo apt-get install --reinstall --yes "\$\{debs\[0\]\}"/);
+    assert.match(linuxReleaseJobSource, /E2E_APP_EXECUTABLE=\/opt\/NetNexus\/net-nexus/);
+    assert.match(linuxReleaseJobSource, /xvfb-run -a node scripts\/installed-bgp-port179-smoke\.js/);
+    assert.match(linuxReleaseJobSource, /-rwsr-xr-x/);
+    assert.match(linuxReleaseJobSource, /remove\|deconfigure\)/);
+    assert.match(linuxReleaseJobSource, /purge\)/);
+    assert.match(linuxReleaseJobSource, /netnexus-libyang-schema/);
+    assert.doesNotMatch(linuxReleaseJobSource, /AppImage|release\/\*\.blockmap|latest-linux/);
+    assert.match(linuxReleaseJobSource, /release\/\*\.deb/);
+    assert.match(linuxReleaseJobSource, /for package_name in [^\n]*libcap2-bin[^\n]*fonts-noto-cjk[^\n]*; do/u);
+
+    const installedBgpSmokeSource = fs.readFileSync(
+        path.join(projectRoot, 'scripts', 'installed-bgp-port179-smoke.js'),
+        'utf8'
+    );
+    assert.match(installedBgpSmokeSource, /delete environment\.ELECTRON_RUN_AS_NODE/);
+    assert.match(installedBgpSmokeSource, /delete environment\.NETNEXUS_E2E/);
+    assert.match(installedBgpSmokeSource, /spawnargs\.includes\('--no-sandbox'\)/);
+    assert.match(installedBgpSmokeSource, /window\.bgpApi\.startBgp/);
+    assert.match(installedBgpSmokeSource, /netnexus\.protocol\.bgp/);
+    assert.match(installedBgpSmokeSource, /connectToBgpPort/);
 }
 
 async function run() {
@@ -1220,6 +1718,9 @@ async function run() {
         testRuntimePathMapping();
         testRuntimeVerifierWithoutNativeRuntime();
         await testBeforePackHook();
+        testLinuxPackagingPreparation();
+        testTcpAoHelperEnsure();
+        await testPackagingBeforePackHook();
         testCiRuntimeInstallOrdering();
         verifyScriptSyntax();
         console.log('libyang packaging contract and clean-CI verification tests passed');

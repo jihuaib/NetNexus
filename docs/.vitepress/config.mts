@@ -27,7 +27,6 @@ export default defineConfig({
                     { text: 'Huawei BMP E2E', link: '/HUAWEI_BMP_E2E' }
                 ]
             },
-            { text: 'PDF 手册', link: '/NetNexus/netnexus-docs.pdf', target: '_blank' },
             { text: 'GitHub', link: repositoryUrl }
         ],
         sidebar: [

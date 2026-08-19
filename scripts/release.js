@@ -9,6 +9,10 @@ const giteeOnly = args.includes('--gitee-only');
 const showHelp = args.includes('--help') || args.includes('-h');
 const isMac = args.includes('--mac');
 const isWin = args.includes('--win');
+const isLinux = args.includes('--linux');
+const isX64 = args.includes('--x64');
+const isArm64 = args.includes('--arm64');
+const MAC_RELEASE_DISABLED_MESSAGE = 'macOS 发布已停用；仅保留 test.yml 中的 macOS CI 验证';
 
 // Show help
 if (showHelp) {
@@ -21,10 +25,14 @@ Options:
   --help, -h          显示帮助信息
   --gitee-only        只发布到 Gitee（不编译，需要先有 tag 和 release 文件）
   --win               构建 Windows 版本
-  --mac               构建 macOS 版本
+  --mac               已停用：不再发布 macOS 版本
+  --linux             构建 Linux Debian 软件包
+  --x64               构建 x64 版本（Linux 必须在原生 x64 主机运行）
+  --arm64             构建 arm64 版本（Linux 必须在原生 arm64 主机运行）
 Examples:
   node release.js                    # 编译 Windows x64 并发布到 GitHub 和 Gitee（默认）
-  node release.js --mac              # 编译 macOS 并发布
+  node release.js --linux            # 编译当前 Linux 主机架构并发布
+  node release.js --linux --arm64    # 在 arm64 Linux 主机编译 .deb
   node release.js --gitee-only       # 只发布到 Gitee（不编译）
 `);
     process.exit(0);
@@ -82,7 +90,7 @@ async function createGiteeRelease() {
     console.log(`\n📦 Creating Gitee release for tag: ${currentTag}`);
 
     // Step 1: Create release
-    const releaseId = await new Promise((resolve, reject) => {
+    const releaseId = await new Promise((resolve, _reject) => {
         const data = JSON.stringify({
             access_token: giteeToken,
             tag_name: currentTag,
@@ -140,14 +148,7 @@ async function createGiteeRelease() {
 
     const files = fs
         .readdirSync(distPath)
-        .filter(
-            file =>
-                file.endsWith('.exe') ||
-                file.endsWith('.zip') ||
-                file.endsWith('.dmg') ||
-                file.endsWith('.msi') ||
-                file.endsWith('.AppImage')
-        );
+        .filter(file => file.endsWith('.exe') || file.endsWith('.msi') || file.endsWith('.deb'));
 
     if (files.length === 0) {
         console.log('⚠️  No installation files found in release directory');
@@ -220,18 +221,61 @@ async function createGiteeRelease() {
     }
 }
 
+function normalizeArchitecture(value) {
+    const architecture = String(value || '').toLowerCase();
+    if (architecture === 'amd64' || architecture === 'x86_64') return 'x64';
+    if (architecture === 'aarch64') return 'arm64';
+    return architecture;
+}
+
+function validateBuildTarget() {
+    if (isMac) {
+        throw new Error(MAC_RELEASE_DISABLED_MESSAGE);
+    }
+
+    const selectedPlatforms = [isWin && 'win', isMac && 'mac', isLinux && 'linux'].filter(Boolean);
+    if (selectedPlatforms.length > 1) {
+        throw new Error(`只能选择一个目标平台：${selectedPlatforms.join(', ')}`);
+    }
+    if (isX64 && isArm64) {
+        throw new Error('不能同时指定 --x64 和 --arm64');
+    }
+    if (!isLinux) return;
+
+    if (process.platform !== 'linux') {
+        throw new Error(`Linux 软件包必须在 Linux 主机上构建；当前平台是 ${process.platform}`);
+    }
+    if (args.includes('--universal')) {
+        throw new Error('Linux 不支持 --universal；请分别在原生 x64 和 arm64 主机上构建');
+    }
+
+    const hostArch = normalizeArchitecture(process.arch);
+    const targetArch = isArm64 ? 'arm64' : isX64 ? 'x64' : hostArch;
+    if (!['x64', 'arm64'].includes(targetArch)) {
+        throw new Error(`Linux 软件包仅支持 x64 和 arm64；当前主机架构是 ${hostArch}`);
+    }
+    if (hostArch !== targetArch) {
+        throw new Error(
+            `不支持交叉构建 Linux 软件包：当前主机是 ${hostArch}，目标是 ${targetArch}。` +
+                '请在相同架构的原生 Linux 主机上构建。'
+        );
+    }
+}
+
 // Build command based on platform and architecture
 function getBuildCommand() {
-    const customArgs = ['--gitee-only', '--help', '-h', '--win', '--mac', '--x64', '--arm64', '--universal'];
+    const customArgs = ['--gitee-only', '--help', '-h', '--win', '--mac', '--linux', '--x64', '--arm64', '--universal'];
     const extraArgs = args.filter(arg => !customArgs.includes(arg)).join(' ');
+
+    if (isLinux) {
+        const targetArch = isArm64 ? 'arm64' : isX64 ? 'x64' : normalizeArchitecture(process.arch);
+        return ['npm', 'run', `dist:linux:${targetArch}`, '--', '--publish', 'never'].join(' ');
+    }
 
     let platform = '--win';
     let arch = '--x64';
 
-    if (isMac) {
-        platform = '--mac';
-        arch = '';
-    } else if (isWin) {
+    if (isWin) {
         platform = '--win';
         arch = '--x64';
     }
@@ -242,6 +286,8 @@ function getBuildCommand() {
 // Run electron-builder
 async function build() {
     try {
+        validateBuildTarget();
+
         if (giteeOnly) {
             // Gitee only mode: 只发布到 Gitee，不编译
             console.log('\n⏭️  Skipping build (Gitee only mode)');
@@ -252,13 +298,6 @@ async function build() {
 
             const command = getBuildCommand();
             console.log(`   Command: ${command}`);
-
-            // macOS 特定检查
-            if (isMac && process.platform !== 'darwin') {
-                console.log('\n⚠️  Warning: Building macOS app on non-macOS platform');
-                console.log('   Code signing will be disabled');
-                console.log('   For best results, build on macOS');
-            }
 
             execSync(command, {
                 stdio: 'inherit',
@@ -273,7 +312,11 @@ async function build() {
 
             // GitHub release (handled by electron-builder if GH_TOKEN is set)
             if (process.env.GH_TOKEN) {
-                console.log('✅ GitHub release created by electron-builder');
+                if (isLinux) {
+                    console.log('ℹ️  Linux .deb 已在本地生成；请使用 release workflow 发布到 GitHub');
+                } else {
+                    console.log('✅ GitHub release created by electron-builder');
+                }
             } else {
                 console.log('⚠️  GH_TOKEN not found, GitHub release skipped');
             }

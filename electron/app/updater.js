@@ -1,18 +1,43 @@
 const { autoUpdater } = require('electron-updater');
 const { parseVersion } = require('electron-updater/out/providers/Provider');
-const { app } = require('electron');
+const { app, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const logger = require('../log/logger');
 const { DEFAULT_UPDATE_SETTINGS } = require('../const/toolsConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 const { successResponse } = require('../utils/responseUtils');
+
+const LINUX_RELEASES_URL = 'https://github.com/jihuaib/NetNexus/releases';
+const LINUX_MANUAL_UPDATE_MESSAGE = 'Linux 请从 GitHub Releases 下载并用 apt 安装 .deb';
+
+function getUpdatePolicy(platform = process.platform) {
+    if (platform === 'linux') {
+        return {
+            platform,
+            mode: 'manual-deb',
+            automaticUpdatesSupported: false,
+            message: LINUX_MANUAL_UPDATE_MESSAGE,
+            releasesUrl: LINUX_RELEASES_URL
+        };
+    }
+
+    return {
+        platform,
+        mode: 'automatic',
+        automaticUpdatesSupported: true,
+        message: '',
+        releasesUrl: LINUX_RELEASES_URL
+    };
+}
+
 class AppUpdater {
     constructor(ipc, mainWindow) {
         this.mainWindow = mainWindow;
         this.ipc = ipc;
         this.updateDownloaded = false;
         this.isDev = !app.isPackaged;
+        this.updatePolicy = getUpdatePolicy();
         this.updateSettingsConfig = DEFAULT_UPDATE_SETTINGS;
 
         // 保存事件监听器引用，便于后续清理
@@ -30,9 +55,16 @@ class AppUpdater {
         this.ipc.handle('updater:downloadUpdate', this.downloadUpdate.bind(this));
         this.ipc.handle('updater:quitAndInstall', this.quitAndInstall.bind(this));
         this.ipc.handle('updater:getCurrentVersion', this.getCurrentVersion.bind(this));
+        this.ipc.handle('updater:getUpdatePolicy', this.getUpdatePolicy.bind(this));
+        this.ipc.handle('updater:openReleasesPage', this.openReleasesPage.bind(this));
     }
 
     setupAutoUpdater() {
+        if (!this.updatePolicy.automaticUpdatesSupported) {
+            logger.info(LINUX_MANUAL_UPDATE_MESSAGE);
+            return;
+        }
+
         // 配置更新日志
         autoUpdater.logger = logger.raw();
 
@@ -81,6 +113,11 @@ class AppUpdater {
 
     // 应用更新设置
     applyUpdateSettings() {
+        if (!this.updatePolicy.automaticUpdatesSupported) {
+            logger.info('Linux 自动更新已禁用；不会执行启动更新检查');
+            return;
+        }
+
         // 自动下载更新
         autoUpdater.autoDownload = this.updateSettingsConfig.autoDownload;
         autoUpdater.autoInstallOnAppQuit = true;
@@ -108,6 +145,10 @@ class AppUpdater {
     }
 
     setupUpdateEvents() {
+        if (!this.updatePolicy.automaticUpdatesSupported) {
+            return;
+        }
+
         // 检查更新时
         this.eventListeners.checkingForUpdate = () => {
             logger.info('正在检查更新...');
@@ -175,6 +216,10 @@ class AppUpdater {
 
     // 检查更新
     async checkForUpdates() {
+        if (!this.updatePolicy.automaticUpdatesSupported) {
+            return this.linuxManualUpdateResponse();
+        }
+
         try {
             logger.info('手动检查更新');
             const result = await autoUpdater.checkForUpdates();
@@ -210,6 +255,10 @@ class AppUpdater {
 
     // 下载更新
     async downloadUpdate() {
+        if (!this.updatePolicy.automaticUpdatesSupported) {
+            return this.linuxManualUpdateResponse();
+        }
+
         try {
             logger.info('开始下载更新');
             this.sendUpdateStatus('download-started');
@@ -222,6 +271,10 @@ class AppUpdater {
 
     // 退出并安装更新
     quitAndInstall() {
+        if (!this.updatePolicy.automaticUpdatesSupported) {
+            return this.linuxManualUpdateResponse();
+        }
+
         if (this.updateDownloaded) {
             // macOS 开发环境下，只记录日志，不执行实际安装
             if (this.isDev && process.platform === 'darwin') {
@@ -240,6 +293,32 @@ class AppUpdater {
     getCurrentVersion() {
         return app.getVersion();
     }
+
+    getUpdatePolicy() {
+        return { ...this.updatePolicy };
+    }
+
+    linuxManualUpdateResponse() {
+        return {
+            success: false,
+            code: 'LINUX_MANUAL_UPDATE_REQUIRED',
+            error: LINUX_MANUAL_UPDATE_MESSAGE,
+            releasesUrl: LINUX_RELEASES_URL
+        };
+    }
+
+    async openReleasesPage() {
+        try {
+            await shell.openExternal(LINUX_RELEASES_URL);
+            return { success: true, releasesUrl: LINUX_RELEASES_URL };
+        } catch (error) {
+            logger.error('打开 GitHub Releases 失败:', error);
+            return { success: false, error: error.message, releasesUrl: LINUX_RELEASES_URL };
+        }
+    }
 }
 
 module.exports = AppUpdater;
+module.exports.getUpdatePolicy = getUpdatePolicy;
+module.exports.LINUX_MANUAL_UPDATE_MESSAGE = LINUX_MANUAL_UPDATE_MESSAGE;
+module.exports.LINUX_RELEASES_URL = LINUX_RELEASES_URL;

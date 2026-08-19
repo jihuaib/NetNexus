@@ -207,7 +207,7 @@
                             <nn-form-item label="自动重连">
                                 <div class="profile-options">
                                     <nn-checkbox v-model:checked="draft.rememberCredentials">
-                                        使用系统安全存储保存凭据
+                                        在本机保存凭据
                                     </nn-checkbox>
                                     <nn-checkbox v-model:checked="draft.autoReconnect">
                                         连接意外中断后自动尝试恢复会话
