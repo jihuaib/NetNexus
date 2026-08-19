@@ -7,6 +7,7 @@ const SecureCredentialStore = require('../../electron/utils/secureCredentialStor
 const LocalFileKeyProvider = require('../../electron/utils/localFileKeyProvider');
 
 const { LINUX_CIPHERTEXT_PREFIX, MAX_LINUX_PLAINTEXT_BYTES } = SecureCredentialStore;
+const SUPPORTS_POSIX_PERMISSIONS = process.platform !== 'win32';
 
 function createFakeKeyProvider(key = Buffer.alloc(32, 0x5a)) {
     return {
@@ -25,6 +26,11 @@ function createLinuxStore(options = {}) {
 
 function permissions(filePath) {
     return fs.statSync(filePath).mode & 0o777;
+}
+
+function assertPermissions(filePath, expectedMode) {
+    if (!SUPPORTS_POSIX_PERMISSIONS) return;
+    assert.strictEqual(permissions(filePath), expectedMode);
 }
 
 function loadKeyDigestInChild(filePath) {
@@ -76,8 +82,8 @@ async function main() {
         assert.deepStrictEqual(initializedKey, generatedKey);
         initializedKey.fill(0);
         assert.strictEqual(generationCalls, 1);
-        assert.strictEqual(permissions(path.dirname(keyFilePath)), 0o700);
-        assert.strictEqual(permissions(keyFilePath), 0o600);
+        assertPermissions(path.dirname(keyFilePath), 0o700);
+        assertPermissions(keyFilePath, 0o600);
         assert.deepStrictEqual(fs.readFileSync(keyFilePath), generatedKey);
 
         const cachedKey = firstProvider.getKey();
@@ -87,8 +93,10 @@ async function main() {
         assert.deepStrictEqual(firstProvider.getKey(), generatedKey, 'clearing memory must not delete the key file');
         assert.strictEqual(generationCalls, 1);
 
-        fs.chmodSync(path.dirname(keyFilePath), 0o755);
-        fs.chmodSync(keyFilePath, 0o644);
+        if (SUPPORTS_POSIX_PERMISSIONS) {
+            fs.chmodSync(path.dirname(keyFilePath), 0o755);
+            fs.chmodSync(keyFilePath, 0o644);
+        }
         const restartedProvider = new LocalFileKeyProvider({
             filePath: keyFilePath,
             randomBytes: () => {
@@ -98,8 +106,8 @@ async function main() {
         const restartedKey = restartedProvider.getKey();
         assert.deepStrictEqual(restartedKey, generatedKey);
         restartedKey.fill(0);
-        assert.strictEqual(permissions(path.dirname(keyFilePath)), 0o700);
-        assert.strictEqual(permissions(keyFilePath), 0o600);
+        assertPermissions(path.dirname(keyFilePath), 0o700);
+        assertPermissions(keyFilePath, 0o600);
 
         const secondProvider = new LocalFileKeyProvider({ filePath: keyFilePath });
         const sharedKey = secondProvider.getKey();
@@ -112,8 +120,8 @@ async function main() {
         );
         assert.strictEqual(new Set(concurrentDigests).size, 1, 'concurrent processes must converge on one key');
         assert.strictEqual(fs.statSync(concurrentPath).size, 32);
-        assert.strictEqual(permissions(path.dirname(concurrentPath)), 0o700);
-        assert.strictEqual(permissions(concurrentPath), 0o600);
+        assertPermissions(path.dirname(concurrentPath), 0o700);
+        assertPermissions(concurrentPath, 0o600);
         assert.deepStrictEqual(
             fs.readdirSync(path.dirname(concurrentPath)),
             ['master-key-v1'],

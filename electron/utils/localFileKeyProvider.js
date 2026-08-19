@@ -5,6 +5,7 @@ const path = require('node:path');
 const MASTER_KEY_BYTES = 32;
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
+const SUPPORTS_POSIX_PERMISSIONS = process.platform !== 'win32';
 
 function codedError(message, code, cause = null) {
     const error = new Error(message);
@@ -30,6 +31,10 @@ class LocalFileKeyProvider {
     }
 
     syncDirectory(directoryPath) {
+        // Win32 does not allow opening directories through fs.openSync. The
+        // Windows application uses safeStorage/DPAPI instead of this local-key
+        // backend, while test instances retain their inherited NTFS ACLs.
+        if (!SUPPORTS_POSIX_PERMISSIONS) return;
         const directoryFlag = fs.constants.O_DIRECTORY || 0;
         const fileDescriptor = fs.openSync(directoryPath, fs.constants.O_RDONLY | directoryFlag);
         try {
@@ -53,10 +58,12 @@ class LocalFileKeyProvider {
             throw codedError('本地密钥目录不是普通目录', 'LOCAL_KEY_DIRECTORY_INVALID');
         }
         validateOwner(stat, '本地密钥目录');
-        if ((stat.mode & 0o777) !== DIRECTORY_MODE) fs.chmodSync(this.directoryPath, DIRECTORY_MODE);
-        const securedStat = fs.lstatSync(this.directoryPath);
-        if ((securedStat.mode & 0o777) !== DIRECTORY_MODE) {
-            throw codedError('本地密钥目录权限必须为0700', 'LOCAL_KEY_DIRECTORY_PERMISSIONS_INVALID');
+        if (SUPPORTS_POSIX_PERMISSIONS) {
+            if ((stat.mode & 0o777) !== DIRECTORY_MODE) fs.chmodSync(this.directoryPath, DIRECTORY_MODE);
+            const securedStat = fs.lstatSync(this.directoryPath);
+            if ((securedStat.mode & 0o777) !== DIRECTORY_MODE) {
+                throw codedError('本地密钥目录权限必须为0700', 'LOCAL_KEY_DIRECTORY_PERMISSIONS_INVALID');
+            }
         }
         this.syncDirectory(this.directoryPath);
         if (created) this.syncDirectory(path.dirname(this.directoryPath));
@@ -78,10 +85,12 @@ class LocalFileKeyProvider {
             if (stat.size !== MASTER_KEY_BYTES) {
                 throw codedError('本地密钥文件格式无效', 'LOCAL_KEY_FILE_INVALID');
             }
-            if ((stat.mode & 0o777) !== FILE_MODE) fs.fchmodSync(fileDescriptor, FILE_MODE);
-            const securedStat = fs.fstatSync(fileDescriptor);
-            if ((securedStat.mode & 0o777) !== FILE_MODE) {
-                throw codedError('本地密钥文件权限必须为0600', 'LOCAL_KEY_FILE_PERMISSIONS_INVALID');
+            if (SUPPORTS_POSIX_PERMISSIONS) {
+                if ((stat.mode & 0o777) !== FILE_MODE) fs.fchmodSync(fileDescriptor, FILE_MODE);
+                const securedStat = fs.fstatSync(fileDescriptor);
+                if ((securedStat.mode & 0o777) !== FILE_MODE) {
+                    throw codedError('本地密钥文件权限必须为0600', 'LOCAL_KEY_FILE_PERMISSIONS_INVALID');
+                }
             }
             key = fs.readFileSync(fileDescriptor);
             if (key.length !== MASTER_KEY_BYTES) {
@@ -119,7 +128,7 @@ class LocalFileKeyProvider {
                 if (written <= 0) throw codedError('无法写入本地密钥文件', 'LOCAL_KEY_FILE_UNAVAILABLE');
                 offset += written;
             }
-            fs.fchmodSync(fileDescriptor, FILE_MODE);
+            if (SUPPORTS_POSIX_PERMISSIONS) fs.fchmodSync(fileDescriptor, FILE_MODE);
             fs.fsyncSync(fileDescriptor);
             fs.closeSync(fileDescriptor);
             fileDescriptor = undefined;

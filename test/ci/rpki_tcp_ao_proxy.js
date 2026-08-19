@@ -306,6 +306,17 @@ async function main() {
     await assertStartupSecretWiped('stdin-error', /写入TCP-AO helper配置失败: fixture stdin failure/);
     await assertStartupSecretWiped('timeout', /没有就绪/);
 
+    // The wrapper checks above use injected process and filesystem adapters and
+    // are portable. The worker integration below intentionally creates a real
+    // Unix-domain socket and verifies POSIX directory/socket modes, so Windows
+    // exercises that transport in rpki_tcp_ao_forward.js only up to its portable
+    // protocol checks and must not attempt to bind the /tmp fixture path here.
+    if (process.platform === 'win32') {
+        console.log('RPKI TCP-AO worker Unix socket integration skipped on Windows');
+        console.log('RPKI TCP-AO proxy wrapper tests passed');
+        return;
+    }
+
     const fakeProxy = new EventEmitter();
     const workerRuntimeProfile = runtimeProfile();
     let workerForwardDirectory;
@@ -336,6 +347,7 @@ async function main() {
     worker.tcpAoProxy = null;
     worker.storageStopping = false;
     worker.rpkiSessionMap = new Map();
+    worker.rpkiRouterKeyMap = new Map();
     worker.closingRpkiSessions = new Set();
     worker.pendingTcpAoSockets = new Set();
     worker.rpkiConfigData = {
