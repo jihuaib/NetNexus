@@ -20,6 +20,17 @@ class RpkiSession {
         this.localPort = null;
         this.remoteIp = null;
         this.remotePort = null;
+        this.transport = 'tcp';
+        this.authentication = 'none';
+        this.authProfileId = null;
+        this.authProfileName = null;
+        this.authPeer = null;
+        this.tcpAoProfileId = null;
+        this.tcpAoProfileName = null;
+        this.tcpAoPeer = null;
+        this.tcpMd5ProfileId = null;
+        this.tcpMd5ProfileName = null;
+        this.tcpMd5Peer = null;
         this.messageBuffer = Buffer.alloc(0);
         this.sessionId = null;
         this.protocolVersion = RpkiConst.RPKI_PROTOCOL_VERSION.V0;
@@ -1077,6 +1088,17 @@ class RpkiSession {
             localPort: this.localPort,
             remoteIp: this.remoteIp,
             remotePort: this.remotePort,
+            transport: this.transport,
+            authentication: this.authentication,
+            authProfileId: this.authProfileId,
+            authProfileName: this.authProfileName,
+            authPeer: this.authPeer,
+            tcpAoProfileId: this.tcpAoProfileId,
+            tcpAoProfileName: this.tcpAoProfileName,
+            tcpAoPeer: this.tcpAoPeer,
+            tcpMd5ProfileId: this.tcpMd5ProfileId,
+            tcpMd5ProfileName: this.tcpMd5ProfileName,
+            tcpMd5Peer: this.tcpMd5Peer,
             protocolVersion: this.protocolVersion
         };
     }

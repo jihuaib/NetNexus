@@ -38,5 +38,5 @@ resources/libyang/*/
 !resources/libyang/iana/
 !resources/libyang/iana/**
 
-# Native TCP-AO helpers are produced for each Linux packaging architecture.
-resources/tcp-ao/linux-*/tcp-ao-helper
+# Native TCP authentication helpers are produced for each Linux packaging architecture.
+resources/tcp-auth/linux-*/tcp-auth-helper

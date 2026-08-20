@@ -148,9 +148,15 @@ function buildSource(bmpSession) {
             bmpV4TlvDraft: bmpSession.getBmpV4TlvDraft?.() || null,
             transport: bmpSession.transport || 'tcp',
             authentication: bmpSession.authentication || 'none',
+            authProfileId: bmpSession.authProfileId || null,
+            authProfileName: bmpSession.authProfileName || null,
+            authPeer: bmpSession.authPeer || null,
             tcpAoProfileId: bmpSession.tcpAoProfileId || null,
             tcpAoProfileName: bmpSession.tcpAoProfileName || null,
-            tcpAoPeer: bmpSession.tcpAoPeer || null
+            tcpAoPeer: bmpSession.tcpAoPeer || null,
+            tcpMd5ProfileId: bmpSession.tcpMd5ProfileId || null,
+            tcpMd5ProfileName: bmpSession.tcpMd5ProfileName || null,
+            tcpMd5Peer: bmpSession.tcpMd5Peer || null
         }
     };
 }

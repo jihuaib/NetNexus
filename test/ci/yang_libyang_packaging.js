@@ -33,7 +33,7 @@ const {
 } = require('../../scripts/ensure-libyang-runtime');
 const beforePack = require('../../scripts/verify-libyang-runtime');
 const packagingBeforePack = require('../../scripts/verify-packaging-runtime');
-const { ensureTcpAoHelper, getBuildReason, resolveHelperPaths } = require('../../scripts/ensure-tcp-ao-helper');
+const { ensureTcpAuthHelper, getBuildReason, resolveHelperPaths } = require('../../scripts/ensure-tcp-auth-helper');
 const {
     assertNativeLinuxBuild,
     optionValue: linuxOptionValue,
@@ -202,7 +202,7 @@ function assertUserInstalledVcpkgContract(powershellSource) {
 function verifyScriptSyntax() {
     const javascriptScripts = [
         'scripts/ensure-libyang-runtime.js',
-        'scripts/ensure-tcp-ao-helper.js',
+        'scripts/ensure-tcp-auth-helper.js',
         'scripts/build-linux-deb.js',
         'scripts/build-linux-distribution.js',
         'scripts/installed-bgp-port179-smoke.js',
@@ -533,9 +533,10 @@ function testPinnedReleaseAndPackageContract() {
     assert.deepEqual(packageJson.build.linux.target, ['deb']);
     assert(
         packageJson.build.linux.extraResources.some(
-            resource => resource.from === 'resources/tcp-ao/linux-${arch}' && resource.to === 'tcp-ao/linux-${arch}'
+            resource =>
+                resource.from === 'resources/tcp-auth/linux-${arch}' && resource.to === 'tcp-auth/linux-${arch}'
         ),
-        'Linux packages must copy only the target-architecture TCP-AO helper into application resources'
+        'Linux packages must copy only the target-architecture TCP authentication helper into application resources'
     );
     for (const dependency of [
         'libc6 (>= 2.38)',
@@ -570,9 +571,9 @@ function testPinnedReleaseAndPackageContract() {
     assert.match(debControl, /^Depends: .*libcap2-bin/mu);
     assert.match(debControl, /^Depends: .*fonts-noto-cjk/mu);
     assert.doesNotMatch(debControl, /^Recommends:/mu);
-    assert.equal(packageJson.scripts['tcp-ao:build'], 'bash scripts/build-tcp-ao-helper.sh');
-    assert.equal(packageJson.scripts['tcp-ao:ensure'], 'node scripts/ensure-tcp-ao-helper.js');
-    assert.equal(packageJson.scripts['tcp-ao:test:native'], 'bash scripts/test-tcp-ao-helper.sh');
+    assert.equal(packageJson.scripts['tcp-auth:build'], 'bash scripts/build-tcp-auth-helper.sh');
+    assert.equal(packageJson.scripts['tcp-auth:ensure'], 'node scripts/ensure-tcp-auth-helper.js');
+    assert.equal(packageJson.scripts['tcp-auth:test:native'], 'bash scripts/test-tcp-auth-helper.sh');
     assert.equal(packageJson.scripts['better-sqlite3:rebuild'], 'node scripts/rebuild-better-sqlite3.js');
     assert.equal(packageJson.scripts['better-sqlite3:smoke'], 'node scripts/smoke-better-sqlite3-runtime.js');
     assert.equal(packageJson.scripts['pack:linux:x64'], 'electron-builder --linux --x64 --dir');
@@ -594,7 +595,7 @@ function testPinnedReleaseAndPackageContract() {
         );
     }
     for (const scriptPath of [
-        'scripts/ensure-tcp-ao-helper.js',
+        'scripts/ensure-tcp-auth-helper.js',
         'scripts/build-linux-deb.js',
         'scripts/build-linux-distribution.js',
         'scripts/installed-bgp-port179-smoke.js',
@@ -607,18 +608,18 @@ function testPinnedReleaseAndPackageContract() {
         assert(fs.statSync(path.join(projectRoot, scriptPath)).isFile(), `${scriptPath} must exist`);
     }
     const e2ePrepareSource = fs.readFileSync(path.join(projectRoot, 'scripts', 'prepare-e2e-release.js'), 'utf8');
-    const e2eHelperBuildIndex = e2ePrepareSource.indexOf("runCommand(npmCommand, ['run', 'tcp-ao:build'])");
+    const e2eHelperBuildIndex = e2ePrepareSource.indexOf("runCommand(npmCommand, ['run', 'tcp-auth:build'])");
     const e2ePackIndex = e2ePrepareSource.indexOf('const { command, args, shell } = getPackCommand()');
     assert(
         e2eHelperBuildIndex >= 0 && e2eHelperBuildIndex < e2ePackIndex,
-        'Linux E2E packaging must build the native TCP-AO helper before invoking electron-builder'
+        'Linux E2E packaging must build the native TCP authentication helper before invoking electron-builder'
     );
     assert.equal(packageJson.scripts['libyang:verify'], 'node scripts/verify-libyang-runtime.js');
     assert.equal(packageJson.scripts['libyang:ensure'], 'node scripts/ensure-libyang-runtime.js');
     assert.equal(packageJson.scripts['libyang:build'], 'node scripts/ensure-libyang-runtime.js --force');
     assert.equal(
         packageJson.scripts.predev,
-        'npm run libyang:ensure && npm run tcp-ao:ensure',
+        'npm run libyang:ensure && npm run tcp-auth:ensure',
         'development startup must ensure both native runtime helpers before Electron launches'
     );
     assert.match(
@@ -1237,7 +1238,7 @@ function testLinuxPackagingPreparation() {
         ['npm', ['run', 'better-sqlite3:rebuild']],
         ['npm', ['run', 'better-sqlite3:smoke']],
         ['npm', ['run', 'build']],
-        ['npm', ['run', 'tcp-ao:build']],
+        ['npm', ['run', 'tcp-auth:build']],
         ['npm', ['run', 'libyang:ensure', '--', '--platform', 'linux', '--arch', 'arm64']]
     ]);
     assert.deepEqual(linuxDistributionBuilderArguments(['--arch', 'arm64', '--publish', 'never'], 'arm64'), [
@@ -1313,25 +1314,25 @@ function testLinuxPackagingPreparation() {
     assert.match(debBuilderSource, /'--root-owner-group'/);
 }
 
-function testTcpAoHelperEnsure() {
+function testTcpAuthHelperEnsure() {
     let touched = false;
     assert.equal(
-        ensureTcpAoHelper(
+        ensureTcpAuthHelper(
             { projectRoot: '/unused', platform: 'darwin', arch: 'arm64' },
             {
                 spawnSync() {
                     touched = true;
                 },
-                verifyTcpAoHelper() {
+                verifyTcpAuthHelper() {
                     touched = true;
                 }
             }
         ),
         null
     );
-    assert.equal(touched, false, 'non-Linux TCP-AO setup must skip without touching build dependencies');
+    assert.equal(touched, false, 'non-Linux TCP authentication setup must skip without touching build dependencies');
 
-    const helperProjectRoot = path.join(tempDir, 'tcp-ao-ensure-fixture');
+    const helperProjectRoot = path.join(tempDir, 'tcp-auth-ensure-fixture');
     const paths = resolveHelperPaths({ projectRoot: helperProjectRoot, platform: 'linux', arch: 'aarch64' });
     fs.mkdirSync(path.dirname(paths.sourceFile), { recursive: true });
     fs.mkdirSync(path.dirname(paths.helperPath), { recursive: true });
@@ -1346,15 +1347,15 @@ function testTcpAoHelperEnsure() {
     assert.equal(getBuildReason(paths), '');
 
     const currentMessages = [];
-    const currentStatus = { versionOutput: 'netnexus-tcp-ao-helper 1.0.0' };
+    const currentStatus = { versionOutput: 'netnexus-tcp-auth-helper 1.0.0' };
     assert.equal(
-        ensureTcpAoHelper(
+        ensureTcpAuthHelper(
             { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
             {
                 spawnSync() {
-                    assert.fail('a current TCP-AO helper must not be rebuilt');
+                    assert.fail('a current TCP authentication helper must not be rebuilt');
                 },
-                verifyTcpAoHelper(options) {
+                verifyTcpAuthHelper(options) {
                     assert.deepEqual(options, {
                         projectRoot: helperProjectRoot,
                         platform: 'linux',
@@ -1371,16 +1372,16 @@ function testTcpAoHelperEnsure() {
 
     const latest = new Date();
     fs.utimesSync(paths.sourceFile, latest, latest);
-    assert.match(getBuildReason(paths), /tcp-ao-helper\.c is newer/);
+    assert.match(getBuildReason(paths), /tcp-auth-helper\.c is newer/);
     const buildCalls = [];
-    ensureTcpAoHelper(
+    ensureTcpAuthHelper(
         { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
         {
             spawnSync(command, args, options) {
                 buildCalls.push({ command, args, options });
                 return { status: 0 };
             },
-            verifyTcpAoHelper: () => currentStatus,
+            verifyTcpAuthHelper: () => currentStatus,
             write() {}
         }
     );
@@ -1392,14 +1393,14 @@ function testTcpAoHelperEnsure() {
     fs.utimesSync(paths.helperPath, new Date(Date.now() + 10_000), new Date(Date.now() + 10_000));
     let verificationCount = 0;
     let rebuildCount = 0;
-    ensureTcpAoHelper(
+    ensureTcpAuthHelper(
         { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
         {
             spawnSync() {
                 rebuildCount++;
                 return { status: 0 };
             },
-            verifyTcpAoHelper() {
+            verifyTcpAuthHelper() {
                 verificationCount++;
                 if (verificationCount === 1) throw new Error('fixture validation failure');
                 return currentStatus;
@@ -1424,8 +1425,8 @@ async function testPackagingBeforePackHook() {
             async verifyLibyangBeforePack() {
                 calls.push('libyang');
             },
-            verifyTcpAoHelper(options) {
-                calls.push('tcp-ao');
+            verifyTcpAuthHelper(options) {
+                calls.push('tcp-auth');
                 assert.deepEqual(options, {
                     projectRoot: '/fixture/project',
                     platform: 'linux',
@@ -1434,14 +1435,14 @@ async function testPackagingBeforePackHook() {
                 return {
                     platform: 'linux',
                     arch: 'arm64',
-                    helpers: ['/fixture/project/resources/tcp-ao/linux-arm64/tcp-ao-helper']
+                    helpers: ['/fixture/project/resources/tcp-auth/linux-arm64/tcp-auth-helper']
                 };
             },
             write: message => messages.push(message)
         }
     );
-    assert.deepEqual(calls, ['libyang', 'tcp-ao']);
-    assert.match(messages.join(''), /Verified bundled TCP-AO helper for linux-arm64/);
+    assert.deepEqual(calls, ['libyang', 'tcp-auth']);
+    assert.match(messages.join(''), /Verified bundled TCP authentication helper for linux-arm64/);
 
     calls.length = 0;
     await packagingBeforePack(
@@ -1450,17 +1451,17 @@ async function testPackagingBeforePackHook() {
             async verifyLibyangBeforePack() {
                 calls.push('libyang');
             },
-            verifyTcpAoHelper() {
-                calls.push('tcp-ao');
+            verifyTcpAuthHelper() {
+                calls.push('tcp-auth');
             }
         }
     );
     assert.deepEqual(calls, ['libyang'], 'non-Linux packaging must retain only the libyang verifier');
 
     if (process.platform !== 'win32') {
-        const helperProjectRoot = path.join(tempDir, 'tcp-ao-helper-fixture');
-        const helperDirectory = path.join(helperProjectRoot, 'resources', 'tcp-ao', 'linux-arm64');
-        const helperPath = path.join(helperDirectory, 'tcp-ao-helper');
+        const helperProjectRoot = path.join(tempDir, 'tcp-auth-helper-fixture');
+        const helperDirectory = path.join(helperProjectRoot, 'resources', 'tcp-auth', 'linux-arm64');
+        const helperPath = path.join(helperDirectory, 'tcp-auth-helper');
         fs.mkdirSync(helperDirectory, { recursive: true });
         const elfHeader = Buffer.alloc(64);
         Buffer.from([0x7f, 0x45, 0x4c, 0x46]).copy(elfHeader);
@@ -1469,23 +1470,23 @@ async function testPackagingBeforePackHook() {
         elfHeader.writeUInt16LE(packagingBeforePack.ELF_MACHINE_BY_ARCH.arm64, 18);
         fs.writeFileSync(helperPath, elfHeader, { mode: 0o755 });
 
-        const helperStatus = packagingBeforePack.verifyTcpAoHelper(
+        const helperStatus = packagingBeforePack.verifyTcpAuthHelper(
             { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
             {
                 spawnSync(executable, args) {
                     assert.equal(executable, helperPath);
                     assert.deepEqual(args, ['--version']);
-                    return { status: 0, stdout: 'netnexus-tcp-ao-helper 1.0.0\n', stderr: '' };
+                    return { status: 0, stdout: 'netnexus-tcp-auth-helper 1.0.0\n', stderr: '' };
                 }
             }
         );
-        assert.equal(helperStatus.versionOutput, 'netnexus-tcp-ao-helper 1.0.0');
+        assert.equal(helperStatus.versionOutput, 'netnexus-tcp-auth-helper 1.0.0');
         assert.deepEqual(helperStatus.helpers, [helperPath]);
 
         fs.chmodSync(helperPath, 0o775);
         assert.throws(
             () =>
-                packagingBeforePack.verifyTcpAoHelper(
+                packagingBeforePack.verifyTcpAuthHelper(
                     { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
                     { spawnSync: () => ({ status: 0, stdout: 'version' }) }
                 ),
@@ -1495,7 +1496,7 @@ async function testPackagingBeforePackHook() {
         fs.chmodSync(helperPath, 0o757);
         assert.throws(
             () =>
-                packagingBeforePack.verifyTcpAoHelper(
+                packagingBeforePack.verifyTcpAuthHelper(
                     { projectRoot: helperProjectRoot, platform: 'linux', arch: 'arm64' },
                     { spawnSync: () => ({ status: 0, stdout: 'version' }) }
                 ),
@@ -1658,12 +1659,12 @@ function testCiRuntimeInstallOrdering() {
         /sudo apt-get install --yes build-essential cmake linux-libc-dev patchelf xvfb/
     );
     assert.match(linuxReleaseJobSource, /test "\$\(id -u\)" -ne 0/);
-    assert.match(linuxReleaseJobSource, /npm run tcp-ao:test:native/);
+    assert.match(linuxReleaseJobSource, /npm run tcp-auth:test:native/);
     assert.match(linuxReleaseJobSource, /run:\s*xvfb-run -a npm test/);
     assert.match(linuxReleaseJobSource, /run:\s*xvfb-run -a npm run test:ci:minified/);
     assert.match(linuxReleaseJobSource, /dist_script:\s*dist:linux:x64/);
     assert.match(linuxReleaseJobSource, /dist_script:\s*dist:linux:arm64/);
-    assert.match(linuxReleaseJobSource, /resources\/tcp-ao\/linux-\$\{\{ matrix\.arch \}\}\/tcp-ao-helper/);
+    assert.match(linuxReleaseJobSource, /resources\/tcp-auth\/linux-\$\{\{ matrix\.arch \}\}\/tcp-auth-helper/);
     assert.match(linuxReleaseJobSource, /resources\/libyang\/linux-\$\{\{ matrix\.arch \}\}\/bin\/yanglint/);
     assert.match(linuxReleaseJobSource, /node_modules\/better-sqlite3\/build\/Release\/better_sqlite3\.node/);
     assert.match(
@@ -1730,7 +1731,7 @@ async function run() {
         testRuntimeVerifierWithoutNativeRuntime();
         await testBeforePackHook();
         testLinuxPackagingPreparation();
-        testTcpAoHelperEnsure();
+        testTcpAuthHelperEnsure();
         await testPackagingBeforePackHook();
         testCiRuntimeInstallOrdering();
         verifyScriptSyntax();

@@ -13,18 +13,31 @@ const BmpPersistenceClient = require('../worker/bmp/bmpPersistenceClient');
 const { normalizeBmpClientKey } = require('../window/monitorWindowManager');
 const SecureCredentialStore = require('../utils/secureCredentialStore');
 const TcpAoSettingsStore = require('../utils/tcpAoSettingsStore');
+const TcpMd5SettingsStore = require('../utils/tcpMd5SettingsStore');
 const {
     BMP_AUTH_TYPES,
-    normalizeBmpAuthSelection,
-    assertNonOverlappingTcpAoProfiles,
-    redactTcpAoConfig
-} = require('../utils/tcpAoConfig');
+    normalizeBmpAuthenticationSelection,
+    redactAuthenticationConfig
+} = require('../utils/tcpAuthConfig');
+const { assertNonOverlappingTcpAoProfiles } = require('../utils/tcpAoConfig');
+const { assertNonOverlappingTcpMd5Profiles } = require('../utils/tcpMd5Config');
+const TcpAoSettingsLifecycleGate = require('./tcpAoSettingsLifecycleGate');
 
 const BMP_ANALYSIS_INVALIDATION_EVENTS = Object.freeze(['bmp:routeAssuranceInvalidated', 'bmp:routeLensInvalidated']);
 const BMP_RUNTIME_CHANGED_EVENT = 'bmp:runtimeChanged';
 const PACKAGED_RENDERER_PATH = path.resolve(__dirname, '../../dist/index.html');
 const MAX_RUNTIME_FAILURE_CODE_LENGTH = 64;
 const MAX_RUNTIME_FAILURE_REASON_LENGTH = 512;
+const TCP_AO_RUNTIME_RELOAD_TIMEOUT_MS = 15_000;
+
+function clearRuntimeTcpAoProfiles(profiles) {
+    for (const profile of Array.isArray(profiles) ? profiles : []) {
+        for (const key of Array.isArray(profile?.keys) ? profile.keys : []) {
+            if (Object.prototype.hasOwnProperty.call(key, 'key')) key.key = '<redacted>';
+        }
+        if (profile && typeof profile === 'object') profile.keys = [];
+    }
+}
 
 const BMP_PERSISTENCE_ARTIFACTS = Object.freeze([
     { kind: 'database', suffix: '' },
@@ -89,7 +102,7 @@ function normalizeBmpConfig(config = {}) {
         bmpV4TlvDraft,
         pathMarkingTlvType,
         persistenceEnabled: true,
-        ...normalizeBmpAuthSelection(config)
+        ...normalizeBmpAuthenticationSelection(config)
     };
 }
 
@@ -105,6 +118,9 @@ class BmpApp {
         this.credentialStore = options.credentialStore || new SecureCredentialStore();
         this.tcpAoSettingsStore =
             options.tcpAoSettingsStore || new TcpAoSettingsStore(this.store, this.credentialStore);
+        this.tcpMd5SettingsStore =
+            options.tcpMd5SettingsStore || new TcpMd5SettingsStore(this.store, this.credentialStore);
+        this.tcpAoSettingsLifecycleGate = options.tcpAoSettingsLifecycleGate || new TcpAoSettingsLifecycleGate();
         this.bmpConfigFileKey = 'bmp-config';
         this.persistenceDbPath = path.join(
             this.store?.path ? path.dirname(this.store.path) : process.cwd(),
@@ -117,8 +133,11 @@ class BmpApp {
         this.bmpStartPromise = null;
         this.bmpStopPromise = null;
         this.bmpStartGeneration = 0;
+        this.bmpQueuedTcpAoStartGeneration = null;
         this.bmpRuntimeState = null;
         this.bmpRuntimeFailure = null;
+        this.runningAuthType = BMP_AUTH_TYPES.NONE;
+        this.runningTcpAoProfileIds = [];
         this.persistenceDatabaseDeleting = false;
         this.eventDispatcher = null;
         this.runningPersistenceEnabled = false;
@@ -145,6 +164,7 @@ class BmpApp {
         this.registerTrustedHandler('bmp:saveBmpConfig', this.handleSaveBmpConfig);
         this.registerTrustedHandler('bmp:loadBmpConfig', this.handleLoadBmpConfig);
         this.registerTrustedHandler('bmp:loadTcpAoSettings', this.handleLoadTcpAoSettings);
+        this.registerTrustedHandler('bmp:loadTcpMd5Settings', this.handleLoadTcpMd5Settings);
         this.registerTrustedHandler('bmp:startBmp', this.handleStartBmp);
         this.registerTrustedHandler('bmp:stopBmp', this.handleStopBmp);
         this.ipcMain.handle('bmp:getClientList', this.handleGetClientList.bind(this));
@@ -226,7 +246,13 @@ class BmpApp {
 
     async handleSaveBmpConfig(event, config) {
         try {
-            this.store.set(this.bmpConfigFileKey, normalizeBmpConfig(config));
+            const storedConfig = normalizeBmpConfig(config);
+            if (storedConfig.authType === BMP_AUTH_TYPES.TCP_AO) {
+                this.getTcpAoSettingsStore().assertProfilesExist(storedConfig.tcpAoProfileIds);
+            } else if (storedConfig.authType === BMP_AUTH_TYPES.TCP_MD5) {
+                this.getTcpMd5SettingsStore().assertProfilesExist(storedConfig.tcpMd5ProfileIds);
+            }
+            this.store.set(this.bmpConfigFileKey, storedConfig);
             return successResponse(null, 'BMP配置文件保存成功');
         } catch (error) {
             logger.error('Error saving BMP config:', error.message);
@@ -266,6 +292,11 @@ class BmpApp {
         return this.tcpAoSettingsStore;
     }
 
+    getTcpMd5SettingsStore() {
+        this.tcpMd5SettingsStore.store = this.store;
+        return this.tcpMd5SettingsStore;
+    }
+
     async initializeCredentialStore() {
         if (typeof this.credentialStore.initialize === 'function') {
             await this.credentialStore.initialize();
@@ -280,6 +311,67 @@ class BmpApp {
             logger.error('Error loading BMP TCP-AO settings:', error.message);
             return errorResponse(error.message);
         }
+    }
+
+    async handleLoadTcpMd5Settings() {
+        try {
+            await this.initializeCredentialStore();
+            return successResponse(this.getTcpMd5SettingsStore().listProfiles(), 'TCP MD5配置加载成功');
+        } catch (error) {
+            logger.error('Error loading BMP TCP MD5 settings:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    getTcpAoRuntimeReloadState(options = {}) {
+        const ignoreQueuedStart = options.ignoreQueuedStart === true && !this.bmpStarting;
+        if (
+            this.bmpStarting ||
+            this.bmpStopping ||
+            this.bmpStopPromise ||
+            (this.bmpStartPromise && !ignoreQueuedStart)
+        ) {
+            return { service: 'BMP', state: 'transitioning', profileIds: [] };
+        }
+        if (!this.worker || this.runningAuthType !== BMP_AUTH_TYPES.TCP_AO) {
+            return { service: 'BMP', state: 'inactive', profileIds: [] };
+        }
+        return {
+            service: 'BMP',
+            state: 'running',
+            profileIds: [...this.runningTcpAoProfileIds]
+        };
+    }
+
+    async reloadTcpAoRuntimeProfiles(profiles) {
+        const state = this.getTcpAoRuntimeReloadState();
+        if (state.state !== 'running') throw new Error('BMP未以TCP-AO认证方式稳定运行');
+        const profileIds = (Array.isArray(profiles) ? profiles : []).map(profile => profile?.id);
+        if (JSON.stringify(profileIds) !== JSON.stringify(state.profileIds)) {
+            throw new Error('BMP TCP-AO运行Profile选择已变化，需要停止并重新启动BMP服务');
+        }
+        const worker = this.worker;
+        let request;
+        try {
+            request = worker.sendRequest(
+                BmpConst.BMP_REQ_TYPES.RELOAD_TCP_AO_PROFILES,
+                { profiles },
+                { timeoutMs: TCP_AO_RUNTIME_RELOAD_TIMEOUT_MS }
+            );
+        } finally {
+            clearRuntimeTcpAoProfiles(profiles);
+        }
+        const result = await request;
+        if (this.worker !== worker || this.getTcpAoRuntimeReloadState().state !== 'running') {
+            throw new Error('BMP在TCP-AO密钥热更新期间已停止');
+        }
+        return result.data || {};
+    }
+
+    async stopTcpAoRuntimeAfterReloadFailure() {
+        if (!this.worker && !this.bmpStarting && !this.bmpStartPromise) return { stopped: true };
+        const result = await this.handleStopBmp();
+        return { stopped: result?.status === 'success', message: result?.msg || '' };
     }
 
     emitRuntimeChanged(running, dispatcher = this.eventDispatcher, failure = null) {
@@ -747,21 +839,46 @@ class BmpApp {
             return Promise.resolve(errorResponse('BMP数据库正在删除，请稍后重试'));
         }
 
-        return this.trackLifecycleOperation('bmpStartPromise', () => this.startBmpOperation(event, bmpConfigData));
+        let tcpAoStart = false;
+        try {
+            tcpAoStart = normalizeBmpConfig(bmpConfigData).authType === BMP_AUTH_TYPES.TCP_AO;
+        } catch (_error) {
+            // Invalid input is rejected by startBmpOperation without reading a
+            // persisted TCP-AO profile, so it does not need the settings gate.
+        }
+        const queuedStartGeneration = tcpAoStart ? ++this.bmpStartGeneration : null;
+        if (queuedStartGeneration !== null) this.bmpQueuedTcpAoStartGeneration = queuedStartGeneration;
+        return this.trackLifecycleOperation('bmpStartPromise', () => {
+            if (!tcpAoStart) return this.startBmpOperation(event, bmpConfigData);
+            return this.tcpAoSettingsLifecycleGate.runExclusive(() => {
+                const cancelled =
+                    this.bmpStopping ||
+                    this.bmpQueuedTcpAoStartGeneration !== queuedStartGeneration ||
+                    this.bmpStartGeneration !== queuedStartGeneration;
+                if (this.bmpQueuedTcpAoStartGeneration === queuedStartGeneration) {
+                    this.bmpQueuedTcpAoStartGeneration = null;
+                }
+                if (cancelled) return errorResponse('BMP启动已取消');
+                return this.startBmpOperation(event, bmpConfigData, queuedStartGeneration);
+            });
+        });
     }
 
-    async startBmpOperation(event, bmpConfigData) {
+    async startBmpOperation(event, bmpConfigData, reservedStartGeneration = null) {
         const webContents = event?.sender || null;
         this.bmpStarting = true;
         this.bmpStopping = false;
         this.bmpRuntimeState = null;
         this.bmpRuntimeFailure = null;
-        const startGeneration = ++this.bmpStartGeneration;
+        this.runningAuthType = BMP_AUTH_TYPES.NONE;
+        this.runningTcpAoProfileIds = [];
+        const startGeneration = reservedStartGeneration ?? ++this.bmpStartGeneration;
         try {
             const inputConfig = bmpConfigData;
             const normalizedConfig = normalizeBmpConfig(inputConfig);
-            const auth = normalizeBmpAuthSelection(normalizedConfig);
+            const auth = normalizeBmpAuthenticationSelection(normalizedConfig);
             let tcpAoProfiles = [];
+            let tcpMd5Profiles = [];
             if (auth.authType === BMP_AUTH_TYPES.TCP_AO) {
                 if (this.platform !== 'linux') {
                     throw new Error('TCP-AO认证仅支持Linux 6.7及以上系统');
@@ -771,10 +888,20 @@ class BmpApp {
                     this.getTcpAoSettingsStore().getRuntimeProfile(profileId)
                 );
                 assertNonOverlappingTcpAoProfiles(tcpAoProfiles);
+            } else if (auth.authType === BMP_AUTH_TYPES.TCP_MD5) {
+                if (this.platform !== 'linux') {
+                    throw new Error('TCP MD5认证仅支持Linux系统');
+                }
+                await this.initializeCredentialStore();
+                tcpMd5Profiles = auth.tcpMd5ProfileIds.map(profileId =>
+                    this.getTcpMd5SettingsStore().getRuntimeProfile(profileId)
+                );
+                assertNonOverlappingTcpMd5Profiles(tcpMd5Profiles);
             }
             bmpConfigData = {
                 ...normalizedConfig,
                 tcpAoProfiles,
+                tcpMd5Profiles,
                 // SQLite now is the BMP RIB rather than an optional history sink.
                 persistenceEnabled: true,
                 persistenceDbPath: this.persistenceDbPath,
@@ -797,7 +924,8 @@ class BmpApp {
             this.runningPersistenceEnabled = true;
             logger.info('BMP config:', {
                 ...bmpConfigData,
-                tcpAoProfiles: tcpAoProfiles.map(profile => redactTcpAoConfig(profile)),
+                tcpAoProfiles: tcpAoProfiles.map(profile => redactAuthenticationConfig(profile)),
+                tcpMd5Profiles: tcpMd5Profiles.map(profile => redactAuthenticationConfig(profile)),
                 persistenceDbPath: '[user-data]/bmp/bmp.sqlite3'
             });
 
@@ -822,6 +950,8 @@ class BmpApp {
                     this.emitRuntimeChanged(false, this.eventDispatcher, failure);
                     this.worker = null;
                     this.runningPersistenceEnabled = false;
+                    this.runningAuthType = BMP_AUTH_TYPES.NONE;
+                    this.runningTcpAoProfileIds = [];
                     this.closeMonitorWindows();
                     this.eventDispatcher?.cleanup();
                     this.eventDispatcher = null;
@@ -867,6 +997,8 @@ class BmpApp {
             this.bmpRuntimeFailureHandler = failure => {
                 if (this.worker !== activeWorker) return;
                 this.bmpRuntimeFailure = normalizeRuntimeFailure(failure);
+                this.runningAuthType = BMP_AUTH_TYPES.NONE;
+                this.runningTcpAoProfileIds = [];
                 this.emitRuntimeChanged(false, this.eventDispatcher, this.bmpRuntimeFailure);
             };
 
@@ -892,6 +1024,8 @@ class BmpApp {
             }
 
             // 这里肯定是启动成功了，如果失败，会抛出异常
+            this.runningAuthType = auth.authType;
+            this.runningTcpAoProfileIds = auth.authType === BMP_AUTH_TYPES.TCP_AO ? [...auth.tcpAoProfileIds] : [];
             this.emitRuntimeChanged(true);
             logger.info('bmp启动成功 result:', result);
             return successResponse(null, result.msg);
@@ -915,6 +1049,8 @@ class BmpApp {
                 }
             }
             this.runningPersistenceEnabled = false;
+            this.runningAuthType = BMP_AUTH_TYPES.NONE;
+            this.runningTcpAoProfileIds = [];
             this.emitRuntimeChanged(false);
             if (this.eventDispatcher) {
                 this.eventDispatcher.cleanup(); // 清理事件发送器
@@ -941,11 +1077,16 @@ class BmpApp {
     async stopBmpOperation() {
         this.closeMonitorWindows();
         const pendingStart = this.bmpStartPromise;
+        const queuedTcpAoStart = Boolean(
+            pendingStart && !this.bmpStarting && this.bmpQueuedTcpAoStartGeneration !== null
+        );
         const cancelledPendingStart = Boolean(this.bmpStarting || pendingStart);
         this.bmpStopping = true;
+        this.runningAuthType = BMP_AUTH_TYPES.NONE;
+        this.runningTcpAoProfileIds = [];
         this.emitRuntimeChanged(false);
         this.cancelPendingStart();
-        if (pendingStart) await pendingStart.catch(() => {});
+        if (pendingStart && !queuedTcpAoStart) await pendingStart.catch(() => {});
 
         if (!this.worker) {
             this.bmpStopping = false;
@@ -980,6 +1121,8 @@ class BmpApp {
                 this.worker = null;
             }
             this.runningPersistenceEnabled = false;
+            this.runningAuthType = BMP_AUTH_TYPES.NONE;
+            this.runningTcpAoProfileIds = [];
             if (this.eventDispatcher) {
                 this.eventDispatcher.cleanup(); // 清理事件发送器
                 this.eventDispatcher = null;
@@ -1308,6 +1451,7 @@ class BmpApp {
     cancelPendingStart() {
         if (!this.bmpStarting && !this.bmpStartPromise) return false;
         this.bmpStopping = true;
+        this.bmpQueuedTcpAoStartGeneration = null;
         this.bmpStartGeneration += 1;
         return true;
     }

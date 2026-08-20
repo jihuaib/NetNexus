@@ -7,7 +7,7 @@
             <nn-alert
                 type="info"
                 message="每个 Profile 可配置多把密钥及独立的接收、发送有效期。空白时间表示该方向没有边界。"
-                description="保存前，每个 Profile 至少需要一把当前可发送的密钥；最后一把密钥若设置发送结束时间且没有后继密钥，到期时会断开连接并停止服务，不会降级为无认证 TCP。正在运行的 BMP 或 RPKI 会继续使用启动时加载的计划，修改后需停止并重新启动对应服务。"
+                description="保存前，每个 Profile 至少需要一把当前可发送的密钥；最后一把密钥若设置发送结束时间且没有后继密钥，到期时会断开连接并停止服务，不会降级为无认证 TCP。保存会等待正在使用该 Profile 的 BMP 或 RPKI 同步密钥、算法、Key ID、MAC 长度与有效期；全部同步成功后立即生效。失败时持久化修改和运行计划会回滚；无法恢复旧计划的服务将安全停止。运行中不能修改已选 Profile 的对端地址或前缀。同一 Key ID 更换密钥、算法或 MAC 长度会关闭受影响的已有连接，并发握手也可能需要重试；需要无损轮换时请新增 Key ID 并设置重叠的接收时间窗。"
                 show-icon
                 variant="subtle"
                 class="tcp-ao-guidance"
@@ -32,16 +32,24 @@
                             <nn-tag :color="hasCurrentlySendableKey(profile) ? 'green' : 'orange'">
                                 {{ hasCurrentlySendableKey(profile) ? '当前可发送' : '需要有效发送密钥' }}
                             </nn-tag>
+                            <nn-tag v-for="consumer in profile.usedBy" :key="consumer" color="blue">
+                                {{ consumer }} 使用中
+                            </nn-tag>
                         </div>
-                        <nn-button
-                            danger
-                            size="small"
-                            :aria-label="`删除 TCP-AO Profile ${profileIndex + 1}`"
-                            :data-testid="`tcp-ao-delete-profile-${profileIndex}`"
-                            @click="removeProfile(profileIndex)"
-                        >
-                            删除 Profile
-                        </nn-button>
+                        <nn-tooltip :title="profileDeleteDisabledReason(profile)">
+                            <span>
+                                <nn-button
+                                    danger
+                                    size="small"
+                                    :aria-label="`删除 TCP-AO Profile ${profileIndex + 1}`"
+                                    :data-testid="`tcp-ao-delete-profile-${profileIndex}`"
+                                    :disabled="isProfileInUse(profile)"
+                                    @click="removeProfile(profileIndex)"
+                                >
+                                    删除 Profile
+                                </nn-button>
+                            </span>
+                        </nn-tooltip>
                     </div>
 
                     <div class="tcp-ao-profile-metadata">
@@ -339,6 +347,14 @@
     const MAX_KEYS_PER_PROFILE = 16;
     const MAX_KEY_BYTES = 80;
     const DEFAULT_MAC_LENGTH = 12;
+    const SAVE_SUCCESS_MESSAGE = 'TCP-AO 设置已保存并立即应用';
+    const SAVE_WITHOUT_RUNTIME_CHANGE_MESSAGE = 'TCP-AO 设置已保存；当前没有需要更新的 TCP-AO 运行计划';
+    const OLD_RUNTIME_PLAN_MESSAGE = '修改未应用，正在运行的 BMP/RPKI 继续使用修改前的 TCP-AO 密钥计划';
+    const isRuntimeApplyFailure = message => /热重载|热更新|运行时.*(?:失败|错误)|同步.*(?:失败|错误)/u.test(message);
+    const mentionsRuntimeFailureOutcome = message =>
+        /(?:运行|密钥)计划.*(?:回滚|恢复|保持|修改前)|(?:回滚|恢复|保持).*?(?:运行|密钥)计划|(?:持久化|配置).*已恢复|回滚失败|安全停止|服务已停止/u.test(
+            message
+        );
     const PROFILE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
     const algorithmOptions = Object.freeze(['hmac(sha1)', 'cmac(aes)', 'hmac(sha256)']);
     const algorithmMacLengthLimits = Object.freeze({
@@ -361,6 +377,8 @@
 
     let generatedIdSequence = 0;
     let clockTimer = null;
+    let settingsLoaded = false;
+    let profileUsageRequestId = 0;
 
     const createId = prefix => {
         if (typeof globalThis.crypto?.randomUUID === 'function') {
@@ -403,10 +421,14 @@
         acceptEnd: toDateTimeInput(source.acceptEnd)
     });
 
+    const normalizeProfileConsumers = source =>
+        Array.isArray(source) ? [...new Set(source.filter(consumer => consumer === 'BMP' || consumer === 'RPKI'))] : [];
+
     const createProfile = (source = {}) => ({
         id: String(source.id || createId('tcp-ao-profile')),
         name: String(source.name || ''),
         peer: String(source.peer || ''),
+        usedBy: normalizeProfileConsumers(source.usedBy),
         keys: Array.isArray(source.keys)
             ? source.keys.slice(0, MAX_KEYS_PER_PROFILE).map(createKey)
             : source.id
@@ -491,6 +513,11 @@
         return (sendStart === null || sendStart <= now) && (sendEnd === null || now < sendEnd);
     };
     const hasCurrentlySendableKey = profile => profile.keys.some(keyItem => isKeyCurrentlySendable(keyItem));
+    const isProfileInUse = profile => profile.usedBy.length > 0;
+    const profileDeleteDisabledReason = profile =>
+        isProfileInUse(profile)
+            ? `该 Profile 正被 ${profile.usedBy.join('、')} 使用，请先在对应服务配置中取消引用`
+            : '';
 
     const validateKeyTimes = (keyItem, errors) => {
         const timestamps = Object.fromEntries(
@@ -754,18 +781,61 @@
         clockTimer = null;
     };
 
-    const loadSettings = async () => {
-        loading.value = true;
+    const requestStoredSettings = async () => {
+        if (typeof window.rpkiApi?.loadTcpAoSettings !== 'function') {
+            throw new Error('当前后端未提供 TCP-AO 设置接口');
+        }
+        const result = await window.rpkiApi.loadTcpAoSettings();
+        if (result?.status !== 'success') {
+            throw new Error(result?.msg || '加载 TCP-AO 设置失败');
+        }
+        return result.data || {};
+    };
+
+    const reconcileProfileUsage = (source, { restoreReferencedProfiles = false } = {}) => {
+        const storedProfiles = Array.isArray(source) ? source.slice(0, MAX_PROFILE_COUNT) : [];
+        const storedById = new Map(storedProfiles.map(item => [String(item?.id || ''), item]));
+        const localIds = new Set(profiles.value.map(profile => profile.id));
+
+        profiles.value.forEach(profile => {
+            const stored = storedById.get(profile.id);
+            if (stored) profile.usedBy = normalizeProfileConsumers(stored.usedBy);
+        });
+
+        if (!restoreReferencedProfiles) return;
+        storedProfiles.forEach(stored => {
+            const id = String(stored?.id || '');
+            if (!id || localIds.has(id) || normalizeProfileConsumers(stored.usedBy).length === 0) return;
+            profiles.value.push(createProfile(stored));
+            localIds.add(id);
+        });
+    };
+
+    const refreshProfileUsage = async ({ restoreReferencedProfiles = false, notifyFailure = true } = {}) => {
+        if (!settingsLoaded || loading.value) return false;
+        const requestId = ++profileUsageRequestId;
         try {
-            if (typeof window.rpkiApi?.loadTcpAoSettings !== 'function') {
-                throw new Error('当前后端未提供 TCP-AO 设置接口');
-            }
-            const result = await window.rpkiApi.loadTcpAoSettings();
-            if (result?.status !== 'success') {
-                throw new Error(result?.msg || '加载 TCP-AO 设置失败');
-            }
-            profiles.value = sanitizeProfilesForRenderer(result.data?.profiles);
+            const data = await requestStoredSettings();
+            if (requestId !== profileUsageRequestId) return false;
+            reconcileProfileUsage(data.profiles, { restoreReferencedProfiles });
+            return true;
+        } catch (error) {
+            if (requestId !== profileUsageRequestId) return false;
+            console.error('刷新 TCP-AO Profile 使用状态失败', error);
+            if (notifyFailure) notify.error(error.message || '刷新 TCP-AO Profile 使用状态失败');
+            return false;
+        }
+    };
+
+    const loadSettings = async () => {
+        if (loading.value) return;
+        loading.value = true;
+        profileUsageRequestId += 1;
+        try {
+            const data = await requestStoredSettings();
+            profiles.value = sanitizeProfilesForRenderer(data.profiles);
             profileErrors.value = {};
+            settingsLoaded = true;
             emitProfilesChanged();
         } catch (error) {
             console.error('加载 TCP-AO 设置失败', error);
@@ -781,6 +851,11 @@
     };
 
     const removeProfile = index => {
+        const profile = profiles.value[index];
+        if (profile && isProfileInUse(profile)) {
+            notify.warning(profileDeleteDisabledReason(profile));
+            return;
+        }
         const [removed] = profiles.value.splice(index, 1);
         if (removed) {
             const nextErrors = { ...profileErrors.value };
@@ -828,29 +903,68 @@
             if (Array.isArray(result.data?.profiles)) {
                 profiles.value = sanitizeProfilesForRenderer(result.data.profiles);
             } else {
+                const usageByProfileId = new Map(profiles.value.map(profile => [profile.id, [...profile.usedBy]]));
                 profiles.value = payloadProfiles.map(profile =>
                     createProfile({
                         ...profile,
+                        usedBy: usageByProfileId.get(profile.id) || [],
                         keys: profile.keys.map(keyItem => ({
                             ...keyItem,
                             hasSavedKey: keyItem.hasSavedKey || Boolean(keyItem.key)
                         }))
                     })
                 );
+                await refreshProfileUsage({ notifyFailure: false });
             }
             profileErrors.value = {};
             emitProfilesChanged();
-            notify.success('TCP-AO 设置已保存');
+            const runtimeServices = Array.isArray(result.data?.runtimeReload?.services)
+                ? result.data.runtimeReload.services
+                : [];
+            const reportedDisconnectedConnections = Number(result.data?.runtimeReload?.disconnectedConnections);
+            const disconnectedConnections = Number.isSafeInteger(reportedDisconnectedConnections)
+                ? Math.max(0, reportedDisconnectedConnections)
+                : runtimeServices.reduce((total, service) => {
+                      const count = Number(service?.disconnectedConnections);
+                      return total + (Number.isSafeInteger(count) && count > 0 ? count : 0);
+                  }, 0);
+            if (runtimeServices.some(service => service?.status === 'reloaded')) {
+                notify.success(
+                    disconnectedConnections > 0
+                        ? `${SAVE_SUCCESS_MESSAGE}；有 ${disconnectedConnections} 条连接已安全断开，设备需要重新连接`
+                        : SAVE_SUCCESS_MESSAGE
+                );
+            } else {
+                notify.success(SAVE_WITHOUT_RUNTIME_CHANGE_MESSAGE);
+            }
         } catch (error) {
             console.error('保存 TCP-AO 设置失败', error);
-            notify.error(error.message || '保存 TCP-AO 设置失败');
+            const message = String(error?.message || '保存 TCP-AO 设置失败').trim();
+            notify.error(
+                isRuntimeApplyFailure(message) &&
+                    !message.includes(OLD_RUNTIME_PLAN_MESSAGE) &&
+                    !mentionsRuntimeFailureOutcome(message)
+                    ? `${message}；${OLD_RUNTIME_PLAN_MESSAGE}`
+                    : message
+            );
+            await refreshProfileUsage({ restoreReferencedProfiles: true, notifyFailure: false });
         } finally {
             saving.value = false;
         }
     };
 
+    const resumeBackgroundWork = () => {
+        startClock();
+        if (loading.value) return;
+        if (settingsLoaded) {
+            void refreshProfileUsage({ restoreReferencedProfiles: true });
+        } else {
+            void loadSettings();
+        }
+    };
+
     onMounted(loadSettings);
-    onActivated(startClock);
+    onActivated(resumeBackgroundWork);
     onDeactivated(() => {
         wipePlaintextKeys();
         stopClock();
@@ -863,7 +977,7 @@
     defineExpose({
         wipePlaintextKeys,
         pauseBackgroundWork: stopClock,
-        resumeBackgroundWork: startClock
+        resumeBackgroundWork
     });
 </script>
 

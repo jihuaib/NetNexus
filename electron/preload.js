@@ -147,6 +147,7 @@ contextBridge.exposeInMainWorld('bmpApi', {
     saveBmpConfig: config => ipcRenderer.invoke('bmp:saveBmpConfig', config),
     loadBmpConfig: () => ipcRenderer.invoke('bmp:loadBmpConfig'),
     loadTcpAoSettings: () => ipcRenderer.invoke('bmp:loadTcpAoSettings'),
+    loadTcpMd5Settings: () => ipcRenderer.invoke('bmp:loadTcpMd5Settings'),
 
     // bmp操作
     startBmp: config => ipcRenderer.invoke('bmp:startBmp', config),
@@ -194,6 +195,8 @@ contextBridge.exposeInMainWorld('rpkiApi', {
     loadRpkiConfig: () => ipcRenderer.invoke('rpki:loadRpkiConfig'),
     saveTcpAoSettings: settings => ipcRenderer.invoke('rpki:saveTcpAoSettings', settings),
     loadTcpAoSettings: () => ipcRenderer.invoke('rpki:loadTcpAoSettings'),
+    saveTcpMd5Settings: settings => ipcRenderer.invoke('rpki:saveTcpMd5Settings', settings),
+    loadTcpMd5Settings: () => ipcRenderer.invoke('rpki:loadTcpMd5Settings'),
 
     // rpki操作
     startRpki: config => ipcRenderer.invoke('rpki:startRpki', config),

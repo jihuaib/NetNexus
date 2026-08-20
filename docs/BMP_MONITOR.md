@@ -22,6 +22,7 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 - BMP v3 / v4 报文接收。
 - BMPv4 TLV draft-19 / draft-20 可配置。
 - Linux 6.7+ 上的 TCP-AO 双向认证，可同时选择多个对端 Profile 并按 IPv4/IPv6 CIDR 匹配密钥。
+- Linux 上的 TCP MD5 兼容认证，支持 1–32 个互不重叠的对端 Profile。
 - Initiation、Termination、Peer Up、Peer Down、Route Monitoring、Statistics Report 处理。
 - 客户端连接列表。
 - BGP session 列表和 session RIB 路由列表。
@@ -65,6 +66,7 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 | 启动BMP / BMP已启动 | 按监听端口、认证方式和 TLV draft 启动 BMP 服务；启动后显示运行状态。 |
 | 停止BMP | 停止 BMP 服务、断开当前客户端连接，并关闭所有 BMP Client 独立监控窗口。 |
 | 前往 TCP-AO 设置 | 打开 BMP、RPKI-RTR 共享的 TCP-AO Profile 和密钥轮换设置。 |
+| 前往 TCP MD5 设置 | 打开 BMP、RPKI-RTR 共享的 TCP MD5 对端与密钥 Profile。 |
 | Client 监控 | 为当前客户端打开或切换到唯一的独立监控窗口；窗口内可查看会话、Loc-RIB 和两类统计。 |
 | 详情 | 打开当前 BMP 客户端的连接、Initiation TLV 和 Termination 信息。 |
 
@@ -92,6 +94,10 @@ BMP 的选择和验证规则如下：
 - TCP-AO 由 Linux 内核双向执行：入站段必须通过对端密钥和 `RcvID` 验证，NetNexus 发出的 ACK/数据段使用当前 `SndID` 签名。客户端列表的“认证”列会显示 `TCP-AO · Profile 名称`，详情中可核对允许的对端范围。
 
 如果最后一把发送密钥到期且没有后继密钥、系统时钟不可用或回拨、发生全局轮换失败，或者 helper 异常退出，BMP 会安全停止监听并断开全部客户端；选择多个 Profile 时，其中任一 Profile 的发送计划耗尽都会停止整个 BMP 服务。配置页会保留明确的红色运行时故障提示，不会改用未认证 TCP。修正密钥计划、系统时间或运行环境后，重新启动 BMP 即可清除提示。
+
+#### TCP MD5 认证
+
+TCP MD5 用于兼容仍使用 TCP MD5 Signature Option 的设备；新部署优先选择 TCP-AO。先在“设置 → TCP MD5”为对端地址或 CIDR 保存 1–80 字节共享密钥，然后在 BMP 配置中选择 1–32 个互不重叠的 Profile。正确密钥连接由 Linux 内核验证，错误或缺失密钥会被拒绝；未匹配 Profile 的来源不会被转发给 BMP Worker。客户端列表的“认证”列会显示 `TCP MD5 · Profile 名称`。修改密钥或对端后需重启 BMP，详见 [TCP MD5 设置](SETTINGS.md#tcp-md5-设置)。
 
 ### Client 独立监控窗口
 

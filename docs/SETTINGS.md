@@ -117,7 +117,7 @@
 
 ## TCP-AO 设置
 
-TCP-AO 页集中管理 BMP 与 RPKI-RTR 共享的对端 Profile 和轮换密钥。该功能只支持 Ubuntu 24.04+、Linux kernel 6.7+ 且 `CONFIG_TCP_AO=y` 的桌面环境；应用还必须带有与当前 CPU 架构匹配的原生 TCP-AO helper。
+TCP-AO 页集中管理 BMP 与 RPKI-RTR 共享的对端 Profile 和轮换密钥。该功能只支持 Ubuntu 24.04+、Linux kernel 6.7+ 且 `CONFIG_TCP_AO=y` 的桌面环境；应用还必须带有与当前 CPU 架构匹配的原生 TCP 认证 helper。
 
 最多可保存 32 个 Profile。每个 Profile 包含名称、规范的 IPv4/IPv6 地址或 CIDR，以及最多 16 把密钥。CIDR 必须填写网络地址，主机位应为 0；不接受带 zone/scope 的 IPv6 地址或 IPv4 映射 IPv6 地址。同一 Profile 内每把密钥的 Send ID、Receive ID 必须分别唯一。本端 `SndID` 应对应对端 `RcvID`，本端 `RcvID` 应对应对端 `SndID`。当前支持 `hmac(sha1)`、`hmac(sha256)` 和 `cmac(aes)`（AES-128）三种算法；时间输入按运行 NetNexus 的 Linux 主机本地时区解释。
 
@@ -143,9 +143,23 @@ TCP-AO 页集中管理 BMP 与 RPKI-RTR 共享的对端 Profile 和轮换密钥�
 
 这些时间窗由 NetNexus 在用户态执行，不会通过 TCP-AO 报文自动协商；对端必须配置相同的密钥材料、算法、MAC 长度和对应的 Key ID，并协调轮换时间。
 
-密钥明文只在本次保存时提交，再次打开设置不会回填明文。Windows 和 macOS 使用 Electron `safeStorage`（Windows 为 DPAPI）；Linux 自动在应用数据目录创建权限为 `0600` 的本地主密钥文件，配置中只持久化带认证的 AES-256-GCM 密文。通过 SSH/X11 转发使用时无需初始化或解锁任何额外服务。BMP、RPKI 配置和渲染层启动参数只保存或传递 Profile ID，不包含密钥材料；主进程在启动服务时才解密所选 Profile，helper 一次性加载当前计划后即可按预设时间在线轮换。
+密钥明文只在本次保存时提交，再次打开设置不会回填明文。Windows 和 macOS 使用 Electron `safeStorage`（Windows 为 DPAPI）；Linux 自动在应用数据目录创建权限为 `0600` 的本地主密钥文件，配置中只持久化带认证的 AES-256-GCM 密文。通过 SSH/X11 转发使用时无需初始化或解锁任何额外服务。BMP、RPKI 配置和渲染层启动参数只保存或传递 Profile ID，不包含密钥材料；主进程在启动服务时才解密所选 Profile，并在后续保存时通过父子进程控制通道把变化后的完整计划原子同步给 helper。helper 持续按当前计划执行在线轮换。
 
-进入“RPKI → RPKI配置”时可选择一个 Profile；进入“BMP → BMP配置”时可选择 1–32 个 Profile。BMP 根据连接对端地址匹配 Profile，因此同一监听器所选的 IPv4/IPv6 地址或 CIDR 不能互相重叠，避免一条连接对应多套密钥。只有落在所选范围内且通过内核 TCP-AO 双向验证的对端才能建立 BMP 会话；未选择的地址、缺失或错误的 Key ID/密钥以及普通 TCP 连接都会被拒绝。服务运行期间修改 Profile 后，必须停止并重新启动相应的 BMP 或 RPKI-RTR 服务才会加载新计划。
+进入“RPKI → RPKI配置”时可选择一个 Profile；进入“BMP → BMP配置”时可选择 1–32 个 Profile。BMP 根据连接对端地址匹配 Profile，因此同一监听器所选的 IPv4/IPv6 地址或 CIDR 不能互相重叠，避免一条连接对应多套密钥。只有落在所选范围内且通过内核 TCP-AO 双向验证的对端才能建立 BMP 会话；未选择的地址、缺失或错误的 Key ID/密钥以及普通 TCP 连接都会被拒绝。
+
+保存 Profile 时，主进程会等待正在使用它的 BMP 和 RPKI-RTR 全部完成运行时同步。密钥材料、算法、Send/Receive Key ID、MAC 长度和四个有效期边界可在线修改；有运行计划发生变化时，全部相关服务确认后才显示“已保存并立即应用”，无需重启服务。没有相关运行服务或运行内容未变化时只提示已保存。若任一服务同步失败，保存返回错误，持久化配置恢复为修改前的版本，运行服务回滚到修改前的密钥计划，不会显示成功提示；若个别服务连旧计划也无法恢复，该服务会安全停止并在错误中明确指出。未启动的服务会在下次启动时加载已保存计划。
+
+运行中的服务不能在线修改所选 Profile 的对端地址或 CIDR；请先停止对应服务，保存修改后再启动。同一 Send/Receive Key ID 下更换密钥材料、算法或 MAC 长度时，helper 会关闭受影响的已有连接，并发中的握手也可能被拒绝并需要设备重试；保存成功提示会给出安全断开的已有连接总数。需要尽量无损轮换时，应新增一组 Key ID，让新旧密钥的接收时间窗重叠，再用连续的发送时间窗切换。部分 Linux 内核若无法在已建立 socket 上原位应用其他变化，也会只关闭受影响的连接；没有连接被断开时不会显示重连警告。任何一种情况都不会降级为未认证 TCP。
+
+已被 BMP 或 RPKI 配置引用的 Profile 会标记使用方并禁止删除，避免留下无法再次启动的悬空引用。需要删除时，请先在对应服务配置中改用“无认证”或选择其他 Profile 并保存，再返回 TCP-AO 设置删除。
+
+## TCP MD5 设置
+
+TCP MD5 页为 BMP 和 RPKI-RTR 管理独立的对端 Profile。每个 Profile 只包含名称、规范的 IPv4/IPv6 地址或 CIDR，以及一把 1–80 个 UTF-8 字节的共享密钥；不包含 TCP-AO 的算法、Key ID 或时间轮换字段。`authType` 在配置和运行时统一使用 `tcp-md5`。
+
+该功能仅支持启用 Linux TCP MD5 Signature Option 的系统，并由随应用分发的原生 TCP 认证 helper 在 `bind`/`listen` 前安装密钥。RPKI-RTR 每次选择一个 Profile，BMP 可选择 1–32 个互不重叠的 Profile。对于匹配 Profile 的对端，缺失或错误密钥的连接会被 Linux 内核拒绝。Linux TCP MD5 没有 TCP-AO `ao_required` 对应的全局开关：未匹配任何 Profile 的来源可能完成 TCP 握手，helper 会在 `accept` 后立即关闭，不会将其转发给 BMP 或 RPKI-RTR 协议进程，也不会另行开放普通 TCP 监听器。
+
+TCP MD5 是面向旧设备的兼容方案，新部署应优先使用 TCP-AO。TCP MD5 不支持应用内在线轮换；修改 Profile 后必须停止并重新启动对应服务。密钥与 TCP-AO 一样使用本机安全凭据存储加密，配置页和渲染层启动参数只携带 Profile ID，不回填、不持久化明文。已被 BMP 或 RPKI 引用的 Profile 同样会标记使用方并禁止删除。
 
 ## 应用更新
 

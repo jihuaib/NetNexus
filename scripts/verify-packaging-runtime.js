@@ -34,7 +34,7 @@ function readElfHeader(filePath, fsApi = fs) {
     const elfClass = header[4];
     const dataEncoding = header[5];
     if (dataEncoding !== 1) {
-        throw new Error(`TCP-AO helper ELF must use little-endian encoding: ${filePath}`);
+        throw new Error(`TCP authentication helper ELF must use little-endian encoding: ${filePath}`);
     }
     return {
         elfClass,
@@ -42,7 +42,7 @@ function readElfHeader(filePath, fsApi = fs) {
     };
 }
 
-function verifyTcpAoHelper(options = {}, dependencies = {}) {
+function verifyTcpAuthHelper(options = {}, dependencies = {}) {
     const projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
     const platform = normalizePlatform(options.platform);
     const arch = normalizeArch(options.arch);
@@ -52,48 +52,52 @@ function verifyTcpAoHelper(options = {}, dependencies = {}) {
 
     const expectedMachine = ELF_MACHINE_BY_ARCH[arch];
     if (!expectedMachine) {
-        throw new Error(`Bundled TCP-AO helper validation supports linux-x64 and linux-arm64; received linux-${arch}`);
+        throw new Error(
+            `Bundled TCP authentication helper validation supports linux-x64 and linux-arm64; received linux-${arch}`
+        );
     }
 
-    const runtimeDirectory = path.join(projectRoot, 'resources', 'tcp-ao', `${platform}-${arch}`);
+    const runtimeDirectory = path.join(projectRoot, 'resources', 'tcp-auth', `${platform}-${arch}`);
     const fsApi = dependencies.fs || fs;
     let rootStats;
     try {
         rootStats = fsApi.lstatSync(runtimeDirectory);
     } catch (error) {
         throw new Error(
-            `Bundled TCP-AO helper is missing for ${platform}-${arch}: ${runtimeDirectory}. ` +
+            `Bundled TCP authentication helper is missing for ${platform}-${arch}: ${runtimeDirectory}. ` +
                 `Build the target-specific helper before packaging.`
         );
     }
     if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
-        throw new Error(`Bundled TCP-AO helper path must be a regular directory: ${runtimeDirectory}`);
+        throw new Error(`Bundled TCP authentication helper path must be a regular directory: ${runtimeDirectory}`);
     }
 
-    const helperPath = path.join(runtimeDirectory, 'tcp-ao-helper');
+    const helperPath = path.join(runtimeDirectory, 'tcp-auth-helper');
     let helperStats;
     try {
         helperStats = fsApi.lstatSync(helperPath);
     } catch (_error) {
-        throw new Error(`Bundled TCP-AO helper executable is missing: ${helperPath}`);
+        throw new Error(`Bundled TCP authentication helper executable is missing: ${helperPath}`);
     }
     if (!helperStats.isFile() || helperStats.isSymbolicLink()) {
-        throw new Error(`Bundled TCP-AO helper must be a regular non-symlink file: ${helperPath}`);
+        throw new Error(`Bundled TCP authentication helper must be a regular non-symlink file: ${helperPath}`);
     }
     if ((helperStats.mode & 0o111) === 0) {
-        throw new Error(`Bundled TCP-AO helper is not executable: ${helperPath}`);
+        throw new Error(`Bundled TCP authentication helper is not executable: ${helperPath}`);
     }
     if ((helperStats.mode & 0o022) !== 0) {
-        throw new Error(`Bundled TCP-AO helper must not be group-writable or world-writable: ${helperPath}`);
+        throw new Error(
+            `Bundled TCP authentication helper must not be group-writable or world-writable: ${helperPath}`
+        );
     }
 
     const helper = readElfHeader(helperPath, fsApi);
     if (!helper) {
-        throw new Error(`Bundled TCP-AO helper is not an ELF executable: ${helperPath}`);
+        throw new Error(`Bundled TCP authentication helper is not an ELF executable: ${helperPath}`);
     }
     if (helper.elfClass !== 2 || helper.machine !== expectedMachine) {
         throw new Error(
-            `Bundled TCP-AO helper has the wrong ELF architecture for ${platform}-${arch}: ` +
+            `Bundled TCP authentication helper has the wrong ELF architecture for ${platform}-${arch}: ` +
                 `${helperPath} (class ${helper.elfClass}, machine ${helper.machine})`
         );
     }
@@ -108,11 +112,11 @@ function verifyTcpAoHelper(options = {}, dependencies = {}) {
     });
     if (probe.error || probe.status !== 0) {
         const detail = probe.error?.message || probe.stderr || `exit code ${probe.status}`;
-        throw new Error(`Bundled TCP-AO helper version probe failed: ${String(detail).trim()}`);
+        throw new Error(`Bundled TCP authentication helper version probe failed: ${String(detail).trim()}`);
     }
     const versionOutput = `${probe.stdout || ''}\n${probe.stderr || ''}`.trim();
     if (!versionOutput) {
-        throw new Error(`Bundled TCP-AO helper --version returned no output: ${helperPath}`);
+        throw new Error(`Bundled TCP authentication helper --version returned no output: ${helperPath}`);
     }
 
     return {
@@ -133,11 +137,11 @@ async function beforePack(context = {}, dependencies = {}) {
 
     const arch = verifyLibyangBeforePack.archFromContext(context);
     const projectRoot = context.packager?.projectDir || PROJECT_ROOT;
-    const tcpAoVerifier = dependencies.verifyTcpAoHelper || verifyTcpAoHelper;
-    const status = tcpAoVerifier({ projectRoot, platform, arch }, dependencies);
+    const tcpAuthVerifier = dependencies.verifyTcpAuthHelper || verifyTcpAuthHelper;
+    const status = tcpAuthVerifier({ projectRoot, platform, arch }, dependencies);
     const write = dependencies.write || (message => process.stdout.write(message));
     write(
-        `Verified bundled TCP-AO helper for ${status.platform}-${status.arch}: ` +
+        `Verified bundled TCP authentication helper for ${status.platform}-${status.arch}: ` +
             `${status.helpers.map(file => path.relative(projectRoot, file)).join(', ')}\n`
     );
 }
@@ -156,4 +160,4 @@ if (require.main === module) {
 module.exports = beforePack;
 module.exports.ELF_MACHINE_BY_ARCH = ELF_MACHINE_BY_ARCH;
 module.exports.readElfHeader = readElfHeader;
-module.exports.verifyTcpAoHelper = verifyTcpAoHelper;
+module.exports.verifyTcpAuthHelper = verifyTcpAuthHelper;

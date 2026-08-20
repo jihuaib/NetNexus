@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-/* Native Linux integration driver for scripts/test-tcp-ao-helper.sh. */
+/* Native Linux integration driver for scripts/test-tcp-auth-helper.sh. */
 
-#define main netnexus_tcp_ao_helper_program_main
-#include "tcp-ao-helper.c"
+#define main netnexus_tcp_auth_helper_program_main
+#include "tcp-auth-helper.c"
 #undef main
 
 #include <sys/stat.h>
@@ -14,6 +14,12 @@ static const unsigned char cmac_key[] = "0123456789abcdef";
 static const unsigned char cmac_wrong_key[] = "fedcba9876543210";
 static const unsigned char rotation_key_one[] = "netnexus-rotation-key-one";
 static const unsigned char rotation_key_two[] = "netnexus-rotation-key-two";
+static const unsigned char reload_key_old[] = "netnexus-reload-key-old";
+static const unsigned char reload_key_new[] = "netnexus-reload-key-new";
+static const unsigned char md5_key[] = "netnexus-native-md5-key";
+static const unsigned char md5_wrong_key[] = "netnexus-native-md5-wrong";
+static const unsigned char md5_max_key[] =
+    "01234567890123456789012345678901234567890123456789012345678901234567890123456789";
 
 static bool parse_test_family(const char *value, int *family) {
     if (strcmp(value, "4") == 0) {
@@ -27,7 +33,7 @@ static bool parse_test_family(const char *value, int *family) {
     return false;
 }
 
-static void initialize_loopback_profile(ao_profile_config *profile, int family) {
+static void initialize_loopback_profile(auth_profile_config *profile, int family) {
     memset(profile, 0, sizeof(*profile));
     profile->family = family;
     profile->prefix = family == AF_INET ? 32U : 128U;
@@ -61,7 +67,7 @@ static bool initialize_test_key(ao_key_config *key, const char *algorithm, uint8
     return true;
 }
 
-static int connect_with_timeout(int socket_fd, const ao_profile_config *profile, uint16_t port,
+static int connect_with_timeout(int socket_fd, const auth_profile_config *profile, uint16_t port,
                                 int timeout_ms) {
     struct pollfd descriptor = {.fd = socket_fd, .events = POLLOUT};
     int original_flags = fcntl(socket_fd, F_GETFL, 0);
@@ -192,7 +198,7 @@ static int pick_unused_loopback_port(void) {
 
 static int run_algorithm_probe(void) {
     static const char *const algorithms[] = {"hmac(sha1)", "cmac(aes128)", "hmac(sha256)"};
-    ao_profile_config profile;
+    auth_profile_config profile;
     initialize_loopback_profile(&profile, AF_INET);
     for (size_t index = 0; index < sizeof(algorithms) / sizeof(algorithms[0]); index++) {
         ao_key_config key;
@@ -213,7 +219,7 @@ static int run_connection_test(uint16_t port, const char *mode, const char *algo
     const bool use_ao = strcmp(mode, "none") != 0;
     const bool expect_success = strcmp(mode, "correct") == 0;
     const bool wrong = strcmp(mode, "wrong") == 0;
-    ao_profile_config profile;
+    auth_profile_config profile;
     ao_key_config key;
     int socket_fd;
 
@@ -249,8 +255,93 @@ static int run_connection_test(uint16_t port, const char *mode, const char *algo
     return EXIT_SUCCESS;
 }
 
+static int run_md5_connection_test(uint16_t port, const char *mode, int family) {
+    const bool use_md5 = strcmp(mode, "none") != 0;
+    const bool expect_success = strcmp(mode, "correct") == 0 || strcmp(mode, "max") == 0;
+    const bool wrong = strcmp(mode, "wrong") == 0;
+    const unsigned char *material = strcmp(mode, "max") == 0 ? md5_max_key : (wrong ? md5_wrong_key : md5_key);
+    const size_t material_length = strcmp(mode, "max") == 0 ? sizeof(md5_max_key) - 1U : strlen((const char *)material);
+    auth_profile_config profile;
+    int socket_fd;
+
+    if (!expect_success && !wrong && strcmp(mode, "none") != 0) return EXIT_FAILURE;
+    initialize_loopback_profile(&profile, family);
+    socket_fd = socket(family, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (socket_fd < 0) return EXIT_FAILURE;
+    if (use_md5) {
+        if (material_length == 0U || material_length > sizeof(profile.md5_key)) {
+            close(socket_fd);
+            return EXIT_FAILURE;
+        }
+        profile.md5_key_length = (uint16_t)material_length;
+        memcpy(profile.md5_key, material, material_length);
+        if (install_md5_key(socket_fd, &profile) < 0) {
+            fprintf(stderr, "client TCP-MD5 setup failed: %s\n", strerror(errno));
+            close(socket_fd);
+            return EXIT_FAILURE;
+        }
+        secure_zero(profile.md5_key, sizeof(profile.md5_key));
+        profile.md5_key_length = 0U;
+    }
+
+    const int connect_result = connect_with_timeout(socket_fd, &profile, port, 1800);
+    if (!expect_success) {
+        close(socket_fd);
+        if (connect_result == 0) {
+            fprintf(stderr, "%s TCP-MD5 client unexpectedly connected\n", mode);
+            return EXIT_FAILURE;
+        }
+        printf("%s-md5-key-rejected-ok\n", mode);
+        return EXIT_SUCCESS;
+    }
+    if (connect_result < 0 || !round_trip(socket_fd, 1U)) {
+        fprintf(stderr, "TCP-MD5 authenticated round trip failed: %s\n", strerror(errno));
+        close(socket_fd);
+        return EXIT_FAILURE;
+    }
+    close(socket_fd);
+    puts("md5-authenticated-round-trip-ok");
+    return EXIT_SUCCESS;
+}
+
+static int run_unmatched_connection_test(uint16_t port, int family) {
+    static const unsigned char marker[] = "must-not-be-forwarded";
+    auth_profile_config destination;
+    struct pollfd descriptor;
+    unsigned char received[sizeof(marker)] = {0};
+    int socket_fd;
+
+    initialize_loopback_profile(&destination, family);
+    socket_fd = socket(family, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (socket_fd < 0 || connect_with_timeout(socket_fd, &destination, port, 1800) < 0) {
+        fprintf(stderr, "unmatched plain client did not complete its TCP handshake: %s\n", strerror(errno));
+        if (socket_fd >= 0) close(socket_fd);
+        return EXIT_FAILURE;
+    }
+
+    (void)send(socket_fd, marker, sizeof(marker), MSG_NOSIGNAL);
+    descriptor = (struct pollfd){.fd = socket_fd, .events = POLLIN | POLLHUP};
+    int poll_result;
+    do {
+        poll_result = poll(&descriptor, 1, 2000);
+    } while (poll_result < 0 && errno == EINTR);
+    if (poll_result <= 0) {
+        fprintf(stderr, "helper did not close an unmatched plain connection\n");
+        close(socket_fd);
+        return EXIT_FAILURE;
+    }
+    const ssize_t received_length = recv(socket_fd, received, sizeof(received), 0);
+    close(socket_fd);
+    if (received_length > 0) {
+        fprintf(stderr, "helper forwarded application data from an unmatched plain connection\n");
+        return EXIT_FAILURE;
+    }
+    puts("unmatched-plain-connection-not-forwarded-ok");
+    return EXIT_SUCCESS;
+}
+
 static int run_rotation_test(uint16_t port, uint64_t switch_epoch) {
-    ao_profile_config profile;
+    auth_profile_config profile;
     ao_key_config first;
     ao_key_config second;
     int socket_fd;
@@ -276,6 +367,9 @@ static int run_rotation_test(uint16_t port, uint64_t switch_epoch) {
         if (socket_fd >= 0) close(socket_fd);
         return EXIT_FAILURE;
     }
+
+    puts("live-rotation-ready");
+    fflush(stdout);
 
     while (true) {
         const time_t now_time = time(NULL);
@@ -303,8 +397,160 @@ static int run_rotation_test(uint16_t port, uint64_t switch_epoch) {
     return EXIT_SUCCESS;
 }
 
+static int run_dual_key_connection_test(uint16_t port) {
+    auth_profile_config profile;
+    ao_key_config first;
+    ao_key_config second;
+    int socket_fd;
+
+    initialize_loopback_profile(&profile, AF_INET);
+    if (!initialize_test_key(&first, "hmac(sha1)", 1U, false) ||
+        !initialize_test_key(&second, "hmac(sha1)", 2U, false)) {
+        return EXIT_FAILURE;
+    }
+    first.key_length = (uint8_t)(sizeof(rotation_key_one) - 1U);
+    memcpy(first.key, rotation_key_one, sizeof(rotation_key_one) - 1U);
+    second.key_length = (uint8_t)(sizeof(rotation_key_two) - 1U);
+    memcpy(second.key, rotation_key_two, sizeof(rotation_key_two) - 1U);
+    socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (socket_fd < 0 || install_ao_key(socket_fd, &profile, &first) < 0 ||
+        install_ao_key(socket_fd, &profile, &second) < 0 ||
+        set_socket_current_key(socket_fd, &first) < 0 ||
+        connect_with_timeout(socket_fd, &profile, port, 3000) < 0 ||
+        !round_trip(socket_fd, 1U)) {
+        if (socket_fd >= 0) close(socket_fd);
+        return EXIT_FAILURE;
+    }
+    close(socket_fd);
+    puts("dual-key-authenticated-round-trip-ok");
+    return EXIT_SUCCESS;
+}
+
+static bool initialize_reload_key(ao_key_config *key, const char *mode) {
+    const bool use_new_material = strcmp(mode, "new") == 0;
+    const bool use_sha256 = strcmp(mode, "sha256") == 0;
+    const unsigned char *material =
+        use_sha256 ? sha_key : (use_new_material ? reload_key_new : reload_key_old);
+    const size_t material_length = use_sha256
+                                       ? sizeof(sha_key) - 1U
+                                       : (use_new_material ? sizeof(reload_key_new) - 1U
+                                                           : sizeof(reload_key_old) - 1U);
+    if (!use_new_material && !use_sha256 && strcmp(mode, "old") != 0) return false;
+    memset(key, 0, sizeof(*key));
+    strcpy(key->algorithm, use_sha256 ? "hmac(sha256)" : "hmac(sha1)");
+    key->snd_id = 7U;
+    key->rcv_id = 7U;
+    key->mac_length = 12U;
+    key->key_length = (uint8_t)material_length;
+    memcpy(key->key, material, material_length);
+    return true;
+}
+
+static int run_reload_connection_test(uint16_t port, const char *mode, bool expect_success) {
+    auth_profile_config profile;
+    ao_key_config key;
+    int socket_fd;
+    initialize_loopback_profile(&profile, AF_INET);
+    if (!initialize_reload_key(&key, mode)) return EXIT_FAILURE;
+    socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (socket_fd < 0 || install_ao_key(socket_fd, &profile, &key) < 0 ||
+        set_socket_current_key(socket_fd, &key) < 0) {
+        if (socket_fd >= 0) close(socket_fd);
+        return EXIT_FAILURE;
+    }
+    const int result = connect_with_timeout(socket_fd, &profile, port, 1800);
+    if (expect_success) {
+        const bool ok = result == 0 && round_trip(socket_fd, 1U);
+        close(socket_fd);
+        if (!ok) return EXIT_FAILURE;
+        puts("reload-key-connect-ok");
+        return EXIT_SUCCESS;
+    }
+    close(socket_fd);
+    if (result == 0) return EXIT_FAILURE;
+    puts("reload-key-rejected-ok");
+    return EXIT_SUCCESS;
+}
+
+static int run_reload_disconnect_test(uint16_t port) {
+    auth_profile_config profile;
+    ao_key_config key;
+    struct pollfd descriptor;
+    int socket_fd;
+    initialize_loopback_profile(&profile, AF_INET);
+    if (!initialize_reload_key(&key, "old")) return EXIT_FAILURE;
+    socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (socket_fd < 0 || install_ao_key(socket_fd, &profile, &key) < 0 ||
+        set_socket_current_key(socket_fd, &key) < 0 ||
+        connect_with_timeout(socket_fd, &profile, port, 1800) < 0 ||
+        !round_trip(socket_fd, 1U)) {
+        if (socket_fd >= 0) close(socket_fd);
+        return EXIT_FAILURE;
+    }
+    puts("reload-hold-ready");
+    fflush(stdout);
+    descriptor = (struct pollfd){.fd = socket_fd, .events = POLLIN | POLLHUP};
+    int poll_result;
+    do {
+        poll_result = poll(&descriptor, 1, 5000);
+    } while (poll_result < 0 && errno == EINTR);
+    if (poll_result <= 0) {
+        close(socket_fd);
+        return EXIT_FAILURE;
+    }
+    unsigned char byte;
+    const ssize_t received = recv(socket_fd, &byte, sizeof(byte), 0);
+    close(socket_fd);
+    if (received > 0) return EXIT_FAILURE;
+    puts("reload-active-connection-closed-ok");
+    return EXIT_SUCCESS;
+}
+
+static int run_queued_reload_rejection_test(uint16_t port) {
+    static const unsigned char marker[] = "queued-old-key-must-not-forward";
+    auth_profile_config profile;
+    ao_key_config key;
+    struct pollfd descriptor;
+    unsigned char received[sizeof(marker)] = {0};
+    int socket_fd;
+
+    initialize_loopback_profile(&profile, AF_INET);
+    if (!initialize_reload_key(&key, "old")) return EXIT_FAILURE;
+    socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (socket_fd < 0 || install_ao_key(socket_fd, &profile, &key) < 0 ||
+        set_socket_current_key(socket_fd, &key) < 0 ||
+        connect_with_timeout(socket_fd, &profile, port, 3000) < 0) {
+        if (socket_fd >= 0) close(socket_fd);
+        return EXIT_FAILURE;
+    }
+    puts("queued-reload-client-connected");
+    fflush(stdout);
+    if (send(socket_fd, marker, sizeof(marker), MSG_NOSIGNAL) < 0) {
+        close(socket_fd);
+        return EXIT_FAILURE;
+    }
+    descriptor = (struct pollfd){.fd = socket_fd, .events = POLLIN | POLLHUP | POLLERR};
+    int poll_result;
+    do {
+        poll_result = poll(&descriptor, 1, 5000);
+    } while (poll_result < 0 && errno == EINTR);
+    if (poll_result <= 0) {
+        close(socket_fd);
+        return EXIT_FAILURE;
+    }
+    const ssize_t received_length = recv(socket_fd, received, sizeof(received), 0);
+    close(socket_fd);
+    secure_zero(received, sizeof(received));
+    if (received_length > 0) {
+        fprintf(stderr, "queued connection using revoked key material was forwarded\n");
+        return EXIT_FAILURE;
+    }
+    puts("queued-old-key-rejected-ok");
+    return EXIT_SUCCESS;
+}
+
 static int run_rotation_connection_test(uint16_t port, uint8_t key_id, bool expect_success) {
-    ao_profile_config profile;
+    auth_profile_config profile;
     ao_key_config key;
     int socket_fd;
     initialize_loopback_profile(&profile, AF_INET);
@@ -354,14 +600,14 @@ static uint16_t decode_uint16_be(const unsigned char *input) {
     return ntohs(encoded);
 }
 
-static bool decode_capability_argument(const char *encoded,
-                                       unsigned char capability[FORWARD_CAPABILITY_BYTES]) {
-    if (encoded == NULL || strlen(encoded) != FORWARD_CAPABILITY_BYTES * 2U) return false;
-    for (size_t index = 0; index < FORWARD_CAPABILITY_BYTES; index++) {
+static bool decode_capability_argument(
+    const char *encoded, unsigned char capability[TCP_AUTH_FORWARD_CAPABILITY_BYTES]) {
+    if (encoded == NULL || strlen(encoded) != TCP_AUTH_FORWARD_CAPABILITY_BYTES * 2U) return false;
+    for (size_t index = 0; index < TCP_AUTH_FORWARD_CAPABILITY_BYTES; index++) {
         const int high = hex_value(encoded[index * 2U]);
         const int low = hex_value(encoded[index * 2U + 1U]);
         if (high < 0 || low < 0) {
-            secure_zero(capability, FORWARD_CAPABILITY_BYTES);
+            secure_zero(capability, TCP_AUTH_FORWARD_CAPABILITY_BYTES);
             return false;
         }
         capability[index] = (unsigned char)(((unsigned int)high << 4U) | (unsigned int)low);
@@ -369,18 +615,18 @@ static bool decode_capability_argument(const char *encoded,
     return true;
 }
 
-static bool validate_forward_header(const unsigned char header[FORWARD_PEER_HEADER_BYTES], int family,
+static bool validate_forward_header(const unsigned char header[TCP_AUTH_FORWARD_HEADER_BYTES], int family,
                                     uint16_t public_port,
-                                    const unsigned char capability[FORWARD_CAPABILITY_BYTES]) {
+                                    const unsigned char capability[TCP_AUTH_FORWARD_CAPABILITY_BYTES]) {
     static const unsigned char ipv4_loopback[4] = {127U, 0U, 0U, 1U};
     static const unsigned char ipv6_loopback[16] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
                                                     0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U};
-    if (memcmp(header, "NNAO", 4U) != 0 || header[4] != FORWARD_PEER_HEADER_VERSION ||
+    if (memcmp(header, "NNAO", 4U) != 0 || header[4] != TCP_AUTH_FORWARD_HEADER_VERSION ||
         header[5] != (family == AF_INET ? 4U : 6U) ||
-        decode_uint16_be(header + 6U) != FORWARD_PEER_HEADER_BYTES ||
+        decode_uint16_be(header + 6U) != TCP_AUTH_FORWARD_HEADER_BYTES ||
         decode_uint16_be(header + 8U) == 0U || decode_uint16_be(header + 10U) != public_port ||
         header[12] != 0U || header[13] != 0U || header[14] != 0U || header[15] != 0U ||
-        memcmp(header + 48U, capability, FORWARD_CAPABILITY_BYTES) != 0) {
+        memcmp(header + 48U, capability, TCP_AUTH_FORWARD_CAPABILITY_BYTES) != 0) {
         return false;
     }
     if (family == AF_INET) {
@@ -397,8 +643,8 @@ static bool validate_forward_header(const unsigned char header[FORWARD_PEER_HEAD
 static int run_unix_forward_echo(const char *socket_path, const char *encoded_capability, int family,
                                  uint16_t public_port) {
     struct sockaddr_un address;
-    unsigned char capability[FORWARD_CAPABILITY_BYTES] = {0};
-    unsigned char header[FORWARD_PEER_HEADER_BYTES] = {0};
+    unsigned char capability[TCP_AUTH_FORWARD_CAPABILITY_BYTES] = {0};
+    unsigned char header[TCP_AUTH_FORWARD_HEADER_BYTES] = {0};
     const size_t path_length = socket_path == NULL ? 0U : strlen(socket_path);
     int listener = -1;
     int client = -1;
@@ -455,8 +701,8 @@ static int run_unix_forward_supervisor(const char *helper_path, const char *sock
                                        const char *encoded_capability, int family,
                                        uint16_t public_port, uint16_t listen_port) {
     struct sockaddr_un address;
-    unsigned char capability[FORWARD_CAPABILITY_BYTES] = {0};
-    unsigned char header[FORWARD_PEER_HEADER_BYTES] = {0};
+    unsigned char capability[TCP_AUTH_FORWARD_CAPABILITY_BYTES] = {0};
+    unsigned char header[TCP_AUTH_FORWARD_HEADER_BYTES] = {0};
     const size_t path_length = socket_path == NULL ? 0U : strlen(socket_path);
     pid_t helper_pid = -1;
     int listener = -1;
@@ -536,6 +782,75 @@ cleanup:
     return result;
 }
 
+static int run_unix_no_forward_supervisor(const char *helper_path, const char *socket_path,
+                                          uint16_t listen_port) {
+    struct sockaddr_un address;
+    const size_t path_length = socket_path == NULL ? 0U : strlen(socket_path);
+    pid_t helper_pid = -1;
+    int listener = -1;
+    int result = EXIT_FAILURE;
+
+    if (helper_path == NULL || helper_path[0] != '/' || path_length == 0U ||
+        path_length >= sizeof(address.sun_path) || socket_path[0] != '/') {
+        goto cleanup;
+    }
+    listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (listener < 0) goto cleanup;
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    memcpy(address.sun_path, socket_path, path_length + 1U);
+    const socklen_t address_length =
+        (socklen_t)(offsetof(struct sockaddr_un, sun_path) + path_length + 1U);
+    if (bind(listener, (struct sockaddr *)&address, address_length) < 0 || chmod(socket_path, 0600) < 0 ||
+        listen(listener, 4) < 0) {
+        goto cleanup;
+    }
+
+    helper_pid = fork();
+    if (helper_pid < 0) goto cleanup;
+    if (helper_pid == 0) {
+        char parent_pid_text[32];
+        char listen_port_text[16];
+        if (snprintf(parent_pid_text, sizeof(parent_pid_text), "%ld", (long)getppid()) < 0 ||
+            snprintf(listen_port_text, sizeof(listen_port_text), "%u", (unsigned int)listen_port) < 0) {
+            _exit(126);
+        }
+        execl(helper_path, helper_path, "--parent-pid", parent_pid_text, "--listen-port",
+              listen_port_text, "--forward-socket", socket_path, "--max-clients", "32", "--backlog",
+              "32", (char *)NULL);
+        _exit(127);
+    }
+
+    puts("unix-no-forward-supervisor-ready");
+    fflush(stdout);
+    struct pollfd descriptor = {.fd = listener, .events = POLLIN};
+    int poll_result;
+    do {
+        poll_result = poll(&descriptor, 1, 5000);
+    } while (poll_result < 0 && errno == EINTR);
+    if (poll_result == 0) {
+        puts("unmatched-peer-unix-not-forwarded-ok");
+        fflush(stdout);
+        result = EXIT_SUCCESS;
+    } else if (poll_result > 0) {
+        fprintf(stderr, "helper connected to the Unix upstream for an unmatched peer\n");
+    }
+
+cleanup:
+    if (listener >= 0) close(listener);
+    if (helper_pid > 0) {
+        int helper_status = 0;
+        (void)kill(helper_pid, SIGTERM);
+        while (waitpid(helper_pid, &helper_status, 0) < 0 && errno == EINTR) {
+        }
+        if (!WIFEXITED(helper_status) || WEXITSTATUS(helper_status) != EXIT_SUCCESS) {
+            result = EXIT_FAILURE;
+        }
+    }
+    if (path_length > 0U && path_length < sizeof(address.sun_path)) (void)unlink(socket_path);
+    return result;
+}
+
 int main(int argc, char **argv) {
     uint16_t port;
     if (argc == 2 && strcmp(argv[1], "probe-algorithms") == 0) return run_algorithm_probe();
@@ -556,10 +871,25 @@ int main(int argc, char **argv) {
         }
         return run_unix_forward_supervisor(argv[2], argv[3], argv[4], family, port, listen_port);
     }
+    if (argc == 5 && strcmp(argv[1], "unix-reject-supervise") == 0) {
+        uint16_t listen_port;
+        if (!parse_port(argv[4], &listen_port)) return EXIT_FAILURE;
+        return run_unix_no_forward_supervisor(argv[2], argv[3], listen_port);
+    }
     if (argc == 6 && strcmp(argv[1], "connect") == 0 && parse_port(argv[2], &port)) {
         int family;
         if (!parse_test_family(argv[5], &family)) return EXIT_FAILURE;
         return run_connection_test(port, argv[3], argv[4], family);
+    }
+    if (argc == 5 && strcmp(argv[1], "md5-connect") == 0 && parse_port(argv[2], &port)) {
+        int family;
+        if (!parse_test_family(argv[4], &family)) return EXIT_FAILURE;
+        return run_md5_connection_test(port, argv[3], family);
+    }
+    if (argc == 4 && strcmp(argv[1], "unmatched-connect") == 0 && parse_port(argv[2], &port)) {
+        int family;
+        if (!parse_test_family(argv[3], &family)) return EXIT_FAILURE;
+        return run_unmatched_connection_test(port, family);
     }
     if (argc == 4 && strcmp(argv[1], "rotate") == 0 && parse_port(argv[2], &port)) {
         char *end = NULL;
@@ -567,6 +897,9 @@ int main(int argc, char **argv) {
         const unsigned long long parsed = strtoull(argv[3], &end, 10);
         if (errno != 0 || end == argv[3] || *end != '\0') return EXIT_FAILURE;
         return run_rotation_test(port, (uint64_t)parsed);
+    }
+    if (argc == 3 && strcmp(argv[1], "dual-key-connect") == 0 && parse_port(argv[2], &port)) {
+        return run_dual_key_connection_test(port);
     }
     if (argc == 5 && strcmp(argv[1], "rotation-connect") == 0 && parse_port(argv[2], &port)) {
         unsigned int key_id;
@@ -576,12 +909,31 @@ int main(int argc, char **argv) {
         }
         return run_rotation_connection_test(port, (uint8_t)key_id, strcmp(argv[4], "accept") == 0);
     }
+    if (argc == 5 && strcmp(argv[1], "reload-connect") == 0 && parse_port(argv[2], &port)) {
+        if ((strcmp(argv[3], "old") != 0 && strcmp(argv[3], "new") != 0 &&
+             strcmp(argv[3], "sha256") != 0) ||
+            (strcmp(argv[4], "accept") != 0 && strcmp(argv[4], "reject") != 0)) {
+            return EXIT_FAILURE;
+        }
+        return run_reload_connection_test(port, argv[3], strcmp(argv[4], "accept") == 0);
+    }
+    if (argc == 3 && strcmp(argv[1], "reload-hold") == 0 && parse_port(argv[2], &port)) {
+        return run_reload_disconnect_test(port);
+    }
+    if (argc == 3 && strcmp(argv[1], "reload-queued") == 0 && parse_port(argv[2], &port)) {
+        return run_queued_reload_rejection_test(port);
+    }
     fprintf(stderr,
             "usage: %s probe-algorithms|clock-guard|pick-port|echo-auto|echo PORT|"
             "unix-echo PATH CAPABILITY_HEX 4|6 PUBLIC_PORT|"
             "unix-supervise HELPER PATH CAPABILITY_HEX 4|6 PUBLIC_PORT LISTEN_PORT|"
-            "connect PORT correct|wrong|none ALGORITHM 4|6|rotate PORT EPOCH|"
-            "rotation-connect PORT 1|2 accept|reject\n",
+            "unix-reject-supervise HELPER PATH LISTEN_PORT|"
+            "connect PORT correct|wrong|none ALGORITHM 4|6|rotate PORT EPOCH|dual-key-connect PORT|"
+            "md5-connect PORT correct|wrong|none|max 4|6|"
+            "unmatched-connect PORT 4|6|"
+            "rotation-connect PORT 1|2 accept|reject|"
+            "reload-connect PORT old|new|sha256 accept|reject|reload-hold PORT|"
+            "reload-queued PORT\n",
             argv[0]);
     return EXIT_FAILURE;
 }

@@ -2,7 +2,7 @@
 const util = require('util');
 const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
-const TcpAoForwardingServer = require('../core/tcpAoForwardingServer');
+const TcpAuthForwardingServer = require('../core/tcpAuthForwardingServer');
 const BmpSession = require('./bmpSession');
 const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgpUtils');
 const BmpBgpSession = require('./bmpBgpSession');
@@ -22,14 +22,15 @@ const {
     parseRouteLensQuery
 } = require('../../utils/bmpRouteLens');
 const BmpPersistenceClient = require('./bmpPersistenceClient');
-const { BMP_AUTH_TYPES, redactTcpAoConfig } = require('../../utils/tcpAoConfig');
+const { BMP_AUTH_TYPES, redactAuthenticationConfig } = require('../../utils/tcpAuthConfig');
 
 class BmpWorker {
     constructor() {
         this.server = null;
         this.ipv6Server = null;
-        this.tcpAoForwardingServer = null;
+        this.tcpAuthForwardingServer = null;
         this.tcpAoRuntimeFailure = null;
+        this.tcpMd5RuntimeFailure = null;
         this.bmpStopping = false;
         this.bmpShutdownPromise = null;
         this.socket = null;
@@ -66,6 +67,10 @@ class BmpWorker {
         // 注册消息处理器
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.START_BMP, this.startBmp.bind(this));
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.STOP_BMP, this.stopBmp.bind(this));
+        this.messageHandler.registerHandler(
+            BmpConst.BMP_REQ_TYPES.RELOAD_TCP_AO_PROFILES,
+            this.reloadTcpAoProfiles.bind(this)
+        );
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST, this.getClientList.bind(this));
         this.messageHandler.registerHandler(BmpConst.BMP_REQ_TYPES.GET_CLIENT, this.getClient.bind(this));
         this.messageHandler.registerHandler(
@@ -793,10 +798,16 @@ class BmpWorker {
         const bmpSession = this.createBmpSession(socket, clientAddress, clientPort, localAddress, localPort);
         if (!bmpSession) return null;
         bmpSession.transport = transportLabel;
-        bmpSession.authentication = transportLabel === 'tcp-ao' ? 'tcp-ao' : 'none';
+        bmpSession.authentication = ['tcp-ao', 'tcp-md5'].includes(transportLabel) ? transportLabel : 'none';
+        bmpSession.authProfileId = endpoint.authProfileId || null;
+        bmpSession.authProfileName = endpoint.authProfileName || null;
+        bmpSession.authPeer = endpoint.authPeer || null;
         bmpSession.tcpAoProfileId = endpoint.tcpAoProfileId || null;
         bmpSession.tcpAoProfileName = endpoint.tcpAoProfileName || null;
         bmpSession.tcpAoPeer = endpoint.tcpAoPeer || null;
+        bmpSession.tcpMd5ProfileId = endpoint.tcpMd5ProfileId || null;
+        bmpSession.tcpMd5ProfileName = endpoint.tcpMd5ProfileName || null;
+        bmpSession.tcpMd5Peer = endpoint.tcpMd5Peer || null;
 
         socket.on('data', data => {
             if (this.bmpSessionMap.get(sessionKey) !== bmpSession) {
@@ -835,8 +846,13 @@ class BmpWorker {
         logger.info(`TCP Server listening on port ${this.bmpConfigData.port} at ::`);
     }
 
-    createTcpAoForwardingServer() {
-        return new TcpAoForwardingServer({ serviceName: 'BMP', directoryPrefix: 'nn-bmp-ao-' });
+    createTcpAuthForwardingServer(authType) {
+        const authDirectorySuffix = authType === BMP_AUTH_TYPES.TCP_MD5 ? 'md5' : 'ao';
+        return new TcpAuthForwardingServer({
+            serviceName: 'BMP',
+            authType,
+            directoryPrefix: `nn-bmp-${authDirectorySuffix}-`
+        });
     }
 
     scheduleFatalExit() {
@@ -850,7 +866,7 @@ class BmpWorker {
             reason: 'TCP-AO认证进程异常退出，BMP服务已安全停止'
         };
         this.tcpAoRuntimeFailure = failure;
-        logger.error(`TCP-AO helper异常退出，BMP协议进程将停止: ${error.message}`);
+        logger.error(`TCP 认证 helper异常退出（TCP-AO），BMP协议进程将停止: ${error.message}`);
         try {
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, failure);
         } catch (eventError) {
@@ -861,18 +877,36 @@ class BmpWorker {
             .finally(() => this.scheduleFatalExit());
     }
 
+    handleTcpMd5UnexpectedExit(error) {
+        if (this.bmpStopping || this.tcpMd5RuntimeFailure) return;
+        const failure = error?.runtimeFailure || {
+            code: 'TCP_MD5_HELPER_EXIT',
+            reason: 'TCP MD5认证进程异常退出，BMP服务已安全停止'
+        };
+        this.tcpMd5RuntimeFailure = failure;
+        logger.error(`TCP 认证 helper异常退出（TCP MD5），BMP协议进程将停止: ${error.message}`);
+        try {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, failure);
+        } catch (eventError) {
+            logger.warn(`TCP MD5运行时故障事件发送失败: ${eventError.message}`);
+        }
+        this.shutdownBmpRuntime()
+            .catch(shutdownError => logger.error(`TCP MD5故障后停止BMP失败: ${shutdownError.message}`))
+            .finally(() => this.scheduleFatalExit());
+    }
+
     async startTcpAoServer() {
         const runtimeProfiles = this.bmpConfigData?.tcpAoProfiles;
         if (!Array.isArray(runtimeProfiles) || runtimeProfiles.length === 0) {
             throw new Error('缺少BMP TCP-AO运行配置');
         }
-        const forwardingServer = this.createTcpAoForwardingServer();
-        this.tcpAoForwardingServer = forwardingServer;
+        const forwardingServer = this.createTcpAuthForwardingServer(BMP_AUTH_TYPES.TCP_AO);
+        this.tcpAuthForwardingServer = forwardingServer;
         let profilesRedacted = false;
         const redactRuntimeProfiles = () => {
             if (profilesRedacted) return;
             profilesRedacted = true;
-            this.bmpConfigData.tcpAoProfiles = runtimeProfiles.map(profile => redactTcpAoConfig(profile));
+            this.bmpConfigData.tcpAoProfiles = runtimeProfiles.map(profile => redactAuthenticationConfig(profile));
             for (const profile of runtimeProfiles) {
                 for (const key of Array.isArray(profile?.keys) ? profile.keys : []) {
                     if (Object.prototype.hasOwnProperty.call(key, 'key')) key.key = '<redacted>';
@@ -895,7 +929,86 @@ class BmpWorker {
                 onProfilesConsumed: redactRuntimeProfiles
             });
             logger.info(
-                `BMP TCP-AO helper ready on port ${status.listenPort}; families=${(status.families || []).join(',')}`
+                `BMP TCP 认证 helper ready (TCP-AO) on port ${status.listenPort}; families=${(status.families || []).join(',')}`
+            );
+        } finally {
+            redactRuntimeProfiles();
+        }
+    }
+
+    async reloadTcpAoProfiles(messageId, data = {}) {
+        const runtimeProfiles = Array.isArray(data?.profiles) ? data.profiles : [];
+        const redactProfiles = () => {
+            for (const profile of runtimeProfiles) {
+                for (const key of Array.isArray(profile?.keys) ? profile.keys : []) {
+                    if (Object.prototype.hasOwnProperty.call(key, 'key')) key.key = '<redacted>';
+                }
+                if (profile && typeof profile === 'object') profile.keys = [];
+            }
+            if (data && typeof data === 'object') data.profiles = [];
+        };
+        try {
+            if (
+                this.bmpStopping ||
+                this.bmpConfigData?.authType !== BMP_AUTH_TYPES.TCP_AO ||
+                !this.tcpAuthForwardingServer
+            ) {
+                throw new Error('BMP未以TCP-AO认证方式运行，无法热更新密钥');
+            }
+            if (runtimeProfiles.length === 0) throw new Error('BMP TCP-AO热更新至少需要一个Profile');
+            const activeProfileIds = (this.bmpConfigData.tcpAoProfiles || []).map(profile => profile.id);
+            const reloadProfileIds = runtimeProfiles.map(profile => profile?.id);
+            if (JSON.stringify(activeProfileIds) !== JSON.stringify(reloadProfileIds)) {
+                throw new Error('BMP TCP-AO运行Profile选择已变化，需要停止并重新启动BMP服务');
+            }
+            const redactedProfiles = runtimeProfiles.map(profile => redactAuthenticationConfig(profile));
+            const status = await this.tcpAuthForwardingServer.reload({
+                profiles: runtimeProfiles,
+                onProfilesConsumed: redactProfiles
+            });
+            this.bmpConfigData.tcpAoProfiles = redactedProfiles;
+            this.messageHandler.sendSuccessResponse(messageId, status, 'BMP TCP-AO运行时密钥已立即生效');
+        } catch (error) {
+            logger.error(`BMP TCP-AO运行时密钥热更新失败: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, `BMP TCP-AO运行时密钥热更新失败: ${error.message}`);
+        } finally {
+            redactProfiles();
+        }
+    }
+
+    async startTcpMd5Server() {
+        const runtimeProfiles = this.bmpConfigData?.tcpMd5Profiles;
+        if (!Array.isArray(runtimeProfiles) || runtimeProfiles.length === 0) {
+            throw new Error('缺少BMP TCP MD5运行配置');
+        }
+        const forwardingServer = this.createTcpAuthForwardingServer(BMP_AUTH_TYPES.TCP_MD5);
+        this.tcpAuthForwardingServer = forwardingServer;
+        let profilesRedacted = false;
+        const redactRuntimeProfiles = () => {
+            if (profilesRedacted) return;
+            profilesRedacted = true;
+            this.bmpConfigData.tcpMd5Profiles = runtimeProfiles.map(profile => redactAuthenticationConfig(profile));
+            for (const profile of runtimeProfiles) {
+                if (Object.prototype.hasOwnProperty.call(profile, 'key')) profile.key = '<redacted>';
+            }
+        };
+        try {
+            const status = await forwardingServer.start({
+                listenPort: this.bmpConfigData.port,
+                profiles: runtimeProfiles,
+                onConnection: (socket, metadata, initialData) => {
+                    const session = this.attachClientSocket(socket, 'tcp-md5', metadata, initialData);
+                    if (!session) return null;
+                    return {
+                        session,
+                        resume: !(this.bmpSocketsPaused || this.persistence?.paused)
+                    };
+                },
+                onUnexpectedExit: error => this.handleTcpMd5UnexpectedExit(error),
+                onProfilesConsumed: redactRuntimeProfiles
+            });
+            logger.info(
+                `BMP TCP 认证 helper ready (TCP MD5) on port ${status.listenPort}; families=${(status.families || []).join(',')}`
             );
         } finally {
             redactRuntimeProfiles();
@@ -905,10 +1018,12 @@ class BmpWorker {
     async startTcpServer(messageId) {
         try {
             const tcpAoEnabled = this.bmpConfigData?.authType === BMP_AUTH_TYPES.TCP_AO;
+            const tcpMd5Enabled = this.bmpConfigData?.authType === BMP_AUTH_TYPES.TCP_MD5;
             if (tcpAoEnabled) await this.startTcpAoServer();
+            else if (tcpMd5Enabled) await this.startTcpMd5Server();
             else await this.startPlainTcpServers();
 
-            const suffix = tcpAoEnabled ? '（TCP-AO认证）' : '';
+            const suffix = tcpAoEnabled ? '（TCP-AO认证）' : tcpMd5Enabled ? '（TCP MD5认证）' : '';
             logger.info(`bmp协议启动成功${suffix}`);
             this.messageHandler.sendSuccessResponse(messageId, null, `bmp协议启动成功${suffix}`);
         } catch (err) {
@@ -920,10 +1035,10 @@ class BmpWorker {
 
     async closeTcpServers() {
         const servers = [this.server, this.ipv6Server];
-        const tcpAoForwardingServer = this.tcpAoForwardingServer;
+        const tcpAuthForwardingServer = this.tcpAuthForwardingServer;
         this.server = null;
         this.ipv6Server = null;
-        this.tcpAoForwardingServer = null;
+        this.tcpAuthForwardingServer = null;
         await Promise.all([
             ...servers.map(
                 server =>
@@ -947,7 +1062,7 @@ class BmpWorker {
                         }
                     })
             ),
-            tcpAoForwardingServer?.stop?.() || Promise.resolve()
+            tcpAuthForwardingServer?.stop?.() || Promise.resolve()
         ]);
     }
 
@@ -957,6 +1072,7 @@ class BmpWorker {
             return;
         }
         this.tcpAoRuntimeFailure = null;
+        this.tcpMd5RuntimeFailure = null;
         this.bmpConfigData = bmpConfigData;
         const authType = String(this.bmpConfigData?.authType || BMP_AUTH_TYPES.NONE)
             .trim()
@@ -975,7 +1091,16 @@ class BmpWorker {
             this.messageHandler.sendErrorResponse(messageId, 'BMP TCP-AO至少需要一个运行时Profile');
             return;
         }
+        if (
+            authType === BMP_AUTH_TYPES.TCP_MD5 &&
+            (!Array.isArray(this.bmpConfigData.tcpMd5Profiles) || this.bmpConfigData.tcpMd5Profiles.length === 0)
+        ) {
+            this.bmpConfigData = null;
+            this.messageHandler.sendErrorResponse(messageId, 'BMP TCP MD5至少需要一个运行时Profile');
+            return;
+        }
         if (authType !== BMP_AUTH_TYPES.TCP_AO) this.bmpConfigData.tcpAoProfiles = [];
+        if (authType !== BMP_AUTH_TYPES.TCP_MD5) this.bmpConfigData.tcpMd5Profiles = [];
         this.bmpConfigData.bmpV4TlvDraft =
             Number(this.bmpConfigData.bmpV4TlvDraft) === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
                 ? BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19

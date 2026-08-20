@@ -7,6 +7,11 @@ const {
 
 const TCP_AO_SETTINGS_VERSION = 1;
 const MAX_TCP_AO_PROFILES = 32;
+const TCP_AO_AUTH_TYPE = 'tcp-ao';
+const TCP_AO_PROFILE_CONSUMERS = Object.freeze({
+    BMP: 'BMP',
+    RPKI: 'RPKI'
+});
 
 class TcpAoSettingsStore {
     constructor(store, credentialStore, options = {}) {
@@ -35,14 +40,74 @@ class TcpAoSettingsStore {
         }
     }
 
+    getProfileUsage() {
+        const usage = new Map();
+        const addUsage = (profileId, consumer) => {
+            const id = String(profileId || '').trim();
+            if (!id) return;
+            if (!usage.has(id)) usage.set(id, []);
+            const consumers = usage.get(id);
+            if (!consumers.includes(consumer)) consumers.push(consumer);
+        };
+
+        const bmpConfig = this.store?.get?.('bmp-config');
+        if (bmpConfig?.authType === TCP_AO_AUTH_TYPE) {
+            const profileIds = Array.isArray(bmpConfig.tcpAoProfileIds)
+                ? bmpConfig.tcpAoProfileIds
+                : bmpConfig.tcpAoProfileId
+                  ? [bmpConfig.tcpAoProfileId]
+                  : [];
+            profileIds.forEach(profileId => addUsage(profileId, TCP_AO_PROFILE_CONSUMERS.BMP));
+        }
+
+        const rpkiConfig = this.store?.get?.('rpki-config');
+        if (rpkiConfig?.authType === TCP_AO_AUTH_TYPE) {
+            addUsage(rpkiConfig.tcpAoProfileId, TCP_AO_PROFILE_CONSUMERS.RPKI);
+        }
+
+        return usage;
+    }
+
+    assertReferencedProfilesNotRemoved(inputProfiles) {
+        const submittedIds = new Set(
+            inputProfiles.map(profile => String(profile?.id || '').trim()).filter(profileId => profileId.length > 0)
+        );
+        const removedProfiles = this.getStoredSettings().profiles.filter(profile => !submittedIds.has(profile.id));
+        if (removedProfiles.length === 0) return;
+
+        const usage = this.getProfileUsage();
+        const referencedRemovals = removedProfiles
+            .map(profile => ({ profile, consumers: usage.get(profile.id) || [] }))
+            .filter(item => item.consumers.length > 0);
+        if (referencedRemovals.length === 0) return;
+
+        const details = referencedRemovals
+            .map(({ profile, consumers }) => `“${profile.name || profile.id}”正被${consumers.join('、')}使用`)
+            .join('；');
+        throw new Error(`TCP-AO配置${details}，不能删除；请先在对应服务配置中取消引用`);
+    }
+
+    assertProfilesExist(profileIds) {
+        const requestedIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
+            .map(profileId => String(profileId || '').trim())
+            .filter(profileId => profileId.length > 0);
+        const storedIds = new Set(this.getStoredSettings().profiles.map(profile => profile.id));
+        const missingIds = requestedIds.filter(profileId => !storedIds.has(profileId));
+        if (missingIds.length > 0) {
+            throw new Error(`选择的TCP-AO配置不存在: ${missingIds.join('、')}`);
+        }
+        return requestedIds;
+    }
+
     listProfiles() {
         const settings = this.getStoredSettings();
+        const usage = this.getProfileUsage();
         const credentialAvailable =
             typeof this.credentialStore.isAvailable === 'function' ? this.credentialStore.isAvailable() : true;
         return {
             version: TCP_AO_SETTINGS_VERSION,
-            profiles: settings.profiles.map(profile =>
-                sanitizeTcpAoProfile({
+            profiles: settings.profiles.map(profile => ({
+                ...sanitizeTcpAoProfile({
                     ...profile,
                     keys: (profile.keys || []).map(key => {
                         const savedKeyStatus = this.getStoredKeyStatus(key, credentialAvailable);
@@ -52,8 +117,9 @@ class TcpAoSettingsStore {
                             savedKeyStatus
                         };
                     })
-                })
-            )
+                }),
+                usedBy: [...(usage.get(profile.id) || [])]
+            }))
         };
     }
 
@@ -62,6 +128,7 @@ class TcpAoSettingsStore {
         if (inputProfiles.length > MAX_TCP_AO_PROFILES) {
             throw new Error(`TCP-AO配置最多保存${MAX_TCP_AO_PROFILES}条`);
         }
+        this.assertReferencedProfilesNotRemoved(inputProfiles);
 
         const previousProfiles = new Map(this.getStoredSettings().profiles.map(profile => [profile.id, profile]));
         const seenIds = new Set();

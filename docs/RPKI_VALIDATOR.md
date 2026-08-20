@@ -15,12 +15,13 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
 - Serial Query / Reset Query 响应。
 - 运行时 client 列表。
 - Linux 6.7+ 上的 TCP-AO 认证，并支持按与 BMP 共享的 Profile 轮换多把密钥。
+- Linux 上的 TCP MD5 兼容认证，与 BMP 共享独立的 TCP MD5 Profile。
 
 ## 页面
 
 ### RPKI 配置
 
-配置 RPKI-RTR 服务端口、最高协议版本、ASPA 编码格式和认证方式。选择 TCP-AO 时，只能引用已在“设置 → TCP-AO”保存到本机且当前可发送的 Profile；这些 Profile 与 BMP 共用，但 RPKI-RTR 每次只选择一个。RPKI 页面提交的配置和启动参数只包含 Profile ID，不包含密钥明文。
+配置 RPKI-RTR 服务端口、最高协议版本、ASPA 编码格式和认证方式。TCP-AO 和 TCP MD5 分别引用“设置 → TCP-AO”与“设置 → TCP MD5”中的 Profile；两者都与 BMP 共用，但 RPKI-RTR 每次只选择一个。RPKI 页面提交的配置和启动参数只包含 Profile ID，不包含密钥明文。
 
 ![RPKI 配置和客户端](images/rpki/rpki-config-and-client.png)
 
@@ -31,6 +32,7 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
 | 启动服务 / 已启动 | 按端口、协议版本和 ASPA 编码启动 RPKI-RTR 服务。 |
 | 停止服务 | 停止 RPKI-RTR 服务并断开客户端连接。 |
 | 前往 TCP-AO 设置 | 打开 TCP-AO Profile 和密钥轮换设置。 |
+| 前往 TCP MD5 设置 | 打开 TCP MD5 对端与共享密钥 Profile。 |
 
 说明：
 
@@ -38,6 +40,7 @@ RPKI 模块当前实现的是本地 RPKI-RTR cache/server，用于向路由器�
 - v1 支持 Router Key。
 - v2 支持 ASPA。
 - TCP-AO 仅支持 Ubuntu 24.04+、Linux kernel 6.7+ 且 `CONFIG_TCP_AO=y` 的桌面环境，详细时间边界和轮换规则见 [TCP-AO 设置](SETTINGS.md#tcp-ao-设置)。
+- TCP MD5 仅支持具备 TCP MD5 Signature Option 的 Linux 环境，不在应用内在线轮换密钥；修改后需重启服务。详见 [TCP MD5 设置](SETTINGS.md#tcp-md5-设置)。
 
 ### ROA
 
@@ -155,8 +158,8 @@ ASPA JSON 导入：
 ## 使用步骤
 
 1. 进入 `RPKI`。
-2. 如需 TCP-AO，先在“设置 → TCP-AO”创建并保存 Profile。
-3. 在 `RPKI配置` 中设置端口、最高协议版本、ASPA 编码格式和认证方式；TCP-AO 认证需选择一个 Profile。
+2. 如需 TCP-AO 或 TCP MD5，先在“设置”中进入对应页面创建并保存 Profile。
+3. 在 `RPKI配置` 中设置端口、最高协议版本、ASPA 编码格式和认证方式；认证模式需选择一个对应 Profile。
 4. 如有需要，可在启动前维护持久化的 Router Key 配置。
 5. 启动 RPKI 服务。
 6. 在 ROA、ASPA 页面查看、导入或维护当前服务的数据；首次进入页面时会加载一次，同一运行周期内切换标签页不会重复查询。
@@ -168,6 +171,7 @@ ASPA JSON 导入：
 - 启动服务后新增或删除 ROA/Router Key/ASPA，会向已连接 client 发送相应更新。
 - RPKI 服务停止或异常退出后，ROA/ASPA 页面会立即清空；底层 SQLite 数据仍会保留到下一个运行周期。
 - TCP-AO 因最后一把发送密钥到期、系统时钟异常或全局轮换失败而安全停止时，RPKI 配置页会保留具体故障提示；修正配置后重新启动即可清除。
+- TCP MD5 helper 异常退出时同样会安全停止 RPKI 进程，不会回退到未认证 TCP。
 - 标准或低位端口在部分系统上可能需要管理员/root 权限。
 - TCP-AO 不提供 headless 或浏览器前后端分离模式，服务与 Electron 界面必须运行在同一台有 X11/Wayland 会话的 Linux 主机上。
 - 重启应用后，RPKI 服务不会自动恢复启动，需要手动启动；启动前 ROA/ASPA 页面不会展示上一次运行的数据。

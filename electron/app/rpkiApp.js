@@ -13,12 +13,65 @@ const { normalizeRoaObject } = require('../utils/rpkiRoaImport');
 const { normalizeAspaObject } = require('../utils/rpkiAspaImport');
 const SecureCredentialStore = require('../utils/secureCredentialStore');
 const TcpAoSettingsStore = require('../utils/tcpAoSettingsStore');
-const { RPKI_AUTH_TYPES, normalizeRpkiAuthSelection, redactTcpAoConfig } = require('../utils/tcpAoConfig');
+const TcpMd5SettingsStore = require('../utils/tcpMd5SettingsStore');
+const TcpAoSettingsLifecycleGate = require('./tcpAoSettingsLifecycleGate');
+const {
+    RPKI_AUTH_TYPES,
+    normalizeRpkiAuthenticationSelection,
+    redactAuthenticationConfig
+} = require('../utils/tcpAuthConfig');
 
 const RPKI_RUNTIME_CHANGED_EVENT = 'rpki:runtimeChanged';
 const PACKAGED_RENDERER_PATH = path.resolve(__dirname, '../../dist/index.html');
 const MAX_RUNTIME_FAILURE_CODE_LENGTH = 64;
 const MAX_RUNTIME_FAILURE_REASON_LENGTH = 512;
+const TCP_AO_RUNTIME_RELOAD_TIMEOUT_MS = 15_000;
+
+function cloneJson(value) {
+    return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function sameStoredTcpAoSettings(left, right) {
+    // Stored key material is ciphertext; comparing the raw snapshots does not
+    // create an additional plaintext secret representation.
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function clearRuntimeTcpAoProfiles(profiles) {
+    for (const profile of Array.isArray(profiles) ? profiles : []) {
+        for (const key of Array.isArray(profile?.keys) ? profile.keys : []) {
+            if (Object.prototype.hasOwnProperty.call(key, 'key')) key.key = '<redacted>';
+        }
+        if (profile && typeof profile === 'object') profile.keys = [];
+    }
+}
+
+function sameRuntimeTcpAoProfiles(left, right) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    const profileFields = ['peer', 'family', 'address', 'prefixLength'];
+    const keyFields = [
+        'algorithm',
+        'sndId',
+        'rcvId',
+        'key',
+        'macLength',
+        'acceptStart',
+        'sendStart',
+        'sendEnd',
+        'acceptEnd'
+    ];
+    return left.every((profile, profileIndex) => {
+        const candidate = right[profileIndex];
+        if (!candidate || profileFields.some(field => profile?.[field] !== candidate[field])) return false;
+        const keys = Array.isArray(profile?.keys) ? profile.keys : [];
+        const candidateKeys = Array.isArray(candidate.keys) ? candidate.keys : [];
+        if (keys.length !== candidateKeys.length) return false;
+        return keys.every((key, keyIndex) => {
+            const candidateKey = candidateKeys[keyIndex];
+            return Boolean(candidateKey) && keyFields.every(field => key?.[field] === candidateKey[field]);
+        });
+    });
+}
 
 function normalizeRuntimeFailure(failure, fallback = null) {
     const source = failure && typeof failure === 'object' ? failure : fallback;
@@ -72,7 +125,7 @@ function normalizeRpkiConfig(config = {}) {
         port: String(port),
         maxProtocolVersion,
         aspaFormat,
-        ...normalizeRpkiAuthSelection(config)
+        ...normalizeRpkiAuthenticationSelection(config)
     };
 }
 
@@ -90,6 +143,8 @@ class RpkiApp {
         this.credentialStore = options.credentialStore || new SecureCredentialStore();
         this.tcpAoSettingsStore =
             options.tcpAoSettingsStore || new TcpAoSettingsStore(this.store, this.credentialStore);
+        this.tcpMd5SettingsStore =
+            options.tcpMd5SettingsStore || new TcpMd5SettingsStore(this.store, this.credentialStore);
         this.worker = null;
         this.rpkiReady = false;
         this.rpkiStopping = false;
@@ -101,10 +156,16 @@ class RpkiApp {
         this.rpkiStartPromise = null;
         this.rpkiStopPromise = null;
         this.rpkiTerminateOnlyWorker = null;
+        this.rpkiQueuedTcpAoStartGeneration = null;
         this.rpkiRuntimeState = null;
         this.rpkiRuntimeFailure = null;
+        this.runningAuthType = RPKI_AUTH_TYPES.NONE;
+        this.runningTcpAoProfileIds = [];
         this.rpkiRuntimeFailureHandler = null;
         this.routerKeyMutationQueue = Promise.resolve();
+        this.tcpAoSettingsLifecycleGate = options.tcpAoSettingsLifecycleGate || new TcpAoSettingsLifecycleGate();
+        this.getTcpAoRuntimeConsumers =
+            typeof options.getTcpAoRuntimeConsumers === 'function' ? options.getTcpAoRuntimeConsumers : () => [this];
 
         this.registerHandlers();
     }
@@ -114,6 +175,8 @@ class RpkiApp {
         this.registerTrustedHandler('rpki:loadRpkiConfig', this.handleLoadRpkiConfig);
         this.registerTrustedHandler('rpki:saveTcpAoSettings', this.handleSaveTcpAoSettings);
         this.registerTrustedHandler('rpki:loadTcpAoSettings', this.handleLoadTcpAoSettings);
+        this.registerTrustedHandler('rpki:saveTcpMd5Settings', this.handleSaveTcpMd5Settings);
+        this.registerTrustedHandler('rpki:loadTcpMd5Settings', this.handleLoadTcpMd5Settings);
         this.registerTrustedHandler('rpki:startRpki', this.handleStartRpki);
         this.registerTrustedHandler('rpki:stopRpki', this.handleStopRpki);
         this.registerTrustedHandler('rpki:getClientList', this.handleGetClientList);
@@ -175,6 +238,11 @@ class RpkiApp {
     async handleSaveRpkiConfig(event, config) {
         try {
             const storedConfig = normalizeRpkiConfig(config);
+            if (storedConfig.authType === RPKI_AUTH_TYPES.TCP_AO) {
+                this.getTcpAoSettingsStore().assertProfilesExist(storedConfig.tcpAoProfileId);
+            } else if (storedConfig.authType === RPKI_AUTH_TYPES.TCP_MD5) {
+                this.getTcpMd5SettingsStore().assertProfilesExist(storedConfig.tcpMd5ProfileId);
+            }
             this.store.set(this.rpkiConfigFileKey, storedConfig);
             return successResponse(null, 'RPKI配置文件保存成功');
         } catch (error) {
@@ -203,20 +271,220 @@ class RpkiApp {
         return this.tcpAoSettingsStore;
     }
 
+    getTcpMd5SettingsStore() {
+        this.tcpMd5SettingsStore.store = this.store;
+        return this.tcpMd5SettingsStore;
+    }
+
     async initializeCredentialStore() {
         if (typeof this.credentialStore.initialize === 'function') {
             await this.credentialStore.initialize();
         }
     }
 
-    async handleSaveTcpAoSettings(event, settings) {
+    handleSaveTcpAoSettings(event, settings) {
+        return this.tcpAoSettingsLifecycleGate.runExclusive(() => this.saveTcpAoSettingsTransaction(settings));
+    }
+
+    resolveTcpAoRuntimeTargets() {
+        const consumers = this.getTcpAoRuntimeConsumers?.() || [];
+        const seen = new Set();
+        const targets = [];
+        for (const consumer of consumers) {
+            if (!consumer || seen.has(consumer) || typeof consumer.getTcpAoRuntimeReloadState !== 'function') continue;
+            seen.add(consumer);
+            const state = consumer.getTcpAoRuntimeReloadState({ ignoreQueuedStart: true });
+            if (state?.state === 'transitioning') {
+                throw new Error(`${state.service || 'TCP-AO服务'}正在启动或停止，请稍后再保存TCP-AO配置`);
+            }
+            if (state?.state !== 'running') continue;
+            const profileIds = Array.isArray(state.profileIds) ? state.profileIds.filter(Boolean) : [];
+            if (profileIds.length === 0) continue;
+            targets.push({ consumer, service: String(state.service || 'TCP-AO'), profileIds });
+        }
+        return targets;
+    }
+
+    async stopReloadRollbackFailures(failures) {
+        const stopResults = await Promise.allSettled(
+            failures.map(async failure => {
+                const stop = failure.target.consumer.stopTcpAoRuntimeAfterReloadFailure;
+                if (typeof stop !== 'function') {
+                    return { service: failure.target.service, stopped: false, message: '缺少安全停止接口' };
+                }
+                const result = await stop.call(failure.target.consumer);
+                return { service: failure.target.service, ...result };
+            })
+        );
+        return stopResults.map((result, index) => {
+            if (result.status === 'fulfilled') return result.value;
+            return {
+                service: failures[index].target.service,
+                stopped: false,
+                message: result.reason?.message || String(result.reason)
+            };
+        });
+    }
+
+    async saveTcpAoSettingsTransaction(settings) {
+        let oldPlans = [];
+        let newPlans = [];
+        let saved = null;
+        let oldStoredSettings;
+        let runtimeTargets = [];
+        let reloadTargets = [];
         try {
             await this.initializeCredentialStore();
-            const saved = this.getTcpAoSettingsStore().saveSettings(settings);
-            return successResponse(saved, 'TCP-AO配置保存成功');
+            const settingsStore = this.getTcpAoSettingsStore();
+            runtimeTargets = this.resolveTcpAoRuntimeTargets();
+            oldStoredSettings = cloneJson(settingsStore.getStoredSettings());
+            oldPlans = runtimeTargets.map(target => ({
+                target,
+                profiles: target.profileIds.map(profileId => settingsStore.getRuntimeProfile(profileId))
+            }));
+
+            saved = settingsStore.saveSettings(settings);
+            newPlans = runtimeTargets.map(target => ({
+                target,
+                profiles: target.profileIds.map(profileId => settingsStore.getRuntimeProfile(profileId))
+            }));
+            reloadTargets = newPlans.filter((plan, index) => {
+                return !sameRuntimeTcpAoProfiles(oldPlans[index].profiles, plan.profiles);
+            });
+
+            const reloadResults = await Promise.allSettled(
+                reloadTargets.map(plan => plan.target.consumer.reloadTcpAoRuntimeProfiles(plan.profiles))
+            );
+            const reloadFailures = reloadResults
+                .map((result, index) => ({ result, plan: reloadTargets[index] }))
+                .filter(item => item.result.status === 'rejected');
+            if (reloadFailures.length > 0) {
+                const error = new Error(
+                    reloadFailures
+                        .map(
+                            item => `${item.plan.target.service}: ${item.result.reason?.message || item.result.reason}`
+                        )
+                        .join('；')
+                );
+                error.reloadFailed = true;
+                throw error;
+            }
+
+            const reloadedConsumers = new Set(reloadTargets.map(plan => plan.target.consumer));
+            const reloadStatusByConsumer = new Map(
+                reloadResults.map((result, index) => [
+                    reloadTargets[index].target.consumer,
+                    result.status === 'fulfilled' ? result.value : null
+                ])
+            );
+            const runtimeReload = {
+                attempted: reloadTargets.length > 0,
+                services: runtimeTargets.map(target => {
+                    const disconnectedConnections = Number(
+                        reloadStatusByConsumer.get(target.consumer)?.disconnectedConnections
+                    );
+                    return {
+                        service: target.service,
+                        status: reloadedConsumers.has(target.consumer) ? 'reloaded' : 'unchanged',
+                        profileIds: [...target.profileIds],
+                        disconnectedConnections:
+                            Number.isSafeInteger(disconnectedConnections) && disconnectedConnections >= 0
+                                ? disconnectedConnections
+                                : 0
+                    };
+                })
+            };
+            runtimeReload.disconnectedConnections = runtimeReload.services.reduce(
+                (total, service) => total + service.disconnectedConnections,
+                0
+            );
+            const message = runtimeReload.attempted
+                ? 'TCP-AO配置保存成功，运行中的服务已立即应用新密钥计划'
+                : 'TCP-AO配置保存成功';
+            return successResponse({ ...saved, runtimeReload }, message);
         } catch (error) {
-            logger.error('Error saving TCP-AO settings:', error.message);
-            return errorResponse(error.message);
+            let persistedSettingsChanged = Boolean(saved);
+            if (!persistedSettingsChanged && oldStoredSettings !== undefined) {
+                try {
+                    persistedSettingsChanged = !sameStoredTcpAoSettings(
+                        this.getTcpAoSettingsStore().getStoredSettings(),
+                        oldStoredSettings
+                    );
+                } catch (_readError) {
+                    // If the post-failure state cannot be proven identical, use
+                    // the transactional restoration path and fail closed.
+                    persistedSettingsChanged = true;
+                }
+            }
+            if (!persistedSettingsChanged) {
+                logger.error('Error saving TCP-AO settings:', error.message);
+                return errorResponse(error.message);
+            }
+
+            const settingsStore = this.getTcpAoSettingsStore();
+            let persistenceRestoreError = null;
+            try {
+                this.store.set(settingsStore.storageKey, oldStoredSettings);
+            } catch (restoreError) {
+                persistenceRestoreError = restoreError;
+            }
+
+            const rollbackPlans = reloadTargets.map(plan => {
+                const oldPlan = oldPlans.find(candidate => candidate.target === plan.target);
+                return { target: plan.target, profiles: oldPlan?.profiles || [] };
+            });
+            const rollbackResults = await Promise.allSettled(
+                rollbackPlans.map(plan => plan.target.consumer.reloadTcpAoRuntimeProfiles(plan.profiles))
+            );
+            const rollbackFailures = rollbackResults
+                .map((result, index) => ({ result, target: rollbackPlans[index]?.target }))
+                .filter(item => item.result.status === 'rejected' && item.target);
+            const stopCandidates = [...rollbackFailures];
+            if (persistenceRestoreError) {
+                for (const target of runtimeTargets) {
+                    if (stopCandidates.some(candidate => candidate.target === target)) continue;
+                    stopCandidates.push({
+                        target,
+                        result: { status: 'rejected', reason: persistenceRestoreError },
+                        persistenceRestoreFailed: true
+                    });
+                }
+            }
+            const stopResults = await this.stopReloadRollbackFailures(stopCandidates);
+            const stopResultByConsumer = new Map(
+                stopCandidates.map((candidate, index) => [candidate.target.consumer, stopResults[index]])
+            );
+            const details = [`新运行计划应用失败: ${error.message}`];
+            if (persistenceRestoreError) {
+                details.push(`旧TCP-AO配置恢复失败: ${persistenceRestoreError.message}`);
+                const stoppedServices = runtimeTargets.map(target => {
+                    const stop = stopResultByConsumer.get(target.consumer);
+                    return `${target.service}${
+                        stop?.stopped ? '已安全停止' : `安全停止失败: ${stop?.message || '未知错误'}`
+                    }`;
+                });
+                details.push(`为避免持久化与运行计划分裂，${stoppedServices.join('、')}`);
+            } else {
+                details.push('持久化TCP-AO配置已恢复');
+            }
+            if (rollbackFailures.length === 0 && !persistenceRestoreError) {
+                details.push(
+                    rollbackPlans.length > 0 ? '运行中的服务已回滚到旧密钥计划' : '运行中的服务未应用新密钥计划'
+                );
+            } else {
+                const failureDetails = rollbackFailures.map(failure => {
+                    const stop = stopResultByConsumer.get(failure.target.consumer);
+                    return `${failure.target.service}回滚失败: ${failure.result.reason?.message || failure.result.reason}；${
+                        stop?.stopped ? '服务已安全停止' : `服务安全停止失败: ${stop?.message || '未知错误'}`
+                    }`;
+                });
+                details.push(...failureDetails);
+            }
+            const message = details.join('；');
+            logger.error(`Error saving TCP-AO settings: ${message}`);
+            return errorResponse(message);
+        } finally {
+            for (const plan of [...oldPlans, ...newPlans]) clearRuntimeTcpAoProfiles(plan.profiles);
         }
     }
 
@@ -228,6 +496,78 @@ class RpkiApp {
             logger.error('Error loading TCP-AO settings:', error.message);
             return errorResponse(error.message);
         }
+    }
+
+    async handleSaveTcpMd5Settings(event, settings) {
+        try {
+            await this.initializeCredentialStore();
+            const saved = this.getTcpMd5SettingsStore().saveSettings(settings);
+            return successResponse(saved, 'TCP MD5配置保存成功');
+        } catch (error) {
+            logger.error('Error saving TCP MD5 settings:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleLoadTcpMd5Settings() {
+        try {
+            await this.initializeCredentialStore();
+            return successResponse(this.getTcpMd5SettingsStore().listProfiles(), 'TCP MD5配置加载成功');
+        } catch (error) {
+            logger.error('Error loading TCP MD5 settings:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    getTcpAoRuntimeReloadState(options = {}) {
+        const ignoreQueuedStart = options.ignoreQueuedStart === true && !this.rpkiStarting;
+        if (
+            this.rpkiStarting ||
+            this.rpkiStopping ||
+            this.rpkiStopPromise ||
+            (this.rpkiStartPromise && !ignoreQueuedStart)
+        ) {
+            return { service: 'RPKI', state: 'transitioning', profileIds: [] };
+        }
+        if (!this.worker || !this.rpkiReady || this.runningAuthType !== RPKI_AUTH_TYPES.TCP_AO) {
+            return { service: 'RPKI', state: 'inactive', profileIds: [] };
+        }
+        return {
+            service: 'RPKI',
+            state: 'running',
+            profileIds: [...this.runningTcpAoProfileIds]
+        };
+    }
+
+    async reloadTcpAoRuntimeProfiles(profiles) {
+        const state = this.getTcpAoRuntimeReloadState();
+        if (state.state !== 'running') throw new Error('RPKI未以TCP-AO认证方式稳定运行');
+        const runtimeProfiles = Array.isArray(profiles) ? profiles : [];
+        if (runtimeProfiles.length !== 1 || runtimeProfiles[0]?.id !== state.profileIds[0]) {
+            throw new Error('RPKI TCP-AO运行Profile选择已变化，需要停止并重新启动RPKI服务');
+        }
+        const worker = this.worker;
+        let request;
+        try {
+            request = worker.sendRequest(
+                RpkiConst.RPKI_REQ_TYPES.RELOAD_TCP_AO_PROFILE,
+                { profile: runtimeProfiles[0] },
+                { timeoutMs: TCP_AO_RUNTIME_RELOAD_TIMEOUT_MS }
+            );
+        } finally {
+            clearRuntimeTcpAoProfiles(runtimeProfiles);
+        }
+        const result = await request;
+        if (this.worker !== worker || this.getTcpAoRuntimeReloadState().state !== 'running') {
+            throw new Error('RPKI在TCP-AO密钥热更新期间已停止');
+        }
+        return result.data || {};
+    }
+
+    async stopTcpAoRuntimeAfterReloadFailure() {
+        if (!this.worker && !this.rpkiStarting && !this.rpkiStartPromise) return { stopped: true };
+        const result = await this.handleStopRpki();
+        return { stopped: result?.status === 'success', message: result?.msg || '' };
     }
 
     getRpkiDatabasePath() {
@@ -265,6 +605,8 @@ class RpkiApp {
         this.worker = null;
         this.rpkiReady = false;
         this.rpkiStopping = false;
+        this.runningAuthType = RPKI_AUTH_TYPES.NONE;
+        this.runningTcpAoProfileIds = [];
         if (this.rpkiTerminateOnlyWorker === worker) this.rpkiTerminateOnlyWorker = null;
         this.emitRuntimeChanged(false, dispatcher, runtimeFailure);
         dispatcher?.cleanup();
@@ -351,10 +693,32 @@ class RpkiApp {
             return Promise.resolve(errorResponse('rpki协议已经启动或进程仍在回收'));
         }
 
-        return this.trackLifecycleOperation('rpkiStartPromise', () => this.startRpkiOperation(event, config));
+        let tcpAoStart = false;
+        try {
+            tcpAoStart = normalizeRpkiConfig(config).authType === RPKI_AUTH_TYPES.TCP_AO;
+        } catch (_error) {
+            // Invalid input is rejected by startRpkiOperation without reading a
+            // persisted TCP-AO profile, so it does not need the settings gate.
+        }
+        const queuedStartGeneration = tcpAoStart ? ++this.rpkiStartGeneration : null;
+        if (queuedStartGeneration !== null) this.rpkiQueuedTcpAoStartGeneration = queuedStartGeneration;
+        return this.trackLifecycleOperation('rpkiStartPromise', () => {
+            if (!tcpAoStart) return this.startRpkiOperation(event, config);
+            return this.tcpAoSettingsLifecycleGate.runExclusive(() => {
+                const cancelled =
+                    this.rpkiStopping ||
+                    this.rpkiQueuedTcpAoStartGeneration !== queuedStartGeneration ||
+                    this.rpkiStartGeneration !== queuedStartGeneration;
+                if (this.rpkiQueuedTcpAoStartGeneration === queuedStartGeneration) {
+                    this.rpkiQueuedTcpAoStartGeneration = null;
+                }
+                if (cancelled) return errorResponse('RPKI启动已取消');
+                return this.startRpkiOperation(event, config, queuedStartGeneration);
+            });
+        });
     }
 
-    async startRpkiOperation(event, config) {
+    async startRpkiOperation(event, config, reservedStartGeneration = null) {
         const webContents = event?.sender || null;
         let worker = null;
         this.rpkiStarting = true;
@@ -362,22 +726,30 @@ class RpkiApp {
         this.rpkiStopping = false;
         this.rpkiRuntimeState = null;
         this.rpkiRuntimeFailure = null;
-        const startGeneration = ++this.rpkiStartGeneration;
+        const startGeneration = reservedStartGeneration ?? ++this.rpkiStartGeneration;
         let startRequestSucceeded = false;
         try {
             const normalizedConfig = normalizeRpkiConfig(config);
-            const auth = normalizeRpkiAuthSelection(normalizedConfig);
+            const auth = normalizeRpkiAuthenticationSelection(normalizedConfig);
             let tcpAo = null;
+            let tcpMd5 = null;
             if (auth.authType === RPKI_AUTH_TYPES.TCP_AO) {
                 if (this.platform !== 'linux') {
                     throw new Error('TCP-AO认证仅支持Linux 6.7及以上系统');
                 }
                 await this.initializeCredentialStore();
                 tcpAo = this.getTcpAoSettingsStore().getRuntimeProfile(auth.tcpAoProfileId);
+            } else if (auth.authType === RPKI_AUTH_TYPES.TCP_MD5) {
+                if (this.platform !== 'linux') {
+                    throw new Error('TCP MD5认证仅支持Linux系统');
+                }
+                await this.initializeCredentialStore();
+                tcpMd5 = this.getTcpMd5SettingsStore().getRuntimeProfile(auth.tcpMd5ProfileId);
             }
             const rpkiConfigData = {
                 ...normalizedConfig,
                 tcpAo,
+                tcpMd5,
                 rpkiDatabasePath: this.getRpkiDatabasePath(),
                 initialRouterKeys: this.store.get(this.rpkiRouterKeyFileKey) || []
             };
@@ -387,7 +759,8 @@ class RpkiApp {
             logger.info(
                 `${JSON.stringify({
                     ...rpkiConfigData,
-                    tcpAo: tcpAo ? redactTcpAoConfig(tcpAo) : null,
+                    tcpAo: tcpAo ? redactAuthenticationConfig(tcpAo) : null,
+                    tcpMd5: tcpMd5 ? redactAuthenticationConfig(tcpMd5) : null,
                     initialRouterKeys: undefined
                 })}`
             );
@@ -415,6 +788,8 @@ class RpkiApp {
                 if (this.worker !== worker) return;
                 this.rpkiRuntimeFailure = normalizeRuntimeFailure(failure);
                 this.rpkiReady = false;
+                this.runningAuthType = RPKI_AUTH_TYPES.NONE;
+                this.runningTcpAoProfileIds = [];
                 this.emitRuntimeChanged(false, this.eventDispatcher, this.rpkiRuntimeFailure);
             };
             worker.addEventListener(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, this.rpkiClientConnectionHandler);
@@ -429,12 +804,16 @@ class RpkiApp {
                 throw new Error('RPKI启动已取消');
             }
             this.rpkiReady = true;
+            this.runningAuthType = auth.authType;
+            this.runningTcpAoProfileIds = auth.authType === RPKI_AUTH_TYPES.TCP_AO ? [auth.tcpAoProfileId] : [];
             this.emitRuntimeChanged(true);
             logger.info(`rpki启动成功 result: ${JSON.stringify(result)}`);
             return successResponse(null, result.msg);
         } catch (error) {
             let finalError = error;
             this.rpkiReady = false;
+            this.runningAuthType = RPKI_AUTH_TYPES.NONE;
+            this.runningTcpAoProfileIds = [];
             this.emitRuntimeChanged(false);
             if (worker && this.worker === worker) {
                 const gracefulStopOwnsWorker = startRequestSucceeded && this.rpkiStopping;
@@ -470,12 +849,17 @@ class RpkiApp {
 
     async stopRpkiOperation() {
         const pendingStart = this.rpkiStartPromise;
+        const queuedTcpAoStart = Boolean(
+            pendingStart && !this.rpkiStarting && this.rpkiQueuedTcpAoStartGeneration !== null
+        );
         const cancelledPendingStart = Boolean(this.rpkiStarting || pendingStart);
         this.rpkiStopping = true;
         this.rpkiReady = false;
+        this.runningAuthType = RPKI_AUTH_TYPES.NONE;
+        this.runningTcpAoProfileIds = [];
         this.emitRuntimeChanged(false);
         this.cancelPendingStart();
-        if (pendingStart) await pendingStart.catch(() => {});
+        if (pendingStart && !queuedTcpAoStart) await pendingStart.catch(() => {});
 
         const worker = this.worker;
         if (!worker) {
@@ -860,6 +1244,7 @@ class RpkiApp {
         if (!this.rpkiStarting && !this.rpkiStartPromise) return false;
         this.rpkiStopping = true;
         this.rpkiReady = false;
+        this.rpkiQueuedTcpAoStartGeneration = null;
         this.rpkiStartGeneration += 1;
         return true;
     }

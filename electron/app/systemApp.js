@@ -34,6 +34,7 @@ const CliAccessServer = require('./cli');
 const WiresharkPluginInstaller = require('./wiresharkPluginInstaller');
 const { clearMajorVersionData } = require('../utils/majorVersionDataCleanup');
 const SecureCredentialStore = require('../utils/secureCredentialStore');
+const TcpAoSettingsLifecycleGate = require('./tcpAoSettingsLifecycleGate');
 
 const DEFAULT_SHUTDOWN_STEP_TIMEOUT_MS = 45000;
 const BMP_SHUTDOWN_STEP_TIMEOUT_MS = 6 * 60 * 1000;
@@ -70,21 +71,25 @@ class SystemApp {
         });
 
         const primaryWebContents = win?.webContents || null;
-        // BMP/RPKI TCP-AO and NETCONF share one automatically managed local key.
+        // BMP/RPKI TCP authentication and NETCONF share one automatically managed local key.
         this.credentialStore =
             options.credentialStore ||
             new SecureCredentialStore({
                 localKeyFilePath: path.join(app.getPath('userData'), 'secure-credentials', 'master-key-v1')
             });
+        this.tcpAoSettingsLifecycleGate = new TcpAoSettingsLifecycleGate();
         this.bgpApp = new BgpApp(ipc, this.programStore);
         this.bmpApp = new BmpApp(ipc, this.programStore, {
             primaryWebContents,
             credentialStore: this.credentialStore,
+            tcpAoSettingsLifecycleGate: this.tcpAoSettingsLifecycleGate,
             closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('bmp')
         });
         this.rpkiApp = new RpkiApp(ipc, this.programStore, {
             primaryWebContents,
-            credentialStore: this.credentialStore
+            credentialStore: this.credentialStore,
+            tcpAoSettingsLifecycleGate: this.tcpAoSettingsLifecycleGate,
+            getTcpAoRuntimeConsumers: () => [this.bmpApp, this.rpkiApp]
         });
         this.ftpApp = new FtpApp(ipc, this.programStore);
         this.snmpApp = new SnmpApp(ipc, this.programStore, {

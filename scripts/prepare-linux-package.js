@@ -67,7 +67,7 @@ function prepareLinuxPackage(options = {}, dependencies = {}) {
     runNpmScript('better-sqlite3:rebuild', [], dependencies);
     runNpmScript('better-sqlite3:smoke', [], dependencies);
     runNpmScript('build', [], dependencies);
-    runNpmScript('tcp-ao:build', [], dependencies);
+    runNpmScript('tcp-auth:build', [], dependencies);
     runNpmScript('libyang:ensure', ['--', '--platform', target.platform, '--arch', target.targetArch], dependencies);
     return target;
 }

@@ -108,7 +108,8 @@ const RPKI_REQ_TYPES = {
     GET_ROA_LIST: 15,
     GET_ASPA_LIST: 16,
     IMPORT_ROA_JSON: 17,
-    IMPORT_ASPA_JSON: 18
+    IMPORT_ASPA_JSON: 18,
+    RELOAD_TCP_AO_PROFILE: 19
 };
 
 module.exports = {

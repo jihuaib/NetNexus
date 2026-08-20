@@ -4,11 +4,8 @@ const { pathToFileURL } = require('node:url');
 
 const BmpApp = require('../../electron/app/bmpApp');
 const BmpConst = require('../../electron/const/bmpConst');
-const {
-    BMP_AUTH_TYPES,
-    normalizeBmpAuthSelection,
-    assertNonOverlappingTcpAoProfiles
-} = require('../../electron/utils/tcpAoConfig');
+const { BMP_AUTH_TYPES, normalizeBmpAuthenticationSelection } = require('../../electron/utils/tcpAuthConfig');
+const { assertNonOverlappingTcpAoProfiles } = require('../../electron/utils/tcpAoConfig');
 
 class MemoryStore {
     constructor(initial = {}) {
@@ -41,6 +38,15 @@ class FakeCredentialStore {
 
     async initialize() {
         this.initializationCalls += 1;
+    }
+
+    encrypt(value) {
+        return `encrypted:${Buffer.from(value, 'utf8').toString('base64')}`;
+    }
+
+    decrypt(value) {
+        assert.match(value, /^encrypted:/);
+        return Buffer.from(value.slice('encrypted:'.length), 'base64').toString('utf8');
     }
 }
 
@@ -157,6 +163,13 @@ function assertNoRendererSecrets(value) {
     }
 }
 
+function tcpAoAuthSelection(selection) {
+    return {
+        authType: selection.authType,
+        tcpAoProfileIds: selection.tcpAoProfileIds
+    };
+}
+
 async function testTrustedRendererBoundary() {
     const expectedPackagedRenderer = path.resolve(__dirname, '../../dist/index.html');
     assert.equal(BmpApp.PACKAGED_RENDERER_PATH, expectedPackagedRenderer);
@@ -228,26 +241,33 @@ function testAuthSelectionAndOverlapValidation() {
         undefined,
         'BMP runtime failures need a dedicated worker event type'
     );
-    assert.deepEqual(normalizeBmpAuthSelection({}), {
+    assert.deepEqual(tcpAoAuthSelection(normalizeBmpAuthenticationSelection({})), {
         authType: BMP_AUTH_TYPES.NONE,
         tcpAoProfileIds: []
     });
     assert.deepEqual(
-        normalizeBmpAuthSelection({
-            authType: BMP_AUTH_TYPES.TCP_AO,
-            tcpAoProfileIds: ['edge-a', 'edge-b']
-        }),
+        tcpAoAuthSelection(
+            normalizeBmpAuthenticationSelection({
+                authType: BMP_AUTH_TYPES.TCP_AO,
+                tcpAoProfileIds: ['edge-a', 'edge-b']
+            })
+        ),
         { authType: BMP_AUTH_TYPES.TCP_AO, tcpAoProfileIds: ['edge-a', 'edge-b'] }
     );
     assert.deepEqual(
-        normalizeBmpAuthSelection({ authType: BMP_AUTH_TYPES.TCP_AO, tcpAoProfileId: 'legacy-edge' }),
+        tcpAoAuthSelection(
+            normalizeBmpAuthenticationSelection({ authType: BMP_AUTH_TYPES.TCP_AO, tcpAoProfileId: 'legacy-edge' })
+        ),
         { authType: BMP_AUTH_TYPES.TCP_AO, tcpAoProfileIds: ['legacy-edge'] },
         'a legacy single-profile BMP selection should migrate safely'
     );
-    assert.throws(() => normalizeBmpAuthSelection({ authType: BMP_AUTH_TYPES.TCP_AO, tcpAoProfileIds: [] }), /1-32/);
+    assert.throws(
+        () => normalizeBmpAuthenticationSelection({ authType: BMP_AUTH_TYPES.TCP_AO, tcpAoProfileIds: [] }),
+        /1-32/
+    );
     assert.throws(
         () =>
-            normalizeBmpAuthSelection({
+            normalizeBmpAuthenticationSelection({
                 authType: BMP_AUTH_TYPES.TCP_AO,
                 tcpAoProfileIds: ['edge-a', 'edge-a']
             }),
@@ -255,7 +275,7 @@ function testAuthSelectionAndOverlapValidation() {
     );
     assert.throws(
         () =>
-            normalizeBmpAuthSelection({
+            normalizeBmpAuthenticationSelection({
                 authType: BMP_AUTH_TYPES.TCP_AO,
                 tcpAoProfileIds: Array.from({ length: 33 }, (_, index) => `edge-${index}`)
             }),
@@ -281,7 +301,13 @@ function testAuthSelectionAndOverlapValidation() {
 
 async function testBmpConfigWhitelist() {
     const store = new MemoryStore();
-    const app = new BmpApp(new FakeIpcMain(), store);
+    const app = new BmpApp(new FakeIpcMain(), store, { credentialStore: new FakeCredentialStore() });
+    app.getTcpAoSettingsStore().saveSettings({
+        profiles: [
+            runtimeProfile('edge-a', '192.0.2.1/32', 'settings-secret-a'),
+            runtimeProfile('edge-b', '2001:db8::1/128', 'settings-secret-b')
+        ]
+    });
     const maliciousConfig = baseConfig({
         authType: BMP_AUTH_TYPES.TCP_AO,
         tcpAoProfileIds: ['edge-a', 'edge-b'],
@@ -293,11 +319,24 @@ async function testBmpConfigWhitelist() {
         unexpectedRuntimeOption: 'renderer-controlled'
     });
 
+    const missingProfileSave = await app.handleSaveBmpConfig(
+        null,
+        baseConfig({
+            authType: BMP_AUTH_TYPES.TCP_AO,
+            tcpAoProfileIds: ['edge-a', 'missing-edge']
+        })
+    );
+    assert.equal(missingProfileSave.status, 'error');
+    assert.match(missingProfileSave.msg, /TCP-AO.*不存在|不存在.*TCP-AO/);
+    assert.equal(store.get('bmp-config'), undefined, 'a missing TCP-AO profile must not persist a BMP configuration');
+
     const saved = await app.handleSaveBmpConfig(null, maliciousConfig);
     assert.equal(saved.status, 'success', saved.msg);
     const stored = store.get('bmp-config');
     assert.deepEqual(
-        Object.keys(stored).sort(),
+        Object.keys(stored)
+            .filter(key => key !== 'tcpMd5ProfileIds')
+            .sort(),
         ['authType', 'bmpV4TlvDraft', 'pathMarkingTlvType', 'persistenceEnabled', 'port', 'tcpAoProfileIds'].sort(),
         'BMP persistence must be an explicit allowlist'
     );
@@ -428,11 +467,11 @@ async function testStartupErrorsRemainActionable() {
 
     const helperErrorApp = new BmpApp(new FakeIpcMain(), new MemoryStore());
     helperErrorApp.closeOfflinePersistenceReader = async () => {};
-    const fake = createFakeWorker({ startError: new Error('TCP-AO helper未确认AO强制认证状态') });
+    const fake = createFakeWorker({ startError: new Error('TCP 认证 helper未确认TCP-AO强制认证状态') });
     fake.installProcessFactory(helperErrorApp);
     const helperFailure = await helperErrorApp.handleStartBmp({ sender: createRendererTarget([]) }, baseConfig());
     assert.equal(helperFailure.status, 'error');
-    assert.match(helperFailure.msg, /TCP-AO helper未确认AO强制认证状态/);
+    assert.match(helperFailure.msg, /TCP 认证 helper未确认TCP-AO强制认证状态/);
 }
 
 async function testStopCancelsPendingStart() {
@@ -470,6 +509,29 @@ async function testStopCancelsPendingStart() {
     );
 }
 
+async function testRuntimeReloadBoundary() {
+    const app = new BmpApp(new FakeIpcMain(), new MemoryStore());
+    let request = null;
+    const worker = {
+        async sendRequest(operation, payload, options) {
+            request = { operation, payload: JSON.parse(JSON.stringify(payload)), options };
+            return { data: { disconnectedConnections: 3 } };
+        }
+    };
+    app.worker = worker;
+    app.runningAuthType = BMP_AUTH_TYPES.TCP_AO;
+    app.runningTcpAoProfileIds = ['edge-a'];
+    const profiles = [runtimeProfile('edge-a', '192.0.2.1/32', 'replacement runtime secret')];
+
+    const status = await app.reloadTcpAoRuntimeProfiles(profiles);
+
+    assert.equal(request.operation, BmpConst.BMP_REQ_TYPES.RELOAD_TCP_AO_PROFILES);
+    assert.equal(request.payload.profiles[0].keys[0].key, 'replacement runtime secret');
+    assert.equal(JSON.stringify(request.payload).includes('keyEncrypted'), false);
+    assert.equal(profiles[0].keys.length, 0, 'main-process reload input retained plaintext key material');
+    assert.equal(status.disconnectedConnections, 3);
+}
+
 async function main() {
     testAuthSelectionAndOverlapValidation();
     await testTrustedRendererBoundary();
@@ -477,6 +539,7 @@ async function main() {
     await testRuntimeProfilesComeOnlyFromSettings();
     await testStartupErrorsRemainActionable();
     await testStopCancelsPendingStart();
+    await testRuntimeReloadBoundary();
     console.log('BMP TCP-AO app tests passed');
 }
 

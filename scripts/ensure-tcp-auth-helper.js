@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { PROJECT_ROOT, normalizeArch, normalizePlatform } = require('./libyang-runtime-config');
-const { verifyTcpAoHelper } = require('./verify-packaging-runtime');
+const { verifyTcpAuthHelper } = require('./verify-packaging-runtime');
 
 const SUPPORTED_ARCHITECTURES = new Set(['x64', 'arm64']);
 
@@ -15,9 +15,9 @@ function resolveHelperPaths(options = {}) {
         projectRoot,
         platform,
         arch,
-        buildScript: path.join(projectRoot, 'scripts', 'build-tcp-ao-helper.sh'),
-        sourceFile: path.join(projectRoot, 'scripts', 'tcp-ao-helper.c'),
-        helperPath: path.join(projectRoot, 'resources', 'tcp-ao', `${platform}-${arch}`, 'tcp-ao-helper')
+        buildScript: path.join(projectRoot, 'scripts', 'build-tcp-auth-helper.sh'),
+        sourceFile: path.join(projectRoot, 'scripts', 'tcp-auth-helper.c'),
+        helperPath: path.join(projectRoot, 'resources', 'tcp-auth', `${platform}-${arch}`, 'tcp-auth-helper')
     };
 }
 
@@ -26,10 +26,10 @@ function requiredFileStats(filePath, description, fsApi = fs) {
     try {
         stats = fsApi.lstatSync(filePath);
     } catch (error) {
-        throw new Error(`TCP-AO helper ${description} is missing: ${filePath}`);
+        throw new Error(`TCP authentication helper ${description} is missing: ${filePath}`);
     }
     if (!stats.isFile() || stats.isSymbolicLink()) {
-        throw new Error(`TCP-AO helper ${description} must be a regular non-symlink file: ${filePath}`);
+        throw new Error(`TCP authentication helper ${description} must be a regular non-symlink file: ${filePath}`);
     }
     return stats;
 }
@@ -54,15 +54,15 @@ function getBuildReason(paths, fsApi = fs) {
     return newerInput ? `${path.basename(newerInput[0])} is newer than the native executable` : '';
 }
 
-function ensureTcpAoHelper(options = {}, dependencies = {}) {
+function ensureTcpAuthHelper(options = {}, dependencies = {}) {
     const paths = resolveHelperPaths(options);
     if (paths.platform !== 'linux') return null;
     if (!SUPPORTED_ARCHITECTURES.has(paths.arch)) {
-        throw new Error(`TCP-AO helper supports native Linux x64 and arm64; received linux-${paths.arch}`);
+        throw new Error(`TCP authentication helper supports native Linux x64 and arm64; received linux-${paths.arch}`);
     }
 
     const fsApi = dependencies.fs || fs;
-    const verifier = dependencies.verifyTcpAoHelper || verifyTcpAoHelper;
+    const verifier = dependencies.verifyTcpAuthHelper || verifyTcpAuthHelper;
     const spawnSync = dependencies.spawnSync || childProcess.spawnSync;
     const write = dependencies.write || (message => process.stdout.write(message));
     const verifyOptions = {
@@ -75,14 +75,14 @@ function ensureTcpAoHelper(options = {}, dependencies = {}) {
     if (!buildReason) {
         try {
             const status = verifier(verifyOptions, { fs: fsApi });
-            write(`TCP-AO helper for linux-${paths.arch} is current; skipping rebuild.\n`);
+            write(`TCP authentication helper for linux-${paths.arch} is current; skipping rebuild.\n`);
             return status;
         } catch (error) {
             buildReason = `validation failed: ${error.message}`;
         }
     }
 
-    write(`TCP-AO helper for linux-${paths.arch} requires a build: ${buildReason}.\n`);
+    write(`TCP authentication helper for linux-${paths.arch} requires a build: ${buildReason}.\n`);
     const result = spawnSync('bash', [paths.buildScript], {
         cwd: paths.projectRoot,
         env: options.env || process.env,
@@ -90,21 +90,21 @@ function ensureTcpAoHelper(options = {}, dependencies = {}) {
         windowsHide: true
     });
     if (result.error) {
-        throw new Error(`Unable to start the TCP-AO helper build: ${result.error.message}`);
+        throw new Error(`Unable to start the TCP authentication helper build: ${result.error.message}`);
     }
     if (result.status !== 0) {
         const signal = result.signal ? ` (signal ${result.signal})` : '';
-        throw new Error(`TCP-AO helper build failed with exit code ${result.status}${signal}`);
+        throw new Error(`TCP authentication helper build failed with exit code ${result.status}${signal}`);
     }
 
     const status = verifier(verifyOptions, { fs: fsApi });
-    write(`TCP-AO helper for linux-${paths.arch} is ready.\n`);
+    write(`TCP authentication helper for linux-${paths.arch} is ready.\n`);
     return status;
 }
 
 if (require.main === module) {
     try {
-        ensureTcpAoHelper({ force: process.argv.slice(2).includes('--force') });
+        ensureTcpAuthHelper({ force: process.argv.slice(2).includes('--force') });
     } catch (error) {
         process.stderr.write(`${error.stack || error.message || error}\n`);
         process.exitCode = 1;
@@ -113,7 +113,7 @@ if (require.main === module) {
 
 module.exports = {
     SUPPORTED_ARCHITECTURES,
-    ensureTcpAoHelper,
+    ensureTcpAuthHelper,
     getBuildReason,
     requiredFileStats,
     resolveHelperPaths

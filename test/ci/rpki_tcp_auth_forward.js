@@ -6,11 +6,11 @@ const { EventEmitter } = require('node:events');
 const RpkiSession = require('../../electron/worker/rpki/rpkiSession');
 const RpkiWorker = require('../../electron/worker/rpki/rpkiWorker');
 const {
-    TCP_AO_FORWARD_CAPABILITY_BYTES,
-    TCP_AO_FORWARD_HEADER_BYTES,
-    decodeTcpAoForwardHeader,
-    encodeTcpAoForwardHeader
-} = require('../../electron/worker/rpki/tcpAoForwardProtocol');
+    TCP_AUTH_FORWARD_CAPABILITY_BYTES,
+    TCP_AUTH_FORWARD_HEADER_BYTES,
+    decodeTcpAuthForwardHeader,
+    encodeTcpAuthForwardHeader
+} = require('../../electron/worker/core/tcpAuthForwardProtocol');
 
 const TEST_TIMEOUT_MS = 3000;
 
@@ -133,13 +133,13 @@ function makeWorker(publicPort, proxy) {
     const responses = new Map();
     worker.server = null;
     worker.ipv6Server = null;
-    worker.tcpAoProxy = null;
-    worker.tcpAoSocketDirectory = null;
-    worker.tcpAoSocketPath = null;
-    worker.tcpAoSocketIdentity = null;
-    worker.tcpAoForwardCapability = null;
-    worker.tcpAoForwardHeaderTimeoutMs = 75;
-    worker.pendingTcpAoSockets = new Set();
+    worker.tcpAuthProxy = null;
+    worker.tcpAuthSocketDirectory = null;
+    worker.tcpAuthSocketPath = null;
+    worker.tcpAuthSocketIdentity = null;
+    worker.tcpAuthForwardCapability = null;
+    worker.tcpAuthForwardHeaderTimeoutMs = 75;
+    worker.pendingTcpAuthSockets = new Set();
     worker.storageStopping = false;
     worker.rpkiStore = null;
     worker.rpkiDatabasePath = null;
@@ -160,7 +160,7 @@ function makeWorker(publicPort, proxy) {
         },
         sendEvent() {}
     };
-    worker.createTcpAoProxy = () => proxy;
+    worker.createTcpAuthProxy = () => proxy;
     worker.createdSessions = [];
     worker.createRpkiSession = function createTestSession(socket, remoteAddress, remotePort, localAddress, localPort) {
         const key = RpkiSession.makeKey(localAddress, localPort, remoteAddress, remotePort);
@@ -193,8 +193,8 @@ function makeWorker(publicPort, proxy) {
 }
 
 function testForwardProtocol() {
-    const capability = Buffer.alloc(TCP_AO_FORWARD_CAPABILITY_BYTES, 0xa5);
-    const ipv4Header = encodeTcpAoForwardHeader({
+    const capability = Buffer.alloc(TCP_AUTH_FORWARD_CAPABILITY_BYTES, 0xa5);
+    const ipv4Header = encodeTcpAuthForwardHeader({
         family: 4,
         remoteAddress: '192.0.2.9',
         remotePort: 49152,
@@ -202,8 +202,8 @@ function testForwardProtocol() {
         localPort: 8282,
         capability
     });
-    assert.equal(ipv4Header.length, TCP_AO_FORWARD_HEADER_BYTES);
-    assert.deepEqual(decodeTcpAoForwardHeader(ipv4Header, capability), {
+    assert.equal(ipv4Header.length, TCP_AUTH_FORWARD_HEADER_BYTES);
+    assert.deepEqual(decodeTcpAuthForwardHeader(ipv4Header, capability), {
         family: 4,
         remoteAddress: '192.0.2.9',
         remotePort: 49152,
@@ -211,7 +211,7 @@ function testForwardProtocol() {
         localPort: 8282
     });
 
-    const ipv6Header = encodeTcpAoForwardHeader({
+    const ipv6Header = encodeTcpAuthForwardHeader({
         family: 6,
         remoteAddress: '2001:db8::9',
         remotePort: 49153,
@@ -219,7 +219,7 @@ function testForwardProtocol() {
         localPort: 8282,
         capability
     });
-    assert.deepEqual(decodeTcpAoForwardHeader(ipv6Header, capability), {
+    assert.deepEqual(decodeTcpAuthForwardHeader(ipv6Header, capability), {
         family: 6,
         remoteAddress: '2001:db8::9',
         remotePort: 49153,
@@ -228,7 +228,7 @@ function testForwardProtocol() {
     });
 
     assert.throws(
-        () => decodeTcpAoForwardHeader(ipv4Header, Buffer.alloc(TCP_AO_FORWARD_CAPABILITY_BYTES, 0x5a)),
+        () => decodeTcpAuthForwardHeader(ipv4Header, Buffer.alloc(TCP_AUTH_FORWARD_CAPABILITY_BYTES, 0x5a)),
         /内部通道认证失败/
     );
     for (const [offset, value, expected] of [
@@ -241,12 +241,12 @@ function testForwardProtocol() {
     ]) {
         const malformed = Buffer.from(ipv4Header);
         malformed[offset] = value;
-        assert.throws(() => decodeTcpAoForwardHeader(malformed, capability), expected);
+        assert.throws(() => decodeTcpAuthForwardHeader(malformed, capability), expected);
     }
-    assert.throws(() => decodeTcpAoForwardHeader(ipv4Header.subarray(0, 79), capability), /长度/);
+    assert.throws(() => decodeTcpAuthForwardHeader(ipv4Header.subarray(0, 79), capability), /长度/);
     assert.throws(
         () =>
-            encodeTcpAoForwardHeader({
+            encodeTcpAuthForwardHeader({
                 family: 6,
                 remoteAddress: '::ffff:192.0.2.9',
                 remotePort: 49154,
@@ -357,56 +357,56 @@ async function testWorkerForwarding() {
     try {
         await worker.startTcpServer('start');
         assert.equal(responses.get('start')?.status, 'success', responses.get('start')?.message);
-        assert.equal(startupOptions.forwardSocket, worker.tcpAoSocketPath);
-        assert.equal(startupOptions.forwardCapability, worker.tcpAoForwardCapability);
+        assert.equal(startupOptions.forwardSocket, worker.tcpAuthSocketPath);
+        assert.equal(startupOptions.forwardCapability, worker.tcpAuthForwardCapability);
         assert.equal(startupOptions.profiles[0].keys[0].key, '<redacted>');
         assert.equal(worker.rpkiConfigData.tcpAo.keys[0].key, '<redacted>');
 
-        forwardDirectory = worker.tcpAoSocketDirectory;
+        forwardDirectory = worker.tcpAuthSocketDirectory;
         assert.equal(fs.statSync(forwardDirectory).mode & 0o777, 0o700);
-        assert.equal(fs.statSync(worker.tcpAoSocketPath).mode & 0o777, 0o600);
+        assert.equal(fs.statSync(worker.tcpAuthSocketPath).mode & 0o777, 0o600);
         await assertTcpBypassClosed(publicPort);
 
         const resetQuery = Buffer.from('0102000000000008', 'hex');
-        await sendRejected(worker.tcpAoSocketPath, [resetQuery]);
+        await sendRejected(worker.tcpAuthSocketPath, [resetQuery]);
         assert.equal(worker.createdSessions.length, 0, 'raw loopback RPKI PDU bypassed the peer header');
 
-        const validHeader = encodeTcpAoForwardHeader({
+        const validHeader = encodeTcpAuthForwardHeader({
             family: 4,
             remoteAddress: '192.0.2.55',
             remotePort: 50000,
             localAddress: '198.51.100.10',
             localPort: publicPort,
-            capability: worker.tcpAoForwardCapability
+            capability: worker.tcpAuthForwardCapability
         });
         const wrongTokenHeader = Buffer.from(validHeader);
         wrongTokenHeader.fill(0, 48, 80);
-        await sendRejected(worker.tcpAoSocketPath, [wrongTokenHeader]);
-        await sendRejected(worker.tcpAoSocketPath, [validHeader.subarray(0, 79)]);
-        const timedOutClient = await connectUnix(worker.tcpAoSocketPath);
+        await sendRejected(worker.tcpAuthSocketPath, [wrongTokenHeader]);
+        await sendRejected(worker.tcpAuthSocketPath, [validHeader.subarray(0, 79)]);
+        const timedOutClient = await connectUnix(worker.tcpAuthSocketPath);
         timedOutClient.write(validHeader.subarray(0, 1));
         await waitForSocketClose(timedOutClient);
-        const wrongPeerHeader = encodeTcpAoForwardHeader({
+        const wrongPeerHeader = encodeTcpAuthForwardHeader({
             family: 4,
             remoteAddress: '203.0.113.9',
             remotePort: 50001,
             localAddress: '198.51.100.10',
             localPort: publicPort,
-            capability: worker.tcpAoForwardCapability
+            capability: worker.tcpAuthForwardCapability
         });
-        await sendRejected(worker.tcpAoSocketPath, [wrongPeerHeader]);
-        const wrongLocalPortHeader = encodeTcpAoForwardHeader({
+        await sendRejected(worker.tcpAuthSocketPath, [wrongPeerHeader]);
+        const wrongLocalPortHeader = encodeTcpAuthForwardHeader({
             family: 4,
             remoteAddress: '192.0.2.57',
             remotePort: 50002,
             localAddress: '198.51.100.10',
             localPort: publicPort === 65535 ? 65534 : publicPort + 1,
-            capability: worker.tcpAoForwardCapability
+            capability: worker.tcpAuthForwardCapability
         });
-        await sendRejected(worker.tcpAoSocketPath, [wrongLocalPortHeader]);
+        await sendRejected(worker.tcpAuthSocketPath, [wrongLocalPortHeader]);
         assert.equal(worker.createdSessions.length, 0, 'malformed or unauthenticated headers created sessions');
 
-        const client = await connectUnix(worker.tcpAoSocketPath);
+        const client = await connectUnix(worker.tcpAuthSocketPath);
         clients.push(client);
         client.write(Buffer.concat([validHeader, resetQuery]));
         await waitFor(() => worker.createdSessions.length === 1, 'valid forwarded session');
@@ -429,15 +429,15 @@ async function testWorkerForwarding() {
         assert.equal(firstSession.received.length, 1);
         assert.deepEqual(firstSession.received[0], resetQuery, 'first RPKI PDU bytes were lost after the peer header');
 
-        const fragmentedHeader = encodeTcpAoForwardHeader({
+        const fragmentedHeader = encodeTcpAuthForwardHeader({
             family: 4,
             remoteAddress: '192.0.2.56',
             remotePort: 50001,
             localAddress: '198.51.100.10',
             localPort: publicPort,
-            capability: worker.tcpAoForwardCapability
+            capability: worker.tcpAuthForwardCapability
         });
-        const fragmentedClient = await connectUnix(worker.tcpAoSocketPath);
+        const fragmentedClient = await connectUnix(worker.tcpAuthSocketPath);
         clients.push(fragmentedClient);
         fragmentedClient.write(fragmentedHeader.subarray(0, 79));
         await delay(25);
@@ -451,11 +451,11 @@ async function testWorkerForwarding() {
     } finally {
         for (const client of clients) client.destroy();
         for (const session of worker.rpkiSessionMap.values()) await session.closeSession();
-        worker.destroyPendingTcpAoSockets();
+        worker.destroyPendingTcpAuthSockets();
         const server = worker.server;
         worker.server = null;
         if (server) await worker.closeTcpServer(server, 'test Unix server');
-        worker.cleanupTcpAoForwardEndpoint();
+        worker.cleanupTcpAuthForwardEndpoint();
     }
     assert.equal(fs.existsSync(forwardDirectory), false, 'normal stop left the private socket directory behind');
     assert.equal(
@@ -496,12 +496,12 @@ async function main() {
     await testSessionOwnershipRace();
     testPduLengthBounds();
     if (process.platform === 'win32') {
-        console.log('RPKI TCP-AO Unix forwarding tests skipped on Windows');
+        console.log('RPKI TCP auth Unix forwarding tests skipped on Windows');
         return;
     }
     await testWorkerForwarding();
     await testStartupFailureCleanup();
-    console.log('RPKI TCP-AO private forwarding tests passed');
+    console.log('RPKI TCP auth private forwarding tests passed');
 }
 
 main().catch(error => {

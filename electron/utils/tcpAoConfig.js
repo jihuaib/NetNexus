@@ -1,15 +1,5 @@
-const net = require('node:net');
 const ipaddr = require('ipaddr.js');
-
-const RPKI_AUTH_TYPES = Object.freeze({
-    NONE: 'none',
-    TCP_AO: 'tcp-ao'
-});
-
-// TCP-AO is shared by the protocol servers. Keep the original RPKI export for
-// compatibility with the first consumer, while giving BMP its own semantic
-// alias and normalizer below.
-const BMP_AUTH_TYPES = RPKI_AUTH_TYPES;
+const { normalizeAuthenticationPeer } = require('./tcpAuthConfig');
 
 const TCP_AO_ALGORITHMS = Object.freeze({
     HMAC_SHA1: 'hmac(sha1)',
@@ -49,52 +39,7 @@ function normalizeProfileName(value) {
 }
 
 function normalizePeer(value) {
-    const peer = String(value || '').trim();
-    if (!peer) {
-        throw new Error('请输入TCP-AO对端地址或网段');
-    }
-
-    const slashIndex = peer.lastIndexOf('/');
-    const address = slashIndex === -1 ? peer : peer.slice(0, slashIndex);
-    const prefixText = slashIndex === -1 ? '' : peer.slice(slashIndex + 1);
-    if (!address || address.includes('/') || (slashIndex !== -1 && !/^\d+$/.test(prefixText))) {
-        throw new Error('TCP-AO对端地址格式无效');
-    }
-
-    const family = net.isIP(address);
-    if (!family) {
-        throw new Error('TCP-AO对端必须是IPv4、IPv6地址或CIDR网段');
-    }
-    if (address.includes('%')) {
-        throw new Error('TCP-AO对端不支持带zone或scope的IPv6地址');
-    }
-    const parsedAddress = ipaddr.parse(address);
-    if (family === 6 && parsedAddress.isIPv4MappedAddress?.()) {
-        throw new Error('TCP-AO对端不支持IPv4映射IPv6地址');
-    }
-
-    const maximumPrefix = family === 4 ? 32 : 128;
-    const prefixLength =
-        slashIndex === -1 ? maximumPrefix : normalizeInteger(prefixText, 'TCP-AO前缀长度', 0, maximumPrefix);
-    const addressBytes = parsedAddress.toByteArray();
-    const wholeBytes = Math.floor(prefixLength / 8);
-    const remainingBits = prefixLength % 8;
-    const hasHostBits = addressBytes.some((byte, index) => {
-        if (index < wholeBytes) return false;
-        if (index > wholeBytes || remainingBits === 0) return byte !== 0;
-        const hostMask = (1 << (8 - remainingBits)) - 1;
-        return (byte & hostMask) !== 0;
-    });
-    if (hasHostBits) {
-        throw new Error('TCP-AO CIDR必须填写规范网络地址，不能包含主机位');
-    }
-
-    return {
-        peer: `${address}/${prefixLength}`,
-        address,
-        prefixLength,
-        family
-    };
+    return normalizeAuthenticationPeer(value, 'TCP-AO');
 }
 
 function normalizeAlgorithm(value) {
@@ -349,48 +294,6 @@ function assertContinuousRotationSchedule(profile, nowSeconds = Math.floor(Date.
     return current;
 }
 
-function normalizeRpkiAuthSelection(config = {}) {
-    const authType = String(config.authType || RPKI_AUTH_TYPES.NONE)
-        .trim()
-        .toLowerCase();
-    if (!Object.values(RPKI_AUTH_TYPES).includes(authType)) {
-        throw new Error('不支持的RPKI认证方式');
-    }
-
-    const tcpAoProfileId = authType === RPKI_AUTH_TYPES.TCP_AO ? normalizeProfileId(config.tcpAoProfileId) : '';
-    return { authType, tcpAoProfileId };
-}
-
-function normalizeBmpAuthSelection(config = {}) {
-    const authType = String(config.authType || BMP_AUTH_TYPES.NONE)
-        .trim()
-        .toLowerCase();
-    if (!Object.values(BMP_AUTH_TYPES).includes(authType)) {
-        throw new Error('不支持的BMP认证方式');
-    }
-
-    if (authType !== BMP_AUTH_TYPES.TCP_AO) {
-        return { authType, tcpAoProfileIds: [] };
-    }
-
-    // Accept the singular field as a migration aid for early development
-    // builds, but always persist and return the plural BMP representation.
-    const inputIds = Array.isArray(config.tcpAoProfileIds)
-        ? config.tcpAoProfileIds
-        : config.tcpAoProfileId
-          ? [config.tcpAoProfileId]
-          : [];
-    if (inputIds.length === 0 || inputIds.length > 32) {
-        throw new Error('BMP TCP-AO必须选择1-32个Profile');
-    }
-
-    const tcpAoProfileIds = inputIds.map(normalizeProfileId);
-    if (new Set(tcpAoProfileIds).size !== tcpAoProfileIds.length) {
-        throw new Error('BMP TCP-AO Profile不能重复选择');
-    }
-    return { authType, tcpAoProfileIds };
-}
-
 function assertNonOverlappingTcpAoProfiles(profiles = []) {
     if (!Array.isArray(profiles) || profiles.length === 0) {
         throw new Error('BMP TCP-AO至少需要一个运行时Profile');
@@ -425,8 +328,6 @@ function redactTcpAoConfig(config = {}) {
 }
 
 module.exports = {
-    RPKI_AUTH_TYPES,
-    BMP_AUTH_TYPES,
     TCP_AO_ALGORITHMS,
     MAX_TCP_AO_KEY_BYTES,
     MAX_TCP_AO_KEYS_PER_PROFILE,
@@ -438,8 +339,6 @@ module.exports = {
     isKeySendActive,
     assertCurrentSendKey,
     assertContinuousRotationSchedule,
-    normalizeRpkiAuthSelection,
-    normalizeBmpAuthSelection,
     assertNonOverlappingTcpAoProfiles,
     redactTcpAoConfig
 };

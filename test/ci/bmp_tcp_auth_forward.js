@@ -6,11 +6,11 @@ const { EventEmitter } = require('node:events');
 
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
-const TcpAoForwardingServer = require('../../electron/worker/core/tcpAoForwardingServer');
+const TcpAuthForwardingServer = require('../../electron/worker/core/tcpAuthForwardingServer');
 const {
-    TCP_AO_FORWARD_CAPABILITY_BYTES,
-    encodeTcpAoForwardHeader
-} = require('../../electron/worker/rpki/tcpAoForwardProtocol');
+    TCP_AUTH_FORWARD_CAPABILITY_BYTES,
+    encodeTcpAuthForwardHeader
+} = require('../../electron/worker/core/tcpAuthForwardProtocol');
 
 const TEST_TIMEOUT_MS = 3000;
 
@@ -138,7 +138,7 @@ function makeWorker(publicPort, proxy) {
 
     worker.server = null;
     worker.ipv6Server = null;
-    worker.tcpAoForwardingServer = null;
+    worker.tcpAuthForwardingServer = null;
     worker.tcpAoRuntimeFailure = null;
     worker.bmpStopping = false;
     worker.bmpConfigData = {
@@ -177,8 +177,8 @@ function makeWorker(publicPort, proxy) {
         plainListenerFactoryCalls += 1;
         throw new Error('TCP-AO mode must not create plaintext BMP listeners');
     };
-    worker.createTcpAoForwardingServer = () =>
-        new TcpAoForwardingServer({
+    worker.createTcpAuthForwardingServer = () =>
+        new TcpAuthForwardingServer({
             serviceName: 'BMP',
             directoryPrefix: 'nn-bmp-ao-ci-',
             headerTimeoutMs: 75,
@@ -197,6 +197,7 @@ function makeWorker(publicPort, proxy) {
 async function testBmpTcpAoForwarding() {
     const publicPort = await unusedTcpPort();
     let startupOptions = null;
+    let reloadOptions = null;
     const proxy = new EventEmitter();
     proxy.start = async options => {
         startupOptions = options;
@@ -205,6 +206,17 @@ async function testBmpTcpAoForwarding() {
             listenPort: publicPort,
             families: ['ipv4'],
             aoRequired: true
+        };
+    };
+    proxy.reload = async options => {
+        reloadOptions = JSON.parse(JSON.stringify(options));
+        return {
+            requestId: 1,
+            profileCount: 1,
+            keyCount: 1,
+            installedKeyCount: 1,
+            disconnectedConnections: 0,
+            activeSocketUpdate: 'update-or-safe-reconnect'
         };
     };
     proxy.stop = async () => {};
@@ -226,9 +238,17 @@ async function testBmpTcpAoForwarding() {
         forwardCapability = startupOptions.forwardCapability;
         assert.equal(fs.statSync(forwardDirectory).mode & 0o777, 0o700);
         assert.equal(fs.statSync(startupOptions.forwardSocket).mode & 0o777, 0o600);
-        assert.equal(forwardCapability.length, TCP_AO_FORWARD_CAPABILITY_BYTES);
+        assert.equal(forwardCapability.length, TCP_AUTH_FORWARD_CAPABILITY_BYTES);
 
-        const validHeader = encodeTcpAoForwardHeader({
+        const reloadProfile = tcpAoProfile();
+        reloadProfile.keys[0].key = 'bmp replacement runtime key';
+        await worker.reloadTcpAoProfiles('reload', { profiles: [reloadProfile] });
+        assert.equal(responses.get('reload')?.status, 'success', responses.get('reload')?.message);
+        assert.equal(reloadOptions.profiles[0].keys[0].key, 'bmp replacement runtime key');
+        assert.equal(reloadProfile.keys.length, 0, 'BMP worker reload input retained plaintext key material');
+        assert.equal(worker.bmpConfigData.tcpAoProfiles[0].keys[0].key, '<redacted>');
+
+        const validHeader = encodeTcpAuthForwardHeader({
             family: 4,
             remoteAddress: '192.0.2.55',
             remotePort: 50000,
@@ -241,7 +261,7 @@ async function testBmpTcpAoForwarding() {
         wrongCapability[48] ^= 0xff;
         await sendRejected(startupOptions.forwardSocket, [wrongCapability]);
 
-        const wrongAddress = encodeTcpAoForwardHeader({
+        const wrongAddress = encodeTcpAuthForwardHeader({
             family: 4,
             remoteAddress: '203.0.113.9',
             remotePort: 50001,
@@ -251,7 +271,7 @@ async function testBmpTcpAoForwarding() {
         });
         await sendRejected(startupOptions.forwardSocket, [wrongAddress]);
 
-        const wrongPort = encodeTcpAoForwardHeader({
+        const wrongPort = encodeTcpAuthForwardHeader({
             family: 4,
             remoteAddress: '192.0.2.56',
             remotePort: 50002,
@@ -322,11 +342,11 @@ async function testBmpTcpAoForwarding() {
 
 async function main() {
     if (process.platform === 'win32') {
-        console.log('BMP TCP-AO private forwarding tests skipped on Windows (Unix sockets are Linux-only)');
+        console.log('BMP TCP auth private forwarding tests skipped on Windows (Unix sockets are Linux-only)');
         return;
     }
     await testBmpTcpAoForwarding();
-    console.log('BMP TCP-AO private forwarding tests passed');
+    console.log('BMP TCP auth private forwarding tests passed');
 }
 
 main().catch(error => {

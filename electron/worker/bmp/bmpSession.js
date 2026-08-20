@@ -46,9 +46,15 @@ class BmpSession {
         this.remotePort = null;
         this.transport = 'tcp';
         this.authentication = 'none';
+        this.authProfileId = null;
+        this.authProfileName = null;
+        this.authPeer = null;
         this.tcpAoProfileId = null;
         this.tcpAoProfileName = null;
         this.tcpAoPeer = null;
+        this.tcpMd5ProfileId = null;
+        this.tcpMd5ProfileName = null;
+        this.tcpMd5Peer = null;
         this.sysName = null;
         this.sysDesc = null;
         this.receivedAt = null;
@@ -2033,9 +2039,15 @@ class BmpSession {
             remotePort: this.remotePort,
             transport: this.transport,
             authentication: this.authentication,
+            authProfileId: this.authProfileId,
+            authProfileName: this.authProfileName,
+            authPeer: this.authPeer,
             tcpAoProfileId: this.tcpAoProfileId,
             tcpAoProfileName: this.tcpAoProfileName,
             tcpAoPeer: this.tcpAoPeer,
+            tcpMd5ProfileId: this.tcpMd5ProfileId,
+            tcpMd5ProfileName: this.tcpMd5ProfileName,
+            tcpMd5Peer: this.tcpMd5Peer,
             sysName: this.sysName,
             sysDesc: this.sysDesc,
             bmpVersion: this.bmpVersion,

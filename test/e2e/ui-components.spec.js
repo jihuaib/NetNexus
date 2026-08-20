@@ -546,14 +546,15 @@ test.describe('Custom UI component interactions', () => {
         await expect(settingsDialog).toBeVisible();
         const settingsIconShapes = await getMenuIconShapes(
             settingsDialog.locator('.nn-navigation-modal-nav'),
-            ['通用', '工具', 'FTP', 'API', '数据', '运行时', 'TCP-AO', '更新'],
+            ['通用', '工具', 'FTP', 'API', '数据', '运行时', 'TCP-AO', 'TCP MD5', '更新'],
             'tab'
         );
-        expect(new Set(Object.values(settingsIconShapes)).size).toBe(Object.keys(settingsIconShapes).length);
+        expect(new Set(Object.values(settingsIconShapes)).size).toBe(Object.keys(settingsIconShapes).length - 1);
         expect(settingsIconShapes['通用']).toBe(quickIconShapes['设置']);
         expect(settingsIconShapes['工具']).toBe(mainIconShapes['工具']);
         expect(settingsIconShapes.FTP).toBe(mainIconShapes.FTP);
         expect(settingsIconShapes['TCP-AO']).toBe(mainIconShapes.RPKI);
+        expect(settingsIconShapes['TCP MD5']).toBe(mainIconShapes.RPKI);
     });
 
     test('keeps configuration labels compact, radio buttons joined and selected sidebar text emphasized', async ({
@@ -1288,6 +1289,22 @@ test.describe('Custom UI component interactions', () => {
                             }
                         });
                     }
+                    if (property === 'loadTcpMd5Settings') {
+                        return async () => ({
+                            status: 'success',
+                            data: {
+                                profiles: [
+                                    {
+                                        id: 'layout-md5-profile',
+                                        name: 'Layout MD5 Profile',
+                                        peer: '198.51.100.1/32',
+                                        hasSavedKey: true,
+                                        savedKeyStatus: 'available'
+                                    }
+                                ]
+                            }
+                        });
+                    }
                     return Reflect.get(target, property, receiver);
                 }
             });
@@ -1344,11 +1361,19 @@ test.describe('Custom UI component interactions', () => {
             },
             {
                 tab: 'TCP-AO',
-                description: 'RPKI TCP-AO 密钥与轮换 Profile',
+                description: 'BMP/RPKI TCP-AO 密钥与轮换 Profile',
                 root: '.tcp-ao-settings',
                 layout: '.tcp-ao-profile-list',
                 items: 0,
                 sections: ['TCP-AO Profiles']
+            },
+            {
+                tab: 'TCP MD5',
+                description: 'BMP 与 RPKI TCP MD5 对端与密钥 Profile',
+                root: '.tcp-md5-settings',
+                layout: '.tcp-md5-profile-list',
+                items: 0,
+                sections: ['TCP MD5 Profiles']
             },
             {
                 tab: '更新',
@@ -1520,6 +1545,465 @@ test.describe('Custom UI component interactions', () => {
         await expect.poll(() => page.evaluate(() => window.__linuxUpdateCalls)).toEqual(['open-releases']);
     });
 
+    test('manages TCP MD5 profiles without restoring plaintext secrets', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            const state = {
+                profiles: [
+                    {
+                        id: 'bmp-core',
+                        name: 'BMP 核心路由器',
+                        peer: '192.0.2.1/32',
+                        key: 'backend-secret-must-never-render',
+                        hasSavedKey: true,
+                        savedKeyStatus: 'available',
+                        usedBy: ['BMP']
+                    }
+                ],
+                loadCalls: 0,
+                saveCalls: []
+            };
+            window.__tcpMd5SettingsE2e = state;
+            window.rpkiApi = new Proxy(window.rpkiApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpMd5Settings') {
+                        return async () => {
+                            state.loadCalls += 1;
+                            return {
+                                status: 'success',
+                                data: { profiles: structuredClone(state.profiles) }
+                            };
+                        };
+                    }
+                    if (property === 'saveTcpMd5Settings') {
+                        return async settings => {
+                            state.saveCalls.push(structuredClone(settings));
+                            state.profiles = settings.profiles.map(profile => {
+                                const { key, ...metadata } = profile;
+                                return {
+                                    ...metadata,
+                                    hasSavedKey: profile.hasSavedKey || Boolean(key),
+                                    savedKeyStatus: 'available',
+                                    usedBy: profile.id === 'bmp-core' ? ['BMP'] : []
+                                };
+                            });
+                            return {
+                                status: 'success',
+                                data: { profiles: structuredClone(state.profiles) }
+                            };
+                        };
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+        });
+
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: 'TCP MD5', exact: true }).click();
+        await expect(settingsDialog.getByTestId('tcp-md5-profile-0')).toContainText('BMP 使用中');
+        await expect(settingsDialog.getByTestId('tcp-md5-delete-profile-0')).toBeDisabled();
+        await expect(settingsDialog.getByTestId('tcp-md5-key-secret-0')).toHaveValue('');
+
+        await settingsDialog.getByTestId('tcp-md5-key-secret-0').fill('temporary-unsaved-secret');
+        await settingsDialog.getByRole('tab', { name: '通用', exact: true }).click();
+        await settingsDialog.getByRole('tab', { name: 'TCP MD5', exact: true }).click();
+        await expect(settingsDialog.getByTestId('tcp-md5-key-secret-0')).toHaveValue('');
+
+        await settingsDialog.getByTestId('tcp-md5-add-profile-button').click();
+        await settingsDialog.getByTestId('tcp-md5-profile-name-1').fill('IPv6 Cache');
+        await settingsDialog.getByTestId('tcp-md5-profile-peer-1').fill('2001:0db8::1');
+        await settingsDialog.getByTestId('tcp-md5-key-secret-1').fill('new-md5-secret');
+        await settingsDialog.getByTestId('tcp-md5-save-button').click();
+
+        await expect.poll(() => page.evaluate(() => window.__tcpMd5SettingsE2e.saveCalls.length)).toBe(1);
+        const saveCall = await page.evaluate(() => window.__tcpMd5SettingsE2e.saveCalls[0]);
+        expect(saveCall.profiles).toHaveLength(2);
+        expect(saveCall.profiles[0].key).toBe('');
+        expect(saveCall.profiles[1].peer).toBe('2001:db8::1/128');
+        expect(saveCall.profiles[1].key).toBe('new-md5-secret');
+        await expect(settingsDialog.getByTestId('tcp-md5-key-secret-0')).toHaveValue('');
+        await expect(settingsDialog.getByTestId('tcp-md5-key-secret-1')).toHaveValue('');
+
+        const initialLoadCalls = await page.evaluate(() => window.__tcpMd5SettingsE2e.loadCalls);
+        await settingsDialog.getByRole('button', { name: '关闭' }).click();
+        await page.evaluate(() => {
+            window.__tcpMd5SettingsE2e.profiles[0].usedBy = [];
+        });
+        const reopenedSettingsDialog = await openSettingsDialog(page);
+        await reopenedSettingsDialog.getByRole('tab', { name: 'TCP MD5', exact: true }).click();
+        await expect
+            .poll(() => page.evaluate(() => window.__tcpMd5SettingsE2e.loadCalls))
+            .toBeGreaterThan(initialLoadCalls);
+        await expect(reopenedSettingsDialog.getByTestId('tcp-md5-delete-profile-0')).toBeEnabled();
+    });
+
+    test('refreshes TCP-AO usage when settings are reopened', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            const state = {
+                loadCalls: 0,
+                usedBy: ['RPKI']
+            };
+            const profile = {
+                id: 'core-router',
+                name: '核心路由器',
+                peer: '192.0.2.1/32',
+                keys: [
+                    {
+                        id: 'current-key',
+                        algorithm: 'hmac(sha1)',
+                        sndId: 1,
+                        rcvId: 1,
+                        macLength: 12,
+                        hasSavedKey: true,
+                        acceptStart: null,
+                        sendStart: null,
+                        sendEnd: null,
+                        acceptEnd: null
+                    }
+                ]
+            };
+            window.__tcpAoUsageRefreshE2e = state;
+            window.rpkiApi = new Proxy(window.rpkiApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpAoSettings') {
+                        return async () => {
+                            state.loadCalls += 1;
+                            return {
+                                status: 'success',
+                                data: {
+                                    profiles: [{ ...structuredClone(profile), usedBy: [...state.usedBy] }]
+                                }
+                            };
+                        };
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+        });
+
+        let settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: 'TCP-AO', exact: true }).click();
+        const profileCard = settingsDialog.getByTestId('tcp-ao-profile-0');
+        await expect(profileCard).toContainText('RPKI 使用中');
+        await expect(settingsDialog.getByTestId('tcp-ao-delete-profile-0')).toBeDisabled();
+        const initialLoadCalls = await page.evaluate(() => window.__tcpAoUsageRefreshE2e.loadCalls);
+
+        await settingsDialog.getByRole('button', { name: '关闭' }).click();
+        await expect(settingsDialog).toBeHidden();
+        await page.evaluate(() => {
+            window.__tcpAoUsageRefreshE2e.usedBy = [];
+        });
+
+        settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: 'TCP-AO', exact: true }).click();
+        await expect
+            .poll(() => page.evaluate(() => window.__tcpAoUsageRefreshE2e.loadCalls))
+            .toBeGreaterThan(initialLoadCalls);
+        await expect(settingsDialog.getByTestId('tcp-ao-profile-0')).not.toContainText('RPKI 使用中');
+        await expect(settingsDialog.getByTestId('tcp-ao-delete-profile-0')).toBeEnabled();
+    });
+
+    test('restores a TCP-AO profile when the backend rejects a raced deletion', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            const originalConsoleError = console.error.bind(console);
+            console.error = (...args) => {
+                const message = args.map(value => String(value)).join(' ');
+                if (
+                    message.includes('保存 TCP-AO 设置失败') &&
+                    message.includes('TCP-AO配置“核心路由器”正被BMP使用，不能删除')
+                ) {
+                    return;
+                }
+                originalConsoleError(...args);
+            };
+            const state = {
+                loadCalls: 0,
+                saveCalls: [],
+                usedBy: []
+            };
+            const profile = {
+                id: 'core-router',
+                name: '核心路由器',
+                peer: '192.0.2.1/32',
+                keys: [
+                    {
+                        id: 'current-key',
+                        algorithm: 'hmac(sha1)',
+                        sndId: 1,
+                        rcvId: 1,
+                        macLength: 12,
+                        hasSavedKey: true,
+                        acceptStart: null,
+                        sendStart: null,
+                        sendEnd: null,
+                        acceptEnd: null
+                    }
+                ]
+            };
+            window.__tcpAoRejectedDeleteE2e = state;
+            window.rpkiApi = new Proxy(window.rpkiApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpAoSettings') {
+                        return async () => {
+                            state.loadCalls += 1;
+                            return {
+                                status: 'success',
+                                data: {
+                                    profiles: [{ ...structuredClone(profile), usedBy: [...state.usedBy] }]
+                                }
+                            };
+                        };
+                    }
+                    if (property === 'saveTcpAoSettings') {
+                        return async settings => {
+                            state.saveCalls.push(structuredClone(settings));
+                            state.usedBy = ['BMP'];
+                            return {
+                                status: 'error',
+                                msg: 'TCP-AO配置“核心路由器”正被BMP使用，不能删除'
+                            };
+                        };
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+        });
+
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: 'TCP-AO', exact: true }).click();
+        await expect(settingsDialog.getByTestId('tcp-ao-delete-profile-0')).toBeEnabled();
+        const initialLoadCalls = await page.evaluate(() => window.__tcpAoRejectedDeleteE2e.loadCalls);
+
+        await settingsDialog.getByTestId('tcp-ao-delete-profile-0').click();
+        await expect(settingsDialog.getByTestId('tcp-ao-empty-state')).toBeVisible();
+        await settingsDialog.getByTestId('tcp-ao-save-button').click();
+
+        await expect(page.getByText('TCP-AO配置“核心路由器”正被BMP使用，不能删除', { exact: true })).toBeVisible();
+        await expect
+            .poll(() => page.evaluate(() => window.__tcpAoRejectedDeleteE2e.loadCalls))
+            .toBeGreaterThan(initialLoadCalls);
+        await expect(settingsDialog.getByTestId('tcp-ao-profile-0')).toContainText('BMP 使用中');
+        await expect(settingsDialog.getByTestId('tcp-ao-delete-profile-0')).toBeDisabled();
+        expect(await page.evaluate(() => window.__tcpAoRejectedDeleteE2e.saveCalls)).toEqual([{ profiles: [] }]);
+    });
+
+    test('waits for running TCP-AO services before reporting an immediately applied save', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            const profile = {
+                id: 'core-router',
+                name: '核心路由器',
+                peer: '192.0.2.1/32',
+                usedBy: ['BMP', 'RPKI'],
+                keys: [
+                    {
+                        id: 'current-key',
+                        algorithm: 'hmac(sha1)',
+                        sndId: 1,
+                        rcvId: 1,
+                        macLength: 12,
+                        hasSavedKey: true,
+                        acceptStart: null,
+                        sendStart: null,
+                        sendEnd: null,
+                        acceptEnd: null
+                    }
+                ]
+            };
+            const state = {
+                profile,
+                saveCalls: [],
+                finishSave: null,
+                disconnectedByService: { BMP: 2, RPKI: 1 }
+            };
+            window.__tcpAoRuntimeSaveE2e = state;
+            window.rpkiApi = new Proxy(window.rpkiApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpAoSettings') {
+                        return async () => ({
+                            status: 'success',
+                            data: { profiles: [structuredClone(state.profile)] }
+                        });
+                    }
+                    if (property === 'saveTcpAoSettings') {
+                        return settings => {
+                            state.saveCalls.push(structuredClone(settings));
+                            return new Promise(resolve => {
+                                state.finishSave = () => {
+                                    const savedProfile = structuredClone(settings.profiles[0]);
+                                    savedProfile.usedBy = ['BMP', 'RPKI'];
+                                    savedProfile.keys = savedProfile.keys.map(keyItem => {
+                                        const { key, ...metadata } = keyItem;
+                                        return { ...metadata, hasSavedKey: keyItem.hasSavedKey || Boolean(key) };
+                                    });
+                                    state.profile = savedProfile;
+                                    const disconnectedConnections =
+                                        state.disconnectedByService.BMP + state.disconnectedByService.RPKI;
+                                    resolve({
+                                        status: 'success',
+                                        data: {
+                                            version: 1,
+                                            profiles: [structuredClone(savedProfile)],
+                                            runtimeReload: {
+                                                attempted: true,
+                                                disconnectedConnections,
+                                                services: [
+                                                    {
+                                                        service: 'BMP',
+                                                        status: 'reloaded',
+                                                        profileIds: ['core-router'],
+                                                        disconnectedConnections: state.disconnectedByService.BMP
+                                                    },
+                                                    {
+                                                        service: 'RPKI',
+                                                        status: 'reloaded',
+                                                        profileIds: ['core-router'],
+                                                        disconnectedConnections: state.disconnectedByService.RPKI
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    });
+                                };
+                            });
+                        };
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+        });
+
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: 'TCP-AO', exact: true }).click();
+        await settingsDialog.getByTestId('tcp-ao-key-secret-0-0').fill('rotated-runtime-secret');
+        const saveButton = settingsDialog.getByTestId('tcp-ao-save-button');
+        await saveButton.click();
+
+        await expect.poll(() => page.evaluate(() => window.__tcpAoRuntimeSaveE2e.saveCalls.length)).toBe(1);
+        await expect(saveButton).toBeDisabled();
+        await expect(page.getByText(/TCP-AO 设置已保存并立即应用/u)).toHaveCount(0);
+
+        await page.evaluate(() => window.__tcpAoRuntimeSaveE2e.finishSave());
+
+        await expect(
+            page.getByText('TCP-AO 设置已保存并立即应用；有 3 条连接已安全断开，设备需要重新连接', {
+                exact: true
+            })
+        ).toBeVisible();
+        await expect(saveButton).toBeEnabled();
+        await expect(settingsDialog.getByTestId('tcp-ao-key-secret-0-0')).toHaveValue('');
+
+        await page.evaluate(() => {
+            window.__tcpAoRuntimeSaveE2e.disconnectedByService = { BMP: 0, RPKI: 0 };
+        });
+        await settingsDialog.getByTestId('tcp-ao-key-secret-0-0').fill('second-runtime-secret');
+        await saveButton.click();
+        await expect.poll(() => page.evaluate(() => window.__tcpAoRuntimeSaveE2e.saveCalls.length)).toBe(2);
+        await page.evaluate(() => window.__tcpAoRuntimeSaveE2e.finishSave());
+        await expect(page.getByText('TCP-AO 设置已保存并立即应用', { exact: true })).toBeVisible();
+    });
+
+    test('keeps the old TCP-AO runtime plan and does not report success when synchronization fails', async ({
+        page
+    }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            const originalConsoleError = console.error.bind(console);
+            console.error = (...args) => {
+                const message = args.map(value => String(value)).join(' ');
+                if (message.includes('保存 TCP-AO 设置失败') && message.includes('BMP TCP-AO 热重载失败')) return;
+                originalConsoleError(...args);
+            };
+            const oldProfile = {
+                id: 'core-router',
+                name: '核心路由器',
+                peer: '192.0.2.1/32',
+                usedBy: ['BMP'],
+                keys: [
+                    {
+                        id: 'current-key',
+                        algorithm: 'hmac(sha1)',
+                        sndId: 1,
+                        rcvId: 1,
+                        macLength: 12,
+                        hasSavedKey: true,
+                        acceptStart: null,
+                        sendStart: null,
+                        sendEnd: null,
+                        acceptEnd: null
+                    }
+                ]
+            };
+            const state = {
+                oldProfile,
+                loadCalls: 0,
+                saveCalls: [],
+                failSave: null,
+                finishRefresh: null
+            };
+            window.__tcpAoRuntimeFailureE2e = state;
+            window.rpkiApi = new Proxy(window.rpkiApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpAoSettings') {
+                        return () => {
+                            state.loadCalls += 1;
+                            const response = () => ({
+                                status: 'success',
+                                data: { profiles: [structuredClone(state.oldProfile)] }
+                            });
+                            if (state.loadCalls === 1) return Promise.resolve(response());
+                            return new Promise(resolve => {
+                                state.finishRefresh = () => resolve(response());
+                            });
+                        };
+                    }
+                    if (property === 'saveTcpAoSettings') {
+                        return settings => {
+                            state.saveCalls.push(structuredClone(settings));
+                            return new Promise(resolve => {
+                                state.failSave = () =>
+                                    resolve({
+                                        status: 'error',
+                                        msg: 'BMP TCP-AO 热重载失败：helper 拒绝更新；持久化配置已恢复，BMP 运行计划已回滚'
+                                    });
+                            });
+                        };
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+        });
+
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: 'TCP-AO', exact: true }).click();
+        const initialLoadCalls = await page.evaluate(() => window.__tcpAoRuntimeFailureE2e.loadCalls);
+        await settingsDialog.getByTestId('tcp-ao-key-secret-0-0').fill('must-not-be-applied');
+        const saveButton = settingsDialog.getByTestId('tcp-ao-save-button');
+        await saveButton.click();
+
+        await expect.poll(() => page.evaluate(() => window.__tcpAoRuntimeFailureE2e.saveCalls.length)).toBe(1);
+        await expect(saveButton).toBeDisabled();
+        await expect(page.getByText(/TCP-AO 设置已保存并立即应用/u)).toHaveCount(0);
+
+        await page.evaluate(() => window.__tcpAoRuntimeFailureE2e.failSave());
+
+        await expect(
+            page.getByText('BMP TCP-AO 热重载失败：helper 拒绝更新；持久化配置已恢复，BMP 运行计划已回滚', {
+                exact: true
+            })
+        ).toBeVisible();
+        await expect(page.getByText(/TCP-AO 设置已保存并立即应用/u)).toHaveCount(0);
+        await expect
+            .poll(() => page.evaluate(() => window.__tcpAoRuntimeFailureE2e.loadCalls))
+            .toBeGreaterThan(initialLoadCalls);
+        await expect(saveButton).toBeDisabled();
+        await page.evaluate(() => window.__tcpAoRuntimeFailureE2e.finishRefresh());
+        await expect(settingsDialog.getByTestId('tcp-ao-key-secret-0-0')).toHaveValue('must-not-be-applied');
+        await expect(saveButton).toBeEnabled();
+    });
+
     test('manages nested TCP-AO rotation keys without restoring plaintext secrets', async ({ page }) => {
         await page.goto('/#/tools/packet-parser');
         await page.evaluate(() => {
@@ -1530,6 +2014,7 @@ test.describe('Custom UI component interactions', () => {
                         id: 'core-router',
                         name: '核心路由器',
                         peer: '192.0.2.1/32',
+                        usedBy: ['BMP', 'RPKI'],
                         keys: [
                             {
                                 id: 'current-key',
@@ -1563,6 +2048,7 @@ test.describe('Custom UI component interactions', () => {
                                         id: profile.id,
                                         name: profile.name,
                                         peer: profile.peer,
+                                        usedBy: profile.id === 'core-router' ? ['BMP', 'RPKI'] : [],
                                         keys: profile.keys.map(keyItem => {
                                             const { key, ...metadata } = keyItem;
                                             return { ...metadata, hasSavedKey: keyItem.hasSavedKey || Boolean(key) };
@@ -1580,6 +2066,9 @@ test.describe('Custom UI component interactions', () => {
         const settingsDialog = await openSettingsDialog(page);
         await settingsDialog.getByRole('tab', { name: 'TCP-AO', exact: true }).click();
         await expect(settingsDialog.getByTestId('tcp-ao-profile-0')).toBeVisible();
+        await expect(settingsDialog.getByTestId('tcp-ao-profile-0')).toContainText('BMP 使用中');
+        await expect(settingsDialog.getByTestId('tcp-ao-profile-0')).toContainText('RPKI 使用中');
+        await expect(settingsDialog.getByTestId('tcp-ao-delete-profile-0')).toBeDisabled();
         await expect(settingsDialog.getByTestId('tcp-ao-key-secret-0-0')).toHaveValue('');
 
         await settingsDialog.getByTestId('tcp-ao-key-secret-0-0').fill('unsaved-secret-must-be-wiped');

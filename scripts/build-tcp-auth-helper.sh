@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ "$(uname -s)" != "Linux" ]]; then
-    echo "tcp-ao-helper can only be built on Linux" >&2
+    echo "tcp-auth-helper can only be built on Linux" >&2
     exit 1
 fi
 
@@ -14,16 +14,16 @@ case "$(uname -m)" in
         target_arch="arm64"
         ;;
     *)
-        echo "tcp-ao-helper supports only native Linux x64 and arm64 builds" >&2
+        echo "tcp-auth-helper supports only native Linux x64 and arm64 builds" >&2
         exit 1
         ;;
 esac
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd -- "${script_dir}/.." && pwd)"
-source_file="${script_dir}/tcp-ao-helper.c"
-output_dir="${project_root}/resources/tcp-ao/linux-${target_arch}"
-output_file="${output_dir}/tcp-ao-helper"
+source_file="${script_dir}/tcp-auth-helper.c"
+output_dir="${project_root}/resources/tcp-auth/linux-${target_arch}"
+output_file="${output_dir}/tcp-auth-helper"
 compiler="${CC:-cc}"
 
 if ! command -v "${compiler}" >/dev/null 2>&1; then
@@ -33,7 +33,7 @@ if ! command -v "${compiler}" >/dev/null 2>&1; then
 fi
 
 mkdir -p -- "${output_dir}"
-temporary_file="$(mktemp "${output_dir}/.tcp-ao-helper.XXXXXX")"
+temporary_file="$(mktemp "${output_dir}/.tcp-auth-helper.XXXXXX")"
 cleanup() {
     rm -f -- "${temporary_file}"
 }

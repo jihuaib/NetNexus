@@ -71,9 +71,11 @@
                                     >
                                         <nn-radio value="none">无认证</nn-radio>
                                         <nn-radio value="tcp-ao">TCP-AO</nn-radio>
+                                        <nn-radio value="tcp-md5">TCP MD5</nn-radio>
                                     </nn-radio-group>
                                     <div class="nn-helper-text">
-                                        TCP-AO 仅在支持该能力的 Linux 内核上生效；密钥统一在“设置 → TCP-AO”中保存到本机。
+                                        TCP-AO 与 TCP MD5 仅在支持相应能力的 Linux 内核上生效；密钥统一在设置中的对应
+                                        Profile 页面保存到本机。
                                     </div>
                                 </nn-form-item>
                             </nn-col>
@@ -105,7 +107,7 @@
                                                 </nn-select-option>
                                             </nn-select>
                                         </nn-tooltip>
-                                        <div v-if="selectedTcpAoProfile" class="tcp-ao-profile-summary">
+                                        <div v-if="selectedTcpAoProfile" class="tcp-auth-profile-summary">
                                             <nn-tag color="green">当前可发送</nn-tag>
                                             <span>
                                                 当前 Send ID {{ selectedTcpAoProfile.currentSendKey.sndId }} / Receive
@@ -122,15 +124,78 @@
                                         show-icon
                                         variant="subtle"
                                         data-testid="rpki-tcp-ao-profile-empty"
-                                        class="tcp-ao-profile-alert"
+                                        class="tcp-auth-profile-alert"
                                     />
                                     <nn-button
                                         type="link"
                                         data-testid="rpki-open-tcp-ao-settings"
-                                        class="tcp-ao-settings-link"
+                                        class="tcp-auth-settings-link"
                                         @click="openTcpAoSettings"
                                     >
                                         前往 TCP-AO 设置
+                                    </nn-button>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row v-if="rpkiConfig.authType === RPKI_AUTH_TYPE.TCP_MD5">
+                            <nn-col :span="24">
+                                <nn-form-item label="TCP MD5 Profile" name="tcpMd5ProfileId">
+                                    <template v-if="tcpMd5ProfileOptions.length > 0">
+                                        <nn-tooltip
+                                            :title="validationErrors.tcpMd5ProfileId"
+                                            :open="!!validationErrors.tcpMd5ProfileId"
+                                        >
+                                            <nn-select
+                                                v-model:value="rpkiConfig.tcpMd5ProfileId"
+                                                aria-label="TCP MD5 Profile"
+                                                data-testid="rpki-tcp-md5-profile-select"
+                                                :loading="tcpMd5ProfilesLoading"
+                                                :status="validationErrors.tcpMd5ProfileId ? 'error' : ''"
+                                                placeholder="请选择已保存密钥的 Profile"
+                                                style="width: min(520px, 100%)"
+                                                @change="clearAuthenticationError"
+                                            >
+                                                <nn-select-option
+                                                    v-for="profile in tcpMd5ProfileOptions"
+                                                    :key="profile.id"
+                                                    :value="profile.id"
+                                                    :disabled="!profile.available"
+                                                >
+                                                    {{ profile.name }} · {{ profile.peer }} ·
+                                                    {{ profile.available ? '密钥已保存' : profile.unavailableReason }}
+                                                </nn-select-option>
+                                            </nn-select>
+                                        </nn-tooltip>
+                                        <div v-if="selectedTcpMd5Profile?.available" class="tcp-auth-profile-summary">
+                                            <nn-tag color="green">密钥已保存</nn-tag>
+                                            <span>允许的对端范围：{{ selectedTcpMd5Profile.peer }}</span>
+                                        </div>
+                                        <div
+                                            v-if="tcpMd5SelectionWarning"
+                                            class="tcp-auth-selection-warning"
+                                            role="alert"
+                                            data-testid="rpki-tcp-md5-selection-warning"
+                                        >
+                                            {{ tcpMd5SelectionWarning }}
+                                        </div>
+                                    </template>
+                                    <nn-alert
+                                        v-else-if="!tcpMd5ProfilesLoading"
+                                        type="warning"
+                                        message="尚无 TCP MD5 Profile"
+                                        description="请先在设置中添加 Profile 并保存密钥，然后返回此处选择。"
+                                        show-icon
+                                        variant="subtle"
+                                        data-testid="rpki-tcp-md5-profile-empty"
+                                        class="tcp-auth-profile-alert"
+                                    />
+                                    <nn-button
+                                        type="link"
+                                        data-testid="rpki-open-tcp-md5-settings"
+                                        class="tcp-auth-settings-link"
+                                        @click="openTcpMd5Settings"
+                                    >
+                                        前往 TCP MD5 设置
                                     </nn-button>
                                 </nn-form-item>
                             </nn-col>
@@ -186,7 +251,14 @@
                             class="adaptive-table"
                         >
                             <template #bodyCell="{ column, record }">
-                                <template v-if="column.key === 'action'">
+                                <template v-if="column.key === 'authentication'">
+                                    <nn-tooltip :title="getClientAuthenticationDescription(record)">
+                                        <nn-tag :color="isAuthenticatedClient(record) ? 'green' : 'default'">
+                                            {{ getClientAuthenticationName(record) }}
+                                        </nn-tag>
+                                    </nn-tooltip>
+                                </template>
+                                <template v-else-if="column.key === 'action'">
                                     <nn-button type="link" @click="viewClientDetails(record)">详情</nn-button>
                                 </template>
                             </template>
@@ -229,10 +301,13 @@
 
     const RPKI_AUTH_TYPE = Object.freeze({
         NONE: 'none',
-        TCP_AO: 'tcp-ao'
+        TCP_AO: 'tcp-ao',
+        TCP_MD5: 'tcp-md5'
     });
     const TCP_AO_SETTINGS_CHANGED_EVENT = 'rpki:tcpAoSettingsChanged';
     const TCP_AO_SETTINGS_LISTENER_ID = 'rpki-config-tcp-ao-settings';
+    const TCP_MD5_SETTINGS_CHANGED_EVENT = 'tcp-md5:settingsChanged';
+    const TCP_MD5_SETTINGS_LISTENER_ID = 'rpki-config-tcp-md5-settings';
 
     const labelCol = { style: { width: '100px' } };
     const wrapperCol = { span: 40 };
@@ -242,7 +317,8 @@
         maxProtocolVersion: DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION,
         aspaFormat: RPKI_ASPA_FORMAT.LATEST,
         authType: RPKI_AUTH_TYPE.NONE,
-        tcpAoProfileId: ''
+        tcpAoProfileId: '',
+        tcpMd5ProfileId: ''
     });
 
     const tcpAoProfiles = ref([]);
@@ -268,6 +344,25 @@
     const selectedTcpAoProfile = computed(
         () => configuredTcpAoProfiles.value.find(profile => profile.id === rpkiConfig.value.tcpAoProfileId) || null
     );
+    const tcpMd5Profiles = ref([]);
+    const tcpMd5ProfilesLoading = ref(false);
+    const tcpMd5ProfileOptions = computed(() =>
+        tcpMd5Profiles.value.map(profile => ({
+            ...profile,
+            available: profile.hasSavedKey,
+            unavailableReason: profile.savedKeyStatus === 'unavailable' ? '密钥不可用，需重新输入' : '尚未保存密钥'
+        }))
+    );
+    const selectedTcpMd5Profile = computed(
+        () => tcpMd5ProfileOptions.value.find(profile => profile.id === rpkiConfig.value.tcpMd5ProfileId) || null
+    );
+    const tcpMd5SelectionWarning = computed(() => {
+        if (!rpkiConfig.value.tcpMd5ProfileId) return '';
+        if (!selectedTcpMd5Profile.value) return '所选 Profile 已被删除，请重新选择。';
+        return selectedTcpMd5Profile.value.available
+            ? ''
+            : `所选 Profile 当前不可用：${selectedTcpMd5Profile.value.unavailableReason}`;
+    });
 
     const serverLoading = ref(false);
     const serverRunning = ref(false);
@@ -278,6 +373,42 @@
         return Object.values(RPKI_PROTOCOL_VERSION).includes(maxProtocolVersion)
             ? maxProtocolVersion
             : DEFAULT_VALUES.DEFAULT_RPKI_MAX_PROTOCOL_VERSION;
+    };
+
+    const isTcpAoClient = record =>
+        record?.authentication === RPKI_AUTH_TYPE.TCP_AO || record?.transport === RPKI_AUTH_TYPE.TCP_AO;
+    const isTcpMd5Client = record =>
+        record?.authentication === RPKI_AUTH_TYPE.TCP_MD5 || record?.transport === RPKI_AUTH_TYPE.TCP_MD5;
+    const isAuthenticatedClient = record => isTcpAoClient(record) || isTcpMd5Client(record);
+
+    const getClientAuthenticationName = record => {
+        if (isTcpMd5Client(record)) {
+            const profileName = String(record?.tcpMd5ProfileName || '').trim();
+            return profileName ? `TCP MD5 · ${profileName}` : 'TCP MD5';
+        }
+        if (isTcpAoClient(record)) {
+            const profileName = String(record?.tcpAoProfileName || '').trim();
+            return profileName ? `TCP-AO · ${profileName}` : 'TCP-AO';
+        }
+        return '无认证';
+    };
+
+    const getClientAuthenticationDescription = record => {
+        if (isTcpMd5Client(record)) {
+            const profileName = String(record?.tcpMd5ProfileName || record?.tcpMd5ProfileId || '').trim();
+            const peer = String(record?.tcpMd5Peer || '').trim();
+            return [profileName ? `Profile：${profileName}` : '', peer ? `允许的对端范围：${peer}` : '']
+                .filter(Boolean)
+                .join('；');
+        }
+        if (isTcpAoClient(record)) {
+            const profileName = String(record?.tcpAoProfileName || record?.tcpAoProfileId || '').trim();
+            const peer = String(record?.tcpAoPeer || '').trim();
+            return [profileName ? `Profile：${profileName}` : '', peer ? `允许的对端范围：${peer}` : '']
+                .filter(Boolean)
+                .join('；');
+        }
+        return '普通 TCP 连接';
     };
 
     // 客户端列表
@@ -320,17 +451,23 @@
                     : `v${record.protocolVersion}`
         },
         {
+            title: '认证',
+            key: 'authentication',
+            width: 180
+        },
+        {
             title: '操作',
             key: 'action'
         }
     ];
 
-    const validationErrors = ref({ port: '', tcpAoProfileId: '' });
+    const validationErrors = ref({ port: '', tcpAoProfileId: '', tcpMd5ProfileId: '' });
 
     let validator = new FormValidator(validationErrors);
     validator.addRules(createRpkiConfigValidationRules());
 
-    const normalizeAuthType = value => (value === RPKI_AUTH_TYPE.TCP_AO ? RPKI_AUTH_TYPE.TCP_AO : RPKI_AUTH_TYPE.NONE);
+    const normalizeAuthType = value =>
+        [RPKI_AUTH_TYPE.TCP_AO, RPKI_AUTH_TYPE.TCP_MD5].includes(value) ? value : RPKI_AUTH_TYPE.NONE;
 
     const normalizeTcpAoTimestamp = value => {
         if (value === '' || value === null || value === undefined || value === 0 || value === '0') return null;
@@ -404,12 +541,72 @@
         }
     };
 
+    const sanitizeTcpMd5Profile = profile => {
+        const savedKeyStatus = ['available', 'unavailable', 'missing'].includes(profile?.savedKeyStatus)
+            ? profile.savedKeyStatus
+            : profile?.hasSavedKey === true
+              ? 'available'
+              : 'missing';
+        return {
+            id: String(profile?.id || ''),
+            name: String(profile?.name || profile?.id || ''),
+            peer: String(profile?.peer || ''),
+            hasSavedKey: profile?.hasSavedKey === true && savedKeyStatus !== 'unavailable',
+            savedKeyStatus
+        };
+    };
+
+    const applyTcpMd5Profiles = source => {
+        tcpMd5Profiles.value = (Array.isArray(source) ? source : [])
+            .slice(0, 32)
+            .map(sanitizeTcpMd5Profile)
+            .filter(profile => profile.id);
+        validationErrors.value.tcpMd5ProfileId = '';
+    };
+
+    const loadTcpMd5Profiles = async () => {
+        tcpMd5ProfilesLoading.value = true;
+        try {
+            if (typeof window.rpkiApi?.loadTcpMd5Settings !== 'function') {
+                applyTcpMd5Profiles([]);
+                return;
+            }
+            const result = await window.rpkiApi.loadTcpMd5Settings();
+            if (result?.status === 'success') {
+                applyTcpMd5Profiles(Array.isArray(result.data) ? result.data : result.data?.profiles);
+            } else {
+                applyTcpMd5Profiles([]);
+                console.error('TCP MD5配置加载失败', result?.msg);
+            }
+        } catch (error) {
+            applyTcpMd5Profiles([]);
+            console.error('TCP MD5配置加载失败', error);
+        } finally {
+            tcpMd5ProfilesLoading.value = false;
+        }
+    };
+
     const clearAuthenticationError = () => {
         validationErrors.value.tcpAoProfileId = '';
+        validationErrors.value.tcpMd5ProfileId = '';
     };
 
     const validateAuthentication = () => {
         clearAuthenticationError();
+        if (rpkiConfig.value.authType === RPKI_AUTH_TYPE.TCP_MD5) {
+            const selectedId = String(rpkiConfig.value.tcpMd5ProfileId || '');
+            if (!selectedId) {
+                validationErrors.value.tcpMd5ProfileId = '请选择 TCP MD5 Profile';
+                return true;
+            }
+            const selectedProfile = tcpMd5Profiles.value.find(profile => profile.id === selectedId);
+            if (!selectedProfile || !selectedProfile.hasSavedKey || selectedProfile.savedKeyStatus === 'unavailable') {
+                validationErrors.value.tcpMd5ProfileId = '所选 TCP MD5 Profile 不存在或没有可用的已保存密钥';
+                return true;
+            }
+            return false;
+        }
+
         if (rpkiConfig.value.authType !== RPKI_AUTH_TYPE.TCP_AO) return false;
 
         if (!rpkiConfig.value.tcpAoProfileId) {
@@ -439,12 +636,17 @@
             maxProtocolVersion: normalizeMaxProtocolVersion(rpkiConfig.value.maxProtocolVersion),
             aspaFormat: rpkiConfig.value.aspaFormat || RPKI_ASPA_FORMAT.LATEST,
             authType,
-            tcpAoProfileId: authType === RPKI_AUTH_TYPE.TCP_AO ? String(rpkiConfig.value.tcpAoProfileId || '') : ''
+            tcpAoProfileId: authType === RPKI_AUTH_TYPE.TCP_AO ? String(rpkiConfig.value.tcpAoProfileId || '') : '',
+            tcpMd5ProfileId: authType === RPKI_AUTH_TYPE.TCP_MD5 ? String(rpkiConfig.value.tcpMd5ProfileId || '') : ''
         };
     };
 
     const openTcpAoSettings = () => {
         emit('open-settings', 'tcp-ao');
+    };
+
+    const openTcpMd5Settings = () => {
+        emit('open-settings', 'tcp-md5');
     };
 
     // 暴露清空验证错误的方法给父组件
@@ -605,7 +807,7 @@
             currentTimeMs.value = Date.now();
         }, 1000);
         EventBus.on('rpki:clientConnection', RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG, onClientConnection);
-        await Promise.all([loadClientList(), loadTcpAoProfiles()]);
+        await Promise.all([loadClientList(), loadTcpAoProfiles(), loadTcpMd5Profiles()]);
     });
 
     onDeactivated(() => {
@@ -620,6 +822,7 @@
     onMounted(async () => {
         EventBus.on(RPKI_RUNTIME_CHANGED_EVENT, RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG, handleRuntimeChanged);
         EventBus.on(TCP_AO_SETTINGS_CHANGED_EVENT, TCP_AO_SETTINGS_LISTENER_ID, applyTcpAoProfiles);
+        EventBus.on(TCP_MD5_SETTINGS_CHANGED_EVENT, TCP_MD5_SETTINGS_LISTENER_ID, applyTcpMd5Profiles);
         try {
             // 加载配置
             const result = await window.rpkiApi.loadRpkiConfig();
@@ -632,6 +835,7 @@
                     rpkiConfig.value.aspaFormat = result.data.aspaFormat || RPKI_ASPA_FORMAT.LATEST;
                     rpkiConfig.value.authType = normalizeAuthType(result.data.authType);
                     rpkiConfig.value.tcpAoProfileId = String(result.data.tcpAoProfileId || '');
+                    rpkiConfig.value.tcpMd5ProfileId = String(result.data.tcpMd5ProfileId || '');
                 }
             } else {
                 console.error('配置文件加载失败', result.msg);
@@ -639,13 +843,14 @@
         } catch (error) {
             console.error('初始化RPKI配置出错:', error);
         }
-        await loadTcpAoProfiles();
+        await Promise.all([loadTcpAoProfiles(), loadTcpMd5Profiles()]);
     });
 
     onBeforeUnmount(() => {
         if (tcpAoClockTimer !== null) clearInterval(tcpAoClockTimer);
         EventBus.off(RPKI_RUNTIME_CHANGED_EVENT, RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG);
         EventBus.off(TCP_AO_SETTINGS_CHANGED_EVENT, TCP_AO_SETTINGS_LISTENER_ID);
+        EventBus.off(TCP_MD5_SETTINGS_CHANGED_EVENT, TCP_MD5_SETTINGS_LISTENER_ID);
         EventBus.off('rpki:clientConnection', RPKI_EVENT_PAGE_ID.PAGE_ID_RPKI_CONFIG);
     });
 </script>
@@ -668,7 +873,7 @@
         flex: 0 0 auto;
     }
 
-    .tcp-ao-profile-summary {
+    .tcp-auth-profile-summary {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
@@ -678,13 +883,20 @@
         font-size: 12px;
     }
 
-    .tcp-ao-profile-alert {
+    .tcp-auth-profile-alert {
         max-width: 620px;
     }
 
-    .tcp-ao-settings-link {
+    .tcp-auth-settings-link {
         margin-top: 4px;
         padding-inline: 0;
+    }
+
+    .tcp-auth-selection-warning {
+        margin-top: 8px;
+        color: var(--nn-color-error);
+        font-size: 12px;
+        line-height: 18px;
     }
 
     .adaptive-list-row {

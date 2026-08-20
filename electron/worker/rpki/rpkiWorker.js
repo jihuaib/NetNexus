@@ -7,36 +7,38 @@ const ipaddr = require('ipaddr.js');
 const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
 const RequestWorkerClient = require('../core/requestWorkerClient');
+const TcpAuthForwardingServer = require('../core/tcpAuthForwardingServer');
 const RpkiSession = require('./rpkiSession');
 const RpkiRouterKey = require('./rpkiRouterKey');
 const RPKI_IMPORT_OP = require('./rpkiImportConst');
 const RpkiConst = require('../../const/rpkiConst');
-const TcpAoProxy = require('./tcpAoProxy');
+const TcpAuthProxy = require('../core/tcpAuthProxy');
 const {
-    TCP_AO_FORWARD_CAPABILITY_BYTES,
-    TCP_AO_FORWARD_HEADER_BYTES,
-    TCP_AO_FORWARD_HEADER_TIMEOUT_MS,
-    TCP_AO_UNIX_PATH_MAX_BYTES,
-    decodeTcpAoForwardHeader
-} = require('./tcpAoForwardProtocol');
-const { RPKI_AUTH_TYPES, redactTcpAoConfig } = require('../../utils/tcpAoConfig');
+    TCP_AUTH_FORWARD_CAPABILITY_BYTES,
+    TCP_AUTH_FORWARD_HEADER_BYTES,
+    TCP_AUTH_FORWARD_HEADER_TIMEOUT_MS,
+    TCP_AUTH_FORWARD_UNIX_PATH_MAX_BYTES,
+    decodeTcpAuthForwardHeader
+} = require('../core/tcpAuthForwardProtocol');
+const { RPKI_AUTH_TYPES, redactAuthenticationConfig } = require('../../utils/tcpAuthConfig');
 
 const DEFAULT_SNAPSHOT_SHUTDOWN_TIMEOUT_MS = 2000;
-const MAX_PENDING_TCP_AO_HEADERS = 256;
+const MAX_PENDING_TCP_AUTH_HEADERS = 256;
 
 class RpkiWorker {
     constructor() {
         this.server = null;
         this.ipv6Server = null;
-        this.tcpAoProxy = null;
-        this.tcpAoSocketDirectory = null;
-        this.tcpAoDirectoryIdentity = null;
-        this.tcpAoSocketPath = null;
-        this.tcpAoSocketIdentity = null;
-        this.tcpAoForwardCapability = null;
-        this.tcpAoForwardHeaderTimeoutMs = TCP_AO_FORWARD_HEADER_TIMEOUT_MS;
-        this.tcpAoExitCleanup = null;
-        this.pendingTcpAoSockets = new Set();
+        this.tcpAuthProxy = null;
+        this.tcpAuthForwardingServer = null;
+        this.tcpAuthSocketDirectory = null;
+        this.tcpAuthDirectoryIdentity = null;
+        this.tcpAuthSocketPath = null;
+        this.tcpAuthSocketIdentity = null;
+        this.tcpAuthForwardCapability = null;
+        this.tcpAuthForwardHeaderTimeoutMs = TCP_AUTH_FORWARD_HEADER_TIMEOUT_MS;
+        this.tcpAuthExitCleanup = null;
+        this.pendingTcpAuthSockets = new Set();
         this.socket = null;
 
         this.rpkiConfigData = null; // rpki配置数据
@@ -66,6 +68,10 @@ class RpkiWorker {
         // 注册消息处理器
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.START_RPKI, this.startRpki.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.STOP_RPKI, this.stopRpki.bind(this));
+        this.messageHandler.registerHandler(
+            RpkiConst.RPKI_REQ_TYPES.RELOAD_TCP_AO_PROFILE,
+            this.reloadTcpAoProfile.bind(this)
+        );
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ROA, this.addRoa.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.ADD_ROA_BATCH, this.addRoaBatch.bind(this));
         this.messageHandler.registerHandler(RpkiConst.RPKI_REQ_TYPES.DELETE_ROA, this.deleteRoa.bind(this));
@@ -286,7 +292,8 @@ class RpkiWorker {
         clientAddress,
         clientPort,
         localAddress = socket.localAddress,
-        localPort = socket.localPort
+        localPort = socket.localPort,
+        authentication = {}
     ) {
         if (this.storageStopping) {
             socket?.destroy?.();
@@ -308,6 +315,17 @@ class RpkiWorker {
         rpkiSession.localPort = localPort;
         rpkiSession.remoteIp = clientAddress;
         rpkiSession.remotePort = clientPort;
+        rpkiSession.transport = authentication.transport || 'tcp';
+        rpkiSession.authentication = authentication.authentication || 'none';
+        rpkiSession.authProfileId = authentication.authProfileId || null;
+        rpkiSession.authProfileName = authentication.authProfileName || null;
+        rpkiSession.authPeer = authentication.authPeer || null;
+        rpkiSession.tcpAoProfileId = authentication.tcpAoProfileId || null;
+        rpkiSession.tcpAoProfileName = authentication.tcpAoProfileName || null;
+        rpkiSession.tcpAoPeer = authentication.tcpAoPeer || null;
+        rpkiSession.tcpMd5ProfileId = authentication.tcpMd5ProfileId || null;
+        rpkiSession.tcpMd5ProfileName = authentication.tcpMd5ProfileName || null;
+        rpkiSession.tcpMd5Peer = authentication.tcpMd5Peer || null;
         rpkiSession.aspaFormat = this.rpkiConfigData?.aspaFormat || RpkiConst.RPKI_ASPA_FORMAT.LATEST;
 
         this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.CLIENT_CONNECTION, {
@@ -378,18 +396,18 @@ class RpkiWorker {
         });
     }
 
-    ensurePendingTcpAoSockets() {
-        if (!this.pendingTcpAoSockets) this.pendingTcpAoSockets = new Set();
-        return this.pendingTcpAoSockets;
+    ensurePendingTcpAuthSockets() {
+        if (!this.pendingTcpAuthSockets) this.pendingTcpAuthSockets = new Set();
+        return this.pendingTcpAuthSockets;
     }
 
-    destroyPendingTcpAoSockets() {
-        const pending = this.ensurePendingTcpAoSockets();
+    destroyPendingTcpAuthSockets() {
+        const pending = this.ensurePendingTcpAuthSockets();
         for (const socket of pending) socket.destroy?.();
         pending.clear();
     }
 
-    isOwnedTcpAoDirectory(directoryPath, expectedIdentity = null) {
+    isOwnedTcpAuthDirectory(directoryPath, expectedIdentity = null) {
         try {
             const stats = fs.lstatSync(directoryPath);
             const uid = typeof process.getuid === 'function' ? process.getuid() : null;
@@ -405,12 +423,12 @@ class RpkiWorker {
         }
     }
 
-    createTcpAoForwardEndpoint() {
-        this.cleanupTcpAoForwardEndpoint();
-        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nn-rpki-ao-'));
-        this.tcpAoSocketDirectory = directory;
-        const exitCleanup = () => this.cleanupTcpAoForwardEndpoint();
-        this.tcpAoExitCleanup = exitCleanup;
+    createTcpAuthForwardEndpoint() {
+        this.cleanupTcpAuthForwardEndpoint();
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nn-rpki-auth-'));
+        this.tcpAuthSocketDirectory = directory;
+        const exitCleanup = () => this.cleanupTcpAuthForwardEndpoint();
+        this.tcpAuthExitCleanup = exitCleanup;
         process.once('exit', exitCleanup);
         try {
             fs.chmodSync(directory, 0o700);
@@ -422,33 +440,33 @@ class RpkiWorker {
                 (directoryStats.mode & 0o777) !== 0o700 ||
                 (uid !== null && directoryStats.uid !== uid)
             ) {
-                throw new Error('TCP-AO内部Unix socket目录权限无效');
+                throw new Error('TCP认证内部Unix socket目录权限无效');
             }
-            this.tcpAoDirectoryIdentity = { dev: directoryStats.dev, ino: directoryStats.ino };
+            this.tcpAuthDirectoryIdentity = { dev: directoryStats.dev, ino: directoryStats.ino };
             const socketPath = path.join(directory, 'r.sock');
-            if (Buffer.byteLength(socketPath, 'utf8') > TCP_AO_UNIX_PATH_MAX_BYTES) {
-                throw new Error(`TCP-AO内部Unix socket路径超过${TCP_AO_UNIX_PATH_MAX_BYTES}字节`);
+            if (Buffer.byteLength(socketPath, 'utf8') > TCP_AUTH_FORWARD_UNIX_PATH_MAX_BYTES) {
+                throw new Error(`TCP认证内部Unix socket路径超过${TCP_AUTH_FORWARD_UNIX_PATH_MAX_BYTES}字节`);
             }
-            this.tcpAoSocketPath = socketPath;
-            this.tcpAoForwardCapability = crypto.randomBytes(TCP_AO_FORWARD_CAPABILITY_BYTES);
-            return { socketPath, capability: this.tcpAoForwardCapability };
+            this.tcpAuthSocketPath = socketPath;
+            this.tcpAuthForwardCapability = crypto.randomBytes(TCP_AUTH_FORWARD_CAPABILITY_BYTES);
+            return { socketPath, capability: this.tcpAuthForwardCapability };
         } catch (error) {
-            this.cleanupTcpAoForwardEndpoint();
+            this.cleanupTcpAuthForwardEndpoint();
             throw error;
         }
     }
 
-    secureTcpAoSocketFile() {
-        const socketPath = this.tcpAoSocketPath;
-        if (!socketPath || !this.isOwnedTcpAoDirectory(this.tcpAoSocketDirectory, this.tcpAoDirectoryIdentity)) {
-            throw new Error('TCP-AO内部Unix socket目录无效');
+    secureTcpAuthSocketFile() {
+        const socketPath = this.tcpAuthSocketPath;
+        if (!socketPath || !this.isOwnedTcpAuthDirectory(this.tcpAuthSocketDirectory, this.tcpAuthDirectoryIdentity)) {
+            throw new Error('TCP认证内部Unix socket目录无效');
         }
         const initialStats = fs.lstatSync(socketPath);
         const uid = typeof process.getuid === 'function' ? process.getuid() : null;
         if (!initialStats.isSocket() || initialStats.isSymbolicLink() || (uid !== null && initialStats.uid !== uid)) {
-            throw new Error('TCP-AO内部Unix socket文件无效');
+            throw new Error('TCP认证内部Unix socket文件无效');
         }
-        this.tcpAoSocketIdentity = { dev: initialStats.dev, ino: initialStats.ino };
+        this.tcpAuthSocketIdentity = { dev: initialStats.dev, ino: initialStats.ino };
         fs.chmodSync(socketPath, 0o600);
         const stats = fs.lstatSync(socketPath);
         if (
@@ -456,30 +474,30 @@ class RpkiWorker {
             stats.isSymbolicLink() ||
             (stats.mode & 0o777) !== 0o600 ||
             (uid !== null && stats.uid !== uid) ||
-            stats.dev !== this.tcpAoSocketIdentity.dev ||
-            stats.ino !== this.tcpAoSocketIdentity.ino
+            stats.dev !== this.tcpAuthSocketIdentity.dev ||
+            stats.ino !== this.tcpAuthSocketIdentity.ino
         ) {
-            throw new Error('TCP-AO内部Unix socket文件权限无效');
+            throw new Error('TCP认证内部Unix socket文件权限无效');
         }
     }
 
-    cleanupTcpAoForwardEndpoint() {
-        this.destroyPendingTcpAoSockets();
-        const exitCleanup = this.tcpAoExitCleanup;
-        this.tcpAoExitCleanup = null;
+    cleanupTcpAuthForwardEndpoint() {
+        this.destroyPendingTcpAuthSockets();
+        const exitCleanup = this.tcpAuthExitCleanup;
+        this.tcpAuthExitCleanup = null;
         if (typeof exitCleanup === 'function') process.removeListener('exit', exitCleanup);
-        if (Buffer.isBuffer(this.tcpAoForwardCapability)) this.tcpAoForwardCapability.fill(0);
-        this.tcpAoForwardCapability = null;
+        if (Buffer.isBuffer(this.tcpAuthForwardCapability)) this.tcpAuthForwardCapability.fill(0);
+        this.tcpAuthForwardCapability = null;
 
-        const directory = this.tcpAoSocketDirectory;
-        const directoryIdentity = this.tcpAoDirectoryIdentity;
-        const socketPath = this.tcpAoSocketPath;
-        const identity = this.tcpAoSocketIdentity;
-        this.tcpAoSocketDirectory = null;
-        this.tcpAoDirectoryIdentity = null;
-        this.tcpAoSocketPath = null;
-        this.tcpAoSocketIdentity = null;
-        if (!directory || !this.isOwnedTcpAoDirectory(directory, directoryIdentity)) return;
+        const directory = this.tcpAuthSocketDirectory;
+        const directoryIdentity = this.tcpAuthDirectoryIdentity;
+        const socketPath = this.tcpAuthSocketPath;
+        const identity = this.tcpAuthSocketIdentity;
+        this.tcpAuthSocketDirectory = null;
+        this.tcpAuthDirectoryIdentity = null;
+        this.tcpAuthSocketPath = null;
+        this.tcpAuthSocketIdentity = null;
+        if (!directory || !this.isOwnedTcpAuthDirectory(directory, directoryIdentity)) return;
 
         if (socketPath) {
             try {
@@ -490,13 +508,13 @@ class RpkiWorker {
                     (!identity || (stats.dev === identity.dev && stats.ino === identity.ino));
                 if (sameSocket) fs.unlinkSync(socketPath);
             } catch (error) {
-                if (error.code !== 'ENOENT') logger.debug(`清理TCP-AO Unix socket失败: ${error.message}`);
+                if (error.code !== 'ENOENT') logger.debug(`清理TCP认证 Unix socket失败: ${error.message}`);
             }
         }
         try {
             fs.rmdirSync(directory);
         } catch (error) {
-            if (error.code !== 'ENOENT') logger.debug(`清理TCP-AO Unix socket目录失败: ${error.message}`);
+            if (error.code !== 'ENOENT') logger.debug(`清理TCP认证 Unix socket目录失败: ${error.message}`);
         }
     }
 
@@ -520,28 +538,28 @@ class RpkiWorker {
         return metadata;
     }
 
-    acceptTcpAoInternalSocket(socket) {
-        const pending = this.ensurePendingTcpAoSockets();
-        const capability = this.tcpAoForwardCapability;
+    acceptTcpAuthInternalSocket(socket) {
+        const pending = this.ensurePendingTcpAuthSockets();
+        const capability = this.tcpAuthForwardCapability;
         if (
             this.storageStopping ||
             !Buffer.isBuffer(capability) ||
-            capability.length !== TCP_AO_FORWARD_CAPABILITY_BYTES ||
-            pending.size >= MAX_PENDING_TCP_AO_HEADERS
+            capability.length !== TCP_AUTH_FORWARD_CAPABILITY_BYTES ||
+            pending.size >= MAX_PENDING_TCP_AUTH_HEADERS
         ) {
             socket.destroy();
             return;
         }
 
-        const header = Buffer.alloc(TCP_AO_FORWARD_HEADER_BYTES);
+        const header = Buffer.alloc(TCP_AUTH_FORWARD_HEADER_BYTES);
         let received = 0;
         let finished = false;
         pending.add(socket);
-        const configuredTimeout = Number(this.tcpAoForwardHeaderTimeoutMs);
+        const configuredTimeout = Number(this.tcpAuthForwardHeaderTimeoutMs);
         const headerTimeoutMs =
             Number.isFinite(configuredTimeout) && configuredTimeout > 0
-                ? Math.min(configuredTimeout, TCP_AO_FORWARD_HEADER_TIMEOUT_MS)
-                : TCP_AO_FORWARD_HEADER_TIMEOUT_MS;
+                ? Math.min(configuredTimeout, TCP_AUTH_FORWARD_HEADER_TIMEOUT_MS)
+                : TCP_AUTH_FORWARD_HEADER_TIMEOUT_MS;
         const timer = setTimeout(() => rejectHeader(), headerTimeoutMs);
         timer.unref?.();
 
@@ -565,16 +583,16 @@ class RpkiWorker {
         const onError = () => rejectHeader();
         const onData = chunk => {
             if (finished || !Buffer.isBuffer(chunk)) return;
-            const copyLength = Math.min(TCP_AO_FORWARD_HEADER_BYTES - received, chunk.length);
+            const copyLength = Math.min(TCP_AUTH_FORWARD_HEADER_BYTES - received, chunk.length);
             chunk.copy(header, received, 0, copyLength);
             received += copyLength;
-            if (received < TCP_AO_FORWARD_HEADER_BYTES) return;
+            if (received < TCP_AUTH_FORWARD_HEADER_BYTES) return;
 
             socket.pause();
             let metadata;
             try {
                 metadata = this.validateTcpAoPeerMetadata(
-                    decodeTcpAoForwardHeader(header, this.tcpAoForwardCapability)
+                    decodeTcpAuthForwardHeader(header, this.tcpAuthForwardCapability)
                 );
                 if (this.storageStopping) throw new Error('RPKI正在停止');
             } catch (_error) {
@@ -592,7 +610,7 @@ class RpkiWorker {
                 }
                 socket.resume();
             } catch (error) {
-                logger.warn(`TCP-AO内部连接初始化失败: ${error.message}`);
+                logger.warn(`TCP认证内部连接初始化失败: ${error.message}`);
                 socket.destroy();
             }
         };
@@ -625,7 +643,11 @@ class RpkiWorker {
         logger.info(`${transportLabel} Client connected from ${clientAddress}:${clientPort}`);
         logger.info(`${transportLabel} localAddress: ${localAddress}:${localPort}`);
 
-        const rpkiSession = this.createRpkiSession(socket, clientAddress, clientPort, localAddress, localPort);
+        const rpkiSession = this.createRpkiSession(socket, clientAddress, clientPort, localAddress, localPort, {
+            ...endpoint,
+            transport: transportLabel,
+            authentication: ['tcp-ao', 'tcp-md5'].includes(transportLabel) ? transportLabel : 'none'
+        });
         if (!rpkiSession) return null;
 
         socket.on('data', data => {
@@ -692,8 +714,17 @@ class RpkiWorker {
         });
     }
 
-    createTcpAoProxy() {
-        return new TcpAoProxy();
+    createTcpAuthProxy(authType = RPKI_AUTH_TYPES.TCP_AO) {
+        return new TcpAuthProxy({ authType });
+    }
+
+    createTcpAuthForwardingServer(authType) {
+        const authDirectorySuffix = authType === RPKI_AUTH_TYPES.TCP_MD5 ? 'md5' : 'ao';
+        return new TcpAuthForwardingServer({
+            serviceName: 'RPKI',
+            authType,
+            directoryPrefix: `nn-rpki-${authDirectorySuffix}-`
+        });
     }
 
     scheduleFatalExit() {
@@ -702,7 +733,7 @@ class RpkiWorker {
 
     handleTcpAoUnexpectedExit(error) {
         if (this.storageStopping) return;
-        logger.error(`TCP-AO helper异常退出，RPKI协议进程将停止: ${error.message}`);
+        logger.error(`TCP 认证 helper异常退出（TCP-AO），RPKI协议进程将停止: ${error.message}`);
         const failure = error?.runtimeFailure || {
             code: 'TCP_AO_HELPER_EXIT',
             reason: 'TCP-AO认证进程异常退出，RPKI服务已安全停止'
@@ -711,6 +742,22 @@ class RpkiWorker {
             this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.RUNTIME_FAILURE, failure);
         } catch (eventError) {
             logger.warn(`TCP-AO运行时故障事件发送失败: ${eventError.message}`);
+        } finally {
+            this.scheduleFatalExit();
+        }
+    }
+
+    handleTcpMd5UnexpectedExit(error) {
+        if (this.storageStopping) return;
+        logger.error(`TCP 认证 helper异常退出（TCP MD5），RPKI协议进程将停止: ${error.message}`);
+        const failure = error?.runtimeFailure || {
+            code: 'TCP_MD5_HELPER_EXIT',
+            reason: 'TCP MD5认证进程异常退出，RPKI服务已安全停止'
+        };
+        try {
+            this.messageHandler.sendEvent(RpkiConst.RPKI_EVT_TYPES.RUNTIME_FAILURE, failure);
+        } catch (eventError) {
+            logger.warn(`TCP MD5运行时故障事件发送失败: ${eventError.message}`);
         } finally {
             this.scheduleFatalExit();
         }
@@ -728,19 +775,19 @@ class RpkiWorker {
 
     async startTcpAoServer() {
         if (!this.rpkiConfigData?.tcpAo) throw new Error('缺少TCP-AO运行配置');
-        const { socketPath, capability } = this.createTcpAoForwardEndpoint();
-        this.server = net.createServer({ pauseOnConnect: true }, socket => this.acceptTcpAoInternalSocket(socket));
-        this.server.maxConnections = MAX_PENDING_TCP_AO_HEADERS;
+        const { socketPath, capability } = this.createTcpAuthForwardEndpoint();
+        this.server = net.createServer({ pauseOnConnect: true }, socket => this.acceptTcpAuthInternalSocket(socket));
+        this.server.maxConnections = MAX_PENDING_TCP_AUTH_HEADERS;
         await this.listenUnixServer(this.server, socketPath);
-        this.secureTcpAoSocketFile();
+        this.secureTcpAuthSocketFile();
 
-        const proxy = this.createTcpAoProxy();
-        this.tcpAoProxy = proxy;
+        const proxy = this.createTcpAuthProxy(RPKI_AUTH_TYPES.TCP_AO);
+        this.tcpAuthProxy = proxy;
         proxy.once('unexpectedExit', error => this.handleTcpAoUnexpectedExit(error));
         const runtimeProfile = this.rpkiConfigData.tcpAo;
         let startup;
         try {
-            // TcpAoProxy serializes the helper configuration synchronously. Remove
+            // TcpAuthProxy serializes the helper configuration synchronously. Remove
             // every worker-owned plaintext key reference immediately afterwards;
             // the helper owns the rotation schedule from this point onward.
             startup = proxy.start({
@@ -750,39 +797,118 @@ class RpkiWorker {
                 profiles: [runtimeProfile]
             });
         } finally {
-            this.rpkiConfigData.tcpAo = redactTcpAoConfig(runtimeProfile);
+            this.rpkiConfigData.tcpAo = redactAuthenticationConfig(runtimeProfile);
             for (const key of Array.isArray(runtimeProfile?.keys) ? runtimeProfile.keys : []) {
                 if (Object.prototype.hasOwnProperty.call(key, 'key')) key.key = '<redacted>';
             }
         }
         const status = await startup;
-        logger.info(`TCP-AO helper ready on port ${status.listenPort}; families=${(status.families || []).join(',')}`);
+        logger.info(
+            `TCP 认证 helper ready (TCP-AO) on port ${status.listenPort}; families=${(status.families || []).join(',')}`
+        );
+    }
+
+    async reloadTcpAoProfile(messageId, data = {}) {
+        const runtimeProfile = data?.profile;
+        const redactProfile = () => {
+            for (const key of Array.isArray(runtimeProfile?.keys) ? runtimeProfile.keys : []) {
+                if (Object.prototype.hasOwnProperty.call(key, 'key')) key.key = '<redacted>';
+            }
+            if (runtimeProfile && typeof runtimeProfile === 'object') runtimeProfile.keys = [];
+            if (data && typeof data === 'object') data.profile = null;
+        };
+        try {
+            if (
+                this.storageStopping ||
+                this.rpkiConfigData?.authType !== RPKI_AUTH_TYPES.TCP_AO ||
+                !this.tcpAuthProxy
+            ) {
+                throw new Error('RPKI未以TCP-AO认证方式运行，无法热更新密钥');
+            }
+            if (!runtimeProfile || typeof runtimeProfile !== 'object') {
+                throw new Error('RPKI TCP-AO热更新缺少运行时Profile');
+            }
+            if (runtimeProfile.id !== this.rpkiConfigData.tcpAo?.id) {
+                throw new Error('RPKI TCP-AO运行Profile选择已变化，需要停止并重新启动RPKI服务');
+            }
+            const redactedProfile = redactAuthenticationConfig(runtimeProfile);
+            const proxy = this.tcpAuthProxy;
+            const reloadPromise = proxy.reload({ profiles: [runtimeProfile] });
+            redactProfile();
+            const status = await reloadPromise;
+            if (this.storageStopping || this.tcpAuthProxy !== proxy) {
+                throw new Error('RPKI在TCP-AO密钥热更新期间已停止');
+            }
+            this.rpkiConfigData.tcpAo = redactedProfile;
+            this.messageHandler.sendSuccessResponse(messageId, status, 'RPKI TCP-AO运行时密钥已立即生效');
+        } catch (error) {
+            logger.error(`RPKI TCP-AO运行时密钥热更新失败: ${error.message}`);
+            this.messageHandler.sendErrorResponse(messageId, `RPKI TCP-AO运行时密钥热更新失败: ${error.message}`);
+        } finally {
+            redactProfile();
+        }
+    }
+
+    async startTcpMd5Server() {
+        const runtimeProfile = this.rpkiConfigData?.tcpMd5;
+        if (!runtimeProfile) throw new Error('缺少TCP MD5运行配置');
+        const forwardingServer = this.createTcpAuthForwardingServer(RPKI_AUTH_TYPES.TCP_MD5);
+        this.tcpAuthForwardingServer = forwardingServer;
+        let profileRedacted = false;
+        const redactRuntimeProfile = () => {
+            if (profileRedacted) return;
+            profileRedacted = true;
+            this.rpkiConfigData.tcpMd5 = redactAuthenticationConfig(runtimeProfile);
+            if (Object.prototype.hasOwnProperty.call(runtimeProfile, 'key')) runtimeProfile.key = '<redacted>';
+        };
+        try {
+            const status = await forwardingServer.start({
+                listenPort: this.rpkiConfigData.port,
+                profiles: [runtimeProfile],
+                onConnection: (socket, metadata, initialData) => {
+                    const session = this.attachClientSocket(socket, 'tcp-md5', metadata, initialData);
+                    return session ? { session } : null;
+                },
+                onUnexpectedExit: error => this.handleTcpMd5UnexpectedExit(error),
+                onProfilesConsumed: redactRuntimeProfile
+            });
+            logger.info(
+                `RPKI TCP 认证 helper ready (TCP MD5) on port ${status.listenPort}; families=${(status.families || []).join(',')}`
+            );
+        } finally {
+            redactRuntimeProfile();
+        }
     }
 
     async startTcpServer(messageId) {
         try {
             const tcpAoEnabled = this.rpkiConfigData?.authType === RPKI_AUTH_TYPES.TCP_AO;
+            const tcpMd5Enabled = this.rpkiConfigData?.authType === RPKI_AUTH_TYPES.TCP_MD5;
             if (tcpAoEnabled) await this.startTcpAoServer();
+            else if (tcpMd5Enabled) await this.startTcpMd5Server();
             else await this.startPlainTcpServers();
 
-            const suffix = tcpAoEnabled ? '（TCP-AO认证）' : '';
+            const suffix = tcpAoEnabled ? '（TCP-AO认证）' : tcpMd5Enabled ? '（TCP MD5认证）' : '';
             logger.info(`rpki协议启动成功${suffix}`);
             this.messageHandler.sendSuccessResponse(messageId, null, `rpki协议启动成功${suffix}`);
         } catch (err) {
             logger.error(`Error starting TCP server: ${err.message}`);
-            const proxy = this.tcpAoProxy;
-            this.tcpAoProxy = null;
+            const proxy = this.tcpAuthProxy;
+            const tcpAuthForwardingServer = this.tcpAuthForwardingServer;
+            this.tcpAuthProxy = null;
+            this.tcpAuthForwardingServer = null;
             const ipv4Server = this.server;
             const ipv6Server = this.ipv6Server;
             this.server = null;
             this.ipv6Server = null;
-            this.destroyPendingTcpAoSockets();
+            this.destroyPendingTcpAuthSockets();
             await Promise.allSettled([
                 proxy?.stop?.(),
+                tcpAuthForwardingServer?.stop?.(),
                 this.closeTcpServer(ipv4Server, 'RPKI TCP server'),
                 this.closeTcpServer(ipv6Server, 'RPKI IPv6 TCP server')
             ]);
-            this.cleanupTcpAoForwardEndpoint();
+            this.cleanupTcpAuthForwardEndpoint();
             this.closeRpkiStore();
             this.rpkiConfigData = null;
             this.rpkiRouterKeyMap.clear();
@@ -799,6 +925,27 @@ class RpkiWorker {
         this.storageMutationQueue = Promise.resolve();
         this.storageStopping = false;
         this.rpkiConfigData = rpkiConfigData;
+        const authType = String(rpkiConfigData?.authType || RPKI_AUTH_TYPES.NONE)
+            .trim()
+            .toLowerCase();
+        if (!Object.values(RPKI_AUTH_TYPES).includes(authType)) {
+            this.rpkiConfigData = null;
+            this.messageHandler.sendErrorResponse(messageId, '不支持的RPKI认证方式');
+            return;
+        }
+        this.rpkiConfigData.authType = authType;
+        if (authType === RPKI_AUTH_TYPES.TCP_AO && !this.rpkiConfigData.tcpAo) {
+            this.rpkiConfigData = null;
+            this.messageHandler.sendErrorResponse(messageId, 'RPKI TCP-AO缺少运行时Profile');
+            return;
+        }
+        if (authType === RPKI_AUTH_TYPES.TCP_MD5 && !this.rpkiConfigData.tcpMd5) {
+            this.rpkiConfigData = null;
+            this.messageHandler.sendErrorResponse(messageId, 'RPKI TCP MD5缺少运行时Profile');
+            return;
+        }
+        if (authType !== RPKI_AUTH_TYPES.TCP_AO) this.rpkiConfigData.tcpAo = null;
+        if (authType !== RPKI_AUTH_TYPES.TCP_MD5) this.rpkiConfigData.tcpMd5 = null;
         const configuredSnapshotLimit = Number(rpkiConfigData?.maxConcurrentSnapshots);
         this.maxConcurrentDataSnapshots =
             Number.isInteger(configuredSnapshotLimit) && configuredSnapshotLimit > 0
@@ -835,14 +982,17 @@ class RpkiWorker {
         let stopError = null;
         const ipv4Server = this.server;
         const ipv6Server = this.ipv6Server;
-        const tcpAoProxy = this.tcpAoProxy;
+        const tcpAuthProxy = this.tcpAuthProxy;
+        const tcpAuthForwardingServer = this.tcpAuthForwardingServer;
         this.server = null;
         this.ipv6Server = null;
-        this.tcpAoProxy = null;
-        this.destroyPendingTcpAoSockets();
+        this.tcpAuthProxy = null;
+        this.tcpAuthForwardingServer = null;
+        this.destroyPendingTcpAuthSockets();
 
         const serverClosePromises = [
-            tcpAoProxy?.stop?.() || Promise.resolve(),
+            tcpAuthProxy?.stop?.() || Promise.resolve(),
+            tcpAuthForwardingServer?.stop?.() || Promise.resolve(),
             this.closeTcpServer(ipv4Server, 'RPKI IPv4 TCP server'),
             this.closeTcpServer(ipv6Server, 'RPKI IPv6 TCP server')
         ];
@@ -877,7 +1027,7 @@ class RpkiWorker {
             stopError = error;
             logger.error(`停止RPKI协议失败: ${error.message}`);
         } finally {
-            this.cleanupTcpAoForwardEndpoint();
+            this.cleanupTcpAuthForwardEndpoint();
             this.rpkiConfigData = null;
             this.rpkiSessionMap.clear();
             this.closingRpkiSessions?.clear();

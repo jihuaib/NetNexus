@@ -57,11 +57,11 @@
         "libyang:verify": "node scripts/verify-libyang-runtime.js",
         "better-sqlite3:rebuild": "node scripts/rebuild-better-sqlite3.js",
         "better-sqlite3:smoke": "node scripts/smoke-better-sqlite3-runtime.js",
-        "tcp-ao:ensure": "node scripts/ensure-tcp-ao-helper.js",
-        "tcp-ao:build": "bash scripts/build-tcp-ao-helper.sh",
-        "tcp-ao:test:native": "bash scripts/test-tcp-ao-helper.sh",
+        "tcp-auth:ensure": "node scripts/ensure-tcp-auth-helper.js",
+        "tcp-auth:build": "bash scripts/build-tcp-auth-helper.sh",
+        "tcp-auth:test:native": "bash scripts/test-tcp-auth-helper.sh",
         "start": "vite --force",
-        "predev": "npm run libyang:ensure && npm run tcp-ao:ensure",
+        "predev": "npm run libyang:ensure && npm run tcp-auth:ensure",
         "dev": "concurrently -k \"cross-env BROWSER=none npm start\" \"wait-port 3000 && electron .\"",
         "dev:ui": "node scripts/run-with-local-ui.js dev",
         "build:ui": "node scripts/run-with-local-ui.js build",
@@ -210,8 +210,8 @@
             "synopsis": "Network protocol simulation and analysis toolkit",
             "extraResources": [
                 {
-                    "from": "resources/tcp-ao/linux-${arch}",
-                    "to": "tcp-ao/linux-${arch}"
+                    "from": "resources/tcp-auth/linux-${arch}",
+                    "to": "tcp-auth/linux-${arch}"
                 }
             ]
         },

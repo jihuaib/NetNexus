@@ -27,6 +27,7 @@
     import BmpDataSettings from '../view/settings/BmpDataSettings.vue';
     import RuntimeSettings from '../view/settings/RuntimeSettings.vue';
     import TcpAoSettings from '../view/settings/TcpAoSettings.vue';
+    import TcpMd5Settings from '../view/settings/TcpMd5Settings.vue';
 
     const props = defineProps({
         open: {
@@ -102,7 +103,13 @@
         {
             key: 'tcp-ao',
             label: 'TCP-AO',
-            description: 'RPKI TCP-AO 密钥与轮换 Profile',
+            description: 'BMP/RPKI TCP-AO 密钥与轮换 Profile',
+            icon: moduleNavigationIcons.rpki
+        },
+        {
+            key: 'tcp-md5',
+            label: 'TCP MD5',
+            description: 'BMP 与 RPKI TCP MD5 对端与密钥 Profile',
             icon: moduleNavigationIcons.rpki
         },
         {
@@ -121,6 +128,7 @@
         'data-management': BmpDataSettings,
         runtime: RuntimeSettings,
         'tcp-ao': TcpAoSettings,
+        'tcp-md5': TcpMd5Settings,
         update: UpdateSettings
     });
 

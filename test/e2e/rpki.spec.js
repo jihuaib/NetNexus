@@ -221,6 +221,53 @@ test.describe('RPKI pages', () => {
         expect(JSON.stringify(savedConfig)).not.toContain('edge-current');
         expect(JSON.stringify(savedConfig)).not.toContain('key');
     });
+
+    test('starts with a TCP MD5 profile reference without sending key material', async ({ page }) => {
+        await page.goto('/#/tools/packet-parser');
+        await page.evaluate(() => {
+            window.rpkiApi = new Proxy(window.rpkiApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpMd5Settings') {
+                        return async () => ({
+                            status: 'success',
+                            data: {
+                                profiles: [
+                                    {
+                                        id: 'rpki-cache-md5',
+                                        name: 'RPKI Cache MD5',
+                                        peer: '198.51.100.20/32',
+                                        hasSavedKey: true,
+                                        savedKeyStatus: 'available'
+                                    }
+                                ]
+                            }
+                        });
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+        });
+
+        await page
+            .locator('.main-menu')
+            .getByRole('menuitem', { name: /^RPKI(?:服务器)?$/u })
+            .click();
+        await expect(page).toHaveURL(/#\/rpki\/rpki-config$/u);
+        await page.getByRole('radio', { name: 'TCP MD5', exact: true }).check({ force: true });
+        await page.getByTestId('rpki-tcp-md5-profile-select').click();
+        await page.getByRole('option').filter({ hasText: 'RPKI Cache MD5' }).click();
+        await expect(page.getByText('允许的对端范围：198.51.100.20/32', { exact: true })).toBeVisible();
+
+        await page.getByTestId('rpki-start-button').click();
+        await expect(page.getByTestId('rpki-stop-button')).toBeEnabled();
+
+        const savedConfig = harness.controller.state.rpki.config;
+        expect(savedConfig.authType).toBe('tcp-md5');
+        expect(savedConfig.tcpMd5ProfileId).toBe('rpki-cache-md5');
+        expect(savedConfig.tcpAoProfileId).toBe('');
+        expect(JSON.stringify(savedConfig)).not.toContain('198.51.100.20');
+        expect(JSON.stringify(savedConfig)).not.toContain('key');
+    });
 });
 
 test.describe('RPKI stop lifecycle', () => {

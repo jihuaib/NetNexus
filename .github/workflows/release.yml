@@ -143,10 +143,10 @@ jobs:
             - name: Test bundled libyang runtime
               run: npm run libyang:smoke
 
-            - name: Test native TCP-AO helper
+            - name: Test native TCP authentication helper
               run: |
                   test "$(id -u)" -ne 0
-                  npm run tcp-ao:test:native
+                  npm run tcp-auth:test:native
 
             - name: Run Linux tests
               run: xvfb-run -a npm test
@@ -163,7 +163,7 @@ jobs:
 
             - name: Verify packaged native runtimes and artifacts
               run: |
-                  helper_path="release/${{ matrix.unpacked_dir }}/resources/tcp-ao/linux-${{ matrix.arch }}/tcp-ao-helper"
+                  helper_path="release/${{ matrix.unpacked_dir }}/resources/tcp-auth/linux-${{ matrix.arch }}/tcp-auth-helper"
                   libyang_path="release/${{ matrix.unpacked_dir }}/resources/libyang/linux-${{ matrix.arch }}/bin/yanglint"
                   sqlite_path="release/${{ matrix.unpacked_dir }}/resources/app/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
                   test -x "$helper_path"
@@ -203,7 +203,7 @@ jobs:
                   deb_contents="$(dpkg-deb --contents "${debs[0]}")"
                   chrome_archive_entry="$(awk '$6 == "./opt/NetNexus/chrome-sandbox" { print; found=1 } END { exit !found }' <<<"$deb_contents")"
                   grep --extended-regexp --quiet '^-rwsr-xr-x[[:space:]]+root/root' <<<"$chrome_archive_entry"
-                  grep --fixed-strings --quiet "./opt/NetNexus/resources/tcp-ao/linux-${{ matrix.arch }}/tcp-ao-helper" <<<"$deb_contents"
+                  grep --fixed-strings --quiet "./opt/NetNexus/resources/tcp-auth/linux-${{ matrix.arch }}/tcp-auth-helper" <<<"$deb_contents"
                   grep --fixed-strings --quiet "./opt/NetNexus/resources/libyang/linux-${{ matrix.arch }}/bin/netnexus-libyang-schema" <<<"$deb_contents"
 
                   deb_depends="$(dpkg-deb --field "${debs[0]}" Depends)"

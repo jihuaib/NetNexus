@@ -253,6 +253,63 @@ test.describe('BMP pages', () => {
         await controller.cleanup();
     });
 
+    test('starts with TCP MD5 profile references without sending key material', async ({ page }) => {
+        const bmpPort = await BmpE2eController.getFreePort();
+        const profiles = [
+            {
+                id: 'bmp-md5-v4',
+                name: 'BMP MD5 IPv4',
+                peer: '192.0.2.0/24',
+                hasSavedKey: true,
+                savedKeyStatus: 'available'
+            },
+            {
+                id: 'bmp-md5-v6',
+                name: 'BMP MD5 IPv6',
+                peer: '2001:db8::/64',
+                hasSavedKey: true,
+                savedKeyStatus: 'available'
+            }
+        ];
+
+        await page.goto('/#/bmp/bmp-config');
+        await expect(page.getByTestId('bmp-config-page')).toBeVisible();
+        await page.evaluate(profileList => {
+            window.bmpApi = new Proxy(window.bmpApi, {
+                get(target, property, receiver) {
+                    if (property === 'loadTcpMd5Settings') {
+                        return async () => ({
+                            status: 'success',
+                            data: { profiles: structuredClone(profileList) }
+                        });
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+            window.__bmpE2eEmit?.('tcp-md5:settingsChanged', structuredClone(profileList));
+        }, profiles);
+
+        await page.getByRole('radio', { name: 'TCP MD5（对端共享密钥）', exact: true }).check({ force: true });
+        const profileSelect = page.getByTestId('bmp-tcp-md5-profile-select');
+        await profileSelect.click();
+        await page.getByRole('option').filter({ hasText: 'BMP MD5 IPv4' }).click();
+        await page.getByRole('option').filter({ hasText: 'BMP MD5 IPv6' }).click();
+        await expect(page.getByText('IPv4 1 个 / IPv6 1 个', { exact: false })).toBeVisible();
+
+        await page.getByTestId('bmp-port-input').fill(String(bmpPort));
+        await page.getByTestId('bmp-start-button').click();
+        await expect(page.getByTestId('bmp-stop-button')).toBeEnabled();
+
+        expect(controller.savedConfig.authType).toBe('tcp-md5');
+        expect(controller.savedConfig.tcpMd5ProfileIds).toEqual(['bmp-md5-v4', 'bmp-md5-v6']);
+        expect(controller.savedConfig.tcpAoProfileIds).toEqual([]);
+        expect(JSON.stringify(controller.savedConfig)).not.toContain('192.0.2.0/24');
+        expect(JSON.stringify(controller.savedConfig)).not.toContain('key');
+
+        await page.getByTestId('bmp-stop-button').click();
+        await expect(page.getByTestId('bmp-stop-button')).toBeDisabled();
+    });
+
     test('starts BMP server, ingests mock client data, and renders BMP tabs', async ({ page }) => {
         let bmpPort;
         let liveClient;

@@ -12,7 +12,7 @@ NetNexus 是一个基于 Vue 3、自研 NetNexus UI 和 Electron 的本地网络
 
 ## 功能简介
 
-- **路由与安全**：BGP 模拟器、BMP v3/v4 监控与五阶段路由分析、RPKI-RTR、ROA、Router Key 和 ASPA；BMP、RPKI-RTR 可使用 TCP-AO 强制认证。
+- **路由与安全**：BGP 模拟器、BMP v3/v4 监控与五阶段路由分析、RPKI-RTR、ROA、Router Key 和 ASPA；BMP、RPKI-RTR 可使用 TCP-AO 或 TCP MD5 认证。
 - **网络管理**：SNMP Trap/MIB/查询，以及 NETCONF over SSH、YANG 模型发现、编译、Schema 浏览和 RPC 操作。
 - **本地协议服务**：FTP、DHCPv4/v6、NTP、RADIUS、TFTP 和 Syslog，覆盖配置、运行状态、请求或会话记录。
 - **开发工具**：字符串生成、报文解析、端口监控、网络信息、HTTP API 测试、TCP-AO MAC 和 TCP/UDP 收发。
@@ -29,9 +29,9 @@ npm run dev
 
 应用构建、测试、NetNexus UI 本地联调和文档维护说明见[开发与运行](https://jihuaib.github.io/NetNexus/DEVELOPMENT.html)。
 
-### Ubuntu 与 BMP / RPKI TCP-AO
+### Ubuntu 与 BMP / RPKI TCP 认证
 
-Linux 安装包面向 Ubuntu 24.04+，提供 x64 和 arm64 的原生 `.deb`。BMP、RPKI-RTR 的 TCP-AO 认证还要求 Linux kernel 6.7+ 且内核启用 `CONFIG_TCP_AO=y`。两项服务共享“设置 → TCP-AO”中的 Profile 和轮换密钥；启用后只建立通过内核双向认证的连接，不会回退到普通 TCP。
+Linux 安装包面向 Ubuntu 24.04+，提供 x64 和 arm64 的原生 `.deb`。BMP、RPKI-RTR 的 TCP-AO 认证还要求 Linux kernel 6.7+ 且内核启用 `CONFIG_TCP_AO=y`；兼容旧设备时也可使用 Linux TCP MD5 Signature Option。两种认证分别在“设置 → TCP-AO”和“设置 → TCP MD5”管理 Profile，配置只引用 Profile ID，密钥加密保存在本机。新部署优先使用 TCP-AO。
 
 ```bash
 # 必须在对应架构的 Ubuntu 主机上原生打包，不能交叉打包
@@ -42,7 +42,7 @@ npm run dist:linux:arm64
 sudo apt install ./release/NetNexus-*-linux-*.deb
 ```
 
-项目仅发布 `.deb`；通过 `sudo apt install` 安装时，APT 会自动安装 `fonts-noto-cjk` 和 `libcap2-bin`，安装脚本会把 Electron 的 `chrome-sandbox` 设置为 `root:root 4755`，并授予 NetNexus 监听 BGP 179 等低位端口所需的 `CAP_NET_BIND_SERVICE`，无需用 root 启动应用。NetNexus 是 Electron 桌面应用，运行界面需要有效的 X11 或 Wayland 图形会话；Linux 会自动创建本地凭据密钥文件，X11 转发环境无需额外初始化。当前不支持在无桌面环境的 Linux 后台运行协议服务、再从另一台机器用浏览器打开前端的分离部署方式。安装、内核检查和 TCP-AO 配置方法见[开发与运行](https://jihuaib.github.io/NetNexus/DEVELOPMENT.html#ubuntu-24-04-与-tcp-ao)与[设置](https://jihuaib.github.io/NetNexus/SETTINGS.html#tcp-ao-设置)。
+项目仅发布 `.deb`；通过 `sudo apt install` 安装时，APT 会自动安装 `fonts-noto-cjk` 和 `libcap2-bin`，安装脚本会把 Electron 的 `chrome-sandbox` 设置为 `root:root 4755`，并授予 NetNexus 监听 BGP 179 等低位端口所需的 `CAP_NET_BIND_SERVICE`，无需用 root 启动应用。NetNexus 是 Electron 桌面应用，运行界面需要有效的 X11 或 Wayland 图形会话；Linux 会自动创建本地凭据密钥文件，X11 转发环境无需额外初始化。当前不支持在无桌面环境的 Linux 后台运行协议服务、再从另一台机器用浏览器打开前端的分离部署方式。安装、内核检查和 TCP 认证配置方法见[开发与运行](https://jihuaib.github.io/NetNexus/DEVELOPMENT.html#ubuntu-24-04-与-tcp-认证)、[TCP-AO 设置](https://jihuaib.github.io/NetNexus/SETTINGS.html#tcp-ao-设置)和 [TCP MD5 设置](https://jihuaib.github.io/NetNexus/SETTINGS.html#tcp-md5-设置)。
 
 ## License
 
