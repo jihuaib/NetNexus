@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+const SOURCE_PROJECT_ROOT = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || PROJECT_ROOT);
 
 function projectPath(relativePath) {
     return path.join(PROJECT_ROOT, relativePath);
@@ -10,6 +11,10 @@ function projectPath(relativePath) {
 
 function read(relativePath) {
     return fs.readFileSync(projectPath(relativePath), 'utf8');
+}
+
+function readSource(relativePath) {
+    return fs.readFileSync(path.join(SOURCE_PROJECT_ROOT, relativePath), 'utf8');
 }
 
 const retiredSharedPaths = [
@@ -88,7 +93,7 @@ const nativeHelperSource = read('scripts/tcp-auth-helper.c');
 assert.doesNotMatch(nativeHelperSource, /\bao_profile_config\b|NETNEXUS_TCP_AO_HELPER_VERSION/);
 
 for (const relativePath of ['src/view/bmp/BmpConfig.vue', 'src/view/rpki/RpkiConfig.vue']) {
-    const source = read(relativePath);
+    const source = readSource(relativePath);
     assert.doesNotMatch(source, /(?:class=["'][^"']*|\.)tcp-ao-(?:profile|selection|settings)/);
 }
 
