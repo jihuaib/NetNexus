@@ -2,13 +2,21 @@ const path = require('path');
 const { Worker } = require('worker_threads');
 const { BMP_PERSISTENCE_OP } = require('./bmpPersistenceConst');
 
-const DEFAULT_BATCH_SIZE = 2000;
-const DEFAULT_BATCH_BYTES = 2 * 1024 * 1024;
+const DEFAULT_BATCH_SIZE = 5000;
+const DEFAULT_BATCH_BYTES = 16 * 1024 * 1024;
 const DEFAULT_FLUSH_MS = 20;
 const DEFAULT_HIGH_WATERMARK_BYTES = 64 * 1024 * 1024;
 const DEFAULT_LOW_WATERMARK_BYTES = 32 * 1024 * 1024;
 const DEFAULT_BATCH_RETRY_LIMIT = 3;
 const DEFAULT_BATCH_RETRY_DELAY_MS = 25;
+const MUTATION_BASE_BYTES = 320;
+const MUTATION_SCOPE_BYTES = 256;
+const MUTATION_ROUTE_BYTES = 256;
+const MUTATION_METADATA_BYTES = 256;
+
+function stringBytes(value) {
+    return typeof value === 'string' ? value.length : 0;
+}
 
 function positiveInteger(value, fallback) {
     const number = Number(value);
@@ -103,6 +111,59 @@ class BmpPersistenceClient {
         return `bmp-store-${process.pid}-${Date.now()}-${this.requestSequence}`;
     }
 
+    // Streams an ordered Route Assurance scan from the worker. `onChunk` is
+    // awaited for every chunk; the worker never runs more than `window`
+    // chunks ahead of the last awaited chunk (see streamChunks in the worker).
+    // Resolves with the worker's summary once the scan completes; calling the
+    // returned handle's cancel() stops the scan at the next chunk boundary.
+    streamRouteAssuranceRows(query = {}, options = {}) {
+        const onChunk = typeof options.onChunk === 'function' ? options.onChunk : null;
+        if (!onChunk) {
+            return Promise.reject(new Error('BMP route assurance stream requires onChunk'));
+        }
+        const buffer = new SharedArrayBuffer(8);
+        const state = new Int32Array(buffer);
+        const control = { buffer, window: Math.max(1, Number(options.window) || 4) };
+        let chain = Promise.resolve();
+        let consumerFailure = null;
+        const cancel = () => {
+            Atomics.store(state, 1, 1);
+            Atomics.notify(state, 0);
+        };
+        const handleChunk = chunk => {
+            chain = chain
+                .then(async () => {
+                    if (consumerFailure || Atomics.load(state, 1) !== 0) {
+                        return;
+                    }
+                    try {
+                        await onChunk(chunk);
+                    } catch (error) {
+                        consumerFailure = error;
+                        cancel();
+                    }
+                })
+                .finally(() => {
+                    Atomics.add(state, 0, 1);
+                    Atomics.notify(state, 0);
+                });
+        };
+        const request = this.sendRequest(
+            BMP_PERSISTENCE_OP.STREAM_ROUTE_ASSURANCE_ROWS,
+            { query, control },
+            { onChunk: handleChunk }
+        );
+        const promise = request.then(async summary => {
+            await chain;
+            if (consumerFailure) {
+                throw consumerFailure;
+            }
+            return summary;
+        });
+        promise.cancel = cancel;
+        return promise;
+    }
+
     sendRequest(op, data = null, options = {}) {
         if (!this.worker) {
             return Promise.reject(new Error('BMP persistence worker is not running'));
@@ -118,7 +179,7 @@ class BmpPersistenceClient {
         }
         const messageId = this.makeRequestId();
         return new Promise((resolve, reject) => {
-            this.callbacks.set(messageId, { resolve, reject });
+            this.callbacks.set(messageId, { resolve, reject, onChunk: options.onChunk || null });
             try {
                 this.worker.postMessage({ messageId, op, data });
             } catch (error) {
@@ -131,6 +192,10 @@ class BmpPersistenceClient {
     handleMessage(message) {
         const callback = this.callbacks.get(message?.messageId);
         if (!callback) {
+            return;
+        }
+        if (message.status === 'chunk') {
+            callback.onChunk?.(message.data);
             return;
         }
         this.callbacks.delete(message.messageId);
@@ -162,8 +227,41 @@ class BmpPersistenceClient {
         this.callbacks.clear();
     }
 
+    // Approximates the serialized size for watermark accounting without
+    // re-serializing the whole mutation. The route, scope, and source payloads
+    // are already JSON strings built by bmpPersistenceMutation, so their
+    // lengths dominate; the remaining scalar fields are covered by a fixed
+    // allowance. Stringifying every mutation here doubled the CPU cost on the
+    // ingest thread during large table dumps.
     estimateMutationBytes(mutation) {
-        return Buffer.byteLength(JSON.stringify(mutation), 'utf8');
+        let bytes = MUTATION_BASE_BYTES;
+        const source = mutation?.source;
+        if (source) {
+            bytes += stringBytes(source.keyJson) + stringBytes(source.identityJson);
+            bytes += stringBytes(source.sysName) + stringBytes(source.sysDesc);
+            if (source.metadata) {
+                bytes += MUTATION_METADATA_BYTES;
+            }
+        }
+        const scope = mutation?.scope;
+        if (scope) {
+            bytes += MUTATION_SCOPE_BYTES + stringBytes(scope.keyJson) + stringBytes(scope.identityJson);
+        }
+        const route = mutation?.route;
+        if (route) {
+            bytes +=
+                MUTATION_ROUTE_BYTES +
+                stringBytes(route.keyJson) +
+                stringBytes(route.identityJson) +
+                stringBytes(route.nlriJson) +
+                stringBytes(route.attrJson) +
+                stringBytes(route.routeJson) +
+                stringBytes(route.legacyRouteKey);
+        }
+        if (mutation?.statistics) {
+            bytes += Buffer.byteLength(JSON.stringify(mutation.statistics), 'utf8');
+        }
+        return bytes;
     }
 
     enqueue(mutation) {
@@ -224,12 +322,61 @@ class BmpPersistenceClient {
         return this.queue.length - this.queueHead;
     }
 
+    // Every mutation carries its own source/connection/scope descriptors, and
+    // within one batch those repeat thousands of times. The transport encoding
+    // sends each distinct descriptor once (`refs`) so the structured clone to
+    // the worker stays small; the store rehydrates them in applyBatch.
+    encodeBatchMutations(mutations) {
+        const refs = { sources: [], connections: [], scopes: [] };
+        const sourceIndex = new Map();
+        const connectionIndex = new Map();
+        const scopeIndex = new Map();
+        const intern = (index, table, key, value) => {
+            let position = index.get(key);
+            if (position === undefined) {
+                position = table.length;
+                table.push(value);
+                index.set(key, position);
+            }
+            return position;
+        };
+        const encoded = mutations.map(mutation => {
+            if (!mutation || typeof mutation !== 'object') {
+                return mutation;
+            }
+            const copy = { ...mutation };
+            if (mutation.source && typeof mutation.source === 'object' && mutation.source.id) {
+                copy.sourceRef = intern(sourceIndex, refs.sources, mutation.source.id, mutation.source);
+                delete copy.source;
+            }
+            if (mutation.connection && typeof mutation.connection === 'object' && mutation.connection.id) {
+                copy.connectionRef = intern(
+                    connectionIndex,
+                    refs.connections,
+                    mutation.connection.id,
+                    mutation.connection
+                );
+                delete copy.connection;
+            }
+            if (mutation.scope && typeof mutation.scope === 'object' && mutation.scope.id) {
+                const scope = mutation.scope;
+                const key = `${scope.id}\u001f${scope.epoch}\u001f${scope.state}\u001f${scope.reason}\u001f${scope.vrfName}`;
+                copy.scopeRef = intern(scopeIndex, refs.scopes, key, scope);
+                delete copy.scope;
+            }
+            return copy;
+        });
+        return { mutations: encoded, refs };
+    }
+
     makeBatch(entries) {
         this.batchSequence += 1;
+        const { mutations, refs } = this.encodeBatchMutations(entries.map(entry => entry.mutation));
         const batch = {
             batchId: `bmp-${process.pid}-${Date.now()}-${this.batchSequence}`,
             createdAtMs: Date.now(),
-            mutations: entries.map(entry => entry.mutation)
+            mutations,
+            refs
         };
         batch.includeDeltas =
             typeof this.includeCommittedDeltas === 'function'
@@ -259,7 +406,6 @@ class BmpPersistenceClient {
             return;
         }
         pending.attempts = (pending.attempts || 0) + 1;
-
         this.sendRequest(BMP_PERSISTENCE_OP.APPLY_BATCH, pending.batch, { allowDuringClosing: true })
             .then(result => {
                 if (this.inFlight !== pending) {

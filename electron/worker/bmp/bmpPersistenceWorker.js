@@ -18,6 +18,38 @@ function failure(messageId, error) {
     });
 }
 
+// Chunk flow control for streaming reads. The client hands over a
+// SharedArrayBuffer with two Int32 slots: [0] = chunks consumed by the
+// client, [1] = cancel flag. The worker may run at most `window` chunks ahead
+// of the consumer and blocks with Atomics.wait otherwise, so a slow consumer
+// never causes an unbounded backlog of posted messages.
+const STREAM_CONSUMED_INDEX = 0;
+const STREAM_CANCEL_INDEX = 1;
+
+function streamChunks(messageId, control, produce) {
+    const state = control?.buffer instanceof SharedArrayBuffer ? new Int32Array(control.buffer) : null;
+    const window = Math.max(1, Number(control?.window) || 4);
+    let produced = 0;
+    const emit = chunk => {
+        if (state) {
+            for (;;) {
+                if (Atomics.load(state, STREAM_CANCEL_INDEX) !== 0) {
+                    return false;
+                }
+                const consumed = Atomics.load(state, STREAM_CONSUMED_INDEX);
+                if (produced - consumed < window) {
+                    break;
+                }
+                Atomics.wait(state, STREAM_CONSUMED_INDEX, consumed, 1000);
+            }
+        }
+        parentPort.postMessage({ messageId, status: 'chunk', data: chunk });
+        produced += 1;
+        return true;
+    };
+    return produce(emit);
+}
+
 function requireStore() {
     if (!store) {
         throw new Error('BMP persistence store is not open');
@@ -83,6 +115,14 @@ function handleMessage(message) {
                 break;
             case BMP_PERSISTENCE_OP.PURGE_SOURCE:
                 success(messageId, requireStore().purgeSource(data));
+                break;
+            case BMP_PERSISTENCE_OP.STREAM_ROUTE_ASSURANCE_ROWS:
+                success(
+                    messageId,
+                    streamChunks(messageId, data.control, emit =>
+                        requireStore().streamRouteAssuranceRows(data.query || {}, emit)
+                    )
+                );
                 break;
             case BMP_PERSISTENCE_OP.PURGE_STALE_ROUTES:
                 success(messageId, requireStore().purgeStaleRoutes(data));

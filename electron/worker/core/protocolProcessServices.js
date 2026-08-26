@@ -9,6 +9,7 @@ const PROTOCOL_PROCESS_SERVICES = Object.freeze({
     RADIUS: 'netnexus.protocol.radius',
     TFTP: 'netnexus.protocol.tftp',
     SYSLOG: 'netnexus.protocol.syslog',
+    GRPC: 'netnexus.protocol.grpc',
     YANG: 'netnexus.protocol.yang',
     NETCONF: 'netnexus.protocol.yang'
 });
@@ -24,6 +25,7 @@ const PROTOCOL_PROCESS_DISPLAY_NAMES = Object.freeze({
     [PROTOCOL_PROCESS_SERVICES.RADIUS]: 'RADIUS 协议进程',
     [PROTOCOL_PROCESS_SERVICES.TFTP]: 'TFTP 协议进程',
     [PROTOCOL_PROCESS_SERVICES.SYSLOG]: 'Syslog 协议进程',
+    [PROTOCOL_PROCESS_SERVICES.GRPC]: 'gRPC 协议进程',
     [PROTOCOL_PROCESS_SERVICES.YANG]: 'YANG 协议进程'
 });
 

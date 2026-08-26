@@ -23,6 +23,7 @@ const NtpApp = require('./ntpApp');
 const RadiusApp = require('./radiusApp');
 const TftpApp = require('./tftpApp');
 const SyslogApp = require('./syslogApp');
+const GrpcApp = require('./grpcApp');
 const YangApp = require('./yangApp');
 const NetconfApp = require('./netconfApp');
 const AppUpdater = require('./updater');
@@ -39,6 +40,7 @@ const TcpAoSettingsLifecycleGate = require('./tcpAoSettingsLifecycleGate');
 const DEFAULT_SHUTDOWN_STEP_TIMEOUT_MS = 45000;
 const BMP_SHUTDOWN_STEP_TIMEOUT_MS = 6 * 60 * 1000;
 const PENDING_START_WAIT_TIMEOUT_MS = 15000;
+const DEVTOOLS_REOPEN_DELAY_MS = 800;
 /**
  * 用于系统菜单处理
  */
@@ -101,6 +103,9 @@ class SystemApp {
         this.tftpApp = new TftpApp(ipc, this.programStore);
         this.syslogApp = new SyslogApp(ipc, this.programStore, {
             closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('syslog')
+        });
+        this.grpcApp = new GrpcApp(ipc, this.programStore, {
+            closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('grpc')
         });
         this.yangApp = new YangApp(ipc, this.programStore, { primaryWebContents });
         this.netconfApp = new NetconfApp(ipc, this.programStore, {
@@ -259,6 +264,7 @@ class SystemApp {
                 this.radiusApp,
                 this.tftpApp,
                 this.syslogApp,
+                this.grpcApp,
                 this.toolsApp,
                 this.yangApp,
                 this.netconfApp
@@ -284,7 +290,7 @@ class SystemApp {
     }
 
     registerHandlers(ipc) {
-        ipc.on('common:openDeveloperOptions', () => this.handleOpenDeveloperOptions());
+        ipc.on('common:openDeveloperOptions', event => this.handleOpenDeveloperOptions(event));
         ipc.on('common:openSoftwareInfo', () => this.handleOpenSoftwareInfo());
         ipc.handle('common:saveGeneralSettings', (event, settings) => this.handleSaveGeneralSettings(settings));
         ipc.handle('common:getGeneralSettings', () => this.handleGetGeneralSettings());
@@ -580,8 +586,35 @@ class SystemApp {
         };
     }
 
-    handleOpenDeveloperOptions() {
-        this.win.webContents.openDevTools();
+    /**
+     * 主窗口在 macOS 上关闭后可由 Dock 重新创建，this.win 可能已销毁，
+     * 因此优先使用发起请求的 webContents。
+     */
+    handleOpenDeveloperOptions(event = null) {
+        const sender = event && event.sender && !event.sender.isDestroyed() ? event.sender : null;
+        const target = sender || (this.win && !this.win.isDestroyed() ? this.win.webContents : null);
+        if (!target) {
+            logger.warn('无法打开开发人员选项：主窗口不存在');
+            return;
+        }
+        // 开发模式下启动时会自动打开 DevTools，它可能是独立窗口且被主窗口遮住：
+        // 已打开时先关再开并激活，保证用户点击后一定能看到。
+        if (target.isDevToolsOpened()) {
+            // closeDevTools 是异步的：紧接着或在 devtools-closed 事件里 openDevTools 都会被吞掉（Electron 22 实测），
+            // 稍等片刻再重新打开并激活，保证独立 DevTools 窗口被挡住时也能重新弹到前面。
+            target.closeDevTools();
+            setTimeout(() => {
+                if (!target.isDestroyed()) {
+                    target.openDevTools({ activate: true });
+                }
+            }, DEVTOOLS_REOPEN_DELAY_MS);
+            return;
+        }
+        target.openDevTools({ activate: true });
+    }
+
+    setMainWindow(win) {
+        this.win = win;
     }
 
     showSoftwareInfo() {
@@ -623,6 +656,7 @@ class SystemApp {
             this.radiusApp,
             this.tftpApp,
             this.syslogApp,
+            this.grpcApp,
             this.yangApp,
             this.netconfApp
         ].forEach(appInstance => this.applyLogLevelToApp(appInstance));
@@ -758,6 +792,7 @@ class SystemApp {
             radius: this.radiusApp.getRadiusRunning(),
             tftp: this.tftpApp.getTftpRunning(),
             syslog: this.syslogApp.getSyslogRunning(),
+            grpc: this.grpcApp.getGrpcRunning(),
             netconf: this.netconfApp.getRunning(),
             yang: this.yangApp.getRunning(),
             api: this.externalApiServer.getRunning(),
@@ -850,7 +885,8 @@ class SystemApp {
                 ['NTP', () => this.ntpApp.getNtpRunning(), () => this.ntpApp.handleStopNtp()],
                 ['RADIUS', () => this.radiusApp.getRadiusRunning(), () => this.radiusApp.handleStopRadius()],
                 ['TFTP', () => this.tftpApp.getTftpRunning(), () => this.tftpApp.handleStopTftp()],
-                ['Syslog', () => this.syslogApp.getSyslogRunning(), () => this.syslogApp.handleStopSyslog()]
+                ['Syslog', () => this.syslogApp.getSyslogRunning(), () => this.syslogApp.handleStopSyslog()],
+                ['gRPC', () => this.grpcApp.hasWorker(), () => this.grpcApp.handleShutdown()]
             ];
             for (const [name, isRunning, stop, timeoutMs] of protocolSteps) {
                 await run(

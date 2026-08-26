@@ -125,8 +125,7 @@ const bmpBrowserMockScript = `
         getBgpStatisticsReports: client => window.__bmpE2eCall('getBgpStatisticsReports', client),
         getBgpInstanceStatisticsReports: client => window.__bmpE2eCall('getBgpInstanceStatisticsReports', client),
         getPersistenceStatus: () => window.__bmpE2eCall('getPersistenceStatus'),
-        getPersistedRouteEvents: query =>
-            window.__bmpE2eCall('getPersistedRouteEvents', structuredClone(query || {}))
+
     };
 })();
 `;
@@ -272,7 +271,6 @@ const BmpE2eController = (() => {
                 case 'queryStatisticsReports':
                 case 'purgeSource':
                 case 'purgeStaleRoutes':
-                case 'queryEvents':
                 case 'sweep':
                     return currentStore[method](data || {});
                 case 'getStatus': {
@@ -282,7 +280,6 @@ const BmpE2eController = (() => {
                         connections: 'SELECT COUNT(*) AS count FROM bmp_connections',
                         scopes: 'SELECT COUNT(*) AS count FROM bmp_rib_scopes',
                         currentRoutes: 'SELECT COALESCE(SUM(route_count), 0) AS count FROM bmp_scope_route_counts',
-                        routeEvents: 'SELECT COUNT(*) AS count FROM bmp_route_events',
                         statisticsSamples: 'SELECT COUNT(*) AS count FROM bmp_statistics_samples',
                         statisticsLatest: 'SELECT COUNT(*) AS count FROM bmp_statistics_latest',
                         routeAttributes: 'SELECT COUNT(*) AS count FROM bmp_route_attributes',
@@ -1160,22 +1157,6 @@ const BmpE2eController = (() => {
                         instance: this.summarizeInstance(data.instance),
                         routeKey: data.routeKey,
                         route: this.summarizeRoute(data.route)
-                    };
-                case 'getPersistedRouteEvents':
-                    return {
-                        groupByRoute: data.groupByRoute === true,
-                        prefixExact: data.prefixExact,
-                        prefix: data.prefix,
-                        prefixLength: data.prefixLength,
-                        scopeKind: data.scopeKind,
-                        ribType: data.ribType,
-                        scopeId: data.scopeId,
-                        routeId: data.routeId,
-                        routeKey: data.routeKey,
-                        toEventId: data.toEventId,
-                        pageSize: data.pageSize,
-                        cursor: data.cursor || null,
-                        includeTotal: data.includeTotal
                     };
                 case 'getRouteLens':
                     return {

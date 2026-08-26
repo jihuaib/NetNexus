@@ -6,7 +6,6 @@
                 <nn-tab-pane key="bmp-config" tab="BMP配置" />
                 <nn-tab-pane key="route-assurance" tab="路由矩阵" />
                 <nn-tab-pane key="route-lens" tab="路由追踪" />
-                <nn-tab-pane key="route-history" tab="路由轨迹" />
             </nn-tabs>
         </div>
 
@@ -34,7 +33,7 @@
     const activeTabKey = ref('bmp-config');
     const currentTab = ref(null);
     const defaultTabKey = 'bmp-config';
-    const tabKeys = new Set(['bmp-config', 'route-assurance', 'route-lens', 'route-history']);
+    const tabKeys = new Set(['bmp-config', 'route-assurance', 'route-lens']);
     const monitorOnlyTabKeys = new Set(['bgp-session', 'bgp-loc-rib']);
 
     const handleTabChange = key => {

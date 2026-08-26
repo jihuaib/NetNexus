@@ -1816,9 +1816,9 @@
         });
         const presenceRequired = Boolean(
             requiredComment ||
-            schemaMetadata.placeholder ||
-            valueSchemaMetadata.isListKey ||
-            valueSchemaMetadata.schemaNode?.mandatory === true
+                schemaMetadata.placeholder ||
+                valueSchemaMetadata.isListKey ||
+                valueSchemaMetadata.schemaNode?.mandatory === true
         );
         const required = presenceRequired && !valueSchemaMetadata.acceptsEmptyString;
         const hasRequiredDescendant = childNodes.some(child => child.required || child.hasRequiredDescendant);

@@ -184,8 +184,7 @@ contextBridge.exposeInMainWorld('bmpApi', {
     getPersistenceStatus: () => ipcRenderer.invoke('bmp:getPersistenceStatus'),
     getPersistenceDatabaseInfo: () => ipcRenderer.invoke('bmp:getPersistenceDatabaseInfo'),
     deletePersistenceDatabase: () => ipcRenderer.invoke('bmp:deletePersistenceDatabase'),
-    getPersistedRoutes: (query = {}) => ipcRenderer.invoke('bmp:getPersistedRoutes', query),
-    getPersistedRouteEvents: (query = {}) => ipcRenderer.invoke('bmp:getPersistedRouteEvents', query)
+    getPersistedRoutes: (query = {}) => ipcRenderer.invoke('bmp:getPersistedRoutes', query)
 });
 
 // rpki模块
@@ -362,6 +361,46 @@ contextBridge.exposeInMainWorld('tftpApi', {
     stopTftp: () => ipcRenderer.invoke('tftp:stopTftp'),
     getTransferList: () => ipcRenderer.invoke('tftp:getTransferList'),
     clearTransferHistory: () => ipcRenderer.invoke('tftp:clearTransferHistory')
+});
+
+// grpc模块
+contextBridge.exposeInMainWorld('grpcApi', {
+    startRuntime: () => ipcRenderer.invoke('grpc:startRuntime'),
+    stopRuntime: () => ipcRenderer.invoke('grpc:stopRuntime'),
+    getRuntimeState: () => ipcRenderer.invoke('grpc:getRuntimeState'),
+    getProtoConfig: () => ipcRenderer.invoke('grpc:getProtoConfig'),
+    selectProtoFiles: () => ipcRenderer.invoke('grpc:selectProtoFiles'),
+    selectProtoDirectory: () => ipcRenderer.invoke('grpc:selectProtoDirectory'),
+    compileProtos: payload => ipcRenderer.invoke('grpc:compileProtos', payload),
+    getProtoCatalog: () => ipcRenderer.invoke('grpc:getProtoCatalog'),
+    clearProtos: () => ipcRenderer.invoke('grpc:clearProtos'),
+    getProtoTreeChildren: parentKey => ipcRenderer.invoke('grpc:getProtoTreeChildren', parentKey),
+    getProtoNode: key => ipcRenderer.invoke('grpc:getProtoNode', key),
+    saveProtoProject: payload => ipcRenderer.invoke('grpc:saveProtoProject', payload),
+    listProtoProjects: () => ipcRenderer.invoke('grpc:listProtoProjects'),
+    importProtoProject: payload => ipcRenderer.invoke('grpc:importProtoProject', payload),
+    exportProtoProject: payload => ipcRenderer.invoke('grpc:exportProtoProject', payload),
+    removeProtoProject: payload => ipcRenderer.invoke('grpc:removeProtoProject', payload),
+    selectDirectory: payload => ipcRenderer.invoke('grpc:selectDirectory', payload),
+    getMessageTemplate: typeName => ipcRenderer.invoke('grpc:getMessageTemplate', typeName),
+    saveServerConfig: config => ipcRenderer.invoke('grpc:saveServerConfig', config),
+    getServerConfig: () => ipcRenderer.invoke('grpc:getServerConfig'),
+    startServer: config => ipcRenderer.invoke('grpc:startServer', config),
+    stopServer: () => ipcRenderer.invoke('grpc:stopServer'),
+    getServerStatus: () => ipcRenderer.invoke('grpc:getServerStatus'),
+    getMessageList: query => ipcRenderer.invoke('grpc:getMessageList', query),
+    getMessageDetail: id => ipcRenderer.invoke('grpc:getMessageDetail', id),
+    clearMessageHistory: () => ipcRenderer.invoke('grpc:clearMessageHistory'),
+    getStreamList: () => ipcRenderer.invoke('grpc:getStreamList'),
+    sendStreamMessage: payload => ipcRenderer.invoke('grpc:sendStreamMessage', payload),
+    closeStream: payload => ipcRenderer.invoke('grpc:closeStream', payload),
+    saveClientConfig: config => ipcRenderer.invoke('grpc:saveClientConfig', config),
+    getClientConfig: () => ipcRenderer.invoke('grpc:getClientConfig'),
+    clientStartCall: payload => ipcRenderer.invoke('grpc:clientStartCall', payload),
+    clientSendMessage: payload => ipcRenderer.invoke('grpc:clientSendMessage', payload),
+    clientEndCall: payload => ipcRenderer.invoke('grpc:clientEndCall', payload),
+    clientCancelCall: payload => ipcRenderer.invoke('grpc:clientCancelCall', payload),
+    getClientCallList: () => ipcRenderer.invoke('grpc:getClientCallList')
 });
 
 // syslog模块

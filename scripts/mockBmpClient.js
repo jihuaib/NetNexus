@@ -31,7 +31,7 @@ const ROUTE_HISTORY_SCENARIO = Object.freeze({
     flowSpecPrefixLength: 24,
     flowSpecIdentity: 'dst=198.18.253.0/24; proto = 6; dst-port = 443'
 });
-const SUPPORTED_SCENARIOS = new Set(['full', 'route-history']);
+const SUPPORTED_SCENARIOS = new Set(['full', 'non-ip-lifecycle']);
 
 function u16(value) {
     return Buffer.from([(value >> 8) & 0xff, value & 0xff]);
@@ -736,7 +736,7 @@ function parseArgs(argv) {
         throw new Error(`Invalid --interval: ${options.interval}`);
     }
     if (!SUPPORTED_SCENARIOS.has(options.scenario)) {
-        throw new Error(`Invalid --scenario: ${options.scenario}; expected full or route-history`);
+        throw new Error(`Invalid --scenario: ${options.scenario}; expected full or non-ip-lifecycle`);
     }
 
     return options;
@@ -750,7 +750,7 @@ Options:
   --port <port>      BMP server port, default ${DEFAULT_OPTIONS.port}
   --routes <count>   IPv4 route count, default ${DEFAULT_OPTIONS.routes}
   --interval <ms>    Delay between message batches, default ${DEFAULT_OPTIONS.interval}
-  --scenario <name>  Scenario: full or route-history, default ${DEFAULT_OPTIONS.scenario}
+  --scenario <name>  Scenario: full or non-ip-lifecycle, default ${DEFAULT_OPTIONS.scenario}
   --once             Send data once and close the TCP connection
   --dump-packets     Print each sent BMP packet as copyable hex bytes, default on
   --no-dump-packets  Do not print packet hex bytes
@@ -797,14 +797,14 @@ function buildRouteHistoryScenario() {
 
     return [
         {
-            name: 'route-history-initiation',
+            name: 'non-ip-lifecycle-initiation',
             data: initiationMessage({
                 sysName: ROUTE_HISTORY_SCENARIO.sysName,
-                sysDesc: 'NetNexus route-history UI fixture'
+                sysDesc: 'NetNexus non-IP route lifecycle fixture'
             })
         },
         {
-            name: 'route-history-peer-up-post-policy-adj-rib-in',
+            name: 'non-ip-lifecycle-peer-up-post-policy-adj-rib-in',
             data: bmpMessage(
                 BmpConst.BMP_MSG_TYPE.PEER_UP_NOTIFICATION,
                 peerUpPayload({
@@ -815,7 +815,7 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-lifecycle-announce',
+            name: 'non-ip-lifecycle-lifecycle-announce',
             data: routeMonitoringMessage(
                 peer,
                 ipv4Update([ROUTE_HISTORY_SCENARIO.lifecyclePrefix], {
@@ -827,7 +827,7 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-lifecycle-replace',
+            name: 'non-ip-lifecycle-lifecycle-replace',
             data: routeMonitoringMessage(
                 peer,
                 ipv4Update([ROUTE_HISTORY_SCENARIO.lifecyclePrefix], {
@@ -839,11 +839,11 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-lifecycle-withdraw',
+            name: 'non-ip-lifecycle-lifecycle-withdraw',
             data: routeMonitoringMessage(peer, ipv4Withdraw([ROUTE_HISTORY_SCENARIO.lifecyclePrefix]))
         },
         {
-            name: 'route-history-active-announce',
+            name: 'non-ip-lifecycle-active-announce',
             data: routeMonitoringMessage(
                 peer,
                 ipv4Update([ROUTE_HISTORY_SCENARIO.activePrefix], {
@@ -855,11 +855,11 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-withdraw-noop',
+            name: 'non-ip-lifecycle-withdraw-noop',
             data: routeMonitoringMessage(peer, ipv4Withdraw([ROUTE_HISTORY_SCENARIO.withdrawNoopPrefix]))
         },
         {
-            name: 'route-history-evpn-announce',
+            name: 'non-ip-lifecycle-evpn-announce',
             data: routeMonitoringMessage(
                 peer,
                 multiprotocolUpdate(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, evpnRoute, {
@@ -871,7 +871,7 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-evpn-replace',
+            name: 'non-ip-lifecycle-evpn-replace',
             data: routeMonitoringMessage(
                 peer,
                 multiprotocolUpdate(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, evpnRoute, {
@@ -883,14 +883,14 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-evpn-withdraw',
+            name: 'non-ip-lifecycle-evpn-withdraw',
             data: routeMonitoringMessage(
                 peer,
                 multiprotocolWithdraw(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN, evpnRoute)
             )
         },
         {
-            name: 'route-history-bgp-ls-announce',
+            name: 'non-ip-lifecycle-bgp-ls-announce',
             data: routeMonitoringMessage(
                 peer,
                 multiprotocolUpdate(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS, bgpLsRoute, {
@@ -900,7 +900,7 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-bgp-ls-replace',
+            name: 'non-ip-lifecycle-bgp-ls-replace',
             data: routeMonitoringMessage(
                 peer,
                 multiprotocolUpdate(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS, bgpLsRoute, {
@@ -910,14 +910,14 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-bgp-ls-withdraw',
+            name: 'non-ip-lifecycle-bgp-ls-withdraw',
             data: routeMonitoringMessage(
                 peer,
                 multiprotocolWithdraw(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS, bgpLsRoute)
             )
         },
         {
-            name: 'route-history-flowspec-announce',
+            name: 'non-ip-lifecycle-flowspec-announce',
             data: routeMonitoringMessage(
                 peer,
                 multiprotocolUpdate(
@@ -929,7 +929,7 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-flowspec-replace',
+            name: 'non-ip-lifecycle-flowspec-replace',
             data: routeMonitoringMessage(
                 peer,
                 multiprotocolUpdate(
@@ -941,7 +941,7 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-flowspec-withdraw',
+            name: 'non-ip-lifecycle-flowspec-withdraw',
             data: routeMonitoringMessage(
                 peer,
                 multiprotocolWithdraw(
@@ -952,25 +952,25 @@ function buildRouteHistoryScenario() {
             )
         },
         {
-            name: 'route-history-ipv4-eor',
+            name: 'non-ip-lifecycle-ipv4-eor',
             data: routeMonitoringMessage(peer, endOfRibUpdate())
         },
         {
-            name: 'route-history-evpn-eor',
+            name: 'non-ip-lifecycle-evpn-eor',
             data: routeMonitoringMessage(
                 peer,
                 endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_L2VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN)
             )
         },
         {
-            name: 'route-history-bgp-ls-eor',
+            name: 'non-ip-lifecycle-bgp-ls-eor',
             data: routeMonitoringMessage(
                 peer,
                 endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_BGP_LS, BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS)
             )
         },
         {
-            name: 'route-history-flowspec-eor',
+            name: 'non-ip-lifecycle-flowspec-eor',
             data: routeMonitoringMessage(
                 peer,
                 endOfRibUpdate(BgpConst.BGP_AFI_TYPE.AFI_IPV4, BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC)
@@ -980,7 +980,7 @@ function buildRouteHistoryScenario() {
 }
 
 function buildScenario(options) {
-    if ((options.scenario || DEFAULT_OPTIONS.scenario) === 'route-history') {
+    if ((options.scenario || DEFAULT_OPTIONS.scenario) === 'non-ip-lifecycle') {
         return buildRouteHistoryScenario();
     }
 
@@ -2226,9 +2226,9 @@ async function run() {
     }
 
     const messages = buildScenario(options);
-    if (options.scenario === 'route-history') {
+    if (options.scenario === 'non-ip-lifecycle') {
         console.log(
-            `route-history fixture: sysName=${ROUTE_HISTORY_SCENARIO.sysName}, ` +
+            `non-ip-lifecycle fixture: sysName=${ROUTE_HISTORY_SCENARIO.sysName}, ` +
                 `lifecycle=${ROUTE_HISTORY_SCENARIO.lifecyclePrefix}/${ROUTE_HISTORY_SCENARIO.prefixLength}, ` +
                 `active=${ROUTE_HISTORY_SCENARIO.activePrefix}/${ROUTE_HISTORY_SCENARIO.prefixLength}, ` +
                 `withdraw-noop=${ROUTE_HISTORY_SCENARIO.withdrawNoopPrefix}/${ROUTE_HISTORY_SCENARIO.prefixLength}\n` +
@@ -2306,5 +2306,22 @@ if (require.main === module) {
 module.exports = {
     buildScenario,
     parseArgs,
-    ROUTE_HISTORY_SCENARIO
+    ROUTE_HISTORY_SCENARIO,
+    // Packet builders shared with scripts/mockBmpScaleClient.js.
+    builders: {
+        u16,
+        u32,
+        ip,
+        ipBytes,
+        rd,
+        bmpMessage,
+        peerUpPayload,
+        locRibPeerUpPayload,
+        initiationMessage,
+        routeMonitoringMessage,
+        statisticsReportMessage,
+        ipv4Update,
+        multiprotocolUpdate,
+        endOfRibUpdate
+    }
 };

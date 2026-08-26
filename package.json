@@ -115,6 +115,7 @@
         "benchmark:rpki-sqlite": "cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/benchmarks/rpki_sqlite_scale_benchmark.js",
         "mock:bgp": "node scripts/mockBgpClient.js",
         "mock:bmp": "node scripts/mockBmpClient.js",
+        "mock:bmp:scale": "node scripts/mockBmpScaleClient.js",
         "mock:netconf": "node scripts/mockNetconfServer.js",
         "mock:radius": "node scripts/mockRadiusClient.js",
         "mock:snmp": "node scripts/manual/snmp/snmp_mib_browser_agent.js",
@@ -122,6 +123,7 @@
         "mock:tftp": "node scripts/mockTftpClient.js",
         "mock:tcp": "node scripts/mockTcpServer.js",
         "mock:udp": "node scripts/mockUdpServer.js",
+        "mock:grpc": "node scripts/mockGrpcDialout.js",
         "docs:install": "node scripts/run-docs-site.js install",
         "docs:dev": "node scripts/run-docs-site.js dev",
         "docs:build": "node scripts/run-docs-site.js build",
@@ -328,6 +330,8 @@
         "wait-port": "^1.1.0"
     },
     "dependencies": {
+        "@grpc/grpc-js": "^1.14.4",
+        "@grpc/proto-loader": "^0.8.1",
         "better-sqlite3": "11.10.0",
         "dayjs": "^1.11.13",
         "electron-log": "^5.3.3",
@@ -338,6 +342,7 @@
         "ipaddr.js": "^2.1.0",
         "net-snmp": "^3.26.3",
         "netnexus-ui": "1.0.2",
+        "protobufjs": "^7.6.5",
         "ssh2": "^1.15.0"
     }
 }

@@ -438,11 +438,11 @@
         const parentListKeys = Array.isArray(parentContext.listKeys) ? parentContext.listKeys : [];
         const isListKey = Boolean(
             node?.isListKey === true ||
-            node?.isKey === true ||
-            node?.keyLeaf === true ||
-            (normalizedKeyword === 'leaf' &&
-                parentContext.parentKeyword === 'list' &&
-                parentListKeys.includes(schemaLocalName(name)))
+                node?.isKey === true ||
+                node?.keyLeaf === true ||
+                (normalizedKeyword === 'leaf' &&
+                    parentContext.parentKeyword === 'list' &&
+                    parentListKeys.includes(schemaLocalName(name)))
         );
         const childContext = {
             parentKeyword: normalizedKeyword,
@@ -675,11 +675,11 @@
     const workspaceHasSchemaCompilation = workspace =>
         Boolean(
             workspace?.compileId &&
-            (workspace?.success === true ||
-                workspace?.schemaAvailable === true ||
-                workspace?.schemaTree?.authoritative === true ||
-                workspace?.validation?.schemaAvailable === true ||
-                workspace?.validation?.succeeded === true)
+                (workspace?.success === true ||
+                    workspace?.schemaAvailable === true ||
+                    workspace?.schemaTree?.authoritative === true ||
+                    workspace?.validation?.schemaAvailable === true ||
+                    workspace?.validation?.succeeded === true)
         );
 
     const loadWorkspace = async ({ preserveTree = false, retrySchemaRestore = true } = {}) => {

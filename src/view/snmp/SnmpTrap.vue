@@ -2,113 +2,107 @@
     <div class="nn-container snmp-trap-page">
         <nn-card title="SNMP Trap 监控" class="trap-card">
             <template #extra>
-                <nn-space v-if="runtimeReady">
-                    <nn-button danger :loading="clearLoading" @click="clearHistory">
+                <nn-space>
+                    <nn-button danger :disabled="!runtimeReady" :loading="clearLoading" @click="clearHistory">
                         <template #icon><DeleteOutlined /></template>
                         清空历史
                     </nn-button>
                 </nn-space>
             </template>
 
-            <div v-if="!runtimeReady" class="trap-runtime-empty" data-testid="snmp-trap-runtime-stopped">
-                <nn-empty description="SNMP 进程未运行" />
-            </div>
+            <!-- 统计信息 -->
+            <nn-row :gutter="16" class="stats-row">
+                <nn-col :span="6">
+                    <nn-statistic title="总接收数量" :value="totalTraps" prefix="#" />
+                </nn-col>
+                <nn-col :span="6">
+                    <nn-statistic title="今日接收" :value="todayTraps" prefix="#" />
+                </nn-col>
+                <nn-col :span="6">
+                    <nn-statistic title="最近1小时" :value="recentTraps" prefix="#" />
+                </nn-col>
+                <nn-col :span="6">
+                    <nn-statistic title="在线代理" :value="onlineAgents" prefix="#" />
+                </nn-col>
+            </nn-row>
 
-            <template v-else>
-                <!-- 统计信息 -->
-                <nn-row :gutter="16" class="stats-row">
-                    <nn-col :span="6">
-                        <nn-statistic title="总接收数量" :value="totalTraps" prefix="#" />
-                    </nn-col>
-                    <nn-col :span="6">
-                        <nn-statistic title="今日接收" :value="todayTraps" prefix="#" />
-                    </nn-col>
-                    <nn-col :span="6">
-                        <nn-statistic title="最近1小时" :value="recentTraps" prefix="#" />
-                    </nn-col>
-                    <nn-col :span="6">
-                        <nn-statistic title="在线代理" :value="onlineAgents" prefix="#" />
-                    </nn-col>
-                </nn-row>
+            <!-- 筛选器 -->
+            <nn-row :gutter="16" class="filter-row">
+                <nn-col :span="6">
+                    <nn-select
+                        v-model:value="filters.version"
+                        placeholder="选择SNMP版本"
+                        allow-clear
+                        style="width: 100%"
+                        @change="handleFilterChange"
+                    >
+                        <nn-select-option value="v1">SNMPv1</nn-select-option>
+                        <nn-select-option value="v2c">SNMPv2c</nn-select-option>
+                        <nn-select-option value="v3">SNMPv3</nn-select-option>
+                    </nn-select>
+                </nn-col>
+                <nn-col :span="6">
+                    <nn-input
+                        v-model:value="filters.sourceIp"
+                        placeholder="源IP地址"
+                        allow-clear
+                        @change="handleFilterChange"
+                    />
+                </nn-col>
+                <nn-col :span="6">
+                    <nn-input
+                        v-model:value="filters.community"
+                        placeholder="Community"
+                        allow-clear
+                        @change="handleFilterChange"
+                    />
+                </nn-col>
+                <nn-col :span="6">
+                    <nn-range-picker
+                        v-model:value="filters.timeRange"
+                        show-time
+                        format="YYYY-MM-DD HH:mm:ss"
+                        style="width: 100%"
+                        @change="handleFilterChange"
+                    />
+                </nn-col>
+            </nn-row>
 
-                <!-- 筛选器 -->
-                <nn-row :gutter="16" class="filter-row">
-                    <nn-col :span="6">
-                        <nn-select
-                            v-model:value="filters.version"
-                            placeholder="选择SNMP版本"
-                            allow-clear
-                            style="width: 100%"
-                            @change="handleFilterChange"
-                        >
-                            <nn-select-option value="v1">SNMPv1</nn-select-option>
-                            <nn-select-option value="v2c">SNMPv2c</nn-select-option>
-                            <nn-select-option value="v3">SNMPv3</nn-select-option>
-                        </nn-select>
-                    </nn-col>
-                    <nn-col :span="6">
-                        <nn-input
-                            v-model:value="filters.sourceIp"
-                            placeholder="源IP地址"
-                            allow-clear
-                            @change="handleFilterChange"
-                        />
-                    </nn-col>
-                    <nn-col :span="6">
-                        <nn-input
-                            v-model:value="filters.community"
-                            placeholder="Community"
-                            allow-clear
-                            @change="handleFilterChange"
-                        />
-                    </nn-col>
-                    <nn-col :span="6">
-                        <nn-range-picker
-                            v-model:value="filters.timeRange"
-                            show-time
-                            format="YYYY-MM-DD HH:mm:ss"
-                            style="width: 100%"
-                            @change="handleFilterChange"
-                        />
-                    </nn-col>
-                </nn-row>
-
-                <!-- Trap列表表格 -->
-                <nn-table
-                    :columns="columns"
-                    :data-source="traps"
-                    :loading="loading"
-                    :pagination="pagination"
-                    :scroll="{ x: 1200, y: 'calc(100vh - 350px)' }"
-                    row-key="id"
-                    class="nn-margin-top-10 trap-list-table"
-                    @change="handleTableChange"
-                >
-                    <template #bodyCell="{ column, record }">
-                        <template v-if="column.key === 'version'">
-                            <nn-tag :color="getVersionColor(record.version)">
-                                {{ record.version.toUpperCase() }}
-                            </nn-tag>
-                        </template>
-                        <template v-else-if="column.key === 'status'">
-                            <nn-tag :color="getStatusColor(record.status)">
-                                {{ getStatusText(record.status) }}
-                            </nn-tag>
-                        </template>
-                        <template v-else-if="column.key === 'timestamp'">
-                            {{ formatTimestamp(record.timestamp) }}
-                        </template>
-                        <template v-else-if="column.key === 'action'">
-                            <nn-space>
-                                <nn-button type="link" size="small" @click="showTrapDetail(record)">
-                                    <template #icon><EyeOutlined /></template>
-                                    详情
-                                </nn-button>
-                            </nn-space>
-                        </template>
+            <!-- Trap列表表格 -->
+            <nn-table
+                :columns="columns"
+                :data-source="traps"
+                :loading="loading"
+                :pagination="pagination"
+                :scroll="{ x: 1200, y: 'calc(100vh - 350px)' }"
+                row-key="id"
+                class="nn-margin-top-10 trap-list-table"
+                @change="handleTableChange"
+            >
+                <template #bodyCell="{ column, record }">
+                    <template v-if="column.key === 'version'">
+                        <nn-tag :color="getVersionColor(record.version)">
+                            {{ record.version.toUpperCase() }}
+                        </nn-tag>
                     </template>
-                </nn-table>
-            </template>
+                    <template v-else-if="column.key === 'status'">
+                        <nn-tag :color="getStatusColor(record.status)">
+                            {{ getStatusText(record.status) }}
+                        </nn-tag>
+                    </template>
+                    <template v-else-if="column.key === 'timestamp'">
+                        {{ formatTimestamp(record.timestamp) }}
+                    </template>
+                    <template v-else-if="column.key === 'action'">
+                        <nn-space>
+                            <nn-button type="link" size="small" @click="showTrapDetail(record)">
+                                <template #icon><EyeOutlined /></template>
+                                详情
+                            </nn-button>
+                        </nn-space>
+                    </template>
+                </template>
+            </nn-table>
         </nn-card>
 
         <!-- Trap详情模态框 -->
@@ -697,14 +691,6 @@
         flex-direction: column;
         min-height: 0;
         overflow: hidden;
-    }
-
-    .trap-runtime-empty {
-        display: flex;
-        min-height: 0;
-        flex: 1;
-        align-items: center;
-        justify-content: center;
     }
 
     .stats-row,

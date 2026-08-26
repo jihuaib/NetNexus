@@ -33,7 +33,7 @@ features:
       linkText: 查看工作台文档
     - icon: ◫
       title: 本地协议服务器
-      details: 集成 FTP、DHCP、NTP、RADIUS、TFTP 和 Syslog 服务，适合实验室和协议验证。
+      details: 集成 FTP、DHCP、NTP、RADIUS、TFTP、Syslog 和 proto 驱动的 gRPC 服务，适合实验室和协议验证。
       link: /FTP_SERVER
       linkText: 查看服务器文档
     - icon: ◇

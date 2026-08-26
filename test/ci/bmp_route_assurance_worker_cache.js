@@ -92,7 +92,9 @@ Object.assign(worker, {
     persistenceReader: null,
     routeAssuranceService: new BmpRouteAssuranceService(),
     routeAssuranceFilters: {},
-    routeAssuranceRebuildScheduled: false,
+    routeAssuranceRebuildTimer: null,
+    // Rebuilds are debounced until the writer is quiet; keep the wait short here.
+    routeAssuranceRebuildQuietMs: 10,
     persistence: {
         async fence() {},
         async queryRoutes(query) {
@@ -112,7 +114,7 @@ Object.assign(worker, {
 });
 
 async function waitForRouteAssuranceRebuild() {
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setTimeout(resolve, 30));
     if (worker.routeAssuranceService.bootstrapPromise) {
         await worker.routeAssuranceService.bootstrapPromise;
     }

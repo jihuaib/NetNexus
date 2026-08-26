@@ -1,0 +1,76 @@
+// OpenConfig gNMI 扩展定义（精简自 github.com/openconfig/gnmi）。
+syntax = "proto3";
+
+package gnmi_ext;
+
+message Extension {
+  oneof ext {
+    RegisteredExtension registered_ext = 1;
+    MasterArbitration master_arbitration = 2;
+    History history = 3;
+    Commit commit = 4;
+    Depth depth = 5;
+  }
+}
+
+message RegisteredExtension {
+  ExtensionID id = 1;
+  bytes msg = 2;
+}
+
+enum ExtensionID {
+  EID_UNSET = 0;
+  EID_EXPERIMENTAL = 999;
+}
+
+message MasterArbitration {
+  Role role = 1;
+  Uint128 election_id = 2;
+}
+
+message Uint128 {
+  uint64 high = 1;
+  uint64 low = 2;
+}
+
+message Role {
+  string id = 1;
+}
+
+message History {
+  oneof request {
+    int64 snapshot_time = 1;
+    TimeRange range = 2;
+  }
+}
+
+message TimeRange {
+  int64 start = 1;
+  int64 end = 2;
+}
+
+message Commit {
+  string id = 1;
+  oneof action {
+    CommitRequest commit = 2;
+    CommitConfirm confirm = 3;
+    CommitCancel cancel = 4;
+    CommitSetRollbackDuration set_rollback_duration = 5;
+  }
+}
+
+message CommitRequest {
+  int64 rollback_duration_seconds = 1;
+}
+
+message CommitConfirm {}
+
+message CommitCancel {}
+
+message CommitSetRollbackDuration {
+  int64 rollback_duration_seconds = 1;
+}
+
+message Depth {
+  uint32 level = 1;
+}

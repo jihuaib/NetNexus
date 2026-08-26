@@ -10,7 +10,7 @@ function parseQpDqpn(buffer, position, bitLength) {
     }
 
     if (bitLength > 0 && bitLength % 8 !== 0) {
-        dqpn &= (1 << (bitLength % 8)) - 1;
+        dqpn &= (1 << bitLength % 8) - 1;
     }
 
     return {

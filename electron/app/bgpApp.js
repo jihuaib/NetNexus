@@ -476,7 +476,10 @@ class BgpApp {
                 }
             } catch (cleanupError) {
                 terminationError = cleanupError;
-                logger.error('Error terminating BGP process after start failure:', cleanupError.message || cleanupError);
+                logger.error(
+                    'Error terminating BGP process after start failure:',
+                    cleanupError.message || cleanupError
+                );
             } finally {
                 this.cleanupBgpRuntime(worker);
             }

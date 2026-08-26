@@ -6,6 +6,9 @@ const {
     buildBmpRouteAssuranceAnalysis,
     buildBmpRouteAssuranceAnalysisAsync,
     buildBmpRouteAssuranceAnalysisFromPersistedRoutesAsync,
+    buildBmpRouteAssuranceAnalysisFromRowStreamAsync,
+    refreshBmpRouteAssuranceStreamRun,
+    makeStreamRunKey,
     countBmpRouteAssuranceSourcePaths,
     getRouteAssuranceStage,
     makeRouteAssuranceSourceKey,
@@ -26,6 +29,100 @@ const PERSISTED_REBUILD_ACTIONS = new Set([
     'connection_close'
 ]);
 const PERSISTED_NOOP_ACTIONS = new Set(['connection_open']);
+// Streamed snapshots refresh one NLRI group per committed delta by re-reading
+// that group from SQLite. Under a full-table dump the delta rate is far
+// higher than that makes sense; beyond this many pending groups the service
+// asks the caller to invalidate and rebuild once the writer goes quiet.
+const DEFAULT_MAX_PENDING_GROUP_REFRESHES = 5000;
+const DEFAULT_GROUP_REFRESH_DELAY_MS = 200;
+
+// Bridges push-style chunk callbacks to the async iterable the builder
+// consumes; each push resolves once the builder has processed the chunk so
+// the producer's flow-control window reflects real consumption.
+function makeChunkQueue() {
+    const pending = [];
+    let waiter = null;
+    let closed = false;
+    let failure = null;
+    const wake = () => {
+        if (waiter) {
+            const resolve = waiter;
+            waiter = null;
+            resolve();
+        }
+    };
+    return {
+        push(chunk) {
+            return new Promise(resolve => {
+                pending.push({ chunk, resolve });
+                wake();
+            });
+        },
+        close() {
+            closed = true;
+            wake();
+        },
+        fail(error) {
+            failure = error;
+            closed = true;
+            wake();
+        },
+        async *[Symbol.asyncIterator]() {
+            for (;;) {
+                if (pending.length > 0) {
+                    const { chunk, resolve } = pending.shift();
+                    try {
+                        yield chunk;
+                    } finally {
+                        resolve();
+                    }
+                    continue;
+                }
+                if (failure) {
+                    throw failure;
+                }
+                if (closed) {
+                    return;
+                }
+                await new Promise(resolve => {
+                    waiter = resolve;
+                });
+            }
+        }
+    };
+}
+
+function makeGroupLocator(route, delta) {
+    if (!route || typeof route !== 'object') {
+        return null;
+    }
+    const sourceId = route.persistentSourceId || delta?.sourceId || delta?.source?.id || null;
+    const prefix = route.ip ?? route.prefix ?? route.nlriDetail?.prefix ?? null;
+    if (!sourceId || prefix === null || prefix === undefined || prefix === '') {
+        return null;
+    }
+    const afi = Number(route.afi);
+    const safi = Number(route.safi);
+    const prefixLength = route.mask ?? route.prefixLength ?? null;
+    const locator = {
+        sourceId: String(sourceId),
+        afi: Number.isFinite(afi) ? afi : null,
+        safi: Number.isFinite(safi) ? safi : null,
+        rd: route.rd ?? route.nlriDetail?.rd ?? null,
+        prefix: String(prefix),
+        prefixLength: Number.isFinite(Number(prefixLength)) ? Number(prefixLength) : null
+    };
+    // Row-shaped view of the locator so it hashes to the same run key as rows.
+    locator.row = {
+        sourceId: locator.sourceId,
+        afi: locator.afi ?? '',
+        safi: locator.safi ?? '',
+        rd: locator.rd ?? '',
+        ip: locator.prefix,
+        mask: locator.prefixLength ?? ''
+    };
+    return locator;
+}
 
 function normalizedRouteState(value) {
     const state = String(value || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE)
@@ -111,6 +208,207 @@ class BmpRouteAssuranceService {
         this.dataMode = 'memory';
         this.persistedSourceToken = Object.freeze({ kind: 'bmp-persisted-routes' });
         this.persistedAnalysisOptions = null;
+        this.streamControl = null;
+        this.groupRefreshLoader = null;
+        this.pendingGroupRefreshes = new Map();
+        this.groupRefreshTimer = null;
+        this.groupRefreshRunning = false;
+        this.maxPendingGroupRefreshes = Math.max(
+            1,
+            Math.floor(Number(options.maxPendingGroupRefreshes)) || DEFAULT_MAX_PENDING_GROUP_REFRESHES
+        );
+        this.groupRefreshDelayMs = Math.max(0, Number(options.groupRefreshDelayMs) || DEFAULT_GROUP_REFRESH_DELAY_MS);
+        this.groupRefreshCount = 0;
+        this.groupRefreshOverflow = false;
+    }
+
+    // Streamed bootstrap: `openStream(onChunk)` must start an ordered scan
+    // (BmpPersistenceClient.streamRouteAssuranceRows) and resolve when it
+    // completes; the returned promise may expose cancel(). Committed deltas
+    // that arrive later are applied by re-reading the affected NLRI group via
+    // `control.loadGroupRows(locator)`.
+    async bootstrapFromRouteStream(openStream, options = {}, control = {}) {
+        if (typeof openStream !== 'function') {
+            throw new Error('BMP Route Assurance stream bootstrap requires an openStream function');
+        }
+        const rebuildingInvalidatedSnapshot = this.enabled && this.state === 'dirty';
+        this.enabled = true;
+        this.state = 'bootstrapping';
+        this.dataMode = 'stream';
+        this.bootstrapGeneration += 1;
+        const generation = this.bootstrapGeneration;
+        this.cache.clear();
+        if (!rebuildingInvalidatedSnapshot) {
+            this.revision += 1;
+            this.invalidationCount += 1;
+            this.lastInvalidationReason = 'stream-bootstrap';
+        }
+        this.pendingMutations.clear();
+        this.pendingGroupRefreshes.clear();
+        this.groupRefreshOverflow = false;
+        this.bootstrapProgress = { scannedPathCount: 0 };
+        const analysisOptions = makeAnalysisOptions(options);
+        this.persistedAnalysisOptions = analysisOptions;
+        this.streamControl = {
+            resolveContext: control.resolveContext,
+            maxRetainedIssuesPerCategory: control.maxRetainedIssuesPerCategory
+        };
+        this.groupRefreshLoader = typeof control.loadGroupRows === 'function' ? control.loadGroupRows : null;
+        const cacheKey = this.makeCacheKey(this.persistedSourceToken, analysisOptions);
+        this.bootstrapCacheKey = cacheKey;
+        const startedAt = performance.now();
+
+        const queue = makeChunkQueue();
+        const shouldCancel = () => generation !== this.bootstrapGeneration || !this.enabled;
+        const streamPromise = openStream(chunk => {
+            if (shouldCancel()) {
+                return Promise.reject(
+                    Object.assign(new Error('路由矩阵分析初始化已取消'), { code: 'BMP_ROUTE_ASSURANCE_CANCELLED' })
+                );
+            }
+            return queue.push(chunk);
+        });
+        const cancelStream = () => {
+            if (typeof streamPromise?.cancel === 'function') {
+                streamPromise.cancel();
+            }
+        };
+        streamPromise.then(
+            () => queue.close(),
+            error => queue.fail(error)
+        );
+        const cancelWatcher = setInterval(() => {
+            if (shouldCancel()) {
+                cancelStream();
+                queue.fail(
+                    Object.assign(new Error('路由矩阵分析初始化已取消'), { code: 'BMP_ROUTE_ASSURANCE_CANCELLED' })
+                );
+            }
+        }, 250);
+        cancelWatcher.unref?.();
+
+        this.bootstrapPromise = buildBmpRouteAssuranceAnalysisFromRowStreamAsync(queue, analysisOptions, {
+            chunkSize: control.chunkSize,
+            resolveContext: control.resolveContext,
+            maxRetainedIssuesPerCategory: control.maxRetainedIssuesPerCategory,
+            shouldCancel,
+            onProgress: progress => {
+                this.bootstrapProgress = { ...progress };
+                control.onProgress?.(this.getStatus());
+            }
+        })
+            .then(async analysis => {
+                clearInterval(cancelWatcher);
+                if (shouldCancel()) {
+                    cancelStream();
+                    return this.getStatus();
+                }
+                await streamPromise.catch(() => {});
+                this.lastAggregationDurationMs = performance.now() - startedAt;
+                this.aggregationCount += 1;
+                const cacheEntry = {
+                    analysis,
+                    aggregationDurationMs: this.lastAggregationDurationMs,
+                    revision: this.revision
+                };
+                this.cache.set(cacheKey, cacheEntry);
+                this.state = 'ready';
+                this.bootstrapPromise = null;
+                this.bootstrapCacheKey = null;
+                this.scheduleGroupRefresh();
+                return this.getStatus();
+            })
+            .catch(error => {
+                clearInterval(cancelWatcher);
+                cancelStream();
+                if (error?.code === 'BMP_ROUTE_ASSURANCE_CANCELLED') {
+                    return this.getStatus();
+                }
+                if (generation === this.bootstrapGeneration) {
+                    this.state = this.enabled ? 'dirty' : 'disabled';
+                    this.cache.clear();
+                    this.bootstrapPromise = null;
+                    this.bootstrapCacheKey = null;
+                    this.pendingGroupRefreshes.clear();
+                }
+                throw error;
+            });
+        return this.bootstrapPromise;
+    }
+
+    // Queues one NLRI group for re-evaluation. Returns false when the caller
+    // should fall back to a full rebuild instead.
+    queueGroupRefresh(delta) {
+        const locator = makeGroupLocator(delta?.current, delta) || makeGroupLocator(delta?.previous, delta);
+        if (!locator) {
+            return false;
+        }
+        if (!this.groupRefreshLoader) {
+            return false;
+        }
+        const runKey = makeStreamRunKey(locator.row);
+        this.pendingGroupRefreshes.set(runKey, locator);
+        this.revision += 1;
+        if (this.pendingGroupRefreshes.size > this.maxPendingGroupRefreshes) {
+            this.groupRefreshOverflow = true;
+            this.pendingGroupRefreshes.clear();
+            return false;
+        }
+        this.scheduleGroupRefresh();
+        return true;
+    }
+
+    scheduleGroupRefresh() {
+        if (this.groupRefreshTimer || this.groupRefreshRunning || this.pendingGroupRefreshes.size === 0) {
+            return;
+        }
+        if (this.state !== 'ready') {
+            return;
+        }
+        this.groupRefreshTimer = setTimeout(() => {
+            this.groupRefreshTimer = null;
+            this.flushGroupRefreshes().catch(error => {
+                this.lastGroupRefreshError = error?.message || String(error);
+                this.invalidate('group-refresh-error', { prepareBootstrap: true });
+            });
+        }, this.groupRefreshDelayMs);
+        this.groupRefreshTimer.unref?.();
+    }
+
+    async flushGroupRefreshes() {
+        if (this.groupRefreshRunning || !this.groupRefreshLoader) {
+            return;
+        }
+        this.groupRefreshRunning = true;
+        try {
+            while (this.pendingGroupRefreshes.size > 0 && this.state === 'ready' && this.enabled) {
+                const [runKey, locator] = this.pendingGroupRefreshes.entries().next().value;
+                this.pendingGroupRefreshes.delete(runKey);
+                const rows = await this.groupRefreshLoader(locator);
+                if (this.state !== 'ready' || !this.enabled) {
+                    return;
+                }
+                this.cache.forEach(cacheEntry => {
+                    if (
+                        refreshBmpRouteAssuranceStreamRun(
+                            cacheEntry.analysis,
+                            locator.row,
+                            rows,
+                            this.streamControl?.resolveContext
+                        )
+                    ) {
+                        cacheEntry.revision = this.revision;
+                    }
+                });
+                this.groupRefreshCount += 1;
+                this.incrementalUpdateCount += 1;
+            }
+        } finally {
+            this.groupRefreshRunning = false;
+            if (this.pendingGroupRefreshes.size > 0) {
+                this.scheduleGroupRefresh();
+            }
+        }
     }
 
     getMapId(bmpSessionMap) {
@@ -289,6 +587,11 @@ class BmpRouteAssuranceService {
     }
 
     invalidate(reason = 'data-change', options = {}) {
+        this.pendingGroupRefreshes.clear();
+        if (this.groupRefreshTimer) {
+            clearTimeout(this.groupRefreshTimer);
+            this.groupRefreshTimer = null;
+        }
         if (this.state === 'bootstrapping') {
             this.bootstrapGeneration += 1;
             this.bootstrapPromise = null;
@@ -525,6 +828,9 @@ class BmpRouteAssuranceService {
         if (delta?.committed === true && delta.projectionChanged === false) {
             return true;
         }
+        if (this.dataMode === 'stream') {
+            return this.queueGroupRefresh(delta);
+        }
         return this.applyMutation(normalizeBmpRouteAssuranceCommittedDelta(delta));
     }
 
@@ -615,7 +921,9 @@ class BmpRouteAssuranceService {
             state: this.state,
             dataMode: this.dataMode,
             bootstrapProgress: { ...this.bootstrapProgress },
-            incrementalUpdateCount: this.incrementalUpdateCount
+            incrementalUpdateCount: this.incrementalUpdateCount,
+            groupRefreshCount: this.groupRefreshCount,
+            pendingGroupRefreshes: this.pendingGroupRefreshes.size
         };
     }
 }

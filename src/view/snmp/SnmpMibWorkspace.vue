@@ -5,134 +5,130 @@
         @click="hideContextMenu"
     >
         <nn-card title="MIB 工作区" class="workspace-card">
-            <div v-if="!runtimeReady" class="workspace-runtime-empty" data-testid="snmp-workspace-runtime-stopped">
-                <nn-empty description="请先在 SNMP 配置页启动 SNMP 进程" />
+            <div class="workspace-toolbar">
+                <div class="workspace-status" aria-label="MIB 工作区状态">
+                    <nn-tag v-if="loading" color="processing">正在刷新</nn-tag>
+                    <nn-tag v-else-if="mibStatus.totalObjects" color="success">MIB 已就绪</nn-tag>
+                    <nn-tag v-else color="default">暂无 MIB</nn-tag>
+                    <nn-tag v-if="mibStatus.cacheHit" color="green">缓存命中</nn-tag>
+                    <nn-tag color="blue">用户模块 {{ mibStatus.modules.length }}</nn-tag>
+                    <nn-tag color="cyan">基础模块 {{ mibStatus.baseModules.length }}</nn-tag>
+                    <nn-tag color="green">OID {{ mibStatus.totalObjects }}</nn-tag>
+                    <nn-tag color="default">文件 {{ mibStatus.expandedFileCount }}</nn-tag>
+                </div>
+
+                <div class="workspace-actions">
+                    <div class="oid-query-row">
+                        <nn-input
+                            v-model:value="oidQuery"
+                            allow-clear
+                            aria-label="OID"
+                            placeholder="输入 OID 定位节点，例如 1.3.6.1.2.1.1.3.0"
+                            @press-enter="locateOidNode"
+                        />
+                        <nn-button :disabled="!runtimeReady" :loading="oidTranslateLoading" @click="locateOidNode">
+                            定位节点
+                        </nn-button>
+                    </div>
+                    <nn-button :disabled="!runtimeReady" :loading="loading" @click="loadMibStatus({ force: true })">
+                        <template #icon><ReloadOutlined /></template>
+                        刷新
+                    </nn-button>
+                    <nn-button
+                        v-if="canOpenMonitorWindow"
+                        data-testid="open-snmp-trap-monitor-window"
+                        :loading="monitorOpening"
+                        @click="openMonitorWindow"
+                    >
+                        <template #icon><ExternalLinkOutlined /></template>
+                        打开 Trap 监控
+                    </nn-button>
+                </div>
             </div>
 
-            <template v-else>
-                <div class="workspace-toolbar">
-                    <div class="workspace-status" aria-label="MIB 工作区状态">
-                        <nn-tag v-if="loading" color="processing">正在刷新</nn-tag>
-                        <nn-tag v-else-if="mibStatus.totalObjects" color="success">MIB 已就绪</nn-tag>
-                        <nn-tag v-else color="default">暂无 MIB</nn-tag>
-                        <nn-tag v-if="mibStatus.cacheHit" color="green">缓存命中</nn-tag>
-                        <nn-tag color="blue">用户模块 {{ mibStatus.modules.length }}</nn-tag>
-                        <nn-tag color="cyan">基础模块 {{ mibStatus.baseModules.length }}</nn-tag>
-                        <nn-tag color="green">OID {{ mibStatus.totalObjects }}</nn-tag>
-                        <nn-tag color="default">文件 {{ mibStatus.expandedFileCount }}</nn-tag>
-                    </div>
-
-                    <div class="workspace-actions">
-                        <div class="oid-query-row">
-                            <nn-input
-                                v-model:value="oidQuery"
-                                allow-clear
-                                aria-label="OID"
-                                placeholder="输入 OID 定位节点，例如 1.3.6.1.2.1.1.3.0"
-                                @press-enter="locateOidNode"
-                            />
-                            <nn-button :loading="oidTranslateLoading" @click="locateOidNode">定位节点</nn-button>
+            <div ref="workspaceLayoutRef" class="workspace-layout" :style="workspaceLayoutStyle">
+                <section class="mib-tree-panel" aria-label="OID 树">
+                    <div class="panel-header">
+                        <div class="panel-heading">
+                            <span class="panel-title">OID 树</span>
+                            <span class="panel-meta">{{ mibStatus.totalObjects }} 个对象</span>
                         </div>
-                        <nn-button :loading="loading" @click="loadMibStatus({ force: true })">
-                            <template #icon><ReloadOutlined /></template>
-                            刷新
-                        </nn-button>
-                        <nn-button
-                            v-if="canOpenMonitorWindow"
-                            data-testid="open-snmp-trap-monitor-window"
-                            :loading="monitorOpening"
-                            @click="openMonitorWindow"
-                        >
-                            <template #icon><ExternalLinkOutlined /></template>
-                            打开 Trap 监控
-                        </nn-button>
                     </div>
-                </div>
-
-                <div ref="workspaceLayoutRef" class="workspace-layout" :style="workspaceLayoutStyle">
-                    <section class="mib-tree-panel" aria-label="OID 树">
-                        <div class="panel-header">
-                            <div class="panel-heading">
-                                <span class="panel-title">OID 树</span>
-                                <span class="panel-meta">{{ mibStatus.totalObjects }} 个对象</span>
-                            </div>
-                        </div>
-                        <div ref="treeScrollRef" class="mib-tree-scroll">
-                            <nn-spin :spinning="loading && mibStatus.oidTree.length === 0">
-                                <nn-tree
-                                    v-if="mibStatus.oidTree.length"
-                                    ref="treeRef"
-                                    v-model:expanded-keys="treeExpandedKeys"
-                                    :selected-keys="treeSelectedKeys"
-                                    :tree-data="mibStatus.oidTree"
-                                    block-node
-                                    @expand="handleTreeExpand"
-                                    @right-click="handleTreeRightClick"
-                                    @select="handleTreeSelect"
-                                >
-                                    <template #title="node">
-                                        <span class="mib-node-title" :data-tree-oid="node.oid">
-                                            <span
-                                                class="mib-node-icon"
-                                                :class="`mib-node-icon-${mibNodeIconKind(node)}`"
-                                                :data-node-icon="mibNodeIconKind(node)"
-                                                aria-hidden="true"
-                                            >
-                                                <component
-                                                    :is="mibNodeIconComponent(node)"
-                                                    :spin="node.loading"
-                                                    :stroke-width="1.8"
-                                                />
-                                            </span>
-                                            <span class="mib-node-name">{{ node.title }}</span>
-                                            <span class="mib-node-oid">{{ node.oid }}</span>
-                                            <span v-if="node.macro" class="mib-node-macro">{{ node.macro }}</span>
-                                            <span
-                                                v-if="getNodeRoleText(node)"
-                                                :class="['mib-node-role', getNodeRoleClass(node)]"
-                                            >
-                                                {{ getNodeRoleText(node) }}
-                                            </span>
-                                            <span v-if="node.moduleName" class="mib-node-module">
-                                                {{ node.moduleName }}
-                                            </span>
+                    <div ref="treeScrollRef" class="mib-tree-scroll">
+                        <nn-spin :spinning="loading && mibStatus.oidTree.length === 0">
+                            <nn-tree
+                                v-if="mibStatus.oidTree.length"
+                                ref="treeRef"
+                                v-model:expanded-keys="treeExpandedKeys"
+                                :selected-keys="treeSelectedKeys"
+                                :tree-data="mibStatus.oidTree"
+                                block-node
+                                @expand="handleTreeExpand"
+                                @right-click="handleTreeRightClick"
+                                @select="handleTreeSelect"
+                            >
+                                <template #title="node">
+                                    <span class="mib-node-title" :data-tree-oid="node.oid">
+                                        <span
+                                            class="mib-node-icon"
+                                            :class="`mib-node-icon-${mibNodeIconKind(node)}`"
+                                            :data-node-icon="mibNodeIconKind(node)"
+                                            aria-hidden="true"
+                                        >
+                                            <component
+                                                :is="mibNodeIconComponent(node)"
+                                                :spin="node.loading"
+                                                :stroke-width="1.8"
+                                            />
                                         </span>
-                                    </template>
-                                </nn-tree>
-                                <nn-empty v-else description="请先在 MIB 编译页导入并编译文件" />
-                            </nn-spin>
-                        </div>
-                    </section>
-
-                    <div
-                        class="workspace-column-resizer"
-                        role="separator"
-                        aria-label="调整 OID 树宽度"
-                        aria-orientation="vertical"
-                        :aria-valuemin="treePaneMinWidth"
-                        :aria-valuemax="treePaneMaxWidth"
-                        :aria-valuenow="treePaneWidth"
-                        tabindex="0"
-                        title="拖动调整 OID 树宽度；双击恢复默认宽度"
-                        @pointerdown="startTreePaneResize"
-                        @keydown="handleTreePaneResizeKeydown"
-                        @dblclick="resetTreePaneResize"
-                    >
-                        <span class="pane-resizer-grip" aria-hidden="true" />
+                                        <span class="mib-node-name">{{ node.title }}</span>
+                                        <span class="mib-node-oid">{{ node.oid }}</span>
+                                        <span v-if="node.macro" class="mib-node-macro">{{ node.macro }}</span>
+                                        <span
+                                            v-if="getNodeRoleText(node)"
+                                            :class="['mib-node-role', getNodeRoleClass(node)]"
+                                        >
+                                            {{ getNodeRoleText(node) }}
+                                        </span>
+                                        <span v-if="node.moduleName" class="mib-node-module">
+                                            {{ node.moduleName }}
+                                        </span>
+                                    </span>
+                                </template>
+                            </nn-tree>
+                            <nn-empty v-else description="请先在 MIB 编译页导入并编译文件" />
+                        </nn-spin>
                     </div>
+                </section>
 
-                    <section class="workspace-operation-panel" aria-label="SNMP 操作区">
-                        <SnmpMibOperations
-                            ref="operationsRef"
-                            :context-node="operationContext.node"
-                            :context-operation="operationContext.operation"
-                            :context-revision="operationContext.revision"
-                            :runtime-ready="runtimeReady"
-                            :runtime-revision="snmpRuntime.runtimeRevision"
-                        />
-                    </section>
+                <div
+                    class="workspace-column-resizer"
+                    role="separator"
+                    aria-label="调整 OID 树宽度"
+                    aria-orientation="vertical"
+                    :aria-valuemin="treePaneMinWidth"
+                    :aria-valuemax="treePaneMaxWidth"
+                    :aria-valuenow="treePaneWidth"
+                    tabindex="0"
+                    title="拖动调整 OID 树宽度；双击恢复默认宽度"
+                    @pointerdown="startTreePaneResize"
+                    @keydown="handleTreePaneResizeKeydown"
+                    @dblclick="resetTreePaneResize"
+                >
+                    <span class="pane-resizer-grip" aria-hidden="true" />
                 </div>
-            </template>
+
+                <section class="workspace-operation-panel" aria-label="SNMP 操作区">
+                    <SnmpMibOperations
+                        ref="operationsRef"
+                        :context-node="operationContext.node"
+                        :context-operation="operationContext.operation"
+                        :context-revision="operationContext.revision"
+                        :runtime-ready="runtimeReady"
+                        :runtime-revision="snmpRuntime.runtimeRevision"
+                    />
+                </section>
+            </div>
         </nn-card>
 
         <nn-context-menu
@@ -846,14 +842,6 @@
         flex: 1;
         flex-direction: column;
         overflow: hidden;
-    }
-
-    .workspace-runtime-empty {
-        display: flex;
-        min-height: 0;
-        flex: 1;
-        align-items: center;
-        justify-content: center;
     }
 
     .workspace-toolbar {

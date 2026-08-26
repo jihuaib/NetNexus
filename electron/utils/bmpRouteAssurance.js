@@ -8,6 +8,11 @@ const { parseRouteLensQuery } = require('./bmpRouteLens');
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 200;
 const MAX_SORTED_ISSUES = 100_000;
+// An issue lists at most this many evidence entries and peers; the full
+// numbers are reported in evidenceCount / peerCount. A prefix seen from a
+// hundred peers would otherwise carry a hundred evidence objects per issue.
+const MAX_ISSUE_EVIDENCE_ENTRIES = 25;
+const MAX_ISSUE_PEERS = 25;
 const GLOBAL_VRF = '__global__';
 const STAGES = ['preIn', 'postIn', 'locRib', 'preOut', 'postOut'];
 const CATEGORIES = ['inbound-gap', 'not-selected', 'not-exported', 'outbound-gap', 'multi-egress-inconsistent'];
@@ -1044,7 +1049,8 @@ function makeBaseIssue(category, group, evidence) {
     const representative = allEntries[0];
     const meta = group.meta || getEntryMeta(representative);
     const stagePresence = makeStagePresence(group);
-    const peers = uniquePeers(allEntries);
+    const allPeers = uniquePeers(allEntries);
+    const peers = allPeers.length > MAX_ISSUE_PEERS ? allPeers.slice(0, MAX_ISSUE_PEERS) : allPeers;
     const representativeRoute = getEntryRouteInfo(representative);
     const rd = representativeRoute.nlriDetail?.rd || representativeRoute.rd || '0:0';
     const nlri = {
@@ -1071,9 +1077,11 @@ function makeBaseIssue(category, group, evidence) {
         vrfTableNames: meta.vrfTableNames,
         stagePresence,
         peers,
+        peerCount: allPeers.length,
         differences: [],
+        evidenceCount: Array.isArray(evidence.entries) ? evidence.entries.length : 0,
         evidence: Array.isArray(evidence.entries)
-            ? evidence.entries.map(entry => {
+            ? evidence.entries.slice(0, MAX_ISSUE_EVIDENCE_ENTRIES).map(entry => {
                   const routeInfo = getEntryRouteInfo(entry);
                   return {
                       entryId: makeEvidenceEntryId(entry),
@@ -1882,14 +1890,20 @@ function selectIssuePage(analysis, categories, offset, pageSize) {
 
 function paginateBmpRouteAssuranceAnalysis(analysis, options = {}) {
     const filters = normalizeFilters({ ...analysis?.filters, ...options });
-    const allIssueCount = Array.isArray(analysis?.allIssues) ? analysis.allIssues.length : 0;
+    // Streamed analyses may retain fewer issue objects than they counted;
+    // paginate against the exact counts so totals stay truthful.
+    const exactCounts = analysis?._stream ? analysis.summary?.categoryCounts || null : null;
+    const categoryIssueCount = category =>
+        exactCounts ? exactCounts[category] || 0 : analysis?.issuesByCategory?.[category]?.length || 0;
+    const allIssueCount = exactCounts
+        ? CATEGORIES.reduce((count, category) => count + categoryIssueCount(category), 0)
+        : Array.isArray(analysis?.allIssues)
+          ? analysis.allIssues.length
+          : 0;
     const selectedIssueCount =
         filters.category.length === 0
             ? allIssueCount
-            : filters.category.reduce(
-                  (count, category) => count + (analysis?.issuesByCategory?.[category]?.length || 0),
-                  0
-              );
+            : filters.category.reduce((count, category) => count + categoryIssueCount(category), 0);
     const total = selectedIssueCount;
     const totalPages = Math.max(1, Math.ceil(total / filters.pageSize));
     const page = Math.min(filters.page, totalPages);
@@ -1920,6 +1934,535 @@ function buildBmpRouteAssurance(bmpSessionMap, options = {}) {
     return paginateBmpRouteAssuranceAnalysis(analysis, options);
 }
 
+// ---------------------------------------------------------------------------
+// Streaming analysis.
+//
+// The in-memory builders above retain one entry per path for the whole RIB,
+// which does not fit in the worker heap once the RIB reaches a few hundred
+// thousand paths. The streaming builder consumes rows that SQLite already
+// ordered by (source, afi, safi, rd, prefix, prefix_length, ...): every NLRI
+// of one source arrives contiguously ("run"), so each run is evaluated as
+// soon as it ends and only issues, facets and counters survive. Per run a
+// small numeric record is kept so a later delta can re-evaluate that run and
+// subtract its previous contribution exactly. Per category at most
+// MAX_RETAINED_ISSUES_PER_CATEGORY issue objects are retained; counts stay
+// exact so the summary and funnel are unaffected.
+
+const DEFAULT_MAX_RETAINED_ISSUES_PER_CATEGORY = 20_000;
+
+function internValue(index, value) {
+    const key = String(value ?? '');
+    let id = index.get(key);
+    if (id === undefined) {
+        id = index.size;
+        index.set(key, id);
+    }
+    return id;
+}
+
+// Run key of a row (or a group locator with the same field names). The
+// source id is interned so the key stays short for millions of runs.
+function makeStreamRunKey(row, sourceIndex = null) {
+    const route = row?.route && typeof row.route === 'object' ? row.route : row;
+    const sourceId = row?.sourceId ?? row?.persistentSourceId ?? route?.persistentSourceId ?? '';
+    const prefix = route?.ip ?? route?.prefix ?? route?.nlriDetail?.prefix ?? '';
+    const prefixLength = route?.mask ?? route?.prefixLength ?? '';
+    const rd = route?.rd ?? route?.nlriDetail?.rd ?? '';
+    const sourcePart = sourceIndex ? internValue(sourceIndex, sourceId) : sourceId;
+    return `${sourcePart}\u001f${route?.afi ?? ''}\u001f${route?.safi ?? ''}\u001f${rd}\u001f${prefix}\u001f${prefixLength}`;
+}
+
+function makeStreamState(filters, options = {}) {
+    return {
+        filters,
+        maxRetainedIssuesPerCategory: Math.max(
+            1,
+            Math.floor(Number(options.maxRetainedIssuesPerCategory)) || DEFAULT_MAX_RETAINED_ISSUES_PER_CATEGORY
+        ),
+        sourceIndex: new Map(),
+        scannedPathCount: 0,
+        filteredPathCount: 0,
+        stagePathCounts: Object.fromEntries(STAGES.map(stage => [stage, 0])),
+        stageCounts: Object.fromEntries(STAGES.map(stage => [stage, 0])),
+        uniqueNlriCount: 0,
+        categoryCounts: Object.fromEntries(CATEGORIES.map(category => [category, 0])),
+        evidenceCounts: new Map(),
+        facets: makeFacetAccumulator(),
+        // Facet combinations (client/vrf/af) are interned so a run record can
+        // reference them by number.
+        facetComboIndex: new Map(),
+        facetComboMeta: [],
+        allIssues: [],
+        issuesByCategory: Object.fromEntries(CATEGORIES.map(category => [category, []])),
+        issuesByRun: new Map(),
+        allIssuePositions: new Map(),
+        categoryIssuePositions: Object.fromEntries(CATEGORIES.map(category => [category, new Map()])),
+        truncatedCategories: new Set(),
+        // Run records live in one growable Int32Array pool (fixed layout, see
+        // RUN_RECORD_* below); runRecords maps runKey -> pool offset and
+        // freeRecords recycles released slots.
+        runRecords: new Map(),
+        recordPool: new Int32Array(RUN_RECORD_SIZE * 1024),
+        recordPoolUsed: 0,
+        freeRecords: [],
+        runFacetOverflow: new Map(),
+        updateCount: 0
+    };
+}
+
+const RUN_RECORD_STAGE_PATH_OFFSET = 3;
+const RUN_RECORD_STAGE_COUNT_OFFSET = RUN_RECORD_STAGE_PATH_OFFSET + STAGES.length;
+const RUN_RECORD_CATEGORY_OFFSET = RUN_RECORD_STAGE_COUNT_OFFSET + STAGES.length;
+const RUN_RECORD_FACET_OFFSET = RUN_RECORD_CATEGORY_OFFSET + CATEGORIES.length;
+const RUN_RECORD_FACET_SLOTS = 4;
+const RUN_RECORD_SIZE = RUN_RECORD_FACET_OFFSET + RUN_RECORD_FACET_SLOTS * 2;
+
+function allocateRunRecord(state) {
+    if (state.freeRecords.length > 0) {
+        return state.freeRecords.pop();
+    }
+    if (state.recordPoolUsed + RUN_RECORD_SIZE > state.recordPool.length) {
+        const grown = new Int32Array(state.recordPool.length * 2);
+        grown.set(state.recordPool);
+        state.recordPool = grown;
+    }
+    const offset = state.recordPoolUsed;
+    state.recordPoolUsed += RUN_RECORD_SIZE;
+    return offset;
+}
+
+function facetComboId(state, entry) {
+    const meta = getEntryMeta(entry);
+    const afValue = meta.af === undefined ? `${meta.afi}|${meta.safi}` : String(meta.af);
+    const key = `${meta.client.key}\u001f${meta.vrfTableNames.join(',')}\u001f${afValue}`;
+    let id = state.facetComboIndex.get(key);
+    if (id === undefined) {
+        id = state.facetComboMeta.length;
+        state.facetComboIndex.set(key, id);
+        state.facetComboMeta.push({
+            client: meta.client,
+            vrfTableNames: meta.vrfTableNames,
+            af: meta.af,
+            afi: meta.afi,
+            safi: meta.safi
+        });
+    }
+    return id;
+}
+
+function adjustStreamCounters(state, offset, sign) {
+    const pool = state.recordPool;
+    state.uniqueNlriCount += sign * pool[offset];
+    state.scannedPathCount += sign * pool[offset + 1];
+    state.filteredPathCount += sign * pool[offset + 2];
+    STAGES.forEach((stage, index) => {
+        state.stagePathCounts[stage] += sign * pool[offset + RUN_RECORD_STAGE_PATH_OFFSET + index];
+        state.stageCounts[stage] += sign * pool[offset + RUN_RECORD_STAGE_COUNT_OFFSET + index];
+    });
+    CATEGORIES.forEach((category, index) => {
+        state.categoryCounts[category] += sign * pool[offset + RUN_RECORD_CATEGORY_OFFSET + index];
+    });
+}
+
+function removeRunFacets(state, runKey, offset) {
+    const pool = state.recordPool;
+    const removeCombo = (id, count) => {
+        const meta = state.facetComboMeta[id];
+        for (let index = 0; index < count; index += 1) {
+            removeFacetEntry(state.facets, meta);
+        }
+    };
+    for (let slot = 0; slot < RUN_RECORD_FACET_SLOTS; slot += 1) {
+        const base = offset + RUN_RECORD_FACET_OFFSET + slot * 2;
+        if (pool[base + 1] > 0) {
+            removeCombo(pool[base], pool[base + 1]);
+        }
+    }
+    const overflow = state.runFacetOverflow.get(runKey);
+    if (overflow) {
+        overflow.forEach((count, id) => removeCombo(id, count));
+        state.runFacetOverflow.delete(runKey);
+    }
+}
+
+function retainStreamIssue(state, runKey, issue) {
+    const bucket = state.issuesByCategory[issue.category];
+    if (bucket.length >= state.maxRetainedIssuesPerCategory) {
+        state.truncatedCategories.add(issue.category);
+        return;
+    }
+    addDenseIssue(state.allIssues, state.allIssuePositions, issue);
+    addDenseIssue(bucket, state.categoryIssuePositions[issue.category], issue);
+    if (!state.issuesByRun.has(runKey)) {
+        state.issuesByRun.set(runKey, []);
+    }
+    state.issuesByRun.get(runKey).push(issue);
+}
+
+function releaseStreamRun(state, runKey) {
+    const issues = state.issuesByRun.get(runKey) || [];
+    issues.forEach(issue => {
+        removeDenseIssue(state.allIssues, state.allIssuePositions, issue.id);
+        removeDenseIssue(
+            state.issuesByCategory[issue.category],
+            state.categoryIssuePositions[issue.category],
+            issue.id
+        );
+        const evidence = (state.evidenceCounts.get(issue.evidenceType) || 0) - 1;
+        if (evidence > 0) {
+            state.evidenceCounts.set(issue.evidenceType, evidence);
+        } else {
+            state.evidenceCounts.delete(issue.evidenceType);
+        }
+    });
+    state.issuesByRun.delete(runKey);
+    const offset = state.runRecords.get(runKey);
+    if (offset === undefined) {
+        return;
+    }
+    adjustStreamCounters(state, offset, -1);
+    removeRunFacets(state, runKey, offset);
+    state.runRecords.delete(runKey);
+    state.recordPool.fill(0, offset, offset + RUN_RECORD_SIZE);
+    state.freeRecords.push(offset);
+}
+
+// Fast pre-check for a run: derives stage presence per (peer, path id)
+// without building entries, groups or issues. Returns null when the run
+// might carry an issue (or needs the full path for another reason), otherwise
+// the counters the run contributes.
+function classifyStreamRunFast(state, rows, resolveContext) {
+    const filters = state.filters;
+    if (filters.query) {
+        return null;
+    }
+    const stageKeys = Object.fromEntries(STAGES.map(stage => [stage, null]));
+    const stagePathCounts = Object.fromEntries(STAGES.map(stage => [stage, 0]));
+    const postOutPeers = new Set();
+    let scanned = 0;
+    let filtered = 0;
+    let facetEntry = null;
+    let vrfKey = null;
+    for (const row of rows) {
+        const overrides = resolveContext?.(row) || {};
+        const source = makePersistedRouteContext(row, overrides);
+        if (!source || !entryMatchesClient({ client: source.client }, filters.client)) {
+            continue;
+        }
+        scanned += 1;
+        if (!source.route || !routeStateMatches(source.route, filters.routeState)) {
+            continue;
+        }
+        const route = source.route;
+        const nlriDetail = route.nlriDetail;
+        const routeType = nlriDetail?.routeType ?? route.routeType;
+        const dqpn = nlriDetail?.dqpn ?? route.dqpn;
+        if (
+            (routeType !== null && routeType !== undefined && routeType !== '') ||
+            (dqpn !== null && dqpn !== undefined && dqpn !== '')
+        ) {
+            // Route-type / DQPN aware identities may split one run into
+            // several groups; leave those to the exact path.
+            return null;
+        }
+        const vrfTableNames = getVrfNames(route, source.owner);
+        const nextVrfKey = vrfTableNames.map(normalizedText).sort().join(',');
+        if (vrfKey === null) {
+            vrfKey = nextVrfKey;
+        } else if (vrfKey !== nextVrfKey) {
+            return null;
+        }
+        const afi = Number(route.afi);
+        const safi = Number(route.safi);
+        const af = route.addrFamilyType ?? getAddrFamilyType(afi, safi);
+        if (!facetEntry) {
+            facetEntry = {
+                client: source.client,
+                vrfTableNames,
+                af,
+                afi,
+                safi,
+                afLabel: `${getBgpAfiName(afi)} ${getBgpSafiName(safi)}`
+            };
+        }
+        if (!entryMatchesVrf(facetEntry, filters.vrf) || !entryMatchesAf(facetEntry, filters.af)) {
+            continue;
+        }
+        const stage = source.stage;
+        if (!STAGES.includes(stage)) {
+            continue;
+        }
+        filtered += 1;
+        stagePathCounts[stage] += 1;
+        const pathKey = `${source.peer?.key || ''}\u001f${route.pathId ?? 0}`;
+        if (!stageKeys[stage]) {
+            stageKeys[stage] = new Set();
+        }
+        stageKeys[stage].add(pathKey);
+        if (stage === 'postOut' && source.peer) {
+            postOutPeers.add(source.peer.key);
+        }
+    }
+    const has = stage => stageKeys[stage] !== null && stageKeys[stage].size > 0;
+    const covered = (before, after) => {
+        if (!has(before)) {
+            return true;
+        }
+        if (!has(after)) {
+            return false;
+        }
+        for (const key of stageKeys[before]) {
+            if (!stageKeys[after].has(key)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (
+        !covered('preIn', 'postIn') ||
+        (has('postIn') && !has('locRib')) ||
+        (has('locRib') && !has('preOut')) ||
+        !covered('preOut', 'postOut') ||
+        postOutPeers.size >= 2
+    ) {
+        return null;
+    }
+    return { scanned, filtered, stagePathCounts, stageKeys, facetEntry };
+}
+
+// Evaluates one contiguous run of rows (same source + NLRI identity minus
+// path id) and folds the result into the state.
+function evaluateStreamRun(state, runKey, rows, resolveContext) {
+    const fast = classifyStreamRunFast(state, rows, resolveContext);
+    if (fast) {
+        if (fast.scanned === 0) {
+            return;
+        }
+        const offset = allocateRunRecord(state);
+        const pool = state.recordPool;
+        const groupCount = fast.filtered > 0 ? 1 : 0;
+        pool[offset] = groupCount;
+        pool[offset + 1] = fast.scanned;
+        pool[offset + 2] = fast.filtered;
+        STAGES.forEach((stage, index) => {
+            pool[offset + RUN_RECORD_STAGE_PATH_OFFSET + index] = fast.stagePathCounts[stage];
+            pool[offset + RUN_RECORD_STAGE_COUNT_OFFSET + index] = fast.stagePathCounts[stage] > 0 ? 1 : 0;
+        });
+        if (fast.filtered > 0) {
+            const comboId = facetComboId(state, fast.facetEntry);
+            pool[offset + RUN_RECORD_FACET_OFFSET] = comboId;
+            pool[offset + RUN_RECORD_FACET_OFFSET + 1] = fast.filtered;
+            for (let count = 0; count < fast.filtered; count += 1) {
+                recordFacetEntry(state.facets, fast.facetEntry);
+            }
+        }
+        state.runRecords.set(runKey, offset);
+        adjustStreamCounters(state, offset, 1);
+        return;
+    }
+    const collection = makeEmptyCollection();
+    rows.forEach(row => {
+        const overrides = resolveContext?.(row) || {};
+        const source = makePersistedRouteContext(row, overrides);
+        if (!source || !entryMatchesClient({ client: source.client }, state.filters.client)) {
+            return;
+        }
+        collectRouteAssuranceSource(collection, source, state.filters);
+    });
+    if (collection.scannedPathCount === 0 && collection.grouped.size === 0) {
+        return;
+    }
+    const offset = allocateRunRecord(state);
+    const pool = state.recordPool;
+    pool[offset] = collection.grouped.size;
+    pool[offset + 1] = collection.scannedPathCount;
+    pool[offset + 2] = collection.filteredPathCount;
+    STAGES.forEach((stage, index) => {
+        pool[offset + RUN_RECORD_STAGE_PATH_OFFSET + index] = collection.stagePathCounts[stage];
+    });
+    const stageCounts = Object.fromEntries(STAGES.map(stage => [stage, 0]));
+    const categoryCounts = Object.fromEntries(CATEGORIES.map(category => [category, 0]));
+    const comboCounts = new Map();
+    collection.grouped.forEach(group => {
+        STAGES.forEach(stage => {
+            if (getGroupStageCount(group, stage) > 0) {
+                stageCounts[stage] += 1;
+            }
+        });
+        getAllGroupEntries(group).forEach(entry => {
+            const id = facetComboId(state, entry);
+            comboCounts.set(id, (comboCounts.get(id) || 0) + 1);
+        });
+        buildGroupIssues(group).forEach(issue => {
+            categoryCounts[issue.category] += 1;
+            state.evidenceCounts.set(issue.evidenceType, (state.evidenceCounts.get(issue.evidenceType) || 0) + 1);
+            retainStreamIssue(state, runKey, issue);
+        });
+    });
+    STAGES.forEach((stage, index) => {
+        pool[offset + RUN_RECORD_STAGE_COUNT_OFFSET + index] = stageCounts[stage];
+    });
+    CATEGORIES.forEach((category, index) => {
+        pool[offset + RUN_RECORD_CATEGORY_OFFSET + index] = categoryCounts[category];
+    });
+    let slot = 0;
+    comboCounts.forEach((count, id) => {
+        if (slot < RUN_RECORD_FACET_SLOTS) {
+            pool[offset + RUN_RECORD_FACET_OFFSET + slot * 2] = id;
+            pool[offset + RUN_RECORD_FACET_OFFSET + slot * 2 + 1] = count;
+            slot += 1;
+            return;
+        }
+        if (!state.runFacetOverflow.has(runKey)) {
+            state.runFacetOverflow.set(runKey, new Map());
+        }
+        state.runFacetOverflow.get(runKey).set(id, count);
+    });
+    state.runRecords.set(runKey, offset);
+    adjustStreamCounters(state, offset, 1);
+    mergeFacetAccumulator(state.facets, collection.facets);
+}
+
+function mergeFacetAccumulator(target, source) {
+    source.clients.forEach((facet, key) => {
+        const existing = target.clients.get(key);
+        if (existing) {
+            existing.count += facet.count;
+        } else {
+            target.clients.set(key, { ...facet });
+        }
+    });
+    source.vrfs.forEach((count, key) => target.vrfs.set(key, (target.vrfs.get(key) || 0) + count));
+    source.addressFamilies.forEach((facet, key) => {
+        const existing = target.addressFamilies.get(key);
+        if (existing) {
+            existing.count += facet.count;
+        } else {
+            target.addressFamilies.set(key, { ...facet });
+        }
+    });
+}
+
+function publishStreamAnalysis(analysis, state) {
+    analysis.funnel = { ...state.stageCounts };
+    analysis.summary.stageCounts = { ...state.stageCounts };
+    analysis.summary.stagePathCounts = { ...state.stagePathCounts };
+    analysis.summary.uniqueNlriCount = state.uniqueNlriCount;
+    analysis.summary.categoryCounts = { ...state.categoryCounts };
+    analysis.summary.totalIssueCount = CATEGORIES.reduce((sum, category) => sum + state.categoryCounts[category], 0);
+    analysis.summary.retainedIssueCount = state.allIssues.length;
+    analysis.summary.truncatedCategories = Array.from(state.truncatedCategories);
+    analysis.summary.clientCount = state.facets.clients.size;
+    analysis.summary.scannedPathCount = state.scannedPathCount;
+    analysis.summary.filteredPathCount = state.filteredPathCount;
+    analysis.facets = buildFacets(state.facets, [], state.categoryCounts);
+    analysis.facets.evidenceTypes = Array.from(state.evidenceCounts, ([value, count]) => ({
+        value,
+        label: value,
+        count
+    }));
+    analysis.allIssues = state.allIssues;
+    analysis.issuesByCategory = state.issuesByCategory;
+    analysis.generatedAt = new Date().toISOString();
+}
+
+function finalizeStreamAnalysis(state, startedAt) {
+    // Sort once for stable first pages; the dense positions are rebuilt after.
+    const issueIndex = finalizeIssueIndex(state.allIssues);
+    state.allIssues = issueIndex.allIssues;
+    state.issuesByCategory = issueIndex.issuesByCategory;
+    state.allIssuePositions = new Map(state.allIssues.map((issue, index) => [issue.id, index]));
+    state.categoryIssuePositions = Object.fromEntries(
+        CATEGORIES.map(category => [
+            category,
+            new Map(state.issuesByCategory[category].map((issue, index) => [issue.id, index]))
+        ])
+    );
+    const analysis = {
+        filters: {
+            client: state.filters.client,
+            vrf: state.filters.vrf,
+            af: state.filters.af,
+            query: state.filters.query,
+            routeState: state.filters.routeState
+        },
+        funnel: {},
+        summary: { scanDurationMs: Date.now() - startedAt },
+        facets: {},
+        allIssues: [],
+        issuesByCategory: {},
+        generatedAt: new Date().toISOString()
+    };
+    publishStreamAnalysis(analysis, state);
+    Object.defineProperty(analysis, '_stream', { value: state, enumerable: false });
+    return analysis;
+}
+
+// `rowStream` is an async iterable of row arrays (chunks) in the order
+// produced by BmpPersistenceStore.streamRouteAssuranceRows().
+async function buildBmpRouteAssuranceAnalysisFromRowStreamAsync(rowStream, options = {}, control = {}) {
+    const startedAt = Date.now();
+    const filters = normalizeFilters(options);
+    const state = makeStreamState(filters, control);
+    let runKey = null;
+    let runRows = [];
+    let sinceYield = 0;
+    const chunkSize = Math.max(100, Math.floor(Number(control.chunkSize)) || 5000);
+    for await (const chunk of rowStream) {
+        if (control.shouldCancel?.()) {
+            const error = new Error('路由矩阵分析初始化已取消');
+            error.code = 'BMP_ROUTE_ASSURANCE_CANCELLED';
+            throw error;
+        }
+        const rows = Array.isArray(chunk) ? chunk : [chunk];
+        for (const row of rows) {
+            const key = makeStreamRunKey(row, state.sourceIndex);
+            if (key !== runKey) {
+                if (runRows.length > 0) {
+                    evaluateStreamRun(state, runKey, runRows, control.resolveContext);
+                }
+                runRows = [];
+                runKey = key;
+            }
+            runRows.push(row);
+            sinceYield += 1;
+        }
+        if (sinceYield >= chunkSize) {
+            sinceYield = 0;
+            control.onProgress?.({ scannedPathCount: state.scannedPathCount + runRows.length });
+            await yieldToEventLoop();
+        }
+    }
+    if (runRows.length > 0) {
+        evaluateStreamRun(state, runKey, runRows, control.resolveContext);
+    }
+    control.onProgress?.({ scannedPathCount: state.scannedPathCount });
+    return finalizeStreamAnalysis(state, startedAt);
+}
+
+// Re-evaluates the run identified by `locator` (all current paths of one NLRI
+// within one source, any route state) against a streamed analysis. `rows`
+// are the paths currently in SQLite for that locator; rows that belong to a
+// different run are ignored.
+function refreshBmpRouteAssuranceStreamRun(analysis, locator, rows, resolveContext) {
+    const state = analysis?._stream;
+    if (!state) {
+        return false;
+    }
+    const runKey = makeStreamRunKey(locator, state.sourceIndex);
+    const runRows = (Array.isArray(rows) ? rows : []).filter(
+        row => makeStreamRunKey(row, state.sourceIndex) === runKey
+    );
+    releaseStreamRun(state, runKey);
+    if (runRows.length > 0) {
+        evaluateStreamRun(state, runKey, runRows, resolveContext);
+    }
+    state.updateCount += 1;
+    publishStreamAnalysis(analysis, state);
+    analysis.summary.incrementalUpdateCount = state.updateCount;
+    return true;
+}
+
 module.exports = {
     CATEGORIES,
     CATEGORY_LABELS,
@@ -1931,6 +2474,10 @@ module.exports = {
     buildBmpRouteAssuranceAnalysis,
     buildBmpRouteAssuranceAnalysisAsync,
     buildBmpRouteAssuranceAnalysisFromPersistedRoutesAsync,
+    buildBmpRouteAssuranceAnalysisFromRowStreamAsync,
+    refreshBmpRouteAssuranceStreamRun,
+    makeStreamRunKey,
+    DEFAULT_MAX_RETAINED_ISSUES_PER_CATEGORY,
     countBmpRouteAssuranceSourcePaths,
     paginateBmpRouteAssuranceAnalysis,
     applyBmpRouteAssuranceMutation,

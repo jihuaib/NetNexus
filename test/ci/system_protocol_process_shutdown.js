@@ -19,6 +19,7 @@ function loadSystemApp() {
         './radiusApp',
         './tftpApp',
         './syslogApp',
+        './grpcApp',
         './yangApp',
         './netconfApp',
         './updater',
@@ -113,6 +114,11 @@ function createHarness(SystemApp, options = {}) {
     };
     app.tftpApp = protocolApp('Tftp', trace, Boolean(options.tftpRunning));
     app.syslogApp = protocolApp('Syslog', trace, Boolean(options.syslogRunning));
+    app.grpcApp = {
+        hasWorker: () => Boolean(options.grpcRunning),
+        getGrpcRunning: () => Boolean(options.grpcRunning),
+        handleShutdown: async () => trace.push('Grpc:stop')
+    };
     app.netconfApp = {
         getRunning: () => Boolean(options.netconfRunning),
         closeAll: async () => trace.push('netconf:close')
@@ -138,7 +144,8 @@ async function testFailureIsolation(SystemApp) {
         ntpRunning: true,
         radiusRunning: true,
         tftpRunning: true,
-        syslogRunning: true
+        syslogRunning: true,
+        grpcRunning: true
     });
 
     const errors = await app.shutdownServices();
@@ -157,6 +164,7 @@ async function testFailureIsolation(SystemApp) {
         'Radius:stop',
         'Tftp:stop',
         'Syslog:stop',
+        'Grpc:stop',
         'netconf:close',
         'bmp:close-reader',
         'yang:close'

@@ -659,16 +659,16 @@ function buildSubscriptionQos(options = {}) {
 function isDatastoreSubscription(options = {}) {
     return Boolean(
         options.targetType === 'datastore' ||
-        ['yang-push', 'rfc8641'].includes(options.subscriptionType) ||
-        options.datastore ||
-        options.datastoreFilter ||
-        options.datastoreFilterName ||
-        options.selectionFilterRef ||
-        options.updateTrigger ||
-        options.trigger ||
-        options.mode ||
-        options.period !== undefined ||
-        options.dampeningPeriod !== undefined
+            ['yang-push', 'rfc8641'].includes(options.subscriptionType) ||
+            options.datastore ||
+            options.datastoreFilter ||
+            options.datastoreFilterName ||
+            options.selectionFilterRef ||
+            options.updateTrigger ||
+            options.trigger ||
+            options.mode ||
+            options.period !== undefined ||
+            options.dampeningPeriod !== undefined
     );
 }
 

@@ -406,14 +406,6 @@ function createBmpApiRoutes(bmpApp) {
                 const payload = normalizePersistenceQuery(body, settings, true);
                 return bmpApp.queryPersistedRoutes(payload);
             })
-        },
-        {
-            method: 'POST',
-            path: '/api/v1/bmp/persistence/events',
-            handler: wrap(async ({ body, settings }) => {
-                const payload = normalizePersistenceQuery(body, settings, false);
-                return bmpApp.queryPersistedRouteEvents(payload);
-            })
         }
     ];
 }

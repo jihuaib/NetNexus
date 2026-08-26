@@ -23,7 +23,6 @@ const BmpMain = () => import('../view/bmp/BmpMain.vue');
 const BmpConfig = () => import('../view/bmp/BmpConfig.vue');
 const BgpRouteAssurance = () => import('../view/bmp/BgpRouteAssurance.vue');
 const BgpRouteLens = () => import('../view/bmp/BgpRouteLens.vue');
-const BgpRouteHistory = () => import('../view/bmp/BgpRouteHistory.vue');
 const BmpClientMonitor = () => import('../view/bmp/BmpClientMonitor.vue');
 const RpkiMain = () => import('../view/rpki/RpkiMain.vue');
 const RpkiConfig = () => import('../view/rpki/RpkiConfig.vue');
@@ -59,6 +58,10 @@ const TftpTransferLog = () => import('../view/tftp/TftpTransferLog.vue');
 const SyslogMain = () => import('../view/syslog/SyslogMain.vue');
 const SyslogConfig = () => import('../view/syslog/SyslogConfig.vue');
 const SyslogMessageLog = () => import('../view/syslog/SyslogMessageLog.vue');
+const GrpcMain = () => import('../view/grpc/GrpcMain.vue');
+const GrpcProto = () => import('../view/grpc/GrpcProto.vue');
+const GrpcWorkspace = () => import('../view/grpc/GrpcWorkspace.vue');
+const GrpcMessageLog = () => import('../view/grpc/GrpcMessageLog.vue');
 const MonitorWindow = () => import('../view/MonitorWindow.vue');
 const ProcessResourceManager = () => import('../view/system/ProcessResourceManager.vue');
 
@@ -87,6 +90,16 @@ const routes = [
                     monitorWindow: true,
                     windowTitle: 'Syslog 消息监控 - NetNexus',
                     monitorTestId: 'syslog-monitor-shell'
+                }
+            },
+            {
+                path: 'grpc-message-log',
+                name: 'GrpcMessageLogMonitor',
+                component: GrpcMessageLog,
+                meta: {
+                    monitorWindow: true,
+                    windowTitle: 'gRPC 消息监控 - NetNexus',
+                    monitorTestId: 'grpc-monitor-shell'
                 }
             },
             {
@@ -290,12 +303,6 @@ const routes = [
                         path: 'route-lens',
                         name: 'BgpRouteLens',
                         component: BgpRouteLens,
-                        meta: { keepAlive: true }
-                    },
-                    {
-                        path: 'route-history',
-                        name: 'BgpRouteHistory',
-                        component: BgpRouteHistory,
                         meta: { keepAlive: true }
                     },
                     {
@@ -529,6 +536,35 @@ const routes = [
                     {
                         path: 'syslog-message-log',
                         redirect: '/syslog/syslog-config'
+                    }
+                ]
+            },
+            {
+                path: '/grpc',
+                name: 'GrpcMain',
+                component: GrpcMain,
+                meta: { keepAlive: true },
+                redirect: '/grpc/grpc-proto',
+                children: [
+                    {
+                        path: 'grpc-proto',
+                        name: 'GrpcProto',
+                        component: GrpcProto,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'grpc-workspace',
+                        name: 'GrpcWorkspace',
+                        component: GrpcWorkspace,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'grpc-server',
+                        redirect: '/grpc/grpc-workspace'
+                    },
+                    {
+                        path: 'grpc-client',
+                        redirect: '/grpc/grpc-workspace'
                     }
                 ]
             }

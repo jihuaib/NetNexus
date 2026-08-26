@@ -92,16 +92,16 @@ async function collectDeviceEvidence(live) {
 
 async function collectPersistenceEvidence(controller, prefixes) {
     const status = await controller.call('getPersistenceStatus');
-    const events = {};
+    const routes = {};
     for (const prefix of prefixes) {
-        events[prefix] = await controller.call('getPersistedRouteEvents', {
-            groupByRoute: true,
+        routes[prefix] = await controller.call('getPersistedRoutes', {
             prefixExact: prefix,
+            routeState: 'all',
             pageSize: 100,
             includeTotal: true
         });
     }
-    return { status, events };
+    return { status, routes };
 }
 
 async function runIteration(index, rootDirectory, durationMs) {

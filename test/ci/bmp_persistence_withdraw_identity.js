@@ -346,6 +346,29 @@ try {
             kind: 'peer',
             scopeState: 'syncing'
         });
+        const announceResult = store.applyBatch(batch(`withdraw-identity-${index}-announce`, [announce]));
+        assert.equal(announceResult.deltas[0].classification, 'announce', `${fixture.name}: announce classification`);
+        assert.equal(store.queryRoutes({ scopeId: announce.scope.id, routeId: announce.route.id }).total, 1);
+
+        if (fixture.pathId !== undefined) {
+            const wrongPathWithdraw = buildRouteWithdrawMutation(
+                bmpSession,
+                owner,
+                { ...fixture.pair.withdrawn, pathId: fixture.pathId + 1 },
+                null,
+                fixture.afi,
+                fixture.safi,
+                RIB_TYPE,
+                { kind: 'peer', state: 'syncing' }
+            );
+            assert.notEqual(wrongPathWithdraw.route.id, announce.route.id, 'ADD-PATH IDs must isolate paths');
+            const wrongResult = store.applyBatch(batch(`withdraw-identity-${index}-wrong-path`, [wrongPathWithdraw]));
+            assert.equal(wrongResult.deltas[0].classification, 'withdraw-noop');
+            assert.equal(store.queryRoutes({ scopeId: announce.scope.id, routeId: announce.route.id }).total, 1);
+        }
+
+        // Mutations must carry increasing sequences per connection; build the real
+        // withdraw after the wrong-path probe so it is not treated as a replay.
         const withdraw = buildRouteWithdrawMutation(
             bmpSession,
             owner,
@@ -369,27 +392,6 @@ try {
             `${fixture.name}: a DB-backed withdraw must not pre-claim the route is missing`
         );
 
-        const announceResult = store.applyBatch(batch(`withdraw-identity-${index}-announce`, [announce]));
-        assert.equal(announceResult.deltas[0].classification, 'announce', `${fixture.name}: announce classification`);
-        assert.equal(store.queryRoutes({ scopeId: announce.scope.id, routeId: announce.route.id }).total, 1);
-
-        if (fixture.pathId !== undefined) {
-            const wrongPathWithdraw = buildRouteWithdrawMutation(
-                bmpSession,
-                owner,
-                { ...fixture.pair.withdrawn, pathId: fixture.pathId + 1 },
-                null,
-                fixture.afi,
-                fixture.safi,
-                RIB_TYPE,
-                { kind: 'peer', state: 'syncing' }
-            );
-            assert.notEqual(wrongPathWithdraw.route.id, announce.route.id, 'ADD-PATH IDs must isolate paths');
-            const wrongResult = store.applyBatch(batch(`withdraw-identity-${index}-wrong-path`, [wrongPathWithdraw]));
-            assert.equal(wrongResult.deltas[0].classification, 'withdraw-noop');
-            assert.equal(store.queryRoutes({ scopeId: announce.scope.id, routeId: announce.route.id }).total, 1);
-        }
-
         const withdrawResult = store.applyBatch(batch(`withdraw-identity-${index}-withdraw`, [withdraw]));
         assert.equal(withdrawResult.deltas[0].classification, 'withdraw', `${fixture.name}: withdraw classification`);
         assert.equal(
@@ -403,16 +405,6 @@ try {
             0,
             `${fixture.name}: SQLite current route must be deleted`
         );
-
-        const eventResult = store.queryEvents({
-            scopeId: announce.scope.id,
-            routeId: announce.route.id,
-            eventType: 'withdraw',
-            pageSize: 10
-        });
-        assert.equal(eventResult.total, 1, `${fixture.name}: one successful withdraw event must be committed`);
-        assert.equal(eventResult.list[0].eventType, 'withdraw');
-        assert.equal(eventResult.list[0].reason, null);
     });
 
     assert.equal(store.queryRoutes({ pageSize: 100 }).total, 0, 'all announced routes must be withdrawn');

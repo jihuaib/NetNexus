@@ -170,6 +170,26 @@ async function main() {
         includeDynamicDeltas = true;
         assert.equal(dynamicDeltasClient.makeBatch([{ mutation: { eventType: 'synthetic' } }]).includeDeltas, true);
 
+        // Watermark accounting uses the already-serialized JSON payloads rather
+        // than re-stringifying every mutation on the ingest thread.
+        const estimateClient = new BmpPersistenceClient({ dbPath: 'synthetic-estimate.sqlite3' });
+        const routeMutation = buildRouteUpsertMutation(bmpSession, owner, route, 1, 1, 2, {
+            kind: 'peer',
+            state: 'syncing',
+            scopeState: 'syncing',
+            isNewRoute: true
+        });
+        const routeEstimate = estimateClient.estimateMutationBytes(routeMutation);
+        const routeActual = Buffer.byteLength(JSON.stringify(routeMutation), 'utf8');
+        assert.ok(routeEstimate > 0);
+        assert.ok(
+            routeEstimate >= routeActual * 0.5 && routeEstimate <= routeActual * 2,
+            `route mutation estimate ${routeEstimate} should approximate ${routeActual}`
+        );
+        const connectionMutation = buildConnectionMutation(bmpSession, 'connection_open');
+        assert.ok(estimateClient.estimateMutationBytes(connectionMutation) < routeEstimate);
+        assert.ok(estimateClient.estimateMutationBytes({ eventType: 'synthetic' }) > 0);
+
         const retryClient = new BmpPersistenceClient({
             dbPath: 'synthetic-retry.sqlite3',
             batchSize: 1,

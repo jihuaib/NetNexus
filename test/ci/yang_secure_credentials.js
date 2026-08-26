@@ -213,10 +213,7 @@ async function main() {
         tamperedTag[0] ^= 0xff;
         tamperedParts[1] = tamperedTag.toString('base64');
         tamperedTag.fill(0);
-        assert.throws(
-            () => store.decrypt(`${LINUX_CIPHERTEXT_PREFIX}${tamperedParts.join(':')}`),
-            /密文认证失败/u
-        );
+        assert.throws(() => store.decrypt(`${LINUX_CIPHERTEXT_PREFIX}${tamperedParts.join(':')}`), /密文认证失败/u);
         assert.throws(() => store.decrypt(`${LINUX_CIPHERTEXT_PREFIX}invalid`), /密文格式无效/u);
         assert.throws(() => store.decrypt('unsupported-ciphertext'), /重新输入密钥/u);
 

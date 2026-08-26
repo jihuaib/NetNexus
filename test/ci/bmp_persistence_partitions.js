@@ -39,20 +39,20 @@ const expectedTableNames = [
 const requiredPartitionColumns = [
     'path_pk',
     'partition_id',
-    'scope_id',
+    'scope_pk',
     'route_pk',
     'payload_id',
-    'attr_id',
-    'connection_id',
+    'attr_pk',
+    'connection_pk',
     'rib_epoch',
     'explicit_state',
     'first_seen_ms',
     'last_seen_ms',
     'source_timestamp_ms',
-    'last_event_id'
+    'last_sequence'
 ];
 
-assert.equal(BmpPersistenceStore.SCHEMA_VERSION, 9);
+assert.equal(BmpPersistenceStore.SCHEMA_VERSION, 13);
 assert.deepEqual(
     BMP_ROUTE_FAMILIES.map(family => family.token),
     expectedFamilyTokens
@@ -131,7 +131,6 @@ try {
             .sort();
         assert.deepEqual(indexNames, [
             `idx_${tableName}_attr`,
-            `idx_${tableName}_connection`,
             `idx_${tableName}_payload`,
             `idx_${tableName}_route`,
             `idx_${tableName}_scope_epoch`,
@@ -226,8 +225,12 @@ try {
     assert.ok(otherRow);
     assert.equal(otherRow.partition_id, 118);
     assert.equal(
-        store.db.prepare('SELECT partition_id FROM bmp_rib_scopes WHERE scope_id = ?').pluck().get(otherRow.scope_id),
+        store.db.prepare('SELECT partition_id FROM bmp_rib_scopes WHERE scope_pk = ?').pluck().get(otherRow.scope_pk),
         118
+    );
+    assert.equal(
+        store.db.prepare('SELECT scope_id FROM bmp_rib_scopes WHERE scope_pk = ?').pluck().get(otherRow.scope_pk),
+        'partition-test-scope-other'
     );
     assert.equal(
         store.db.prepare('SELECT COUNT(*) FROM bmp_current_routes_all').pluck().get(),
@@ -235,49 +238,44 @@ try {
         'an unknown AFI/SAFI route must remain visible through the unified view'
     );
 
+    // Shared identity, payload, and attribute rows are garbage collected by
+    // candidate-driven anti-joins instead of per-row reference counters: a row
+    // survives while any event or current route still points at it.
     const readReferenceState = () => ({
         identity: store.db
-            .prepare(
-                `SELECT current_ref_count, event_ref_count
-                   FROM bmp_route_identities
-                  WHERE route_pk = ?`
-            )
-            .get(otherRow.route_pk),
+            .prepare('SELECT COUNT(*) AS count FROM bmp_route_identities WHERE route_pk = ?')
+            .get(otherRow.route_pk).count,
         payloads: store.db
-            .prepare(
-                `SELECT payload_id, current_ref_count, event_ref_count
-                   FROM bmp_route_payloads
-                  ORDER BY payload_id`
-            )
-            .all(),
+            .prepare('SELECT payload_id FROM bmp_route_payloads ORDER BY payload_id')
+            .all()
+            .map(row => row.payload_id),
         attributes: store.db
-            .prepare(
-                `SELECT attr_id, current_ref_count, event_ref_count
-                   FROM bmp_route_attributes
-                  ORDER BY attr_id`
-            )
-            .all(),
+            .prepare('SELECT attr_id FROM bmp_route_attributes ORDER BY attr_id')
+            .all()
+            .map(row => row.attr_id),
         scopeCounts: store.db
             .prepare(
-                `SELECT connection_id, rib_epoch, explicit_state, route_count
-                   FROM bmp_scope_route_counts
-                  WHERE scope_id = ?
-                  ORDER BY connection_id, rib_epoch, explicit_state`
+                `SELECT conn.connection_id, count.rib_epoch, count.explicit_state, count.route_count
+                   FROM bmp_scope_route_counts count
+                   JOIN bmp_connections conn ON conn.connection_pk = count.connection_pk
+                  WHERE count.scope_pk = ?
+                  ORDER BY conn.connection_id, count.rib_epoch, count.explicit_state`
             )
-            .all(otherRow.scope_id)
+            .all(otherRow.scope_pk)
     });
+    const expectedScopeCounts = [
+        {
+            connection_id: 'partition-test-connection',
+            rib_epoch: 0,
+            explicit_state: 'active',
+            route_count: 1
+        }
+    ];
     assert.deepEqual(readReferenceState(), {
-        identity: { current_ref_count: 1, event_ref_count: 1 },
-        payloads: [{ payload_id: otherRow.payload_id, current_ref_count: 1, event_ref_count: 1 }],
-        attributes: [{ attr_id: 'partition-test-attr-original', current_ref_count: 1, event_ref_count: 1 }],
-        scopeCounts: [
-            {
-                connection_id: 'partition-test-connection',
-                rib_epoch: 0,
-                explicit_state: 'active',
-                route_count: 1
-            }
-        ]
+        identity: 1,
+        payloads: [otherRow.payload_id],
+        attributes: ['partition-test-attr-original'],
+        scopeCounts: expectedScopeCounts
     });
 
     const referencesBeforeRejectedWrites = readReferenceState();
@@ -285,11 +283,11 @@ try {
         () =>
             store.db.exec(`
                 INSERT INTO bmp_current_routes_peer_ipv4_unicast(
-                    scope_id, route_pk, payload_id, attr_id, connection_id, rib_epoch,
-                    explicit_state, first_seen_ms, last_seen_ms, source_timestamp_ms, last_event_id
+                    scope_pk, route_pk, payload_id, attr_pk, connection_pk, rib_epoch,
+                    explicit_state, first_seen_ms, last_seen_ms, source_timestamp_ms, last_sequence
                 )
-                SELECT scope_id, route_pk, payload_id, attr_id, connection_id, rib_epoch,
-                       explicit_state, first_seen_ms, last_seen_ms, source_timestamp_ms, last_event_id
+                SELECT scope_pk, route_pk, payload_id, attr_pk, connection_pk, rib_epoch,
+                       explicit_state, first_seen_ms, last_seen_ms, source_timestamp_ms, last_sequence
                   FROM ${otherTable}
             `),
         /BMP route identity does not match target partition/,
@@ -306,12 +304,12 @@ try {
         () =>
             store.db.exec(`
                 INSERT INTO bmp_rib_scopes(
-                    scope_id, source_id, partition_id, scope_key_json, scope_identity_json,
+                    scope_id, source_pk, partition_id, scope_key_json, scope_identity_json,
                     scope_kind, afi, safi, rib_type, current_epoch, scope_state,
-                    last_connection_id, created_at_ms, updated_at_ms
+                    last_connection_pk, created_at_ms, updated_at_ms
                 )
-                SELECT 'partition-test-invalid-scope', source_id, 101, '{}', '{}',
-                       'peer', 65000, 250, '2', 0, 'syncing', last_connection_id,
+                SELECT 'partition-test-invalid-scope', source_pk, 101, '{}', '{}',
+                       'peer', 65000, 250, '2', 0, 'syncing', last_connection_pk,
                        created_at_ms, updated_at_ms
                   FROM bmp_rib_scopes
                  WHERE scope_id = 'partition-test-scope-other'
@@ -320,12 +318,15 @@ try {
     );
     assert.deepEqual(readReferenceState(), referencesBeforeRejectedWrites);
 
-    store.db
-        .prepare(
-            `INSERT INTO bmp_route_attributes(attr_id, attr_json, first_seen_ms, last_seen_ms)
-             VALUES ('partition-test-attr-next', '{"nextHop":"192.0.2.2"}', ?, ?)`
-        )
-        .run(eventAtMs + 1, eventAtMs + 1);
+    const nextAttrPk = Number(
+        store.db
+            .prepare(
+                `INSERT INTO bmp_route_attributes(attr_id, attr_json, first_seen_ms, last_seen_ms)
+                 VALUES ('partition-test-attr-next', '{"nextHop":"192.0.2.2"}', ?, ?)
+                 RETURNING attr_pk`
+            )
+            .get(eventAtMs + 1, eventAtMs + 1).attr_pk
+    );
     const nextPayloadId = Number(
         store.db
             .prepare(
@@ -336,36 +337,26 @@ try {
             .get(Buffer.from('partition-test-payload-next'), eventAtMs + 1, eventAtMs + 1).payload_id
     );
     store.db
-        .prepare(`UPDATE ${otherTable} SET payload_id = ?, attr_id = ? WHERE path_pk = ?`)
-        .run(nextPayloadId, 'partition-test-attr-next', otherRow.path_pk);
-
-    assert.deepEqual(readReferenceState(), {
-        identity: { current_ref_count: 1, event_ref_count: 1 },
-        payloads: [
-            { payload_id: otherRow.payload_id, current_ref_count: 0, event_ref_count: 1 },
-            { payload_id: nextPayloadId, current_ref_count: 1, event_ref_count: 0 }
-        ],
-        attributes: [
-            { attr_id: 'partition-test-attr-next', current_ref_count: 1, event_ref_count: 0 },
-            { attr_id: 'partition-test-attr-original', current_ref_count: 0, event_ref_count: 1 }
-        ],
-        scopeCounts: [
-            {
-                connection_id: 'partition-test-connection',
-                rib_epoch: 0,
-                explicit_state: 'active',
-                route_count: 1
-            }
-        ]
-    });
+        .prepare(`UPDATE ${otherTable} SET payload_id = ?, attr_pk = ? WHERE path_pk = ?`)
+        .run(nextPayloadId, nextAttrPk, otherRow.path_pk);
+    assert.deepEqual(
+        readReferenceState(),
+        {
+            identity: 1,
+            payloads: [otherRow.payload_id, nextPayloadId],
+            attributes: ['partition-test-attr-next', 'partition-test-attr-original'],
+            scopeCounts: expectedScopeCounts
+        },
+        'a raw projection change must not delete rows on its own'
+    );
 
     const referencesBeforeNoopUpdate = readReferenceState();
     store.db
         .prepare(
             `UPDATE ${otherTable}
                 SET payload_id = payload_id,
-                    attr_id = attr_id,
-                    connection_id = connection_id,
+                    attr_pk = attr_pk,
+                    connection_pk = connection_pk,
                     rib_epoch = rib_epoch,
                     explicit_state = explicit_state
               WHERE path_pk = ?`
@@ -374,18 +365,26 @@ try {
     assert.deepEqual(
         readReferenceState(),
         referencesBeforeNoopUpdate,
-        'reference counts must not drift when watched columns retain the same values'
+        'scope route counts must not drift when watched columns retain the same values'
     );
 
-    const eventId = store.db.prepare('SELECT event_id FROM bmp_route_events').pluck().get();
-    assert.throws(
-        () =>
-            store.db
-                .prepare('UPDATE bmp_route_events SET payload_id = ?, attr_id = ? WHERE event_id = ?')
-                .run(nextPayloadId, 'partition-test-attr-next', eventId),
-        /event identity, payload, and attributes are immutable/
-    );
-    assert.deepEqual(readReferenceState(), referencesBeforeNoopUpdate);
+    // Once the replaced payload and attribute are offered as garbage candidates
+    // they are removed, while the identity and the replacement rows stay
+    // referenced by the current projection.
+    const garbage = store.db.transaction(() => {
+        store.addGcCandidates([
+            { route_pk: otherRow.route_pk, payload_id: otherRow.payload_id, attr_pk: otherRow.attr_pk },
+            { payload_id: nextPayloadId, attr_pk: nextAttrPk }
+        ]);
+        return store.collectGarbage();
+    })();
+    assert.deepEqual(garbage, { attributes: 1, payloads: 1, identities: 0 });
+    assert.deepEqual(readReferenceState(), {
+        identity: 1,
+        payloads: [nextPayloadId],
+        attributes: ['partition-test-attr-next'],
+        scopeCounts: expectedScopeCounts
+    });
 
     console.log('BMP persistence partition manifest/schema tests passed');
 } finally {

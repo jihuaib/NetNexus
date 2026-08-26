@@ -9,7 +9,7 @@ const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceSto
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
 const { buildScenario, parseArgs, ROUTE_HISTORY_SCENARIO } = require('../../scripts/mockBmpClient');
 
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-mock-route-history-'));
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-mock-non-ip-lifecycle-'));
 const store = new BmpPersistenceStore({ dbPath: path.join(tempDir, 'bmp.sqlite3') }).open();
 const persistenceFailures = [];
 let batchSequence = 0;
@@ -24,7 +24,7 @@ try {
         enqueuePersistenceMutation(mutation) {
             batchSequence += 1;
             store.applyBatch({
-                batchId: `mock-route-history-${batchSequence}`,
+                batchId: `mock-non-ip-lifecycle-${batchSequence}`,
                 createdAtMs: Date.now(),
                 mutations: [mutation]
             });
@@ -46,7 +46,7 @@ try {
         remotePort: 50000
     });
 
-    const options = parseArgs(['--scenario', 'route-history', '--interval', '0', '--no-dump-packets']);
+    const options = parseArgs(['--scenario', 'non-ip-lifecycle', '--interval', '0', '--no-dump-packets']);
     buildScenario(options).forEach(message => session.processMessage(message.data));
     assert.deepEqual(persistenceFailures, []);
 
@@ -74,8 +74,7 @@ try {
     expectedRoutes.forEach(expected => {
         const identity = store.db
             .prepare(
-                `SELECT route_pk, route_id, legacy_route_key, afi, safi, prefix, nlri_kind,
-                        current_ref_count, event_ref_count
+                `SELECT route_pk, route_id, legacy_route_key, afi, safi, prefix, nlri_kind
                    FROM bmp_route_identities
                   WHERE prefix = @prefix`
             )
@@ -85,34 +84,13 @@ try {
         assert.equal(identity.safi, expected.safi);
         assert.equal(identity.nlri_kind, expected.nlriKind);
         assert.ok(identity.legacy_route_key.includes(`|${expected.identity}|`));
-        assert.equal(identity.current_ref_count, 0, 'the final MP_UNREACH must remove the current projection');
-        assert.equal(identity.event_ref_count, 3);
-
-        const events = store.db
-            .prepare(
-                `SELECT event_type, attr_id
-                   FROM bmp_route_events
-                  WHERE route_pk = @routePk
-                  ORDER BY event_id`
-            )
-            .all({ routePk: identity.route_pk });
-        assert.deepEqual(
-            events.map(event => event.event_type),
-            ['announce', 'replace', 'withdraw']
+        assert.equal(
+            store.db
+                .prepare('SELECT COUNT(*) AS count FROM bmp_current_route_refs WHERE route_pk = @routePk')
+                .get({ routePk: identity.route_pk }).count,
+            0,
+            'the final MP_UNREACH must remove the current projection'
         );
-        assert.notEqual(events[0].attr_id, events[1].attr_id, 'the second announcement must be an attribute replace');
-        assert.equal(events[2].attr_id, null);
-
-        const groupedHistory = store.queryEvents({
-            groupByRoute: true,
-            prefix: expected.identity,
-            pageSize: 10
-        });
-        assert.equal(groupedHistory.total, 1);
-        assert.equal(groupedHistory.list.length, 1);
-        assert.equal(groupedHistory.list[0].route.ip, expected.identity);
-        assert.equal(groupedHistory.list[0].latestEvent.eventType, 'withdraw');
-        assert.equal(groupedHistory.list[0].eventCount, 3);
 
         const scope = store.db
             .prepare(

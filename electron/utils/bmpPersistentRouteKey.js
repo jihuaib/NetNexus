@@ -1,7 +1,10 @@
 const crypto = require('crypto');
 const ipaddr = require('ipaddr.js');
 
-const KEY_SCHEMA_VERSION = 1;
+// v2: keys hash a fixed-order canonical string instead of sorted JSON. The
+// identity semantics are unchanged; only the bytes (and therefore key values)
+// differ from v1.
+const KEY_SCHEMA_VERSION = 2;
 const KEY_ALGORITHM = 'sha256';
 
 const AFI_IPV4 = 1;
@@ -126,31 +129,95 @@ function normalizeText(value, name) {
     return text;
 }
 
+// Address/prefix normalization dominates route key construction, and the
+// same prefix text arrives from every peer that announces it. Results are
+// memoized by text; the maps are cleared when they grow past the cap.
+const NORMALIZED_ADDRESS_CACHE = new Map();
+const NORMALIZED_PREFIX_CACHE = new Map();
+const NORMALIZATION_CACHE_LIMIT = 200_000;
+const IPV4_TEXT = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const HEX_BYTES = Array.from({ length: 256 }, (_, value) => value.toString(16).padStart(2, '0'));
+
+function remember(cache, key, value) {
+    if (cache.size >= NORMALIZATION_CACHE_LIMIT) {
+        cache.clear();
+    }
+    cache.set(key, value);
+    return value;
+}
+
+function parseIpv4Fast(text) {
+    const match = IPV4_TEXT.exec(text);
+    if (!match) {
+        return null;
+    }
+    const bytes = [];
+    for (let index = 1; index <= 4; index += 1) {
+        const octet = Number(match[index]);
+        if (octet > 255 || (match[index].length > 1 && match[index][0] === '0')) {
+            return null;
+        }
+        bytes.push(octet);
+    }
+    return bytes;
+}
+
 function normalizeIpAddress(value, expectedAfi = null) {
     const text = normalizeText(value, 'IP address');
+    const cached = NORMALIZED_ADDRESS_CACHE.get(text);
+    const resolved = cached || resolveIpAddress(text);
+    if (!cached) {
+        remember(NORMALIZED_ADDRESS_CACHE, text, resolved);
+    }
+    if (expectedAfi === AFI_IPV4 && resolved.family !== 'ipv4') {
+        throw new Error(`Expected an IPv4 address, got ${text}`);
+    }
+    if (expectedAfi === AFI_IPV6 && resolved.family !== 'ipv6') {
+        throw new Error(`Expected an IPv6 address, got ${text}`);
+    }
+    return resolved;
+}
+
+function resolveIpAddress(text) {
+    const ipv4 = parseIpv4Fast(text);
+    if (ipv4) {
+        return {
+            family: 'ipv4',
+            address: ipv4.join('.'),
+            addressHex: HEX_BYTES[ipv4[0]] + HEX_BYTES[ipv4[1]] + HEX_BYTES[ipv4[2]] + HEX_BYTES[ipv4[3]]
+        };
+    }
     let address;
     try {
         address = ipaddr.parse(text);
     } catch (error) {
         throw new Error(`Invalid IP address: ${text}`);
     }
-
-    const family = address.kind();
-    if (expectedAfi === AFI_IPV4 && family !== 'ipv4') {
-        throw new Error(`Expected an IPv4 address, got ${text}`);
-    }
-    if (expectedAfi === AFI_IPV6 && family !== 'ipv6') {
-        throw new Error(`Expected an IPv6 address, got ${text}`);
-    }
-
     return {
-        family,
+        family: address.kind(),
         address: address.toString(),
         addressHex: Buffer.from(address.toByteArray()).toString('hex')
     };
 }
 
+function networkTextFromHex(family, networkHex) {
+    const bytes = Buffer.from(networkHex, 'hex');
+    if (family === 'ipv4') {
+        return `${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}`;
+    }
+    return ipaddr.fromByteArray(Array.from(bytes)).toString();
+}
+
 function normalizeIpPrefix(prefixValue, lengthValue, afi) {
+    const cacheKey = `${afi}\u001f${prefixValue}\u001f${lengthValue}`;
+    const cached = NORMALIZED_PREFIX_CACHE.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+    return remember(NORMALIZED_PREFIX_CACHE, cacheKey, resolveIpPrefix(prefixValue, lengthValue, afi));
+}
+
+function resolveIpPrefix(prefixValue, lengthValue, afi) {
     let prefix = normalizeText(prefixValue, 'NLRI prefix');
     let cidrLength = null;
     const slash = prefix.lastIndexOf('/');
@@ -181,10 +248,14 @@ function normalizeIpPrefix(prefixValue, lengthValue, afi) {
         network[index] = 0;
     }
 
+    const networkHex = network.toString('hex');
     return {
         family: parsed.family,
         prefixLength,
-        networkHex: network.toString('hex')
+        networkHex,
+        // Canonical text of the network address (what the persisted `prefix`
+        // column stores), computed once per distinct prefix.
+        networkText: networkTextFromHex(parsed.family, networkHex)
     };
 }
 
@@ -280,23 +351,72 @@ function canonicalStringify(value) {
     return JSON.stringify(normalizeCanonicalValue(value));
 }
 
+const SEP = '\u001f';
+const KEY_CACHE = new Map();
+const KEY_CACHE_LIMIT = 200_000;
+
+function canonicalNlriString(nlri) {
+    switch (nlri.kind) {
+        case 'ip-prefix':
+            return `ip-prefix${SEP}${nlri.prefix.family}${SEP}${nlri.prefix.networkHex}${SEP}${nlri.prefix.prefixLength}`;
+        case 'vpn-prefix':
+            return `vpn-prefix${SEP}${nlri.rd}${SEP}${nlri.prefix.family}${SEP}${nlri.prefix.networkHex}${SEP}${nlri.prefix.prefixLength}`;
+        case 'qp-prefix':
+            return `qp-prefix${SEP}${nlri.prefix.family}${SEP}${nlri.prefix.networkHex}${SEP}${nlri.prefix.prefixLength}${SEP}${nlri.dqpn}${SEP}${nlri.dqpnBits}`;
+        case 'raw-nlri':
+            return `raw-nlri${SEP}${nlri.routeType === null ? '' : nlri.routeType}${SEP}${nlri.rd === null ? '' : nlri.rd}${SEP}${nlri.rawNlriHex}`;
+        default:
+            // EVPN and structured NLRI keep the sorted canonical JSON of their
+            // parsed semantic fields; those kinds are rare and field sets vary
+            // by route type.
+            return `${nlri.kind}${SEP}${canonicalStringify(nlri.semantic)}`;
+    }
+}
+
+// Deterministic canonical string per key domain. Every field that decides
+// identity is present in a fixed order; nothing is sorted or JSON-encoded
+// on the hot path.
+function canonicalIdentityString(domain, identity) {
+    if (domain === 'bmp-route') {
+        return `bmp-route${SEP}${KEY_SCHEMA_VERSION}${SEP}${identity.afi}${SEP}${identity.safi}${SEP}${identity.pathId}${SEP}${canonicalNlriString(identity.nlri)}`;
+    }
+    if (domain === 'bmp-rib-scope') {
+        const peer = identity.peer;
+        return `bmp-rib-scope${SEP}${KEY_SCHEMA_VERSION}${SEP}${identity.sourceKeyHex}${SEP}${identity.scopeKind}${SEP}${
+            peer.type === null ? '' : peer.type
+        }${SEP}${peer.rd}${SEP}${peer.address === null ? '' : peer.address}${SEP}${peer.asn === null ? '' : peer.asn}${SEP}${
+            identity.afi
+        }${SEP}${identity.safi}${SEP}${identity.stage}`;
+    }
+    return `${domain}${SEP}${KEY_SCHEMA_VERSION}${SEP}${canonicalStringify(identity)}`;
+}
+
 function buildKey(domain, canonicalIdentity) {
-    const canonicalJson = canonicalStringify({
-        domain,
-        schemaVersion: KEY_SCHEMA_VERSION,
-        identity: canonicalIdentity
-    });
-    const canonicalBytes = Buffer.from(canonicalJson, 'utf8');
-    const keyBuffer = crypto.createHash(KEY_ALGORITHM).update(canonicalBytes).digest();
+    const canonicalJson = canonicalIdentityString(domain, canonicalIdentity);
+    let keyHex = KEY_CACHE.get(canonicalJson);
+    if (keyHex === undefined) {
+        keyHex = crypto.createHash(KEY_ALGORITHM).update(canonicalJson, 'utf8').digest('hex');
+        if (KEY_CACHE.size >= KEY_CACHE_LIMIT) {
+            KEY_CACHE.clear();
+        }
+        KEY_CACHE.set(canonicalJson, keyHex);
+    }
     return {
         schemaVersion: KEY_SCHEMA_VERSION,
         algorithm: KEY_ALGORITHM,
-        keyBuffer,
-        keyBlob: keyBuffer,
-        keyHex: keyBuffer.toString('hex'),
+        keyHex,
         canonicalIdentity,
-        canonicalBytes,
-        canonicalJson
+        canonicalJson,
+        // Buffers are only materialized on demand; the ingest path never needs them.
+        get keyBuffer() {
+            return Buffer.from(keyHex, 'hex');
+        },
+        get keyBlob() {
+            return Buffer.from(keyHex, 'hex');
+        },
+        get canonicalBytes() {
+            return Buffer.from(canonicalJson, 'utf8');
+        }
     };
 }
 

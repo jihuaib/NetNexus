@@ -265,7 +265,6 @@ async function main() {
         await offlineClient.open();
         const offlineRoutes = await offlineClient.queryRoutes({ routeState: 'all', pageSize: 5000 });
         assert.equal(offlineRoutes.total, persistedTotal);
-        assert.ok((await offlineClient.queryEvents({ pageSize: 5000 })).total > persistedTotal);
         await offlineClient.close();
         offlineClient = null;
 

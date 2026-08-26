@@ -69,24 +69,21 @@ async function findProductionMainWindow(electronApp) {
 }
 
 async function findBgpUtilityMetric(electronApp) {
-    return waitFor(
-        async () => {
-            const metrics = await electronApp.evaluate(({ app }) =>
-                app.getAppMetrics().map(metric => ({
-                    pid: metric.pid,
-                    type: metric.type,
-                    name: metric.name,
-                    serviceName: metric.serviceName
-                }))
-            );
-            return metrics.find(
-                metric =>
-                    metric.type === 'Utility' &&
-                    (metric.name === BGP_SERVICE_NAME || metric.serviceName === BGP_SERVICE_NAME)
-            );
-        },
-        'the production BGP utility process'
-    );
+    return waitFor(async () => {
+        const metrics = await electronApp.evaluate(({ app }) =>
+            app.getAppMetrics().map(metric => ({
+                pid: metric.pid,
+                type: metric.type,
+                name: metric.name,
+                serviceName: metric.serviceName
+            }))
+        );
+        return metrics.find(
+            metric =>
+                metric.type === 'Utility' &&
+                (metric.name === BGP_SERVICE_NAME || metric.serviceName === BGP_SERVICE_NAME)
+        );
+    }, 'the production BGP utility process');
 }
 
 async function closeApplication(electronApp) {
@@ -141,21 +138,20 @@ async function main() {
             'production BGP IPC registration'
         );
 
-        const startResult = await mainPage.evaluate(
-            config => window.bgpApi.startBgp(config),
-            {
-                port: BGP_PORT,
-                localAs: '65000',
-                routerId: '192.0.2.1',
-                addressFamily: [1]
-            }
-        );
+        const startResult = await mainPage.evaluate(config => window.bgpApi.startBgp(config), {
+            port: BGP_PORT,
+            localAs: '65000',
+            routerId: '192.0.2.1',
+            addressFamily: [1]
+        });
         assert.equal(startResult?.status, 'success', startResult?.msg || 'BGP start returned no result');
         bgpStarted = true;
 
         const metric = await findBgpUtilityMetric(electronApp);
         await connectToBgpPort();
-        console.log(`Installed BGP TCP/179 smoke passed: utility pid=${metric.pid}, sandbox=enabled, uid=${process.getuid()}`);
+        console.log(
+            `Installed BGP TCP/179 smoke passed: utility pid=${metric.pid}, sandbox=enabled, uid=${process.getuid()}`
+        );
     } finally {
         if (bgpStarted && mainPage && !mainPage.isClosed()) {
             await mainPage.evaluate(() => window.bgpApi.stopBgp()).catch(() => {});

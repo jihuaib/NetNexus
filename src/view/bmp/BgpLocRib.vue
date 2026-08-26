@@ -154,23 +154,11 @@
             :width="routeEventTarget ? '760px' : '500px'"
             @close="closeDetailsDrawer"
         >
-            <nn-tabs v-if="routeEventTarget" v-model:active-key="detailsTabKey" size="small">
-                <nn-tab-pane key="detail" tab="路由详情">
-                    <nn-spin :spinning="routeDetailLoading">
-                        <div v-if="routeDetailLoading && !currentDetails" class="route-detail-loading" />
-                        <nn-empty v-else-if="!currentDetails" description="暂无路由详情" />
-                        <nn-json-viewer v-else class="route-detail-json" :value="currentDetails" wrap />
-                    </nn-spin>
-                </nn-tab-pane>
-                <nn-tab-pane key="history" tab="事件轨迹">
-                    <BmpRouteEventTimeline
-                        :active="detailsDrawerVisible && detailsTabKey === 'history'"
-                        :scope-id="routeEventTarget.scopeId"
-                        :route-key="routeEventTarget.routeKey"
-                        :route-id="routeEventTarget.routeId"
-                    />
-                </nn-tab-pane>
-            </nn-tabs>
+            <nn-spin v-if="routeEventTarget" :spinning="routeDetailLoading">
+                <div v-if="routeDetailLoading && !currentDetails" class="route-detail-loading" />
+                <nn-empty v-else-if="!currentDetails" description="暂无路由详情" />
+                <nn-json-viewer v-else class="route-detail-json" :value="currentDetails" wrap />
+            </nn-spin>
             <nn-json-viewer v-else-if="currentDetails" class="route-detail-json" :value="currentDetails" wrap />
         </nn-drawer>
     </div>
@@ -183,7 +171,6 @@
     import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import { ProfileOutlined } from 'netnexus-ui/icons';
     import BmpLocRibInstanceDetailModal from '../../components/BmpLocRibInstanceDetailModal.vue';
-    import BmpRouteEventTimeline from '../../components/BmpRouteEventTimeline.vue';
     import {
         BMP_SESSION_TYPE_NAME,
         BMP_SESSION_STATE_NAME,
@@ -498,7 +485,6 @@
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
     const currentDetails = ref(null);
-    const detailsTabKey = ref('detail');
     const routeEventTarget = ref(null);
     const routeDetailLoading = ref(false);
     const instanceDetailModalVisible = ref(false);
@@ -535,7 +521,6 @@
         routeDetailRequestId += 1;
         detailsDrawerVisible.value = false;
         currentDetails.value = null;
-        detailsTabKey.value = 'detail';
         routeEventTarget.value = null;
         routeDetailLoading.value = false;
     };
@@ -1222,7 +1207,6 @@
 
         detailsDrawerTitle.value = `路由detail: ${record.ip || ''}`;
         detailsDrawerVisible.value = true;
-        detailsTabKey.value = 'detail';
         currentDetails.value = null;
         routeDetailLoading.value = true;
         routeEventTarget.value = {

@@ -154,7 +154,6 @@ async function runPackagedChild() {
         assert.equal(liveRoutes.total, 1);
         assert.equal(liveRoutes.list[0].persistentRouteId, fixture.route.id);
         assert.equal(liveRoutes.list[0].routeKey, fixture.route.legacyRouteKey);
-        assert.equal((await writer.queryEvents({ pageSize: 10 })).total, 2);
 
         await writer.close();
         writer = null;

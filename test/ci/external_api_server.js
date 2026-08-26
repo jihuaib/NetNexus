@@ -238,29 +238,6 @@ function makeMockBmpApp() {
                 },
                 'mock persisted routes'
             );
-        },
-        async queryPersistedRouteEvents(payload) {
-            assert.strictEqual(payload.sourceId, mockSourceId);
-            assert.strictEqual(payload.eventType, 'announce');
-            assert.strictEqual(payload.page, 1);
-            assert.strictEqual(payload.pageSize, 2);
-            assert.strictEqual(payload.routeState, undefined);
-            return successResponse(
-                {
-                    list: [
-                        {
-                            sourceId: mockSourceId,
-                            scopeId: mockScopeId,
-                            routeId: mockPersistentRouteId,
-                            eventType: 'announce'
-                        }
-                    ],
-                    total: 1,
-                    page: payload.page,
-                    pageSize: payload.pageSize
-                },
-                'mock persisted route events'
-            );
         }
     };
 }
@@ -404,12 +381,6 @@ async function main() {
             routeState: 'all',
             prefix: 'evpn:mac-ip'
         };
-        const persistedEventPayload = {
-            sourceId: mockSourceId,
-            eventType: 'announce',
-            page: 1,
-            pageSize: 2
-        };
 
         const endpointChecks = [
             [
@@ -488,12 +459,6 @@ async function main() {
                 '/api/v1/bmp/persistence/routes',
                 persistedRoutePayload,
                 response => assert.strictEqual(response.body.data.list[0].routeId, mockPersistentRouteId)
-            ],
-            [
-                'POST',
-                '/api/v1/bmp/persistence/events',
-                persistedEventPayload,
-                response => assert.strictEqual(response.body.data.list[0].eventType, 'announce')
             ]
         ];
 
@@ -533,12 +498,6 @@ async function main() {
         });
         assertSuccess(offlineRoutesResponse, 'offline persisted routes');
         assert.strictEqual(offlineRoutesResponse.body.data.total, 1);
-
-        const offlineEventsResponse = await checkedRequest(port, 'POST', '/api/v1/bmp/persistence/events', {
-            body: persistedEventPayload
-        });
-        assertSuccess(offlineEventsResponse, 'offline persisted route events');
-        assert.strictEqual(offlineEventsResponse.body.data.total, 1);
 
         assertError(
             await checkedRequest(port, 'GET', '/api/v1/bmp/clients'),

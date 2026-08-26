@@ -638,7 +638,12 @@ class SnmpApp {
     }
 
     handleSendGetRequest(_event, request = {}) {
-        return this.handleQueryRequest(SnmpConst.SNMP_REQ_TYPES.SEND_GET_REQUEST, request, 'GET查询成功', '发送SNMP GET失败');
+        return this.handleQueryRequest(
+            SnmpConst.SNMP_REQ_TYPES.SEND_GET_REQUEST,
+            request,
+            'GET查询成功',
+            '发送SNMP GET失败'
+        );
     }
 
     handleSendGetNextRequest(_event, request = {}) {
@@ -660,7 +665,12 @@ class SnmpApp {
     }
 
     handleSendSetRequest(_event, request = {}) {
-        return this.handleQueryRequest(SnmpConst.SNMP_REQ_TYPES.SEND_SET_REQUEST, request, 'SET发送成功', '发送SNMP SET失败');
+        return this.handleQueryRequest(
+            SnmpConst.SNMP_REQ_TYPES.SEND_SET_REQUEST,
+            request,
+            'SET发送成功',
+            '发送SNMP SET失败'
+        );
     }
 
     handleListOidInstances(_event, request = {}) {
@@ -687,13 +697,15 @@ class SnmpApp {
     normalizeFilePaths(filePaths) {
         if (!Array.isArray(filePaths)) return [];
         const seen = new Set();
-        return filePaths.filter(filePath => {
-            if (typeof filePath !== 'string') return false;
-            const trimmed = filePath.trim();
-            if (!trimmed || seen.has(trimmed)) return false;
-            seen.add(trimmed);
-            return true;
-        }).map(filePath => filePath.trim());
+        return filePaths
+            .filter(filePath => {
+                if (typeof filePath !== 'string') return false;
+                const trimmed = filePath.trim();
+                if (!trimmed || seen.has(trimmed)) return false;
+                seen.add(trimmed);
+                return true;
+            })
+            .map(filePath => filePath.trim());
     }
 
     emitMibCompileProgress(target, progressId, progress = {}) {

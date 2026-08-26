@@ -472,8 +472,8 @@ class MibWorker {
     }
 
     remapMibFilePaths(filePaths, filePathMap) {
-        return this.normalizeFilePaths(filePaths.map(filePath => filePathMap.get(filePath) || filePath)).filter(filePath =>
-            fs.existsSync(filePath)
+        return this.normalizeFilePaths(filePaths.map(filePath => filePathMap.get(filePath) || filePath)).filter(
+            filePath => fs.existsSync(filePath)
         );
     }
 
@@ -532,7 +532,12 @@ class MibWorker {
     normalizeFilePaths(filePaths) {
         if (!Array.isArray(filePaths)) return [];
         return Array.from(
-            new Set(filePaths.filter(filePath => typeof filePath === 'string').map(filePath => filePath.trim()).filter(Boolean))
+            new Set(
+                filePaths
+                    .filter(filePath => typeof filePath === 'string')
+                    .map(filePath => filePath.trim())
+                    .filter(Boolean)
+            )
         );
     }
 

@@ -57,7 +57,8 @@ export default defineConfig({
                     { text: 'NTP 服务器', link: '/NTP_SERVER' },
                     { text: 'RADIUS 服务器', link: '/RADIUS_SERVER' },
                     { text: 'TFTP 服务器', link: '/TFTP_SERVER' },
-                    { text: 'Syslog 服务器', link: '/SYSLOG_SERVER' }
+                    { text: 'Syslog 服务器', link: '/SYSLOG_SERVER' },
+                    { text: 'gRPC 服务器', link: '/GRPC_SERVER' }
                 ]
             },
             {

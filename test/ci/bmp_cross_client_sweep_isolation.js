@@ -172,7 +172,6 @@ try {
         )
     );
 
-    const eventCountBefore = store.queryEvents({ pageSize: 1 }).total;
     const clientBSweep = store.sweep({
         mode: 'lifecycle',
         sourceId: sourceB,
@@ -181,8 +180,6 @@ try {
         eventsBeforeMs: Date.now()
     });
     assert.equal(clientBSweep.routes, 0, 'Client B lifecycle sweep must not delete Client A routes');
-    assert.equal(clientBSweep.events, 0, 'Client lifecycle sweep must not run global history retention');
-    assert.equal(store.queryEvents({ pageSize: 1 }).total, eventCountBefore);
     assert.equal(store.queryRoutes({ sourceId: sourceA, routeState: 'all' }).total, 1);
     assert.equal(store.queryRoutes({ sourceId: sourceB, routeState: 'all' }).total, 1);
     const clientACleanup = store.sweep({

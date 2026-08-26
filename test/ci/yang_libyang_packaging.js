@@ -533,8 +533,7 @@ function testPinnedReleaseAndPackageContract() {
     assert.deepEqual(packageJson.build.linux.target, ['deb']);
     assert(
         packageJson.build.linux.extraResources.some(
-            resource =>
-                resource.from === 'resources/tcp-auth/linux-${arch}' && resource.to === 'tcp-auth/linux-${arch}'
+            resource => resource.from === 'resources/tcp-auth/linux-${arch}' && resource.to === 'tcp-auth/linux-${arch}'
         ),
         'Linux packages must copy only the target-architecture TCP authentication helper into application resources'
     );
@@ -1627,7 +1626,7 @@ function testCiRuntimeInstallOrdering() {
     assert.match(publishJobSource, /NetNexus-\$\{version\}-linux-arm64\.deb/);
     const draftCreateIndex = publishJobSource.indexOf('gh release create "$RELEASE_TAG"');
     const assetUploadIndex = publishJobSource.indexOf('gh release upload "$RELEASE_TAG"');
-    const assetVerifyIndex = publishJobSource.indexOf("<(gh release view \"$RELEASE_TAG\" --json assets");
+    const assetVerifyIndex = publishJobSource.indexOf('<(gh release view "$RELEASE_TAG" --json assets');
     const publishReleaseIndex = publishJobSource.indexOf('gh release edit "$RELEASE_TAG" --draft=false');
     assert(
         draftCreateIndex >= 0 &&

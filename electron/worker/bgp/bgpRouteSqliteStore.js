@@ -1090,10 +1090,10 @@ class BgpRouteSqliteStore {
         const instance = this.getInstance(instanceKey);
         return Boolean(
             instance &&
-            this.getRouteStatements(instance).hasRoute.get({
-                instanceId: instance.instance_id,
-                routeKey: String(routeKey)
-            })
+                this.getRouteStatements(instance).hasRoute.get({
+                    instanceId: instance.instance_id,
+                    routeKey: String(routeKey)
+                })
         );
     }
 

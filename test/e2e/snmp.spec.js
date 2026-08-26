@@ -193,7 +193,7 @@ test.describe('SNMP pages', () => {
     test('loads MIB data only for the active runtime and drops late status responses', async ({ page }) => {
         await page.goto(MIB_COMPILE_ROUTE);
 
-        await expect(page.getByTestId('snmp-mib-runtime-stopped')).toBeVisible();
+        await expect(page.getByTestId('snmp-mib-import-files-button')).toBeDisabled();
         await expect(page.getByText('NETNEXUS-DEMO-MIB.mib', { exact: true })).toHaveCount(0);
         expect(apiCallCount(harness, 'snmp.getMibStatus')).toBe(0);
 
@@ -214,7 +214,7 @@ test.describe('SNMP pages', () => {
                 trapRunning: false
             });
         });
-        await expect(page.getByTestId('snmp-mib-runtime-stopped')).toBeVisible();
+        await expect(page.getByTestId('snmp-mib-import-files-button')).toBeDisabled();
         await expect(page.getByText('NETNEXUS-DEMO-MIB.mib', { exact: true })).toHaveCount(0);
 
         harness.controller.state.snmp.mibStatusDelayMs = 250;
@@ -234,15 +234,15 @@ test.describe('SNMP pages', () => {
             });
         });
         await page.waitForTimeout(350);
-        await expect(page.getByTestId('snmp-mib-runtime-stopped')).toBeVisible();
+        await expect(page.getByTestId('snmp-mib-import-files-button')).toBeDisabled();
         await expect(page.getByText('NETNEXUS-DEMO-MIB.mib', { exact: true })).toHaveCount(0);
     });
 
-    test('keeps the workspace empty while stopped and clears it on runtime stop', async ({ page }) => {
+    test('keeps the workspace layout while stopped and clears the tree on runtime stop', async ({ page }) => {
         await page.goto(MIB_WORKSPACE_ROUTE);
 
-        await expect(page.getByTestId('snmp-workspace-runtime-stopped')).toBeVisible();
-        await expect(page.locator('.mib-tree-panel')).toHaveCount(0);
+        await expect(page.locator('.mib-tree-panel')).toBeVisible();
+        await expect(page.locator('.mib-tree-panel .nn-tree')).toHaveCount(0);
         expect(apiCallCount(harness, 'snmp.getMibStatus')).toBe(0);
 
         await page.evaluate(() => {
@@ -262,9 +262,9 @@ test.describe('SNMP pages', () => {
                 trapRunning: false
             });
         });
-        await expect(page.getByTestId('snmp-workspace-runtime-stopped')).toBeVisible();
-        await expect(page.locator('.mib-tree-panel')).toHaveCount(0);
-        await expect(page.locator('.snmp-mib-operations')).toHaveCount(0);
+        await expect(page.locator('.mib-tree-panel')).toBeVisible();
+        await expect(page.locator('.mib-tree-panel .nn-tree')).toHaveCount(0);
+        await expect(mibTreeNode(page, 'system')).toHaveCount(0);
     });
 
     test('renders SNMP pages with mock data', async ({ page }) => {

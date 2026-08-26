@@ -234,6 +234,10 @@ function createWindow() {
     });
 
     mainWindow = win;
+    if (systemApp) {
+        // Dock 重新创建主窗口后同步给 SystemApp，避免持有已销毁窗口
+        systemApp.setMainWindow(win);
+    }
 
     if (isDev) {
         win.webContents.openDevTools();

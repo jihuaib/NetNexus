@@ -341,11 +341,7 @@ function runBenchmark() {
         if (status.currentRoutes !== routeCount) {
             throw new Error(`expected ${routeCount} SQLite routes, got ${status.currentRoutes}`);
         }
-        console.log(
-            `SQLite: currentRoutes=${status.currentRoutes}, routeEvents=${status.routeEvents}, size=${formatBytes(
-                status.totalSize
-            )}`
-        );
+        console.log(`SQLite: currentRoutes=${status.currentRoutes}, size=${formatBytes(status.totalSize)}`);
         printMemory('after queries');
     } finally {
         store?.close();

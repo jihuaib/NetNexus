@@ -389,14 +389,6 @@
                             <nn-json-viewer :value="selectedRecord" :max-height="440" wrap />
                         </div>
                     </nn-tab-pane>
-                    <nn-tab-pane key="history" tab="事件轨迹">
-                        <BmpRouteEventTimeline
-                            :active="drawerOpen && drawerTabKey === 'history'"
-                            :scope-id="selectedRouteEventTarget.scopeId"
-                            :route-key="selectedRouteEventTarget.routeKey"
-                            :route-id="selectedRouteEventTarget.routeId"
-                        />
-                    </nn-tab-pane>
                 </nn-tabs>
             </template>
             <template v-else-if="selectedRecord">
@@ -425,7 +417,6 @@
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
     import EventBus from '../../utils/eventBus';
     import { notify } from '../../utils/notify';
-    import BmpRouteEventTimeline from '../../components/BmpRouteEventTimeline.vue';
 
     defineOptions({ name: 'BgpRouteLens' });
 
@@ -532,18 +523,6 @@
     });
 
     const getRoute = entry => entry?.route || entry || {};
-    const selectedRouteEventTarget = computed(() => {
-        if (selectedType.value !== 'route' || !selectedRecord.value) {
-            return { scopeId: '', routeKey: '', routeId: '' };
-        }
-        const route = getRoute(selectedRecord.value);
-        const owner = selectedRecord.value.session || selectedRecord.value.instance || {};
-        return {
-            scopeId: route.persistentScopeId || owner.persistentScopeId || '',
-            routeKey: route.routeKey || '',
-            routeId: route.persistentRouteId || ''
-        };
-    });
     const hasPathMarking = entry => {
         const route = getRoute(entry);
         return (

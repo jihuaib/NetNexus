@@ -1713,7 +1713,7 @@ assert.equal(ipv6LocRib.instance.getRibEpoch(), ipv6LocRibPeerDownEpoch);
 assert.equal(ipv4LocRib.instance.instanceState, BmpConst.BMP_SESSION_STATE.PEER_UP);
 assert.equal(ipv6LocRib.instance.instanceState, BmpConst.BMP_SESSION_STATE.PEER_DOWN);
 
-const { session: locRibNotificationPeerDownSession, store: locRibNotificationPeerDownStore } = makeSession();
+const { session: locRibNotificationPeerDownSession } = makeSession();
 const locRibNotificationRoute = addLocRibRoute(
     locRibNotificationPeerDownSession,
     BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -1739,15 +1739,6 @@ const retainedLocRibNotificationRoutes = queryLocRibRoutes(
 assert.equal(retainedLocRibNotificationRoutes.length, 1);
 assert.equal(retainedLocRibNotificationRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
 assert.equal(locRibNotificationRoute.instance.instanceState, BmpConst.BMP_SESSION_STATE.PEER_DOWN);
-assert.equal(
-    locRibNotificationPeerDownStore.queryEvents({
-        eventType: 'purge',
-        scopeKind: 'loc-rib'
-    }).total,
-    0,
-    'a Loc-RIB Peer Down must retain routes even when it carries a valid BGP Notification'
-);
-
 const { session: peerUpRefreshSession } = makeSession();
 const peerUpRefreshAddressFamilies = [
     { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST },
@@ -1934,7 +1925,7 @@ assert.equal(peerDownIpv4Routes.length, 1);
 assert.equal(peerDownIpv6Routes.length, 1);
 assert.equal(peerDownPostPolicyRoutes.length, 1);
 
-const { session: peerDownNotificationMultiAfSession, store: peerDownNotificationStore } = makeSession();
+const { session: peerDownNotificationMultiAfSession } = makeSession();
 const peerDownNotificationRecvFamilies = [
     { afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4, safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST },
     {
@@ -2052,19 +2043,6 @@ const notificationLocRibRoutes = queryLocRibRoutes(
 assert.equal(notificationLocRibRoutes.length, 1);
 assert.equal(notificationLocRibRoutes[0].routeState, BmpConst.BMP_ROUTE_STATE.ACTIVE);
 assert.equal(peerDownNotificationLocRibRoute.instance.instanceState, BmpConst.BMP_SESSION_STATE.PEER_UP);
-const notificationPurgeEvents = peerDownNotificationStore.queryEvents({
-    eventType: 'purge',
-    scopeKind: 'peer',
-    pageSize: 100
-});
-assert.equal(notificationPurgeEvents.total, 3);
-assert.ok(
-    notificationPurgeEvents.list.every(
-        event =>
-            event.reason ===
-            `peer-down-notification:${BmpConst.BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_WITH_NOTIFICATION}`
-    )
-);
 const notificationEpoch = notificationOwner.getRibEpoch(
     BgpConst.BGP_AFI_TYPE.AFI_IPV4,
     BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST,
@@ -2178,7 +2156,7 @@ const invalidPeerDownNotificationCases = [
     }
 ];
 invalidPeerDownNotificationCases.forEach((testCase, index) => {
-    const { session: invalidNotificationSession, store: invalidNotificationStore } = makeSession();
+    const { session: invalidNotificationSession } = makeSession();
     const route = addBgpSessionRoute(
         invalidNotificationSession,
         BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -2202,11 +2180,6 @@ invalidPeerDownNotificationCases.forEach((testCase, index) => {
     );
     assert.equal(retained.length, 1, `${testCase.name} must not hard-delete peer routes`);
     assert.equal(retained[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
-    assert.equal(
-        invalidNotificationStore.queryEvents({ eventType: 'purge', scopeKind: 'peer' }).total,
-        0,
-        `${testCase.name} must not create purge history`
-    );
 });
 
 const { session: addPathSession } = makeSession();

@@ -124,9 +124,7 @@ class SecureCredentialStore {
         const status = this.getAvailabilityStatus();
         if (status.available) return;
         if (this.platform === 'linux') {
-            throw new Error(
-                this.lastLinuxStorageError?.message || 'Linux本地密钥文件不可用，请检查应用数据目录权限'
-            );
+            throw new Error(this.lastLinuxStorageError?.message || 'Linux本地密钥文件不可用，请检查应用数据目录权限');
         }
         throw new Error('操作系统安全存储当前不可用');
     }

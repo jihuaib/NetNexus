@@ -195,13 +195,13 @@ function patchPackagedElectronRpath(executablePath, installedDirectory, dependen
         commandOptions
     );
     if (patchResult.error) {
-        throw new Error(`Unable to start patchelf; install the patchelf build dependency: ${patchResult.error.message}`);
+        throw new Error(
+            `Unable to start patchelf; install the patchelf build dependency: ${patchResult.error.message}`
+        );
     }
     if (patchResult.status !== 0) {
         const detail = String(patchResult.stderr || patchResult.stdout || '').trim();
-        throw new Error(
-            `patchelf failed with exit code ${patchResult.status}${detail ? `: ${detail}` : ''}`
-        );
+        throw new Error(`patchelf failed with exit code ${patchResult.status}${detail ? `: ${detail}` : ''}`);
     }
 
     const verifyResult = spawnSync('patchelf', ['--print-rpath', executablePath], commandOptions);
@@ -214,7 +214,9 @@ function patchPackagedElectronRpath(executablePath, installedDirectory, dependen
     }
     const actualRpath = String(verifyResult.stdout || '').trim();
     if (actualRpath !== installedDirectory) {
-        throw new Error(`Packaged Electron RPATH mismatch: expected ${installedDirectory}, received ${actualRpath || '(empty)'}`);
+        throw new Error(
+            `Packaged Electron RPATH mismatch: expected ${installedDirectory}, received ${actualRpath || '(empty)'}`
+        );
     }
     return actualRpath;
 }
@@ -256,15 +258,11 @@ function buildLinuxDeb(options = {}, dependencies = {}) {
             verbatimSymlinks: true
         });
         fsApi.writeFileSync(path.join(installRoot, 'resources', 'package-type'), 'deb\n');
-        patchPackagedElectronRpath(
-            path.join(installRoot, executableName),
-            `/opt/${installDirectoryName}`,
-            {
-                spawnSync,
-                cwd: projectRoot,
-                env: options.env || process.env
-            }
-        );
+        patchPackagedElectronRpath(path.join(installRoot, executableName), `/opt/${installDirectoryName}`, {
+            spawnSync,
+            cwd: projectRoot,
+            env: options.env || process.env
+        });
 
         const iconDirectory = path.join(stagingDirectory, 'usr', 'share', 'icons', 'hicolor', '512x512', 'apps');
         const desktopDirectory = path.join(stagingDirectory, 'usr', 'share', 'applications');

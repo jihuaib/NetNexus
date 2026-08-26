@@ -3,6 +3,7 @@ import {
     AppstoreOutlined,
     ClockCircleOutlined,
     CloudDownloadOutlined,
+    CloudServerOutlined,
     ClusterOutlined,
     CodeOutlined,
     DatabaseOutlined,
@@ -30,7 +31,8 @@ export const moduleNavigationIcons = Object.freeze({
     ntp: ClockCircleOutlined,
     radius: KeyOutlined,
     tftp: SwapOutlined,
-    syslog: FileTextOutlined
+    syslog: FileTextOutlined,
+    grpc: CloudServerOutlined
 });
 
 export const settingsNavigationIcons = Object.freeze({

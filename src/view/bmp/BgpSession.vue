@@ -189,23 +189,11 @@
             :width="routeEventTarget ? '760px' : '500px'"
             @close="closeDetailsDrawer"
         >
-            <nn-tabs v-if="routeEventTarget" v-model:active-key="detailsTabKey" size="small">
-                <nn-tab-pane key="detail" tab="路由详情">
-                    <nn-spin :spinning="routeDetailLoading">
-                        <div v-if="routeDetailLoading && !currentDetails" class="route-detail-loading" />
-                        <nn-empty v-else-if="!currentDetails" description="暂无路由详情" />
-                        <nn-json-viewer v-else class="route-detail-json" :value="currentDetails" wrap />
-                    </nn-spin>
-                </nn-tab-pane>
-                <nn-tab-pane key="history" tab="事件轨迹">
-                    <BmpRouteEventTimeline
-                        :active="detailsDrawerVisible && detailsTabKey === 'history'"
-                        :scope-id="routeEventTarget.scopeId"
-                        :route-key="routeEventTarget.routeKey"
-                        :route-id="routeEventTarget.routeId"
-                    />
-                </nn-tab-pane>
-            </nn-tabs>
+            <nn-spin v-if="routeEventTarget" :spinning="routeDetailLoading">
+                <div v-if="routeDetailLoading && !currentDetails" class="route-detail-loading" />
+                <nn-empty v-else-if="!currentDetails" description="暂无路由详情" />
+                <nn-json-viewer v-else class="route-detail-json" :value="currentDetails" wrap />
+            </nn-spin>
             <nn-json-viewer v-else-if="currentDetails" class="route-detail-json" :value="currentDetails" wrap />
         </nn-drawer>
     </div>
@@ -217,7 +205,6 @@
     import { notify } from '../../utils/notify';
     import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
     import { ProfileOutlined } from 'netnexus-ui/icons';
-    import BmpRouteEventTimeline from '../../components/BmpRouteEventTimeline.vue';
     import BmpSessionDetailModal from '../../components/BmpSessionDetailModal.vue';
     import {
         BMP_SESSION_TYPE_NAME,
@@ -379,7 +366,6 @@
     const detailsDrawerVisible = ref(false);
     const detailsDrawerTitle = ref('');
     const currentDetails = ref(null);
-    const detailsTabKey = ref('detail');
     const routeEventTarget = ref(null);
     const routeDetailLoading = ref(false);
     const sessionDetailModalVisible = ref(false);
@@ -610,6 +596,8 @@
         }, SESSION_DETAIL_REFRESH_DEBOUNCE_MS);
     };
 
+    const normalizeRibType = value => (value === null || value === undefined || value === '' ? null : String(value));
+
     const getSessionRouteScopes = session => {
         const scopes = Array.isArray(session?.routeScopes) ? session.routeScopes : [];
         if (scopes.length > 0) {
@@ -622,7 +610,10 @@
                         (scope.afi !== undefined && scope.safi !== undefined
                             ? getAddrFamilyType(Number(scope.afi), Number(scope.safi))
                             : null),
-                    ribType: scope.ribType ?? null
+                    // Live sessions report numeric RIB types while persisted scopes
+                    // store TEXT; normalize so select options and the bound value
+                    // share one type and the dropdown never falls back to the raw id.
+                    ribType: scope.ribType === null || scope.ribType === undefined ? null : String(scope.ribType)
                 }))
                 .filter(scope => scope.addrFamilyType !== null && scope.ribType !== null);
         }
@@ -631,7 +622,7 @@
                 {
                     persistentScopeId: session.persistentScopeId,
                     addrFamilyType: session.addrFamilyType ?? session.enabledAddrFamilyTypes?.[0] ?? null,
-                    ribType: session.ribType ?? session.ribTypes?.[0] ?? null
+                    ribType: normalizeRibType(session.ribType ?? session.ribTypes?.[0] ?? null)
                 }
             ].filter(scope => scope.addrFamilyType !== null && scope.ribType !== null);
         }
@@ -651,7 +642,7 @@
 
     const getSessionRibTypes = session =>
         uniqueSelectorValues([
-            ...(Array.isArray(session?.ribTypes) ? session.ribTypes : []),
+            ...(Array.isArray(session?.ribTypes) ? session.ribTypes.map(normalizeRibType) : []),
             ...getSessionRouteScopes(session).map(scope => scope.ribType)
         ]);
 
@@ -716,7 +707,6 @@
 
         detailsDrawerTitle.value = `路由detail: ${record.ip || ''}`;
         detailsDrawerVisible.value = true;
-        detailsTabKey.value = 'detail';
         currentDetails.value = null;
         routeDetailLoading.value = true;
         routeEventTarget.value = {
@@ -831,7 +821,6 @@
         routeDetailRequestId += 1;
         detailsDrawerVisible.value = false;
         currentDetails.value = null;
-        detailsTabKey.value = 'detail';
         routeEventTarget.value = null;
         routeDetailLoading.value = false;
     };
@@ -1250,13 +1239,13 @@
             const currentScope = getSelectedSessionRouteScope(session, activeLocRibAf.value, activeLocRibType.value);
             const selectedScope = currentScope || routeScopes[0];
             activeLocRibAf.value = selectedScope.addrFamilyType;
-            activeLocRibType.value = selectedScope.ribType;
+            activeLocRibType.value = normalizeRibType(selectedScope.ribType) ?? '';
         } else {
             if (!enabledAddrFamilyTypes.some(af => sameSelectorValue(af, activeLocRibAf.value))) {
                 activeLocRibAf.value = enabledAddrFamilyTypes[0];
             }
             if (!ribTypes.some(ribType => sameSelectorValue(ribType, activeLocRibType.value))) {
-                activeLocRibType.value = ribTypes[0];
+                activeLocRibType.value = normalizeRibType(ribTypes[0]) ?? '';
             }
         }
 

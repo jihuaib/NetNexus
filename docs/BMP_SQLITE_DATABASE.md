@@ -1,8 +1,8 @@
 # BMP SQLite 数据库说明
 
-本文档说明 NetNexus BMP SQLite schema v9 的定位、固定路由分区、全局路由对象、引用计数、scope 计数，以及启动、写入、查询、清理和崩溃恢复行为。
+本文档说明 NetNexus BMP SQLite schema v13 的定位、固定路由分区、全局路由对象、整数代理键、候选驱动的对象回收、scope 计数，以及启动、写入、查询、清理和崩溃恢复行为。
 
-如果目标是先理解页面怎么用、路由矩阵/路由追踪/路由轨迹有什么区别，以及详情和事件时间线长什么样，请先看带截图的 [BMP 监控器说明](BMP_MONITOR.md)；本文继续解释这些页面怎样关联 SQLite 表并组装字段。
+如果目标是先理解页面怎么用、路由矩阵/路由追踪有什么区别，以及详情长什么样，请先看带截图的 [BMP 监控器说明](BMP_MONITOR.md)；本文继续解释这些页面怎样关联 SQLite 表并组装字段。
 
 实现依据：
 
@@ -42,29 +42,30 @@
 | “Next Hop、AS Path、MED、Community 是什么？” | `bmp_route_attributes` |
 | “Path Marking、Label、Route TLV 等扩展展示字段是什么？” | `bmp_route_payloads` |
 | “当前有多少 active/stale 路由？” | `bmp_scope_route_counts` + `bmp_rib_scopes` |
-| “这条路由以前发生过什么？” | `bmp_route_events` |
 
 ### 0.2 一条 current route 的关联键
 
-已知页面选中的 `scope_id` 后，关联方向如下：
+已知页面选中的 `scope_id`（外部稳定 hex ID）后，先在 `bmp_rib_scopes` 上把它换成整数 `scope_pk`，再按下面的方向关联：
 
 ```text
-bmp_rib_scopes.scope_id
+bmp_rib_scopes.scope_id ──> bmp_rib_scopes.scope_pk
   │
   ├─ partition_id ──> manifest ──> 选中一张 bmp_current_routes_* 表
   │                                      │
-  │                                      ├─ route_pk   ──> bmp_route_identities.route_pk
-  │                                      ├─ payload_id ──> bmp_route_payloads.payload_id
-  │                                      ├─ attr_id    ──> bmp_route_attributes.attr_id
-  │                                      └─ connection_id -> bmp_connections.connection_id
+  │                                      ├─ route_pk      ──> bmp_route_identities.route_pk
+  │                                      ├─ payload_id    ──> bmp_route_payloads.payload_id
+  │                                      ├─ attr_pk       ──> bmp_route_attributes.attr_pk
+  │                                      └─ connection_pk ──> bmp_connections.connection_pk
   │
-  └─ source_id ──> bmp_sources.source_id
+  └─ source_pk ──> bmp_sources.source_pk
 ```
+
+事实表（current 分区、`bmp_scope_route_counts`）只保存整数代理键；64 位 hex 的 `source_id`、`scope_id`、`attr_id` 和 UUID `connection_id` 只在各自维表里出现一次。这样每个索引条目从几十到上百字节缩到 8 字节，是 v10 写入吞吐和库体积改善的主要来源。
 
 一条 current route 的业务唯一键是：
 
 ```text
-(scope_id, route_pk)
+(scope_pk, route_pk)
 ```
 
 它的含义是“在这个明确的 RIB 空间里，当前存在这个 canonical NLRI”。同一个 `route_pk` 可以同时出现在 Pre-In、Post-In 和 Loc-RIB 等多个 scope 中。
@@ -73,28 +74,26 @@ bmp_rib_scopes.scope_id
 
 | ID | 唯一范围 | 用途 | 页面/API 是否应直接使用 |
 | --- | --- | --- | --- |
-| `source_id` | 全库 | 稳定的 BMP 上报设备 ID；设备重连时复用 | 可用于查询和运维 |
-| `connection_id` | 全库 | 某一次 TCP/BMP 连接 ID；每次重连新建 | 通常只用于诊断 |
-| `scope_id` | 全库 | 稳定的逻辑 RIB ID；包含 source、Peer/Instance、AFI/SAFI、RIB stage | 页面查询路由的首选条件 |
+| `source_id` / `source_pk` | 全库 | 稳定的 BMP 上报设备 ID（hex）及其数据库内部整数键；设备重连时复用 | `source_id` 可用于查询和运维；`source_pk` 只在库内 |
+| `connection_id` / `connection_pk` | 全库 | 某一次 TCP/BMP 连接 ID（UUID）及其整数键；每次重连新建 | 通常只用于诊断 |
+| `scope_id` / `scope_pk` | 全库 | 稳定的逻辑 RIB ID（hex）及其整数键；包含 source、Peer/Instance、AFI/SAFI、RIB stage | `scope_id` 是页面查询路由的首选条件 |
 | `partition_id` | 全库 manifest | 把 scope 定向到一张物理 current 分区表 | 不由外部输入自行推导 |
 | `route_pk` | 全库 | SQLite 内部短整数键，供 current/event 高效关联 identity | 不作为稳定外部 ID |
 | `route_id` | 全库 | canonical route identity 的稳定 SHA-256 ID | 可用于跨 scope 查同一 NLRI |
 | `legacy_route_key` / 返回字段 `routeKey` | 某种路由 key 规则 | 兼容旧页面和详情查询的 opaque key | 页面只应原样回传，不应自行拆解 |
 | `path_pk` | **仅在某一张分区表内** | current 物理行主键和稳定分页辅助键 | 跨分区时必须与 `partition_id` 一起看 |
-| `attr_id` | 全库 | canonical Path Attributes JSON 的内容哈希 | 通常仅用于诊断 |
+| `attr_id` / `attr_pk` | 全库 | canonical Path Attributes JSON 的内容哈希及其整数键 | 通常仅用于诊断 |
 | `payload_id` | 全库 | 去重扩展 payload 的内部键 | 通常仅用于诊断 |
-| `event_id` | 全库单调递增 | 事件顺序、时间线分页和 current 版本保护 | 可用于事件查询 |
 
 字段后缀也有统一含义：
 
 | 后缀/命名 | 含义 |
 | --- | --- |
 | `*_id` | 稳定业务 ID、内容 ID，或被引用对象的 ID；具体类型要看字段表 |
-| `*_pk` | SQLite 内部整数短键，不承诺可跨库复用 |
+| `*_pk` | SQLite 内部整数短键，不承诺可跨库复用；事实表和索引只引用这类键 |
 | `*_ms` | Unix epoch 毫秒，不是格式化时间文本 |
 | `*_epoch` | RIB 刷新代次，不是时间戳 |
 | `*_json` | 序列化 JSON；查询后由应用解析并叠加到返回对象 |
-| `*_ref_count` | Trigger 维护的引用数，不能由业务代码随意修改 |
 | `*_state` | 当前状态或状态桶；需区分数据库存值与查询计算值 |
 
 本文字段表中的 `PK`、`FK`、`UNIQUE`、`NOT NULL`、`CHECK` 表示 SQLite 真正强制的约束；只写“应用使用/约定”的枚举值则由代码保证。页面字段还可能是计算值，例如 `routeState` 不是表中某一列的直接别名。
@@ -136,11 +135,11 @@ bmp_route_payloads.route_json = {}
 
 但这个 NLRI 当前同时出现在三个逻辑 RIB 中，所以有三行窄 current state：
 
-| 物理分区 | scope 的 `rib_type` | `scope_id` | `route_pk` | `payload_id` | `attr_id` |
-| --- | --- | --- | ---: | ---: | --- |
-| `bmp_current_routes_peer_ipv4_unicast` | `1` = Pre Adj-RIB-In | `scope-pre-in` | 3 | 1 | `c8eada...` |
-| `bmp_current_routes_peer_ipv4_unicast` | `2` = Post Adj-RIB-In | `scope-post-in` | 3 | 1 | `c8eada...` |
-| `bmp_current_routes_loc_rib_ipv4_unicast` | `loc-rib` | `scope-loc-rib` | 3 | 1 | `c8eada...` |
+| 物理分区 | scope 的 `rib_type` | scope（`scope_pk`） | `route_pk` | `payload_id` | `attr_pk` |
+| --- | --- | --- | ---: | ---: | ---: |
+| `bmp_current_routes_peer_ipv4_unicast` | `1` = Pre Adj-RIB-In | `scope-pre-in`（11） | 3 | 1 | 7 |
+| `bmp_current_routes_peer_ipv4_unicast` | `2` = Post Adj-RIB-In | `scope-post-in`（12） | 3 | 1 | 7 |
+| `bmp_current_routes_loc_rib_ipv4_unicast` | `loc-rib` | `scope-loc-rib`（13） | 3 | 1 | 7 |
 
 因此，三个 RIB 各自保存“我当前包含 route 3”，但 NLRI JSON 和相同的 Path Attributes 不需要复制三份。
 
@@ -183,10 +182,10 @@ Loc-RIB 页的链路几乎相同，只是用 Client + Instance 定位 `scope_kin
 
 ### 0.6 数据库实际如何选表和 JOIN
 
-第一步不是扫描 36 张表，而是用 `scope_id` 找到固定分区：
+第一步不是扫描 36 张表，而是用 `scope_id` 找到固定分区和整数键：
 
 ```sql
-SELECT partition_id
+SELECT scope_pk, partition_id
   FROM bmp_rib_scopes
  WHERE scope_id = :scope_id
  LIMIT 1;
@@ -200,18 +199,18 @@ SELECT partition_id
 WITH current_expanded AS (
     SELECT current.partition_id,
            current.path_pk,
-           current.scope_id,
+           current.scope_pk,
            current.route_pk,
            current.payload_id,
-           current.attr_id,
-           current.connection_id,
+           current.attr_pk,
+           current.connection_pk,
            current.rib_epoch,
            current.explicit_state,
            current.first_seen_ms,
            current.last_seen_ms,
            current.source_timestamp_ms,
            identity.route_id,
-           identity.route_key_json,
+           identity.route_key_version,
            identity.legacy_route_key,
            identity.afi,
            identity.safi,
@@ -228,7 +227,10 @@ WITH current_expanded AS (
         ON payload.payload_id = current.payload_id
 ), assembled AS (
     SELECT route.*,
-           scope.source_id,
+           scope.scope_id,
+           source.source_id,
+           connection.connection_id,
+           attributes.attr_id,
            scope.scope_kind,
            scope.owner_key,
            scope.peer_type,
@@ -252,20 +254,20 @@ WITH current_expanded AS (
            CASE
              WHEN route.explicit_state = 'stale'
                OR scope.scope_state IN ('stale', 'down')
-               OR route.connection_id IS NOT scope.last_connection_id
+               OR route.connection_pk IS NOT scope.last_connection_pk
                OR route.rib_epoch < scope.current_epoch
              THEN 'stale'
              ELSE 'active'
            END AS effective_state
       FROM current_expanded AS route
       JOIN bmp_rib_scopes AS scope
-        ON scope.scope_id = route.scope_id
+        ON scope.scope_pk = route.scope_pk
       JOIN bmp_sources AS source
-        ON source.source_id = scope.source_id
+        ON source.source_pk = scope.source_pk
       JOIN bmp_connections AS connection
-        ON connection.connection_id = route.connection_id
+        ON connection.connection_pk = route.connection_pk
       LEFT JOIN bmp_route_attributes AS attributes
-        ON attributes.attr_id = route.attr_id
+        ON attributes.attr_pk = route.attr_pk
      WHERE scope.scope_id = :scope_id
        AND route.route_pk IN (
            SELECT route_pk
@@ -286,7 +288,7 @@ OFFSET :offset;
 
 IPv4/IPv6 Unicast 输入 `10.0.0.0/24` 时，上述条件是标准化后的**精确前缀和掩码匹配**，不是最长前缀匹配（LPM）。输入纯 IP 时按精确 IP 匹配；其他文本才按页面支持的文本规则过滤。
 
-`bmp_route_attributes` 使用 `LEFT JOIN`，因为某些 current route 观测没有可用 `attr_id`；identity 和 payload 是 current route 的必需对象，因此使用普通 `JOIN`。Withdraw 自身只写历史 event，并在有效 connection/epoch 下删除 current row，不会作为 current row 留在该查询里。
+`bmp_route_attributes` 使用 `LEFT JOIN`，因为某些 current route 观测没有可用 `attr_pk`；identity 和 payload 是 current route 的必需对象，因此使用普通 `JOIN`。Withdraw 自身只写历史 event，并在有效 connection/epoch 下删除 current row，不会作为 current row 留在该查询里。
 
 ### 0.7 SQL 行如何组装成页面路由
 
@@ -313,9 +315,9 @@ SQL 查出一个展开行后，`buildStoredRouteProjection()` 按以下顺序组
 | --- | --- | --- |
 | `routeKey` | `bmp_route_identities.legacy_route_key` | 详情查询原样回传 |
 | `persistentRouteId` | `bmp_route_identities.route_id` | 稳定 canonical route ID；详情对象保留，普通列表会裁掉 |
-| `persistentScopeId` | current `scope_id` | 页面查询的逻辑 RIB 主键；详情对象保留 |
-| `persistentSourceId` | `bmp_rib_scopes.source_id` | 稳定上报源 ID |
-| `persistentConnectionId` | current `connection_id` | 该 current 版本来自的连接 ID |
+| `persistentScopeId` | `bmp_rib_scopes.scope_id`（经 current `scope_pk` 关联） | 页面查询的逻辑 RIB 主键；详情对象保留 |
+| `persistentSourceId` | `bmp_sources.source_id`（经 scope 的 `source_pk` 关联） | 稳定上报源 ID |
+| `persistentConnectionId` | `bmp_connections.connection_id`（经 current `connection_pk` 关联） | 该 current 版本来自的连接 ID |
 | `afi` / `safi` | `bmp_route_identities` | 同时用于分区校验 |
 | `ip` / `mask` | `prefix` / `prefix_length` | 复杂 NLRI 可能为 `NULL` |
 | `rd` / `pathId` | `bmp_route_identities` | 属于 canonical route identity |
@@ -380,7 +382,7 @@ Session/Loc-RIB **列表**不会把这个对象的所有字段发给表格；Wor
 
 例如该 scope 一共有 1000 条路由，前缀过滤只命中 1 条，则响应可以同时是 `total = 1`、`summary.total = 1000`。没有 prefix/text 等路由级条件时，列表 `total` 也可直接由 counter 求出；存在这些条件时才对选中的分区执行带 JOIN 的 `COUNT(*)`。
 
-### 0.8 列表、详情、Route Lens 和路由轨迹的查询差异
+### 0.8 列表、详情、Route Lens 的查询差异
 
 | 功能 | 主要查询条件 | 访问的 current 分区 | 最终返回 |
 | --- | --- | --- | --- |
@@ -389,48 +391,18 @@ Session/Loc-RIB **列表**不会把这个对象的所有字段发给表格；Wor
 | 路由详情 | `scope_id + legacy_route_key` | 只访问 scope 所在的 1 张 | 完整组装对象；没有单独的 detail 表 |
 | Route Lens | IP/CIDR/NLRI 查询 + state | 按 AFI/SAFI 剪枝；文本 NLRI 查询可能跨多分区 | 将同一查询的路由按五个 RIB stage 分组 |
 | Route Assurance | 全量 current 快照 + 页面筛选 | 可跨多分区分页扫描 | 五阶段漏斗和异常候选 |
-| 路由轨迹 | IP/CIDR 或 NLRI 语义标识 + Scope 类型 + RIB stage | 不查 current 分区；按保留事件中的 `(scope_id, route_pk)` 分组 | 每个 Scope 隔离的路由轨迹摘要，包含仍在 RIB 和已撤销/清理的路由 |
-| 路由事件 | route/source/scope/type/time | 不查 current 分区；从 `bmp_route_events` 开始 | 事件元数据 + identity/payload/attributes 重建的当次路由 |
 
 路由详情与列表复用同一套组装逻辑。详情查询只是把 `routeState` 设为 `all`，加上 `legacy_route_key` 精确条件并限制 `pageSize = 1`。
 
-Session、Loc-RIB 和 Route Lens 的路由详情都提供“事件轨迹”页签。页面用当前路由的
-`scope_id + route_id/routeKey` 调用 `getPersistedRouteEvents()`，按观察时间从新到旧分页展示
-`announce / refresh / replace / withdraw / purge`，并比较相邻的可用属性快照，标出 Next Hop、
-AS Path、Local Preference、MED 和 Community 等变化。这里必须带 `scope_id`：只用 `route_id`
-会把同一 NLRI 在 Pre-In、Post-In、Loc-RIB 等不同 RIB 中的事件混到一起。
-有稳定 `route_id` 时页面只使用 `scope_id + route_id`；只有详情尚未返回 `route_id` 时才回退到
-`scope_id + routeKey`，两种 route identity 条件不会同时做 AND 查询。
+数据库只保存 current 投影：成功 withdraw/purge 且未重新宣告的路由会从分区表删除，之后没有任何页面或 API 能再查到它。v11 起没有路由事件表，也没有“路由轨迹/事件轨迹”功能。
 
-这条轨迹是保留期内的规范化路由生命周期，不是原始 BMP/BGP 报文回放。`withdraw` 通常只有
-NLRI identity、没有撤销前的 `attr_id`；这时撤销前属性要查看时间线上更早一次
-`announce / replace / refresh`。如果 withdraw/purge 事件实际保留了 `attr_id`，页面会直接展示该
-事件携带的撤销/清理前快照。`scope_stale`、`scope_eor` 等 scope 级事件不会混入单路由轨迹。
-
-Session、Loc-RIB 和 Route Lens 的入口仍从 current-route 结果打开详情；成功 withdraw/purge 且未
-重新宣告的路由不会再出现在这些入口中。`/bmp/route-history` 的“路由轨迹”页签同时查询仍在 RIB 和已离开 current RIB 的路由：
-它调用 `getPersistedRouteEvents({ groupByRoute: true, ... })`，直接从保留事件按
-`(scope_id, route_pk)` 聚合，所以 current 分区已经没有该路由时仍可检索。这里不能只按
-`route_id` 分组，因为同一 NLRI 会同时出现在多个 Peer、RIB stage 或 Loc-RIB Scope 中。
-
-页面对 IP/CIDR 使用 `prefixExact` 做规范化精确查询；对复杂 NLRI 使用 `prefix` 在
-`bmp_route_identities.prefix` 上做从头匹配。这个字段对复杂 NLRI 保存 parser 生成的可读标识，例如：
+复杂 NLRI 的 `bmp_route_identities.prefix` 保存 parser 生成的可读标识，Route Lens 用它做从头匹配，例如：
 
 - EVPN：`evpn:mac-ip:65000:41:tag=141:mac=aa:bb:cc:dd:ee:29:ip=192.0.2.51`
 - BGP-LS：`bgp-ls:Link:10.250.0.1->10.250.0.2`
 - FlowSpec：`dst=198.18.253.0/24; proto = 6; dst-port = 443`
 
-因此可以输入完整标识，也可输入开头部分，例如 `evpn:mac-ip:` 或 `bgp-ls:`。复杂 NLRI 的
-`prefix_length` 是 parser 长度元数据，不是 CIDR Mask，页面不会把它拼成 `/Mask`。
-
-路由轨迹的 `total` 是 Scope 隔离后的**轨迹数**，不是事件数；每行的 `eventCount` 才是该轨迹在
-当前保留窗口内的事件数。首屏查询会记录 `asOfEventId`，后续游标和打开的事件时间线都限定在这个
-Event **摄入上界**内，避免新事件导致列表与抽屉的“最近事件”互相矛盾。这个上界不会冻结物理删除：
-保留 sweep 或删除 Source 仍可能移除上界内的数据，所以它不是数据库快照。点击一行后使用该行的
-`scope_id + route_id + asOfEventId` 查询事件时间线。
-
-页面上的“最近保留事件”不等于当前状态；保留策略或磁盘压力可能裁掉更早事件，页面会同时展示
-数据库当前最早保留的事件时间。空结果只表示“当前保留窗口内没有命中”，不表示该路由从未出现。
+复杂 NLRI 的 `prefix_length` 是 parser 长度元数据，不是 CIDR Mask，页面不会把它拼成 `/Mask`。
 
 ## 1. 数据库定位
 
@@ -443,17 +415,19 @@ SQLite 是 BMP RIB 的权威数据源，不是可选的历史副本。
 
 数据库基本信息：
 
-| 项目 | schema v9 的值 |
+| 项目 | schema v10 的值 |
 | --- | --- |
 | 数据库文件 | 通常为 Electron `userData/bmp/bmp.sqlite3` |
-| Schema version | `9`，保存在 `PRAGMA user_version` |
-| 稳定键 schema version | `1` |
+| Schema version | `13`，保存在 `PRAGMA user_version` |
+| 稳定键 schema version | `2`（固定顺序的规范化字符串哈希，见 7.1） |
 | 稳定键算法 | SHA-256 |
 | Journal 模式 | WAL |
 | 外键 | `foreign_keys = ON` |
 | 同步级别 | `synchronous = NORMAL` |
 | Busy timeout | 5000 ms |
 | 临时存储 | MEMORY |
+| Writer 页缓存 | 64 MiB（`cache_size = -65536`） |
+| Reader mmap | 256 MiB（`mmap_size`，只读连接） |
 | WAL 自动 checkpoint | 2000 页 |
 
 WAL 模式运行时，数据库目录还可能存在：
@@ -461,16 +435,23 @@ WAL 模式运行时，数据库目录还可能存在：
 - `bmp.sqlite3-wal`：尚未 checkpoint 回主文件的已提交 WAL 页面。
 - `bmp.sqlite3-shm`：WAL 共享内存索引。
 
-## 2. Schema v9 的核心变化
+## 2. Schema v13 的核心变化
 
-v9 不再把所有 current route 放在一张 `bmp_current_routes` 大表中。新的结构有四个重点：
+v10~v13 保留 v9 的固定分区和全局对象去重，重点是为“大量邻居同时全表上报”这类写入场景瘦身：
 
-1. current route 固定拆成 `2 × 18 = 36` 张物理分区表。
-2. Route identity/NLRI、扩展展示 payload 和 path attributes 分开全局去重，分区表只保留当前路径状态和外键。
-3. `current_ref_count`、`event_ref_count` 和 scope route counters 由 SQLite trigger 在事务内维护。
-4. v9 只支持空库初始化，不包含 v8 或更早版本的数据迁移和兼容表。
+1. current route 固定拆成 `2 × 18 = 36` 张物理分区表（同 v9）。
+2. Route identity/NLRI、扩展展示 payload 和 path attributes 分开全局去重，分区表只保留当前路径状态和外键（同 v9）。
+3. `bmp_sources`、`bmp_connections`、`bmp_rib_scopes`、`bmp_route_attributes` 改为 rowid 表并暴露整数代理键 `source_pk`、`connection_pk`、`scope_pk`、`attr_pk`；current 分区和 `bmp_scope_route_counts` 只引用这些整数键，hex/UUID ID 仅在维表出现一次。
+4. 取消 `current_ref_count` / `event_ref_count` 和维护它们的 trigger。identity、payload、attributes 的回收改为“候选驱动”：删除或替换 current row 时把旧引用键记入临时候选表，sweep/清理/删除 Source 时用反连接删除已无任何引用的候选。写入热路径不再为 GC 付出任何额外 UPDATE。
+5. **v11 删除了路由事件表 `bmp_route_events` 和整个路由历史/事件轨迹功能。** 数据库只保存 current RIB 投影和 Statistics Report；重放去重改由 `bmp_connections.last_sequence` 承担，current 行的版本保护改用 mutation 序号 `last_sequence`。
+6. current 分区从 6 个二级索引精简到 5 个；`bmp_route_identities` 去掉冗余的 `route_key_json` 列和一个前缀索引。
+7. Scope route counters 仍由 trigger 在事务内维护（同 v9）。
+8. **v13** 稳定键算法升为 v2：`route_id` / `scope_id` 哈希固定顺序的规范化字符串而不是排序 JSON（见 7.1）；同一路由的判定语义不变，键值不同。同时 bmpWorker 侧按邻居缓存 scope 描述符、按属性对象缓存 attr JSON/哈希、按文本缓存前缀归一化，并在批次传输时只发送一份 source/scope/connection 描述符。
+9. **v12** 去掉 `bmp_route_identities.route_identity_json`（碰撞检测只依赖 SHA-256），普通 IP 前缀的 `nlri_json` 不再落库（`nlri_json = NULL`，`nlri_flags` 记录可选键，读取时由拆列重建完全相同的对象）。
+10. **写入攒批**：一个批次内所有 identity / payload / attribute 先各用一条多行 `INSERT OR IGNORE`（每 250 行一条）写入，再用一条 `SELECT … IN (...)` 取回主键；不再对每条路由做带 `RETURNING` 的 upsert。分析未开启时 announce 也不再读取旧行的完整投影，只探测被替换的 payload/attr 主键用于回收。
+11. 版本不匹配时不迁移：Writer 打开数据库发现 `user_version` 不等于 13（更旧、更新、或未版本化但非空），会删除全部已有对象并重建空库。
 
-这种设计把高频的 scope 内分页、upsert、withdraw 和 epoch 清理限制在一张较小的分区表中，同时避免把较大的 NLRI JSON、route JSON 和 attribute JSON 复制到每个 scope。
+以 20 个邻居 × 2 万条路由的本机基准计，v10 相比 v9 写入吞吐约 2 倍（6.0k → 11.6k routes/s），数据库体积约 1/3（1010 MB → 351 MB）；v11 去掉事件表后见第 10 节的数据。
 
 ## 3. 数据库对象总览
 
@@ -486,7 +467,6 @@ v9 不再把所有 current route 放在一张 `bmp_current_routes` 大表中。�
 | `bmp_route_identities` | 全局去重的 canonical NLRI identity |
 | `bmp_route_payloads` | 全局去重的 route 扩展展示字段 JSON；普通路由可以共享 `{}` |
 | `bmp_ingest_batches` | 批量写入幂等记录 |
-| `bmp_route_events` | 带固定分区归属的连接、scope、路由和统计事件流水 |
 | `bmp_statistics_samples` | Statistics Report 历史样本 |
 | `bmp_statistics_latest` | 每个逻辑 Statistics Report 的最新样本投影 |
 
@@ -508,19 +488,21 @@ bmp_current_routes_{peer|loc_rib}_{family_token}
 - `bmp_route_identities`；
 - `bmp_route_payloads`。
 
-视图固定输出 27 列：
+视图固定输出 26 列：
 
 | 来源 | 输出字段 |
 | --- | --- |
-| Current 分区行（13 列） | `partition_id`、`path_pk`、`scope_id`、`route_pk`、`payload_id`、`attr_id`、`connection_id`、`rib_epoch`、`explicit_state`、`first_seen_ms`、`last_seen_ms`、`source_timestamp_ms`、`last_event_id` |
-| Route identity（13 列） | `route_id`、`route_key_json`、`route_identity_json`、`route_key_version`、`legacy_route_key`、`afi`、`safi`、`path_id`、`rd`、`prefix`、`prefix_length`、`nlri_kind`、`nlri_json` |
+| Current 分区行（13 列） | `partition_id`、`path_pk`、`scope_pk`、`route_pk`、`payload_id`、`attr_pk`、`connection_pk`、`rib_epoch`、`explicit_state`、`first_seen_ms`、`last_seen_ms`、`source_timestamp_ms`、`last_sequence` |
+| Route identity（12 列） | `route_id`、`route_key_version`、`legacy_route_key`、`afi`、`safi`、`path_id`、`rd`、`prefix`、`prefix_length`、`nlri_kind`、`nlri_json`、`nlri_flags` |
 | Route payload（1 列） | `route_json` |
+
+另有一个更轻的 `bmp_current_route_refs` 视图，只 `UNION ALL` 36 张分区的 `(scope_pk, route_pk, payload_id, attr_pk)`，不做任何 JOIN；对象 GC 的反连接和诊断用它探测“某个对象是否还被任何 current row 引用”。
 
 它**不包含** `attr_json`、scope、source 或 connection 展示字段，这些仍需分别关联 `bmp_route_attributes`、`bmp_rib_scopes`、`bmp_sources` 和 `bmp_connections`。
 
 该 view 主要用于真正的跨分区查询和运维检查。生产页面已知 `scope_id` 时，不会先扫这个 36 分区 view；查询代码会生成相同的 identity/payload 展开 SQL，但只针对 manifest 选中的 1 张物理表。
 
-SQLite 还会自动创建 `sqlite_sequence`，用于记录 `bmp_route_events.event_id` 和 `bmp_statistics_samples.sample_id` 的 AUTOINCREMENT 进度。不要手工修改该表。
+SQLite 还会自动创建 `sqlite_sequence`，用于记录 `bmp_statistics_samples.sample_id` 的 AUTOINCREMENT 进度。不要手工修改该表。
 
 ## 4. 固定分区清单
 
@@ -589,9 +571,9 @@ AFI 必须是 0 到 65535 的整数，SAFI 必须是 0 到 255 的整数。
 数据库内还有连续的校验链：
 
 - Scope insert/update trigger 验证 `(partition_id, scope_kind, afi, safi)` 必须与 manifest 中的某个 descriptor 匹配：known-family 必须精确匹配，`other` 必须排除 17 个已知组合；AFI/SAFI 的类型和取值范围由进入数据库前的 manifest resolver 校验。
-- 每张分区表的 `partition_id` 有固定值 `CHECK`，并通过 `(scope_id, partition_id)` 复合外键指向 `bmp_rib_scopes`。
+- 每张分区表的 `partition_id` 有固定值 `CHECK`，并通过 `(scope_pk, partition_id)` 复合外键指向 `bmp_rib_scopes`。
 - 分区 insert trigger 同时关联 scope 和 route identity，验证 scope 的 partition、kind、AFI/SAFI、identity 的 AFI/SAFI 与目标分区一致。
-- 分区行一旦建立，`scope_id`、`partition_id` 和 `route_pk` 不可更新，避免绕过上述校验把路径移动到另一个 scope、分区或 identity。
+- 分区行一旦建立，`scope_pk`、`partition_id` 和 `route_pk` 不可更新，避免绕过上述校验把路径移动到另一个 scope、分区或 identity。
 
 ## 5. 表关联图
 
@@ -599,34 +581,28 @@ AFI 必须是 0 到 65535 的整数，SAFI 必须是 0 到 255 的整数。
 bmp_sources
   ├── 1:N ── bmp_connections
   ├── 1:N ── bmp_rib_scopes
-  ├── 1:N ── bmp_route_events
   ├── 1:N ── bmp_statistics_samples
   └── 1:N ── bmp_statistics_latest
 
 bmp_connections
-  ├── 1:N ── bmp_rib_scopes.last_connection_id
-  ├── 1:N ── 36 张 current-route 分区.connection_id
-  ├── 1:N ── bmp_scope_route_counts.connection_id
-  ├── 1:N ── bmp_route_events.connection_id
-  └── 1:N ── bmp_statistics_samples.connection_id
+  ├── 1:N ── bmp_rib_scopes.last_connection_pk
+  ├── 1:N ── 36 张 current-route 分区.connection_pk
+  ├── 1:N ── bmp_scope_route_counts.connection_pk
+  └── 1:N ── bmp_statistics_samples.connection_id（文本 ID）
 
 bmp_rib_scopes
   ├── 1:N ── 所属的一张 current-route 分区
   ├── 1:N ── bmp_scope_route_counts
-  ├── 1:N ── bmp_route_events.(scope_id, partition_id)，复合引用可整体为空
-  └── 1:N ── bmp_statistics_samples.scope_id，可为空
+  └── 1:N ── bmp_statistics_samples.scope_id（文本 ID），可为空
 
 bmp_route_identities
-  ├── 1:N ── current-route 分区.route_pk
-  └── 1:N ── bmp_route_events.route_pk
+  └── 1:N ── current-route 分区.route_pk
 
 bmp_route_payloads
-  ├── 1:N ── current-route 分区.payload_id
-  └── 1:N ── bmp_route_events.payload_id
+  └── 1:N ── current-route 分区.payload_id
 
 bmp_route_attributes
-  ├── 1:N ── current-route 分区.attr_id，可为空
-  └── 1:N ── bmp_route_events.attr_id，可为空
+  └── 1:N ── current-route 分区.attr_pk，可为空
 
 bmp_statistics_samples
   └── 应用通常 1:0..1 ── bmp_statistics_latest.sample_id
@@ -636,22 +612,16 @@ bmp_statistics_samples
 
 | 子表字段 | 父表字段 | 数据库 FK | 删除行为/用途 |
 | --- | --- | --- | --- |
-| `bmp_connections.source_id` | `bmp_sources.source_id` | 是 | 默认 `NO ACTION` |
-| `bmp_rib_scopes.source_id` | `bmp_sources.source_id` | 是 | 默认 `NO ACTION` |
-| `bmp_rib_scopes.last_connection_id` | `bmp_connections.connection_id` | 是，可空 | 当前接管 scope 的连接 |
-| `current.(scope_id, partition_id)` | `bmp_rib_scopes.(scope_id, partition_id)` | 是，复合 FK | `ON DELETE CASCADE` |
+| `bmp_connections.source_pk` | `bmp_sources.source_pk` | 是 | 默认 `NO ACTION` |
+| `bmp_rib_scopes.source_pk` | `bmp_sources.source_pk` | 是 | 默认 `NO ACTION` |
+| `bmp_rib_scopes.last_connection_pk` | `bmp_connections.connection_pk` | 是，可空 | 当前接管 scope 的连接 |
+| `current.(scope_pk, partition_id)` | `bmp_rib_scopes.(scope_pk, partition_id)` | 是，复合 FK | `ON DELETE CASCADE` |
 | `current.route_pk` | `bmp_route_identities.route_pk` | 是 | NLRI identity |
 | `current.payload_id` | `bmp_route_payloads.payload_id` | 是 | 扩展展示 payload |
-| `current.attr_id` | `bmp_route_attributes.attr_id` | 是，可空 | Path Attributes |
-| `current.connection_id` | `bmp_connections.connection_id` | 是 | 当前版本来自哪次连接 |
-| `bmp_scope_route_counts.scope_id` | `bmp_rib_scopes.scope_id` | 是 | `ON DELETE CASCADE` |
-| `bmp_scope_route_counts.connection_id` | `bmp_connections.connection_id` | 是 | 计数桶所属连接 |
-| `bmp_route_events.source_id` | `bmp_sources.source_id` | 是 | 事件所属 source |
-| `bmp_route_events.connection_id` | `bmp_connections.connection_id` | 是 | 事件所属连接 |
-| `bmp_route_events.(scope_id, partition_id)` | `bmp_rib_scopes.(scope_id, partition_id)` | 是，可整体为空 | 固定事件的逻辑 RIB 和物理分区 |
-| `bmp_route_events.route_pk` | `bmp_route_identities.route_pk` | 是，可空 | 重建事件发生时的 NLRI identity |
-| `bmp_route_events.payload_id` | `bmp_route_payloads.payload_id` | 是，可空 | 重建事件发生时的扩展 payload |
-| `bmp_route_events.attr_id` | `bmp_route_attributes.attr_id` | 是，可空 | 重建事件发生时的 Path Attributes |
+| `current.attr_pk` | `bmp_route_attributes.attr_pk` | 是，可空 | Path Attributes |
+| `current.connection_pk` | `bmp_connections.connection_pk` | 是 | 当前版本来自哪次连接 |
+| `bmp_scope_route_counts.scope_pk` | `bmp_rib_scopes.scope_pk` | 是 | `ON DELETE CASCADE` |
+| `bmp_scope_route_counts.connection_pk` | `bmp_connections.connection_pk` | 是 | 计数桶所属连接 |
 | `bmp_statistics_samples.source_id` | `bmp_sources.source_id` | 是 | 统计样本所属 source |
 | `bmp_statistics_samples.connection_id` | `bmp_connections.connection_id` | 是 | 统计样本所属连接 |
 | `bmp_statistics_samples.scope_id` | `bmp_rib_scopes.scope_id` | 是，可空 | 可选 RIB scope |
@@ -660,12 +630,9 @@ bmp_statistics_samples
 
 只有表中明确写出的两条 `ON DELETE CASCADE` 会级联删除；其他 FK 使用 SQLite 默认的 `NO ACTION`。删除 source、connection 或全局路由对象前，应用必须先处理引用行。
 
-`partition_id` 与 `scope_id` 一起重复保存在 current/event 中，是为了让数据库能用复合 FK 和 trigger 校验“这行确实属于该 scope 对应的固定分区”，并支持事件按分区剪枝；它不是另一套 scope ID。
+`partition_id` 与 `scope_pk` 一起重复保存在 current 行中，是为了让数据库能用复合 FK 和 trigger 校验“这行确实属于该 scope 对应的固定分区”；它不是另一套 scope ID。
 
-有两条关联是应用有意不声明 FK：
-
-- `bmp_route_events.batch_id -> bmp_ingest_batches.batch_id`：用于批次追踪和清理。
-- `current.last_event_id -> bmp_route_events.event_id`：用于 upsert 版本保护，防止旧 event 覆盖新 current state；页面排序不使用它。
+`current.last_sequence` 记录写入该版本的 mutation 在其连接内的序号，用于 upsert 版本保护（同一连接内旧序号不能覆盖新状态）；页面排序不使用它。`bmp_ingest_batches` 只承担批次幂等，按时间独立清理。
 
 另外，`bmp_statistics_latest.sample_id` 只有普通 FK、没有 `UNIQUE`。正常写入语义是一条 sample 最多成为一个逻辑报告的 latest，但 DDL 本身允许多行 latest 引用同一 sample，因此图中的 `1:0..1` 是应用语义，不是 SQLite 强制基数。
 
@@ -677,7 +644,8 @@ bmp_statistics_samples
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `source_id` | TEXT PK | 规范化 source identity 的 SHA-256 十六进制值 |
+| `source_pk` | INTEGER PK | 数据库内部整数键；connections、scopes、events 引用它 |
+| `source_id` | TEXT NOT NULL UNIQUE | 规范化 source identity 的 SHA-256 十六进制值；对外稳定 ID |
 | `source_key_json` | TEXT NOT NULL | 键版本、算法和 keyHex |
 | `source_identity_json` | TEXT NOT NULL | 生成 source ID 的规范化身份 |
 | `remote_ip` | TEXT NULL | 最近已知的 BMP 发起端地址 |
@@ -695,8 +663,9 @@ bmp_statistics_samples
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `connection_id` | TEXT PK | 单次 TCP/BMP 连接的全库 ID |
-| `source_id` | TEXT NOT NULL，FK | 所属稳定 source，关联 `bmp_sources.source_id` |
+| `connection_pk` | INTEGER PK | 数据库内部整数键；scopes、current 分区、counters、events 引用它 |
+| `connection_id` | TEXT NOT NULL UNIQUE | 单次 TCP/BMP 连接的全库 ID（UUID） |
+| `source_pk` | INTEGER NOT NULL，FK | 所属稳定 source，关联 `bmp_sources.source_pk` |
 | `connection_generation` | INTEGER NOT NULL | 应用生成的连接代次，用于新连接接管旧 scope |
 | `local_ip` | TEXT NULL | Collector 本地地址 |
 | `local_port` | INTEGER NULL | Collector 本地端口 |
@@ -706,10 +675,13 @@ bmp_statistics_samples
 | `closed_at_ms` | INTEGER NULL | 连接关闭时间；在线时为空 |
 | `close_reason` | TEXT NULL | 关闭原因 |
 | `connection_state` | TEXT NOT NULL | 应用使用 `open` / `closed`；DDL 没有枚举 CHECK |
+| `last_sequence` | INTEGER NOT NULL，DEFAULT `0` | 该连接已提交的最大 mutation 序号；重放去重的依据 |
 
 `connection_generation` 的单调性由 Writer 保证，数据库没有为它声明 UNIQUE。
 
-`idx_bmp_connections_source_time(source_id, opened_at_ms DESC)` 用于查某 source 的连接历史。
+Mutation 在一个连接内按 `source_sequence` 严格递增到达。Writer 在触碰 scope/route 之前先比较序号：小于等于 `last_sequence` 的 mutation 视为重放，是完全的 no-op；批次提交时把批内最大序号写回。整批重试由 `bmp_ingest_batches` 的 `batch_id` 幂等保证，事务回滚时序号不会推进。
+
+`idx_bmp_connections_source_time(source_pk, opened_at_ms DESC)` 用于查某 source 的连接历史。
 
 ### 6.3 `bmp_rib_scopes`
 
@@ -727,8 +699,9 @@ source
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `scope_id` | TEXT PK | 规范化 scope identity 的 SHA-256 |
-| `source_id` | TEXT NOT NULL，FK | 所属 source |
+| `scope_pk` | INTEGER PK | 数据库内部整数键；current 分区、counters、events 引用它 |
+| `scope_id` | TEXT NOT NULL UNIQUE | 规范化 scope identity 的 SHA-256；对外稳定 ID |
+| `source_pk` | INTEGER NOT NULL，FK | 所属 source |
 | `partition_id` | INTEGER NOT NULL | manifest 中的固定物理分区 ID |
 | `scope_key_json` | TEXT NOT NULL | 稳定键版本、算法和 keyHex |
 | `scope_identity_json` | TEXT NOT NULL | 生成 `scope_id` 的完整 canonical identity |
@@ -749,11 +722,11 @@ source
 | `stale_since_ms` | INTEGER NULL | 开始 stale/down 的时间 |
 | `refresh_started_ms` | INTEGER NULL | 当前刷新开始时间 |
 | `cleanup_pending_epoch` | INTEGER NULL | 等待清理旧路径的 epoch |
-| `last_connection_id` | TEXT NULL，FK | 当前接管 scope 的连接 |
+| `last_connection_pk` | INTEGER NULL，FK | 当前接管 scope 的连接 |
 | `created_at_ms` | INTEGER NOT NULL | Scope 创建时间 |
 | `updated_at_ms` | INTEGER NOT NULL | Scope 最近更新时间 |
 
-`UNIQUE(scope_id, partition_id)` 为分区表的复合外键提供目标。Scope 的 insert/update trigger 还会根据固定 manifest 验证 `partition_id`、`scope_kind`、AFI 和 SAFI 的组合；一个 scope 的 `partition_id` 在其生命周期内必须稳定。
+`UNIQUE(scope_pk, partition_id)` 为分区表的复合外键提供目标。Scope 的 insert/update trigger 还会根据固定 manifest 验证 `partition_id`、`scope_kind`、AFI 和 SAFI 的组合；一个 scope 的 `partition_id` 在其生命周期内必须稳定。
 
 Peer scope 的 `rib_type` 应用约定如下；Loc-RIB 是独立的 RIB 视图，固定保存文本 `loc-rib`，不再细分 Pre/Post Adj-RIB-In/Out：
 
@@ -780,8 +753,6 @@ DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_s
 | --- | --- | --- |
 | `route_pk` | INTEGER PK | 数据库内部短键，供分区和 event 引用 |
 | `route_id` | TEXT NOT NULL UNIQUE | Canonical route identity 的稳定 SHA-256 ID |
-| `route_key_json` | TEXT NOT NULL | 稳定键版本、算法和 keyHex |
-| `route_identity_json` | TEXT NOT NULL | 完整 canonical route identity |
 | `route_key_version` | INTEGER NOT NULL | Route key schema version |
 | `legacy_route_key` | TEXT NULL | 兼容页面/API 的旧 route key |
 | `afi` | INTEGER NOT NULL | Address Family Identifier，也是分区验证依据 |
@@ -791,24 +762,23 @@ DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_s
 | `prefix` | TEXT NULL | 可索引的 IP 前缀或 parser 生成的复杂 NLRI 语义标识 |
 | `prefix_length` | INTEGER NULL | IP 时是前缀长度；复杂 NLRI 时可能是协议编码长度，不能当作 CIDR Mask |
 | `nlri_kind` | TEXT NULL | `ip-prefix`、`vpn-prefix`、`evpn`、`raw-nlri` 等 |
-| `nlri_json` | TEXT NOT NULL | 完整解析后的 NLRI |
+| `nlri_json` | TEXT NULL | 完整解析后的 NLRI；普通 IP 前缀（detail 只含 `pathId/prefix/length/rd/valid` 且与拆列一致）为 `NULL` |
+| `nlri_flags` | INTEGER NOT NULL，DEFAULT `0` | `nlri_json` 为 `NULL` 时记录可选键：bit0 = `valid: true`，bit1 = 含 `rd` |
 | `first_seen_ms` | INTEGER NOT NULL | Identity 首次使用时间 |
-| `last_seen_ms` | INTEGER NOT NULL | Identity 最近使用时间，也是历史 GC cutoff 的依据 |
-| `current_ref_count` | INTEGER NOT NULL，DEFAULT `0`，CHECK `>= 0` | 36 张 current 分区中的引用数 |
-| `event_ref_count` | INTEGER NOT NULL，DEFAULT `0`，CHECK `>= 0` | event 中的引用数 |
+| `last_seen_ms` | INTEGER NOT NULL | Identity 最近使用时间；仅供诊断，不再参与 GC |
+
+页面返回的 `canonicalRouteKey`（`{schemaVersion, algorithm, keyHex}`）由 `route_key_version` 和 `route_id` 在读取时重建，不再单独存 `route_key_json`。
 
 普通 IP 的 `prefix` 在新写入时会按地址族和 `prefix_length` 规范化为网络地址文本，避免等价 IPv6
 因为零段压缩方式不同而精确查询漏项。历史查询仍会同时生成旧 v9 BMP 解析器使用的 IPv6 文本候选，
 因此升级前已经保留的 identity 不需要重建数据库才能被搜索到。
 
-`route_id` 的 canonical identity 包含 AFI、SAFI、ADD-PATH `path_id` 和规范化 NLRI。同一个 `route_id` 在多个 peer、RIB stage 或 Loc-RIB 中出现时只保存一份 identity/NLRI JSON；相同前缀但 `path_id` 不同则是不同 identity。
+`route_id` 的 canonical identity 包含 AFI、SAFI、ADD-PATH `path_id` 和规范化 NLRI。v13 起哈希输入是一条固定顺序的规范化字符串（`bmp-route|2|afi|safi|pathId|kind|…`，字段间用 U+001F 分隔）：IP/VPN/QP 前缀用网络地址 hex + 长度（VPN 另加规范化 RD），FlowSpec / BGP-LS / MVPN 等带原始字节的 NLRI 用 `routeType|rd|rawNlriHex`，EVPN 和其他结构化 NLRI 仍用解析字段（排除 label/VNI、path attribute 和展示字段）的排序 JSON。同一条路由从不同邻居、不同表示形式到达得到同一个 `route_id` 的语义与 v1 完全一致，只是哈希值不同。同一个 `route_id` 在多个 peer、RIB stage 或 Loc-RIB 中出现时只保存一份 identity/NLRI JSON；相同前缀但 `path_id` 不同则是不同 identity。
 
 索引：
 
-- `(afi, safi, prefix, prefix_length, route_pk)`：前缀查询。
-- `(prefix, prefix_length, route_pk)`：已定向到 scope/分区后的精确前缀反查。
+- `(prefix, prefix_length, route_pk)`：精确前缀/前缀范围反查；AFI/SAFI 由展开行或分区选择过滤，不再单独维护带 AFI/SAFI 前导列的第二个前缀索引。
 - `(legacy_route_key, route_pk)`：旧 route key 查询。
-- `(current_ref_count, event_ref_count, last_seen_ms, route_pk)`：无引用对象清理。
 
 ### 7.2 `bmp_route_payloads`
 
@@ -821,8 +791,6 @@ DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_s
 | `route_json` | TEXT NOT NULL | 仅含扩展展示字段的 JSON object；允许为 `{}` |
 | `first_seen_ms` | INTEGER NOT NULL | Payload 首次使用时间 |
 | `last_seen_ms` | INTEGER NOT NULL | Payload 最近使用时间 |
-| `current_ref_count` | INTEGER NOT NULL，DEFAULT `0`，CHECK `>= 0` | current 分区引用数 |
-| `event_ref_count` | INTEGER NOT NULL，DEFAULT `0`，CHECK `>= 0` | event 引用数 |
 
 内容相同的 payload 在不同 route identity、scope、刷新和 event 之间共享一行。普通 IP prefix 路由如果没有额外展示字段，payload 就是 `{}`；所有这类 current row 和 route event 可以引用同一个 `payload_id`。
 
@@ -832,12 +800,11 @@ DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_s
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `attr_id` | TEXT PK | Canonical attribute JSON 的 SHA-256 ID |
+| `attr_pk` | INTEGER PK | 数据库内部整数键；current 分区和 events 引用它 |
+| `attr_id` | TEXT NOT NULL UNIQUE | Canonical attribute JSON 的 SHA-256 ID |
 | `attr_json` | TEXT NOT NULL | 去重后的属性 JSON |
 | `first_seen_ms` | INTEGER NOT NULL | Attribute 首次使用时间 |
 | `last_seen_ms` | INTEGER NOT NULL | Attribute 最近使用时间 |
-| `current_ref_count` | INTEGER NOT NULL，DEFAULT `0`，CHECK `>= 0` | current 分区引用数 |
-| `event_ref_count` | INTEGER NOT NULL，DEFAULT `0`，CHECK `>= 0` | event 引用数 |
 
 Identity、payload 和 attributes 分离后，route 更新属性时无需复制 NLRI；同一组属性也不会在数百万条 route 中重复保存。
 
@@ -847,29 +814,33 @@ Identity、payload 和 attributes 分离后，route 更新属性时无需复制 
 
 1. `bmp_route_identities` 的 AFI/SAFI、prefix、RD、path ID 和 `nlri_json` 构造 identity/NLRI 基础字段及默认展示值，`nlri_json` 恢复为 `nlriDetail`。
 2. `bmp_route_payloads.route_json` 叠加少量扩展展示字段；`{}` 不影响基础投影。
-3. `bmp_route_attributes.attr_json` 叠加 canonical BGP Path Attributes，再由 current/event 行的 `attr_id` 恢复 `attrId`。
+3. `bmp_route_attributes.attr_json` 叠加 canonical BGP Path Attributes，再由关联到的 `bmp_route_attributes.attr_id` 恢复 `attrId`。
 4. Current-route 查询再从物理分区、scope 和 connection 补充 `routeState`、epoch、stale 原因和观察时间；event 查询则在 route 投影之外返回事件元数据。
 
-### 7.4 引用计数
+### 7.4 对象回收（候选驱动 GC）
 
-三张全局对象表都分别维护：
+v10 起不再维护引用计数。identity、payload 和 attributes 的生命周期规则是：**只要还有任何 current row 引用它，就保留；否则可以删除。**
 
-- `current_ref_count`：当前 36 张分区的引用数。
-- `event_ref_count`：`bmp_route_events` 的引用数。
+删除或替换 current row 是唯一会让对象失去引用的途径，所以回收由这些操作驱动：
 
-计数由 trigger 维护：
-
-| 动作 | 自动变化 |
+| 动作 | 记录的候选 |
 | --- | --- |
-| 分区 INSERT | identity、payload，以及非空 attribute 的 current 引用 `+1` |
-| 分区 DELETE | 对应 current 引用 `-1` |
-| 分区 `payload_id` / `attr_id` UPDATE | 变化时旧引用 `-1`、新引用 `+1`；`route_pk` 不允许更新 |
-| Event INSERT | 对应 event 引用 `+1` |
-| Event DELETE | 对应 event 引用 `-1` |
+| Withdraw / purge 删除 current row（`DELETE ... RETURNING`） | 被删 current row 的 `route_pk`、`payload_id`、`attr_pk` |
+| Announce 替换了已有 current row 的 payload/attribute | 旧的 `payload_id`、`attr_pk` |
+| Sweep 删除旧 epoch/旧连接/过期 stale 的 current row | 被删 current row 的 `route_pk`、`payload_id`、`attr_pk` |
+| 手动清理 stale 路由、删除 Source | 同上 |
 
-引用字段比较使用 SQLite 的 NULL-safe `IS NOT`：可空的 `attr_id` 从 `NULL` 变为非空、从非空变为 `NULL`，或在两个 ID 之间切换时，计数都能正确更新；值未变化时不会重复增减。
+候选先写入 Writer 连接的临时表 `temp.bmp_gc_candidates(kind, pk)`，然后在同一事务末尾执行三条反连接删除，例如：
 
-只有 `current_ref_count = 0` 且 `event_ref_count = 0`，并早于 event/history retention cutoff 的对象才可被 GC。应用代码不应手工修正这些计数。
+```sql
+DELETE FROM bmp_route_attributes
+ WHERE attr_pk IN (SELECT pk FROM temp.bmp_gc_candidates WHERE kind = 3)
+   AND NOT EXISTS (SELECT 1 FROM bmp_current_route_refs c WHERE c.attr_pk = bmp_route_attributes.attr_pk);
+```
+
+反连接走每张分区的 `attr` / `payload` / `route` 索引，因此代价与候选数成正比，而不是与全表大小成正比。
+
+Announce/withdraw 的热路径只把键写入临时候选表，不执行反连接；真正的删除只在周期性 maintenance sweep、手动清理 stale 路由和删除 Source 时进行。候选表随 Writer 连接存在，重启后丢失的候选不会造成错误，只是对应对象要等到下一次被引用后再释放时才会被回收。
 
 ## 8. Current-route 分区表
 
@@ -879,42 +850,43 @@ Identity、payload 和 attributes 分离后，route 更新属性时无需复制 
 | --- | --- | --- |
 | `path_pk` | INTEGER PK | 当前路径行的短主键；只在这一张物理分区内唯一 |
 | `partition_id` | INTEGER NOT NULL，固定 DEFAULT + CHECK | 该表固定 partition ID |
-| `scope_id` | TEXT NOT NULL，复合 FK | 所属 scope |
+| `scope_pk` | INTEGER NOT NULL，复合 FK | 所属 scope |
 | `route_pk` | INTEGER NOT NULL，FK | 指向全局 route identity |
 | `payload_id` | INTEGER NOT NULL，FK | 指向全局 route payload |
-| `attr_id` | TEXT NULL，FK | 指向全局 Path Attributes |
-| `connection_id` | TEXT NOT NULL，FK | 当前版本来自哪次连接 |
+| `attr_pk` | INTEGER NULL，FK | 指向全局 Path Attributes |
+| `connection_pk` | INTEGER NOT NULL，FK | 当前版本来自哪次连接 |
 | `rib_epoch` | INTEGER NOT NULL | 当前版本所属刷新 epoch |
 | `explicit_state` | TEXT NOT NULL，DEFAULT `active` | 显式状态桶；DDL 无枚举 CHECK |
 | `first_seen_ms` | INTEGER NOT NULL | 该 scope/path 首次出现时间 |
 | `last_seen_ms` | INTEGER NOT NULL | 该 scope/path 最近出现时间 |
 | `source_timestamp_ms` | INTEGER NULL | 最近 BMP source timestamp |
-| `last_event_id` | INTEGER NOT NULL | 最新事件序号；逻辑引用，用于 upsert 版本保护，不用于页面排序 |
+| `last_sequence` | INTEGER NOT NULL | 写入该版本的 mutation 在其连接内的序号；用于 upsert 版本保护，不用于页面排序 |
 
 业务唯一约束为：
 
 ```text
-UNIQUE(scope_id, route_pk)
+UNIQUE(scope_pk, route_pk)
 ```
 
 同一个 canonical route 可以出现在多个 scope；同一 scope 内只保留一个 current 版本。
 
 当前 Writer 在 announce/replace/refresh upsert 时会把 `explicit_state` 写回 `active`。常见的 stale 并不是逐行把该列改成 `stale`，而是由 scope state、连接接管和 epoch 动态推导；这个字段仍保留在状态公式和 counter key 中，但不要把它误认为页面 `routeState` 的唯一来源。
 
-`(scope_id, partition_id)` 对 scope 使用 `ON DELETE CASCADE`。删除一个 scope 会自动删除它在所属 current 分区中的行，并由分区 delete trigger 同步减少 counter 和三类全局对象引用计数。
+`(scope_pk, partition_id)` 对 scope 使用 `ON DELETE CASCADE`。删除一个 scope 会自动删除它在所属 current 分区中的行，并由分区 delete trigger 同步减少 counter。
 
-每张分区有六个二级索引：
+每张分区有五个二级索引：
 
 | 索引后缀 | 字段 | 用途 |
 | --- | --- | --- |
-| `scope_first_seen` | `(scope_id, first_seen_ms, path_pk)` | Scope 页面稳定分页 |
-| `scope_epoch` | `(scope_id, connection_id, rib_epoch, path_pk)` | 接管、epoch 和 stale 清理 |
-| `route` | `(route_pk, scope_id)` | 跨 scope 定位同一路由 |
-| `attr` | `(attr_id)` | 属性关联和诊断 |
-| `payload` | `(payload_id)` | Payload 引用定位、删除诊断和引用完整性检查 |
-| `connection` | `(connection_id, scope_id)` | 按连接清理或定位其 current route |
+| `scope_first_seen` | `(scope_pk, first_seen_ms, path_pk)` | Scope 页面稳定分页 |
+| `scope_epoch` | `(scope_pk, connection_pk, rib_epoch, path_pk)` | 接管、epoch 和 stale 清理 |
+| `route` | `(route_pk, scope_pk)` | 跨 scope 定位同一路由、identity GC 反连接 |
+| `attr` | `(attr_pk)` | 属性 GC 反连接和 FK 检查 |
+| `payload` | `(payload_id)` | Payload GC 反连接和 FK 检查 |
 
-分区 trigger 负责三类不变量：insert 时校验 scope、partition 和 family；update 时禁止改变 `scope_id`、`partition_id`、`route_pk`；insert/delete/update 时事务内维护 scope counter 和全局对象的 current ref count。
+v9 的 `connection` 索引已删除：没有查询只按连接定位 current row，`scope_epoch` 已包含 `connection_pk`。
+
+分区 trigger 负责三类不变量：insert 时校验 scope、partition 和 family；update 时禁止改变 `scope_pk`、`partition_id`、`route_pk`；insert/delete 以及 `connection_pk`/`rib_epoch`/`explicit_state` 变化的 update 时在事务内维护 scope counter。
 
 ### 8.1 为什么分区表保持窄行
 
@@ -931,8 +903,8 @@ UNIQUE(scope_id, route_pk)
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `scope_id` | TEXT NOT NULL，PK 部分，FK | 所属 scope；删除 scope 时 `ON DELETE CASCADE` |
-| `connection_id` | TEXT NOT NULL，PK 部分，FK | 这些 current row 来自哪次 connection |
+| `scope_pk` | INTEGER NOT NULL，PK 部分，FK | 所属 scope；删除 scope 时 `ON DELETE CASCADE` |
+| `connection_pk` | INTEGER NOT NULL，PK 部分，FK | 这些 current row 来自哪次 connection |
 | `rib_epoch` | INTEGER NOT NULL，PK 部分 | 这些 current row 属于哪个刷新代次 |
 | `explicit_state` | TEXT NOT NULL，PK 部分 | 分区行的显式状态桶；DDL 无枚举 CHECK |
 | `route_count` | INTEGER NOT NULL，CHECK `>= 0` | 36 张分区中落入该桶的物理行数 |
@@ -940,7 +912,7 @@ UNIQUE(scope_id, route_pk)
 复合主键是：
 
 ```text
-(scope_id, connection_id, rib_epoch, explicit_state)
+(scope_pk, connection_pk, rib_epoch, explicit_state)
 ```
 
 同一 scope 只属于一张分区，因此该 scope 的所有 counter 加总就等于其 current row 总数。分区 INSERT 会新建或 `+1`；DELETE 会 `-1` 并删除降到 0 的桶；connection、epoch 或 explicit state 改变时，UPDATE trigger 会把计数从旧桶搬到新桶。应用不直接写这张表。
@@ -952,7 +924,7 @@ UNIQUE(scope_id, route_pk)
 ```text
 explicit_state = 'stale'
 或 scope_state IN ('stale', 'down')
-或 connection_id IS NOT last_connection_id
+或 connection_pk IS NOT last_connection_pk
 或 rib_epoch < current_epoch
     => stale
 
@@ -970,58 +942,27 @@ explicit_state = 'stale'
 全部 AFI/SAFI/RIB scope 的 current route；它不会触碰 Loc-RIB。Loc-RIB 自己的 Peer Down 以及
 普通 peer 不携带有效 Notification 的 Peer Down 继续保留 stale projection。
 
-## 10. Route events 和批次
+## 10. 批次幂等（v11 起没有路由事件表）
 
-### 10.1 `bmp_route_events`
+v11 删除了 `bmp_route_events`。数据库不再保存 announce / replace / withdraw / purge 的历史流水，页面上的“路由轨迹”和路由详情中的“事件轨迹”页签也随之移除。只保留：
 
-Event 表继续保持全局时间线，但不再重复保存 route JSON、AFI、SAFI、prefix 和 legacy key，而是引用全局 route 对象。
+- current RIB 投影（36 张分区 + 全局对象）；
+- Statistics Report 样本和最新投影；
+- `bmp_ingest_batches` 批次幂等记录。
 
-| 字段 | 类型和约束 | 说明 |
-| --- | --- | --- |
-| `event_id` | INTEGER PK AUTOINCREMENT | 全库递增事件 ID |
-| `batch_id` | TEXT NOT NULL，无 FK | 所属 ingest batch，逻辑关联 `bmp_ingest_batches.batch_id` |
-| `source_id` | TEXT NOT NULL，FK | 来源设备 |
-| `connection_id` | TEXT NOT NULL，FK | 来源连接 |
-| `source_sequence` | INTEGER NOT NULL | 连接内 mutation 序号 |
-| `scope_id` | TEXT NULL，复合 FK | 可选 scope ID；与 `partition_id` 同空或同非空 |
-| `partition_id` | INTEGER NULL，复合 FK | Event 所属固定分区；与 `scope_id` 共同引用 `bmp_rib_scopes` |
-| `route_pk` | INTEGER NULL，FK | 可选 route identity |
-| `payload_id` | INTEGER NULL，FK | 可选 route payload |
-| `event_type` | TEXT NOT NULL | 事件最终分类；DDL 无枚举 CHECK |
-| `observed_at_ms` | INTEGER NOT NULL | Collector 观察时间 |
-| `source_timestamp_ms` | INTEGER NULL | BMP 原始时间戳 |
-| `rib_epoch` | INTEGER NULL | 对应 RIB epoch |
-| `attr_id` | TEXT NULL，FK | 可选 Path Attributes |
-| `reason` | TEXT NULL | stale、close、purge 等原因 |
+去掉事件表带来的写入变化：每条路由少写 1 行 + 7 个索引，不再需要 `updateEventType` 和事件序列预查询；序列去重改由 `bmp_connections.last_sequence` 一次比较完成。
 
-`scope_id` 和 `partition_id` 受 CHECK 约束，必须同时为 `NULL` 或同时非空；非空时通过 `(scope_id, partition_id)` 复合外键保证事件分区与 scope 分区一致。另一个 CHECK 只保证 `route_pk` 和 `payload_id` 同时为空或同时非空。
-
-“Route event 带 route/payload，连接或 scope event 不带”是应用层按 `event_type` 保证的语义；DDL 没有把具体 `event_type` 与这对字段绑定，也没有给 `event_type` 声明枚举 CHECK。`UNIQUE(connection_id, source_sequence)` 保证同一连接内 mutation 重放幂等。
-
-Event 创建后，`scope_id`、`partition_id`、`route_pk`、`payload_id` 和 `attr_id` 不可更新，确保分区归属、event ref count 与不可变的历史记录保持一致；需要不同引用时应写入新事件。
-
-`idx_bmp_route_events_partition_time(partition_id, observed_at_ms DESC, event_id DESC)` 支持按分区和时间倒序读取历史。事件查询带 `scopeKind`、AFI 或 SAFI 条件时，会先通过固定 manifest 解析候选 `partition_id`，添加 `e.partition_id IN (...)` 进行剪枝，再用 scope/identity 的 AFI/SAFI 条件做最终精确过滤。AFI/SAFI 均给出时，已知 family 在指定 owner 下缩小到一个分区，未指定 owner 时缩小到 peer 和 loc-rib 两个分区；未知组合则命中相应 `other` 分区。
-
-常见 `event_type`：
-
-- 连接/source：`connection_open`、`source_update`、`connection_close`
-- Scope：`scope_open`、`scope_stale`、`scope_eor`、`scope_timeout`
-- Route：`announce`、`replace`、`refresh`、`upsert-noop`、`withdraw`、`withdraw-noop`、`purge`
-- Statistics：`statistics`
-
-### 10.2 `bmp_ingest_batches`
-
-`bmp_ingest_batches` 保存 Writer 批次幂等记录：
+### 10.1 `bmp_ingest_batches`
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
 | `batch_id` | TEXT PK | Persistence Client 生成的批次 ID |
-| `created_at_ms` | INTEGER NOT NULL | 批次首次提交时间；用于按 event retention 清理 |
+| `created_at_ms` | INTEGER NOT NULL | 批次首次提交时间；用于按保留期清理 |
 | `mutation_count` | INTEGER NOT NULL | 该批次携带的 mutation 数量 |
 
-同一个 `batch_id` 重试时整批不会重复执行。`bmp_route_events.batch_id` 与它是逻辑关联而非 FK，因此清理 batch 前会显式检查是否仍有 event 引用；索引 `created_at_ms` 支持按时间选取旧批次。
+同一个 `batch_id` 重试时整批不会重复执行。批次记录与其他表之间没有关联，按 `created_at_ms` 独立清理。
 
-一批中的 source、connection、scope、全局路由对象、event、current projection、counter 和 statistics 修改在一个 SQLite transaction 中提交。
+一批中的 source、connection、scope、全局路由对象、current projection、counter、连接序号和 statistics 修改在一个 SQLite transaction 中提交。
 
 ## 11. Statistics tables
 
@@ -1079,11 +1020,12 @@ SQLite Writer transaction
    │    ├─ identity + nlri_json
    │    ├─ 扩展展示 payload（普通路由可为 {}）
    │    └─ path attributes
-   ├─ insert event；带 scope 的事件同时写入 partition_id，trigger 更新 event_ref_count
+   ├─ 用 connection.last_sequence 判定重放
    ├─ upsert/delete 一张 current-route 分区
    │    ├─ trigger 校验 family
    │    ├─ trigger 更新 scope counters
-   │    └─ trigger 更新 current_ref_count
+   │    └─ 被替换/删除的对象键记入 GC 候选
+   ├─ 批末写回各连接的 last_sequence
    └─ statistics sample/latest（如有）
 ```
 
@@ -1091,21 +1033,21 @@ SQLite Writer transaction
 
 | 参数 | 默认值 |
 | --- | ---: |
-| Batch size | 2000 mutations |
-| Batch bytes | 2 MiB |
+| Batch size | 5000 mutations |
+| Batch bytes | 16 MiB |
 | Flush interval | 20 ms |
 | High watermark | 64 MiB |
 | Low watermark | 32 MiB |
 | Stale/down scope aging retention | 24 小时 |
 | Refresh timeout | 30 分钟 |
-| Event/历史对象 retention | 7 天 |
+| Statistics 样本 / 批次记录 retention | 7 天 |
 | 存储压力触发阈值 | 20 GiB |
 
-20 GiB 不是 SQLite 文件硬上限，也不会保证文件大小被截断在 20 GiB。逻辑占用达到阈值时，Worker 会临时把 stale 和 event/history 的清理 cutoff 提前到当前时间，尽快清理 stale 路径、历史事件和零引用对象。健康 scope 中的 active 路由以及仍被 latest 引用的 statistics sample 不会仅因超过该阈值被删除，物理文件也不会自动缩小。
+20 GiB 不是 SQLite 文件硬上限，也不会保证文件大小被截断在 20 GiB。逻辑占用达到阈值时，Worker 会临时把 stale 和 statistics/批次的清理 cutoff 提前到当前时间，尽快清理 stale 路径、历史样本和零引用对象。健康 scope 中的 active 路由以及仍被 latest 引用的 statistics sample 不会仅因超过该阈值被删除，物理文件也不会自动缩小。
 
 默认未开启 Route Assurance 时，Writer 不构造也不跨 Worker 回传完整 committed route delta；开启分析时在一次 writer fence 后启用 delta，用于衔接初始快照之后的增量变化。
 
-页面列表、分页和详情查询从独立只读连接读取最新已提交的 WAL 快照，不等待持续增长的 Writer 队列。因此高速摄入时页面可能短暂滞后于尚未提交的 batch，但不会读到半个事务。停止、删除、清理和 Route Assurance 初始快照边界仍执行 writer fence。只读连接失败时可回退 Writer；Writer 失败则停止 BMP 摄入。
+页面列表、分页和详情查询从独立只读连接读取最新已提交的 WAL 快照，不等待持续增长的 Writer 队列。会话/实例列表和持久化路由查询会先等待一次 writer fence，但等待有上限（`persistenceReadFenceTimeoutMs`，默认 250 ms）：全表上报期间队列可能积压数万条 mutation，超时后直接读取已提交状态，页面在下一次路由更新事件时再刷新。因此高速摄入时页面可能短暂滞后于尚未提交的 batch，但不会读到半个事务。停止、删除、清理和 Route Assurance 初始快照边界仍执行无上限的 writer fence。只读连接失败时可回退 Writer；Writer 失败则停止 BMP 摄入。
 
 ## 13. Route 生命周期
 
@@ -1113,21 +1055,20 @@ SQLite Writer transaction
 
 1. 解析并校验 scope 的物理 partition。
 2. 将 route 拆成 identity/NLRI、扩展展示 payload 和 attributes 后分别 upsert；普通路由 payload 可以复用全局 `{}` 行。
-3. 插入 route event。
-4. 只有 mutation connection 等于 scope 当前 connection，且 epoch 等于 scope 当前 epoch，才允许更新 current projection。
-5. 同一 `(scope_id, route_pk)` 已存在时更新 payload、attribute、时间和 `last_event_id`。
-6. 根据是否新增、属性变化或仅刷新，将 event 分类为 `announce`、`replace`、`refresh` 或 `upsert-noop`。
+3. 只有 mutation connection 等于 scope 当前 connection，且 epoch 等于 scope 当前 epoch，才允许更新 current projection。
+4. 同一 `(scope_pk, route_pk)` 已存在时更新 payload、attribute、时间和 `last_sequence`，旧 payload/attribute 记入 GC 候选。
+5. 根据是否新增、属性变化或仅刷新，把本次变更分类为 `announce`、`replace`、`refresh` 或 `upsert-noop`；该分类只出现在返回给 Worker 的 committed delta 中（供 Route Assurance 增量使用），不再落库。
 
 ### 13.2 Withdraw
 
-1. Upsert/定位 route identity 和 payload，并写 event。
+1. Upsert/定位 route identity 和 payload。
 2. 只有 connection 和 epoch 仍有效时，才从目标分区删除 current row。
-3. Trigger 自动减少 scope count 和 current reference counts。
-4. 旧 connection 或错误 epoch 不删除 current row，event 分类为 `withdraw-noop`。
+3. Trigger 自动减少 scope count；被撤销路由的 identity/payload/attributes 记入 GC 候选，等待下一次 maintenance sweep 回收。
+4. 旧 connection 或错误 epoch 不删除 current row，delta 分类为 `withdraw-noop`。
 
 ### 13.3 EOR 和旧 epoch
 
-同一 BMP 连接内，重复上报某 AF 的 Peer Up（该 AF 的新一轮刷新）会推进该 AF scope 的 `current_epoch` 并进入 `syncing`；分批 Peer Up 中首次出现的新 AF 只打开自身 scope，不影响已经存在的其他 AF。Peer Down 已推进全部已跟踪 scope 的 epoch，因此其后的首个 Peer Up 复用该 epoch，不重复推进。若普通 peer 的 Peer Down reason 1/3 携带结构完整的 BGP Notification，旧 epoch 路由会立即以 `peer-down-notification:<reason>` 原因写入 `purge` 历史并从 current projection 删除；其他 Peer Down 仍保留 stale 路由等待刷新、撤销或 sweep。EOR 将精确的 AF/RIB scope 设为 `ready`，记录 `eor_epoch` 并设置 `cleanup_pending_epoch`。
+同一 BMP 连接内，重复上报某 AF 的 Peer Up（该 AF 的新一轮刷新）会推进该 AF scope 的 `current_epoch` 并进入 `syncing`；分批 Peer Up 中首次出现的新 AF 只打开自身 scope，不影响已经存在的其他 AF。Peer Down 已推进全部已跟踪 scope 的 epoch，因此其后的首个 Peer Up 复用该 epoch，不重复推进。若普通 peer 的 Peer Down reason 1/3 携带结构完整的 BGP Notification，旧 epoch 路由会立即从 current projection 删除（delta 原因为 `peer-down-notification:<reason>`）；其他 Peer Down 仍保留 stale 路由等待刷新、撤销或 sweep。EOR 将精确的 AF/RIB scope 设为 `ready`，记录 `eor_epoch` 并设置 `cleanup_pending_epoch`。
 
 旧 connection/epoch 路径在删除前通过有效状态公式显示为 stale。Sweep 从 scope 对应的单一分区中分批删除旧路径，避免全库大事务。
 
@@ -1140,18 +1081,17 @@ Worker 默认周期性执行小批量 sweep：
 1. 找到需要清理的 scope。
 2. 根据 scope 的 `partition_id` 只访问对应 current-route 表。
 3. 分批删除旧 epoch、旧 connection 或超过 stale 保留期的路径。
-4. 分批删除超过事件保留期的 event；event delete trigger 自动减少 event 引用。
-5. 清理未被 latest 引用的旧 statistics sample 和旧 ingest batch。
-6. 删除 `current_ref_count = 0 AND event_ref_count = 0` 且超过保留期的 identity、payload 和 attributes。
+4. 清理未被 latest 引用的旧 statistics sample 和旧 ingest batch。
+5. 对累计的候选做反连接删除：仍被任何 current row 引用的候选保留，其余删除（见 7.4）。
 
 这里有两个不同的时间口径：
 
 - Stale retention 只控制已经 stale/down 的 scope 路径老化；EOR 已确认的旧 epoch 可以立即进入清理，不必再等 24 小时。
-- Event retention 的 `eventsBeforeMs` 同时作为旧 event、未被 latest 引用的 statistics sample、无 event 引用的 ingest batch，以及零引用 identity/payload/attributes 的历史清理 cutoff。
+- `eventsBeforeMs`（沿用旧参数名）是未被 latest 引用的 statistics sample 和旧 ingest batch 的清理 cutoff；identity/payload/attributes 没有独立的时间口径，只要失去最后一个引用就会在下一次 maintenance sweep 中被回收。
 
 除默认周期 sweep 外，Worker 会为最早的 scope refresh 维护单一 deadline timer；到期清理完成后，按受影响的 `source_id/scope_id` 发送路由刷新事件，使已打开的页面重新查询 SQLite，而不是继续显示清理前的列表缓存。
 
-删除 current row 和 event 后不要绕过 trigger，否则引用计数和 scope counters 会失真。
+不要绕过 Writer 直接删除 current row：绕过 trigger 会让 scope counters 失真，绕过 Writer 的 `RETURNING` 收集会让被释放的对象错过回收（它们不会造成错误，但会一直占用空间）。
 
 ## 15. 正常停止与崩溃恢复
 
@@ -1170,27 +1110,22 @@ Worker 默认周期性执行小批量 sweep：
 
 数据库重新打开时，遗留 `open` connection 会改为 `closed`，关闭原因为 `collector-restart`；其当前 scope 会进入 `down`。Current rows 不需要批量更新，通过 scope state 自动显示 stale。
 
-## 16. Schema v9 初始化和版本规则
+## 16. Schema v13 初始化和版本规则
 
-v9 明确不支持旧库迁移。
+v13 不做任何数据迁移。Writer 打开数据库时按 `PRAGMA user_version` 判断：
 
-Writer 只接受以下两种数据库：
+| 情况 | Writer 行为 | Read-only 打开 |
+| --- | --- | --- |
+| `user_version = 13` 且对象完整 | 直接使用 | 直接使用 |
+| `user_version = 13` 但缺表/缺列 | 记录警告，删除全部对象后重建空库 | 报缺失对象错误 |
+| v1 到 v12 | 记录警告，删除全部对象后重建空库，随后 `VACUUM` 回收空间 | `BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE` |
+| `user_version = 0` 但已有业务表、索引、view 或 trigger | 同上 | `BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE` |
+| 高于 v13 | 同上 | `BMP_PERSISTENCE_SCHEMA_TOO_NEW` |
+| 空库 | 初始化 | 报缺失对象错误 |
 
-1. 已经是完整 schema v9 的数据库。
-2. `PRAGMA user_version = 0` 且没有任何非 SQLite 内部对象的空数据库。
+也就是说，BMP 启动后旧版本数据库会被原地清空并重建；SQLite 中的 current route 和 statistics 是 BMP 设备重连后会重新上报的投影，不需要人工干预。重建时先临时关闭 `foreign_keys`，避免 SQLite 在 DROP TABLE 时对旧 schema 做隐式 DELETE 校验，然后在一个事务里按 trigger → view → index → table 的顺序删除全部非内部对象，再执行正常初始化。
 
-其他情况直接失败：
-
-| 情况 | 结果 |
-| --- | --- |
-| v1 到 v8 | `BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE` |
-| `user_version = 0` 但已有业务表、索引、view 或 trigger | `BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE` |
-| 高于 v9 | `BMP_PERSISTENCE_SCHEMA_TOO_NEW` |
-| Read-only 打开非 v9 | 拒绝读取 |
-
-不能通过手工把旧库 `user_version` 改成 0 来升级，因为初始化还会检查数据库是否为空。
-
-升级到使用 v9 的版本前，如需保留旧库用于审计，应先停止 BMP 并备份整个 SQLite/WAL 文件组；应用使用 v9 时需要创建新的空数据库。旧 current route、event 和 statistics 不会自动导入。
+如需保留旧库用于审计，应在升级前停止 BMP 并备份整个 SQLite/WAL 文件组。旧 current route 和 statistics 不会自动导入。
 
 ## 17. 运维查询示例
 
@@ -1222,36 +1157,42 @@ SELECT partition_id, COUNT(*) AS routes
 ### 17.3 Scope counters
 
 ```sql
-SELECT scope_id, connection_id, rib_epoch, explicit_state, route_count
-  FROM bmp_scope_route_counts
- ORDER BY scope_id, connection_id, rib_epoch, explicit_state;
+SELECT s.scope_id, c.connection_id, count.rib_epoch, count.explicit_state, count.route_count
+  FROM bmp_scope_route_counts count
+  JOIN bmp_rib_scopes s ON s.scope_pk = count.scope_pk
+  JOIN bmp_connections c ON c.connection_pk = count.connection_pk
+ ORDER BY s.scope_id, c.connection_id, count.rib_epoch, count.explicit_state;
 ```
 
-### 17.4 引用计数诊断
+### 17.4 未被引用对象诊断
+
+正常情况下这三个数字应接近 0；非零表示有对象绕过 Writer 被释放，等待下一次相关删除把它们带成候选，或可人工清理。
 
 ```sql
 SELECT 'identity' AS kind, COUNT(*) AS unreferenced
-  FROM bmp_route_identities
- WHERE current_ref_count = 0 AND event_ref_count = 0
+  FROM bmp_route_identities i
+ WHERE NOT EXISTS (SELECT 1 FROM bmp_current_route_refs c WHERE c.route_pk = i.route_pk)
 UNION ALL
 SELECT 'payload', COUNT(*)
-  FROM bmp_route_payloads
- WHERE current_ref_count = 0 AND event_ref_count = 0
+  FROM bmp_route_payloads p
+ WHERE NOT EXISTS (SELECT 1 FROM bmp_current_route_refs c WHERE c.payload_id = p.payload_id)
 UNION ALL
 SELECT 'attribute', COUNT(*)
-  FROM bmp_route_attributes
- WHERE current_ref_count = 0 AND event_ref_count = 0;
+  FROM bmp_route_attributes a
+ WHERE NOT EXISTS (SELECT 1 FROM bmp_current_route_refs c WHERE c.attr_pk = a.attr_pk);
 ```
 
 ### 17.5 某 scope 的展开路由
 
 ```sql
-SELECT r.scope_id, r.route_id, r.afi, r.safi, r.prefix, r.prefix_length,
-       r.connection_id, r.rib_epoch, r.explicit_state, r.last_seen_ms,
+SELECT s.scope_id, r.route_id, r.afi, r.safi, r.prefix, r.prefix_length,
+       c.connection_id, r.rib_epoch, r.explicit_state, r.last_seen_ms,
        r.nlri_json, a.attr_json, r.route_json AS extension_payload_json
   FROM bmp_current_routes_all r
-  LEFT JOIN bmp_route_attributes a ON a.attr_id = r.attr_id
- WHERE r.scope_id = ?
+  JOIN bmp_rib_scopes s ON s.scope_pk = r.scope_pk
+  JOIN bmp_connections c ON c.connection_pk = r.connection_pk
+  LEFT JOIN bmp_route_attributes a ON a.attr_pk = r.attr_pk
+ WHERE s.scope_id = ?
  ORDER BY r.first_seen_ms, r.path_pk
  LIMIT 100;
 ```
@@ -1267,10 +1208,10 @@ SQL 跟踪包括执行方式、耗时、受影响行数或返回行数，以及�
 ## 19. 运维注意事项
 
 - 不要手工向分区表写入错误的 `partition_id`，也不要绕过 family validation trigger。
-- 不要手工修改 scope counters 或任何 ref-count 字段。
+- 不要手工修改 scope counters；不要绕过 Writer 删除 current row。
 - 不要根据外部输入拼接物理表名，表名必须来自固定 manifest。
 - 不要只备份 `bmp.sqlite3` 而忽略正在使用的 WAL/SHM。
 - 最稳妥的离线备份方式是先停止 BMP，让队列 drain 并 checkpoint，再复制数据库文件。
 - 大量删除后文件不会自动缩小；`freelist_count` 表示可复用页，是否执行 `VACUUM` 应由运维窗口和可用磁盘空间决定。
 - `bmp_current_routes_all` 是只读统一视图，不应作为写入目标。
-- v9 没有旧库兼容层；发现 schema 不匹配时应备份旧库并创建空库，不要直接修改 `user_version` 或表结构。
+- v13 没有旧库兼容层；Writer 发现 schema 不匹配会直接清空并重建数据库，需要保留旧数据时必须在启动 BMP 之前备份。

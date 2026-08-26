@@ -9,7 +9,7 @@ const BMP_PERSISTENCE_OP = Object.freeze({
     QUERY_STATISTICS_REPORTS: 'query-statistics-reports',
     PURGE_SOURCE: 'purge-source',
     PURGE_STALE_ROUTES: 'purge-stale-routes',
-    QUERY_EVENTS: 'query-events',
+    STREAM_ROUTE_ASSURANCE_ROWS: 'stream-route-assurance-rows',
     GET_STATUS: 'get-status',
     SWEEP: 'sweep',
     CHECKPOINT: 'checkpoint',

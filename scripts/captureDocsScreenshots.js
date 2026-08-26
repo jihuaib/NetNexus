@@ -37,10 +37,6 @@ const UDP_TOOL_DOCS_PAYLOAD = 'NetNexus UDP demo payload';
 const BMP_DRAFT_20 = 20;
 const BMP_PATH_MARKING_TLV_DRAFT_20 = 8;
 const BMP_ROUTE_LENS_QUERY = '203.0.120.1';
-const BMP_ROUTE_HISTORY_IPV4_QUERY = '198.18.250.0/24';
-const BMP_ROUTE_HISTORY_EVPN_QUERY = 'evpn:mac-ip:';
-const BMP_ROUTE_HISTORY_BGP_LS_QUERY = 'bgp-ls:';
-const BMP_ROUTE_HISTORY_FLOW_SPEC_QUERY = 'dst=198.18.253.0/24';
 const BMP_CLIENT_KEY_PLACEHOLDER = '__BMP_CLIENT_KEY__';
 const DEFAULT_WINDOW_WIDTH = 1920;
 const DEFAULT_WINDOW_HEIGHT = 1200;
@@ -133,12 +129,6 @@ const screenshots = [
         prepare: 'open-bmp-session-route-detail',
         cleanup: 'close-overlay'
     },
-    {
-        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=session`,
-        outputPath: 'docs/images/bmp/bmp-session-route-event-timeline.png',
-        prepare: 'open-bmp-session-route-event-timeline',
-        cleanup: 'close-overlay'
-    },
     [
         `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=loc-rib`,
         'docs/images/bmp/bmp-monitor-bgp-route.png'
@@ -153,12 +143,6 @@ const screenshots = [
         route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=loc-rib`,
         outputPath: 'docs/images/bmp/bmp-loc-rib-route-detail.png',
         prepare: 'open-bmp-loc-rib-route-detail',
-        cleanup: 'close-overlay'
-    },
-    {
-        route: `/monitor/bmp-client?clientKey=${BMP_CLIENT_KEY_PLACEHOLDER}&view=loc-rib`,
-        outputPath: 'docs/images/bmp/bmp-loc-rib-route-event-timeline.png',
-        prepare: 'open-bmp-loc-rib-route-event-timeline',
         cleanup: 'close-overlay'
     },
     [
@@ -199,43 +183,8 @@ const screenshots = [
     },
     {
         route: '/bmp/route-lens',
-        outputPath: 'docs/images/bmp/bmp-route-lens-route-event-timeline.png',
-        prepare: 'open-bmp-route-lens-route-event-timeline',
-        cleanup: 'close-overlay'
-    },
-    {
-        route: '/bmp/route-lens',
         outputPath: 'docs/images/bmp/bmp-route-lens-policy-diff-detail.png',
         prepare: 'open-bmp-route-lens-policy-diff-detail',
-        cleanup: 'close-overlay'
-    },
-    {
-        route: '/bmp/route-history',
-        outputPath: 'docs/images/bmp/bmp-route-history.png',
-        prepare: 'prepare-bmp-route-history-ipv4'
-    },
-    {
-        route: '/bmp/route-history',
-        outputPath: 'docs/images/bmp/bmp-route-history-event-timeline.png',
-        prepare: 'open-bmp-route-history-ipv4-event-timeline',
-        cleanup: 'close-overlay'
-    },
-    {
-        route: '/bmp/route-history',
-        outputPath: 'docs/images/bmp/bmp-route-history-evpn-event-timeline.png',
-        prepare: 'open-bmp-route-history-evpn-event-timeline',
-        cleanup: 'close-overlay'
-    },
-    {
-        route: '/bmp/route-history',
-        outputPath: 'docs/images/bmp/bmp-route-history-bgp-ls-event-timeline.png',
-        prepare: 'open-bmp-route-history-bgp-ls-event-timeline',
-        cleanup: 'close-overlay'
-    },
-    {
-        route: '/bmp/route-history',
-        outputPath: 'docs/images/bmp/bmp-route-history-flowspec-event-timeline.png',
-        prepare: 'open-bmp-route-history-flowspec-event-timeline',
         cleanup: 'close-overlay'
     },
     ['/rpki/rpki-config', 'docs/images/rpki/rpki-config-and-client.png'],
@@ -899,53 +848,6 @@ async function clickDrawerTab(win, tabText, label) {
     await wait(200);
 }
 
-async function waitForRouteEventTimeline(win, label, expectedEventTypes = []) {
-    await waitForRendererCondition(
-        win,
-        `
-        (() => {
-            const isVisible = element => {
-                const rect = element?.getBoundingClientRect();
-                const style = element ? window.getComputedStyle(element) : null;
-                return Boolean(
-                    element &&
-                    rect &&
-                    rect.width > 0 &&
-                    rect.height > 0 &&
-                    style?.display !== 'none' &&
-                    style?.visibility !== 'hidden'
-                );
-            };
-            const timelines = Array.from(document.querySelectorAll('[data-testid="bmp-route-event-timeline"]'))
-                .filter(isVisible);
-            const timeline = timelines.at(-1);
-            const items = Array.from(timeline?.querySelectorAll('[data-testid="bmp-route-event-item"]') || []);
-            const eventTypes = items.map(item => item.dataset.eventType).filter(Boolean);
-            const expected = ${JSON.stringify(expectedEventTypes)};
-            const spinning = Boolean(timeline?.querySelector('.nn-spin-spinning, .nn-spin-overlay'));
-            return {
-                ready:
-                    Boolean(timeline) &&
-                    !spinning &&
-                    items.length > 0 &&
-                    expected.every(eventType => eventTypes.includes(eventType)),
-                items: items.length,
-                eventTypes,
-                text: timeline?.textContent?.slice(0, 160) || ''
-            };
-        })()
-    `,
-        label,
-        15000
-    );
-}
-
-async function openRouteDetailEventTimeline(win, selector, label) {
-    await openDetailButtonBySelector(win, selector, label);
-    await clickDrawerTab(win, '事件轨迹', label);
-    await waitForRouteEventTimeline(win, label, ['announce']);
-}
-
 async function prepareBmpRouteLens(win, label) {
     const inputReady = await win.webContents.executeJavaScript(
         setDomInputScript('[data-testid="route-lens-query"]', BMP_ROUTE_LENS_QUERY)
@@ -998,12 +900,6 @@ async function openBmpRouteLensRouteDetail(win, label) {
     `);
     if (!result?.clicked) throw new Error(`Route Lens route card unavailable for ${label}`);
     await waitForOpenOverlay(win, label, '203.0.120.0/24 · Pre Adj-RIB-In');
-}
-
-async function openBmpRouteLensRouteEventTimeline(win, label) {
-    await openBmpRouteLensRouteDetail(win, label);
-    await clickDrawerTab(win, '事件轨迹', label);
-    await waitForRouteEventTimeline(win, label, ['announce']);
 }
 
 async function openBmpRouteLensPolicyDiffDetail(win, label) {
@@ -1086,70 +982,6 @@ async function prepareBmpRouteAssurance(win, label) {
         label,
         20000
     );
-}
-
-async function prepareBmpRouteHistory(win, label, query, expectedIdentity) {
-    await selectOptionByText(win, '[data-testid="route-history-scope-kind"]', 'BGP Peer RIB', `${label} scope`);
-    await selectOptionByText(
-        win,
-        '[data-testid="route-history-rib-type"]',
-        'Post-policy Adj-RIB-In',
-        `${label} RIB stage`
-    );
-
-    const inputReady = await win.webContents.executeJavaScript(
-        setDomInputScript('[data-testid="route-history-prefix"]', query)
-    );
-    if (!inputReady) throw new Error(`Route History input unavailable for ${label}`);
-    const clicked = await win.webContents.executeJavaScript(`
-        (() => {
-            const button = document.querySelector('[data-testid="route-history-search"]');
-            if (!button || button.disabled) return false;
-            button.click();
-            return true;
-        })()
-    `);
-    if (!clicked) throw new Error(`Route History search unavailable for ${label}`);
-
-    await waitForRendererCondition(
-        win,
-        `
-        (() => {
-            const rows = Array.from(document.querySelectorAll('[data-testid="route-history-row"]'));
-            const matchingRows = rows.filter(row => row.textContent.includes(${JSON.stringify(expectedIdentity)}));
-            return {
-                ready:
-                    matchingRows.length === 1 &&
-                    matchingRows[0].textContent.includes('最近保留事件：撤销') &&
-                    !document.querySelector('.route-history-page .nn-table-loading-mask'),
-                rows: rows.length,
-                matchingRows: matchingRows.length,
-                text: matchingRows[0]?.textContent?.slice(0, 220) || ''
-            };
-        })()
-    `,
-        label,
-        15000
-    );
-}
-
-async function openBmpRouteHistoryEventTimeline(win, label, query, expectedIdentity) {
-    await prepareBmpRouteHistory(win, label, query, expectedIdentity);
-    const result = await win.webContents.executeJavaScript(`
-        (() => {
-            const row = Array.from(document.querySelectorAll('[data-testid="route-history-row"]'))
-                .find(item => item.textContent.includes(${JSON.stringify(expectedIdentity)}));
-            const button = row?.querySelector('[data-testid="route-history-open"]');
-            if (!button) return { clicked: false, rowText: row?.textContent?.slice(0, 160) || '' };
-            button.click();
-            return { clicked: true };
-        })()
-    `);
-    if (!result?.clicked) {
-        throw new Error(`Route History timeline unavailable for ${label}: ${JSON.stringify(result)}`);
-    }
-    await waitForOpenOverlay(win, label, '事件轨迹');
-    await waitForRouteEventTimeline(win, label, ['withdraw', 'replace', 'announce']);
 }
 
 async function closeOpenOverlay(win) {
@@ -2077,32 +1909,10 @@ screenshotPreparers.set('open-bmp-session-route-detail', (win, label) =>
 screenshotPreparers.set('open-bmp-loc-rib-route-detail', (win, label) =>
     openDetailButtonBySelector(win, '[data-testid="bmp-loc-rib-route-table"] .nn-table-tbody button', label)
 );
-screenshotPreparers.set('open-bmp-session-route-event-timeline', (win, label) =>
-    openRouteDetailEventTimeline(win, '[data-testid="bmp-session-route-table"] .nn-table-tbody button', label)
-);
-screenshotPreparers.set('open-bmp-loc-rib-route-event-timeline', (win, label) =>
-    openRouteDetailEventTimeline(win, '[data-testid="bmp-loc-rib-route-table"] .nn-table-tbody button', label)
-);
 screenshotPreparers.set('prepare-bmp-route-assurance', prepareBmpRouteAssurance);
 screenshotPreparers.set('prepare-bmp-route-lens', prepareBmpRouteLens);
 screenshotPreparers.set('open-bmp-route-lens-route-detail', openBmpRouteLensRouteDetail);
-screenshotPreparers.set('open-bmp-route-lens-route-event-timeline', openBmpRouteLensRouteEventTimeline);
 screenshotPreparers.set('open-bmp-route-lens-policy-diff-detail', openBmpRouteLensPolicyDiffDetail);
-screenshotPreparers.set('prepare-bmp-route-history-ipv4', (win, label) =>
-    prepareBmpRouteHistory(win, label, BMP_ROUTE_HISTORY_IPV4_QUERY, '198.18.250.0/24')
-);
-screenshotPreparers.set('open-bmp-route-history-ipv4-event-timeline', (win, label) =>
-    openBmpRouteHistoryEventTimeline(win, label, BMP_ROUTE_HISTORY_IPV4_QUERY, '198.18.250.0/24')
-);
-screenshotPreparers.set('open-bmp-route-history-evpn-event-timeline', (win, label) =>
-    openBmpRouteHistoryEventTimeline(win, label, BMP_ROUTE_HISTORY_EVPN_QUERY, 'evpn:mac-ip:')
-);
-screenshotPreparers.set('open-bmp-route-history-bgp-ls-event-timeline', (win, label) =>
-    openBmpRouteHistoryEventTimeline(win, label, BMP_ROUTE_HISTORY_BGP_LS_QUERY, 'bgp-ls:Link:')
-);
-screenshotPreparers.set('open-bmp-route-history-flowspec-event-timeline', (win, label) =>
-    openBmpRouteHistoryEventTimeline(win, label, BMP_ROUTE_HISTORY_FLOW_SPEC_QUERY, 'dst=198.18.253.0/24')
-);
 screenshotPreparers.set('open-tcp-ao-result', openTcpAoResult);
 screenshotPreparers.set('open-snmp-mib-context-menu', openSnmpMibContextMenu);
 screenshotPreparers.set('open-snmp-mib-walk', openSnmpMibWalkModal);
@@ -2567,43 +2377,6 @@ async function waitForBmpMockData(win) {
     }
 
     throw new Error(`BMP mock data was not ready: ${JSON.stringify(lastState)}`);
-}
-
-async function waitForBmpRouteHistoryData(win) {
-    await waitForRendererCondition(
-        win,
-        `
-        (async () => {
-            const response = await window.bmpApi.getPersistedRouteEvents({
-                groupByRoute: true,
-                prefixExact: '198.18.250.0',
-                prefixLength: 24,
-                afi: 1,
-                scopeKind: 'peer',
-                ribType: '2',
-                pageSize: 10,
-                includeTotal: true
-            });
-            const list = response?.status === 'success' && Array.isArray(response?.data?.list)
-                ? response.data.list
-                : [];
-            const history = list.find(item => item?.route?.ip === '198.18.250.0');
-            return {
-                ready:
-                    Boolean(history) &&
-                    Number(history.eventCount) >= 3 &&
-                    history.latestEvent?.eventType === 'withdraw',
-                status: response?.status,
-                total: response?.data?.total,
-                eventCount: history?.eventCount,
-                latestEventType: history?.latestEvent?.eventType,
-                message: response?.msg
-            };
-        })()
-    `,
-        'BMP route-history fixture',
-        20000
-    );
 }
 
 async function setupSettingsDemo(win) {
@@ -3820,15 +3593,6 @@ async function setupDocsDemoData(win, runtimeDir, longRunningProcesses, systemAp
     await mock.ready;
     const bmpState = await waitForBmpMockData(win);
     bmpDocsClientKey = bmpState.clientKey;
-    let routeHistoryFixturePromise = null;
-    pagePreparers.set('/bmp/route-history', async pageWin => {
-        if (!routeHistoryFixturePromise) {
-            const routeHistoryMock = startMockBmpClient('route-history');
-            longRunningProcesses.push(routeHistoryMock.child);
-            routeHistoryFixturePromise = routeHistoryMock.ready.then(() => waitForBmpRouteHistoryData(pageWin));
-        }
-        await routeHistoryFixturePromise;
-    });
     await setupRpkiDemo(win);
     await setupYangDemo(win, systemApp);
     await setupFtpDemo(win, runtimeDir);

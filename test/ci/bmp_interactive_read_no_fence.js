@@ -6,10 +6,12 @@ const BmpWorker = loadBmpWorkerClass(__dirname, module);
 
 function deferred() {
     let resolve;
-    const promise = new Promise(resolvePromise => {
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
         resolve = resolvePromise;
+        reject = rejectPromise;
     });
-    return { promise, resolve };
+    return { promise, resolve, reject };
 }
 
 async function expectSettledBeforeImmediate(promise, message) {
@@ -247,6 +249,49 @@ async function main() {
     const defaultResult = await defaultRead;
     assert.equal(defaultResult.probe, 'default-fence-complete');
     assert.equal(calls.reader.length, readerCallsBeforeDefaultRead + 1);
+
+    // During a large table dump the writer queue may take tens of seconds to
+    // drain. Fenced reads must give up waiting after the configured bound and
+    // serve the committed state instead of leaving the page empty.
+    fenceGate = deferred();
+    worker.bmpConfigData = { persistenceReadFenceTimeoutMs: 20 };
+    const readerCallsBeforeBoundedRead = calls.reader.length;
+    const boundedStartedAt = Date.now();
+    const boundedResult = await worker.readPersistence('queryRoutes', { defaultFenceProbe: true });
+    assert.equal(boundedResult.probe, 'default-fence-complete');
+    assert.equal(calls.reader.length, readerCallsBeforeBoundedRead + 1);
+    assert.ok(Date.now() - boundedStartedAt < 1000, 'a bounded fence must not wait for the writer queue to drain');
+    assert.ok(Date.now() - boundedStartedAt >= 15, 'the bounded fence must still wait up to the timeout');
+
+    let boundedListSettled = false;
+    const boundedList = worker.getBgpSessions('bounded-session-list', client).then(() => {
+        boundedListSettled = true;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(boundedListSettled, false, 'the explicit session list still waits for the fence first');
+    await boundedList;
+    assert.equal(responses.get('bounded-session-list')?.status, 'success');
+
+    // A fence that fails after the read already timed out must not surface as
+    // an unhandled rejection.
+    const unhandled = [];
+    const onUnhandled = reason => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    const failingGate = deferred();
+    worker.persistence = {
+        ...writer,
+        fence() {
+            return failingGate.promise;
+        }
+    };
+    await worker.readPersistence('queryRoutes', {});
+    failingGate.promise.catch(() => {});
+    failingGate.reject(new Error('writer failed after the read timed out'));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    process.off('unhandledRejection', onUnhandled);
+    assert.deepEqual(unhandled, []);
+    worker.persistence = writer;
+    fenceGate.resolve();
 
     console.log('BMP interactive persistence reads bypass writer fence tests passed');
 }

@@ -46,6 +46,16 @@ const MONITOR_DEFINITIONS = Object.freeze({
         minHeight: 620,
         eventTypes: Object.freeze(['syslog:event'])
     }),
+    'grpc-message-log': Object.freeze({
+        protocol: 'grpc',
+        route: '/monitor/grpc-message-log',
+        title: 'gRPC 消息监控 - NetNexus',
+        width: 1280,
+        height: 820,
+        minWidth: 900,
+        minHeight: 620,
+        eventTypes: Object.freeze(['grpc:event', 'grpc:runtimeChanged'])
+    }),
     'snmp-trap': Object.freeze({
         protocol: 'snmp',
         route: '/monitor/snmp-trap',

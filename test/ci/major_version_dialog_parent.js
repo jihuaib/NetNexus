@@ -31,6 +31,7 @@ function loadSystemAppClass() {
         './radiusApp',
         './tftpApp',
         './syslogApp',
+        './grpcApp',
         './updater',
         './nativeApp',
         './externalApiServer',

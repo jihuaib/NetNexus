@@ -130,6 +130,15 @@
                     </div>
                 </div>
 
+                <nn-alert
+                    v-if="truncatedCategoryLabels.length > 0"
+                    class="retention-alert"
+                    type="info"
+                    show-icon
+                    message="问题明细已封顶"
+                    :description="`路由量较大，${truncatedCategoryLabels.join('、')} 只保留前 ${formatCount(summary.retainedIssueCount)} 条明细；异常计数和漏斗仍为全量统计。`"
+                />
+
                 <div class="funnel-viewport">
                     <div class="rib-funnel" data-testid="route-assurance-funnel">
                         <template v-for="(stage, index) in funnelStages" :key="stage.key">
@@ -534,6 +543,13 @@
 
     const issues = computed(() => assuranceResult.value.issues || []);
     const summary = computed(() => assuranceResult.value.summary || {});
+    const truncatedCategoryLabels = computed(() => {
+        const categories = Array.isArray(summary.value.truncatedCategories) ? summary.value.truncatedCategories : [];
+        const labelByValue = new Map(
+            (assuranceResult.value.facets?.categories || []).map(item => [item.value, item.label])
+        );
+        return categories.map(category => labelByValue.get(category) || category);
+    });
     const generatedAt = computed(() => {
         const value = assuranceResult.value.generatedAt;
         if (!value) return '';

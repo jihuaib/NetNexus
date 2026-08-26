@@ -110,6 +110,7 @@ function verifySystemAppInjection() {
         './radiusApp',
         './tftpApp',
         './syslogApp',
+        './grpcApp',
         './updater',
         './nativeApp',
         './externalApiServer',

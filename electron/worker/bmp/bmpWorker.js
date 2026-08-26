@@ -22,6 +22,10 @@ const {
     parseRouteLensQuery
 } = require('../../utils/bmpRouteLens');
 const BmpPersistenceClient = require('./bmpPersistenceClient');
+
+const DEFAULT_READ_FENCE_TIMEOUT_MS = 250;
+const ROUTE_ASSURANCE_REBUILD_QUIET_MS = 2000;
+const READ_FENCE_TIMED_OUT = Symbol('bmp-read-fence-timeout');
 const { BMP_AUTH_TYPES, redactAuthenticationConfig } = require('../../utils/tcpAuthConfig');
 
 class BmpWorker {
@@ -39,7 +43,9 @@ class BmpWorker {
         this.bmpSessionMap = new Map(); // bmp会话map
         this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
         this.routeAssuranceFilters = {};
-        this.routeAssuranceRebuildScheduled = false;
+        this.routeAssuranceRebuildTimer = null;
+        this.routeAssuranceRebuildQuietMs = ROUTE_ASSURANCE_REBUILD_QUIET_MS;
+        this.routeAssuranceReader = null;
         this.routeUpdateAggregator = new RouteUpdateAggregator();
         this.routeUpdateFlushTimer = null;
         this.routeUpdateFlushIntervalMs = 1000;
@@ -124,10 +130,6 @@ class BmpWorker {
         this.messageHandler.registerHandler(
             BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES,
             this.getPersistedRoutes.bind(this)
-        );
-        this.messageHandler.registerHandler(
-            BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTE_EVENTS,
-            this.getPersistedRouteEvents.bind(this)
         );
     }
 
@@ -240,23 +242,129 @@ class BmpWorker {
         return revision;
     }
 
+    // A full rebuild streams the whole current RIB, so it must not be started
+    // while peers are still dumping tables: every EOR/scope transition would
+    // cancel the previous attempt and the matrix would never become ready.
+    // Wait for a quiet period without invalidations and an idle writer queue.
     scheduleRouteAssuranceRebuild() {
-        if (this.routeAssuranceRebuildScheduled || !this.routeAssuranceService?.enabled) {
+        if (!this.routeAssuranceService?.enabled) {
             return;
         }
-        this.routeAssuranceRebuildScheduled = true;
-        setImmediate(() => {
-            this.routeAssuranceRebuildScheduled = false;
-            if (!this.routeAssuranceService?.enabled || this.routeAssuranceService.state !== 'dirty') {
-                return;
+        if (this.routeAssuranceRebuildTimer) {
+            clearTimeout(this.routeAssuranceRebuildTimer);
+        }
+        const quietMs = Number.isFinite(this.routeAssuranceRebuildQuietMs)
+            ? this.routeAssuranceRebuildQuietMs
+            : ROUTE_ASSURANCE_REBUILD_QUIET_MS;
+        this.routeAssuranceRebuildTimer = setTimeout(() => {
+            this.routeAssuranceRebuildTimer = null;
+            this.runRouteAssuranceRebuild();
+        }, quietMs);
+        this.routeAssuranceRebuildTimer.unref?.();
+    }
+
+    runRouteAssuranceRebuild() {
+        const service = this.routeAssuranceService;
+        if (!service?.enabled || service.state !== 'dirty') {
+            return;
+        }
+        const watermark = this.persistence?.getWatermark?.() || null;
+        if (watermark && (watermark.queueLength > 0 || watermark.inFlightBytes > 0)) {
+            this.scheduleRouteAssuranceRebuild();
+            return;
+        }
+        this.bootstrapRouteAssurance(this.routeAssuranceFilters).catch(error =>
+            logger.error(`Route Assurance rebuild failed: ${error.message}`)
+        );
+    }
+
+    async ensureRouteAssuranceReader() {
+        if (this.routeAssuranceReader) {
+            return this.routeAssuranceReader;
+        }
+        if (!this.bmpConfigData?.persistenceDbPath) {
+            // No database path (e.g. a stubbed persistence layer): stream from
+            // the shared reader/writer when they support it, otherwise let the
+            // caller fall back to paged bootstrap.
+            const fallback = [this.persistenceReader, this.persistence].find(
+                client => client && typeof client.streamRouteAssuranceRows === 'function'
+            );
+            return fallback || null;
+        }
+        // The ordered scan occupies its SQLite connection for tens of seconds
+        // on a large RIB; a dedicated read-only replica keeps page queries on
+        // the shared reader responsive meanwhile.
+        const reader = this.createPersistenceClient({
+            dbPath: this.bmpConfigData.persistenceDbPath,
+            readOnly: true,
+            logLevel: this.bmpConfigData.logLevel,
+            onError: error => {
+                logger.error(`Route Assurance reader failed: ${error.message}`);
+                if (this.routeAssuranceReader === reader) {
+                    this.routeAssuranceReader = null;
+                }
+                reader.close({ suppressErrors: true }).catch(() => {});
             }
-            this.routeAssuranceService
-                .bootstrapFromPersistedRoutes(
-                    this.createPersistedRoutePageLoader(this.routeAssuranceFilters),
-                    this.routeAssuranceFilters
-                )
-                .catch(error => logger.error(`Route Assurance rebuild failed: ${error.message}`));
         });
+        await reader.open();
+        this.routeAssuranceReader = reader;
+        return reader;
+    }
+
+    async closeRouteAssuranceReader() {
+        const reader = this.routeAssuranceReader;
+        this.routeAssuranceReader = null;
+        if (reader) {
+            await reader.close({ suppressErrors: true }).catch(() => {});
+        }
+    }
+
+    async bootstrapRouteAssurance(analysisFilters = {}) {
+        const reader = await this.ensureRouteAssuranceReader();
+        if (!reader) {
+            return this.routeAssuranceService.bootstrapFromPersistedRoutes(
+                this.createPersistedRoutePageLoader(analysisFilters),
+                analysisFilters
+            );
+        }
+        const streamQuery = {
+            sourceId: analysisFilters.client || undefined,
+            routeState: analysisFilters.routeState || BmpConst.BMP_ROUTE_STATE_FILTER.ACTIVE,
+            lean: true
+        };
+        return this.routeAssuranceService.bootstrapFromRouteStream(
+            onChunk => reader.streamRouteAssuranceRows(streamQuery, { onChunk }),
+            analysisFilters,
+            {
+                loadGroupRows: locator => this.loadRouteAssuranceGroupRows(locator)
+            }
+        );
+    }
+
+    // All current paths (any state, every scope) of one NLRI within one source.
+    async loadRouteAssuranceGroupRows(locator) {
+        const reader = this.routeAssuranceReader || this.persistenceReader || this.persistence;
+        if (!reader) {
+            return [];
+        }
+        const query = {
+            sourceId: locator.sourceId,
+            prefixExact: locator.prefix,
+            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL,
+            pageSize: 5000,
+            includeTotal: false
+        };
+        if (locator.afi !== null && locator.afi !== undefined) {
+            query.afi = locator.afi;
+        }
+        if (locator.safi !== null && locator.safi !== undefined) {
+            query.safi = locator.safi;
+        }
+        if (locator.prefixLength !== null && locator.prefixLength !== undefined) {
+            query.prefixLength = locator.prefixLength;
+        }
+        const result = await reader.queryRoutes(query);
+        return Array.isArray(result?.list) ? result.list : [];
     }
 
     applyRouteAssuranceMutation(mutation) {
@@ -336,12 +444,49 @@ class BmpWorker {
         return true;
     }
 
+    getPersistenceReadFenceTimeoutMs() {
+        const configured = Number(this.bmpConfigData?.persistenceReadFenceTimeoutMs);
+        return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_READ_FENCE_TIMEOUT_MS;
+    }
+
+    // Consistent reads wait for the mutations queued before the read to commit,
+    // but only for a bounded time. During a full-table dump from many peers the
+    // writer queue can hold tens of thousands of mutations, and an unbounded
+    // fence would keep every interactive list request waiting for seconds while
+    // the UI shows nothing. After the timeout the read proceeds against whatever
+    // has been committed so far; the page refreshes again on the next route
+    // update event.
+    async fencePersistenceRead(timeoutMs = this.getPersistenceReadFenceTimeoutMs()) {
+        const fence = this.persistence.fence();
+        if (!(timeoutMs > 0) || !Number.isFinite(timeoutMs)) {
+            return timeoutMs === 0 ? undefined : fence;
+        }
+        let timer = null;
+        const timeout = new Promise(resolve => {
+            timer = setTimeout(() => resolve(READ_FENCE_TIMED_OUT), timeoutMs);
+        });
+        try {
+            const outcome = await Promise.race([fence, timeout]);
+            if (outcome === READ_FENCE_TIMED_OUT) {
+                // Keep the pending fence from surfacing as an unhandled rejection
+                // if the writer fails after the read already gave up waiting.
+                fence.catch(() => {});
+                logger.debug(`BMP persistence read fence timed out after ${timeoutMs}ms; reading committed state`);
+            }
+        } finally {
+            if (timer) {
+                clearTimeout(timer);
+            }
+        }
+        return undefined;
+    }
+
     async readPersistence(method, query = {}, options = {}) {
         if (!this.persistence || typeof this.persistence[method] !== 'function') {
             throw new Error('BMP持久化未打开');
         }
         if (options.fence !== false) {
-            await this.persistence.fence();
+            await this.fencePersistenceRead(options.fenceTimeoutMs);
         }
 
         let result;
@@ -1131,6 +1276,7 @@ class BmpWorker {
                 await this.persistenceReader.close().catch(() => {});
                 this.persistenceReader = null;
             }
+            await this.closeRouteAssuranceReader();
             if (this.persistence) {
                 await this.persistence.close().catch(() => {});
                 this.persistence = null;
@@ -1183,6 +1329,11 @@ class BmpWorker {
             } finally {
                 this.clearPersistenceSweepTimer();
                 this.clearRouteUpdateAggregation();
+                if (this.routeAssuranceRebuildTimer) {
+                    clearTimeout(this.routeAssuranceRebuildTimer);
+                    this.routeAssuranceRebuildTimer = null;
+                }
+                await this.closeRouteAssuranceReader();
                 this.persistenceReader = null;
                 this.persistence = null;
                 if (persistenceReader) {
@@ -1253,19 +1404,6 @@ class BmpWorker {
         try {
             const result = await this.readPersistence('queryRoutes', data);
             this.messageHandler.sendSuccessResponse(messageId, result, '查询持久化路由成功');
-        } catch (error) {
-            this.messageHandler.sendErrorResponse(messageId, error.message);
-        }
-    }
-
-    async getPersistedRouteEvents(messageId, data = {}) {
-        if (!this.persistence) {
-            this.messageHandler.sendErrorResponse(messageId, 'BMP持久化未打开');
-            return;
-        }
-        try {
-            const result = await this.readPersistence('queryEvents', data);
-            this.messageHandler.sendSuccessResponse(messageId, result, '查询BMP路由事件成功');
         } catch (error) {
             this.messageHandler.sendErrorResponse(messageId, error.message);
         }
@@ -1502,10 +1640,7 @@ class BmpWorker {
                 if (!needsBootstrap) {
                     throw error;
                 }
-                await this.routeAssuranceService.bootstrapFromPersistedRoutes(
-                    this.createPersistedRoutePageLoader(analysisFilters),
-                    analysisFilters
-                );
+                await this.bootstrapRouteAssurance(analysisFilters);
                 result = this.routeAssuranceService.queryPersisted(persistedQuery);
             }
             this.messageHandler.sendSuccessResponse(messageId, result, '路由保障矩阵查询成功');
@@ -1529,12 +1664,14 @@ class BmpWorker {
                 // paged snapshot then reads committed WAL state without chasing a continuously
                 // growing writer queue on every page.
                 await this.persistence.fence();
-                status = await this.routeAssuranceService.bootstrapFromPersistedRoutes(
-                    this.createPersistedRoutePageLoader(this.routeAssuranceFilters),
-                    this.routeAssuranceFilters
-                );
+                status = await this.bootstrapRouteAssurance(this.routeAssuranceFilters);
             } else {
+                if (this.routeAssuranceRebuildTimer) {
+                    clearTimeout(this.routeAssuranceRebuildTimer);
+                    this.routeAssuranceRebuildTimer = null;
+                }
                 status = this.routeAssuranceService.setEnabled(false);
+                await this.closeRouteAssuranceReader();
             }
             this.messageHandler.sendSuccessResponse(
                 messageId,

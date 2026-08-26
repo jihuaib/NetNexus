@@ -2,7 +2,7 @@
     <div class="nn-container snmp-mib-page">
         <nn-card title="MIB 编译" class="mib-card">
             <template #extra>
-                <nn-space v-if="runtimeReady" wrap class="mib-status-group">
+                <nn-space wrap class="mib-status-group">
                     <nn-tag v-if="mibCompileLoading || showMibCompileProgress" color="processing">
                         {{ mibCompileProgressTag }}
                     </nn-tag>
@@ -15,33 +15,51 @@
                 </nn-space>
             </template>
 
-            <div v-if="!runtimeReady" class="mib-runtime-empty" data-testid="snmp-mib-runtime-stopped">
-                <nn-empty description="请先在 SNMP 配置页启动 SNMP 进程" />
-            </div>
-
-            <div v-else class="mib-compiler">
+            <div class="mib-compiler">
                 <div class="mib-toolbar">
-                    <nn-button type="primary" :loading="mibCompileLoading" @click="selectMibFiles">
+                    <nn-button
+                        type="primary"
+                        data-testid="snmp-mib-import-files-button"
+                        :disabled="!runtimeReady"
+                        :loading="mibCompileLoading"
+                        @click="selectMibFiles"
+                    >
                         <template #icon><FileSearchOutlined /></template>
                         导入文件
                     </nn-button>
-                    <nn-button :loading="mibCompileLoading" @click="selectMibDirectory">
+                    <nn-button :disabled="!runtimeReady" :loading="mibCompileLoading" @click="selectMibDirectory">
                         <template #icon><FolderOpenOutlined /></template>
                         导入目录
                     </nn-button>
-                    <nn-button :disabled="!hasMibSources" :loading="mibCompileLoading" @click="compileStoredMibs">
+                    <nn-button
+                        :disabled="!runtimeReady || !hasMibSources"
+                        :loading="mibCompileLoading"
+                        @click="compileStoredMibs"
+                    >
                         <template #icon><ReloadOutlined /></template>
                         重新编译
                     </nn-button>
-                    <nn-button :disabled="!hasMibSources" :loading="projectSaving" @click="showSaveProject">
+                    <nn-button
+                        :disabled="!runtimeReady || !hasMibSources"
+                        :loading="projectSaving"
+                        @click="showSaveProject"
+                    >
                         <template #icon><SaveOutlined /></template>
                         保存工程
                     </nn-button>
-                    <nn-button :loading="projectLoading || projectImporting" @click="showImportProject">
+                    <nn-button
+                        :disabled="!runtimeReady"
+                        :loading="projectLoading || projectImporting"
+                        @click="showImportProject"
+                    >
                         <template #icon><ImportOutlined /></template>
                         导入工程
                     </nn-button>
-                    <nn-button danger :disabled="!hasMibSources || mibCompileLoading" @click="clearMibs">
+                    <nn-button
+                        danger
+                        :disabled="!runtimeReady || !hasMibSources || mibCompileLoading"
+                        @click="clearMibs"
+                    >
                         <template #icon><DeleteOutlined /></template>
                         清空
                     </nn-button>
@@ -968,14 +986,6 @@
 
     .mib-status-group {
         justify-content: flex-end;
-    }
-
-    .mib-runtime-empty {
-        display: flex;
-        height: 100%;
-        min-height: 0;
-        align-items: center;
-        justify-content: center;
     }
 
     .mib-compiler {

@@ -356,56 +356,33 @@ try {
     store.applyBatch(batch('batch-4', [withdrawA]));
     assert.equal(store.queryRoutes({ routeState: 'all' }).total, 0);
 
-    const events = store.queryEvents({ pageSize: 100 });
-    assert.equal(
-        events.list.some(event => event.eventType === 'announce'),
-        true
-    );
-    assert.equal(
-        events.list.some(event => event.eventType === 'replace'),
-        true
-    );
-    assert.equal(events.list[0].eventType, 'withdraw');
-    assert.ok(store.queryEvents({ afi: 1, safi: 1, prefix: '203.0.113', fromMs: null }).total > 0);
-    assert.equal(
-        store.queryEvents({ afi: 1, safi: 1, pageSize: 100 }).list.some(event => event.eventType === 'scope_open'),
-        true,
-        'scope-only events must retain their address-family partition'
-    );
-    assert.equal(store.queryEvents({ afi: 2, safi: 1 }).total, 0);
-    const firstEventCursorPage = store.queryEvents({ pageSize: 2, includeTotal: false });
-    assert.equal(firstEventCursorPage.total, null);
-    assert.ok(firstEventCursorPage.nextCursor);
-    const secondEventCursorPage = store.queryEvents({
-        pageSize: 2,
-        includeTotal: false,
-        cursor: firstEventCursorPage.nextCursor
-    });
-    assert.equal(secondEventCursorPage.list.length > 0, true);
-    assert.equal(
-        firstEventCursorPage.list.some(first =>
-            secondEventCursorPage.list.some(second => second.eventId === first.eventId)
-        ),
-        false
-    );
-
-    const eventCountBeforeAtomicityCheck = store.getStatus({ includeCounts: true }).routeEvents;
+    const batchCountBeforeAtomicityCheck = store.db
+        .prepare('SELECT COUNT(*) AS count FROM bmp_ingest_batches')
+        .get().count;
     const validRetryMutation = buildConnectionMutation(bmpSession, 'source_update');
     assert.throws(
         () => store.applyBatch(batch('atomic-retry', [validRetryMutation, { eventType: 'invalid', sequence: 999999 }])),
         /requires source and connection identities/
     );
-    assert.equal(store.getStatus({ includeCounts: true }).routeEvents, eventCountBeforeAtomicityCheck);
+    assert.equal(
+        store.db.prepare('SELECT COUNT(*) AS count FROM bmp_ingest_batches').get().count,
+        batchCountBeforeAtomicityCheck,
+        'a failed batch must roll back completely'
+    );
     const retryResult = store.applyBatch(batch('atomic-retry', [validRetryMutation]));
     assert.deepEqual(retryResult, { duplicate: false, applied: 1 });
 
-    const invalidSqlMutation = buildConnectionMutation(bmpSession, 'source_update');
-    invalidSqlMutation.eventType = null;
+    const invalidSqlMutation = buildScopeMutation(bmpSession, owner, 1, 1, 2, 'scope_open', {
+        kind: 'peer',
+        state: 'syncing'
+    });
+    const validScopeIdentityJson = invalidSqlMutation.scope.identityJson;
+    invalidSqlMutation.scope.identityJson = null;
     assert.throws(
         () => store.applyBatch(batch('sql-constraint-retry', [invalidSqlMutation])),
         /NOT NULL constraint failed/
     );
-    invalidSqlMutation.eventType = 'source_update';
+    invalidSqlMutation.scope.identityJson = validScopeIdentityJson;
     assert.deepEqual(store.applyBatch(batch('sql-constraint-retry', [invalidSqlMutation])), {
         duplicate: false,
         applied: 1
@@ -563,13 +540,11 @@ try {
         5,
         'malformed historical JSON must be ignored without failing the whole query'
     );
-    const expectedEventCountBeforeReopen = store.getStatus({ includeCounts: true }).routeEvents;
 
     store.close();
     store = null;
     const reopened = new BmpPersistenceStore({ dbPath, readOnly: true }).open();
     assert.equal(reopened.queryRoutes({ routeState: 'all' }).total, 0);
-    assert.equal(reopened.queryEvents({ pageSize: 100 }).total, expectedEventCountBeforeReopen);
     assert.equal(
         reopened
             .queryStatisticsReports({ sourceId: connectionOpen.source.id, kind: 'session' })
@@ -1031,7 +1006,12 @@ try {
     assert.equal(takeoverStore.queryRoutes({ routeState: 'all' }).total, 1);
     assert.equal(
         takeoverStore.db
-            .prepare('SELECT last_connection_id FROM bmp_rib_scopes WHERE scope_id = ?')
+            .prepare(
+                `SELECT conn.connection_id AS last_connection_id
+                   FROM bmp_rib_scopes s
+                   JOIN bmp_connections conn ON conn.connection_pk = s.last_connection_pk
+                  WHERE s.scope_id = ?`
+            )
             .get(takeoverAnnounceB.scope.id).last_connection_id,
         takeoverAnnounceB.connection.id
     );
@@ -1052,7 +1032,12 @@ try {
     takeoverStore.applyBatch(batch('takeover-failback-a', [failbackAnnounceA]));
     assert.equal(
         takeoverStore.db
-            .prepare('SELECT last_connection_id FROM bmp_rib_scopes WHERE scope_id = ?')
+            .prepare(
+                `SELECT conn.connection_id AS last_connection_id
+                   FROM bmp_rib_scopes s
+                   JOIN bmp_connections conn ON conn.connection_pk = s.last_connection_pk
+                  WHERE s.scope_id = ?`
+            )
             .get(takeoverAnnounceA.scope.id).last_connection_id,
         takeoverAnnounceA.connection.id
     );
@@ -1082,9 +1067,6 @@ try {
         ])
     );
     assert.equal(purgeStore.queryRoutes({ routeState: 'all' }).total, 0);
-    const purgeEvent = purgeStore.queryEvents({ eventType: 'purge' }).list[0];
-    assert.equal(purgeEvent.eventType, 'purge');
-    assert.equal(purgeEvent.reason, 'manual-stale-purge');
     purgeStore.close();
 
     const directPurgeDbPath = path.join(tempDir, 'direct-purge.sqlite3');
@@ -1103,7 +1085,6 @@ try {
     assert.equal(genericUpsert.eventType, 'upsert');
     const genericUpsertResult = directPurgeStore.applyBatch(batch('direct-purge-announce', [genericUpsert]));
     assert.equal(genericUpsertResult.deltas[0].classification, 'announce');
-    assert.equal(directPurgeStore.queryEvents({ eventType: 'announce' }).total, 1);
     assert.deepEqual(directPurgeStore.queryScopeSummary({ ownerKey: genericUpsert.scope.ownerKey }), {
         active: 0,
         stale: 1,
@@ -1137,11 +1118,7 @@ try {
     assert.equal(directPurge.routes[0].ip, '198.21.0.0');
     assert.equal(directPurge.deltas[0].classification, 'purge');
     assert.equal(directPurge.deltas[0].reason, 'ci-direct-purge');
-    assert.ok(directPurge.deltas[0].eventId > 0);
     assert.equal(directPurgeStore.queryRoutes({ routeState: 'all' }).total, 0);
-    const directPurgeEvents = directPurgeStore.queryEvents({ eventType: 'purge' });
-    assert.equal(directPurgeEvents.total, 1);
-    assert.equal(directPurgeEvents.list[0].reason, 'ci-direct-purge');
     directPurgeStore.close();
 
     const epochCutoffDbPath = path.join(tempDir, 'notification-purge-epoch-cutoff.sqlite3');
@@ -1184,6 +1161,9 @@ try {
     assert.equal(routesAfterCutoffPurge.list[0].ribEpoch, notificationEpoch);
     epochCutoffStore.close();
 
+    // Schema changes are not migrated. A writable open of a database whose
+    // user_version differs from SCHEMA_VERSION drops every existing object and
+    // rebuilds the schema; read-only openers keep rejecting such databases.
     const legacyDbPath = path.join(tempDir, 'legacy-v8.sqlite3');
     const legacyDb = new Database(legacyDbPath);
     legacyDb.exec(`
@@ -1199,21 +1179,45 @@ try {
     `);
     legacyDb.close();
 
-    for (const readOnly of [true, false]) {
-        assert.throws(
-            () => new BmpPersistenceStore({ dbPath: legacyDbPath, readOnly }).open(),
-            error => error.code === 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE',
-            `schema v8 must be rejected in ${readOnly ? 'read-only' : 'writable'} mode`
-        );
-    }
-    const unchangedLegacyDb = new Database(legacyDbPath, { readonly: true });
-    assert.equal(unchangedLegacyDb.pragma('user_version', { simple: true }), 8);
-    assert.deepEqual(unchangedLegacyDb.prepare('SELECT * FROM bmp_current_routes').get(), {
-        scope_id: 'legacy-scope',
-        route_id: 'legacy-route',
-        route_json: '{"ip":"198.24.0.0"}'
-    });
-    unchangedLegacyDb.close();
+    assert.throws(
+        () => new BmpPersistenceStore({ dbPath: legacyDbPath, readOnly: true }).open(),
+        error => error.code === 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE',
+        'schema v8 must be rejected in read-only mode'
+    );
+    const rebuiltLegacyStore = new BmpPersistenceStore({ dbPath: legacyDbPath }).open();
+    assert.equal(rebuiltLegacyStore.getStatus().schemaVersion, BmpPersistenceStore.SCHEMA_VERSION);
+    assert.equal(
+        rebuiltLegacyStore.db
+            .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'bmp_current_routes'")
+            .get().count,
+        0,
+        'a writable open must drop the objects of an older schema'
+    );
+    assert.equal(rebuiltLegacyStore.queryRoutes({ routeState: 'all' }).total, 0);
+    const rebuiltContext = makeContext();
+    rebuiltLegacyStore.applyBatch(
+        batch('rebuilt-legacy', [
+            buildConnectionMutation(rebuiltContext.bmpSession, 'connection_open'),
+            buildRouteUpsertMutation(
+                rebuiltContext.bmpSession,
+                rebuiltContext.owner,
+                makeRoute(rebuiltContext.owner, '198.24.0.0', 0, '192.0.2.24'),
+                1,
+                1,
+                2,
+                { kind: 'peer', state: 'syncing', scopeState: 'syncing', isNewRoute: true }
+            )
+        ])
+    );
+    assert.equal(rebuiltLegacyStore.queryRoutes({ routeState: 'all' }).total, 1);
+    rebuiltLegacyStore.close();
+    const reopenedLegacyStore = new BmpPersistenceStore({ dbPath: legacyDbPath }).open();
+    assert.equal(
+        reopenedLegacyStore.queryRoutes({ routeState: 'all' }).total,
+        1,
+        'reopening a database that already matches the schema must keep its data'
+    );
+    reopenedLegacyStore.close();
 
     const nonEmptyV0DbPath = path.join(tempDir, 'non-empty-v0.sqlite3');
     const nonEmptyV0Db = new Database(nonEmptyV0DbPath);
@@ -1222,29 +1226,35 @@ try {
         INSERT INTO sentinel(value) VALUES ('preserve-me');
     `);
     nonEmptyV0Db.close();
-    assert.throws(
-        () => new BmpPersistenceStore({ dbPath: nonEmptyV0DbPath }).open(),
-        error => error.code === 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE'
+    const rebuiltV0Store = new BmpPersistenceStore({ dbPath: nonEmptyV0DbPath }).open();
+    assert.equal(rebuiltV0Store.getStatus().schemaVersion, BmpPersistenceStore.SCHEMA_VERSION);
+    assert.equal(
+        rebuiltV0Store.db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'sentinel'").get().count,
+        0,
+        'foreign objects in an unversioned database are dropped by the rebuild'
     );
-    const unchangedV0Db = new Database(nonEmptyV0DbPath, { readonly: true });
-    assert.equal(unchangedV0Db.pragma('user_version', { simple: true }), 0);
-    assert.equal(unchangedV0Db.prepare('SELECT value FROM sentinel').get().value, 'preserve-me');
-    unchangedV0Db.close();
+    rebuiltV0Store.close();
 
-    const futureDbPath = path.join(tempDir, 'future-v10.sqlite3');
+    const futureDbPath = path.join(tempDir, 'future-schema.sqlite3');
     const futureDb = new Database(futureDbPath);
     futureDb.exec(`
         CREATE TABLE sentinel (value TEXT NOT NULL);
         INSERT INTO sentinel(value) VALUES ('future-data');
-        PRAGMA user_version = 10;
+        PRAGMA user_version = ${BmpPersistenceStore.SCHEMA_VERSION + 1};
     `);
     futureDb.close();
-    for (const readOnly of [true, false]) {
-        assert.throws(
-            () => new BmpPersistenceStore({ dbPath: futureDbPath, readOnly }).open(),
-            error => error.code === 'BMP_PERSISTENCE_SCHEMA_TOO_NEW'
-        );
-    }
+    assert.throws(
+        () => new BmpPersistenceStore({ dbPath: futureDbPath, readOnly: true }).open(),
+        error => error.code === 'BMP_PERSISTENCE_SCHEMA_TOO_NEW'
+    );
+    const rebuiltFutureStore = new BmpPersistenceStore({ dbPath: futureDbPath }).open();
+    assert.equal(rebuiltFutureStore.getStatus().schemaVersion, BmpPersistenceStore.SCHEMA_VERSION);
+    assert.equal(
+        rebuiltFutureStore.db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'sentinel'").get()
+            .count,
+        0
+    );
+    rebuiltFutureStore.close();
 
     const invalidSchemaDbPath = path.join(tempDir, 'invalid-schema.sqlite3');
     const invalidSchemaStore = new BmpPersistenceStore({ dbPath: invalidSchemaDbPath }).open();
@@ -1254,6 +1264,15 @@ try {
         () => new BmpPersistenceStore({ dbPath: invalidSchemaDbPath, readOnly: true }).open(),
         /missing required table bmp_statistics_latest/
     );
+    const repairedStore = new BmpPersistenceStore({ dbPath: invalidSchemaDbPath }).open();
+    assert.equal(
+        repairedStore.db
+            .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'bmp_statistics_latest'")
+            .get().count,
+        1,
+        'a damaged schema is rebuilt by the writer'
+    );
+    repairedStore.close();
 
     console.log('BMP SQLite persistence tests passed');
 } finally {

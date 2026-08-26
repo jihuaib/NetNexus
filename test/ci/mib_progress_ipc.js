@@ -66,9 +66,7 @@ async function run() {
     app.snmpReady = true;
     app.snmpStopping = false;
     app.mibProgressTargets = new Map();
-    worker.addEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, payload =>
-        app.handleMibCompileProgress(payload)
-    );
+    worker.addEventListener(SnmpConst.MIB_EVT_TYPES.COMPILE_PROGRESS, payload => app.handleMibCompileProgress(payload));
 
     const sent = [];
     const sender = {
@@ -76,11 +74,9 @@ async function run() {
         isDestroyed: () => false,
         send: (channel, payload) => sent.push({ channel, payload })
     };
-    const result = await app.requestMibWithProgress(
-        { sender },
-        SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS,
-        { filePaths: ['/tmp'] }
-    );
+    const result = await app.requestMibWithProgress({ sender }, SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS, {
+        filePaths: ['/tmp']
+    });
 
     assert.equal(result.data, summary);
     assert.equal(worker.lastRequest.op, SnmpConst.MIB_REQ_TYPES.COMPILE_MIBS);

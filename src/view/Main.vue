@@ -210,6 +210,13 @@
             label: 'Syslog',
             title: 'Syslog服务器',
             route: '/syslog'
+        },
+        {
+            key: 'gRPC服务器',
+            icon: h(moduleNavigationIcons.grpc),
+            label: 'gRPC',
+            title: 'gRPC服务器',
+            route: '/grpc'
         }
     ]);
 

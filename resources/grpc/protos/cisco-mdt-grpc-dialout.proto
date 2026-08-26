@@ -1,0 +1,15 @@
+// Cisco IOS-XR Model-Driven Telemetry gRPC Dial-out 传输层定义。
+syntax = "proto3";
+
+package mdt_dialout;
+
+service gRPCMdtDialout {
+  rpc MdtDialout(stream MdtDialoutArgs) returns (stream MdtDialoutArgs) {}
+}
+
+message MdtDialoutArgs {
+  int64 ReqId = 1;
+  // GPB / GPB-KV 编码时为 cisco_telemetry.Telemetry；JSON 编码时为 JSON 文本
+  bytes data = 2;
+  string errors = 3;
+}

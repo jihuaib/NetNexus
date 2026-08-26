@@ -15,6 +15,7 @@ NetNexus 是一个基于 Vue 3、自研 NetNexus UI 和 Electron 的本地网络
 - **路由与安全**：BGP 模拟器、BMP v3/v4 监控与五阶段路由分析、RPKI-RTR、ROA、Router Key 和 ASPA；BMP、RPKI-RTR 可使用 TCP-AO 或 TCP MD5 认证。
 - **网络管理**：SNMP Trap/MIB/查询，以及 NETCONF over SSH、YANG 模型发现、编译、Schema 浏览和 RPC 操作。
 - **本地协议服务**：FTP、DHCPv4/v6、NTP、RADIUS、TFTP 和 Syslog，覆盖配置、运行状态、请求或会话记录。
+- **gRPC 工具**：运行时编译任意 .proto，通用 gRPC 服务器接收设备 Telemetry Dial-out 上报（仓库附带华为 / Cisco / gNMI proto 模板），并可在流上回写或作为 gRPC 客户端下发。
 - **开发工具**：字符串生成、报文解析、端口监控、网络信息、HTTP API 测试、TCP-AO MAC 和 TCP/UDP 收发。
 - **数据与集成**：BMP SQLite 持久化、路由事件历史、统计报告和本机只读 HTTP API。
 

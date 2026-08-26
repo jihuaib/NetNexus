@@ -1,0 +1,53 @@
+// 华为 Telemetry 数据头定义。serviceArgs.data 解码为 Telemetry；
+// TelemetryRowGPB.content 按 Telemetry.proto_path 指向的业务 proto（如 huawei-ifm.proto）再次解码。
+syntax = "proto3";
+
+package telemetry;
+
+message Telemetry {
+  string node_id_str = 1;
+  string subscription_id_str = 2;
+  string sensor_path = 3;
+  string proto_path = 13;
+  uint64 collection_id = 4;
+  uint64 collection_start_time = 5;
+  uint64 msg_timestamp = 6;
+  TelemetryGPBTable data_gpb = 7;
+  uint32 collection_end_time = 8;
+  uint32 current_period = 9;
+  string except_desc = 10;
+  string product_name = 11;
+  enum Encoding {
+    Encoding_GPB = 0;
+    Encoding_JSON = 1;
+  }
+  Encoding encoding = 12;
+  string software_version = 14;
+}
+
+message TelemetryGPBTable {
+  repeated TelemetryRowGPB row = 1;
+  repeated DataPath delete = 2;
+  bool generator_id = 3;
+  uint64 generator_sn = 4;
+  bool generator_end = 5;
+}
+
+message TelemetryRowGPB {
+  uint64 timestamp = 1;
+  bytes content = 11;
+}
+
+message DataPath {
+  uint64 timestamp = 1;
+  Path path = 2;
+}
+
+message Path {
+  repeated PathElem node = 1;
+}
+
+message PathElem {
+  string name = 1;
+  map<string, string> key = 2;
+}

@@ -153,6 +153,7 @@ npm run build:ui -- /absolute/path/to/NetNexusUI
 | `npm run test:e2e:frr` | 使用 Docker 和真实 FRR 验证 BGP/BMP 互操作。 |
 | `npm run mock:netconf` | 启动本地 NETCONF-over-SSH 测试设备。 |
 | `npm run mock:bmp` | 向本机 BMP 服务发送模拟数据。 |
+| `npm run mock:bmp:scale` | 大规模 BMP 压测数据：默认 100 个邻居 × 10,000 条（IPv4/IPv6 单播、VPNv4、VPNv6 四个地址组平分）+ Loc-RIB 每个地址组 100,000 条，共 140 万条；`--dry-run` 只统计报文量，`--help` 查看 `--peers/--routes/--loc-rib-routes/--families/--withdraw-percent` 等参数。 |
 | `npm run docs:screenshots` | 按当前页面状态更新功能截图。 |
 
 ## 本地文档站
@@ -181,7 +182,7 @@ npm run docs:preview
 
 ```bash
 NETNEXUS_DOCS_SCREENSHOT_SCOPE=bmp npm run docs:screenshots
-NETNEXUS_DOCS_SCREENSHOT_MATCH=route-history npm run docs:screenshots
+NETNEXUS_DOCS_SCREENSHOT_MATCH=route-lens npm run docs:screenshots
 ```
 
 截图视口默认不小于 `1920x1200`，可通过 `NETNEXUS_DOCS_WINDOW_WIDTH` 和 `NETNEXUS_DOCS_WINDOW_HEIGHT` 覆盖。脚本会启动各协议 mock 服务，并为 BMP 注入路由矩阵、路由追踪和多地址族路由生命周期数据。

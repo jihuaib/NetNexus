@@ -239,13 +239,6 @@ async function testEorOwnsCleanup() {
         assert.equal(summary.scopes[0].scopeState, 'ready');
         assert.equal(summary.scopes[0].eorEpoch, 1);
         assert.equal(summary.scopes[0].staleReason, null);
-
-        const events = await harness.client.queryEvents({ scopeId: harness.scopeId, pageSize: 100 });
-        assert.ok(events.list.some(event => event.eventType === 'scope_eor'));
-        assert.equal(
-            events.list.some(event => event.eventType === 'scope_timeout'),
-            false
-        );
     } finally {
         await harness.client.close({ suppressErrors: true });
     }

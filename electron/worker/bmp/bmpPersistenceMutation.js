@@ -6,6 +6,31 @@ const {
     createScopeKey,
     createRouteKey
 } = require('../../utils/bmpPersistentRouteKey');
+
+// Per-owner cache of the immutable part of a scope descriptor (key, identity,
+// peer columns); only epoch/state/reason vary per mutation.
+const SCOPE_DESCRIPTOR_CACHE = new WeakMap();
+// Per-attribute-object cache of the canonical JSON + hash. Routes announced in
+// one UPDATE share the attribute object, so one hash serves the whole batch.
+const ATTR_OBJECT_CACHE = new WeakMap();
+const ATTR_ID_CACHE = new Map();
+const ATTR_ID_CACHE_LIMIT = 50_000;
+const PAYLOAD_FIELDS = [
+    'rdRaw',
+    'labels',
+    'routeType',
+    'parseStatus',
+    'pathStatus',
+    'pathStatusNames',
+    'pathStatusText',
+    'pathStatusUnknownBits',
+    'pathStatusReason',
+    'pathStatusReasonName',
+    'pathStatusReasonText',
+    'pathStatusReasons',
+    'routeTlvs',
+    'routeTlvCount'
+];
 const { canonicalizeBmpRouteAttr } = require('./bmpRouteAttrStore');
 
 let lastConnectionGeneration = 0;
@@ -43,20 +68,82 @@ const ROUTE_IDENTITY_PAYLOAD_FIELDS = [
 ];
 const ZERO_VALUE_PAYLOAD_FIELDS = new Set(['parseStatus', 'pathStatusUnknownBits', 'routeTlvCount']);
 
+function isEmptyPayloadValue(field, value) {
+    return (
+        value === null ||
+        (Array.isArray(value) && value.length === 0) ||
+        (value && value.constructor === Object && Object.keys(value).length === 0) ||
+        (value === 0 && ZERO_VALUE_PAYLOAD_FIELDS.has(field))
+    );
+}
+
 function compactRoutePayload(routeInfo) {
     const payload = { ...routeInfo };
     [...DUPLICATED_ROUTE_ATTRIBUTE_FIELDS, ...ROUTE_IDENTITY_PAYLOAD_FIELDS].forEach(field => delete payload[field]);
     Object.entries(payload).forEach(([field, value]) => {
-        if (
-            value === null ||
-            (Array.isArray(value) && value.length === 0) ||
-            (value && value.constructor === Object && Object.keys(value).length === 0) ||
-            (value === 0 && ZERO_VALUE_PAYLOAD_FIELDS.has(field))
-        ) {
+        if (isEmptyPayloadValue(field, value)) {
             delete payload[field];
         }
     });
     return payload;
+}
+
+// Same result as compactRoutePayload(route.getRouteInfo()) for a BmpBgpRoute,
+// without materializing the full route info object first.
+function buildRoutePayload(route) {
+    if (typeof route?.getPathStatusInfo !== 'function' || typeof route.getRouteTlvInfo !== 'function') {
+        const routeInfo = typeof route?.getRouteInfo === 'function' ? route.getRouteInfo() : { ...route };
+        return compactRoutePayload(routeInfo);
+    }
+    const source = {
+        rdRaw: route.rdRaw,
+        labels: route.labels,
+        routeType: route.routeType,
+        parseStatus: route.parseStatus || route.constructor.makeParseStatus(),
+        ...route.getPathStatusInfo(),
+        ...route.getRouteTlvInfo()
+    };
+    const payload = {};
+    PAYLOAD_FIELDS.forEach(field => {
+        const value = source[field];
+        if (value !== undefined && !isEmptyPayloadValue(field, value)) {
+            payload[field] = value;
+        }
+    });
+    return payload;
+}
+
+function resolveRouteAttrIdentity(route, owner) {
+    const attr = route?.getRouteAttr?.() || owner?.getRouteAttr?.(route) || null;
+    if (!attr) {
+        return { attrId: null, attrJson: null };
+    }
+    let cached = typeof attr === 'object' ? ATTR_OBJECT_CACHE.get(attr) : undefined;
+    if (cached) {
+        return cached;
+    }
+    const memoryAttrId = typeof route?.attrId === 'string' && route.attrId ? route.attrId : null;
+    if (memoryAttrId) {
+        cached = ATTR_ID_CACHE.get(memoryAttrId);
+        if (cached) {
+            if (typeof attr === 'object') {
+                ATTR_OBJECT_CACHE.set(attr, cached);
+            }
+            return cached;
+        }
+    }
+    const attrJson = JSON.stringify(canonicalizeBmpRouteAttr(attr));
+    cached = { attrId: crypto.createHash('sha256').update(attrJson).digest('hex'), attrJson };
+    if (typeof attr === 'object') {
+        ATTR_OBJECT_CACHE.set(attr, cached);
+    }
+    if (memoryAttrId) {
+        if (ATTR_ID_CACHE.size >= ATTR_ID_CACHE_LIMIT) {
+            ATTR_ID_CACHE.clear();
+        }
+        ATTR_ID_CACHE.set(memoryAttrId, cached);
+    }
+    return cached;
 }
 
 function nextConnectionGeneration() {
@@ -132,14 +219,24 @@ function nextSequence(bmpSession) {
 function buildSource(bmpSession) {
     ensurePersistenceContext(bmpSession);
     const key = bmpSession.persistenceSourceKey;
+    // The key/identity JSON never changes for a session; build it once.
+    let sourceDescriptor = bmpSession.persistenceSourceDescriptor;
+    if (!sourceDescriptor || sourceDescriptor.id !== key.keyHex) {
+        sourceDescriptor = {
+            id: key.keyHex,
+            keyJson: stringify({
+                schemaVersion: key.schemaVersion,
+                algorithm: key.algorithm,
+                keyHex: key.keyHex
+            }),
+            identityJson: canonicalStringify(key.canonicalIdentity)
+        };
+        bmpSession.persistenceSourceDescriptor = sourceDescriptor;
+    }
     return {
-        id: key.keyHex,
-        keyJson: stringify({
-            schemaVersion: key.schemaVersion,
-            algorithm: key.algorithm,
-            keyHex: key.keyHex
-        }),
-        identityJson: canonicalStringify(key.canonicalIdentity),
+        id: sourceDescriptor.id,
+        keyJson: sourceDescriptor.keyJson,
+        identityJson: sourceDescriptor.identityJson,
         remoteIp: bmpSession.remoteIp || null,
         sysName: bmpSession.sysName || null,
         sysDesc: bmpSession.sysDesc || null,
@@ -186,83 +283,180 @@ function buildScope(bmpSession, owner, afi, safi, ribType, options = {}) {
     const peerIp = isInstance ? owner.instanceIp : owner.sessionIp;
     const peerAs = isInstance ? owner.instanceAs : owner.sessionAs;
     const stage = isInstance ? 'loc-rib' : ribType;
-    const scopeInput = {
-        sourceKey: source.id,
-        scopeKind: isInstance ? 'loc-rib' : 'peer',
-        peerType,
-        peerRd: peerRdIdentity,
-        peerAddress: peerIp || undefined,
-        peerAs,
-        afi,
-        safi,
-        ribType: stage
-    };
-    const key = createScopeKey(scopeInput);
-    const epoch = isInstance ? owner.getRibEpoch() : owner.getRibEpoch(afi, safi, ribType);
-    const ownerKey = isInstance
-        ? `${owner.instanceType}|${peerRdIdentity}|${afi}|${safi}`
-        : `${owner.sessionType}|${peerRdIdentity}|${owner.sessionIp}|${owner.sessionAs}`;
+    const descriptorKey = `${afi}|${safi}|${stage}`;
+    let descriptors = SCOPE_DESCRIPTOR_CACHE.get(owner);
+    if (!descriptors) {
+        descriptors = new Map();
+        SCOPE_DESCRIPTOR_CACHE.set(owner, descriptors);
+    }
+    let descriptor = descriptors.get(descriptorKey);
+    // Peer identity fields live on the owner and can in principle be
+    // re-assigned; validate the cached descriptor against them cheaply.
+    if (
+        descriptor &&
+        (descriptor.sourceId !== source.id ||
+            descriptor.peerType !== peerType ||
+            descriptor.peerRdIdentity !== peerRdIdentity ||
+            descriptor.peerIp !== (peerIp || null) ||
+            descriptor.peerAs !== peerAs)
+    ) {
+        descriptor = null;
+    }
+    if (!descriptor) {
+        const key = createScopeKey({
+            sourceKey: source.id,
+            scopeKind: isInstance ? 'loc-rib' : 'peer',
+            peerType,
+            peerRd: peerRdIdentity,
+            peerAddress: peerIp || undefined,
+            peerAs,
+            afi,
+            safi,
+            ribType: stage
+        });
+        descriptor = {
+            sourceId: source.id,
+            peerRdIdentity,
+            id: key.keyHex,
+            keyJson: stringify({
+                schemaVersion: key.schemaVersion,
+                algorithm: key.algorithm,
+                keyHex: key.keyHex
+            }),
+            identityJson: canonicalStringify(key.canonicalIdentity),
+            kind: isInstance ? 'loc-rib' : 'peer',
+            ownerKey: isInstance
+                ? `${owner.instanceType}|${peerRdIdentity}|${afi}|${safi}`
+                : `${owner.sessionType}|${peerRdIdentity}|${owner.sessionIp}|${owner.sessionAs}`,
+            peerType,
+            peerRd,
+            peerIp: peerIp || null,
+            peerAs,
+            afi: Number(afi),
+            safi: Number(safi),
+            ribType: String(stage)
+        };
+        descriptors.set(descriptorKey, descriptor);
+    }
     return {
-        id: key.keyHex,
-        keyJson: stringify({
-            schemaVersion: key.schemaVersion,
-            algorithm: key.algorithm,
-            keyHex: key.keyHex
-        }),
-        identityJson: canonicalStringify(key.canonicalIdentity),
-        kind: isInstance ? 'loc-rib' : 'peer',
-        ownerKey,
-        peerType,
-        peerRd,
-        peerIp: peerIp || null,
-        peerAs,
+        id: descriptor.id,
+        keyJson: descriptor.keyJson,
+        identityJson: descriptor.identityJson,
+        kind: descriptor.kind,
+        ownerKey: descriptor.ownerKey,
+        peerType: descriptor.peerType,
+        peerRd: descriptor.peerRd,
+        peerIp: descriptor.peerIp,
+        peerAs: descriptor.peerAs,
+        afi: descriptor.afi,
+        safi: descriptor.safi,
+        ribType: descriptor.ribType,
         vrfName: Array.isArray(owner.vrfTableNames) ? owner.vrfTableNames[0] || null : null,
-        afi: Number(afi),
-        safi: Number(safi),
-        ribType: String(stage),
-        epoch,
+        epoch: isInstance ? owner.getRibEpoch() : owner.getRibEpoch(afi, safi, ribType),
         state: options.state || 'syncing',
         reason: options.reason || null
     };
 }
 
+// Plain IP prefixes carry an NLRI detail that only repeats the identity
+// columns (prefix, length, path id, rd, valid). Those are not stored as JSON:
+// nlriJson becomes null and nlriFlags records which optional keys were
+// present so the reader can rebuild the identical object.
+const COMPACT_NLRI_KEYS = new Set(['pathId', 'prefix', 'length', 'rd', 'valid']);
+const NLRI_FLAG_VALID = 1;
+const NLRI_FLAG_RD = 2;
+
+function compactNlri(nlriDetail, { prefix, prefixLength, pathId, rd }) {
+    if (!nlriDetail || typeof nlriDetail !== 'object' || Array.isArray(nlriDetail)) {
+        return null;
+    }
+    const keys = Object.keys(nlriDetail);
+    if (!keys.every(key => COMPACT_NLRI_KEYS.has(key))) {
+        return null;
+    }
+    if (
+        !('pathId' in nlriDetail) ||
+        !('prefix' in nlriDetail) ||
+        !('length' in nlriDetail) ||
+        nlriDetail.prefix !== prefix ||
+        Number(nlriDetail.length) !== Number(prefixLength) ||
+        Number(nlriDetail.pathId) !== Number(pathId)
+    ) {
+        return null;
+    }
+    let flags = 0;
+    if ('valid' in nlriDetail) {
+        if (nlriDetail.valid !== true) {
+            return null;
+        }
+        flags |= NLRI_FLAG_VALID;
+    }
+    if ('rd' in nlriDetail) {
+        if (nlriDetail.rd !== rd) {
+            return null;
+        }
+        flags |= NLRI_FLAG_RD;
+    }
+    return flags;
+}
+
+function rebuildCompactNlri({ prefix, prefixLength, pathId, rd, flags }) {
+    const nlriDetail = { pathId: Number(pathId || 0), prefix, length: Number(prefixLength) };
+    if ((flags & NLRI_FLAG_RD) !== 0) {
+        nlriDetail.rd = rd;
+    }
+    if ((flags & NLRI_FLAG_VALID) !== 0) {
+        nlriDetail.valid = true;
+    }
+    return nlriDetail;
+}
+
 function buildRoute(owner, route, afi, safi) {
-    const routeInfo = typeof route.getRouteInfo === 'function' ? route.getRouteInfo() : { ...route };
-    const compactRouteInfo = compactRoutePayload(routeInfo);
+    const nlriDetail = route.nlriDetail || route;
     const key = createRouteKey({
         afi,
         safi,
         pathId: route.pathId,
         route,
-        nlri: route.nlriDetail || routeInfo.nlriDetail || route
+        nlri: nlriDetail
     });
-    const attr = route?.getRouteAttr?.() || owner?.getRouteAttr?.(route) || null;
-    const canonicalAttr = attr ? canonicalizeBmpRouteAttr(attr) : null;
-    const attrJson = canonicalAttr ? stringify(canonicalAttr) : null;
-    const attrId = attrJson ? crypto.createHash('sha256').update(attrJson).digest('hex') : null;
-    const rawPrefix = route.ip || route.prefix || routeInfo.ip || routeInfo.prefix || null;
-    const prefixLength = route.mask ?? route.length ?? routeInfo.mask ?? routeInfo.length ?? null;
+    const { attrId, attrJson } = resolveRouteAttrIdentity(route, owner);
+    const rawPrefix = route.ip || route.prefix || null;
+    const prefixLength = route.mask ?? route.length ?? null;
+    const canonicalPrefix = key.canonicalIdentity.nlri.prefix;
+    // For IP kinds the key already normalized the network text; other NLRI
+    // keep the parser's semantic identity string as the persisted prefix.
+    const persistedPrefix =
+        canonicalPrefix && canonicalPrefix.networkText
+            ? canonicalPrefix.networkText
+            : normalizePersistedPrefix(rawPrefix, prefixLength);
+    const nlriFlags =
+        key.canonicalIdentity.nlri.kind === 'ip-prefix'
+            ? compactNlri(nlriDetail, {
+                  prefix: persistedPrefix,
+                  prefixLength,
+                  pathId: Number(route.pathId || 0),
+                  rd: route.rd || null
+              })
+            : null;
     return {
         id: key.keyHex,
-        keyJson: stringify({
-            schemaVersion: key.schemaVersion,
-            algorithm: key.algorithm,
-            keyHex: key.keyHex
-        }),
-        identityJson: canonicalStringify(key.canonicalIdentity),
+        // Canonical identity string (not JSON): what the route id hashes.
+        identityJson: key.canonicalJson,
         keyVersion: key.schemaVersion,
-        legacyRouteKey: routeInfo.routeKey || route.getRouteKey?.() || null,
+        legacyRouteKey: route.getRouteKey?.() || route.routeKey || null,
         afi: Number(afi),
         safi: Number(safi),
         pathId: Number(route.pathId || 0),
         rd: route.rd || null,
-        prefix: normalizePersistedPrefix(rawPrefix, prefixLength),
+        prefix: persistedPrefix,
         prefixLength,
         nlriKind: key.canonicalIdentity.nlri.kind,
-        nlriJson: stringify(route.nlriDetail || routeInfo.nlriDetail || route),
+        nlriJson: nlriFlags === null ? stringify(nlriDetail) : null,
+        nlriFlags: nlriFlags ?? 0,
         attrId,
         attrJson,
-        routeJson: stringify(compactRouteInfo)
+        routeJson: stringify(buildRoutePayload(route))
     };
 }
 
@@ -282,24 +476,30 @@ function buildWithdrawRoute(owner, withdrawn, afi, safi, existingRoute = null) {
     };
     const key = createRouteKey({ afi, safi, route, nlri: withdrawn });
     const legacyRouteKey = `${route.pathId}|${route.rd}|${route.ip}|${route.mask}`;
+    const withdrawnPrefix = normalizePersistedPrefix(route.ip, route.mask);
+    const withdrawnFlags =
+        key.canonicalIdentity.nlri.kind === 'ip-prefix'
+            ? compactNlri(withdrawn, {
+                  prefix: withdrawnPrefix,
+                  prefixLength: route.mask,
+                  pathId: route.pathId,
+                  rd: route.rd
+              })
+            : null;
     return {
         id: key.keyHex,
-        keyJson: stringify({
-            schemaVersion: key.schemaVersion,
-            algorithm: key.algorithm,
-            keyHex: key.keyHex
-        }),
-        identityJson: canonicalStringify(key.canonicalIdentity),
+        identityJson: key.canonicalJson,
         keyVersion: key.schemaVersion,
         legacyRouteKey,
         afi: route.afi,
         safi: route.safi,
         pathId: route.pathId,
         rd: route.rd,
-        prefix: normalizePersistedPrefix(route.ip, route.mask),
+        prefix: withdrawnPrefix,
         prefixLength: route.mask,
         nlriKind: key.canonicalIdentity.nlri.kind,
-        nlriJson: stringify(withdrawn),
+        nlriJson: withdrawnFlags === null ? stringify(withdrawn) : null,
+        nlriFlags: withdrawnFlags ?? 0,
         attrId: null,
         attrJson: null,
         routeJson: stringify(
@@ -367,6 +567,8 @@ function buildRoutePurgeMutation(bmpSession, owner, route, afi, safi, ribType, o
 }
 
 module.exports = {
+    rebuildCompactNlri,
+    compactRoutePayload,
     ensurePersistenceContext,
     buildSource,
     buildScope,

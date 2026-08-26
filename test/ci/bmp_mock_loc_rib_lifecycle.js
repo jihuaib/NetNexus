@@ -215,11 +215,6 @@ try {
     assert.ok(routes.list.some(route => route.ip === '198.51.101.0'));
     assert.ok(routes.list.some(route => route.ip === '198.51.102.0'));
 
-    const staleRemovalEvents = store
-        .queryEvents({ scopeId, pageSize: 5000 })
-        .list.filter(event => event.reason === 'peer-up-af-removed');
-    assert.equal(staleRemovalEvents.length, 0);
-
     console.log(
         `BMP mock statistics and Loc-RIB lifecycle regression passed: active=${summary.active}, stale=${summary.stale}, scope=${summary.scopes[0].scopeState}`
     );

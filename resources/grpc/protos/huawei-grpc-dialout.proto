@@ -1,0 +1,20 @@
+// 华为 Telemetry gRPC Dial-out 传输层定义（设备主动连接采集器）。
+// 设备侧在 telemetry destination-group 中配置 protocol grpc 后，会调用 dataPublish 双向流上报数据。
+syntax = "proto3";
+
+package huawei_dialout;
+
+service gRPCDataservice {
+  rpc dataPublish(stream serviceArgs) returns (stream serviceArgs) {}
+}
+
+message serviceArgs {
+  int64 ReqId = 1;
+  oneof MessageData {
+    // GPB 编码：内容为 telemetry.Telemetry
+    bytes data = 2;
+    // JSON 编码：内容为 Telemetry 的 JSON 文本
+    string data_json = 4;
+  }
+  string errors = 3;
+}

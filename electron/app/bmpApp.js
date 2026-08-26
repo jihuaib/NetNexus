@@ -190,7 +190,6 @@ class BmpApp {
         this.ipcMain.handle('bmp:getPersistenceDatabaseInfo', this.handleGetPersistenceDatabaseInfo.bind(this));
         this.ipcMain.handle('bmp:deletePersistenceDatabase', this.handleDeletePersistenceDatabase.bind(this));
         this.ipcMain.handle('bmp:getPersistedRoutes', this.handleGetPersistedRoutes.bind(this));
-        this.ipcMain.handle('bmp:getPersistedRouteEvents', this.handleGetPersistedRouteEvents.bind(this));
     }
 
     registerTrustedHandler(channel, handler) {
@@ -756,14 +755,6 @@ class BmpApp {
         return successResponse(result, '查询离线BMP路由成功');
     }
 
-    async queryPersistedRouteEvents(query = {}) {
-        if (this.worker && this.runningPersistenceEnabled) {
-            return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTE_EVENTS, query, null);
-        }
-        const result = await this.withOfflinePersistence(client => client.queryEvents(query));
-        return successResponse(result, '查询离线BMP路由事件成功');
-    }
-
     async queryBgpRoutes({ client, session, af, ribType, page, pageSize, routeState, prefixFilter }) {
         return this.sendWorkerQuery(
             BmpConst.BMP_REQ_TYPES.GET_BGP_ROUTES,
@@ -905,9 +896,10 @@ class BmpApp {
                 // SQLite now is the BMP RIB rather than an optional history sink.
                 persistenceEnabled: true,
                 persistenceDbPath: this.persistenceDbPath,
-                persistenceBatchSize: Number(inputConfig.persistenceBatchSize) || 2000,
-                persistenceBatchBytes: Number(inputConfig.persistenceBatchBytes) || 2 * 1024 * 1024,
+                persistenceBatchSize: Number(inputConfig.persistenceBatchSize) || 5000,
+                persistenceBatchBytes: Number(inputConfig.persistenceBatchBytes) || 16 * 1024 * 1024,
                 persistenceFlushMs: Number(inputConfig.persistenceFlushMs) || 20,
+                persistenceReadFenceTimeoutMs: Number(inputConfig.persistenceReadFenceTimeoutMs) || 250,
                 persistenceHighWatermarkBytes: Number(inputConfig.persistenceHighWatermarkBytes) || 64 * 1024 * 1024,
                 persistenceLowWatermarkBytes: Number(inputConfig.persistenceLowWatermarkBytes) || 32 * 1024 * 1024,
                 // Offline current RIB data is persistent state. It may only be
@@ -1177,15 +1169,6 @@ class BmpApp {
             return await this.queryPersistedRoutes(query);
         } catch (error) {
             logger.error('Error getting persisted BMP routes:', error.message);
-            return errorResponse(error.message);
-        }
-    }
-
-    async handleGetPersistedRouteEvents(event, query = {}) {
-        try {
-            return await this.queryPersistedRouteEvents(query);
-        } catch (error) {
-            logger.error('Error getting persisted BMP route events:', error.message);
             return errorResponse(error.message);
         }
     }
