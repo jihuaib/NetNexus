@@ -1274,6 +1274,55 @@ try {
     );
     repairedStore.close();
 
+    // Deleting a source must remove every dependent row itself: the writer
+    // runs with foreign_keys = OFF, so nothing cascades from the scope rows.
+    const purgeSourceDbPath = path.join(tempDir, 'purge-source.sqlite3');
+    const purgeSourceContext = makeContext();
+    const purgeSourceStore = new BmpPersistenceStore({ dbPath: purgeSourceDbPath }).open();
+    const purgeSourceOpen = buildConnectionMutation(purgeSourceContext.bmpSession, 'connection_open');
+    purgeSourceStore.applyBatch(
+        batch('purge-source-seed', [
+            purgeSourceOpen,
+            buildScopeMutation(purgeSourceContext.bmpSession, purgeSourceContext.owner, 1, 1, 2, 'scope_open', {
+                kind: 'peer',
+                state: 'ready'
+            }),
+            ...['198.30.0.0', '198.31.0.0'].map(prefix =>
+                buildRouteUpsertMutation(
+                    purgeSourceContext.bmpSession,
+                    purgeSourceContext.owner,
+                    makeRoute(purgeSourceContext.owner, prefix, 0, '192.0.2.30'),
+                    1,
+                    1,
+                    2,
+                    { kind: 'peer', state: 'ready', scopeState: 'ready', isNewRoute: true }
+                )
+            )
+        ])
+    );
+    assert.equal(purgeSourceStore.queryRoutes({ routeState: 'all' }).total, 2);
+    const purgeSourceResult = purgeSourceStore.purgeSource({ sourceId: purgeSourceOpen.source.id });
+    assert.equal(purgeSourceResult.deleted, true);
+    assert.equal(purgeSourceResult.counts.currentRoutes, 2);
+    assert.equal(purgeSourceResult.counts.scopes, 1);
+    assert.equal(purgeSourceResult.counts.routeIdentities, 2);
+    assert.equal(purgeSourceStore.queryRoutes({ routeState: 'all' }).total, 0);
+    ['bmp_sources', 'bmp_connections', 'bmp_rib_scopes', 'bmp_scope_route_counts', 'bmp_route_identities'].forEach(
+        table => {
+            assert.equal(
+                purgeSourceStore.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count,
+                0,
+                `${table} must be empty after the source is purged`
+            );
+        }
+    );
+    assert.deepEqual(
+        purgeSourceStore.db.pragma('foreign_key_check'),
+        [],
+        'purging a source must not leave dangling references'
+    );
+    purgeSourceStore.close();
+
     console.log('BMP SQLite persistence tests passed');
 } finally {
     store?.close();

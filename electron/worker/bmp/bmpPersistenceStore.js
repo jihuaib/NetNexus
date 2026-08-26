@@ -473,11 +473,20 @@ class BmpPersistenceStore {
         });
         try {
             this.db.pragma('busy_timeout = 5000');
-            this.db.pragma('foreign_keys = ON');
+            // Foreign keys stay declared in the DDL (they document the model and
+            // `PRAGMA foreign_key_check` still verifies them), but the writer does
+            // not enforce them: every referenced row is created by the same batch
+            // and the checks cost one index probe per reference per path. The
+            // former ON DELETE CASCADE paths are deleted explicitly (purgeSource).
+            this.db.pragma('foreign_keys = OFF');
 
             if (!this.readOnly) {
                 this.db.pragma('journal_mode = WAL');
-                this.db.pragma('synchronous = NORMAL');
+                // BMP data is a projection that peers re-send on reconnect, and a
+                // damaged database is rebuilt on open, so commits do not wait for
+                // the disk. A process crash loses nothing; an OS crash or power
+                // loss may lose the last seconds of writes.
+                this.db.pragma('synchronous = OFF');
                 this.db.pragma('temp_store = MEMORY');
                 // Route ingest touches ~20 B-tree indexes per mutation; keep the
                 // hot index pages resident instead of re-reading them from the
@@ -850,10 +859,11 @@ class BmpPersistenceStore {
     }
 
     dropAllObjects(existingObjects) {
-        // Foreign keys must be disabled while dropping, otherwise SQLite runs an
-        // implicit DELETE that trips the constraints of the schema being removed.
+        // Foreign keys are already off for the writer; make it explicit here
+        // because SQLite would otherwise run an implicit DELETE on DROP TABLE
+        // that trips the constraints of the schema being removed.
         this.db.pragma('foreign_keys = OFF');
-        try {
+        {
             const drop = this.db.transaction(() => {
                 const order = { trigger: 0, view: 1, index: 2, table: 3 };
                 [...existingObjects]
@@ -867,8 +877,6 @@ class BmpPersistenceStore {
                 this.db.pragma('user_version = 0');
             });
             drop.immediate();
-        } finally {
-            this.db.pragma('foreign_keys = ON');
         }
     }
 
@@ -3350,6 +3358,9 @@ class BmpPersistenceStore {
                      OR scope_id IN (${targetScopeIds})
                      OR connection_id IN (${targetConnectionIds})`
             );
+            // Without foreign-key enforcement the counters no longer cascade
+            // from the scope rows; remove them explicitly.
+            remove(`DELETE FROM bmp_scope_route_counts WHERE scope_pk IN (${targetScopePks})`);
             counts.scopes = remove('DELETE FROM bmp_rib_scopes WHERE source_pk = @sourcePk');
             counts.connections = remove('DELETE FROM bmp_connections WHERE source_pk = @sourcePk');
             counts.sources = remove('DELETE FROM bmp_sources WHERE source_pk = @sourcePk');
@@ -3358,7 +3369,10 @@ class BmpPersistenceStore {
             counts.routeAttributes = garbage.attributes;
             counts.routePayloads = garbage.payloads;
             counts.routeIdentities = garbage.identities;
-            counts.ingestBatches = 0;
+            // Batch idempotency records only matter while some source still owns
+            // data; once the last source is gone there is nothing left to guard.
+            const remainingSources = this.db.prepare('SELECT 1 FROM bmp_sources LIMIT 1').get();
+            counts.ingestBatches = remainingSources ? 0 : remove('DELETE FROM bmp_ingest_batches');
 
             return { sourceId, deleted: counts.sources > 0, counts };
         });

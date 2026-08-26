@@ -590,10 +590,6 @@ class BmpPersistenceClient {
         return this.sendRequest(BMP_PERSISTENCE_OP.PURGE_STALE_ROUTES, query);
     }
 
-    queryEvents(query = {}) {
-        return this.sendRequest(BMP_PERSISTENCE_OP.QUERY_EVENTS, query);
-    }
-
     getStatus(options = {}) {
         return this.sendRequest(BMP_PERSISTENCE_OP.GET_STATUS, options);
     }

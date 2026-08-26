@@ -127,9 +127,6 @@ function handleMessage(message) {
             case BMP_PERSISTENCE_OP.PURGE_STALE_ROUTES:
                 success(messageId, requireStore().purgeStaleRoutes(data));
                 break;
-            case BMP_PERSISTENCE_OP.QUERY_EVENTS:
-                success(messageId, requireStore().queryEvents(data));
-                break;
             case BMP_PERSISTENCE_OP.GET_STATUS:
                 success(messageId, requireStore().getStatus(data));
                 break;

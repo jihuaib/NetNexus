@@ -273,6 +273,16 @@ const BmpE2eController = (() => {
                 case 'purgeStaleRoutes':
                 case 'sweep':
                     return currentStore[method](data || {});
+                case 'streamRouteAssuranceRows': {
+                    // The production client streams chunks through a SharedArrayBuffer
+                    // window; over the JSON IPC bridge the scan is small enough to
+                    // collect and replay to onChunk in order.
+                    const chunks = [];
+                    const result = currentStore.streamRouteAssuranceRows(data || {}, chunk => {
+                        chunks.push(chunk);
+                    });
+                    return { ...result, chunks };
+                }
                 case 'getStatus': {
                     const status = currentStore.getStatus({ ...(data || {}), includeCounts: true });
                     const countQueries = {
@@ -629,8 +639,16 @@ const BmpE2eController = (() => {
             return this.request('purgeSource', query);
         }
 
-        queryEvents(query = {}) {
-            return this.request('queryEvents', query);
+        async streamRouteAssuranceRows(query = {}, options = {}) {
+            const onChunk = typeof options.onChunk === 'function' ? options.onChunk : null;
+            if (!onChunk) {
+                throw new Error('BMP route assurance stream requires onChunk');
+            }
+            const { chunks = [], ...result } = await this.request('streamRouteAssuranceRows', query);
+            for (const chunk of chunks) {
+                await onChunk(chunk);
+            }
+            return result;
         }
 
         getStatus(options = {}) {

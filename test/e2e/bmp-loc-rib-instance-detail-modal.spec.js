@@ -373,8 +373,7 @@ test('shows categorized Loc-RIB Instance details in a fixed-height modal and pre
     await expect(routeDrawer).toBeVisible();
     await expect(page.locator('.nn-drawer-content:visible')).toHaveCount(1);
     await expect(page.getByTestId('bmp-loc-rib-instance-detail-modal')).toBeHidden();
-    await expect(routeDrawer.getByRole('tab', { name: '路由详情', exact: true })).toBeVisible();
-    await expect(routeDrawer.getByRole('tab', { name: '事件轨迹', exact: true })).toBeVisible();
+    await expect(routeDrawer.getByRole('tab')).toHaveCount(0);
     await expect(routeDrawer).toContainText('persistentRouteId');
     await expect(routeDrawer).toContainText(INSTANCE_ROUTE.persistentRouteId);
     await expect(routeDrawer).toContainText('routeDetailMarker');

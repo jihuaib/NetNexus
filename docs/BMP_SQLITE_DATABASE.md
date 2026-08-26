@@ -422,8 +422,8 @@ SQLite 是 BMP RIB 的权威数据源，不是可选的历史副本。
 | 稳定键 schema version | `2`（固定顺序的规范化字符串哈希，见 7.1） |
 | 稳定键算法 | SHA-256 |
 | Journal 模式 | WAL |
-| 外键 | `foreign_keys = ON` |
-| 同步级别 | `synchronous = NORMAL` |
+| 外键 | DDL 中声明，但连接上 `foreign_keys = OFF`（引用完整性由 Writer 保证；`PRAGMA foreign_key_check` 仍可校验） |
+| 同步级别 | `synchronous = OFF`（进程崩溃不丢数据；操作系统崩溃/断电可能丢最近几秒写入，库损坏时启动自动重建） |
 | Busy timeout | 5000 ms |
 | 临时存储 | MEMORY |
 | Writer 页缓存 | 64 MiB（`cache_size = -65536`） |
@@ -628,7 +628,7 @@ bmp_statistics_samples
 | `bmp_statistics_latest.source_id` | `bmp_sources.source_id` | 是 | 最新投影所属 source |
 | `bmp_statistics_latest.sample_id` | `bmp_statistics_samples.sample_id` | 是 | 最新样本 |
 
-只有表中明确写出的两条 `ON DELETE CASCADE` 会级联删除；其他 FK 使用 SQLite 默认的 `NO ACTION`。删除 source、connection 或全局路由对象前，应用必须先处理引用行。
+DDL 里的两条 `ON DELETE CASCADE` 和其他 FK 都只是声明：Writer 连接关闭了外键检查，级联不会发生，删除 source 时 `purgeSource()` 会显式删除 current 行、计数行、scope、connection。运维可用 `PRAGMA foreign_key_check` 检查引用完整性。
 
 `partition_id` 与 `scope_pk` 一起重复保存在 current 行中，是为了让数据库能用复合 FK 和 trigger 校验“这行确实属于该 scope 对应的固定分区”；它不是另一套 scope ID。
 

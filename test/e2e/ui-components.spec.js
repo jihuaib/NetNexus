@@ -2132,7 +2132,9 @@ test.describe('Custom UI component interactions', () => {
         expect(payload.profiles[0].keys).toHaveLength(2);
         expect(payload.profiles[0].keys[0].key).toBe('');
         expect(payload.profiles[0].keys[1].key).toBe('rotation-secret');
-        expect(payload.profiles[0].keys[1].sendStart).toMatch(/^2099-01-01T/u);
+        // The input is local time; the saved value is an ISO instant, so compare
+        // instants instead of the date prefix to stay timezone independent.
+        expect(new Date(payload.profiles[0].keys[1].sendStart).getTime()).toBe(new Date('2099-01-01T00:00').getTime());
         await expect(settingsDialog.getByTestId('tcp-ao-key-secret-0-1')).toHaveValue('');
     });
 
