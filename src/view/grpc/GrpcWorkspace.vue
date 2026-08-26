@@ -1,42 +1,88 @@
 <template>
     <div class="nn-container grpc-workspace-page" @click="hideContextMenu">
         <nn-card class="workspace-card">
-            <!-- 顶栏：模式 + 连接/监听参数 + 执行 -->
+            <!-- 顶栏：模式 | 端点 | 设置与执行 -->
             <div class="workspace-toolbar">
-                <nn-radio-group v-model:value="mode" button-style="solid" size="small" aria-label="工作模式">
-                    <nn-radio-button :value="MODE.CLIENT">客户端（下发）</nn-radio-button>
-                    <nn-radio-button :value="MODE.SERVER">服务器（上报）</nn-radio-button>
-                </nn-radio-group>
+                <nn-segmented v-model:value="mode" :options="modeOptions" aria-label="工作模式" />
 
-                <template v-if="isClient">
-                    <nn-input
-                        v-model:value="clientForm.target"
-                        class="toolbar-input toolbar-input-target"
-                        size="small"
-                        placeholder="目标 host:port"
-                        :status="validation.target ? 'error' : ''"
-                    />
+                <div class="workspace-endpoint">
+                    <template v-if="isClient">
+                        <span class="endpoint-label">目标</span>
+                        <nn-input
+                            v-model:value="clientForm.target"
+                            class="endpoint-input"
+                            placeholder="host:port"
+                            :status="validation.target ? 'error' : ''"
+                        />
+                        <nn-input-number
+                            v-model:value="clientForm.timeoutMs"
+                            class="endpoint-timeout"
+                            :min="0"
+                            :max="3600000"
+                            addon-after="ms"
+                        />
+                    </template>
+                    <template v-else>
+                        <span class="endpoint-label">监听</span>
+                        <nn-input
+                            v-model:value="serverForm.host"
+                            class="endpoint-input"
+                            :disabled="isServerRunning"
+                            placeholder="0.0.0.0"
+                        />
+                        <nn-input-number
+                            v-model:value="serverForm.port"
+                            class="endpoint-port"
+                            :min="1"
+                            :max="65535"
+                            :disabled="isServerRunning"
+                            :status="validation.port ? 'error' : ''"
+                        />
+                        <nn-tag :color="isServerRunning ? 'green' : 'default'" class="endpoint-status">
+                            {{ isServerRunning ? `运行中 :${serverStatus.boundPort || serverForm.port}` : '未监听' }}
+                        </nn-tag>
+                    </template>
+                </div>
+
+                <div class="workspace-actions">
+                    <nn-dropdown :trigger="['click']" placement="bottomRight">
+                        <nn-button>
+                            <template #icon><SettingOutlined /></template>
+                            {{ isClient ? '连接设置' : '服务设置' }}
+                            <nn-badge v-if="settingsBadge" :count="settingsBadge" class="settings-badge" />
+                        </nn-button>
+                        <template #overlay>
+                            <nn-menu @click="handleSettingsMenu">
+                                <template v-if="isClient">
+                                    <nn-menu-item key="clientTls">
+                                        TLS{{ clientForm.tlsEnabled ? ' · 已启用' : '' }}
+                                    </nn-menu-item>
+                                    <nn-menu-item key="metadata">
+                                        Metadata{{ metadataCount ? ` · ${metadataCount} 项` : '' }}
+                                    </nn-menu-item>
+                                </template>
+                                <template v-else>
+                                    <nn-menu-item key="serverTls" :disabled="isServerRunning">
+                                        TLS 与限制{{ serverForm.tlsEnabled ? ' · TLS 已启用' : '' }}
+                                    </nn-menu-item>
+                                    <nn-menu-item key="decodeRules" :disabled="isServerRunning">
+                                        解码规则{{
+                                            serverForm.decodeRules.length
+                                                ? ` · ${serverForm.decodeRules.length} 条`
+                                                : ''
+                                        }}
+                                    </nn-menu-item>
+                                    <nn-menu-item key="reply" :disabled="isServerRunning">
+                                        Unary 回复{{ replyCount ? ` · ${replyCount} 个方法` : '' }}
+                                    </nn-menu-item>
+                                </template>
+                            </nn-menu>
+                        </template>
+                    </nn-dropdown>
+
                     <nn-button
-                        size="small"
-                        :type="clientForm.tlsEnabled ? 'primary' : 'default'"
-                        @click="clientTlsOpen = true"
-                    >
-                        TLS{{ clientForm.tlsEnabled ? ' 开' : '' }}
-                    </nn-button>
-                    <nn-button size="small" @click="metadataOpen = true">
-                        Metadata{{ metadataCount ? ` (${metadataCount})` : '' }}
-                    </nn-button>
-                    <nn-input-number
-                        v-model:value="clientForm.timeoutMs"
-                        class="toolbar-input-timeout"
-                        size="small"
-                        :min="0"
-                        :max="3600000"
-                        addon-after="ms"
-                    />
-                    <nn-button
+                        v-if="isClient"
                         type="primary"
-                        size="small"
                         :loading="callLoading"
                         :disabled="!grpcRuntime.running || !selectedMethod"
                         @click="startCall"
@@ -44,69 +90,28 @@
                         <template #icon><SendOutlined /></template>
                         调用
                     </nn-button>
-                </template>
-
-                <template v-else>
-                    <nn-input
-                        v-model:value="serverForm.host"
-                        class="toolbar-input toolbar-input-host"
-                        size="small"
-                        :disabled="isServerRunning"
-                        placeholder="监听地址"
-                    />
-                    <nn-input-number
-                        v-model:value="serverForm.port"
-                        class="toolbar-input-port"
-                        size="small"
-                        :min="1"
-                        :max="65535"
-                        :disabled="isServerRunning"
-                        :status="validation.port ? 'error' : ''"
-                    />
                     <nn-button
-                        size="small"
-                        :type="serverForm.tlsEnabled ? 'primary' : 'default'"
-                        :disabled="isServerRunning"
-                        @click="serverTlsOpen = true"
-                    >
-                        TLS{{ serverForm.tlsEnabled ? ' 开' : '' }}
-                    </nn-button>
-                    <nn-button size="small" :disabled="isServerRunning" @click="decodeRulesOpen = true">
-                        解码规则{{ serverForm.decodeRules.length ? ` (${serverForm.decodeRules.length})` : '' }}
-                    </nn-button>
-                    <nn-button size="small" :disabled="isServerRunning" @click="replyOpen = true">
-                        Unary 回复{{ replyCount ? ` (${replyCount})` : '' }}
-                    </nn-button>
-                    <nn-button
-                        v-if="!isServerRunning"
+                        v-else-if="!isServerRunning"
                         type="primary"
-                        size="small"
                         :loading="serverLoading"
                         :disabled="!grpcRuntime.running || serverForm.services.length === 0"
                         @click="startServer"
                     >
                         启动服务器
                     </nn-button>
-                    <nn-button v-else type="primary" danger size="small" @click="stopServer">停止服务器</nn-button>
-                    <nn-tag :color="isServerRunning ? 'green' : 'default'" class="toolbar-status">
-                        {{
-                            isServerRunning
-                                ? `监听 ${serverStatus.host}:${serverStatus.boundPort || serverForm.port}`
-                                : '未监听'
-                        }}
-                    </nn-tag>
-                </template>
+                    <nn-button v-else type="primary" danger @click="stopServer">停止服务器</nn-button>
 
-                <span class="toolbar-spacer" />
-                <nn-button
-                    v-if="canOpenMonitorWindow"
-                    size="small"
-                    :loading="monitorOpening"
-                    @click="openMonitorWindow"
-                >
-                    <template #icon><ExternalLinkOutlined /></template>
-                    独立监控窗口
-                </nn-button>
+                    <nn-tooltip title="独立监控窗口">
+                        <nn-button
+                            v-if="canOpenMonitorWindow"
+                            :loading="monitorOpening"
+                            aria-label="独立监控窗口"
+                            @click="openMonitorWindow"
+                        >
+                            <template #icon><ExternalLinkOutlined /></template>
+                        </nn-button>
+                    </nn-tooltip>
+                </div>
             </div>
 
             <div class="workspace-layout">
@@ -585,6 +590,24 @@
     const grpcRuntime = useGrpcRuntime();
     const mode = ref(MODE.CLIENT);
     const isClient = computed(() => mode.value === MODE.CLIENT);
+    const modeOptions = [
+        { label: '客户端 · 下发', value: MODE.CLIENT },
+        { label: '服务器 · 上报', value: MODE.SERVER }
+    ];
+    const settingsBadge = computed(() =>
+        isClient.value
+            ? (clientForm.value.tlsEnabled ? 1 : 0) + (metadataCount.value ? 1 : 0)
+            : (serverForm.value.tlsEnabled ? 1 : 0) +
+              (serverForm.value.decodeRules.length ? 1 : 0) +
+              (replyCount.value ? 1 : 0)
+    );
+    const handleSettingsMenu = ({ key }) => {
+        if (key === 'clientTls') clientTlsOpen.value = true;
+        else if (key === 'metadata') metadataOpen.value = true;
+        else if (key === 'serverTls') serverTlsOpen.value = true;
+        else if (key === 'decodeRules') decodeRulesOpen.value = true;
+        else if (key === 'reply') replyOpen.value = true;
+    };
     const canOpenMonitorWindow = computed(() => typeof window.windowApi?.openMonitor === 'function');
     const monitorOpening = ref(false);
 
@@ -1194,30 +1217,69 @@
     .workspace-toolbar {
         display: flex;
         flex: 0 0 auto;
-        flex-wrap: wrap;
+        align-items: center;
+        gap: 16px;
+        padding: 8px 10px;
+        border: 1px solid var(--nn-color-border-light);
+        border-radius: 6px;
+        background: var(--nn-color-bg-muted);
+    }
+
+    .workspace-endpoint {
+        display: flex;
+        flex: 1 1 auto;
+        min-width: 0;
         align-items: center;
         gap: 8px;
     }
 
-    .toolbar-input-target,
-    .toolbar-input-host {
-        width: 220px;
+    .endpoint-label {
+        flex: 0 0 auto;
+        color: var(--nn-color-text-muted);
+        font-size: 12px;
     }
 
-    .toolbar-input-port {
+    .endpoint-input {
+        width: min(260px, 100%);
+    }
+
+    .endpoint-port {
         width: 110px;
     }
 
-    .toolbar-input-timeout {
-        width: 130px;
+    .endpoint-timeout {
+        width: 140px;
+    }
+
+    .endpoint-status {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .workspace-actions {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .settings-badge {
+        margin-left: 6px;
     }
 
     .toolbar-spacer {
         flex: 1;
     }
 
-    .toolbar-status {
-        font-variant-numeric: tabular-nums;
+    @media (max-width: 1180px) {
+        .workspace-toolbar {
+            flex-wrap: wrap;
+        }
+
+        .workspace-endpoint {
+            flex-basis: 100%;
+            order: 3;
+        }
     }
 
     .workspace-layout {
