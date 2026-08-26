@@ -11,6 +11,7 @@ const BmpConst = require('../../electron/const/bmpConst');
 const DhcpConst = require('../../electron/const/dhcpConst');
 const Dhcp6Const = require('../../electron/const/dhcp6Const');
 const FtpConst = require('../../electron/const/ftpConst');
+const GrpcConst = require('../../electron/const/grpcConst');
 const NtpConst = require('../../electron/const/ntpConst');
 const RadiusConst = require('../../electron/const/radiusConst');
 const RpkiConst = require('../../electron/const/rpkiConst');
@@ -116,6 +117,7 @@ async function runMessageHandlerService(spec, tempDir) {
     let started = false;
 
     try {
+        await spec.prepare?.(client, tempDir);
         const config = await spec.createConfig(tempDir);
         const startResult = await client.sendRequest(spec.startOp, config);
         assert.equal(startResult.status, 'success');
@@ -328,6 +330,29 @@ function createServiceSpecs() {
                 },
                 userConfig: []
             })
+        },
+        {
+            serviceName: PROTOCOL_PROCESS_SERVICES.GRPC,
+            worker: 'grpc/grpcWorker.js',
+            startOp: GrpcConst.GRPC_REQ_TYPES.START_SERVER,
+            stopOp: GrpcConst.GRPC_REQ_TYPES.STOP_SERVER,
+            prepare: async client => {
+                const preset = GrpcConst.GRPC_PROTO_PRESETS.find(item => item.id === 'gnmi');
+                const protoDir = path.join(__dirname, '..', '..', 'resources', 'grpc', 'protos');
+                const compileResult = await client.sendRequest(GrpcConst.GRPC_REQ_TYPES.COMPILE_PROTOS, {
+                    filePaths: preset.files.map(name => path.join(protoDir, name))
+                });
+                assert.equal(compileResult.status, 'success', compileResult.msg);
+            },
+            createConfig: async () => ({
+                ...GrpcConst.DEFAULT_GRPC_SERVER_CONFIG,
+                host: '127.0.0.1',
+                port: await getFreeTcpPort(),
+                services: ['gnmi.gNMI']
+            }),
+            verify: async (client, startResult) => {
+                assert(Number.isInteger(startResult.data?.boundPort) && startResult.data.boundPort > 0);
+            }
         },
         {
             serviceName: PROTOCOL_PROCESS_SERVICES.SNMP,
