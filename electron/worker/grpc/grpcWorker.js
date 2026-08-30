@@ -87,7 +87,7 @@ function metadataToObject(metadata) {
 function buildMetadata(entries) {
     const metadata = new grpc.Metadata();
     for (const entry of Array.isArray(entries) ? entries : []) {
-        if (!entry) {
+        if (!entry || entry.enabled === false) {
             continue;
         }
         const key = String(entry.key || '')
@@ -947,6 +947,8 @@ class GrpcWorker {
         const pageSize = Math.min(500, Math.max(1, Number(query?.pageSize) || 20));
         const role = query?.role ? String(query.role) : '';
         const direction = query?.direction ? String(query.direction) : '';
+        const callId = Number(query?.callId) || 0;
+        const streamId = Number(query?.streamId) || 0;
         const keyword = String(query?.keyword || '')
             .trim()
             .toLowerCase();
@@ -956,6 +958,12 @@ class GrpcWorker {
                 return false;
             }
             if (direction && record.direction !== direction) {
+                return false;
+            }
+            if (callId && record.callId !== callId) {
+                return false;
+            }
+            if (streamId && record.streamId !== streamId) {
                 return false;
             }
             if (keyword) {
@@ -1090,7 +1098,9 @@ class GrpcWorker {
                 decodeRules: config.decodeRules,
                 state: GRPC_STREAM_STATE.OPEN,
                 startedAt: formatTime(),
+                startedAtMs: Date.now(),
                 endedAt: '-',
+                durationMs: null,
                 requests: 0,
                 responses: 0,
                 statusCode: null,
@@ -1306,6 +1316,7 @@ class GrpcWorker {
         }
         callRecord.state = state;
         callRecord.endedAt = formatTime();
+        callRecord.durationMs = Math.max(0, Date.now() - (callRecord.startedAtMs || Date.now()));
         callRecord.reason = reason || '';
         try {
             callRecord.client.close();
@@ -1334,6 +1345,7 @@ class GrpcWorker {
             reason: callRecord.reason || '',
             startedAt: callRecord.startedAt,
             endedAt: callRecord.endedAt,
+            durationMs: callRecord.durationMs ?? Math.max(0, Date.now() - (callRecord.startedAtMs || Date.now())),
             requests: callRecord.requests,
             responses: callRecord.responses,
             statusCode: callRecord.statusCode,

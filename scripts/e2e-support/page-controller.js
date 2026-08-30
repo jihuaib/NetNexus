@@ -3,6 +3,7 @@ const { spawn } = require('child_process');
 const bgp = require('./bgp');
 const dhcp = require('./dhcp');
 const ftp = require('./ftp');
+const grpc = require('./grpc');
 const native = require('./native');
 const ntp = require('./ntp');
 const radius = require('./radius');
@@ -20,6 +21,7 @@ const featureHandlers = {
     bgp,
     dhcp,
     ftp,
+    grpc,
     native,
     ntp,
     radius,
@@ -47,6 +49,7 @@ class FeaturePageE2eController {
             bgp: bgp.createBgpPageState(),
             dhcp: dhcp.createDhcpPageState(now),
             ftp: ftp.createFtpPageState(this.protocolRoot),
+            grpc: grpc.createGrpcPageState(now),
             ntp: ntp.createNtpPageState(now),
             radius: radius.createRadiusPageState(now, this.protocolRoot),
             rpki: rpki.createRpkiPageState(),

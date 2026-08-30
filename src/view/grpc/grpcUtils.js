@@ -7,6 +7,16 @@ import {
 
 export const methodKindLabel = kind => GRPC_METHOD_KIND_LABELS[kind] || kind || '-';
 
+const METHOD_KIND_SHORT = {
+    [GRPC_METHOD_KIND.UNARY]: 'UNARY',
+    [GRPC_METHOD_KIND.SERVER_STREAM]: 'SSTREAM',
+    [GRPC_METHOD_KIND.CLIENT_STREAM]: 'CSTREAM',
+    [GRPC_METHOD_KIND.BIDI_STREAM]: 'BIDI'
+};
+
+/** 方法类型的紧凑标签（树节点 / 历史列表 / URL 栏使用） */
+export const methodKindShort = kind => METHOD_KIND_SHORT[kind] || methodKindLabel(kind);
+
 export const methodKindColor = kind => {
     switch (kind) {
         case GRPC_METHOD_KIND.UNARY:
