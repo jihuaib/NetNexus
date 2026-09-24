@@ -1,7 +1,9 @@
 const BgpConst = require('../../const/bgpConst');
+const ipaddr = require('ipaddr.js');
 const { writeUInt16, writeUInt32, ipToBytes } = require('../../utils/ipUtils');
 const { getAddrFamilyType, getAfiAndSafi } = require('../../utils/bgpUtils');
 const { parseBgpPacket, getBgpPacketSummary } = require('../../utils/bgpPacketParser');
+const { parseBgpRawPacket } = require('../../utils/bgpRawPacket');
 const logger = require('../../log/logger');
 const CommonUtils = require('../../utils/commonUtils');
 const BgpInstance = require('./bgpInstance');
@@ -241,7 +243,12 @@ class BgpSession {
     }
 
     static makeKey(vrfIndex, peerIp) {
-        return `${vrfIndex}|${peerIp}`;
+        // Socket addresses use compressed IPv6 even when the configured peer does not.
+        const address =
+            typeof peerIp === 'string' && peerIp.includes(':') && ipaddr.isValid(peerIp)
+                ? ipaddr.parse(peerIp).toString()
+                : peerIp;
+        return `${vrfIndex}|${address}`;
     }
 
     static parseKey(key) {
@@ -473,7 +480,7 @@ class BgpSession {
                     logger.info(`${this.peerIp} recv keepalive message ${getBgpPacketSummary(parsedPacket)}`);
                 }
                 this.sendKeepAliveMsg();
-                if (this.sessState !== BgpConst.BGP_PEER_STATE.ESTABLISHED) {
+                if (this.sessState === BgpConst.BGP_PEER_STATE.OPEN_CONFIRM) {
                     this.changeSessionFsmState(BgpConst.BGP_PEER_STATE.ESTABLISHED);
 
                     const sessionKey = BgpSession.makeKey(0, this.peerIp);
@@ -871,6 +878,80 @@ class BgpSession {
             socket.once('close', onClose);
             socket.once('error', onError);
         });
+    }
+
+    assertRawPacketSocket(socket) {
+        if (this.sessState !== BgpConst.BGP_PEER_STATE.ESTABLISHED) {
+            throw new Error('BGP 会话尚未 Established，不能发送原始报文');
+        }
+        if (
+            !socket ||
+            this.socket !== socket ||
+            socket.destroyed ||
+            socket.connecting ||
+            socket.writable !== true ||
+            socket.writableEnded ||
+            socket.writableFinished ||
+            socket.readableEnded
+        ) {
+            throw new Error('BGP 连接已断开或不可写，不能发送原始报文');
+        }
+    }
+
+    async sendRawPacket(packetHex) {
+        const socket = this.socket;
+        this.assertRawPacketSocket(socket);
+        const { buffer, byteLength, packetCount } = parseBgpRawPacket(packetHex);
+
+        await new Promise((resolve, reject) => {
+            let settled = false;
+            let timer;
+            const cleanup = () => {
+                clearTimeout(timer);
+                socket.off('close', onClose);
+                socket.off('end', onClose);
+                socket.off('error', onError);
+            };
+            const finish = error => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                if (error) reject(error);
+                else resolve();
+            };
+            const onClose = () => finish(new Error('发送原始报文时 BGP 连接已断开'));
+            const onError = error => finish(new Error(`BGP 原始报文发送失败：${error.message}`));
+            socket.once('close', onClose);
+            socket.once('end', onClose);
+            socket.once('error', onError);
+            timer = setTimeout(() => {
+                socket.destroy();
+                finish(new Error('BGP 原始报文写入超时，连接已关闭'));
+            }, 10000);
+
+            try {
+                // Recheck the live session at the actual write, never queue for a future session.
+                this.assertRawPacketSocket(socket);
+                // A false return only signals backpressure. The callback confirms completion.
+                socket.write(buffer, error => {
+                    if (error) {
+                        onError(error);
+                        return;
+                    }
+                    try {
+                        this.assertRawPacketSocket(socket);
+                        finish();
+                    } catch (writeError) {
+                        finish(writeError);
+                    }
+                });
+            } catch (error) {
+                finish(error);
+            }
+        });
+
+        logger.info(`${this.peerIp} send raw BGP packet: ${packetCount} messages, ${byteLength} bytes`);
+        return { peerIp: this.peerIp, byteLength, packetCount };
     }
 
     withdrawRoute(buffer) {

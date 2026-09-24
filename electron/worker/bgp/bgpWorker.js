@@ -188,6 +188,7 @@ class BgpWorker {
         );
         this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.GET_ROUTES, this.getRoutes.bind(this));
         this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.GET_ROUTE_DETAIL, this.getRouteDetail.bind(this));
+        this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.SEND_RAW_PACKET, this.sendRawPacket.bind(this));
 
         // MVPN
         this.messageHandler.registerHandler(
@@ -634,6 +635,27 @@ class BgpWorker {
 
         logger.info(`ipv6 邻居配置成功`);
         this.messageHandler.sendSuccessResponse(messageId, null, `ipv6 邻居配置成功`);
+    }
+
+    async sendRawPacket(messageId, config = {}) {
+        try {
+            const { vrfIndex = 0, peerIp, packetHex } = config || {};
+            if (!Number.isInteger(vrfIndex) || vrfIndex < 0) {
+                throw new Error('VRF 索引必须为非负整数');
+            }
+            if (typeof peerIp !== 'string' || !net.isIP(peerIp)) {
+                throw new Error('请选择有效的 IPv4 或 IPv6 邻居地址');
+            }
+            const session = this.bgpSessionMap.get(BgpSession.makeKey(vrfIndex, peerIp));
+            if (!session) {
+                throw new Error('BGP 邻居会话不存在，请先配置并建立邻居连接');
+            }
+
+            const result = await session.sendRawPacket(packetHex);
+            this.messageHandler.sendSuccessResponse(messageId, result, 'BGP 原始报文发送成功');
+        } catch (error) {
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+        }
     }
 
     getInstanceInfo(messageId) {

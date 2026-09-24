@@ -67,6 +67,7 @@ class BgpApp {
         );
         ipc.handle('bgp:getPeerInfo', async () => this.handleGetPeerInfo());
         ipc.handle('bgp:deletePeer', async (event, peer) => this.handleDeletePeer(event, peer));
+        ipc.handle('bgp:sendRawPacket', async (event, config) => this.handleSendRawPacket(event, config));
 
         // route
         ipc.handle('bgp:generateIpv4Routes', async (event, config) => this.handleGenerateIpv4Routes(event, config));
@@ -543,6 +544,20 @@ class BgpApp {
             return successResponse(result.data, '获取Peer信息成功');
         } catch (error) {
             logger.error('Error getting peer info:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleSendRawPacket(_event, config) {
+        if (!this.worker) {
+            return errorResponse('BGP未启动，原始报文只能在会话 Established 后发送');
+        }
+
+        try {
+            const result = await this.worker.sendRequest(BgpConst.BGP_REQ_TYPES.SEND_RAW_PACKET, config);
+            return successResponse(result.data, result.msg || '原始报文发送成功');
+        } catch (error) {
+            logger.error('Error sending raw BGP packet:', error.message);
             return errorResponse(error.message);
         }
     }

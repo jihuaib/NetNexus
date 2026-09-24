@@ -147,6 +147,7 @@
                                     >
                                         <nn-input
                                             v-model:value="ipv6PeerConfigData.peerIpv6"
+                                            data-testid="bgp-ipv6-peer-ip-input"
                                             :status="ipv6PeerConfigvalidationErrors.peerIpv6 ? 'error' : ''"
                                         />
                                     </nn-tooltip>
@@ -160,6 +161,7 @@
                                     >
                                         <nn-input
                                             v-model:value="ipv6PeerConfigData.peerIpv6As"
+                                            data-testid="bgp-ipv6-peer-as-input"
                                             :status="ipv6PeerConfigvalidationErrors.peerIpv6As ? 'error' : ''"
                                         />
                                     </nn-tooltip>
@@ -173,6 +175,7 @@
                                     >
                                         <nn-input
                                             v-model:value="ipv6PeerConfigData.holdTimeIpv6"
+                                            data-testid="bgp-ipv6-peer-hold-time-input"
                                             :status="ipv6PeerConfigvalidationErrors.holdTimeIpv6 ? 'error' : ''"
                                         />
                                     </nn-tooltip>
@@ -265,7 +268,13 @@
                             <nn-col :span="24">
                                 <nn-form-item :wrapper-col="{ offset: 10, span: 20 }">
                                     <nn-space size="middle">
-                                        <nn-button type="primary" html-type="submit">配置IPv6邻居</nn-button>
+                                        <nn-button
+                                            data-testid="bgp-config-ipv6-peer-button"
+                                            type="primary"
+                                            html-type="submit"
+                                        >
+                                            配置IPv6邻居
+                                        </nn-button>
                                     </nn-space>
                                 </nn-form-item>
                             </nn-col>
@@ -309,10 +318,30 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
-                                                <template #icon><DeleteOutlined /></template>
-                                                删除
-                                            </nn-button>
+                                            <nn-space size="small">
+                                                <nn-button
+                                                    size="small"
+                                                    :disabled="record.peerState !== 'Established'"
+                                                    :title="
+                                                        record.peerState === 'Established'
+                                                            ? '向当前 BGP 连接发送原始报文'
+                                                            : 'BGP 邻居建立后才可发送'
+                                                    "
+                                                    data-testid="bgp-raw-packet-open"
+                                                    @click="openRawPacket(record)"
+                                                >
+                                                    发送原始报文
+                                                </nn-button>
+                                                <nn-button
+                                                    type="primary"
+                                                    danger
+                                                    size="small"
+                                                    @click="deletePeer(record)"
+                                                >
+                                                    <template #icon><DeleteOutlined /></template>
+                                                    删除
+                                                </nn-button>
+                                            </nn-space>
                                         </template>
                                     </template>
                                 </nn-table>
@@ -345,10 +374,30 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
-                                                <template #icon><DeleteOutlined /></template>
-                                                删除
-                                            </nn-button>
+                                            <nn-space size="small">
+                                                <nn-button
+                                                    size="small"
+                                                    :disabled="record.peerState !== 'Established'"
+                                                    :title="
+                                                        record.peerState === 'Established'
+                                                            ? '向当前 BGP 连接发送原始报文'
+                                                            : 'BGP 邻居建立后才可发送'
+                                                    "
+                                                    data-testid="bgp-raw-packet-open"
+                                                    @click="openRawPacket(record)"
+                                                >
+                                                    发送原始报文
+                                                </nn-button>
+                                                <nn-button
+                                                    type="primary"
+                                                    danger
+                                                    size="small"
+                                                    @click="deletePeer(record)"
+                                                >
+                                                    <template #icon><DeleteOutlined /></template>
+                                                    删除
+                                                </nn-button>
+                                            </nn-space>
                                         </template>
                                     </template>
                                 </nn-table>
@@ -362,6 +411,7 @@
                                     </nn-tag>
                                 </div>
                                 <nn-table
+                                    data-testid="bgp-ipv6-unc-peer-table"
                                     :columns="PeerInfoColumns"
                                     :data-source="ipv6UncPeerList"
                                     :row-key="
@@ -380,10 +430,30 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
-                                                <template #icon><DeleteOutlined /></template>
-                                                删除
-                                            </nn-button>
+                                            <nn-space size="small">
+                                                <nn-button
+                                                    size="small"
+                                                    :disabled="record.peerState !== 'Established'"
+                                                    :title="
+                                                        record.peerState === 'Established'
+                                                            ? '向当前 BGP 连接发送原始报文'
+                                                            : 'BGP 邻居建立后才可发送'
+                                                    "
+                                                    data-testid="bgp-raw-packet-open"
+                                                    @click="openRawPacket(record)"
+                                                >
+                                                    发送原始报文
+                                                </nn-button>
+                                                <nn-button
+                                                    type="primary"
+                                                    danger
+                                                    size="small"
+                                                    @click="deletePeer(record)"
+                                                >
+                                                    <template #icon><DeleteOutlined /></template>
+                                                    删除
+                                                </nn-button>
+                                            </nn-space>
                                         </template>
                                     </template>
                                 </nn-table>
@@ -415,10 +485,30 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
-                                                <template #icon><DeleteOutlined /></template>
-                                                删除
-                                            </nn-button>
+                                            <nn-space size="small">
+                                                <nn-button
+                                                    size="small"
+                                                    :disabled="record.peerState !== 'Established'"
+                                                    :title="
+                                                        record.peerState === 'Established'
+                                                            ? '向当前 BGP 连接发送原始报文'
+                                                            : 'BGP 邻居建立后才可发送'
+                                                    "
+                                                    data-testid="bgp-raw-packet-open"
+                                                    @click="openRawPacket(record)"
+                                                >
+                                                    发送原始报文
+                                                </nn-button>
+                                                <nn-button
+                                                    type="primary"
+                                                    danger
+                                                    size="small"
+                                                    @click="deletePeer(record)"
+                                                >
+                                                    <template #icon><DeleteOutlined /></template>
+                                                    删除
+                                                </nn-button>
+                                            </nn-space>
                                         </template>
                                     </template>
                                 </nn-table>
@@ -450,10 +540,30 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
-                                                <template #icon><DeleteOutlined /></template>
-                                                删除
-                                            </nn-button>
+                                            <nn-space size="small">
+                                                <nn-button
+                                                    size="small"
+                                                    :disabled="record.peerState !== 'Established'"
+                                                    :title="
+                                                        record.peerState === 'Established'
+                                                            ? '向当前 BGP 连接发送原始报文'
+                                                            : 'BGP 邻居建立后才可发送'
+                                                    "
+                                                    data-testid="bgp-raw-packet-open"
+                                                    @click="openRawPacket(record)"
+                                                >
+                                                    发送原始报文
+                                                </nn-button>
+                                                <nn-button
+                                                    type="primary"
+                                                    danger
+                                                    size="small"
+                                                    @click="deletePeer(record)"
+                                                >
+                                                    <template #icon><DeleteOutlined /></template>
+                                                    删除
+                                                </nn-button>
+                                            </nn-space>
                                         </template>
                                     </template>
                                 </nn-table>
@@ -486,10 +596,30 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
-                                                <template #icon><DeleteOutlined /></template>
-                                                删除
-                                            </nn-button>
+                                            <nn-space size="small">
+                                                <nn-button
+                                                    size="small"
+                                                    :disabled="record.peerState !== 'Established'"
+                                                    :title="
+                                                        record.peerState === 'Established'
+                                                            ? '向当前 BGP 连接发送原始报文'
+                                                            : 'BGP 邻居建立后才可发送'
+                                                    "
+                                                    data-testid="bgp-raw-packet-open"
+                                                    @click="openRawPacket(record)"
+                                                >
+                                                    发送原始报文
+                                                </nn-button>
+                                                <nn-button
+                                                    type="primary"
+                                                    danger
+                                                    size="small"
+                                                    @click="deletePeer(record)"
+                                                >
+                                                    <template #icon><DeleteOutlined /></template>
+                                                    删除
+                                                </nn-button>
+                                            </nn-space>
                                         </template>
                                     </template>
                                 </nn-table>
@@ -521,10 +651,30 @@
                                 >
                                     <template #bodyCell="{ column, record }">
                                         <template v-if="column.key === 'action'">
-                                            <nn-button type="primary" danger size="small" @click="deletePeer(record)">
-                                                <template #icon><DeleteOutlined /></template>
-                                                删除
-                                            </nn-button>
+                                            <nn-space size="small">
+                                                <nn-button
+                                                    size="small"
+                                                    :disabled="record.peerState !== 'Established'"
+                                                    :title="
+                                                        record.peerState === 'Established'
+                                                            ? '向当前 BGP 连接发送原始报文'
+                                                            : 'BGP 邻居建立后才可发送'
+                                                    "
+                                                    data-testid="bgp-raw-packet-open"
+                                                    @click="openRawPacket(record)"
+                                                >
+                                                    发送原始报文
+                                                </nn-button>
+                                                <nn-button
+                                                    type="primary"
+                                                    danger
+                                                    size="small"
+                                                    @click="deletePeer(record)"
+                                                >
+                                                    <template #icon><DeleteOutlined /></template>
+                                                    删除
+                                                </nn-button>
+                                            </nn-space>
                                         </template>
                                     </template>
                                 </nn-table>
@@ -534,6 +684,12 @@
                 </nn-card>
             </nn-col>
         </nn-row>
+
+        <BgpRawPacketModal
+            v-model:open="rawPacketVisible"
+            :peer="rawPacketTarget"
+            :peer-state="rawPacketPeer?.peerState || 'Unavailable'"
+        />
 
         <!-- Custom Open Cap Drawers -->
         <nn-textarea-drawer
@@ -564,12 +720,14 @@
         BGP_ADDR_FAMILY,
         BGP_PEER_TYPE,
         BGP_EVENT_PAGE_ID,
+        BGP_RUNTIME_CHANGED_EVENT,
         BGP_OPEN_CAP_CODE,
         BGP_ROLE_TYPE,
         DEFAULT_VALUES,
         IP_TYPE
     } from '../../const/bgpConst';
     import { DeleteOutlined, SettingOutlined, UnorderedListOutlined } from 'netnexus-ui/icons';
+    import BgpRawPacketModal from '../../components/BgpRawPacketModal.vue';
 
     import EventBus from '../../utils/eventBus';
     import {
@@ -931,6 +1089,36 @@
     const ipv6MvpnPeerList = ref([]);
     const ipv4QpPeerList = ref([]);
     const ipv6QpPeerList = ref([]);
+    const peerLists = [
+        ipv4UncPeerList,
+        ipv6UncPeerList,
+        ipv4LabelPeerList,
+        ipv4MvpnPeerList,
+        ipv6MvpnPeerList,
+        ipv4QpPeerList,
+        ipv6QpPeerList
+    ];
+    const rawPacketVisible = ref(false);
+    const rawPacketTarget = ref(null);
+    const rawPacketPeer = computed(() =>
+        peerLists
+            .flatMap(list => list.value)
+            .find(
+                peer =>
+                    peer.peerIp === rawPacketTarget.value?.peerIp &&
+                    (peer.vrfIndex || 0) === (rawPacketTarget.value?.vrfIndex || 0) &&
+                    peer.addressFamily === rawPacketTarget.value?.addressFamily
+            )
+    );
+    const openRawPacket = record => {
+        if (record.peerState !== 'Established') return;
+        rawPacketTarget.value = {
+            peerIp: record.peerIp,
+            vrfIndex: record.vrfIndex || 0,
+            addressFamily: record.addressFamily
+        };
+        rawPacketVisible.value = true;
+    };
     const activePeerInfoTabKey = ref(BGP_ADDR_FAMILY.IPV4_UNC);
     const PeerInfoColumns = [
         {
@@ -997,7 +1185,8 @@
         },
         {
             title: '操作',
-            key: 'action'
+            key: 'action',
+            width: 210
         }
     ];
 
@@ -1074,8 +1263,31 @@
         }
     };
 
+    let peerInfoRequestId = 0;
+    const clearPeerInfo = () => {
+        peerInfoRequestId += 1;
+        peerLists.forEach(list => {
+            list.value = [];
+        });
+    };
+    const handleRuntimeChanged = state => {
+        clearPeerInfo();
+        if (state?.running) refreshPeerInfo();
+    };
+
     const refreshPeerInfo = async () => {
-        const peerInfo = await window.bgpApi.getPeerInfo();
+        const requestId = ++peerInfoRequestId;
+        let peerInfo;
+        try {
+            peerInfo = await window.bgpApi.getPeerInfo();
+        } catch (error) {
+            if (requestId === peerInfoRequestId) {
+                clearPeerInfo();
+                console.error('Peer信息查询失败', error);
+            }
+            return;
+        }
+        if (requestId !== peerInfoRequestId) return;
         if (peerInfo.status === 'success') {
             // 处理 IPv4-UNC 邻居信息
             ipv4UncPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV4_UNC])
@@ -1113,13 +1325,7 @@
                 : [];
         } else {
             console.error(peerInfo.msg || 'Peer信息查询失败');
-            ipv4UncPeerList.value = [];
-            ipv6UncPeerList.value = [];
-            ipv4LabelPeerList.value = [];
-            ipv4MvpnPeerList.value = [];
-            ipv6MvpnPeerList.value = [];
-            ipv4QpPeerList.value = [];
-            ipv6QpPeerList.value = [];
+            clearPeerInfo();
         }
     };
 
@@ -1186,11 +1392,15 @@
     });
 
     onDeactivated(() => {
+        rawPacketVisible.value = false;
+        clearPeerInfo();
         EventBus.off('bgp:peerChange', BGP_EVENT_PAGE_ID.PAGE_ID_BGP_PEER_INFO);
+        EventBus.off(BGP_RUNTIME_CHANGED_EVENT, BGP_EVENT_PAGE_ID.PAGE_ID_BGP_PEER_INFO);
     });
 
     onActivated(async () => {
         EventBus.on('bgp:peerChange', BGP_EVENT_PAGE_ID.PAGE_ID_BGP_PEER_INFO, onPeerChange);
+        EventBus.on(BGP_RUNTIME_CHANGED_EVENT, BGP_EVENT_PAGE_ID.PAGE_ID_BGP_PEER_INFO, handleRuntimeChanged);
         await refreshPeerInfo();
     });
 </script>

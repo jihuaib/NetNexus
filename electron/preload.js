@@ -106,6 +106,7 @@ contextBridge.exposeInMainWorld('bgpApi', {
     configIpv6Peer: ipv6PeerConfigData => ipcRenderer.invoke('bgp:configIpv6Peer', ipv6PeerConfigData),
     getPeerInfo: () => ipcRenderer.invoke('bgp:getPeerInfo'),
     deletePeer: peer => ipcRenderer.invoke('bgp:deletePeer', peer),
+    sendRawPacket: config => ipcRenderer.invoke('bgp:sendRawPacket', config),
 
     // route操作
     generateIpv4Routes: config => ipcRenderer.invoke('bgp:generateIpv4Routes', config),
