@@ -235,6 +235,26 @@ async function main() {
     const shutdown = await app.handleShutdown();
     assert.equal(shutdown.status, 'success');
 
+    // 导入目录：递归收集 .proto 文件，跳过隐藏目录与 node_modules
+    const os = require('node:os');
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const scanRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grpc-proto-scan-'));
+    try {
+        fs.mkdirSync(path.join(scanRoot, 'sub/deep'), { recursive: true });
+        fs.mkdirSync(path.join(scanRoot, '.hidden'), { recursive: true });
+        fs.mkdirSync(path.join(scanRoot, 'node_modules/pkg'), { recursive: true });
+        fs.writeFileSync(path.join(scanRoot, 'a.proto'), 'syntax = "proto3";');
+        fs.writeFileSync(path.join(scanRoot, 'sub/deep/b.proto'), 'syntax = "proto3";');
+        fs.writeFileSync(path.join(scanRoot, 'sub/readme.txt'), 'x');
+        fs.writeFileSync(path.join(scanRoot, '.hidden/c.proto'), 'syntax = "proto3";');
+        fs.writeFileSync(path.join(scanRoot, 'node_modules/pkg/d.proto'), 'syntax = "proto3";');
+        const scanned = GrpcApp.collectProtoFiles(scanRoot);
+        assert.deepEqual(scanned, [path.join(scanRoot, 'a.proto'), path.join(scanRoot, 'sub/deep/b.proto')]);
+        assert.deepEqual(GrpcApp.collectProtoFiles(path.join(scanRoot, 'missing')), []);
+    } finally {
+        fs.rmSync(scanRoot, { recursive: true, force: true });
+    }
     console.log('gRPC app runtime lifecycle test passed');
 }
 

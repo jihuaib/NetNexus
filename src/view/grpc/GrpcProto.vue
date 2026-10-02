@@ -54,7 +54,7 @@
                     </nn-button>
                     <nn-button :disabled="!grpcRuntime.running" :loading="compiling" @click="selectIncludeDirectory">
                         <template #icon><FolderOpenOutlined /></template>
-                        搜索目录
+                        导入目录
                     </nn-button>
                     <nn-button
                         :disabled="!grpcRuntime.running || !hasSources"
@@ -103,7 +103,7 @@
                             <div class="panel-heading">
                                 <span class="panel-title">文件</span>
                                 <span class="panel-meta">
-                                    待编译 {{ filePaths.length }} · 已加载 {{ status.files.length }} · 搜索目录
+                                    待编译 {{ filePaths.length }} · 已加载 {{ status.files.length }} · 目录
                                     {{ includeDirs.length }}
                                 </span>
                             </div>
@@ -757,7 +757,7 @@
     });
 
     const fileStatusMeta = record => {
-        if (record.kind === 'dir') return { color: 'default', text: '搜索目录' };
+        if (record.kind === 'dir') return { color: 'default', text: '导入目录' };
         if (record.kind === 'import') return { color: 'cyan', text: 'import' };
         if (compileError.value && compileError.value.file === record.path) return { color: 'error', text: '失败' };
         if (record.loaded && !dirty.value) return { color: 'success', text: '已编译' };
@@ -1076,9 +1076,19 @@
     const selectIncludeDirectory = async () => {
         try {
             const result = await window.grpcApi.selectProtoDirectory();
-            if (result.status === 'success' && result.data && !includeDirs.value.includes(result.data)) {
-                includeDirs.value = [...includeDirs.value, result.data];
+            if (result.status !== 'success' || !result.data) return;
+            // 兼容旧返回（纯目录字符串）；新返回为 { directory, files }
+            const directory = typeof result.data === 'string' ? result.data : result.data.directory;
+            const files = Array.isArray(result.data.files) ? result.data.files : [];
+            if (directory && !includeDirs.value.includes(directory)) {
+                includeDirs.value = [...includeDirs.value, directory];
                 dirty.value = true;
+            }
+            if (files.length) {
+                addFiles(files);
+                notify.success(`已从目录添加 ${files.length} 个 proto 文件`);
+            } else {
+                notify.warning('目录及其子目录中未找到 .proto 文件，仅作为 import 查找目录');
             }
         } catch (error) {
             notify.error('选择目录失败: ' + error.message);

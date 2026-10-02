@@ -109,6 +109,16 @@ const GRPC_PROTO_PRESETS = [
         ]
     },
     {
+        id: 'h3c-dialout',
+        name: 'H3C gRPC Dial-out',
+        files: ['h3c-grpc-dialout.proto', 'h3c-grpc-dialout-v3.proto'],
+        services: ['grpc_dialout.GRPCDialout', 'grpc_dialout_v3.gRPCDialoutV3'],
+        decodeRules: [
+            { messageType: 'grpc_dialout.DialoutMsg', field: 'jsonData', targetType: '@json' },
+            { messageType: 'grpc_dialout_v3.DialoutV3Args', field: 'data', targetType: '@json' }
+        ]
+    },
+    {
         id: 'gnmi',
         name: 'OpenConfig gNMI',
         files: ['gnmi.proto', 'gnmi_ext.proto'],

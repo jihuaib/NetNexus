@@ -159,7 +159,28 @@ class ProtoRegistry {
         return path.dirname(resolved) === path.resolve(this.builtinDir);
     }
 
-    createResolvePath(includeDirs) {
+    createResolvePath(includeDirs, requestedFiles = []) {
+        // 待编译列表中的文件按相对路径后缀索引：import "a/b.proto" 可命中 /any/dir/a/b.proto。
+        // 只保留无歧义的后缀（同一后缀对应多个文件时不参与匹配）。
+        const requestedBySuffix = new Map();
+        const registerSuffix = (suffix, filePath) => {
+            if (!requestedBySuffix.has(suffix)) {
+                requestedBySuffix.set(suffix, filePath);
+            } else if (requestedBySuffix.get(suffix) !== filePath) {
+                requestedBySuffix.set(suffix, null);
+            }
+        };
+        for (const filePath of requestedFiles) {
+            const segments = path.resolve(filePath).split(path.sep).filter(Boolean);
+            for (let count = 1; count <= segments.length; count += 1) {
+                registerSuffix(segments.slice(-count).join('/'), path.resolve(filePath));
+            }
+        }
+        const findRequestedFile = target => {
+            const normalized = target.split(/[\\/]/u).filter(Boolean).join('/');
+            return requestedBySuffix.get(normalized) || null;
+        };
+
         return (origin, target) => {
             if (path.isAbsolute(target)) {
                 return target;
@@ -169,6 +190,12 @@ class ProtoRegistry {
                 candidates.push(path.resolve(path.dirname(origin), target));
             }
             includeDirs.forEach(dir => candidates.push(path.resolve(dir, target)));
+            // 内置目录只是最后的兜底：优先使用待编译列表里的同名文件，
+            // 避免批量导入与内置模板同名的 proto 时重复加载两份定义导致编译失败。
+            const requestedMatch = findRequestedFile(target);
+            if (requestedMatch) {
+                candidates.push(requestedMatch);
+            }
             candidates.push(path.resolve(this.builtinDir, target));
             const found = candidates.find(candidate => fs.existsSync(candidate));
             if (found) {
@@ -210,7 +237,7 @@ class ProtoRegistry {
 
         const root = new protobuf.Root();
         this.importTargets = new Map();
-        root.resolvePath = this.createResolvePath(dirs);
+        root.resolvePath = this.createResolvePath(dirs, files);
 
         for (const file of files) {
             if (!fs.existsSync(file)) {
@@ -1018,8 +1045,18 @@ class ProtoRegistry {
                 continue;
             }
 
-            if (field.type === 'string' && rule === GRPC_DECODE_TARGET.JSON) {
-                const convert = item => this.expandJsonText(String(item), typeFullName, field.name, warnings);
+            if (field.type === 'string') {
+                let convert = null;
+                if (rule === GRPC_DECODE_TARGET.JSON) {
+                    convert = item => this.expandJsonText(String(item), typeFullName, field.name, warnings);
+                } else if (!rule) {
+                    // 无规则时自动尝试：内容以 { 或 [ 开头且是合法 JSON 的字符串（如 H3C jsonData、
+                    // 华为 data_json）直接展开为对象，避免以转义单行文本展示；解析失败则原样保留。
+                    convert = item => this.autoExpandJsonString(item);
+                }
+                if (!convert) {
+                    continue;
+                }
                 if (field.repeated) {
                     plain[field.name] = (fieldValue || []).map(convert);
                 } else if (!field.map) {
@@ -1154,6 +1191,19 @@ class ProtoRegistry {
         }
     }
 
+    autoExpandJsonString(value) {
+        const text = String(value ?? '');
+        const first = text.trimStart()[0];
+        if (first !== '{' && first !== '[') {
+            return value;
+        }
+        try {
+            return JSON.parse(text);
+        } catch (_error) {
+            return value;
+        }
+    }
+
     expandJsonText(text, ownerType, fieldName, warnings) {
         const trimmed = String(text || '').trim();
         if (!trimmed) {
@@ -1225,6 +1275,10 @@ class ProtoRegistry {
         const seenOneofs = new Set();
 
         for (const field of type.fieldsArray.slice().sort((a, b) => a.id - b.id)) {
+            // 弃用字段不进模板：设备通常已拒绝或忽略这些字段。
+            if (field.options && field.options.deprecated) {
+                continue;
+            }
             if (field.partOf) {
                 if (seenOneofs.has(field.partOf.name)) {
                     continue;
@@ -1232,42 +1286,21 @@ class ProtoRegistry {
                 seenOneofs.add(field.partOf.name);
             }
             field.resolve();
-            const scalar = this.scalarTemplate(field, nextStack, depth);
             if (field.map) {
                 template[field.name] = {};
             } else if (field.repeated) {
-                template[field.name] = [scalar];
+                // repeated 生成空数组：占位元素（空字符串 / 空消息）会被真实编码进请求，
+                // 原样下发时常被设备以 INVALID_ARGUMENT 拒绝。元素结构可在节点属性中查看。
+                template[field.name] = [];
+            } else if (field.resolvedType instanceof protobuf.Type) {
+                template[field.name] = this.buildTemplate(field.resolvedType, nextStack, depth + 1);
             } else {
-                template[field.name] = scalar;
+                // 标量占位一律用 null：null 字段不参与编码，不会把 0 / "" / 枚举首值下发给设备；
+                // protobufjs 对对象上存在的字段一律写入线路（含 proto3 默认值），所以不能用 0 占位。
+                template[field.name] = null;
             }
         }
         return template;
-    }
-
-    scalarTemplate(field, stack, depth) {
-        if (field.resolvedType instanceof protobuf.Type) {
-            return this.buildTemplate(field.resolvedType, stack, depth + 1);
-        }
-        if (field.resolvedType instanceof protobuf.Enum) {
-            const names = Object.keys(field.resolvedType.values);
-            return names.length > 0 ? names[0] : 0;
-        }
-        switch (field.type) {
-            case 'string':
-                return '';
-            case 'bool':
-                return false;
-            case 'bytes':
-                return '';
-            case 'int64':
-            case 'uint64':
-            case 'sint64':
-            case 'fixed64':
-            case 'sfixed64':
-                return '0';
-            default:
-                return 0;
-        }
     }
 }
 

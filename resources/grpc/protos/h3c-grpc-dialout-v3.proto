@@ -1,0 +1,16 @@
+// H3C Comware gRPC Dial-out v3（proto3 版，data 携带 JSON/GPB 负载）。
+// 内容来自 H3C 官方《gRPC 配置指导》公开的 grpc_dialout_v3.proto。
+syntax = "proto3";
+
+package grpc_dialout_v3;
+
+message DialoutV3Args {
+    int64 ReqId = 1;
+    bytes data = 2;
+    string errors = 3;
+    int32 totalSize = 4;
+}
+
+service gRPCDialoutV3 {
+    rpc DialoutV3(stream DialoutV3Args) returns (stream DialoutV3Args) {}
+}

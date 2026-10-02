@@ -142,8 +142,8 @@ function testNestedDecodeByProtoPath() {
         const jsonWithoutRules = registry.decodeMessage('huawei_dialout.serviceArgs', jsonArgs, {});
         assert.deepStrictEqual(
             jsonWithoutRules.value.data_json,
-            JSON.stringify({ node_id_str: 'router-1', rows: [1, 2] }),
-            'string fields stay text without a rule'
+            { node_id_str: 'router-1', rows: [1, 2] },
+            'JSON-looking string fields auto-expand without a rule'
         );
         const opaque = registry.encodeMessage('telemetry.TelemetryRowGPB', {
             timestamp: '1',
@@ -156,9 +156,9 @@ function testNestedDecodeByProtoPath() {
         );
 
         const template = registry.createTemplate('telemetry.Telemetry');
-        assert.strictEqual(template.encoding, 'Encoding_GPB');
-        assert.strictEqual(template.msg_timestamp, '0');
-        assert(Array.isArray(template.data_gpb.row));
+        assert.strictEqual(template.encoding, null, 'scalar placeholders must be null');
+        assert.strictEqual(template.msg_timestamp, null, '64-bit placeholders must be null');
+        assert.deepStrictEqual(template.data_gpb.row, [], 'repeated fields must be empty in templates');
         console.log('[gRPC proto CI] nested decode via proto_path ok');
     });
 }
@@ -239,7 +239,81 @@ function testServiceDefinitionRoundTrip() {
     console.log('[gRPC proto CI] service definition round trip ok');
 }
 
+function testBatchImportPrefersRequestedFilesOverBuiltin() {
+    withTempDir(dir => {
+        // 批量导入的文件里带有与内置模板同名的 proto（不同目录）：
+        // import 必须解析到待编译列表中的那一份，而不是内置目录的副本，
+        // 否则同一包会被加载两次，报 duplicate name。
+        const telemetryDir = path.join(dir, 'vendor');
+        fs.mkdirSync(telemetryDir, { recursive: true });
+        const telemetryPath = path.join(telemetryDir, 'huawei-telemetry.proto');
+        fs.writeFileSync(
+            telemetryPath,
+            'syntax = "proto3";\npackage telemetry;\nmessage Telemetry { string node_id_str = 1; uint32 custom_field = 2; }\n'
+        );
+        const mainPath = path.join(dir, 'main.proto');
+        fs.writeFileSync(
+            mainPath,
+            'syntax = "proto3";\npackage m;\nimport "huawei-telemetry.proto";\nmessage Wrap { telemetry.Telemetry t = 1; }\n'
+        );
+
+        const registry = new ProtoRegistry();
+        const catalog = registry.compile({ filePaths: [mainPath, telemetryPath] });
+        const loaded = catalog.files.map(file => file.path);
+        assert(loaded.includes(telemetryPath), 'user copy must be loaded');
+        assert(!loaded.some(file => registry.isBuiltinFile(file)), 'builtin copy must not be loaded');
+        const type = registry.tryLookupType('telemetry.Telemetry');
+        assert(type.fields.custom_field, 'user version of telemetry.Telemetry must win over builtin');
+        console.log('[gRPC proto CI] batch import prefers requested files over builtin ok');
+    });
+}
+
+function testTemplateIsMinimalAndSendable() {
+    const registry = new ProtoRegistry();
+    const { files } = resolvePreset(registry, 'gnmi');
+    registry.compile({ filePaths: files });
+    const template = registry.createTemplate('gnmi.GetRequest');
+    // repeated / map 为空集合，弃用字段不出现，标量占位为 null
+    assert.deepStrictEqual(template.path, []);
+    assert.deepStrictEqual(template.extension, []);
+    assert(!('element' in (template.prefix || {})), 'deprecated fields must be skipped');
+    assert.strictEqual(template.type, null);
+    assert.strictEqual(template.encoding, null);
+    // 未编辑的模板编码后除空的嵌套消息骨架外不携带任何值，设备侧不会收到 0 / "" 占位
+    const wire = registry.encodeMessage('gnmi.GetRequest', template);
+    const type = registry.lookupType('gnmi.GetRequest');
+    const echoed = type.toObject(type.decode(wire), { defaults: false });
+    assert.deepStrictEqual(echoed, { prefix: {} }, 'untouched template must carry no field values');
+    console.log('[gRPC proto CI] template minimal and sendable ok');
+}
+
+function testStringJsonAutoExpand() {
+    const registry = new ProtoRegistry();
+    const dialoutPath = registry.resolveBuiltinFile('h3c-grpc-dialout.proto');
+    registry.compile({ filePaths: [dialoutPath] });
+    const payload = {
+        deviceMsg: { producerName: 'h3c', deviceName: 'sw1', deviceModel: 'S6520' },
+        sensorPath: 'device/base',
+        jsonData: JSON.stringify({ HostName: 'sw1', MaxSlotNum: 2 })
+    };
+    const buffer = registry.encodeMessage('grpc_dialout.DialoutMsg', payload);
+    // 无任何解码规则：JSON 字符串字段自动展开为对象
+    const decoded = registry.decodeMessage('grpc_dialout.DialoutMsg', buffer, {});
+    assert.deepStrictEqual(decoded.warnings, []);
+    assert.deepStrictEqual(decoded.value.jsonData, { HostName: 'sw1', MaxSlotNum: 2 });
+    assert.strictEqual(decoded.value.sensorPath, 'device/base', 'plain strings stay untouched');
+    // 看着像 JSON 但解析失败：原样保留、不产生警告
+    const broken = registry.encodeMessage('grpc_dialout.DialoutMsg', { ...payload, jsonData: '{not json' });
+    const decodedBroken = registry.decodeMessage('grpc_dialout.DialoutMsg', broken, {});
+    assert.strictEqual(decodedBroken.value.jsonData, '{not json');
+    assert.deepStrictEqual(decodedBroken.warnings, []);
+    console.log('[gRPC proto CI] string JSON auto expand ok');
+}
+
 testBuiltinPresetsCompile();
+testStringJsonAutoExpand();
+testTemplateIsMinimalAndSendable();
+testBatchImportPrefersRequestedFilesOverBuiltin();
 testNestedDecodeByProtoPath();
 testProtoPathFallbackWarning();
 testCompileErrors();

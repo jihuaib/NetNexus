@@ -1,0 +1,27 @@
+// H3C Comware gRPC Dial-out（非 gNMI 订阅，JSON 编码）。
+// 内容来自 H3C 官方《gRPC 配置指导》公开的 grpc_dialout.proto；
+// 业务模块 proto 需联系 H3C 技术支持获取。
+// jsonData 为 JSON 文本，配合解码规则 @json 展开。
+syntax = "proto2";
+
+package grpc_dialout;
+
+message DeviceInfo {
+    required string producerName = 1;
+    required string deviceName = 2;
+    required string deviceModel = 3;
+}
+
+message DialoutMsg {
+    required DeviceInfo deviceMsg = 1;
+    required string sensorPath = 2;
+    required string jsonData = 3;
+}
+
+message DialoutResponse {
+    required string response = 1;
+}
+
+service GRPCDialout {
+    rpc Dialout(stream DialoutMsg) returns (DialoutResponse);
+}

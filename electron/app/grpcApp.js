@@ -9,6 +9,44 @@ const GrpcConst = require('../const/grpcConst');
 const EventDispatcher = require('../utils/eventDispatcher');
 
 const DEFAULT_STATS_EMIT_INTERVAL_MS = 1000;
+const PROTO_DIR_SCAN_MAX_DEPTH = 8;
+const PROTO_DIR_SCAN_MAX_FILES = 2000;
+
+/**
+ * 递归收集目录下的全部 .proto 文件（跳过隐藏目录与 node_modules），
+ * 返回排序后的绝对路径列表。深度与数量有上限，防止误选巨型目录。
+ */
+function collectProtoFiles(dir, { maxDepth = PROTO_DIR_SCAN_MAX_DEPTH, maxFiles = PROTO_DIR_SCAN_MAX_FILES } = {}) {
+    const fs = require('fs');
+    const files = [];
+    const walk = (current, depth) => {
+        if (depth > maxDepth || files.length >= maxFiles) {
+            return;
+        }
+        let entries = [];
+        try {
+            entries = fs.readdirSync(current, { withFileTypes: true });
+        } catch (_error) {
+            return;
+        }
+        for (const entry of entries) {
+            if (files.length >= maxFiles) {
+                return;
+            }
+            if (entry.name.startsWith('.') || entry.name === 'node_modules') {
+                continue;
+            }
+            const fullPath = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                walk(fullPath, depth + 1);
+            } else if (entry.isFile() && entry.name.endsWith('.proto')) {
+                files.push(fullPath);
+            }
+        }
+    };
+    walk(path.resolve(dir), 0);
+    return files.sort();
+}
 const GRPC_EVENT_CHANNEL = 'grpc:event';
 const GRPC_RUNTIME_CHANGED_EVENT = 'grpc:runtimeChanged';
 
@@ -430,13 +468,18 @@ class GrpcApp {
     async handleSelectProtoDirectory(event) {
         try {
             const result = await this.showOpenDialog(event, {
-                title: '选择 proto import 搜索目录',
+                title: '导入 proto 目录',
                 properties: ['openDirectory']
             });
             if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
                 return successResponse(null, '已取消选择');
             }
-            return successResponse(result.filePaths[0], '目录选择成功');
+            const directory = result.filePaths[0];
+            const files = collectProtoFiles(directory);
+            return successResponse(
+                { directory, files },
+                files.length ? `目录中找到 ${files.length} 个 proto 文件` : '目录中未找到 proto 文件'
+            );
         } catch (error) {
             logger.error('选择 proto 目录失败:', error);
             return errorResponse('选择 proto 目录失败: ' + error.message);
@@ -887,5 +930,7 @@ class GrpcApp {
         }
     }
 }
+
+GrpcApp.collectProtoFiles = collectProtoFiles;
 
 module.exports = GrpcApp;
