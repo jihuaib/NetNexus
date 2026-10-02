@@ -958,13 +958,19 @@ test.describe('BGP route pages', () => {
         await generateIpv4Group(page);
         await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 2 条路由');
         const firstPayload = await page.evaluate(() => window.__ipv4GeneratedPayload);
+        expect(harness.controller.state.bgp.routes.get(1).map(route => `${route.ip}/${route.mask}`)).toEqual([
+            '198.51.100.10/32',
+            '198.51.100.11/32'
+        ]);
         await ipv4GroupAction(page, 'copy');
         await page.getByTestId('bgp-ipv4-route-group-name').fill('重叠草稿');
+        // Use one shared NLRI so the conflict key does not depend on which valid intersection is returned.
+        await page.getByTestId('bgp-ipv4-route-prefix-input').fill('198.51.100.11');
         await page.getByTestId('bgp-ipv4-save-workspace-button').click();
         await expect(page.locator('.workspace-save-state')).toContainText('已保存');
         await generateIpv4Group(page);
         await expect(page.locator('.nn-toast-error')).toContainText('已生成骨干');
-        await expect(page.locator('.nn-toast-error')).toContainText('198.51.100.10/32');
+        await expect(page.locator('.nn-toast-error')).toContainText('198.51.100.11/32');
         expect(await page.evaluate(() => window.__ipv4GeneratedPayload)).toEqual(firstPayload);
         expect(harness.controller.state.bgp.routes.get(1)).toHaveLength(2);
         await page.getByTestId('bgp-ipv4-route-prefix-input').fill('198.51.100.20');

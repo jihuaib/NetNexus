@@ -79,10 +79,14 @@ test.describe('Label ADD-PATH peer configuration', () => {
                     .locator('.nn-form-item')
                     .filter({ hasText: /^Addr Family/ })
                     .locator('.nn-select');
-                const toggleLabelFamily = async () => {
-                    await familySelect.click();
+                const addLabelFamily = async () => {
+                    await familySelect.press('ArrowDown');
+                    await expect(familySelect).toHaveAttribute('aria-expanded', 'true');
                     await page.getByRole('option', { name: 'IPv4 Label', exact: true }).click();
-                    await page.keyboard.press('Escape');
+                    await familySelect.press('Escape');
+                    await expect(
+                        familySelect.getByRole('button', { name: '移除 IPv4 Label', exact: true })
+                    ).toBeVisible();
                 };
                 const save = async expectedAddPath => {
                     const previousCount = savedPayloads.length;
@@ -105,7 +109,7 @@ test.describe('Label ADD-PATH peer configuration', () => {
                 await capabilityLabel.click();
                 await expect(labelAddPath).toBeDisabled();
                 await capabilityLabel.click();
-                await toggleLabelFamily();
+                await addLabelFamily();
                 await expect(labelAddPath).toBeDisabled();
                 await capabilityLabel.click();
                 await expect(labelAddPath).toBeEnabled();
@@ -138,7 +142,8 @@ test.describe('Label ADD-PATH peer configuration', () => {
                 await capabilityLabel.click();
                 await expect(labelAddPath).toBeEnabled();
                 await labelAddPathLabel.click();
-                await toggleLabelFamily();
+                await familySelect.getByRole('button', { name: '移除 IPv4 Label', exact: true }).click();
+                await expect(familySelect.getByRole('button', { name: '移除 IPv4 Label', exact: true })).toHaveCount(0);
                 await expect(labelAddPath).toBeDisabled();
                 await expect(labelAddPath).not.toBeChecked();
                 const noFamilyPayload = await save(false);
